@@ -14,16 +14,16 @@ The front-end of the Medaka compiler is in place. We have:
 | Parser          | `lib/parser.mly`    | Menhir grammar, full language syntax                        |
 | Printer         | `lib/printer.ml`    | AST → parseable source (used by round-trip tests)           |
 | Resolver        | `lib/resolve.ml`    | Validates that every identifier reference is bound          |
-| Type checker    | `lib/typecheck.ml`  | Hindley-Milner with let-polymorphism, ADTs, pattern typing  |
+| Type checker    | `lib/typecheck.ml`  | Hindley-Milner with let-polymorphism, ADTs, records, patterns |
 
-160 tests pass across 4 test suites:
+178 tests pass across 4 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
 | Parser            | `test/test_parser.ml`           | 42    | AST shape for each construct                          |
 | Round-trip        | `test/test_roundtrip.ml`        | 50    | parse → print → parse yields the same AST             |
-| Resolver          | `test/test_resolve.ml`          | 30    | Unbound vars, unknown types/ctors, duplicates, scope  |
-| Type checker      | `test/test_typecheck.ml`        | 38    | Inferred types for valid programs + type-error cases  |
+| Resolver          | `test/test_resolve.ml`          | 34    | Unbound vars, unknown types/ctors, duplicates, fields |
+| Type checker      | `test/test_typecheck.ml`        | 52    | Inferred types for valid programs + type-error cases  |
 
 Two debug binaries in `test/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
@@ -165,66 +165,27 @@ Items are ordered by what makes the next session most productive, not strictly
 by importance. Each item below is independently achievable in a session-sized
 chunk; pick one, do it well, write tests, commit, update this doc.
 
-### Phase 1: Records (next)
+### Phase 1: Records ✅ DONE
 
-**Goal.** Type-check field access (`p.name`), record construction
-(`Person { name = "Alice", age = 30 }`), and record update
-(`{ p | age = 31 }`).
+Implemented in commit `83b8a3d`. Field access, record creation, and record
+update all type-check correctly, including polymorphic records.
 
-**Design decisions to make first.**
+**Key implementation detail.** `register_record` must call `exit_level()` BEFORE
+`free_unbound []` so the param TVars (at level 1) satisfy `level > 0` and get
+included in `rec_params`. This makes `instantiate_record` create fresh TVars on
+each call — without it, all uses of a polymorphic record share the same TVar
+refs and spuriously unify.
 
-1. *Nominal vs structural records.* Recommended: nominal. Each `record` decl
-   introduces a named type. `p.name` requires knowing `p`'s record type from
-   inference context. This is what the language-design doc implies ("Fields are
-   namespaced to the type").
-2. *Field-name collisions.* If two records both declare a field called `name`,
-   `p.name` is ambiguous unless `p`'s type is already known. Either:
-   - require enough inference context (annotations) when ambiguous
-   - or disallow field-name collisions globally (simpler, matches Rust)
-   Pick the latter for v1 and revisit if it becomes painful.
+**What was added:**
+- `record_info` type in `typecheck.ml`; `records`/`field_owners` in `env`
+- `register_record` and `instantiate_record` helpers
+- `ERecordCreate`, `EFieldAccess`, `ERecordUpdate` cases in `infer`
+- `UnknownRecord`, `UnknownField`, `MissingField` error variants
+- Resolver: `field_owners` map, `UnknownField`, `FieldNotInRecord` errors;
+  validates field membership in `ERecordCreate` / `ERecordUpdate`
+- 18 new tests (14 typecheck, 4 resolver)
 
-**Implementation hints.**
-
-- Add a `records` table to `typecheck.ml`'s `module_env` (alongside `ctors`).
-  Map record name → `(type_params, [(field_name, field_type)])`.
-- `register_record` mirrors `register_data`: walks the declaration, generalizes
-  field types, stashes them. Also populate a separate `field_owners` map from
-  field name → record name (for the no-collision rule and for looking up
-  ambiguous `p.field`).
-- `ERecordCreate (name, fields)`:
-  - Look up the record. Instantiate type params with fresh vars.
-  - For each field in the *declaration*, find the matching field in the
-    expression (error if missing). Unify expression type with declared type.
-  - All fields must be present (per design doc: "Construction requires all
-    fields").
-  - Result type: `name applied to instantiated type params`.
-- `EFieldAccess (e, field)`:
-  - Look up the record that owns `field`. Instantiate type params.
-  - Unify `infer env e` with the record type.
-  - Result: that field's instantiated type.
-- `ERecordUpdate (e, fields)`:
-  - Look up record that owns the first updated field (all updated fields must
-    belong to same record). Instantiate.
-  - Unify `infer env e` with the record type.
-  - For each updated field, unify its expression with the declared field type.
-  - Result: same record type.
-
-**Resolver updates.** Already validates record-create's type name and field
-existence partially. Tighten: confirm fields belong to that record. Reject
-update where fields span multiple records.
-
-**Tests.**
-
-- New file or extend `test_typecheck.ml`. Cover:
-  - basic create/access/update
-  - polymorphic record (e.g. `record Pair a b { first : a, second : b }`)
-  - error: unknown field
-  - error: field belongs to different record (collision)
-  - error: missing field in create
-  - field access on non-record type
-- Add round-trip cases if any printer changes are needed.
-
-### Phase 2: `do` notation typing
+### Phase 2: `do` notation typing (next)
 
 **Goal.** Currently `EDo` raises `"Do notation typing not yet implemented"`.
 We need to type-check do blocks even before we have full typeclass support.
