@@ -1,0 +1,386 @@
+%{
+open Ast
+
+let fold_ty_app = function
+  | []      -> failwith "empty type application"
+  | [t]     -> t
+  | t :: ts -> List.fold_left (fun acc a -> TyApp (acc, a)) t ts
+
+let stmts_to_expr = function
+  | [DoExpr e] -> e
+  | stmts      -> EDo stmts
+
+(* Convert an expression back into a pattern when used as a lambda parameter.
+   Supported: identifiers, literals, tuples, lists, cons, constructor apps. *)
+let rec expr_to_pat = function
+  | EVar x when x = "_" -> PWild  (* shouldn't normally reach here; UNDERSCORE has its own rule *)
+  | EVar x       -> PVar x
+  | ELit l       -> PLit l
+  | ETuple es    -> PTuple (List.map expr_to_pat es)
+  | EListLit es  -> PList  (List.map expr_to_pat es)
+  | EBinOp ("::", a, b) -> PCons (expr_to_pat a, expr_to_pat b)
+  | EApp _ as e ->
+    (* Constructor application: collect head + args, head must be uppercase *)
+    let rec collect acc = function
+      | EApp (f, a) -> collect (a :: acc) f
+      | EVar c when String.length c > 0
+                  && Char.uppercase_ascii c.[0] = c.[0] ->
+        PCon (c, List.map expr_to_pat acc)
+      | _ -> failwith "Invalid lambda parameter pattern"
+    in
+    collect [] e
+  | _ -> failwith "Invalid lambda parameter pattern"
+%}
+
+(* Literals *)
+%token <int>    INT
+%token <float>  FLOAT
+%token <string> STRING
+%token <string> CHAR
+%token <bool>   BOOL
+
+(* Identifiers *)
+%token <string> IDENT
+%token <string> UPPER
+%token <string> BACKTICK_IDENT
+
+(* Keywords *)
+%token LET MUT IN IF THEN ELSE MATCH DATA RECORD INTERFACE DEFAULT IMPL
+%token USE PUB WHERE OF DO AS
+
+(* Operators *)
+%token PLUS MINUS STAR SLASH
+%token EQ_EQ NEQ LT GT LEQ GEQ
+%token AND OR
+%token CONS PLUSPLUS
+%token FAT_ARROW ARROW LARROW
+%token AT BANG
+
+(* Punctuation *)
+%token EQUAL COLON COMMA DOT PIPE UNDERSCORE
+%token LPAREN RPAREN LBRACKET RBRACKET LBRACE RBRACE
+%token LARRAY RARRAY
+%token DOT_LBRACE DOT_STAR
+
+(* Indentation *)
+%token NEWLINE INDENT DEDENT
+
+%token EOF
+
+%start <Ast.program> program
+
+%%
+
+(* ── Top level ───────────────────────────────────────── *)
+
+program:
+  | option(newlines) decl_list EOF  { $2 }
+
+decl_list:
+  |                  { [] }
+  | decl decl_list   { $1 @ $2 }
+
+decl:
+  | type_sig    { [$1] }
+  | fun_def     { [$1] }
+  | data_decl   { [$1] }
+  | record_decl { [$1] }
+  | iface_decl  { [$1] }
+  | impl_decl   { [$1] }
+  | use_decl    { [$1] }
+
+(* ── Type signatures ─────────────────────────────────── *)
+
+type_sig:
+  | IDENT COLON ty newlines  { DTypeSig ($1, $3) }
+
+(* ── Function definitions ────────────────────────────── *)
+
+fun_def:
+  | IDENT list(pat_atom) EQUAL fun_body newlines
+    { DFunDef ($1, $2, $4) }
+
+fun_body:
+  | expr_no_block                       { $1 }
+  | INDENT nonempty_list(stmt) DEDENT   { stmts_to_expr $2 }
+
+(* ── Types ───────────────────────────────────────────── *)
+
+ty:
+  | ty_fun  { $1 }
+
+ty_fun:
+  | ty_app ARROW ty_fun  { TyFun ($1, $3) }
+  | ty_app               { $1 }
+
+ty_app:
+  | nonempty_list(ty_atom)  { fold_ty_app $1 }
+
+ty_atom:
+  | UPPER                                   { TyCon $1 }
+  | IDENT                                   { TyVar $1 }
+  | LPAREN ty RPAREN                        { $2 }
+  | LPAREN ty COMMA separated_nonempty_list(COMMA, ty) RPAREN
+    { TyTuple ($2 :: $4) }
+  | LT separated_nonempty_list(COMMA, UPPER) GT ty_atom
+    { TyEffect ($2, $4) }
+
+(* ── Patterns ────────────────────────────────────────── *)
+
+pat:
+  | pat_cons  { $1 }
+
+pat_cons:
+  | pat_atom CONS pat_cons  { PCons ($1, $3) }
+  | pat_atom                { $1 }
+
+pat_atom:
+  | IDENT                                                  { PVar $1 }
+  | UNDERSCORE                                             { PWild }
+  | UPPER                                                  { PCon ($1, []) }
+  | LPAREN UPPER nonempty_list(pat_atom) RPAREN            { PCon ($2, $3) }
+  | lit                                                    { PLit $1 }
+  | LPAREN RPAREN                                          { PLit LUnit }
+  | LPAREN pat RPAREN                                      { $2 }
+  | LPAREN pat COMMA separated_nonempty_list(COMMA, pat) RPAREN
+    { PTuple ($2 :: $4) }
+  | LBRACKET RBRACKET                                      { PList [] }
+  | LBRACKET separated_nonempty_list(COMMA, pat) RBRACKET  { PList $2 }
+
+(* ── Expressions ─────────────────────────────────────── *)
+
+expr_no_block:
+  | expr_annot  { $1 }
+
+expr_annot:
+  | expr_lam COLON ty  { EAnnot ($1, $3) }
+  | expr_lam           { $1 }
+
+(* Lambdas: parse the LHS as an expression, then reinterpret as a pattern when
+   FAT_ARROW follows. This avoids the IDENT-vs-IDENT ambiguity with application. *)
+expr_lam:
+  | LET MUT pat EQUAL expr_no_block IN expr_lam
+    { ELet (true,  $3, $5, $7) }
+  | LET pat EQUAL expr_no_block IN expr_lam
+    { ELet (false, $2, $4, $6) }
+  | IF expr_or THEN expr_lam ELSE expr_lam
+    { EIf ($2, $4, $6) }
+  | MATCH expr_or INDENT nonempty_list(match_arm) DEDENT
+    { EMatch ($2, $4) }
+  | DO INDENT nonempty_list(stmt) DEDENT
+    { EDo $3 }
+  | UNDERSCORE FAT_ARROW expr_lam
+    { ELam ([PWild], $3) }
+  | expr_or FAT_ARROW expr_lam
+    { ELam ([expr_to_pat $1], $3) }
+  | expr_or
+    { $1 }
+
+expr_or:
+  | expr_or OR expr_and   { EBinOp ("||", $1, $3) }
+  | expr_and              { $1 }
+
+expr_and:
+  | expr_and AND expr_cmp  { EBinOp ("&&", $1, $3) }
+  | expr_cmp               { $1 }
+
+expr_cmp:
+  | expr_cmp EQ_EQ expr_cons  { EBinOp ("==", $1, $3) }
+  | expr_cmp NEQ   expr_cons  { EBinOp ("!=", $1, $3) }
+  | expr_cmp LT    expr_cons  { EBinOp ("<",  $1, $3) }
+  | expr_cmp GT    expr_cons  { EBinOp (">",  $1, $3) }
+  | expr_cmp LEQ   expr_cons  { EBinOp ("<=", $1, $3) }
+  | expr_cmp GEQ   expr_cons  { EBinOp (">=", $1, $3) }
+  | expr_cons                 { $1 }
+
+expr_cons:
+  | expr_append CONS expr_cons  { EBinOp ("::", $1, $3) }
+  | expr_append                 { $1 }
+
+expr_append:
+  | expr_append PLUSPLUS expr_add  { EBinOp ("++", $1, $3) }
+  | expr_add                       { $1 }
+
+expr_add:
+  | expr_add PLUS  expr_mul  { EBinOp ("+", $1, $3) }
+  | expr_add MINUS expr_mul  { EBinOp ("-", $1, $3) }
+  | expr_mul                 { $1 }
+
+expr_mul:
+  | expr_mul STAR  expr_infix  { EBinOp ("*", $1, $3) }
+  | expr_mul SLASH expr_infix  { EBinOp ("/", $1, $3) }
+  | expr_infix                 { $1 }
+
+expr_infix:
+  | expr_infix BACKTICK_IDENT expr_app  { EInfix ($2, $1, $3) }
+  | expr_app                            { $1 }
+
+expr_app:
+  | expr_app expr_unary  { EApp ($1, $2) }
+  | expr_unary           { $1 }
+
+expr_unary:
+  | MINUS expr_postfix   { EUnOp ("-", $2) }
+  | BANG  expr_postfix   { EUnOp ("!", $2) }
+  | expr_postfix         { $1 }
+
+expr_postfix:
+  | expr_postfix DOT IDENT                        { EFieldAccess ($1, $3) }
+  | expr_postfix LBRACKET expr_no_block RBRACKET  { EIndex ($1, $3) }
+  | expr_atom                                     { $1 }
+
+expr_atom:
+  | lit                                              { ELit $1 }
+  | IDENT                                            { EVar $1 }
+  | UPPER                                            { EVar $1 }
+  | LPAREN RPAREN                                    { ELit LUnit }
+  | LPAREN expr_no_block RPAREN                      { $2 }
+  | LPAREN expr_no_block COMMA
+      separated_nonempty_list(COMMA, expr_no_block) RPAREN
+    { ETuple ($2 :: $4) }
+  | LBRACKET RBRACKET
+    { EListLit [] }
+  | LBRACKET separated_nonempty_list(COMMA, expr_no_block) RBRACKET
+    { EListLit $2 }
+  | LARRAY RARRAY
+    { EArrayLit [] }
+  | LARRAY separated_nonempty_list(COMMA, expr_no_block) RARRAY
+    { EArrayLit $2 }
+  | UPPER LBRACE separated_list(COMMA, record_field_expr) RBRACE
+    { ERecordCreate ($1, $3) }
+  | LBRACE expr_no_block PIPE separated_nonempty_list(COMMA, record_field_expr) RBRACE
+    { ERecordUpdate ($2, $4) }
+  | AT UPPER
+    { EVar ("@" ^ $2) }
+
+record_field_expr:
+  | IDENT EQUAL expr_no_block  { ($1, $3) }
+
+(* ── Match arms ──────────────────────────────────────── *)
+
+match_arm:
+  | pat option(guard) FAT_ARROW expr_no_block newlines  { ($1, $2, $4) }
+
+guard:
+  | IF expr_or  { $2 }
+
+(* ── Do-notation statements ──────────────────────────── *)
+
+stmt:
+  | pat LARROW expr_no_block newlines         { DoBind ($1, $3) }
+  | LET MUT pat EQUAL expr_no_block newlines  { DoLet (true,  $3, $5) }
+  | LET pat EQUAL expr_no_block newlines      { DoLet (false, $2, $4) }
+  | expr_no_block newlines                    { DoExpr $1 }
+
+(* ── Data declarations ───────────────────────────────── *)
+
+data_decl:
+  | DATA UPPER list(IDENT) INDENT nonempty_list(data_variant_line) DEDENT newlines
+    { DData ($2, $3, $5) }
+  | DATA UPPER list(IDENT) EQUAL separated_nonempty_list(PIPE, data_variant_inline) newlines
+    { DData ($2, $3, $5) }
+
+data_variant_line:
+  | PIPE UPPER list(ty_atom) newlines  { { con_name = $2; con_fields = $3 } }
+
+data_variant_inline:
+  | UPPER list(ty_atom)  { { con_name = $1; con_fields = $2 } }
+
+(* ── Record declarations ─────────────────────────────── *)
+
+record_decl:
+  | RECORD UPPER list(IDENT) INDENT nonempty_list(record_field_decl) DEDENT newlines
+    { DRecord ($2, $3, $5) }
+
+record_field_decl:
+  | IDENT COLON ty newlines  { { field_name = $1; field_type = $3 } }
+
+(* ── Interface declarations ──────────────────────────── *)
+
+iface_decl:
+  | option(DEFAULT) INTERFACE UPPER list(IDENT) option(iface_super) WHERE
+    INDENT nonempty_list(iface_member) DEDENT newlines
+    { DInterface {
+        is_default  = $1 <> None;
+        iface_name  = $3;
+        type_params = $4;
+        super       = Option.value ~default:[] $5;
+        methods     = $8;
+      }
+    }
+
+iface_super:
+  | OF separated_nonempty_list(COMMA, iface_super_entry)  { $2 }
+
+iface_super_entry:
+  | UPPER list(IDENT)  { ($1, $2) }
+
+iface_member:
+  | IDENT COLON ty newlines
+    { { method_name = $1; method_type = $3; method_default = None } }
+  | IDENT list(pat_atom) EQUAL fun_body newlines
+    { { method_name = $1; method_type = TyVar "_"; method_default = Some ($2, $4) } }
+
+(* ── Impl declarations ───────────────────────────────── *)
+
+impl_decl:
+  | option(DEFAULT) IMPL UPPER nonempty_list(ty_atom) WHERE
+    INDENT nonempty_list(impl_method) DEDENT newlines
+    { DImpl {
+        is_default = $1 <> None;
+        iface_name = $3;
+        type_args  = $4;
+        impl_name  = None;
+        methods    = $7;
+      }
+    }
+  | option(DEFAULT) IMPL IDENT OF UPPER nonempty_list(ty_atom) WHERE
+    INDENT nonempty_list(impl_method) DEDENT newlines
+    { DImpl {
+        is_default = $1 <> None;
+        iface_name = $5;
+        type_args  = $6;
+        impl_name  = Some $3;
+        methods    = $9;
+      }
+    }
+
+impl_method:
+  | IDENT list(pat_atom) EQUAL fun_body newlines  { ($1, $2, $4) }
+
+(* ── Use declarations ────────────────────────────────── *)
+
+use_decl:
+  | PUB USE use_path newlines  { DUse (true,  $3) }
+  | USE use_path newlines      { DUse (false, $2) }
+
+use_path:
+  | use_qual                                       { UseName $1 }
+  | use_qual AS UPPER                              { UseAlias ($1, $3) }
+  | use_qual AS IDENT                              { UseAlias ($1, $3) }
+  | use_qual DOT_LBRACE separated_nonempty_list(COMMA, IDENT) RBRACE
+                                                   { UseGroup ($1, $3) }
+  | use_qual DOT_STAR                              { UseWild $1 }
+
+use_qual:
+  | use_ident                  { [$1] }
+  | use_qual DOT use_ident     { $1 @ [$3] }
+
+use_ident:
+  | IDENT  { $1 }
+  | UPPER  { $1 }
+
+(* ── Literals ────────────────────────────────────────── *)
+
+lit:
+  | INT    { LInt $1 }
+  | FLOAT  { LFloat $1 }
+  | STRING { LString $1 }
+  | CHAR   { LChar $1 }
+  | BOOL   { LBool $1 }
+
+(* ── Newlines ────────────────────────────────────────── *)
+
+newlines:
+  | NEWLINE           { () }
+  | NEWLINE newlines  { () }

@@ -1,0 +1,10 @@
+(library
+ (name medaka_lib)
+ (modules ast lexer parser)
+ (libraries menhirLib))
+
+(ocamllex lexer)
+
+(menhir
+ (modules parser)
+ (flags --explain))

@@ -1,0 +1,7 @@
+(test
+ (name test_parser)
+ (libraries medaka_lib alcotest))
+
+(executable
+ (name debug)
+ (libraries medaka_lib))
