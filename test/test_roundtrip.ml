@@ -26,7 +26,9 @@ let roundtrip src =
         "Re-parse of printed output failed: %s\n\nOriginal:\n%s\nPrinted:\n%s"
         msg src printed)
   in
-  if ast1 <> ast2 then
+  let ast1' = Ast.strip_locs_program ast1 in
+  let ast2' = Ast.strip_locs_program ast2 in
+  if ast1' <> ast2' then
     failwith (Printf.sprintf
       "AST mismatch on round-trip.\n\nOriginal source:\n%s\nPrinted:\n%s\n\
        AST1 has %d decls, AST2 has %d decls."

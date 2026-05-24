@@ -6,14 +6,17 @@ open Ast
 let parse src =
   Lexer.reset ();
   let lexbuf = Lexing.from_string src in
-  try Parser.program Lexer.token lexbuf
-  with
-  | Parser.Error ->
-    let pos = lexbuf.Lexing.lex_curr_p in
-    failwith (Printf.sprintf "Parse error at line %d col %d in:\n%s"
-                pos.Lexing.pos_lnum
-                (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
-                src)
+  let prog =
+    try Parser.program Lexer.token lexbuf
+    with
+    | Parser.Error ->
+      let pos = lexbuf.Lexing.lex_curr_p in
+      failwith (Printf.sprintf "Parse error at line %d col %d in:\n%s"
+                  pos.Lexing.pos_lnum
+                  (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
+                  src)
+  in
+  Ast.strip_locs_program prog
 
 let pp_decl d =
   match d with

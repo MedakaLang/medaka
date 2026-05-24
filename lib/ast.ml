@@ -1,5 +1,7 @@
 type ident = string
 
+type loc = { file: string; line: int; col: int }
+
 type literal =
   | LInt    of int
   | LFloat  of float
@@ -53,6 +55,7 @@ and expr =
   | EDo           of do_stmt list
   | EAnnot        of expr * ty
   | EInfix        of ident * expr * expr                (* x `div` y *)
+  | ELoc          of loc * expr                         (* source position; transparent to semantics *)
 
 type use_path =
   | UseName  of ident list                   (* use utils.greet *)
@@ -158,9 +161,55 @@ let rec pp_expr = function
   | EDo stmts            -> Printf.sprintf "(do %s)" (String.concat "; " (List.map pp_do_stmt stmts))
   | EAnnot (e, t)        -> Printf.sprintf "(%s : %s)" (pp_expr e) (pp_ty t)
   | EInfix (op, l, r)    -> Printf.sprintf "(%s `%s` %s)" (pp_expr l) op (pp_expr r)
+  | ELoc (_, e)          -> pp_expr e
 
 and pp_do_stmt = function
   | DoBind (p, e)       -> Printf.sprintf "%s <- %s" (pp_pat p) (pp_expr e)
   | DoExpr e            -> pp_expr e
   | DoLet (mut, p, e)   ->
     Printf.sprintf "let %s%s = %s" (if mut then "mut " else "") (pp_pat p) (pp_expr e)
+
+(* Strip all ELoc annotations from an expression/program — used by round-trip
+   tests so that position metadata doesn't break structural equality. *)
+let rec strip_locs_expr = function
+  | ELoc (_, e)            -> strip_locs_expr e
+  | EApp (f, x)            -> EApp (strip_locs_expr f, strip_locs_expr x)
+  | ELam (ps, e)           -> ELam (ps, strip_locs_expr e)
+  | ELet (m, p, e1, e2)   -> ELet (m, p, strip_locs_expr e1, strip_locs_expr e2)
+  | EMatch (e, arms)       ->
+    EMatch (strip_locs_expr e,
+            List.map (fun (p, g, b) -> (p, Option.map strip_locs_expr g, strip_locs_expr b)) arms)
+  | EIf (c, t, e)         -> EIf (strip_locs_expr c, strip_locs_expr t, strip_locs_expr e)
+  | EBinOp (op, l, r)     -> EBinOp (op, strip_locs_expr l, strip_locs_expr r)
+  | EUnOp (op, e)         -> EUnOp (op, strip_locs_expr e)
+  | EFieldAccess (e, f)   -> EFieldAccess (strip_locs_expr e, f)
+  | ERecordCreate (n, fs) -> ERecordCreate (n, List.map (fun (k, v) -> (k, strip_locs_expr v)) fs)
+  | ERecordUpdate (e, fs) -> ERecordUpdate (strip_locs_expr e, List.map (fun (k, v) -> (k, strip_locs_expr v)) fs)
+  | EArrayLit es          -> EArrayLit (List.map strip_locs_expr es)
+  | EListLit es           -> EListLit (List.map strip_locs_expr es)
+  | ETuple es             -> ETuple (List.map strip_locs_expr es)
+  | EIndex (e, i)         -> EIndex (strip_locs_expr e, strip_locs_expr i)
+  | EDo stmts             -> EDo (List.map strip_locs_do stmts)
+  | EAnnot (e, t)         -> EAnnot (strip_locs_expr e, t)
+  | EInfix (op, l, r)    -> EInfix (op, strip_locs_expr l, strip_locs_expr r)
+  | e                     -> e  (* ELit, EVar *)
+
+and strip_locs_do = function
+  | DoBind (p, e)     -> DoBind (p, strip_locs_expr e)
+  | DoExpr e          -> DoExpr (strip_locs_expr e)
+  | DoLet (m, p, e)  -> DoLet (m, p, strip_locs_expr e)
+
+let strip_locs_iface_method m =
+  match m.method_default with
+  | None -> m
+  | Some (ps, e) -> { m with method_default = Some (ps, strip_locs_expr e) }
+
+let strip_locs_decl = function
+  | DFunDef (n, ps, e) -> DFunDef (n, ps, strip_locs_expr e)
+  | DInterface d ->
+    DInterface { d with methods = List.map strip_locs_iface_method d.methods }
+  | DImpl d ->
+    DImpl { d with methods = List.map (fun (n, ps, e) -> (n, ps, strip_locs_expr e)) d.methods }
+  | d -> d
+
+let strip_locs_program = List.map strip_locs_decl

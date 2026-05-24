@@ -1,6 +1,11 @@
 %{
 open Ast
 
+let of_pos p =
+  { file = p.Lexing.pos_fname;
+    line = p.Lexing.pos_lnum;
+    col  = p.Lexing.pos_cnum - p.Lexing.pos_bol }
+
 let fold_ty_app = function
   | []      -> failwith "empty type application"
   | [t]     -> t
@@ -17,6 +22,7 @@ let curry_lam pats body =
 (* Convert an expression back into a pattern when used as a lambda parameter.
    Supported: identifiers, literals, tuples, lists, cons, constructor apps. *)
 let rec expr_to_pat = function
+  | ELoc (_, e)  -> expr_to_pat e
   | EVar x when x = "_" -> PWild  (* shouldn't normally reach here; UNDERSCORE has its own rule *)
   | EVar x       -> PVar x
   | ELit l       -> PLit l
@@ -172,21 +178,21 @@ expr_annot:
    FAT_ARROW follows. This avoids the IDENT-vs-IDENT ambiguity with application. *)
 expr_lam:
   | LET MUT pat EQUAL expr_no_block IN expr_lam
-    { ELet (true,  $3, $5, $7) }
+    { ELoc (of_pos $startpos, ELet (true,  $3, $5, $7)) }
   | LET pat EQUAL expr_no_block IN expr_lam
-    { ELet (false, $2, $4, $6) }
+    { ELoc (of_pos $startpos, ELet (false, $2, $4, $6)) }
   | LET IDENT nonempty_list(pat_atom) EQUAL expr_no_block IN expr_lam
-    { ELet (false, PVar $2, curry_lam $3 $5, $7) }
+    { ELoc (of_pos $startpos, ELet (false, PVar $2, curry_lam $3 $5, $7)) }
   | IF expr_or THEN expr_lam ELSE expr_lam
-    { EIf ($2, $4, $6) }
+    { ELoc (of_pos $startpos, EIf ($2, $4, $6)) }
   | MATCH expr_or INDENT nonempty_list(match_arm) DEDENT
-    { EMatch ($2, $4) }
+    { ELoc (of_pos $startpos, EMatch ($2, $4)) }
   | DO INDENT nonempty_list(stmt) DEDENT
-    { EDo $3 }
+    { ELoc (of_pos $startpos, EDo $3) }
   | UNDERSCORE FAT_ARROW expr_lam
-    { ELam ([PWild], $3) }
+    { ELoc (of_pos $startpos, ELam ([PWild], $3)) }
   | expr_pipe FAT_ARROW expr_lam
-    { ELam ([expr_to_pat $1], $3) }
+    { ELoc (of_pos $startpos, ELam ([expr_to_pat $1], $3)) }
   | expr_pipe
     { $1 }
 
@@ -258,28 +264,28 @@ expr_postfix:
   | expr_atom                                     { $1 }
 
 expr_atom:
-  | lit                                              { ELit $1 }
-  | IDENT                                            { EVar $1 }
-  | UPPER                                            { EVar $1 }
-  | LPAREN RPAREN                                    { ELit LUnit }
+  | lit                                              { ELoc (of_pos $startpos, ELit $1) }
+  | IDENT                                            { ELoc (of_pos $startpos, EVar $1) }
+  | UPPER                                            { ELoc (of_pos $startpos, EVar $1) }
+  | LPAREN RPAREN                                    { ELoc (of_pos $startpos, ELit LUnit) }
   | LPAREN expr_no_block RPAREN                      { $2 }
   | LPAREN expr_no_block COMMA
       separated_nonempty_list(COMMA, expr_no_block) RPAREN
-    { ETuple ($2 :: $4) }
+    { ELoc (of_pos $startpos, ETuple ($2 :: $4)) }
   | LBRACKET RBRACKET
-    { EListLit [] }
+    { ELoc (of_pos $startpos, EListLit []) }
   | LBRACKET separated_nonempty_list(COMMA, expr_no_block) RBRACKET
-    { EListLit $2 }
+    { ELoc (of_pos $startpos, EListLit $2) }
   | LARRAY RARRAY
-    { EArrayLit [] }
+    { ELoc (of_pos $startpos, EArrayLit []) }
   | LARRAY separated_nonempty_list(COMMA, expr_no_block) RARRAY
-    { EArrayLit $2 }
+    { ELoc (of_pos $startpos, EArrayLit $2) }
   | UPPER LBRACE separated_list(COMMA, record_field_expr) RBRACE
-    { ERecordCreate ($1, $3) }
+    { ELoc (of_pos $startpos, ERecordCreate ($1, $3)) }
   | LBRACE expr_no_block PIPE separated_nonempty_list(COMMA, record_field_expr) RBRACE
-    { ERecordUpdate ($2, $4) }
+    { ELoc (of_pos $startpos, ERecordUpdate ($2, $4)) }
   | AT UPPER
-    { EVar ("@" ^ $2) }
+    { ELoc (of_pos $startpos, EVar ("@" ^ $2)) }
 
 record_field_expr:
   | IDENT EQUAL expr_no_block  { ($1, $3) }

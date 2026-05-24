@@ -75,9 +75,11 @@ type type_error =
   | AmbiguousImpl of ident * mono list        (* iface_name, concrete type args *)
   | Other          of string
 
-exception Type_error of type_error
+exception Type_error of type_error * Ast.loc option
 
-let fail e = raise (Type_error e)
+let current_loc : Ast.loc option ref = ref None
+
+let fail e = raise (Type_error (e, !current_loc))
 
 (* ── State: fresh vars + current level ──────────── *)
 
@@ -485,6 +487,10 @@ let instantiate_record info =
 (* ── Expression typing ──────────────────────────── *)
 
 let rec infer env = function
+  | ELoc (l, e) ->
+    current_loc := Some l;
+    infer env e
+
   | ELit l -> type_lit l
 
   | EVar x ->
@@ -506,6 +512,8 @@ let rec infer env = function
     end
 
   | EApp (f, EVar hint) when String.length hint > 0 && hint.[0] = '@' ->
+    infer env f
+  | EApp (f, ELoc (_, EVar hint)) when String.length hint > 0 && hint.[0] = '@' ->
     (* @ImplName is a disambiguation hint — drop it silently so it does not
        consume an argument position in f's type.  Full impl selection deferred. *)
     infer env f
@@ -951,7 +959,7 @@ let check_impl env (decl : decl) = match decl with
         let actual_t = infer env impl_expr in
         exit_level ();
         (try unify expected_t actual_t
-         with Type_error (TypeMismatch (a, b)) ->
+         with Type_error (TypeMismatch (a, b), _) ->
            fail (MethodTypeMismatch (mname, a, b)))
     ) info.iface_methods;
     (* Check for extra methods that are not part of the interface *)
@@ -1054,8 +1062,9 @@ let rec expr_effects (eff_env : (string, effect_set) Hashtbl.t) (e : expr) : eff
   let sub e   = expr_effects eff_env e in
   (* Effects from calling `e` as a function — if it's a bare name we can look
      it up directly; otherwise fall back to the expression's own effects. *)
-  let call_effs = function
+  let rec call_effs = function
     | EVar n -> call n
+    | ELoc (_, e) -> call_effs e
     | e -> sub e
   in
   match e with
@@ -1093,6 +1102,7 @@ let rec expr_effects (eff_env : (string, effect_set) Hashtbl.t) (e : expr) : eff
   | EIndex (e, i)           -> effect_union (sub e) (sub i)
   | EAnnot (e, _)           -> sub e
   | EInfix (_, l, r)        -> effect_union (sub l) (sub r)
+  | ELoc (_, e)             -> sub e
 
 and do_stmt_effects eff_env = function
   | DoBind (_, e) | DoExpr e | DoLet (_, _, e) -> expr_effects eff_env e
@@ -1137,6 +1147,7 @@ let infer_and_check_effects groups =
    the (still-monomorphic) placeholder. *)
 let check_program (prog : program) : (ident * scheme) list =
   reset_state ();
+  current_loc := None;
   let env = initial_env () in
 
   (* Phase 1: register data, record, interface, and impl declarations *)

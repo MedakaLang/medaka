@@ -17,6 +17,8 @@ type error =
   | UnknownInterface    of ident           (* impl references an unknown interface *)
   | MethodNotInInterface of ident * ident  (* method name, interface name *)
 
+let current_loc : Ast.loc option ref = ref None
+
 let pp_error = function
   | UnboundVariable n      -> Printf.sprintf "Unbound variable: %s" n
   | UnknownConstructor n   -> Printf.sprintf "Unknown constructor: %s" n
@@ -97,10 +99,10 @@ let rec pat_bindings = function
 
 (* ── Phase 1: build env from top-level decls ──── *)
 
-let build_env (prog : program) : module_env * error list =
+let build_env (prog : program) : module_env * (error * Ast.loc option) list =
   let env = create_env () in
   let errors = ref [] in
-  let report e = errors := e :: !errors in
+  let report e = errors := (e, None) :: !errors in
   let add_unique tbl kind name =
     if Hashtbl.mem tbl name then
       report (DuplicateDefinition (kind, name))
@@ -159,12 +161,14 @@ let lookup_value env scope name =
   || Hashtbl.mem env.constructors name
   || Hashtbl.mem env.imported name
 
+let emit errors e = errors := (e, !current_loc) :: !errors
+
 let rec check_pat env errors p =
   match p with
   | PVar _ | PWild | PLit _ -> ()
   | PCon (c, ps) ->
     if not (Hashtbl.mem env.constructors c || Hashtbl.mem env.imported c) then
-      errors := UnknownConstructor c :: !errors;
+      emit errors (UnknownConstructor c);
     List.iter (check_pat env errors) ps
   | PCons (a, b) ->
     check_pat env errors a;
@@ -176,7 +180,7 @@ let rec check_type env errors t =
   match t with
   | TyCon n ->
     if not (Hashtbl.mem env.types n || Hashtbl.mem env.imported n) then
-      errors := UnknownType n :: !errors
+      emit errors (UnknownType n)
   | TyVar _ -> ()
   | TyApp (a, b) | TyFun (a, b) ->
     check_type env errors a; check_type env errors b
@@ -185,16 +189,19 @@ let rec check_type env errors t =
   | TyEffect (es, t) ->
     List.iter (fun e ->
       if not (List.mem e built_in_effects) then
-        errors := UnknownEffect e :: !errors
+        emit errors (UnknownEffect e)
     ) es;
     check_type env errors t
 
 let rec check_expr env scope errors e =
   match e with
+  | ELoc (l, e') ->
+    current_loc := Some l;
+    check_expr env scope errors e'
   | ELit _ -> ()
   | EVar n ->
     if not (lookup_value env scope n) then
-      errors := UnboundVariable n :: !errors
+      emit errors (UnboundVariable n)
   | EApp (f, x) ->
     check_expr env scope errors f;
     check_expr env scope errors x
@@ -231,14 +238,14 @@ let rec check_expr env scope errors e =
     check_expr env scope errors e
   | ERecordCreate (name, fs) ->
     if not (Hashtbl.mem env.types name || Hashtbl.mem env.imported name) then
-      errors := UnknownType name :: !errors
+      emit errors (UnknownType name)
     else begin
       (* Each field must belong to the named record *)
       List.iter (fun (fname, _) ->
         match Hashtbl.find_opt env.field_owners fname with
-        | None -> errors := UnknownField fname :: !errors
+        | None -> emit errors (UnknownField fname)
         | Some owner when owner <> name ->
-          errors := FieldNotInRecord (fname, name) :: !errors
+          emit errors (FieldNotInRecord (fname, name))
         | Some _ -> ()
       ) fs
     end;
@@ -252,7 +259,7 @@ let rec check_expr env scope errors e =
       | (fname, _) :: _ ->
         (match Hashtbl.find_opt env.field_owners fname with
          | None ->
-           errors := UnknownField fname :: !errors; None
+           emit errors (UnknownField fname); None
          | Some r -> Some r)
     in
     List.iter (fun (fname, v) ->
@@ -261,9 +268,9 @@ let rec check_expr env scope errors e =
        | None -> ()
        | Some r ->
          match Hashtbl.find_opt env.field_owners fname with
-         | None -> errors := UnknownField fname :: !errors
+         | None -> emit errors (UnknownField fname)
          | Some owner when owner <> r ->
-           errors := FieldNotInRecord (fname, r) :: !errors
+           emit errors (FieldNotInRecord (fname, r))
          | Some _ -> ())
     ) fs
   | EArrayLit es | EListLit es | ETuple es ->
@@ -293,7 +300,7 @@ let rec check_expr env scope errors e =
     check_type env errors t
   | EInfix (op, l, r) ->
     if not (lookup_value env scope op) then
-      errors := UnboundVariable op :: !errors;
+      emit errors (UnboundVariable op);
     check_expr env scope errors l;
     check_expr env scope errors r
 
@@ -327,20 +334,21 @@ let check_decl env errors = function
       check_expr env scope errors body
     ) methods;
     if not (Hashtbl.mem env.interfaces iface_name) then
-      errors := UnknownInterface iface_name :: !errors
+      emit errors (UnknownInterface iface_name)
     else begin
       let known_methods =
         try Hashtbl.find env.iface_methods iface_name with Not_found -> []
       in
       List.iter (fun (mname, _, _) ->
         if not (List.mem mname known_methods) then
-          errors := MethodNotInInterface (mname, iface_name) :: !errors
+          emit errors (MethodNotInInterface (mname, iface_name))
       ) methods
     end
 
 (* ── Public entry point ───────────────────────── *)
 
-let resolve_program (prog : program) : error list =
+let resolve_program (prog : program) : (error * Ast.loc option) list =
+  current_loc := None;
   let env, build_errors = build_env prog in
   let errors = ref build_errors in
   List.iter (check_decl env errors) prog;

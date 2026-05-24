@@ -131,7 +131,7 @@ let binop_prec = function
 
 let is_right_assoc = function "::" -> true | _ -> false
 
-let expr_prec = function
+let rec expr_prec = function
   | ELit _ | EVar _ | ETuple _ | EArrayLit _ | EListLit _
   | ERecordCreate _ | ERecordUpdate _ -> prec_atom
   | EFieldAccess _ | EIndex _          -> prec_postfix
@@ -141,6 +141,7 @@ let expr_prec = function
   | EBinOp (op, _, _)                  -> binop_prec op
   | ELam _ | ELet _ | EIf _
   | EMatch _ | EDo _ | EAnnot _        -> prec_top
+  | ELoc (_, e)                        -> expr_prec e
 
 let rec print_expr p min_prec e =
   let ep = expr_prec e in
@@ -254,11 +255,13 @@ and print_expr_raw p = function
     print_expr p (prec_infix + 1) l;
     write p " `"; write p op; write p "` ";
     print_expr p (prec_infix + 1) r
+  | ELoc (_, e) -> print_expr_raw p e
 
 (* Body position: a Match/Do can use its natural multi-line layout
    without surrounding parens. *)
 and print_expr_body p e = match e with
   | EMatch _ | EDo _ -> print_expr_raw p e
+  | ELoc (_, e')     -> print_expr_body p e'
   | _ -> print_expr p prec_top e
 
 and print_do_stmt p = function
@@ -276,8 +279,9 @@ and print_do_stmt p = function
 
 (* ── Declarations ────────────────────────────────── *)
 
-let is_block_body = function
+let rec is_block_body = function
   | EMatch _ | EDo _ -> true
+  | ELoc (_, e)      -> is_block_body e
   | _ -> false
 
 let print_use_path p = function

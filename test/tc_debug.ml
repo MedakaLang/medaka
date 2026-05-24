@@ -26,5 +26,5 @@ f x =
   | result ->
     List.iter (fun (n, s) ->
       Printf.printf "%s : %s\n" n (pp_scheme s)) result
-  | exception Type_error e ->
+  | exception Type_error (e, _) ->
     Printf.printf "Error: %s\n" (pp_error e)

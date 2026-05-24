@@ -14,7 +14,7 @@ let parse src =
 
 let check src =
   try Ok (check_program (parse src))
-  with Type_error e -> Error e
+  with Type_error (e, _) -> Error e
 
 (* assert_type src name expected — check that `name` in `src` types as `expected` *)
 let assert_type src name expected () =

@@ -18,15 +18,15 @@ let assert_ok src () =
   let errs = resolve src in
   if errs <> [] then
     failwith (Printf.sprintf "Expected no errors, got:\n  %s\n\nSource:\n%s"
-                (String.concat "\n  " (List.map pp_error errs))
+                (String.concat "\n  " (List.map (fun (e, _) -> pp_error e) errs))
                 src)
 
 let assert_err pred src () =
   let errs = resolve src in
-  if not (List.exists pred errs) then
+  if not (List.exists (fun (e, _) -> pred e) errs) then
     failwith (Printf.sprintf
       "Expected matching error, got:\n  %s\n\nSource:\n%s"
-      (String.concat "\n  " (List.map pp_error errs))
+      (String.concat "\n  " (List.map (fun (e, _) -> pp_error e) errs))
       src)
 
 (* ── Error matchers ─────────────────────────── *)
