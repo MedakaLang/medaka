@@ -41,6 +41,14 @@ type iface_info = {
   iface_defaults  : ident list;             (* method names that have default impls *)
 }
 
+(* Per-impl metadata used for constraint checking at call sites. *)
+type impl_entry = {
+  impl_iface      : ident;
+  impl_name       : ident option;
+  impl_is_default : bool;
+  impl_type_mono  : mono list;  (* from_ast_type of each type_arg *)
+}
+
 (* ── Effects ─────────────────────────────────────── *)
 
 type effect_set = string list  (* sorted, deduplicated *)
@@ -63,6 +71,8 @@ type type_error =
   | MissingMethod      of ident * ident       (* iface_name, missing required method *)
   | MethodTypeMismatch of ident * mono * mono (* method_name, expected, actual *)
   | ImplArityMismatch  of ident * int * int   (* iface_name, expected params, got type_args *)
+  | NoImplFound   of ident * mono list        (* iface_name, concrete type args *)
+  | AmbiguousImpl of ident * mono list        (* iface_name, concrete type args *)
   | Other          of string
 
 exception Type_error of type_error
@@ -185,6 +195,29 @@ let instantiate_with (Forall (vars, t)) (subs : (int * mono) list) =
   in
   walk t
 
+(* Like instantiate, but also returns the fresh TVar refs corresponding to
+   specific bound IDs (the interface's iface_param_ids). Used to track which
+   concrete types a method call is dispatching on, for constraint checking. *)
+let instantiate_method (Forall (vars, t)) track_ids =
+  let sub = List.map (fun id -> (id, fresh_var ())) vars in
+  let rec walk t = match normalize t with
+    | TVar v ->
+      (match !v with
+       | Unbound (id, _) -> (try List.assoc id sub with Not_found -> TVar v)
+       | Link _ -> assert false)
+    | TCon _ as t -> t
+    | TApp (a, b)  -> TApp (walk a, walk b)
+    | TFun (a, b)  -> TFun (walk a, walk b)
+    | TTuple ts    -> TTuple (List.map walk ts)
+  in
+  let result = walk t in
+  let tracked = List.filter_map (fun id ->
+    match List.assoc_opt id sub with
+    | Some (TVar r) -> Some r
+    | _ -> None  (* param not present in this method's scheme: skip *)
+  ) track_ids in
+  (result, tracked)
+
 (* ── Pretty printing ────────────────────────────── *)
 
 let pp_mono t =
@@ -258,24 +291,36 @@ let pp_error = function
   | ImplArityMismatch (iface, expected, got) ->
     Printf.sprintf "Interface %s has %d type parameter(s) but impl provides %d type argument(s)"
       iface expected got
+  | NoImplFound (iface, args) ->
+    Printf.sprintf "No impl of %s for %s"
+      iface (String.concat " " (List.map pp_mono args))
+  | AmbiguousImpl (iface, args) ->
+    Printf.sprintf "Ambiguous: multiple impls of %s for %s — use @ImplName to disambiguate"
+      iface (String.concat " " (List.map pp_mono args))
   | Other msg -> msg
 
 (* ── Environment ────────────────────────────────── *)
 
 type env = {
-  vars         : (ident * scheme) list;
-  ctors        : (ident, scheme) Hashtbl.t;   (* constructor name → scheme *)
-  records      : (ident, record_info) Hashtbl.t;  (* record name → info *)
-  field_owners : (ident, ident) Hashtbl.t;    (* field name → record name *)
-  interfaces   : (ident, iface_info) Hashtbl.t;  (* interface name → info *)
+  vars          : (ident * scheme) list;
+  ctors         : (ident, scheme) Hashtbl.t;   (* constructor name → scheme *)
+  records       : (ident, record_info) Hashtbl.t;  (* record name → info *)
+  field_owners  : (ident, ident) Hashtbl.t;    (* field name → record name *)
+  interfaces    : (ident, iface_info) Hashtbl.t;  (* interface name → info *)
+  method_iface  : (ident, ident) Hashtbl.t;    (* method name → interface name *)
+  impls         : impl_entry list ref;          (* all registered impls *)
+  method_usages : (ident * tyvar_info ref list) list ref;  (* (method, param_var_refs) *)
 }
 
 let empty_env () = {
-  vars         = [];
-  ctors        = Hashtbl.create 16;
-  records      = Hashtbl.create 8;
-  field_owners = Hashtbl.create 16;
-  interfaces   = Hashtbl.create 8;
+  vars          = [];
+  ctors         = Hashtbl.create 16;
+  records       = Hashtbl.create 8;
+  field_owners  = Hashtbl.create 16;
+  interfaces    = Hashtbl.create 8;
+  method_iface  = Hashtbl.create 16;
+  impls         = ref [];
+  method_usages = ref [];
 }
 
 let lookup_var env x =
@@ -444,12 +489,26 @@ let rec infer env = function
 
   | EVar x ->
     if String.length x > 0 && x.[0] = '@' then
-      (* @ImplName is a disambiguation hint — treated as Unit for now;
-         full impl selection is Phase 4.2. *)
       t_unit
-    else
-      (try instantiate (Hashtbl.find env.ctors x)
-       with Not_found -> instantiate (lookup_var env x))
+    else begin
+      let scheme =
+        try Hashtbl.find env.ctors x
+        with Not_found -> lookup_var env x
+      in
+      match Hashtbl.find_opt env.method_iface x with
+      | Some iface_name ->
+        let info = Hashtbl.find env.interfaces iface_name in
+        let (t, param_vars) = instantiate_method scheme info.iface_param_ids in
+        env.method_usages := (x, param_vars) :: !(env.method_usages);
+        t
+      | None ->
+        instantiate scheme
+    end
+
+  | EApp (f, EVar hint) when String.length hint > 0 && hint.[0] = '@' ->
+    (* @ImplName is a disambiguation hint — drop it silently so it does not
+       consume an argument position in f's type.  Full impl selection deferred. *)
+    infer env f
 
   | EApp (f, x) ->
     let tf = infer env f in
@@ -859,6 +918,9 @@ let register_interface env (iface_name, type_params, methods) =
     iface_defaults  = defaults;
   } in
   Hashtbl.replace env.interfaces iface_name info;
+  List.iter (fun m ->
+    Hashtbl.replace env.method_iface m.Ast.method_name iface_name
+  ) methods;
   method_schemes
 
 (* Validate a DImpl declaration against the registered interface.
@@ -898,6 +960,78 @@ let check_impl env (decl : decl) = match decl with
         fail (ExtraMethod (iface_name, n))
     ) methods
   | _ -> ()
+
+(* Record an impl declaration in env.impls so call-site constraint checking
+   can find it.  Must run after register_interface so the interface exists. *)
+let register_impl env = function
+  | DImpl { iface_name; type_args; impl_name; is_default; _ } ->
+    if not (Hashtbl.mem env.interfaces iface_name) then
+      fail (UnknownInterface iface_name);
+    let entry = {
+      impl_iface      = iface_name;
+      impl_name;
+      impl_is_default = is_default;
+      impl_type_mono  = List.map from_ast_type type_args;
+    } in
+    env.impls := entry :: !(env.impls)
+  | _ -> ()
+
+(* ── Constraint checking ─────────────────────────── *)
+
+(* One-directional structural matching: pattern (from impl type_args) may
+   contain unbound TVars that act as wildcards; concrete must be fully resolved. *)
+let rec mono_matches ~pattern ~concrete =
+  match normalize pattern, normalize concrete with
+  | TVar _, _ -> true
+  | TCon a, TCon b -> a = b
+  | TApp (f1, a1), TApp (f2, a2) ->
+    mono_matches ~pattern:f1 ~concrete:f2 &&
+    mono_matches ~pattern:a1 ~concrete:a2
+  | TFun (a1, b1), TFun (a2, b2) ->
+    mono_matches ~pattern:a1 ~concrete:a2 &&
+    mono_matches ~pattern:b1 ~concrete:b2
+  | TTuple ps, TTuple cs when List.length ps = List.length cs ->
+    List.for_all2 (fun p c -> mono_matches ~pattern:p ~concrete:c) ps cs
+  | _ -> false
+
+(* After HM inference, check every recorded method call site against the impl
+   registry.  Skips usages where types are still polymorphic or where the method
+   scheme doesn't mention all interface params (uncommon). *)
+let check_method_usages env =
+  let n_iface_params iface_name =
+    List.length (Hashtbl.find env.interfaces iface_name).iface_param_ids
+  in
+  let rec is_concrete = function
+    | TVar v -> (match !v with Unbound _ -> false | Link t -> is_concrete t)
+    | TCon _ -> true
+    | TApp (a, b) | TFun (a, b) -> is_concrete a && is_concrete b
+    | TTuple ts -> List.for_all is_concrete ts
+  in
+  List.iter (fun (method_name, param_vars) ->
+    let iface_name = Hashtbl.find env.method_iface method_name in
+    let n = n_iface_params iface_name in
+    if n = 0 || List.length param_vars <> n then ()
+    else begin
+      let concrete_args = List.map (fun r -> normalize (TVar r)) param_vars in
+      if not (List.for_all is_concrete concrete_args) then ()
+      else begin
+        let matching = List.filter (fun e ->
+          e.impl_iface = iface_name &&
+          List.length e.impl_type_mono = n &&
+          List.for_all2
+            (fun p c -> mono_matches ~pattern:p ~concrete:c)
+            e.impl_type_mono concrete_args
+        ) !(env.impls) in
+        match matching with
+        | [] -> fail (NoImplFound (iface_name, concrete_args))
+        | [_] -> ()
+        | entries ->
+          let defaults = List.filter (fun e -> e.impl_is_default) entries in
+          if List.length defaults = 1 then ()
+          else fail (AmbiguousImpl (iface_name, concrete_args))
+      end
+    end
+  ) !(env.method_usages)
 
 (* ── Effect inference ────────────────────────────── *)
 
@@ -1005,7 +1139,7 @@ let check_program (prog : program) : (ident * scheme) list =
   reset_state ();
   let env = initial_env () in
 
-  (* Phase 1: register data, record, and interface declarations *)
+  (* Phase 1: register data, record, interface, and impl declarations *)
   let iface_method_schemes = ref [] in
   List.iter (function
     | DData (n, ps, vs) -> register_data env (n, ps, vs)
@@ -1015,6 +1149,8 @@ let check_program (prog : program) : (ident * scheme) list =
       iface_method_schemes := ms @ !iface_method_schemes
     | _ -> ()
   ) prog;
+  (* register_impl runs after all interfaces are registered *)
+  List.iter (register_impl env) prog;
 
   (* Phase 2: collect type sigs and fn clause groups *)
   let groups = group_fundefs prog in
@@ -1055,6 +1191,9 @@ let check_program (prog : program) : (ident * scheme) list =
     | DImpl _ as d -> check_impl !env d
     | _ -> ()
   ) prog;
+
+  (* Phase 4.6: verify method call sites have matching impls *)
+  check_method_usages !env;
 
   (* Phase 5: effect inference and checking *)
   infer_and_check_effects groups;

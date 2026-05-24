@@ -619,6 +619,134 @@ impl Pair Int where
   swap p = p
 |}
 
+(* ── Phase 4.2: constraint checking at call sites ── *)
+
+(* Method called with a concrete type that has a matching impl — no error *)
+let t_constraint_single_impl = assert_type
+  {|interface Eq a where
+  eq : a -> a -> Bool
+
+impl Eq Int where
+  eq x y = x == y
+
+f = eq 1 2
+|}
+  "f" "Bool"
+
+(* Method used polymorphically: type param stays unresolved — check is skipped *)
+let t_constraint_polymorphic = assert_type
+  {|interface Eq a where
+  eq : a -> a -> Bool
+
+impl Eq Int where
+  eq x y = x == y
+
+f x y = eq x y
+|}
+  "f" "'a -> 'a -> Bool"
+
+(* Zero-param interface: no constraint check needed *)
+let t_constraint_zero_param = assert_type
+  {|interface Printable where
+  sep : String
+
+f = sep
+|}
+  "f" "String"
+
+(* Multiple impls, one marked default — default is selected without error at a concrete type *)
+let t_constraint_default_impl = assert_type
+  {|interface Monoid a where
+  mempty : a
+  mappend : a -> a -> a
+
+default impl additive of Monoid Int where
+  mempty = 0
+  mappend x y = x + y
+
+impl multiplicative of Monoid Int where
+  mempty = 1
+  mappend x y = x * y
+
+f : Int
+f = mempty
+|}
+  "f" "Int"
+
+(* Polymorphic impl (Option a) matches a call on Option Int *)
+let t_constraint_poly_impl = assert_type
+  {|interface Show a where
+  show : a -> String
+
+impl Show (Option a) where
+  show x = "option"
+
+f x = show (Some x)
+|}
+  "f" "'a -> String"
+
+(* @Name hint in application position drops silently — method types correctly *)
+let t_constraint_at_name_drop = assert_type
+  {|interface Eq a where
+  eq : a -> a -> Bool
+
+impl Eq Int where
+  eq x y = x == y
+
+f = eq @Eq 1 2
+|}
+  "f" "Bool"
+
+(* Error: method called with a type that has no impl *)
+let e_constraint_no_impl = assert_err
+  {|interface Eq a where
+  eq : a -> a -> Bool
+
+impl Eq Int where
+  eq x y = x == y
+
+f = eq 1.0 2.0
+|}
+
+(* Error: method called on a type entirely absent from the impl registry *)
+let e_constraint_missing_impl = assert_err
+  {|interface Show a where
+  show : a -> String
+
+g = show True
+|}
+
+(* Error: multiple non-default impls, no disambiguation, at a concrete type *)
+let e_constraint_ambiguous = assert_err
+  {|interface Monoid a where
+  mempty : a
+  mappend : a -> a -> a
+
+impl additive of Monoid Int where
+  mempty = 0
+  mappend x y = x + y
+
+impl multiplicative of Monoid Int where
+  mempty = 1
+  mappend x y = x * y
+
+f : Int
+f = mempty
+|}
+
+(* Error: method used in a function whose return type is made concrete
+   downstream, and there is no matching impl *)
+let e_constraint_concrete_in_context = assert_err
+  {|interface Eq a where
+  eq : a -> a -> Bool
+
+impl Eq Int where
+  eq x y = x == y
+
+check : String -> String -> Bool
+check x y = eq x y
+|}
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -752,5 +880,17 @@ let () =
       test_case "err: wrong type"        `Quick e_iface_wrong_type;
       test_case "err: extra method"      `Quick e_iface_extra_method;
       test_case "err: arity mismatch"    `Quick e_iface_arity;
+    ];
+    "constraint checking", [
+      test_case "single impl"            `Quick t_constraint_single_impl;
+      test_case "polymorphic skip"       `Quick t_constraint_polymorphic;
+      test_case "zero-param skip"        `Quick t_constraint_zero_param;
+      test_case "default impl"           `Quick t_constraint_default_impl;
+      test_case "poly impl match"        `Quick t_constraint_poly_impl;
+      test_case "@Name drop"             `Quick t_constraint_at_name_drop;
+      test_case "err: no impl"           `Quick e_constraint_no_impl;
+      test_case "err: missing impl"      `Quick e_constraint_missing_impl;
+      test_case "err: ambiguous"         `Quick e_constraint_ambiguous;
+      test_case "err: concrete context"  `Quick e_constraint_concrete_in_context;
     ];
   ]

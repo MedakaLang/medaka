@@ -16,14 +16,14 @@ The front-end of the Medaka compiler is in place. We have:
 | Resolver        | `lib/resolve.ml`    | Validates that every identifier reference is bound          |
 | Type checker    | `lib/typecheck.ml`  | Hindley-Milner with let-polymorphism, ADTs, records, patterns, pipe/compose, effects |
 
-231 tests pass across 4 test suites:
+241 tests pass across 4 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
 | Parser            | `test/test_parser.ml`           | 48    | AST shape for each construct                          |
 | Round-trip        | `test/test_roundtrip.ml`        | 50    | parse → print → parse yields the same AST             |
 | Resolver          | `test/test_resolve.ml`          | 34    | Unbound vars, unknown types/ctors, duplicates, fields |
-| Type checker      | `test/test_typecheck.ml`        | 99    | Inferred types for valid programs + type-error cases  |
+| Type checker      | `test/test_typecheck.ml`        | 109   | Inferred types for valid programs + type-error cases  |
 
 Two debug binaries in `test/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
@@ -293,21 +293,39 @@ methods as polymorphic bindings in the env.
 - `@Name` disambiguation doesn't select a specific impl yet
 - Named impl names must be lowercase (parser uses `IDENT`; fix in Phase 7)
 
-### Phase 4.2: Interfaces — constraint solving at call sites — next
+### Phase 4.2: Interfaces — constraint solving at call sites ✅ DONE
 
 **Goal.** At each method call site, verify that a valid impl exists for the
 inferred argument types. Handle the `@Name` disambiguation hint properly.
 
-**Design.** After the HM pass, walk the typed program; at each `EVar m` for a
-method `m`, check that the inferred type is compatible with at least one impl's
-type args. If multiple match, require exactly one to be marked `default` or an
-explicit `@Name` annotation. Error with a helpful message if ambiguous or absent.
+**What was added (this session).**
+- `impl_entry` type in `typecheck.ml`; `method_iface`, `impls`, `method_usages`
+  fields added to `env`
+- `register_impl` — populates `env.impls` from `DImpl` declarations in Phase 1
+- `register_interface` now also populates `env.method_iface` (method → iface map)
+- `instantiate_method` — variant of `instantiate` that returns the fresh TVar
+  refs corresponding to the interface's type params, so call sites are trackable
+- Modified `EVar` in `infer`: method variables use `instantiate_method` and
+  record `(method_name, param_var_refs)` in `env.method_usages`
+- `EApp` special case: `EApp(f, EVar "@X")` where `@X` starts with `@` silently
+  drops the hint argument (no Unit arg consumed), so `eq @EqInt 1 2` type-checks
+- `mono_matches` — one-directional structural matching; impl pattern may have
+  unbound TVars that act as wildcards (handles `impl Show (Option a)`)
+- `check_method_usages` — post-HM pass (Phase 4.6) that walks all recorded
+  usages; skips polymorphic / underconstrained calls; raises `NoImplFound` or
+  `AmbiguousImpl` otherwise
+- `NoImplFound (iface, concrete_args)` and `AmbiguousImpl (iface, concrete_args)`
+  error variants with `pp_error` cases
+- 10 new tests (6 valid, 4 error); 241 total
 
-This is substantially simpler than a full constraint-based rewrite because HM
-already inferred concrete types — we just need to check post-hoc.
-
-**Recommended.** Consider whether this is actually needed before the interpreter
-(Phase 9) — without a runtime, impls are only used for type-checking guarantees.
+**Known limitations.**
+- `@Name` hints drop silently (no argument consumed, type unchanged) but do not
+  yet *select* a specific impl. Full `@Name` selection deferred until Phase 7
+  addresses the parser quirk (impl names forced lowercase via `IDENT`).
+- Constraint checking is skipped when a method's scheme doesn't mention all
+  interface type params (method doesn't constrain that param). Rare in practice.
+- Higher-order callbacks that receive effectful/constrained functions aren't
+  tracked (same limitation as Phase 3 effect tracking).
 
 ### Phase 5: Position-tracked errors
 
