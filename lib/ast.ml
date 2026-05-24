@@ -104,14 +104,25 @@ type decl =
 type program = decl list
 
 (* Pretty-printing helpers *)
-let rec pp_ty = function
+(* Precedence-aware type printer.
+   0 = top level / no wrap
+   1 = arrow lhs / app head (wrap arrows)
+   2 = app arg (wrap arrows and applications) *)
+let rec pp_ty_prec p = function
   | TyCon s         -> s
   | TyVar s         -> s
-  | TyApp (f, x)    -> Printf.sprintf "(%s %s)" (pp_ty f) (pp_ty x)
-  | TyFun (a, b)    -> Printf.sprintf "%s -> %s" (pp_ty a) (pp_ty b)
-  | TyTuple ts      -> Printf.sprintf "(%s)" (String.concat ", " (List.map pp_ty ts))
+  | TyTuple ts      -> Printf.sprintf "(%s)" (String.concat ", " (List.map (pp_ty_prec 0) ts))
+  | TyApp (f, x)    ->
+    let s = Printf.sprintf "%s %s" (pp_ty_prec 1 f) (pp_ty_prec 2 x) in
+    if p >= 2 then "(" ^ s ^ ")" else s
+  | TyFun (a, b)    ->
+    let s = Printf.sprintf "%s -> %s" (pp_ty_prec 1 a) (pp_ty_prec 0 b) in
+    if p >= 1 then "(" ^ s ^ ")" else s
   | TyEffect (effs, t) ->
-    Printf.sprintf "<%s> %s" (String.concat ", " effs) (pp_ty t)
+    let s = Printf.sprintf "<%s> %s" (String.concat ", " effs) (pp_ty_prec 0 t) in
+    if p >= 1 then "(" ^ s ^ ")" else s
+
+let pp_ty t = pp_ty_prec 0 t
 
 let pp_lit = function
   | LInt n    -> string_of_int n

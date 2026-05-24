@@ -1,0 +1,3 @@
+(executables
+ (names debug tc_debug)
+ (libraries medaka_lib))

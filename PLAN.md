@@ -16,18 +16,18 @@ The front-end of the Medaka compiler is in place. We have:
 | Resolver        | `lib/resolve.ml`    | Validates that every identifier reference is bound          |
 | Type checker    | `lib/typecheck.ml`  | Hindley-Milner with let-polymorphism, ADTs, records, patterns, pipe/compose, effects |
 
-Two debug binaries in `test/` (not run as part of `dune test`):
+Two debug binaries in `dev/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
 - `tc_debug.ml` — quick type-check probe
 
-260 tests pass across 4 test suites:
+275 tests pass across 4 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
 | Parser            | `test/test_parser.ml`           | 48    | AST shape for each construct                          |
 | Round-trip        | `test/test_roundtrip.ml`        | 50    | parse → print → parse yields the same AST             |
 | Resolver          | `test/test_resolve.ml`          | 34    | Unbound vars, unknown types/ctors, duplicates, fields |
-| Type checker      | `test/test_typecheck.ml`        | 128   | Inferred types, type errors, exhaustiveness warnings  |
+| Type checker      | `test/test_typecheck.ml`        | 143   | Inferred types, type errors, exhaustiveness warnings  |
 
 The source of truth for what the language *is* is `language-design.md`. Read it
 before designing new features.
@@ -75,8 +75,8 @@ the input and the actual output in its failure message. See the helpers in
 `test/test_resolve.ml` (`assert_ok`, `assert_err`) for the established pattern:
 pretty-print the actual result and include the source on failure.
 
-When debugging a specific case, add a probe to `test/tc_debug.ml` (or
-`test/debug.ml` for parser issues), build, and run that binary instead of
+When debugging a specific case, add a probe to `dev/tc_debug.ml` (or
+`dev/debug.ml` for parser issues), build, and run that binary instead of
 binary-searching through the test suite.
 
 ### 2.4 Grammar conflicts are silently resolved
@@ -104,6 +104,10 @@ When you change the AST or printer, every existing round-trip test must still
 pass. The contract is: `parse src → AST1`, `print AST1 → src'`,
 `parse src' → AST2`, `AST1 = AST2` (structural equality via OCaml's `=`). The
 printer can produce ugly output as long as it parses back to the same AST.
+
+Structural `=` on `Ast.program` is fine because the AST has no mutable refs.
+Don't introduce any without revisiting this contract — `[@@deriving eq]` would
+become necessary the moment a field uses `ref` or similar.
 
 ### 2.7 OCaml argument evaluation order is unspecified
 
@@ -426,29 +430,43 @@ pipeline — parse → resolve → type-check — with Elm-style error output
 
 **Design note.** `Ref T` is represented as `TApp(TCon "Ref", T)` — no new `mono` variant needed. The `.value` field reads through `Ref` without consuming a `<Mut>` effect (reads are pure); writes require calling `set_ref` which carries `<Mut>` through the existing effect-propagation pass. `let mut x` binding reassignment is tracked separately from `Ref` — `let mut x = 5` followed by `x = 10` in a do-block is a `DoAssign`, while `Ref` provides explicit shared mutable cells. Value/reference semantics documentation deferred to Phase 9 (eval pass).
 
-### Phase 8.6: Housekeeping pass (before backend) ⬅ NEXT
+### Phase 8.6: Housekeeping pass (before backend) ✅ DONE
 
-Small, independent cleanups uncovered while auditing the frontend. None block
-the backend, but tackling them in one short session leaves the codebase in a
-better state to build on.
+Small, independent cleanups completed in one session before starting the
+backend.
 
-- **Update `README.md`.** Stale: claims "Not yet: name resolution, type
-  checking, codegen, anything that runs Medaka code" and lists only 40 parser
-  tests. Sync with current reality (275 tests, full frontend in place).
-- **Move `tc_debug.ml` and `debug.ml` out of `test/` into `dev/`.** They are
-  exploratory probes, not tests, and they confuse `dune test` reasoning.
-- **Add a `.editorconfig`.** Enforce 2-space OCaml indentation so future
-  contributors don't drift.
-- **Fix `pp_ty` over-parenthesisation.** `pp_ty (TyApp _)` always wraps in
-  parens (`(List Int)`); precedence-aware printing would read better.
-- **Decide on `Eq`-deriving for AST equality.** Structural `=` works today,
-  but `TVar ref` in `typecheck.ml`'s `mono` is already mutable; the round-trip
-  contract will start to bite if more mutable bits creep in.
+**What was added (this session).**
+- `dev/` directory created; `test/debug.ml` and `test/tc_debug.ml` moved to
+  `dev/debug.ml` and `dev/tc_debug.ml` with their own `dev/dune`
+  (`executables` stanza). `test/dune` now only contains the `tests` stanza.
+  Doc references updated.
+- `.editorconfig` added at repo root: 2-space indent for OCaml sources and
+  Markdown/YAML/JSON, tabs only for Makefile, LF endings, final newline,
+  trim trailing whitespace.
+- `lib/ast.ml`: `pp_ty` rewritten as a precedence-aware printer
+  (`pp_ty_prec`). `List Int` now prints as `List Int` instead of
+  `(List Int)`; arrows only get wrapped when they sit in an
+  application argument or arrow-lhs position. Tests unaffected (none
+  asserted on the old over-parenthesised form).
+- README was already current — no edits needed beyond the layout block
+  (moved `debug.ml` / `tc_debug.ml` under a new `dev/` heading).
+- Stale test counts in PLAN.md §1 fixed: 260 → 275 total, 128 → 143 for
+  the type-checker suite.
+- `Eq`-deriving for AST: decided to keep structural `=`. `Ast.program` has
+  no mutable refs; `TVar ref` lives in `typecheck.ml`'s `mono`, which
+  round-trip tests never compare. Documented under PLAN.md §2.6 so the
+  next session doesn't reopen it.
+
+275 tests still pass; conflict count unchanged (4 S/R / 13, 6 R/R / 21).
 
 Not in scope here (tracked in Section 5): polymorphic numeric/comparison
 operators, higher-order effect tracking, `@Name` impl selection, cons-pattern
 `DoBind`, `r.value = e` field assignment, local recursion. These are revisited
 once the stdlib forces real use cases.
+
+### Phase 9: `extern` declarations ⬅ NEXT
+
+See "Phase 9 onwards: Backend" below.
 
 ---
 

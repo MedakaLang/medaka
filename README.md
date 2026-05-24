@@ -75,6 +75,7 @@ test/
   test_roundtrip.ml   parse → print → parse stability
   test_resolve.ml     Resolution errors
   test_typecheck.ml   Inferred types, type errors, exhaustiveness warnings
+dev/
   debug.ml            Ad-hoc parse-and-print probe
   tc_debug.ml         Ad-hoc type-check probe
 ```
