@@ -20,14 +20,15 @@ Two debug binaries in `dev/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
 - `tc_debug.ml` — quick type-check probe
 
-275 tests pass across 4 test suites:
+336 tests pass across 5 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
-| Parser            | `test/test_parser.ml`           | 48    | AST shape for each construct                          |
-| Round-trip        | `test/test_roundtrip.ml`        | 50    | parse → print → parse yields the same AST             |
-| Resolver          | `test/test_resolve.ml`          | 34    | Unbound vars, unknown types/ctors, duplicates, fields |
-| Type checker      | `test/test_typecheck.ml`        | 143   | Inferred types, type errors, exhaustiveness warnings  |
+| Parser            | `test/test_parser.ml`           | 53    | AST shape for each construct                          |
+| Round-trip        | `test/test_roundtrip.ml`        | 54    | parse → print → parse yields the same AST             |
+| Resolver          | `test/test_resolve.ml`          | 40    | Unbound vars, unknown types/ctors, duplicates, fields |
+| Type checker      | `test/test_typecheck.ml`        | 148   | Inferred types, type errors, exhaustiveness warnings  |
+| Evaluator         | `test/test_eval.ml`             | 41    | Runtime values, recursion, do-blocks, Ref, errors     |
 
 The source of truth for what the language *is* is `language-design.md`. Read it
 before designing new features.
@@ -464,9 +465,9 @@ operators, higher-order effect tracking, `@Name` impl selection, cons-pattern
 `DoBind`, `r.value = e` field assignment, local recursion. These are revisited
 once the stdlib forces real use cases.
 
-### Phase 9: `extern` declarations ⬅ NEXT
+### Phase 9: `extern` declarations ✅ DONE
 
-See "Phase 9 onwards: Backend" below.
+See "Phase 9 onwards: Backend" below for the full write-up.
 
 ---
 
@@ -541,7 +542,18 @@ equality.
 **Done when.** The evaluator can run every existing type-checked test program
 to a value and the new `test_eval.ml` suite is green.
 
-### Phase 11: Driver — running whole programs
+**What was added (commit `8d25560`).**
+- `lib/eval.ml` — `type value` (14 variants), ref-cell env frames for mutual
+  recursion, `match_pat`, `apply`, `eval`, `eval_do`, `eval_binop`,
+  `eval_arith`, extern dispatch table, `eval_program`
+- `True`/`False` map to `VBool true`/`VBool false`; `PCon("True",[])` /
+  `PCon("False",[])` patterns special-cased in `match_pat` to match `VBool`
+- do-block monad dispatch: runtime heuristic — inspects the first `DoBind`
+  result shape to detect Option / Result / IO; `pure` consults a
+  `current_monad` ref. See §5 Known limitations for the holes.
+- `test/test_eval.ml` — 41 tests across 14 groups (336 total)
+
+### Phase 11: Driver — running whole programs ⬅ NEXT
 
 **Goal.** `medaka run file.mdk` actually executes a program.
 
@@ -595,19 +607,26 @@ concrete work once real programs are running through the interpreter.
 
 These aren't blockers, but a less-careful change could trip over them:
 
+- do-block monad dispatch in `eval.ml` is a runtime heuristic: the monad is
+  detected by inspecting the first `DoBind` result's constructor shape. This
+  means (a) `pure` in a do-block with no `<-` statements returns the value
+  unwrapped (monad context unknown); (b) the List monad is not supported; (c)
+  higher-order functions that receive do-blocks don't thread monad context. The
+  clean fix is a type-annotated AST: after type-checking, tag `EDo` with its
+  resolved monad so `eval` doesn't need to guess. Deferred until Phase 11 or
+  later forces the issue.
 - `let mut` binding reassignment (`DoAssign`) is now type-checked in do-blocks,
   but `ELet(true, ...)` in expression context only tracks `mut_vars` — there is
   no syntax for reassigning a `let mut` binding outside a do-block. The `Ref`
-  type is fully type-checked; actual mutation happens at runtime (Phase 10).
+  type is fully type-checked; actual mutation happens at runtime (Phase 10 ✅).
 - `r.value = expr` field-assignment syntax for `Ref` is not yet supported.
   Use `set_ref r expr` instead.
 - `let f x = ...` is purely sugar; the parser desugars to nested lambdas at
   parse time. There is no `let-rec` for locals; if you need local recursion,
   use a top-level def.
-- The resolver bakes in a list of "primitive values" (`pure`, `print`, `map`,
-  …) and "primitive types" (`List`, `Option`, …). Phase 9 (extern) replaces
-  the value list with a runtime registry; primitive types still live there
-  until the stdlib lands.
+- Primitive values (`pure`, `print`, `map`, …) now live exclusively in
+  `lib/runtime.ml` (Phase 9 ✅). Primitive types (`List`, `Option`, …) are
+  still hard-coded in `resolve.ml`/`typecheck.ml` until the stdlib lands.
 - `EUnOp "-"` only types as `Int -> Int`. Float negation isn't supported.
 - All comparison ops (`==`, `<`, …) currently force `Int`. They should be
   polymorphic (`forall a. a -> a -> Bool` for `==`, ordered types for `<`)
