@@ -60,6 +60,10 @@
           "named": true
         },
         {
+          "type": "map_lit",
+          "named": true
+        },
+        {
           "type": "match_expr",
           "named": true
         },
@@ -73,6 +77,10 @@
         },
         {
           "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
           "named": true
         },
         {
@@ -167,6 +175,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -180,6 +192,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -279,6 +295,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -292,6 +312,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -494,6 +518,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -507,6 +535,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -612,6 +644,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -625,6 +661,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -760,6 +800,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -773,6 +817,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -878,6 +926,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -891,6 +943,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -986,6 +1042,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -999,6 +1059,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1120,6 +1184,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1133,6 +1201,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1222,6 +1294,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1235,6 +1311,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1271,6 +1351,10 @@
         "types": [
           {
             "type": "ident",
+            "named": true
+          },
+          {
+            "type": "upper",
             "named": true
           }
         ]
@@ -1374,6 +1458,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1387,6 +1475,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1486,6 +1578,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1499,6 +1595,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1614,6 +1714,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1627,6 +1731,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1716,6 +1824,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1729,6 +1841,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1818,6 +1934,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -1831,6 +1951,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -1933,6 +2057,10 @@
           "named": true
         },
         {
+          "type": "map_lit",
+          "named": true
+        },
+        {
           "type": "match_expr",
           "named": true
         },
@@ -1950,6 +2078,10 @@
         },
         {
           "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
           "named": true
         },
         {
@@ -2147,6 +2279,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2160,6 +2296,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2348,6 +2488,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2361,6 +2505,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2450,6 +2598,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2463,6 +2615,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2598,6 +2754,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2611,6 +2771,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2716,6 +2880,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2729,6 +2897,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2848,6 +3020,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -2861,6 +3037,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -2948,6 +3128,10 @@
           "named": true
         },
         {
+          "type": "map_lit",
+          "named": true
+        },
+        {
           "type": "match_expr",
           "named": true
         },
@@ -2961,6 +3145,10 @@
         },
         {
           "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
           "named": true
         },
         {
@@ -3012,6 +3200,258 @@
         },
         {
           "type": "string_lit",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "map_entry",
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "do_expr",
+            "named": true
+          },
+          {
+            "type": "expr_app",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "impl_selection",
+            "named": true
+          },
+          {
+            "type": "index_expr",
+            "named": true
+          },
+          {
+            "type": "lambda_expr",
+            "named": true
+          },
+          {
+            "type": "let_expr",
+            "named": true
+          },
+          {
+            "type": "list_expr",
+            "named": true
+          },
+          {
+            "type": "literal",
+            "named": true
+          },
+          {
+            "type": "map_lit",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "operator_section",
+            "named": true
+          },
+          {
+            "type": "record_create",
+            "named": true
+          },
+          {
+            "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
+            "type": "type_annotation",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unit_expr",
+            "named": true
+          },
+          {
+            "type": "upper",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "do_expr",
+            "named": true
+          },
+          {
+            "type": "expr_app",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "impl_selection",
+            "named": true
+          },
+          {
+            "type": "index_expr",
+            "named": true
+          },
+          {
+            "type": "lambda_expr",
+            "named": true
+          },
+          {
+            "type": "let_expr",
+            "named": true
+          },
+          {
+            "type": "list_expr",
+            "named": true
+          },
+          {
+            "type": "literal",
+            "named": true
+          },
+          {
+            "type": "map_lit",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "operator_section",
+            "named": true
+          },
+          {
+            "type": "record_create",
+            "named": true
+          },
+          {
+            "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
+            "type": "type_annotation",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unit_expr",
+            "named": true
+          },
+          {
+            "type": "upper",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "map_lit",
+    "named": true,
+    "fields": {
+      "constructor": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "upper",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "map_entry",
           "named": true
         }
       ]
@@ -3086,6 +3526,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3099,6 +3543,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3188,6 +3636,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3201,6 +3653,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3306,6 +3762,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3319,6 +3779,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3434,6 +3898,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3447,6 +3915,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3767,6 +4239,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3780,6 +4256,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3875,6 +4355,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -3888,6 +4372,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -3928,6 +4416,124 @@
     "type": "section_op",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "set_lit",
+    "named": true,
+    "fields": {
+      "constructor": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "upper",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array_expr",
+          "named": true
+        },
+        {
+          "type": "binary_expr",
+          "named": true
+        },
+        {
+          "type": "do_expr",
+          "named": true
+        },
+        {
+          "type": "expr_app",
+          "named": true
+        },
+        {
+          "type": "field_access",
+          "named": true
+        },
+        {
+          "type": "ident",
+          "named": true
+        },
+        {
+          "type": "if_expr",
+          "named": true
+        },
+        {
+          "type": "impl_selection",
+          "named": true
+        },
+        {
+          "type": "index_expr",
+          "named": true
+        },
+        {
+          "type": "lambda_expr",
+          "named": true
+        },
+        {
+          "type": "let_expr",
+          "named": true
+        },
+        {
+          "type": "list_expr",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "map_lit",
+          "named": true
+        },
+        {
+          "type": "match_expr",
+          "named": true
+        },
+        {
+          "type": "operator_section",
+          "named": true
+        },
+        {
+          "type": "record_create",
+          "named": true
+        },
+        {
+          "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
+          "named": true
+        },
+        {
+          "type": "tuple_expr",
+          "named": true
+        },
+        {
+          "type": "type_annotation",
+          "named": true
+        },
+        {
+          "type": "unary_expr",
+          "named": true
+        },
+        {
+          "type": "unit_expr",
+          "named": true
+        },
+        {
+          "type": "upper",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "source_file",
@@ -4064,6 +4670,10 @@
           "named": true
         },
         {
+          "type": "map_lit",
+          "named": true
+        },
+        {
           "type": "match_expr",
           "named": true
         },
@@ -4077,6 +4687,10 @@
         },
         {
           "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
           "named": true
         },
         {
@@ -4262,6 +4876,10 @@
           "named": true
         },
         {
+          "type": "map_lit",
+          "named": true
+        },
+        {
           "type": "match_expr",
           "named": true
         },
@@ -4275,6 +4893,10 @@
         },
         {
           "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "set_lit",
           "named": true
         },
         {
@@ -4429,6 +5051,10 @@
             "named": true
           },
           {
+            "type": "map_lit",
+            "named": true
+          },
+          {
             "type": "match_expr",
             "named": true
           },
@@ -4442,6 +5068,10 @@
           },
           {
             "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
             "named": true
           },
           {
@@ -4474,15 +5104,15 @@
     "fields": {}
   },
   {
-    "type": " ",
-    "named": false
-  },
-  {
     "type": "!",
     "named": false
   },
   {
     "type": "!=",
+    "named": false
+  },
+  {
+    "type": "%",
     "named": false
   },
   {

@@ -1,0 +1,26 @@
+{
+  "name": "medaka",
+  "displayName": "Medaka",
+  "description": "Syntax highlighting for the Medaka programming language (.mdk)",
+  "version": "0.1.0",
+  "publisher": "medaka-lang",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "medaka",
+        "aliases": ["Medaka", "mdk"],
+        "extensions": [".mdk"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "medaka",
+        "scopeName": "source.medaka",
+        "path": "./syntaxes/medaka.tmLanguage.json"
+      }
+    ]
+  }
+}

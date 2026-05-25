@@ -1,0 +1,4 @@
+-- string.mdk — operations on String and Char
+-- See STDLIB.md for the full implementation plan.
+
+import core.{Eq, Ord, Show}

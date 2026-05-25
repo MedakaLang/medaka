@@ -39,10 +39,11 @@ readFile : String -> <IO> String
             (upper)))))))
 
 ==================
-Type signature — pub
+Type signature — export
 ==================
 
-pub length : List a -> Int
+export
+length : List a -> Int
 
 ---
 
@@ -92,10 +93,10 @@ add x y = x + y
       right: (ident))))
 
 ==================
-Function definition — pub
+Function definition — export
 ==================
 
-pub double x = x * 2
+export double x = x * 2
 
 ---
 
@@ -255,34 +256,48 @@ impl myShow of Show Int where
         (string_lit)))))
 
 ==================
-Use declaration — qualified import
+Import declaration — qualified
 ==================
 
-use list.map
+import list.map
 
 ---
 
 (source_file
-  (use_decl
-    (use_path
-      (use_qual
+  (import_decl
+    (import_path
+      (import_qual
         (ident)
         (ident)))))
 
 ==================
-Use declaration — alias
+Import declaration — alias
 ==================
 
-use collections as C
+import collections as C
 
 ---
 
 (source_file
-  (use_decl
-    (use_path
-      (use_qual
+  (import_decl
+    (import_path
+      (import_qual
         (ident))
       (upper))))
+
+==================
+Import declaration — re-export
+==================
+
+export import core.*
+
+---
+
+(source_file
+  (import_decl
+    (import_path
+      (import_qual
+        (ident)))))
 
 ==================
 Extern declaration
@@ -305,10 +320,11 @@ extern println : String -> <IO> Unit
             (upper)))))))
 
 ==================
-Extern declaration — pub
+Extern declaration — export
 ==================
 
-pub extern readLine : <IO> String
+export
+extern readLine : <IO> String
 
 ---
 
@@ -320,3 +336,23 @@ pub extern readLine : <IO> String
         effect: (upper)
         type: (ty_atom
           (upper))))))
+
+==================
+Extern declaration — constructor name
+==================
+
+extern Ref : a -> Ref a
+
+---
+
+(source_file
+  (extern_decl
+    name: (upper)
+    type: (ty_fun
+      arg: (ty_atom
+        (ident))
+      result: (ty_app
+        constructor: (ty_atom
+          (upper))
+        arg: (ty_atom
+          (ident))))))

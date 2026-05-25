@@ -32,8 +32,12 @@ module.exports = grammar({
 
   /* GLR conflicts: parser uses all interpretations simultaneously */
   conflicts: $ => [
-    /* `Upper {` — record_create vs expr followed by block */
+    /* `Upper {` — record_create vs map_lit vs set_lit vs expr followed by block */
+    [$._expr, $.record_create, $.map_lit, $.set_lit],
     [$._expr, $.record_create],
+    [$.record_create, $.map_lit],
+    [$.record_create, $.set_lit],
+    [$.map_lit, $.set_lit],
     /* lambda vs application: `f x =>` */
     [$.lambda_expr, $.expr_app],
     /* type_sig and fun_def both start with ident */
@@ -335,7 +339,7 @@ module.exports = grammar({
      * import utils as U
      * export import core.*      */
     import_decl: $ => seq(
-      optional(seq('export', ' ')),
+      optional('export'),
       'import',
       $.import_path,
       $._newline,
@@ -353,11 +357,12 @@ module.exports = grammar({
       repeat(seq('.', choice($.ident, $.upper))),
     ),
 
-    /* extern println : String -> <IO> Unit */
+    /* extern println : String -> <IO> Unit
+     * extern Ref : a -> Ref a            (constructor-style extern, Phase 18) */
     extern_decl: $ => seq(
       optional($._export_marker),
       'extern',
-      field('name', $.ident),
+      field('name', choice($.ident, $.upper)),
       ':',
       field('type', $._type_expr),
       $._newline,
@@ -382,6 +387,8 @@ module.exports = grammar({
       $.index_expr,
       $.record_create,
       $.record_update,
+      $.map_lit,
+      $.set_lit,
       $.operator_section,
       $.impl_selection,
       $.tuple_expr,
@@ -464,6 +471,7 @@ module.exports = grammar({
       prec.left(8,  seq(field('left', $._expr), '-',   field('right', $._expr))),
       prec.left(9,  seq(field('left', $._expr), '*',   field('right', $._expr))),
       prec.left(9,  seq(field('left', $._expr), '/',   field('right', $._expr))),
+      prec.left(9,  seq(field('left', $._expr), '%',   field('right', $._expr))),
       prec.left(10, seq(field('left', $._expr),
                         field('op', $.backtick_ident),
                         field('right', $._expr))),
@@ -522,6 +530,30 @@ module.exports = grammar({
       field('value', $._expr),
     ),
 
+    /* Map { k => v, ... }  — Phase 16 collection literals */
+    map_lit: $ => seq(
+      field('constructor', $.upper),
+      '{',
+      $.map_entry,
+      repeat(seq(',', $.map_entry)),
+      '}',
+    ),
+
+    map_entry: $ => seq(
+      field('key', $._expr),
+      '=>',
+      field('value', $._expr),
+    ),
+
+    /* Set { e, ... } */
+    set_lit: $ => seq(
+      field('constructor', $.upper),
+      '{',
+      $._expr,
+      repeat(seq(',', $._expr)),
+      '}',
+    ),
+
     /* Operator section: (+5) → \x -> x + 5 */
     operator_section: $ => seq(
       '(',
@@ -531,7 +563,7 @@ module.exports = grammar({
     ),
 
     section_op: $ => choice(
-      '+', '*', '/', '==', '!=', '<', '>', '<=', '>=',
+      '+', '*', '/', '%', '==', '!=', '<', '>', '<=', '>=',
       '&&', '||', '::', '++', '|>', '>>', '<<',
     ),
 

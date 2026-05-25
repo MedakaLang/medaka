@@ -1,0 +1,111 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Medaka",
+  "scopeName": "source.medaka",
+  "fileTypes": ["mdk"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#char" },
+    { "include": "#effect-annotation" },
+    { "include": "#keyword" },
+    { "include": "#bool-literal" },
+    { "include": "#number" },
+    { "include": "#type-constructor" },
+    { "include": "#impl-selection" },
+    { "include": "#operator" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-dash.medaka",
+      "match": "--.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.medaka",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.medaka",
+          "match": "\\\\(?:[\\\\\"/nrtb0]|u\\{[0-9a-fA-F]+\\})"
+        }
+      ]
+    },
+    "char": {
+      "name": "string.quoted.single.medaka",
+      "match": "'[^'\\\\]'|'\\\\.[^']*'"
+    },
+    "effect-annotation": {
+      "name": "meta.effect.medaka",
+      "match": "<(?:[A-Z][a-zA-Z0-9_']*,?\\s*)+>",
+      "captures": {
+        "0": { "name": "storage.modifier.effect.medaka" }
+      }
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.medaka",
+          "match": "\\b(if|then|else|match|do|let|in|mut)\\b"
+        },
+        {
+          "name": "keyword.declaration.medaka",
+          "match": "\\b(data|record|interface|impl|default)\\b"
+        },
+        {
+          "name": "keyword.modifier.medaka",
+          "match": "\\b(export|extern)\\b"
+        },
+        {
+          "name": "keyword.import.medaka",
+          "match": "\\b(import)\\b"
+        },
+        {
+          "name": "keyword.other.medaka",
+          "match": "\\b(where|of|as)\\b"
+        }
+      ]
+    },
+    "bool-literal": {
+      "name": "constant.language.medaka",
+      "match": "\\b(True|False)\\b"
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.medaka",
+          "match": "\\b[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.medaka",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "type-constructor": {
+      "name": "entity.name.type.medaka",
+      "match": "\\b[A-Z][a-zA-Z0-9_']*\\b"
+    },
+    "impl-selection": {
+      "name": "entity.name.type.instance.medaka",
+      "match": "@[A-Z][a-zA-Z0-9_']*"
+    },
+    "operator": {
+      "name": "keyword.operator.medaka",
+      "match": "\\|>|>>|<<|\\+\\+|::|==|!=|<=|>=|<-|=>|->|[+\\-*/%<>!&|=:]"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.bracket.medaka",
+          "match": "[\\(\\)\\[\\]\\{\\}]|\\[\\||\\|\\]"
+        },
+        {
+          "name": "punctuation.delimiter.medaka",
+          "match": "[,.]"
+        }
+      ]
+    }
+  }
+}

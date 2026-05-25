@@ -12,10 +12,10 @@
 ["data" "record" "interface" "impl" "default"] @keyword.type
 
 ; Visibility & linkage
-["pub" "extern"] @keyword.modifier
+["export" "extern"] @keyword.modifier
 
 ; Import
-"use" @keyword.import
+"import" @keyword.import
 
 ; The `mut` qualifier
 "mut" @keyword.modifier
@@ -42,6 +42,7 @@
 (type_sig      name: (ident)) @function
 (fun_def       name: (ident)) @function
 (extern_decl   name: (ident)) @function
+(extern_decl   name: (upper)) @function
 (impl_method   name: (ident)) @function
 (iface_member  name: (ident)) @function
 
@@ -70,7 +71,7 @@
 ; ── Operators ────────────────────────────────────────────────────────
 (binary_expr
   [ "|>" ">>" "<<" "||" "&&" "==" "!=" "<" ">" "<=" ">="
-    "::" "++" "+" "-" "*" "/" ] @operator)
+    "::" "++" "+" "-" "*" "/" "%" ] @operator)
 
 (binary_expr op: (backtick_ident) @operator)
 (unary_expr ["-" "!"] @operator)
@@ -83,6 +84,9 @@
 (do_bind   "<-" @operator)
 (type_sig  ":" @operator)
 
+; Map literal fat-arrow
+(map_entry "=>" @operator)
+
 ; ── Brackets ─────────────────────────────────────────────────────────
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket
 ["[|" "|]"] @punctuation.bracket
@@ -91,5 +95,5 @@
 "," @punctuation.delimiter
 "." @punctuation.delimiter
 
-; ── Use paths ────────────────────────────────────────────────────────
-(use_path (use_qual) @namespace)
+; ── Import paths ─────────────────────────────────────────────────────
+(import_path (import_qual) @namespace)

@@ -1,0 +1,4 @@
+-- array.mdk — operations on Array a
+-- See STDLIB.md for the full implementation plan.
+
+import core.{Eq, Ord, Foldable, Mappable}
