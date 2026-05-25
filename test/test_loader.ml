@@ -51,10 +51,10 @@ let test_single_file () =
 let test_happy_path () =
   with_tmp_dir (fun dir ->
     let _ = write_file dir "list.mdk"
-      "pub map f xs =\n  match xs\n    [] => []\n    h::t => (f h) :: (map f t)\n"
+      "export map f xs =\n  match xs\n    [] => []\n    h::t => (f h) :: (map f t)\n"
     in
     let main_path = write_file dir "main.mdk"
-      "use list.{map}\ndouble x = x * 2\nmain : <IO> Unit\nmain =\n  do\n    let r = map double [1, 2, 3]\n    pure ()\n"
+      "import list.{map}\ndouble x = x * 2\nmain : <IO> Unit\nmain =\n  do\n    let r = map double [1, 2, 3]\n    pure ()\n"
     in
     let modules = Loader.load_program main_path dir in
     let ids = List.map (fun (id, _, _) -> id) modules in
@@ -66,8 +66,8 @@ let test_happy_path () =
 
 let test_cycle_detection () =
   with_tmp_dir (fun dir ->
-    let _ = write_file dir "a.mdk" "use b.{foo}\nx = 1\n" in
-    let a_path = write_file dir "b.mdk" "use a.{x}\nfoo = 2\n" in
+    let _ = write_file dir "a.mdk" "import b.{foo}\nx = 1\n" in
+    let a_path = write_file dir "b.mdk" "import a.{x}\nfoo = 2\n" in
     try
       let _ = Loader.load_program a_path dir in
       failwith "expected CyclicDependency error"
@@ -79,7 +79,7 @@ let test_cycle_detection () =
 let test_missing_file () =
   with_tmp_dir (fun dir ->
     let main_path = write_file dir "main.mdk"
-      "use nonexistent.{foo}\nmain : <IO> Unit\nmain = pure ()\n"
+      "import nonexistent.{foo}\nmain : <IO> Unit\nmain = pure ()\n"
     in
     try
       let _ = Loader.load_program main_path dir in
@@ -93,10 +93,10 @@ let test_missing_file () =
 let test_privacy_violation () =
   with_tmp_dir (fun dir ->
     let _ = write_file dir "list.mdk"
-      "internal_helper x = x + 1\npub map f xs = []\n"
+      "internal_helper x = x + 1\nexport map f xs = []\n"
     in
     let main_path = write_file dir "main.mdk"
-      "use list.{internal_helper}\nmain : <IO> Unit\nmain = pure ()\n"
+      "import list.{internal_helper}\nmain : <IO> Unit\nmain = pure ()\n"
     in
     let modules = Loader.load_program main_path dir in
     (* Load succeeds; privacy violation is caught at resolve time *)
@@ -113,30 +113,30 @@ let test_privacy_violation () =
       failwith "expected PrivateNameAccess error but got none"
   )
 
-let test_pub_parsing () =
+let test_export_parsing () =
   Lexer.reset ();
-  let lexbuf = Lexing.from_string "pub map f xs = []\n" in
+  let lexbuf = Lexing.from_string "export map f xs = []\n" in
   let prog = Parser.program Lexer.token lexbuf in
   match prog with
   | [Ast.DFunDef (true, "map", _, _)] -> ()
-  | _ -> failwith "expected pub DFunDef"
+  | _ -> failwith "expected exported DFunDef"
 
-let test_pub_data_parsing () =
+let test_export_data_parsing () =
   Lexer.reset ();
-  let lexbuf = Lexing.from_string "pub data Color = Red | Green | Blue\n" in
+  let lexbuf = Lexing.from_string "export data Color = Red | Green | Blue\n" in
   let prog = Parser.program Lexer.token lexbuf in
   match prog with
   | [Ast.DData (true, "Color", [], _)] -> ()
-  | _ -> failwith "expected pub DData"
+  | _ -> failwith "expected exported DData"
 
-let test_pub_round_trip () =
+let test_export_round_trip () =
   Lexer.reset ();
-  let src = "pub map f xs = []\n" in
+  let src = "export map f xs = []\n" in
   let lexbuf = Lexing.from_string src in
   let prog = Parser.program Lexer.token lexbuf in
   let printed = Printer.program_to_string prog in
-  if not (String.sub printed 0 4 = "pub ") then
-    failwith (Printf.sprintf "expected 'pub ' prefix in printed output, got: %s" printed)
+  if not (String.sub printed 0 7 = "export ") then
+    failwith (Printf.sprintf "expected 'export ' prefix in printed output, got: %s" printed)
 
 (* ── Runner ──────────────────────────────────────── *)
 
@@ -146,10 +146,10 @@ let () =
     "module ID derivation", [
       test_case "path to module id"  `Quick test_module_id_of_path;
     ];
-    "pub keyword parsing", [
-      test_case "pub fun_def"    `Quick test_pub_parsing;
-      test_case "pub data decl"  `Quick test_pub_data_parsing;
-      test_case "pub round-trip" `Quick test_pub_round_trip;
+    "export keyword parsing", [
+      test_case "export fun_def"    `Quick test_export_parsing;
+      test_case "export data decl"  `Quick test_export_data_parsing;
+      test_case "export round-trip" `Quick test_export_round_trip;
     ];
     "loader", [
       test_case "single file"      `Quick test_single_file;

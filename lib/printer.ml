@@ -305,15 +305,15 @@ let print_use_path p = function
 
 let print_decl p = function
   | DTypeSig (pub, n, t) ->
-    if pub then write p "pub ";
+    if pub then write p "export ";
     write p n; write p " : "; print_type p t
 
   | DExtern (pub, n, t) ->
-    if pub then write p "pub ";
+    if pub then write p "export ";
     write p "extern "; write p n; write p " : "; print_type p t
 
   | DFunDef (pub, n, pats, body) ->
-    if pub then write p "pub ";
+    if pub then write p "export ";
     write p n;
     List.iter (fun pat -> write p " "; print_pat_atom p pat) pats;
     write p " =";
@@ -325,7 +325,7 @@ let print_decl p = function
     end
 
   | DData (pub, n, params, variants) ->
-    if pub then write p "pub ";
+    if pub then write p "export ";
     write p "data "; write p n;
     List.iter (fun pa -> write p " "; write p pa) params;
     indented p (fun () ->
@@ -337,7 +337,7 @@ let print_decl p = function
     )
 
   | DRecord (pub, n, params, fields) ->
-    if pub then write p "pub ";
+    if pub then write p "export ";
     write p "record "; write p n;
     List.iter (fun pa -> write p " "; write p pa) params;
     indented p (fun () ->
@@ -350,7 +350,7 @@ let print_decl p = function
     )
 
   | DInterface { is_pub; is_default; iface_name; type_params; super; methods } ->
-    if is_pub then write p "pub ";
+    if is_pub then write p "export ";
     if is_default then write p "default ";
     write p "interface "; write p iface_name;
     List.iter (fun pa -> write p " "; write p pa) type_params;
@@ -379,7 +379,7 @@ let print_decl p = function
     )
 
   | DImpl { is_pub; is_default; iface_name; type_args; impl_name; methods } ->
-    if is_pub then write p "pub ";
+    if is_pub then write p "export ";
     if is_default then write p "default ";
     write p "impl ";
     (match impl_name with
@@ -401,8 +401,8 @@ let print_decl p = function
     )
 
   | DUse (pub, path) ->
-    if pub then write p "pub ";
-    write p "use ";
+    if pub then write p "export ";
+    write p "import ";
     print_use_path p path
 
 let print_program p decls =

@@ -2223,6 +2223,63 @@
     }
   },
   {
+    "type": "import_decl",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "import_path",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_path",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "ident",
+          "named": true
+        },
+        {
+          "type": "import_qual",
+          "named": true
+        },
+        {
+          "type": "upper",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_qual",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "ident",
+          "named": true
+        },
+        {
+          "type": "upper",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "index_expr",
     "named": true,
     "fields": {
@@ -3897,6 +3954,10 @@
           "named": true
         },
         {
+          "type": "import_decl",
+          "named": true
+        },
+        {
           "type": "interface_decl",
           "named": true
         },
@@ -3906,10 +3967,6 @@
         },
         {
           "type": "type_sig",
-          "named": true
-        },
-        {
-          "type": "use_decl",
           "named": true
         }
       ]
@@ -4417,61 +4474,8 @@
     "fields": {}
   },
   {
-    "type": "use_decl",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "use_path",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "use_path",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "ident",
-          "named": true
-        },
-        {
-          "type": "upper",
-          "named": true
-        },
-        {
-          "type": "use_qual",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "use_qual",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "ident",
-          "named": true
-        },
-        {
-          "type": "upper",
-          "named": true
-        }
-      ]
-    }
+    "type": " ",
+    "named": false
   },
   {
     "type": "!",
@@ -4642,6 +4646,10 @@
     "named": false
   },
   {
+    "type": "export",
+    "named": false
+  },
+  {
     "type": "extern",
     "named": false
   },
@@ -4659,6 +4667,10 @@
   },
   {
     "type": "impl",
+    "named": false
+  },
+  {
+    "type": "import",
     "named": false
   },
   {
@@ -4690,10 +4702,6 @@
     "named": false
   },
   {
-    "type": "pub",
-    "named": false
-  },
-  {
     "type": "record",
     "named": false
   },
@@ -4708,10 +4716,6 @@
   {
     "type": "upper",
     "named": true
-  },
-  {
-    "type": "use",
-    "named": false
   },
   {
     "type": "where",

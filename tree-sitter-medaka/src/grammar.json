@@ -50,11 +50,33 @@
         },
         {
           "type": "SYMBOL",
-          "name": "use_decl"
+          "name": "import_decl"
         },
         {
           "type": "SYMBOL",
           "name": "extern_decl"
+        }
+      ]
+    },
+    "_export_marker": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "export"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "_newline"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "export"
         }
       ]
     },
@@ -584,8 +606,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -625,8 +647,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -710,8 +732,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -868,8 +890,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -956,8 +978,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -1158,8 +1180,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"
@@ -1316,15 +1338,24 @@
         }
       ]
     },
-    "use_decl": {
+    "import_decl": {
       "type": "SEQ",
       "members": [
         {
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "export"
+                },
+                {
+                  "type": "STRING",
+                  "value": " "
+                }
+              ]
             },
             {
               "type": "BLANK"
@@ -1333,11 +1364,11 @@
         },
         {
           "type": "STRING",
-          "value": "use"
+          "value": "import"
         },
         {
           "type": "SYMBOL",
-          "name": "use_path"
+          "name": "import_path"
         },
         {
           "type": "SYMBOL",
@@ -1345,7 +1376,7 @@
         }
       ]
     },
-    "use_path": {
+    "import_path": {
       "type": "CHOICE",
       "members": [
         {
@@ -1353,7 +1384,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "use_qual"
+              "name": "import_qual"
             },
             {
               "type": "STRING",
@@ -1390,7 +1421,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "use_qual"
+              "name": "import_qual"
             },
             {
               "type": "STRING",
@@ -1403,7 +1434,7 @@
           "members": [
             {
               "type": "SYMBOL",
-              "name": "use_qual"
+              "name": "import_qual"
             },
             {
               "type": "STRING",
@@ -1426,11 +1457,11 @@
         },
         {
           "type": "SYMBOL",
-          "name": "use_qual"
+          "name": "import_qual"
         }
       ]
     },
-    "use_qual": {
+    "import_qual": {
       "type": "SEQ",
       "members": [
         {
@@ -1480,8 +1511,8 @@
           "type": "CHOICE",
           "members": [
             {
-              "type": "STRING",
-              "value": "pub"
+              "type": "SYMBOL",
+              "name": "_export_marker"
             },
             {
               "type": "BLANK"

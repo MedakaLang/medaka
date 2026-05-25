@@ -1,0 +1,396 @@
+
+** Conflict (shift/reduce) in state 108.
+** Token involved: LBRACE
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL UPPER
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            expr_no_block 
+                                            expr_annot 
+                                            expr_lam COLON ty 
+                                            expr_pipe FAT_ARROW expr_lam 
+                                            expr_compose 
+                                            expr_or 
+                                            expr_and 
+                                            expr_cmp 
+                                            expr_cons 
+                                            expr_append CONS expr_cons 
+                                            expr_add 
+                                            expr_mul 
+                                            expr_unary 
+                                            expr_infix 
+                                            expr_app 
+                                            (?)
+
+** In state 108, looking ahead at LBRACE, reducing production
+** expr_atom -> UPPER
+** is permitted because of the following sub-derivation:
+
+expr_app expr_postfix // lookahead token appears because expr_postfix can begin with LBRACE
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+UPPER . 
+
+** In state 108, looking ahead at LBRACE, shifting is permitted
+** because of the following sub-derivation:
+
+expr_postfix 
+expr_atom 
+UPPER . LBRACE loption(separated_nonempty_list(COMMA,record_field_expr)) RBRACE 
+
+** Conflict (shift/reduce) in state 134.
+** Token involved: LBRACKET
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL expr_postfix
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            expr_no_block 
+                                            expr_annot 
+                                            expr_lam COLON ty 
+                                            expr_pipe FAT_ARROW expr_lam 
+                                            expr_compose 
+                                            expr_or 
+                                            expr_and 
+                                            expr_cmp 
+                                            expr_cons 
+                                            expr_append CONS expr_cons 
+                                            expr_add 
+                                            expr_mul 
+                                            expr_unary 
+                                            expr_infix 
+                                            expr_app 
+                                            (?)
+
+** In state 134, looking ahead at LBRACKET, reducing production
+** expr_app -> expr_postfix
+** is permitted because of the following sub-derivation:
+
+expr_app expr_postfix // lookahead token appears because expr_postfix can begin with LBRACKET
+expr_postfix . 
+
+** In state 134, looking ahead at LBRACKET, shifting is permitted
+** because of the following sub-derivation:
+
+expr_postfix 
+expr_postfix . LBRACKET expr_no_block RBRACKET 
+
+** Conflict (shift/reduce) in state 138.
+** Tokens involved: UPPER STRING RPAREN RBRACKET LPAREN LBRACKET LBRACE INT IDENT FLOAT CONS COMMA CHAR BOOL
+** The following explanations concentrate on token UPPER.
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL INDENT UPPER
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            INDENT nonempty_list(stmt) DEDENT 
+                                                   stmt 
+                                                   (?)
+
+** In state 138, looking ahead at UPPER, reducing production
+** expr_atom -> UPPER
+** is permitted because of the following sub-derivation:
+
+expr_no_block newlines 
+expr_annot 
+expr_lam COLON ty 
+expr_pipe FAT_ARROW expr_lam 
+expr_compose 
+expr_or 
+expr_and 
+expr_cmp 
+expr_cons 
+expr_append CONS expr_cons 
+expr_add 
+expr_mul 
+expr_unary 
+expr_infix 
+expr_app 
+expr_app expr_postfix // lookahead token appears because expr_postfix can begin with UPPER
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+UPPER . 
+
+** In state 138, looking ahead at UPPER, shifting is permitted
+** because of the following sub-derivation:
+
+pat LARROW expr_no_block newlines 
+pat_cons 
+pat_app CONS pat_cons 
+UPPER nonempty_list(pat_atom) 
+      pat_atom 
+      . UPPER 
+
+** Conflict (reduce/reduce) in state 141.
+** Tokens involved: RPAREN RBRACKET CONS COMMA
+** The following explanations concentrate on token CONS.
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL INDENT LPAREN RPAREN
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            INDENT nonempty_list(stmt) DEDENT 
+                                                   stmt 
+                                                   (?)
+
+** In state 141, looking ahead at CONS, reducing production
+** expr_atom -> LPAREN RPAREN
+** is permitted because of the following sub-derivation:
+
+expr_no_block newlines 
+expr_annot 
+expr_lam COLON ty 
+expr_pipe FAT_ARROW expr_lam 
+expr_compose 
+expr_or 
+expr_and 
+expr_cmp 
+expr_cons 
+expr_append CONS expr_cons // lookahead token appears
+expr_add // lookahead token is inherited
+expr_mul // lookahead token is inherited
+expr_unary // lookahead token is inherited
+expr_infix // lookahead token is inherited
+expr_app // lookahead token is inherited
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+LPAREN RPAREN . 
+
+** In state 141, looking ahead at CONS, reducing production
+** pat_atom -> LPAREN RPAREN
+** is permitted because of the following sub-derivation:
+
+pat LARROW expr_no_block newlines 
+pat_cons 
+pat_app CONS pat_cons // lookahead token appears
+pat_atom // lookahead token is inherited
+LPAREN RPAREN . 
+
+** Conflict (reduce/reduce) in state 143.
+** Tokens involved: RPAREN RBRACKET CONS COMMA
+** The following explanations concentrate on token CONS.
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL INDENT LBRACKET RBRACKET
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            INDENT nonempty_list(stmt) DEDENT 
+                                                   stmt 
+                                                   (?)
+
+** In state 143, looking ahead at CONS, reducing production
+** expr_atom -> LBRACKET RBRACKET
+** is permitted because of the following sub-derivation:
+
+expr_no_block newlines 
+expr_annot 
+expr_lam COLON ty 
+expr_pipe FAT_ARROW expr_lam 
+expr_compose 
+expr_or 
+expr_and 
+expr_cmp 
+expr_cons 
+expr_append CONS expr_cons // lookahead token appears
+expr_add // lookahead token is inherited
+expr_mul // lookahead token is inherited
+expr_unary // lookahead token is inherited
+expr_infix // lookahead token is inherited
+expr_app // lookahead token is inherited
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+LBRACKET RBRACKET . 
+
+** In state 143, looking ahead at CONS, reducing production
+** pat_atom -> LBRACKET RBRACKET
+** is permitted because of the following sub-derivation:
+
+pat LARROW expr_no_block newlines 
+pat_cons 
+pat_app CONS pat_cons // lookahead token appears
+pat_atom // lookahead token is inherited
+LBRACKET RBRACKET . 
+
+** Conflict (reduce/reduce) in state 144.
+** Tokens involved: RPAREN RBRACKET CONS COMMA
+** The following explanations concentrate on token CONS.
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL INDENT IDENT
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            INDENT nonempty_list(stmt) DEDENT 
+                                                   stmt 
+                                                   (?)
+
+** In state 144, looking ahead at CONS, reducing production
+** expr_atom -> IDENT
+** is permitted because of the following sub-derivation:
+
+expr_no_block newlines 
+expr_annot 
+expr_lam COLON ty 
+expr_pipe FAT_ARROW expr_lam 
+expr_compose 
+expr_or 
+expr_and 
+expr_cmp 
+expr_cons 
+expr_append CONS expr_cons // lookahead token appears
+expr_add // lookahead token is inherited
+expr_mul // lookahead token is inherited
+expr_unary // lookahead token is inherited
+expr_infix // lookahead token is inherited
+expr_app // lookahead token is inherited
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+IDENT . 
+
+** In state 144, looking ahead at CONS, reducing production
+** pat_atom -> IDENT
+** is permitted because of the following sub-derivation:
+
+pat LARROW expr_no_block newlines 
+pat_cons 
+pat_app CONS pat_cons // lookahead token appears
+pat_atom // lookahead token is inherited
+IDENT . 
+
+** Conflict (reduce/reduce) in state 147.
+** Tokens involved: RPAREN RBRACKET CONS COMMA
+** The following explanations concentrate on token CONS.
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL INDENT lit
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            INDENT nonempty_list(stmt) DEDENT 
+                                                   stmt 
+                                                   (?)
+
+** In state 147, looking ahead at CONS, reducing production
+** expr_atom -> lit
+** is permitted because of the following sub-derivation:
+
+expr_no_block newlines 
+expr_annot 
+expr_lam COLON ty 
+expr_pipe FAT_ARROW expr_lam 
+expr_compose 
+expr_or 
+expr_and 
+expr_cmp 
+expr_cons 
+expr_append CONS expr_cons // lookahead token appears
+expr_add // lookahead token is inherited
+expr_mul // lookahead token is inherited
+expr_unary // lookahead token is inherited
+expr_infix // lookahead token is inherited
+expr_app // lookahead token is inherited
+expr_postfix // lookahead token is inherited
+expr_atom // lookahead token is inherited
+lit . 
+
+** In state 147, looking ahead at CONS, reducing production
+** pat_atom -> lit
+** is permitted because of the following sub-derivation:
+
+pat LARROW expr_no_block newlines 
+pat_cons 
+pat_app CONS pat_cons // lookahead token appears
+pat_atom // lookahead token is inherited
+lit . 
+
+** Conflict (shift/reduce) in state 160.
+** Token involved: LBRACKET
+** This state is reached from program after reading:
+
+option(newlines) IDENT list(pat_atom) EQUAL expr_app expr_postfix
+
+** The derivations that appear below have the following common factor:
+** (The question mark symbol (?) represents the spot where the derivations begin to differ.)
+
+program 
+option(newlines) decl_list EOF 
+                 decl decl_list 
+                 fun_def 
+                 IDENT list(pat_atom) EQUAL fun_body newlines 
+                                            expr_no_block 
+                                            expr_annot 
+                                            expr_lam COLON ty 
+                                            expr_pipe FAT_ARROW expr_lam 
+                                            expr_compose 
+                                            expr_or 
+                                            expr_and 
+                                            expr_cmp 
+                                            expr_cons 
+                                            expr_append CONS expr_cons 
+                                            expr_add 
+                                            expr_mul 
+                                            expr_unary 
+                                            expr_infix 
+                                            expr_app 
+                                            (?)
+
+** In state 160, looking ahead at LBRACKET, reducing production
+** expr_app -> expr_app expr_postfix
+** is permitted because of the following sub-derivation:
+
+expr_app expr_postfix // lookahead token appears because expr_postfix can begin with LBRACKET
+expr_app expr_postfix . 
+
+** In state 160, looking ahead at LBRACKET, shifting is permitted
+** because of the following sub-derivation:
+
+expr_app expr_postfix 
+         expr_postfix . LBRACKET expr_no_block RBRACKET 

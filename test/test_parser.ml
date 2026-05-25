@@ -310,31 +310,41 @@ result =
     ]) -> ()
   | _ -> failwith "wrong"
 
-(* ── Use declaration tests ───────────────────────────── *)
+(* ── Import/export declaration tests ─────────────────── *)
 
 let test_use_simple () =
-  match parse_one "use utils.greet\n" with
+  match parse_one "import utils.greet\n" with
   | DUse (false, UseName ["utils"; "greet"]) -> ()
   | _ -> failwith "wrong"
 
 let test_use_group () =
-  match parse_one "use utils.{greet, helper}\n" with
+  match parse_one "import utils.{greet, helper}\n" with
   | DUse (false, UseGroup (["utils"], ["greet"; "helper"])) -> ()
   | _ -> failwith "wrong"
 
 let test_use_pub () =
-  match parse_one "pub use list.{map, filter}\n" with
+  match parse_one "export import list.{map, filter}\n" with
   | DUse (true, UseGroup (["list"], ["map"; "filter"])) -> ()
   | _ -> failwith "wrong"
 
 let test_use_alias () =
-  match parse_one "use collections.HashMap as HM\n" with
+  match parse_one "import collections.HashMap as HM\n" with
   | DUse (false, UseAlias (["collections"; "HashMap"], "HM")) -> ()
   | _ -> failwith "wrong"
 
 let test_use_wildcard () =
-  match parse_one "use utils.*\n" with
+  match parse_one "import utils.*\n" with
   | DUse (false, UseWild ["utils"]) -> ()
+  | _ -> failwith "wrong"
+
+let test_export_standalone_type_sig () =
+  match parse_one "export\ntoList : Int -> Int\n" with
+  | DTypeSig (true, "toList", _) -> ()
+  | _ -> failwith "wrong"
+
+let test_export_standalone_fun_def () =
+  match parse_one "export\nfoo x = x\n" with
+  | DFunDef (true, "foo", _, _) -> ()
   | _ -> failwith "wrong"
 
 (* ── Multi-declaration tests ─────────────────────────── *)
@@ -470,12 +480,14 @@ let () =
     "do notation", [
       test_case "basic do"  `Quick test_do_basic;
     ];
-    "use declarations", [
-      test_case "simple"    `Quick test_use_simple;
-      test_case "group"     `Quick test_use_group;
-      test_case "pub"       `Quick test_use_pub;
-      test_case "alias"     `Quick test_use_alias;
-      test_case "wildcard"  `Quick test_use_wildcard;
+    "import declarations", [
+      test_case "simple"                   `Quick test_use_simple;
+      test_case "group"                    `Quick test_use_group;
+      test_case "export import (re-export)" `Quick test_use_pub;
+      test_case "alias"                    `Quick test_use_alias;
+      test_case "wildcard"                 `Quick test_use_wildcard;
+      test_case "export standalone type sig" `Quick test_export_standalone_type_sig;
+      test_case "export standalone fun def"  `Quick test_export_standalone_fun_def;
     ];
     "pipe and compose", [
       test_case "pipe"                  `Quick test_pipe;

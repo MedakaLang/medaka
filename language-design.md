@@ -300,34 +300,50 @@ add : Int -> Int -> Int
 
 ## Module System
 
-Rust-inspired. Private by default, file structure mirrors module hierarchy.
+Idris-inspired. Private by default, file structure mirrors module hierarchy.
 
 ```
 -- src/utils.lang
-pub greet : String -> String
+export
+greet : String -> String
 greet name = "Hello, " ++ name
 
 internal : String -> String  -- private, not exported
 internal s = ...
 
 -- src/main.lang
-use utils.greet
+import utils.greet
 
 main =
   print (greet "Alice")
 ```
 
+The `export` keyword can appear on its own line before a declaration (Idris style) or inline:
+
+```
+-- standalone export (Idris style)
+export
+toList : BTree a -> List a
+toList Leaf = []
+toList (Node l v r) = toList l ++ (v :: toList r)
+
+-- inline export (equivalent)
+export toList : BTree a -> List a
+toList Leaf = []
+toList (Node l v r) = toList l ++ (v :: toList r)
+```
+
 ### Rules
-- **Private by default** — explicitly `pub` to export
+- **Private by default** — explicitly `export` to make public
 - **File/directory structure = module hierarchy** — intuitive, no separate declaration
-- **`use` for imports** — clean and explicit
+- **`import` for imports** — clean and explicit
 - **No circular dependencies** — enforced by compiler
 - **No first-class modules or functors** — OCaml-style complexity explicitly rejected
 
 ### To Be Decided (follow Rust's lead)
-- Selective imports: `use utils.{greet, helper}`
-- Wildcard imports: `use utils.*`
-- Qualified imports: `use utils` then `utils.greet`
+- Selective imports: `import utils.{greet, helper}`
+- Wildcard imports: `import utils.*`
+- Qualified imports: `import utils` then `utils.greet`
 - Re-exports for clean public APIs
 
 ---
@@ -530,23 +546,23 @@ The friendly name for the monad interface is **`Thenable`** — familiar to JS d
 
 ```
 -- selective imports
-use utils.{greet, helper}
+import utils.{greet, helper}
 
 -- wildcard (available but discouraged in style guides)
-use utils.*
+import utils.*
 
 -- qualified (no names brought into scope)
-use utils
+import utils
 utils.greet "Alice"
 
 -- re-exports (for clean public APIs)
-pub use list.{map, filter, fold}
+export import list.{map, filter, fold}
 
 -- aliased imports
-use collections.HashMap as HM
+import collections.HashMap as HM
 ```
 
-All follow Rust conventions closely. Wildcard imports are available but style guides should discourage them — makes it hard to know where names come from.
+Wildcard imports are available but style guides should discourage them — makes it hard to know where names come from.
 
 ---
 

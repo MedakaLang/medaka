@@ -47,8 +47,8 @@ let keyword_or_ident s =
   | "interface" -> INTERFACE
   | "default"   -> DEFAULT
   | "impl"      -> IMPL
-  | "use"       -> USE
-  | "pub"       -> PUB
+  | "import"    -> IMPORT
+  | "export"    -> EXPORT
   | "where"     -> WHERE
   | "of"        -> OF
   | "do"        -> DO

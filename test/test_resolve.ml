@@ -79,9 +79,9 @@ result =
     pure (x + y)
 |}
 
-let v_use = assert_ok "use utils.greet\nf = greet\n"
+let v_use = assert_ok "import utils.greet\nf = greet\n"
 
-let v_use_group = assert_ok "use list.{map, filter}\nf = map\n"
+let v_use_group = assert_ok "import list.{map, filter}\nf = map\n"
 
 let v_record_create = assert_ok
 {|record Person

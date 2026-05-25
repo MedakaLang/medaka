@@ -133,12 +133,12 @@ let do_with_let = mk
     pure y
 |}
 
-(* Use declarations *)
-let u_simple  = mk "use utils.greet\n"
-let u_group   = mk "use utils.{greet, helper}\n"
-let u_pub     = mk "pub use list.{map, filter}\n"
-let u_alias   = mk "use collections.HashMap as HM\n"
-let u_wild    = mk "use utils.*\n"
+(* Import/export declarations *)
+let u_simple  = mk "import utils.greet\n"
+let u_group   = mk "import utils.{greet, helper}\n"
+let u_pub     = mk "export import list.{map, filter}\n"
+let u_alias   = mk "import collections.HashMap as HM\n"
+let u_wild    = mk "import utils.*\n"
 
 (* Multiple declarations *)
 let multi = mk
@@ -222,10 +222,10 @@ let () =
       test_case "basic"            `Quick do_basic;
       test_case "with let"         `Quick do_with_let;
     ];
-    "use", [
+    "import/export", [
       test_case "simple"           `Quick u_simple;
       test_case "group"            `Quick u_group;
-      test_case "pub"              `Quick u_pub;
+      test_case "export import"    `Quick u_pub;
       test_case "alias"            `Quick u_alias;
       test_case "wildcard"         `Quick u_wild;
     ];

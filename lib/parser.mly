@@ -56,7 +56,7 @@ let rec expr_to_pat = function
 
 (* Keywords *)
 %token LET MUT IN IF THEN ELSE MATCH DATA RECORD INTERFACE DEFAULT IMPL
-%token USE PUB WHERE OF DO AS EXTERN
+%token IMPORT EXPORT WHERE OF DO AS EXTERN
 
 (* Operators *)
 %token PLUS MINUS STAR SLASH
@@ -156,34 +156,38 @@ decl_list:
   | decl decl_list   { $1 @ $2 }
 
 decl:
-  | type_sig    { [$1] }
-  | fun_def     { [$1] }
-  | data_decl   { [$1] }
-  | record_decl { [$1] }
-  | iface_decl  { [$1] }
-  | impl_decl   { [$1] }
-  | use_decl    { [$1] }
-  | extern_decl { [$1] }
+  | EXPORT newlines inner_decl_body  { [$3 true]  }
+  | EXPORT inner_decl_body           { [$2 true]  }
+  | inner_decl_body                  { [$1 false] }
+  | EXPORT IMPORT import_path newlines  { [DUse (true,  $3)] }
+  | IMPORT import_path newlines         { [DUse (false, $2)] }
+
+inner_decl_body:
+  | inner_type_sig    { $1 }
+  | inner_fun_def     { $1 }
+  | inner_data_decl   { $1 }
+  | inner_record_decl { $1 }
+  | inner_iface_decl  { $1 }
+  | inner_impl_decl   { $1 }
+  | inner_extern_decl { $1 }
 
 (* ── Extern declarations ─────────────────────────────── *)
 
-extern_decl:
-  | PUB EXTERN IDENT COLON ty newlines  { DExtern (true,  $3, $5) }
-  | EXTERN IDENT COLON ty newlines      { DExtern (false, $2, $4) }
+inner_extern_decl:
+  | EXTERN IDENT COLON ty newlines
+    { fun is_pub -> DExtern (is_pub, $2, $4) }
 
 (* ── Type signatures ─────────────────────────────────── *)
 
-type_sig:
-  | PUB IDENT COLON ty newlines  { DTypeSig (true,  $2, $4) }
-  | IDENT COLON ty newlines      { DTypeSig (false, $1, $3) }
+inner_type_sig:
+  | IDENT COLON ty newlines
+    { fun is_pub -> DTypeSig (is_pub, $1, $3) }
 
 (* ── Function definitions ────────────────────────────── *)
 
-fun_def:
-  | PUB IDENT list(pat_atom) EQUAL fun_body newlines
-    { DFunDef (true,  $2, $3, $5) }
+inner_fun_def:
   | IDENT list(pat_atom) EQUAL fun_body newlines
-    { DFunDef (false, $1, $2, $4) }
+    { fun is_pub -> DFunDef (is_pub, $1, $2, $4) }
 
 fun_body:
   | expr_no_block                       { $1 }
@@ -400,15 +404,11 @@ stmt:
 
 (* ── Data declarations ───────────────────────────────── *)
 
-data_decl:
-  | PUB DATA UPPER list(IDENT) INDENT nonempty_list(data_variant_line) DEDENT newlines
-    { DData (true,  $3, $4, $6) }
-  | PUB DATA UPPER list(IDENT) EQUAL separated_nonempty_list(PIPE, data_variant_inline) newlines
-    { DData (true,  $3, $4, $6) }
+inner_data_decl:
   | DATA UPPER list(IDENT) INDENT nonempty_list(data_variant_line) DEDENT newlines
-    { DData (false, $2, $3, $5) }
+    { fun is_pub -> DData (is_pub, $2, $3, $5) }
   | DATA UPPER list(IDENT) EQUAL separated_nonempty_list(PIPE, data_variant_inline) newlines
-    { DData (false, $2, $3, $5) }
+    { fun is_pub -> DData (is_pub, $2, $3, $5) }
 
 data_variant_line:
   | PIPE UPPER list(ty_atom) newlines  { { con_name = $2; con_fields = $3 } }
@@ -418,33 +418,20 @@ data_variant_inline:
 
 (* ── Record declarations ─────────────────────────────── *)
 
-record_decl:
-  | PUB RECORD UPPER list(IDENT) INDENT nonempty_list(record_field_decl) DEDENT newlines
-    { DRecord (true,  $3, $4, $6) }
+inner_record_decl:
   | RECORD UPPER list(IDENT) INDENT nonempty_list(record_field_decl) DEDENT newlines
-    { DRecord (false, $2, $3, $5) }
+    { fun is_pub -> DRecord (is_pub, $2, $3, $5) }
 
 record_field_decl:
   | IDENT COLON ty newlines  { { field_name = $1; field_type = $3 } }
 
 (* ── Interface declarations ──────────────────────────── *)
 
-iface_decl:
-  | PUB option(DEFAULT) INTERFACE UPPER list(IDENT) option(iface_super) WHERE
-    INDENT nonempty_list(iface_member) DEDENT newlines
-    { DInterface {
-        is_pub      = true;
-        is_default  = $2 <> None;
-        iface_name  = $4;
-        type_params = $5;
-        super       = Option.value ~default:[] $6;
-        methods     = $9;
-      }
-    }
+inner_iface_decl:
   | option(DEFAULT) INTERFACE UPPER list(IDENT) option(iface_super) WHERE
     INDENT nonempty_list(iface_member) DEDENT newlines
-    { DInterface {
-        is_pub      = false;
+    { fun is_pub -> DInterface {
+        is_pub;
         is_default  = $1 <> None;
         iface_name  = $3;
         type_params = $4;
@@ -467,33 +454,11 @@ iface_member:
 
 (* ── Impl declarations ───────────────────────────────── *)
 
-impl_decl:
-  | PUB option(DEFAULT) IMPL UPPER nonempty_list(ty_atom) WHERE
-    INDENT nonempty_list(impl_method) DEDENT newlines
-    { DImpl {
-        is_pub     = true;
-        is_default = $2 <> None;
-        iface_name = $4;
-        type_args  = $5;
-        impl_name  = None;
-        methods    = $8;
-      }
-    }
-  | PUB option(DEFAULT) IMPL IDENT OF UPPER nonempty_list(ty_atom) WHERE
-    INDENT nonempty_list(impl_method) DEDENT newlines
-    { DImpl {
-        is_pub     = true;
-        is_default = $2 <> None;
-        iface_name = $6;
-        type_args  = $7;
-        impl_name  = Some $4;
-        methods    = $10;
-      }
-    }
+inner_impl_decl:
   | option(DEFAULT) IMPL UPPER nonempty_list(ty_atom) WHERE
     INDENT nonempty_list(impl_method) DEDENT newlines
-    { DImpl {
-        is_pub     = false;
+    { fun is_pub -> DImpl {
+        is_pub;
         is_default = $1 <> None;
         iface_name = $3;
         type_args  = $4;
@@ -503,8 +468,8 @@ impl_decl:
     }
   | option(DEFAULT) IMPL IDENT OF UPPER nonempty_list(ty_atom) WHERE
     INDENT nonempty_list(impl_method) DEDENT newlines
-    { DImpl {
-        is_pub     = false;
+    { fun is_pub -> DImpl {
+        is_pub;
         is_default = $1 <> None;
         iface_name = $5;
         type_args  = $6;
@@ -516,25 +481,21 @@ impl_decl:
 impl_method:
   | IDENT list(pat_atom) EQUAL fun_body newlines  { ($1, $2, $4) }
 
-(* ── Use declarations ────────────────────────────────── *)
+(* ── Import declarations ─────────────────────────────── *)
 
-use_decl:
-  | PUB USE use_path newlines  { DUse (true,  $3) }
-  | USE use_path newlines      { DUse (false, $2) }
+import_path:
+  | import_qual                                       { UseName $1 }
+  | import_qual AS UPPER                              { UseAlias ($1, $3) }
+  | import_qual AS IDENT                              { UseAlias ($1, $3) }
+  | import_qual DOT_LBRACE separated_nonempty_list(COMMA, IDENT) RBRACE
+                                                      { UseGroup ($1, $3) }
+  | import_qual DOT_STAR                              { UseWild $1 }
 
-use_path:
-  | use_qual                                       { UseName $1 }
-  | use_qual AS UPPER                              { UseAlias ($1, $3) }
-  | use_qual AS IDENT                              { UseAlias ($1, $3) }
-  | use_qual DOT_LBRACE separated_nonempty_list(COMMA, IDENT) RBRACE
-                                                   { UseGroup ($1, $3) }
-  | use_qual DOT_STAR                              { UseWild $1 }
+import_qual:
+  | import_ident                   { [$1] }
+  | import_qual DOT import_ident   { $1 @ [$3] }
 
-use_qual:
-  | use_ident                  { [$1] }
-  | use_qual DOT use_ident     { $1 @ [$3] }
-
-use_ident:
+import_ident:
   | IDENT  { $1 }
   | UPPER  { $1 }
 

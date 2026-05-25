@@ -79,8 +79,14 @@ module.exports = grammar({
       $.record_decl,
       $.interface_decl,
       $.impl_decl,
-      $.use_decl,
+      $.import_decl,
       $.extern_decl,
+    ),
+
+    /* export on its own line (Idris style) or inline before a declaration */
+    _export_marker: $ => choice(
+      seq('export', $._newline),
+      'export',
     ),
 
     /* ═══════════════════════════════════════════════════
@@ -189,16 +195,16 @@ module.exports = grammar({
 
     /* f : Int -> Int */
     type_sig: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       field('name', $.ident),
       ':',
       field('type', $._type_expr),
       $._newline,
     ),
 
-    /* pub? name pat* = body */
+    /* export? name pat* = body */
     fun_def: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       field('name', $.ident),
       repeat(field('param', $.pat_atom)),
       '=',
@@ -225,7 +231,7 @@ module.exports = grammar({
      * data Shape
      *   | Circle Float           */
     data_decl: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       'data',
       field('name', $.upper),
       repeat(field('type_param', $.ident)),
@@ -250,7 +256,7 @@ module.exports = grammar({
     /* record Person
      *   name : String            */
     record_decl: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       'record',
       field('name', $.upper),
       repeat(field('type_param', $.ident)),
@@ -270,7 +276,7 @@ module.exports = grammar({
     /* interface Show a where
      *   show : a -> String       */
     interface_decl: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       optional('default'),
       'interface',
       field('name', $.upper),
@@ -303,7 +309,7 @@ module.exports = grammar({
      *   show n = ...
      * impl myEq of Eq Int where  (named) */
     impl_decl: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       optional('default'),
       'impl',
       choice(
@@ -325,31 +331,31 @@ module.exports = grammar({
       $._newline,
     ),
 
-    /* use list.{map, filter}
-     * use utils as U
-     * pub use core.*            */
-    use_decl: $ => seq(
-      optional('pub'),
-      'use',
-      $.use_path,
+    /* import list.{map, filter}
+     * import utils as U
+     * export import core.*      */
+    import_decl: $ => seq(
+      optional(seq('export', ' ')),
+      'import',
+      $.import_path,
       $._newline,
     ),
 
-    use_path: $ => choice(
-      seq($.use_qual, '.{', $.ident, repeat(seq(',', $.ident)), '}'),
-      seq($.use_qual, '.*'),
-      seq($.use_qual, 'as', choice($.upper, $.ident)),
-      $.use_qual,
+    import_path: $ => choice(
+      seq($.import_qual, '.{', $.ident, repeat(seq(',', $.ident)), '}'),
+      seq($.import_qual, '.*'),
+      seq($.import_qual, 'as', choice($.upper, $.ident)),
+      $.import_qual,
     ),
 
-    use_qual: $ => seq(
+    import_qual: $ => seq(
       choice($.ident, $.upper),
       repeat(seq('.', choice($.ident, $.upper))),
     ),
 
     /* extern println : String -> <IO> Unit */
     extern_decl: $ => seq(
-      optional('pub'),
+      optional($._export_marker),
       'extern',
       field('name', $.ident),
       ':',
