@@ -45,7 +45,10 @@ let assert_runtime_err src name () =
 
 let t_int    = assert_val "x = 42\n"      "x" (VInt 42)
 let t_float  = assert_val "x = 3.14\n"   "x" (VFloat 3.14)
-let t_string = assert_val "x = \"hi\"\n" "x" (VString "hi")
+let t_string       = assert_val "x = \"hi\"\n" "x" (VString "hi")
+let t_triple_string = assert_val {|x = """hi"""
+|} "x" (VString "hi")
+let t_triple_multiline = assert_val ("x = \"\"\"\n  hello\n  world\n  \"\"\"\n") "x" (VString "hello\nworld\n")
 let t_bool   = assert_val "x = True\n"   "x" (VBool true)
 let t_unit   = assert_val "x = ()\n"     "x" VUnit
 
@@ -346,7 +349,9 @@ let () =
     "constants", [
       test_case "int"    `Quick t_int;
       test_case "float"  `Quick t_float;
-      test_case "string" `Quick t_string;
+      test_case "string"          `Quick t_string;
+      test_case "triple string"   `Quick t_triple_string;
+      test_case "triple multiline"`Quick t_triple_multiline;
       test_case "bool"   `Quick t_bool;
       test_case "unit"   `Quick t_unit;
     ];

@@ -128,6 +128,7 @@ and read = parse
   | int_lit      { INT (int_of_string (Lexing.lexeme lexbuf)) }
   | float_lit    { FLOAT (float_of_string (Lexing.lexeme lexbuf)) }
 
+  | "\"\"\""     { read_triple_string (Buffer.create 64) lexbuf }
   | '"'          { read_string (Buffer.create 64) lexbuf }
   | '\'' [^ '\'']+ '\'' {
       let lxm = Lexing.lexeme lexbuf in
@@ -225,3 +226,26 @@ and read_string buf = parse
       read_string buf lexbuf
     }
   | eof           { failwith "Unterminated string literal" }
+
+and read_triple_string buf = parse
+  | "\"\"\""  { STRING (strip_indent (Buffer.contents buf)) }
+  | '\\' 'n'  { Buffer.add_char buf '\n'; read_triple_string buf lexbuf }
+  | '\\' 't'  { Buffer.add_char buf '\t'; read_triple_string buf lexbuf }
+  | '\\' '"'  { Buffer.add_char buf '"';  read_triple_string buf lexbuf }
+  | '\\' '\\' { Buffer.add_char buf '\\'; read_triple_string buf lexbuf }
+  | '\\' 'r'  { Buffer.add_char buf '\r'; read_triple_string buf lexbuf }
+  | '\\' '0'  { Buffer.add_char buf '\000'; read_triple_string buf lexbuf }
+  | '\\' 'u' '{' (['0'-'9' 'a'-'f' 'A'-'F']+ as hex) '}'
+    { let cp = int_of_string ("0x" ^ hex) in
+      Buffer.add_utf_8_uchar buf (Uchar.of_int cp);
+      read_triple_string buf lexbuf }
+  | '\n'
+    { Lexing.new_line lexbuf;
+      Buffer.add_char buf '\n';
+      read_triple_string buf lexbuf }
+  | '"' '"'   { Buffer.add_string buf "\"\""; read_triple_string buf lexbuf }
+  | '"'       { Buffer.add_char  buf '"';    read_triple_string buf lexbuf }
+  | [^ '"' '\\' '\n']+
+    { Buffer.add_string buf (Lexing.lexeme lexbuf);
+      read_triple_string buf lexbuf }
+  | eof       { failwith "Unterminated triple-quoted string" }
