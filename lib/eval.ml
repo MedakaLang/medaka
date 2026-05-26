@@ -258,10 +258,10 @@ and eval env expr =
      | VFloat f -> VFloat (-.f)
      | _ -> raise (Eval_error ("unary minus on non-number", !current_loc)))
 
-  | EUnOp ("not", e) ->
+  | EUnOp (("!" | "not"), e) ->
     (match eval env e with
      | VBool b -> VBool (not b)
-     | _ -> raise (Eval_error ("'not' on non-Bool", !current_loc)))
+     | _ -> raise (Eval_error ("'!' on non-Bool", !current_loc)))
 
   | EUnOp (op, _) ->
     raise (Eval_error ("unknown unary op: " ^ op, !current_loc))
@@ -403,10 +403,6 @@ and eval_arith op lv rv =
   | "-",  VFloat a, VFloat b -> VFloat (a -. b)
   | "*",  VFloat a, VFloat b -> VFloat (a *. b)
   | "/",  VFloat a, VFloat b -> VFloat (a /. b)
-  | "+.", VFloat a, VFloat b -> VFloat (a +. b)
-  | "-.", VFloat a, VFloat b -> VFloat (a -. b)
-  | "*.", VFloat a, VFloat b -> VFloat (a *. b)
-  | "/.", VFloat a, VFloat b -> VFloat (a /. b)
   | "==", a, b -> VBool (a = b)
   | "!=", a, b -> VBool (a <> b)
   | "<",  a, b -> VBool (compare a b < 0)
@@ -597,8 +593,16 @@ let eval_program program =
   (* Prepend stdlib/core.mdk so its data types, interfaces, and impl bodies
      are bound for the user program.  Mirrors what Typecheck.check_program
      does on the type-checking side.  Do-block bind dispatches through the
-     prelude's `andThen` VMulti, so this is what makes Step 3 work. *)
-  let program = Prelude.program @ program in
+     prelude's `andThen` VMulti, so this is what makes Step 3 work.
+     Skip when the program IS core (avoid duplicates). *)
+  let is_core =
+    let has_ordering = List.exists (function
+      | DData (_, "Ordering", _, _, _) -> true | _ -> false) program in
+    let has_foldable = List.exists (function
+      | DInterface { iface_name = "Foldable"; _ } -> true | _ -> false) program in
+    has_ordering && has_foldable
+  in
+  let program = if is_core then program else Prelude.program @ program in
 
   (* Record constructor names that belong to a Thenable impl, so DoBind can
      decide whether to dispatch via `andThen` or fall through; and the

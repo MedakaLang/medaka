@@ -9,23 +9,30 @@ self-host.
 
 ## Status
 
-Frontend and interpreter complete; codegen not yet started.
+Frontend and interpreter complete; standard library underway; codegen not yet started.
 
 - **AST** — `lib/ast.ml`
 - **Lexer** — `lib/lexer.mll` (indentation-sensitive, OCaml-style)
 - **Parser** — `lib/parser.mly` (Menhir)
 - **Printer** — `lib/printer.ml` (AST → parseable source)
-- **Resolver** — `lib/resolve.ml` (every reference is bound)
+- **Resolver** — `lib/resolve.ml` (every reference is bound; multi-module aware)
 - **Type checker** — `lib/typecheck.ml` (Hindley-Milner with let-polymorphism,
-  ADTs, records, pattern matching, interfaces with constraint checking,
-  effect tracking, exhaustiveness/usefulness)
-- **Evaluator** — `lib/eval.ml` (tree-walking interpreter)
+  ADTs, records, type aliases, newtypes, pattern matching, interfaces with
+  constraint checking and constraint syntax in signatures, effect tracking,
+  exhaustiveness/usefulness)
+- **Desugar** — `lib/desugar.ml` (`deriving` → impls, record field punning,
+  list-comprehension lowering)
+- **Loader** — `lib/loader.ml` (multi-file dependency walk, cycle detection)
+- **Evaluator** — `lib/eval.ml` (tree-walking interpreter with VMulti-based
+  typeclass dispatch)
 - **REPL** — `lib/repl.ml` (incremental parse/typecheck/eval with persistent env)
 - **CLI** — `bin/main.ml` — `check`, `run`, and `repl` subcommands
-- **Test suite** — 400 cases across parser, roundtrip, resolve, typecheck,
-  eval, run, and repl suites
+- **Test suite** — 590 cases across parser, roundtrip, resolve, typecheck,
+  eval, run, repl, and loader suites
 
-Not yet: codegen, stdlib. See [PLAN.md](./PLAN.md) for the roadmap.
+The standard library is being developed in Medaka itself on top of the
+`extern` primitives — see [STDLIB.md](./STDLIB.md). Codegen has not started.
+See [PLAN.md](./PLAN.md) for the roadmap.
 
 ## Building
 
@@ -120,8 +127,13 @@ of extern primitives — their type signatures are embedded at build time and
 available in all programs without an explicit import. See
 [stdlib/README.md](stdlib/README.md) for conventions on adding new primitives.
 
-The higher-level stdlib modules (`core`, `list`, `string`, `array`, …) are
-written in Medaka itself and developed interactively via the REPL. See
+`stdlib/core.mdk` is automatically prepended (as a "prelude") to every user
+program at type-check and eval time, so its data types (`Option`, `Result`,
+`Ordering`), interfaces (`Eq`, `Ord`, `Show`, `Num`, `Mappable`, `Foldable`,
+`Applicative`, `Thenable`, `Semigroup`, `Monoid`, …) and helpers (`identity`,
+`flip`, `compose`, `filter`, …) are available without an explicit import.
+The remaining stdlib modules (`list`, `string`, `array`, …) are written in
+Medaka itself and developed interactively via the REPL. See
 [STDLIB.md](STDLIB.md) for the module plan.
 
 ## Editor setup
@@ -219,22 +231,27 @@ npx tree-sitter test       # run corpus tests
 ```
 lib/
   ast.ml          AST type definitions
+  builtins.ml     Compiler-side registry of operator → stdlib method names
   lexer.mll       Tokenizer with INDENT/DEDENT handling
   parser.mly      Menhir grammar
   printer.ml      AST → source (round-trip)
-  resolve.ml      Name resolution
+  resolve.ml      Name resolution (single-file and multi-module)
   typecheck.ml    Hindley-Milner + interfaces + effects + exhaustiveness
   exhaust.ml      Maranget's pattern-matrix algorithm
-  eval.ml         Tree-walking interpreter
-  runtime.ml      Extern dispatch + runtime.mdk embedding
+  desugar.ml      `deriving` expansion, record field puns, list comprehensions
+  loader.ml       Multi-file dependency walk + topological sort
+  eval.ml         Tree-walking interpreter (VMulti dispatch for typeclasses)
+  prelude.ml      Parses and caches `stdlib/core.mdk` for implicit prelude
+  runtime.ml      Parses `stdlib/runtime.mdk` to derive primitive schemes
+  repl.ml         REPL loop (`:load`, `:reload`, `:browse`, `:type`, …)
 bin/
   main.ml         CLI entry point (check / run / repl)
   repl.ml         Interactive REPL loop shim
 gen/
-  embed.ml        Build-time helper: embeds runtime.mdk as an OCaml string
+  embed.ml        Build-time helper: embeds runtime.mdk/core.mdk as an OCaml string
 stdlib/
   runtime.mdk     Extern primitive catalog (embedded at build time)
-  core.mdk        Core interfaces and instances
+  core.mdk        Core interfaces, instances, helpers (implicit prelude)
   list.mdk        List operations
   string.mdk      String operations
   array.mdk       Array operations

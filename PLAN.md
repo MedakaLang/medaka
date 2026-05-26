@@ -20,17 +20,18 @@ Two debug binaries in `dev/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
 - `tc_debug.ml` — quick type-check probe
 
-511 tests pass across 7 test suites:
+590 tests pass across 8 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
-| Parser            | `test/test_parser.ml`           | 92    | AST shape for each construct                          |
-| Round-trip        | `test/test_roundtrip.ml`        | 73    | parse → print → parse yields the same AST             |
+| Parser            | `test/test_parser.ml`           | 110   | AST shape for each construct                          |
+| Round-trip        | `test/test_roundtrip.ml`        | 81    | parse → print → parse yields the same AST             |
 | Resolver          | `test/test_resolve.ml`          | 55    | Unbound vars, unknown types/ctors, duplicates, fields |
-| Type checker      | `test/test_typecheck.ml`        | 208   | Inferred types, type errors, exhaustiveness warnings  |
-| Evaluator         | `test/test_eval.ml`             | 64    | Runtime values, recursion, do-blocks, Ref, errors     |
+| Type checker      | `test/test_typecheck.ml`        | 214   | Inferred types, type errors, exhaustiveness warnings  |
+| Evaluator         | `test/test_eval.ml`             | 90    | Runtime values, recursion, do-blocks, Ref, errors, escapes |
 | Run               | `test/test_run.ml`              | 8     | Stdout capture, factorial, ADT match, do-block, Ref, panic |
 | REPL              | `test/test_repl.ml`             | 11    | process_item, :load atomicity, rollback, :browse      |
+| Loader            | `test/test_loader.ml`           | 21    | Multi-file imports, topo sort, cycle detection, prelude no-op |
 
 The source of truth for what the language *is* is `language-design.md`. Read it
 before designing new features.
@@ -967,6 +968,68 @@ build artifacts).
 
 ---
 
+### Phase 21: List comprehensions ✅ DONE
+
+**Goal.** Haskell-style list comprehensions: `[expr | x <- xs, guard, let p = e]`.
+
+**What was added.**
+- `lc_qual` variant added to `Ast.expr` (`LCGen`, `LCGuard`, `LCLet`) and
+  `EListComp of expr * lc_qual list` ghost expression node.
+- Parser: `lc_qual` rule plus an `expr_atom` alternative
+  `LBRACKET expr_no_block PIPE separated_nonempty_list(COMMA, lc_qual) RBRACKET`.
+- Desugar (`lib/desugar.ml`): `desugar_list_comp` lowers each comprehension to
+  nested `andThen` calls + `if` guards + `let`s, ending in `[body]`.  This
+  makes the comprehension work over any `Thenable` (List in practice).
+- The earlier compiler-side `filter` extern was removed; `filter` now lives
+  in `stdlib/core.mdk` since it composes cleanly with the comprehension
+  desugaring.
+
+---
+
+### Phase 22: Semigroup / Monoid in stdlib ✅ DONE
+
+**Goal.** Make the `++` operator dispatch through `Semigroup.append` and
+provide `Monoid` for ergonomic identity-element use.
+
+**What was added.**
+- `interface Semigroup a` and `interface Monoid a requires Semigroup a` in
+  `stdlib/core.mdk`, with built-in impls for `List` and `String`.
+- `Builtins.operator_iface` extended to map `++` → `Semigroup.append`; the
+  typechecker emits a constraint and dispatches through the impl method.
+- `eval_arith`'s `++` case falls back to `apply (lookup "append") l r` when
+  the operands aren't `List` / `String`, so the operator works for any
+  user-defined `Semigroup` impl.
+
+---
+
+### Stdlib wiring (Steps 1–5) ✅ DONE
+
+**Goal.** Replace compiler-side primitive seeding with type-driven dispatch
+through `stdlib/core.mdk`.  Every operator, monad bind, and built-in
+constructor now flows through interface methods declared in core.mdk.
+
+**What was added (commits `18129df`, `da06513`, `9e5db2e`, `e4bd5d1`, `03d6634`).**
+- **Step 1.** `lib/prelude.ml` parses `stdlib/core.mdk` once and the result
+  is prepended to every user program in `check_program`, `typecheck_module`,
+  and `eval_program`.  A unique-marker detector (`program_is_core`) skips
+  the prepending when the program is core itself.
+- **Step 2.** `lib/builtins.ml` central registry: each operator (`+`, `-`,
+  `*`, `/`, `<`, `>`, `<=`, `>=`, `++`) maps to `(iface, method)` and the
+  typechecker emits a method-usage record so `check_method_usages` validates
+  it against `env.impls`.
+- **Step 3.** Do-block `<-` dispatches through `Thenable.andThen` (the
+  evaluator looks the method up by name in `env`).  The `Thenable` impl
+  bodies in `core.mdk` handle short-circuiting per monad.
+- **Step 4.** Compiler-side seeding for `Some`/`None`/`Ok`/`Err`/etc. and
+  for `Int`/`Float` were retired — the prelude declarations fill those
+  schemes via the same registration pipeline as user `data` decls.
+- **Step 5.** `pure` and `map` reconciled.  `pure` stays a primitive that
+  consults `pure_impls` (populated from `impl Applicative T` bodies) to
+  pick the right wrap; `map` is purely an interface method dispatched
+  via VMulti.
+
+---
+
 ### Phase 24: Left operator sections ✅ DONE
 
 **Goal.** Support `(2 * _)` / `(3 - _)` / `(0 < _)` left sections that desugar
@@ -993,6 +1056,201 @@ placeholder is the unambiguous alternative.
   `expr_atom`. All new resolutions are correct (documented in audit block).
 - 3 new parser tests, 1 roundtrip test, 5 typecheck tests, 3 eval tests.
   **523 tests total.**
+
+---
+
+### Phase 25: Where clauses ⏳ TODO
+
+**Goal.** Allow Haskell-style `where` clauses on top-level `fun_def` and
+on `match`-arm bodies, so locally-scoped helpers can sit beneath the main
+expression rather than living above it as `let ... in`.
+
+The grammar already accepts `where` on a `fun_body` (see [parser.mly:284](lib/parser.mly:284)),
+desugaring to nested `ELet`s.  What's missing:
+
+- Mutually-recursive helpers in a single `where` block — today each binding
+  desugars to a fresh `ELet`, so the second helper cannot see the first's
+  fully generalised scheme.  Phase 25 should desugar a whole `where` block
+  to a single group of mutually recursive bindings.
+- `where` on match arms / impl methods / interface defaults — not yet
+  parsed.  The parser change is small once the grammar slot is identified.
+- Tests covering nested `where` and `where` inside `match` arms.
+
+**Done when.** A typical numeric program with several small helpers
+expressible as `where`-locals (e.g. `quicksort`, `mergeSort` with their
+recursion helpers) type-checks and runs correctly.
+
+---
+
+### Phase 26: Type aliases and newtypes — coverage gaps ⏳ TODO
+
+The syntax is already in place (`type T a = ...`, `newtype UserId = UserId Int
+deriving (Eq, Show, Ord)`).  Remaining work:
+
+- **Recursive type aliases** are not yet rejected.  `type Loop = Loop`
+  silently produces an infinite expansion in `from_ast_type`'s alias
+  expansion.  Detect at registration time and emit `RecursiveTypeAlias`.
+- **Newtype eta-expansion** — currently a newtype wrapper is treated as a
+  unary constructor, but pattern-match elimination should be free.  Today
+  `match UserId 1 of UserId n => n + 1` is fine, but optimisation later
+  may want to erase the wrapper at codegen time.  Not blocking.
+- **Newtype `deriving (Num)`** — derive arithmetic instances by
+  unwrapping/rewrapping.  Useful for `Distance`-style domain wrappers.
+
+---
+
+### Phase 27: Where-bound mutual recursion + local `let-rec` ⏳ TODO
+
+Local recursion is currently impossible — `let f x = ... in f` does not see
+itself in its own body because `ELet` is non-recursive sugar.  Two routes:
+
+1. Treat every `let f x = ...` (i.e. with at least one `pat_atom` argument)
+   as implicitly recursive; the desugar would wrap the RHS in a Y-combinator
+   or generate a thunked fixpoint.
+2. Add an explicit `letrec` form to the AST and the grammar; non-recursive
+   `let` keeps current semantics.
+
+Haskell-style implicit recursion (option 1) is more ergonomic but more
+surprising.  The design doc is silent — needs a decision before
+implementation.
+
+---
+
+### Phase 28: Record field assignment `r.field = e` ⏳ TODO
+
+The design doc explicitly calls for this on mutable records:
+
+```
+let mut p = Person { name = "Alice", age = 30 }
+p.age = 31
+```
+
+Today only `{ p | age = 31 }` (immutable update) works.  Mutable record
+support requires:
+
+- Parser: `IDENT DOT IDENT EQUAL expr` as a new `stmt` form in do-blocks.
+- AST: a `DoFieldAssign of expr * ident * expr` variant (or fold into
+  `DoAssign`).
+- Type checker: verify the record was `let mut`, look up the field, add
+  `<Mut>` to the enclosing function's effect set.
+- Evaluator: rebuild the record's `VRecord` with the field replaced (or
+  switch to a mutable cell representation for `let mut` records).
+
+Same family as `r.value = e` on `Ref` — both should be implemented together.
+
+---
+
+### Phase 29: Higher-order effect tracking via `TFun` ⏳ TODO
+
+Today effects live in a separate `eff_env`; higher-order callbacks that
+receive effectful functions aren't tracked.  The fix is to merge effects
+into the `TFun` constructor:
+
+```ocaml
+TFun of mono * effect_set * mono
+```
+
+This is invasive: every `infer` case that constructs a function type
+gains an effect slot.  Pure functions still annotate-as-empty.  The
+upside is `<Mut>` on `let mut` use, effect-polymorphic `map`, and
+better error messages from `let runEffect = somethingEffectful`.
+
+Scheduled when the stdlib has enough higher-order combinators that
+the current limitation actually starts producing wrong types.
+
+---
+
+### Phase 30: `@Name` impl selection at runtime ⏳ TODO
+
+Today `@Name` parses and the typechecker silently consumes the hint
+without selecting a specific impl — ambiguous impl errors are still
+raised at check time when no default is present.  The runtime should
+actually dispatch through the named impl when `@Name` is present:
+
+```
+fold @Multiplicative [1, 2, 3]  -- explicit opt-out from default
+```
+
+Needs:
+- AST hook so the typechecker can record which impl was selected.
+- Evaluator: VMulti dispatch can short-circuit to the named impl.
+- `interface default Additive of Monoid Int` parsing (the `default`
+  keyword already exists, but resolution by name is incomplete).
+
+---
+
+### Phase 31: Records — pattern matching and field puns in patterns ⏳ TODO
+
+Today records can only be destructured by field access (`r.name`).
+Pattern-matching syntax would help in `match`-driven flow.  Suggested:
+
+```
+match p
+  Person { name = "Alice", age } => use name age
+  Person { ... } => default
+```
+
+Builds naturally on the existing field-pun infrastructure (`Phase 23`).
+The grammar slot is in `pat_atom`; the typechecker reuses
+`instantiate_record` to type-check the partial-field pattern.
+
+---
+
+### Phase 32: Naming impls and `default impl` ⏳ TODO
+
+Idris-style `impl IDENT of UPPER ...` parses today but is not actually
+selectable.  This phase wires up:
+
+- The `default` modifier on `impl` and `interface default` declarations.
+- `@Name` selection (Phase 30) to consult the impl's name when given.
+- Coherence checks: at most one default per interface-type pair.
+
+The named-instance design from the language doc gets us most of the
+way to a Haskell-like coherence story without giving up explicit user
+override.
+
+---
+
+### Phase 33: Where clauses on `match` arms and interfaces ⏳ TODO
+
+Currently `where` is only allowed at the top level of a function body.
+Allowing it on individual match arms and interface default methods is
+the natural follow-on once Phase 25 settles local-recursion semantics.
+
+---
+
+### Phase 34: LSP — error reporting (design-doc Phase 3) ⏳ TODO
+
+Per the design doc's implementation plan, after the REPL the next big
+deliverable is a Language Server with red-squiggle error reporting.  The
+existing `check --json` flag (not yet implemented) is the natural
+machine-readable substrate.
+
+Scope for v1:
+- LSP protocol scaffolding (`medaka lsp` subcommand).
+- Document open/change/close handlers; reparse + re-typecheck on change.
+- Diagnostics with source ranges (the existing `loc` field already has
+  `file:line:col` — needs `end_col` too for proper ranges).
+- No go-to-definition, no completion yet; that's design-doc Phase 6.
+
+---
+
+### Phase 35: Code formatter `medaka fmt` ⏳ TODO
+
+The pretty-printer already produces parseable source.  A `medaka fmt`
+subcommand that wraps `parse → strip locations → print` is the
+single-style formatter the design doc asks for.  Cost is low; this is
+a half-day task once we agree on whitespace/break conventions.
+
+---
+
+### Phase 36: `medaka.toml` project config + `medaka new` ⏳ TODO
+
+Multi-file projects need a stable project root marker.  A minimal
+`medaka.toml` (Cargo-style) at the root, with a `medaka new` command
+that scaffolds it, unblocks the multi-file CLI we already support but
+have no nice way to invoke (today the loader infers project_dir from
+the root file's directory).
 
 ---
 
@@ -1127,6 +1385,30 @@ a phase in §6 unless noted.
   `<-` should desugar to `andThen` calls (Haskell style) so the `Thenable`
   constraint is actually checked. Scheduled with Phase 19 stdlib/typeclass wiring.
 - **Constraint syntax in function type signatures.** ✅ Phase 20 done. `f : Eq a => a -> a -> Bool` now parses, round-trips, and type-checks. Constraint obligations are emitted at call sites and verified post-HM. Known limitation: constraint inference is not implemented — callers that use a constrained function polymorphically must also carry the explicit constraint annotation.
+
+### Additional gaps surfaced during the 2026-05-26 audit
+
+- **Triple-quoted strings don't support `\{...}` interpolation.** The
+  `read_triple_string` lexer rule has no `\\' '{'` branch, so any `\{expr}`
+  inside a `"""..."""` string is emitted as a literal `\{expr}`.  Easy fix:
+  extend `read_triple_string` with the same INTERP_OPEN logic
+  `read_string` uses.  Scheduled as a small follow-up to Phase 23.
+- **Float unary negation rejected by the type checker.** `EUnOp "-"` unifies
+  its argument with `t_int`, so `-3.14` is a type error and `let f = -x` for
+  `x : Float` is too.  The evaluator already does the right thing on `VFloat`
+  values; the fix is to lift the type rule to a `Num a` constraint so
+  negation works for any `Num` impl.  Scheduled with Phase 17 follow-ups.
+- **Single-file `check core.mdk` formerly produced duplicate-declaration
+  errors.** Fixed in the 2026-05-26 audit by detecting `program_is_core`
+  (presence of `data Ordering` + `interface Foldable`) and skipping the
+  prelude prepend in that case.  Same fix applied to `Resolve.create_env`
+  and to `Loader.direct_imports` (which now ignores `import core.{...}`).
+- **`EUnOp "!"` panicked at runtime.** The parser emits `EUnOp ("!", _)`
+  and the typechecker handles it, but the evaluator only handled
+  `EUnOp ("not", _)`.  Fixed in the 2026-05-26 audit.
+- **Tree-sitter grammar lives at the project root** (`tree-sitter-medaka/`)
+  rather than `tree-sitter/` as the original phase wrote.  README and PLAN
+  both reflect the actual path now.
 
 ---
 

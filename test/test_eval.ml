@@ -384,6 +384,22 @@ let t_interp_expr =
     "n = \"Alice\"\ngreeting = \"Hi\"\nx = \"\\{greeting}, \\{n}! Welcome.\"\n"
     "x" (VString "Hi, Alice! Welcome.")
 
+(* ── Unary operators ────────────────────────────────────────────────────── *)
+
+let t_bang_true  = assert_val "r = !True\n"  "r" (VBool false)
+let t_bang_false = assert_val "r = !False\n" "r" (VBool true)
+let t_bang_chain = assert_val "r = !(!True)\n" "r" (VBool true)
+
+(* ── String escape sequences ───────────────────────────────────────────── *)
+
+let t_escape_newline = assert_val "x = \"a\\nb\"\n" "x" (VString "a\nb")
+let t_escape_tab     = assert_val "x = \"a\\tb\"\n" "x" (VString "a\tb")
+let t_escape_quote   = assert_val "x = \"a\\\"b\"\n" "x" (VString "a\"b")
+let t_escape_null    = assert_val "x = \"a\\0b\"\n" "x" (VString "a\000b")
+let t_escape_cr      = assert_val "x = \"a\\rb\"\n" "x" (VString "a\rb")
+(* \u{2603} → ☃ (encoded as 3 UTF-8 bytes "\xe2\x98\x83") *)
+let t_escape_unicode = assert_val "x = \"\\u{2603}\"\n" "x" (VString "\xe2\x98\x83")
+
 (* ── Multi-impl dispatch (VMulti) ───────────────────────────────────────── *)
 
 (* Three impls for the same interface method 'describe'.
@@ -548,5 +564,18 @@ let () =
       test_case "option Some"       `Quick t_dispatch_option_some;
       test_case "option None"       `Quick t_dispatch_option_none;
       test_case "list empty"        `Quick t_dispatch_list_empty;
+    ];
+    "unary operators", [
+      test_case "!True"        `Quick t_bang_true;
+      test_case "!False"       `Quick t_bang_false;
+      test_case "double negation" `Quick t_bang_chain;
+    ];
+    "string escape sequences", [
+      test_case "\\n"          `Quick t_escape_newline;
+      test_case "\\t"          `Quick t_escape_tab;
+      test_case "\\\""         `Quick t_escape_quote;
+      test_case "\\0"          `Quick t_escape_null;
+      test_case "\\r"          `Quick t_escape_cr;
+      test_case "\\u{2603}"    `Quick t_escape_unicode;
     ];
   ]

@@ -72,6 +72,14 @@ let parse_file path =
 
 (* ── Dependency extraction ────────────────────────── *)
 
+(* "core" is the implicit prelude — its declarations are prepended automatically
+   by the type-checker and evaluator.  An `import core.{...}` is a no-op
+   (the names are already in scope); the loader must skip "core" so it doesn't
+   end up duplicating the prelude when a user file imports from it. *)
+let is_prelude_module = function
+  | "core" -> true
+  | _      -> false
+
 (* Extract the module IDs that a program directly imports via `use` *)
 let direct_imports (prog : Ast.program) : string list =
   List.filter_map (function
@@ -85,15 +93,18 @@ let direct_imports (prog : Ast.program) : string list =
       (* Module ID is the dotted path minus the last segment when UseName
          refers to a specific name rather than a module. For all other forms
          the path IS the module, so take it directly. *)
-      (match path with
-       | Ast.UseName ns when List.length ns > 1 ->
-         (* use foo.bar → module is "foo", name is "bar" *)
-         Some (String.concat "." (List.rev (List.tl (List.rev ns))))
-       | Ast.UseName [single] ->
-         (* use foo → module is "foo" *)
-         Some single
-       | _ ->
-         Some (String.concat "." parts))
+      let mid =
+        match path with
+        | Ast.UseName ns when List.length ns > 1 ->
+          (* use foo.bar → module is "foo", name is "bar" *)
+          String.concat "." (List.rev (List.tl (List.rev ns)))
+        | Ast.UseName [single] ->
+          (* use foo → module is "foo" *)
+          single
+        | _ ->
+          String.concat "." parts
+      in
+      if is_prelude_module mid then None else Some mid
     | _ -> None
   ) prog
 

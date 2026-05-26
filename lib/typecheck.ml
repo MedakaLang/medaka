@@ -1,7 +1,18 @@
-(* Hindley-Milner type inference with let-polymorphism, ADTs, and pattern matching.
-   Uses Rémy-style level-based generalization (no environment scan needed).
+(* Hindley-Milner type inference with let-polymorphism.
 
-   Not yet: records, effects, interfaces, exhaustiveness checking. *)
+   Covered: ADTs (`data`), records, type aliases, newtypes, pattern matching,
+   exhaustiveness/usefulness (via [Exhaust]), interfaces with named instances,
+   constraint solving at call sites, `Eq a => ...` constraint syntax in signatures,
+   effect tracking (separate `eff_env` pass after HM), `Ref a` and `<Mut>` for
+   shared mutable state, multi-module type-checking.
+
+   Uses Rémy-style level-based generalization (no env scan needed).
+
+   Not yet covered: effects threaded through `TFun` (today they live in a
+   separate `eff_env`, so higher-order callbacks that receive effectful
+   functions aren't tracked); `@Name` impl selection at runtime; constraint
+   inference (callers of a constrained function must carry the explicit
+   constraint annotation).  See PLAN.md §5 for the full list. *)
 
 open Ast
 
@@ -1483,6 +1494,17 @@ let infer_and_check_effects ~extern_decls groups =
    `id x = x` then `a = id 5` then `b = id "hi"` works), while mutual
    recursion still type-checks because the forward reference unifies with
    the (still-monomorphic) placeholder. *)
+(* If the program redefines a unique pair of core.mdk declarations, assume
+   it IS core.mdk being type-checked standalone and skip prelude prepending to
+   avoid duplicate declarations.  The pair (data Ordering + interface Foldable)
+   is specific enough that user code would not normally trigger it. *)
+let program_is_core (prog : program) : bool =
+  let has_ordering = List.exists (function
+    | DData (_, "Ordering", _, _, _) -> true | _ -> false) prog in
+  let has_foldable = List.exists (function
+    | DInterface { iface_name = "Foldable"; _ } -> true | _ -> false) prog in
+  has_ordering && has_foldable
+
 let check_program (prog : program) : (ident * scheme) list * string list =
   reset_state ();
   current_loc := None;
@@ -1493,8 +1515,9 @@ let check_program (prog : program) : (ident * scheme) list * string list =
      for all user code.  Prelude declarations are processed through the same
      Phase 1–5 pipeline as user code.  seed_builtin_impls (above) supplies
      ground impl_entries for primitive types — Num/Ord on Int/Float, etc. —
-     so operator constraints raised by binop_type find a matching impl. *)
-  let prog = Prelude.program @ prog in
+     so operator constraints raised by binop_type find a matching impl.
+     Skip prepending when type-checking core.mdk itself (would duplicate). *)
+  let prog = if program_is_core prog then prog else Prelude.program @ prog in
 
   (* Phase 1: register data, record, interface, impl, and extern declarations *)
   (* First sub-pass: collect all type aliases so they are available for expansion *)
@@ -1638,8 +1661,9 @@ let typecheck_module
   let env = initial_env () in
   seed_builtin_impls env;
 
-  (* Core stdlib is always available in every module. *)
-  let prog = Prelude.program @ prog in
+  (* Core stdlib is always available in every module.
+     Skip when this module itself IS core (avoid duplicates). *)
+  let prog = if program_is_core prog then prog else Prelude.program @ prog in
 
   (* Seed env with all known module exports *)
   List.iter (fun te ->

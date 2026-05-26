@@ -44,9 +44,13 @@ let pp_error = function
 
 (* Until the stdlib exists, these are baked in. *)
 
+(* Built-in primitive types not declared in stdlib/core.mdk.  Option/Result/
+   Ordering live in core.mdk and flow in via prelude_types — they must not
+   appear here, otherwise type-checking core.mdk standalone reports a duplicate
+   (see program_is_core handling below). *)
 let primitive_types = [
   "Int"; "Float"; "String"; "Char"; "Bool"; "Unit";
-  "List"; "Option"; "Result"; "Ref";
+  "List"; "Ref";
   "Array"; "MutArray"; "Map"; "HashMap"; "Set"; "HashSet";
 ]
 
@@ -117,7 +121,7 @@ type module_env = {
   module_aliases : (ident, module_exports) Hashtbl.t;
 }
 
-let create_env () =
+let create_env ?(with_prelude=true) () =
   let env = {
     values         = Hashtbl.create 32;
     types          = Hashtbl.create 16;
@@ -132,15 +136,27 @@ let create_env () =
   List.iter (fun n -> Hashtbl.replace env.types n ()) primitive_types;
   List.iter (fun n -> Hashtbl.replace env.constructors n ()) primitive_constructors;
   List.iter (fun n -> Hashtbl.replace env.values n ()) primitive_values;
-  (* Seed names from the core stdlib prelude *)
-  List.iter (fun n -> Hashtbl.replace env.types n ()) prelude_types;
-  List.iter (fun n -> Hashtbl.replace env.constructors n ()) prelude_constructors;
-  List.iter (fun (iface, methods) ->
-    Hashtbl.replace env.interfaces iface ();
-    Hashtbl.replace env.iface_methods iface methods
-  ) prelude_interfaces;
-  List.iter (fun n -> Hashtbl.replace env.values n ()) prelude_values;
+  if with_prelude then begin
+    (* Seed names from the core stdlib prelude *)
+    List.iter (fun n -> Hashtbl.replace env.types n ()) prelude_types;
+    List.iter (fun n -> Hashtbl.replace env.constructors n ()) prelude_constructors;
+    List.iter (fun (iface, methods) ->
+      Hashtbl.replace env.interfaces iface ();
+      Hashtbl.replace env.iface_methods iface methods
+    ) prelude_interfaces;
+    List.iter (fun n -> Hashtbl.replace env.values n ()) prelude_values
+  end;
   env
+
+(* When the program itself is core.mdk (detected by the simultaneous presence
+   of `data Ordering` and `interface Foldable`), avoid pre-seeding prelude
+   names so the user-side declarations don't collide with them. *)
+let program_is_core (prog : program) : bool =
+  let has_ordering = List.exists (function
+    | Ast.DData (_, "Ordering", _, _, _) -> true | _ -> false) prog in
+  let has_foldable = List.exists (function
+    | Ast.DInterface { iface_name = "Foldable"; _ } -> true | _ -> false) prog in
+  has_ordering && has_foldable
 
 (* ── Pattern utilities ─────────────────────────── *)
 
@@ -208,7 +224,7 @@ let imported_names (path : use_path) (exp : module_exports)
 
 let build_env ?(known_modules : module_exports list = [])
     (prog : program) : module_env * (error * Ast.loc option) list =
-  let env = create_env () in
+  let env = create_env ~with_prelude:(not (program_is_core prog)) () in
   let errors = ref [] in
   let report e = errors := (e, None) :: !errors in
   let add_unique tbl kind name =
@@ -258,6 +274,9 @@ let build_env ?(known_modules : module_exports list = [])
       ()
     | DUse (_, path) ->
       let mod_id = use_path_module_id path in
+      (* "core" is the implicit prelude — `import core.{...}` is a no-op
+         since the names are already in scope through the prelude. *)
+      if mod_id = "core" then () else
       (match List.find_opt (fun e -> e.exp_mod_id = mod_id) known_modules with
        | None ->
          if known_modules <> [] then

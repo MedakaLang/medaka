@@ -305,6 +305,21 @@ let test_private_import_not_reexported () =
       failwith "expected PrivateNameAccess error but got none"
   )
 
+(* `import core.{...}` is a no-op: core is the implicit prelude, so the
+   loader must not try to find core.mdk on disk.  This test deliberately
+   uses a project dir without a core.mdk file. *)
+let test_import_core_is_noop () =
+  with_tmp_dir (fun dir ->
+    let main = write_file dir "main.mdk"
+      "import core.{identity}\nx = identity 5\n" in
+    let modules = Loader.load_program main dir in
+    let ids = List.map (fun (id, _, _) -> id) modules in
+    match ids with
+    | ["main"] -> ()
+    | _ -> failwith (Printf.sprintf
+            "expected ['main'], got %s" (String.concat ", " ids))
+  )
+
 (* ── Runner ──────────────────────────────────────── *)
 
 let () =
@@ -324,6 +339,7 @@ let () =
       test_case "cycle detection"  `Quick test_cycle_detection;
       test_case "missing file"     `Quick test_missing_file;
       test_case "privacy violation" `Quick test_privacy_violation;
+      test_case "import core no-op" `Quick test_import_core_is_noop;
     ];
     "re-exports", [
       test_case "selective (UseName)"          `Quick test_reexport_value_selective;
