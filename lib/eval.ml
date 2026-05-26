@@ -480,6 +480,10 @@ let primitives : (string * value) list =
       match code with
       | VInt n -> Stdlib.exit n
       | _ -> raise (Eval_error ("exit: expected Int", None))));
+    ("panic", VPrim (fun msg ->
+      match msg with
+      | VString s -> raise (Eval_error ("panic: " ^ s, !current_loc))
+      | _ -> raise (Eval_error ("panic", !current_loc))));
   ]
 
 let () =

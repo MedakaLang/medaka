@@ -357,6 +357,49 @@ f xs =
       ])) -> ()
   | _ -> failwith "wrong"
 
+(* ── Top-level function guard tests ─────────────────── *)
+
+let test_guard_single () =
+  let src = {|
+f x
+  | x > 0 = 1
+  | otherwise = 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "x"],
+      EIf (EBinOp (">", EVar "x", ELit (LInt 0)), ELit (LInt 1),
+        EIf (EVar "otherwise", ELit (LInt 0),
+          EApp (EVar "panic", ELit (LString "Non-exhaustive guards"))))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+let test_guard_multi () =
+  let src = {|
+classify n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | otherwise = "zero"
+|} in
+  match parse_one src with
+  | DFunDef (false, "classify", [PVar "n"],
+      EIf (EBinOp ("<", EVar "n", ELit (LInt 0)), ELit (LString "neg"),
+        EIf (EBinOp (">", EVar "n", ELit (LInt 0)), ELit (LString "pos"),
+          EIf (EVar "otherwise", ELit (LString "zero"),
+            EApp (EVar "panic", ELit (LString "Non-exhaustive guards")))))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+let test_guard_no_params () =
+  let src = {|
+r
+  | True = 42
+  | otherwise = 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "r", [],
+      EIf (EVar "True", ELit (LInt 42),
+        EIf (EVar "otherwise", ELit (LInt 0),
+          EApp (EVar "panic", ELit (LString "Non-exhaustive guards"))))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
 (* ── Data type tests ─────────────────────────────────── *)
 
 let test_data_inline () =
@@ -634,6 +677,11 @@ let () =
     "as-patterns", [
       test_case "cons as-pattern"   `Quick test_as_pattern_cons;
       test_case "var as-pattern"    `Quick test_as_pattern_var;
+    ];
+    "top-level function guards", [
+      test_case "single guard"   `Quick test_guard_single;
+      test_case "multi guards"   `Quick test_guard_multi;
+      test_case "no-param guard" `Quick test_guard_no_params;
     ];
     "data types", [
       test_case "inline variants"     `Quick test_data_inline;

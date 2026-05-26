@@ -161,6 +161,7 @@ let rec pp_pat = function
   | PCons (h, t)    -> Printf.sprintf "(%s::%s)" (pp_pat h) (pp_pat t)
   | PTuple ps       -> Printf.sprintf "(%s)" (String.concat ", " (List.map pp_pat ps))
   | PList ps        -> Printf.sprintf "[%s]" (String.concat ", " (List.map pp_pat ps))
+  | PAs (x, p)      -> Printf.sprintf "%s@%s" x (pp_pat p)
 
 let rec pp_expr = function
   | ELit l              -> pp_lit l

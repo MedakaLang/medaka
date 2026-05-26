@@ -50,6 +50,14 @@ let rec expr_to_pat = function
     collect [] e
   | _ -> failwith "Invalid lambda parameter pattern"
 
+(* Desugar top-level guard arms into a nested if-then-else chain.
+   A missing catch-all panics at runtime, matching Haskell's behaviour. *)
+let desugar_guards arms =
+  List.fold_right
+    (fun (cond, body) else_ -> EIf (cond, body, else_))
+    arms
+    (EApp (EVar "panic", ELit (LString "Non-exhaustive guards")))
+
 (* Interpret a ty_fun as a constraint-list prefix in `ty_fun FAT_ARROW ty`.
    TyApp(TyCon iface, arg) → single constraint; TyTuple → multiple constraints. *)
 let desugar_constraint lhs rhs =
@@ -231,6 +239,11 @@ inner_type_sig:
 inner_fun_def:
   | IDENT list(pat_atom) EQUAL fun_body newlines
     { fun is_pub -> DFunDef (is_pub, $1, $2, $4) }
+  | IDENT list(pat_atom) INDENT nonempty_list(guard_arm) DEDENT newlines
+    { fun is_pub -> DFunDef (is_pub, $1, $2, desugar_guards $4) }
+
+guard_arm:
+  | PIPE expr_or EQUAL fun_body newlines  { ($2, $4) }
 
 fun_body:
   | expr_no_block                                                    { $1 }
