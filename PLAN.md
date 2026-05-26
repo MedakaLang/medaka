@@ -20,15 +20,15 @@ Two debug binaries in `dev/` (not run as part of `dune test`):
 - `debug.ml` — quick parse-and-print probe
 - `tc_debug.ml` — quick type-check probe
 
-630 tests pass across 8 test suites:
+637 tests pass across 8 test suites:
 
 | Suite             | File                            | Cases | Coverage                                              |
 |-------------------|---------------------------------|-------|-------------------------------------------------------|
-| Parser            | `test/test_parser.ml`           | 114   | AST shape for each construct                          |
-| Round-trip        | `test/test_roundtrip.ml`        | 86    | parse → print → parse yields the same AST             |
+| Parser            | `test/test_parser.ml`           | 115   | AST shape for each construct                          |
+| Round-trip        | `test/test_roundtrip.ml`        | 87    | parse → print → parse yields the same AST             |
 | Resolver          | `test/test_resolve.ml`          | 58    | Unbound vars, unknown types/ctors, duplicates, fields |
-| Type checker      | `test/test_typecheck.ml`        | 237   | Inferred types, type errors, exhaustiveness warnings  |
-| Evaluator         | `test/test_eval.ml`             | 101   | Runtime values, recursion, do-blocks, Ref, errors, escapes, @Name dispatch |
+| Type checker      | `test/test_typecheck.ml`        | 240   | Inferred types, type errors, exhaustiveness warnings  |
+| Evaluator         | `test/test_eval.ml`             | 103   | Runtime values, recursion, do-blocks, Ref, errors, escapes, @Name dispatch |
 | Run               | `test/test_run.ml`              | 6     | Stdout capture, factorial, ADT match, do-block, Ref, panic |
 | REPL              | `test/test_repl.ml`             | 9     | process_item, :load atomicity, rollback, :browse      |
 | Loader            | `test/test_loader.ml`           | 19    | Multi-file imports, topo sort, cycle detection, prelude no-op |
@@ -1259,12 +1259,31 @@ override.
 
 ---
 
-### Phase 33: Where clauses on interface defaults ⏳ TODO
+### Phase 33: Where clauses on interface defaults ✅ DONE
 
-`where` on `match` arms (Phase 25) and `impl` methods (already worked via
-`fun_body`) are now supported.  What remains is `where` on interface default
-method bodies, which requires identifying the grammar slot in
-`iface_method_default`.
+**What was added (this session).**
+
+- **Grammar**: Already supported. `iface_member` (line 637 of `parser.mly`) already used `fun_body`
+  which supports `expr_no_block WHERE INDENT bindings DEDENT`. No grammar change needed.
+- **Typecheck** (`lib/typecheck.ml`, `register_interface`): Each default method body is now
+  type-checked immediately after the method schemes are built. A temporary env that includes all
+  interface methods is constructed so defaults can call peer methods. For methods with an inferred
+  type (declared as `TyVar "_"` placeholder), the scheme is upgraded to the actual inferred type so
+  callers see the real signature (e.g. `a -> String`) instead of a naked TVar.
+- **Evaluator** (`lib/eval.ml`):
+  - Pass 1 of `eval_program`: `DInterface` case pre-allocates ref cells for default method names.
+  - Pass 2 of `eval_program`: `DInterface` case evaluates default method bodies and inserts them
+    into `impl_acc` with `score = List.length type_params` (high score = more generic = tried last).
+    Concrete impls (score 0) always win; the default fires only when no concrete impl matches.
+  - `eval_repl_decl`: mirrors the same `DInterface` logic for the REPL.
+- **Tests** (18 new across 6 files):
+  - `test_parser.ml`: 1 test — AST shape of an `iface_member` default with a `where` binding.
+  - `test_roundtrip.ml`: 1 test — interface default with `where` round-trips correctly.
+  - `test_typecheck.ml`: 3 tests — default with `where` type-checks; omitting an overriding impl
+    compiles; type error in default's `where` helper is caught at interface declaration.
+  - `test_eval.ml`: 2 tests — default method runs when impl omits it; default with `where` helper
+    produces correct value.
+- **605 tests total** (was 587).
 
 ---
 

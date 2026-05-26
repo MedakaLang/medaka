@@ -674,6 +674,43 @@ impl Pair Int where
   swap p = p
 |}
 
+(* ── Phase 33: where on interface default method bodies ── *)
+
+(* Default method body with a where helper type-checks *)
+let t_iface_default_where =
+  assert_type
+    {|interface Greeter a where
+  greet : a -> String
+  describe x = label ++ greet x where
+    label = "item: "
+
+impl Greeter Int where
+  greet _ = "an int"
+|}
+    "describe" "a -> String"
+
+(* Impl that omits a default method with a where helper compiles *)
+let t_iface_default_where_omit =
+  assert_type
+    {|interface Greeter a where
+  greet : a -> String
+  describe x = label ++ greet x where
+    label = "item: "
+
+impl Greeter Int where
+  greet _ = "an int"
+|}
+    "greet" "a -> String"
+
+(* Type error in default body's where helper is caught *)
+let e_iface_default_where_type_error =
+  assert_err
+    {|interface Broken a where
+  method : a -> Int
+  badDefault x = helper x where
+    helper y = y + "oops"
+|}
+
 (* ── Phase 4.2: constraint checking at call sites ── *)
 
 (* Method called with a concrete type that has a matching impl — no error *)
@@ -1716,13 +1753,16 @@ let () =
       test_case "poly impl"              `Quick t_iface_poly_impl;
       test_case "HKT"                    `Quick t_iface_hkt;
       test_case "named impl"             `Quick t_iface_named_impl;
-      test_case "default method"         `Quick t_iface_default_method;
-      test_case "@Name annotation"       `Quick t_iface_at_annotation;
-      test_case "err: unknown interface" `Quick e_iface_unknown;
-      test_case "err: missing method"    `Quick e_iface_missing_method;
-      test_case "err: wrong type"        `Quick e_iface_wrong_type;
-      test_case "err: extra method"      `Quick e_iface_extra_method;
-      test_case "err: arity mismatch"    `Quick e_iface_arity;
+      test_case "default method"             `Quick t_iface_default_method;
+      test_case "@Name annotation"           `Quick t_iface_at_annotation;
+      test_case "default method where"       `Quick t_iface_default_where;
+      test_case "default method where omit"  `Quick t_iface_default_where_omit;
+      test_case "err: unknown interface"     `Quick e_iface_unknown;
+      test_case "err: missing method"        `Quick e_iface_missing_method;
+      test_case "err: wrong type"            `Quick e_iface_wrong_type;
+      test_case "err: extra method"          `Quick e_iface_extra_method;
+      test_case "err: arity mismatch"        `Quick e_iface_arity;
+      test_case "err: default where type"    `Quick e_iface_default_where_type_error;
     ];
     "constraint checking", [
       test_case "single impl"            `Quick t_constraint_single_impl;

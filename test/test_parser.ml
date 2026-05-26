@@ -868,6 +868,27 @@ f p =
       ])) -> ()
   | _ -> failwith "wrong"
 
+(* ── Interface default where ─────────────────────────── *)
+
+let test_iface_default_where () =
+  let src = {|interface Greeter a where
+  greet x = prefix ++ x where
+    prefix = "Hello, "
+|} in
+  match parse_one src with
+  | DInterface { iface_name = "Greeter"; methods = [m]; _ } ->
+    (match m with
+     | { method_name = "greet";
+         method_default = Some ([PVar "x"],
+           ELetGroup (["prefix", ELit (LString "Hello, ")],
+             EBinOp ("++", EVar "prefix", EVar "x"))); _ } -> ()
+     | _ -> failwith (Printf.sprintf "wrong method shape: name=%s, default=%s"
+              m.method_name
+              (match m.method_default with
+               | None -> "None"
+               | Some (_, e) -> Ast.pp_expr e)))
+  | d -> failwith ("wrong decl: " ^ pp_decl d)
+
 (* ── Test runner ─────────────────────────────────────── *)
 
 let () =
@@ -1028,5 +1049,8 @@ let () =
       test_case "explicit + pun"     `Quick test_record_pat_explicit;
       test_case "rest only"          `Quick test_record_pat_rest_only;
       test_case "field with rest"    `Quick test_record_pat_with_rest;
+    ];
+    "interface default where", [
+      test_case "where in default body" `Quick test_iface_default_where;
     ];
   ]

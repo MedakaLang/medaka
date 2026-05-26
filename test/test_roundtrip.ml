@@ -308,4 +308,8 @@ let () =
       test_case "rest only"    `Quick (mk "f p =\n  match p\n    Person { ... } => 0\n");
       test_case "field + rest" `Quick (mk "f p =\n  match p\n    Person { name, ... } => name\n");
     ];
+    "interface default where", [
+      test_case "where in default body" `Quick
+        (mk "interface Greeter a where\n  greet x = prefix ++ x where\n    prefix = \"Hi \"\n");
+    ];
   ]

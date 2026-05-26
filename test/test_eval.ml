@@ -543,6 +543,35 @@ let t_rec_pat_rest = assert_val
 |})
   "result" (VInt 99)
 
+(* ── Interface default method bodies (Phase 33) ─────────────────────────── *)
+
+(* Default method runs when the impl doesn't override it *)
+let t_iface_default_runs = assert_val
+  {|interface Greet a where
+  name : a -> String
+  hello x = "Hello " ++ name x
+
+impl Greet Int where
+  name _ = "World"
+
+result = hello 0
+|}
+  "result" (VString "Hello World")
+
+(* Default method with a where helper runs correctly *)
+let t_iface_default_where_runs = assert_val
+  {|interface Greet a where
+  name : a -> String
+  hello x = prefix ++ name x where
+    prefix = "Hi "
+
+impl Greet Int where
+  name _ = "there"
+
+result = hello 42
+|}
+  "result" (VString "Hi there")
+
 (* ── Test registration ──────────────────────────────────────────────────── *)
 
 let () =
@@ -704,5 +733,9 @@ let () =
       test_case "pun binds field"            `Quick t_rec_pat_pun;
       test_case "explicit pattern match"     `Quick t_rec_pat_explicit;
       test_case "wildcard rest catch-all"    `Quick t_rec_pat_rest;
+    ];
+    "interface default methods (Phase 33)", [
+      test_case "default method runs"         `Quick t_iface_default_runs;
+      test_case "default with where helper"   `Quick t_iface_default_where_runs;
     ];
   ]
