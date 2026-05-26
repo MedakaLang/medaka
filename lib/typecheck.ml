@@ -1442,7 +1442,7 @@ let rec impl_type_pattern t = match normalize t with
   | TVar _ -> "_"
   | TCon n -> n
   | TApp (a, b) -> "(" ^ impl_type_pattern a ^ " " ^ impl_type_pattern b ^ ")"
-  | TFun (a, b) -> impl_type_pattern a ^ " -> " ^ impl_type_pattern b
+  | TFun (a, _, b) -> impl_type_pattern a ^ " -> " ^ impl_type_pattern b
   | TTuple ts   -> "(" ^ String.concat "," (List.map impl_type_pattern ts) ^ ")"
 
 (* After all impls are registered, ensure at most one default impl per

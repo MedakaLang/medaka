@@ -1,11 +1,13 @@
 {
   "name": "medaka",
   "displayName": "Medaka",
-  "description": "Syntax highlighting for the Medaka programming language (.mdk)",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and language server support for the Medaka programming language (.mdk)",
+  "version": "0.2.0",
   "publisher": "medaka-lang",
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:medaka"],
+  "main": "./client.js",
   "contributes": {
     "languages": [
       {
@@ -21,6 +23,24 @@
         "scopeName": "source.medaka",
         "path": "./syntaxes/medaka.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Medaka",
+      "properties": {
+        "medaka.serverPath": {
+          "type": "string",
+          "default": "medaka",
+          "description": "Path to the medaka binary. Must support the `lsp` subcommand."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0"
   }
 }

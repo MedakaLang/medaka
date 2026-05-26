@@ -1309,19 +1309,52 @@ time; at runtime the VMulti default-dispatch fires regardless of the hint.
 
 ---
 
-### Phase 34: LSP — error reporting (design-doc Phase 3) ⏳ TODO
+### Phase 34: LSP — error reporting (design-doc Phase 3) ✅ DONE
 
-Per the design doc's implementation plan, after the REPL the next big
-deliverable is a Language Server with red-squiggle error reporting.  The
-existing `check --json` flag (not yet implemented) is the natural
-machine-readable substrate.
+**What was added.**
+- `Ast.loc` extended with `end_line` and `end_col` fields so diagnostics
+  can highlight full expression ranges rather than a single column.
+  `lib/parser.mly`'s `of_pos` helper now takes both `$startpos` and
+  `$endpos` at every `ELoc` injection site (29 call sites updated).
+- `lib/diagnostics.ml` (new) — runs parse → desugar → resolve → typecheck
+  on a source buffer and returns a list of `{severity, loc, message}`
+  records instead of exiting on the first error. Resolve errors all
+  surface; typecheck stops at the first error per the v1 scope.
+- `lib/lsp_server.ml` (new) — LSP server over stdio built on the `lsp`
+  and `jsonrpc` opam packages. Handles `initialize`, `shutdown`,
+  `textDocument/didOpen/didChange/didClose`; publishes diagnostics on
+  every document change. Advertises `textDocumentSync = Full`.
+- `lib/dune` — added `lsp` and `jsonrpc` to `libraries`; added the new
+  modules to the `modules` list. opam dependencies on `lsp 1.26.0` and
+  `jsonrpc 1.26.0` (with transitive `yojson`).
+- `bin/main.ml` — `medaka lsp` subcommand wired to `Lsp_server.run`.
+- `editors/vscode-medaka/` — `client.js` added (minimal
+  `vscode-languageclient` activator spawning `medaka lsp`); `package.json`
+  updated to v0.2.0 with `activationEvents`, `main`, and a `medaka.serverPath`
+  setting; new `README.md`; `editors/install-vscode.sh` bumped to v0.2.0.
+- `dev/lsp_smoke.sh` — out-of-test smoke driver that pipes a synthetic
+  `initialize` + `didOpen` + `shutdown` through the binary and asserts
+  that an Error-severity diagnostic comes back. Kept out of `dune test`
+  per PLAN.md §2.2.
+- `test/test_diagnostics.ml` (new) — 7 tests covering clean source,
+  parse error, unbound variable, type mismatch, multiple resolve errors
+  in one file, `import` rejection, and end-position presence.
+- Also fixed a pre-existing build break in
+  `lib/typecheck.ml:1445` (`TFun (a, b)` → `TFun (a, _, b)`) — the
+  Phase 29 effect-slot change had missed this site.
 
-Scope for v1:
-- LSP protocol scaffolding (`medaka lsp` subcommand).
-- Document open/change/close handlers; reparse + re-typecheck on change.
-- Diagnostics with source ranges (the existing `loc` field already has
-  `file:line:col` — needs `end_col` too for proper ranges).
-- No go-to-definition, no completion yet; that's design-doc Phase 6.
+**655 tests total** (7 new in `test_diagnostics`).
+
+**Known limitations.**
+- Diagnostics are computed only for the currently-open document; the
+  multi-file `use`/`import` loader isn't run, and `import` declarations
+  produce a warning diagnostic in the LSP path.
+- Typecheck still raises on the first error; accumulating multiple
+  typecheck errors per file requires recovery types — deferred.
+- No hover, go-to-definition, or completion (design-doc Phase 6).
+- The VS Code client requires `npm install` to fetch
+  `vscode-languageclient`; this is not run automatically by
+  `editors/install-vscode.sh`.
 
 ---
 

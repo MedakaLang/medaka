@@ -1,6 +1,12 @@
 type ident = string
 
-type loc = { file: string; line: int; col: int }
+type loc = {
+  file: string;
+  line: int;      (* 1-based start line *)
+  col: int;       (* 0-based start column *)
+  end_line: int;  (* 1-based end line *)
+  end_col: int;   (* 0-based end column *)
+}
 
 type literal =
   | LInt    of int

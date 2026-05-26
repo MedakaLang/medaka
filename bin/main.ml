@@ -30,10 +30,11 @@ let has_use_decls prog =
 let () =
   let mode, filename = match Sys.argv with
     | [| _; "repl" |] | [| _ |] -> Medaka_lib.Repl.run (); exit 0
+    | [| _; "lsp"  |]            -> Medaka_lib.Lsp_server.run (); exit 0
     | [| _; "check"; file |] -> `Check, file
     | [| _; "run";   file |] -> `Run,   file
     | [| _; file |]           -> `Run,   file
-    | _ -> print_endline "Usage: medaka [check|run|repl] <file.mdk>"; exit 1
+    | _ -> print_endline "Usage: medaka [check|run|repl|lsp] <file.mdk>"; exit 1
   in
   let project_dir = Filename.dirname filename in
 

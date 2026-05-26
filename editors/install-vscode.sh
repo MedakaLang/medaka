@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT_SRC="$SCRIPT_DIR/vscode-medaka"
-EXT_ID="medaka-lang.medaka-0.1.0"
+EXT_ID="medaka-lang.medaka-0.2.0"
 
 install_for() {
   local label="$1"

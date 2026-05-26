@@ -26,9 +26,12 @@ Frontend and interpreter complete; standard library underway; codegen not yet st
 - **Evaluator** — `lib/eval.ml` (tree-walking interpreter with VMulti-based
   typeclass dispatch)
 - **REPL** — `lib/repl.ml` (incremental parse/typecheck/eval with persistent env)
-- **CLI** — `bin/main.ml` — `check`, `run`, and `repl` subcommands
-- **Test suite** — 590 cases across parser, roundtrip, resolve, typecheck,
-  eval, run, repl, and loader suites
+- **CLI** — `bin/main.ml` — `check`, `run`, `repl`, and `lsp` subcommands
+- **Diagnostics** — `lib/diagnostics.ml` (accumulating error pipeline)
+- **Language server** — `lib/lsp_server.ml` (stdio LSP server with
+  document open/change/close → publishDiagnostics)
+- **Test suite** — 655 cases across parser, roundtrip, resolve, typecheck,
+  eval, run, repl, loader, and diagnostics suites
 
 The standard library is being developed in Medaka itself on top of the
 `extern` primitives — see [STDLIB.md](./STDLIB.md). Codegen has not started.
@@ -73,6 +76,11 @@ Or run individual suites directly (preferred — `dune test` can hang):
 **Interactive REPL:**
 ```sh
 ./_build/default/bin/main.exe repl
+```
+
+**Language server** (for editor integration — speaks LSP over stdio):
+```sh
+./_build/default/bin/main.exe lsp
 ```
 
 ```
@@ -140,8 +148,9 @@ Medaka itself and developed interactively via the REPL. See
 
 ### VS Code / Cursor
 
-A minimal language extension lives in `editors/vscode-medaka/`. It provides
-syntax highlighting for `.mdk` files via a TextMate grammar.
+A language extension lives in `editors/vscode-medaka/`. It provides
+syntax highlighting for `.mdk` files via a TextMate grammar, and connects
+to the Medaka language server (`medaka lsp`) for live error diagnostics.
 
 **Install (symlink, recommended for development):**
 ```sh
@@ -244,6 +253,8 @@ lib/
   prelude.ml      Parses and caches `stdlib/core.mdk` for implicit prelude
   runtime.ml      Parses `stdlib/runtime.mdk` to derive primitive schemes
   repl.ml         REPL loop (`:load`, `:reload`, `:browse`, `:type`, …)
+  diagnostics.ml  Accumulating parse/resolve/typecheck pipeline (no exit-on-error)
+  lsp_server.ml   LSP server: stdio JSON-RPC, publishDiagnostics on edit
 bin/
   main.ml         CLI entry point (check / run / repl)
   repl.ml         Interactive REPL loop shim
@@ -264,9 +275,11 @@ test/
   test_run.ml         End-to-end program runs
   test_repl.ml        REPL meta-commands and load atomicity
   test_loader.ml      Module loader and cross-file imports
+  test_diagnostics.ml Diagnostics module — parse/resolve/typecheck → diagnostic list
 dev/
   debug.ml            Ad-hoc parse-and-print probe
   tc_debug.ml         Ad-hoc type-check probe
+  lsp_smoke.sh        End-to-end smoke driver for `medaka lsp` (not run by `dune test`)
 tree-sitter-medaka/
   grammar.js          Tree-sitter grammar definition
   src/parser.c        Generated parser (committed)

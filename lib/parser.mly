@@ -1,10 +1,12 @@
 %{
 open Ast
 
-let of_pos p =
-  { file = p.Lexing.pos_fname;
-    line = p.Lexing.pos_lnum;
-    col  = p.Lexing.pos_cnum - p.Lexing.pos_bol }
+let of_pos sp ep =
+  { file     = sp.Lexing.pos_fname;
+    line     = sp.Lexing.pos_lnum;
+    col      = sp.Lexing.pos_cnum - sp.Lexing.pos_bol;
+    end_line = ep.Lexing.pos_lnum;
+    end_col  = ep.Lexing.pos_cnum - ep.Lexing.pos_bol }
 
 let fold_ty_app = function
   | []      -> failwith "empty type application"
@@ -385,21 +387,21 @@ expr_annot:
    FAT_ARROW follows. This avoids the IDENT-vs-IDENT ambiguity with application. *)
 expr_lam:
   | LET MUT pat EQUAL expr_no_block IN expr_lam
-    { ELoc (of_pos $startpos, ELet (true,  false, $3, $5, $7)) }
+    { ELoc (of_pos $startpos $endpos, ELet (true,  false, $3, $5, $7)) }
   | LET pat EQUAL expr_no_block IN expr_lam
-    { ELoc (of_pos $startpos, ELet (false, false, $2, $4, $6)) }
+    { ELoc (of_pos $startpos $endpos, ELet (false, false, $2, $4, $6)) }
   | LET IDENT nonempty_list(pat_atom) EQUAL expr_no_block IN expr_lam
-    { ELoc (of_pos $startpos, ELet (false, true, PVar $2, curry_lam $3 $5, $7)) }
+    { ELoc (of_pos $startpos $endpos, ELet (false, true, PVar $2, curry_lam $3 $5, $7)) }
   | IF expr_or THEN expr_lam ELSE expr_lam
-    { ELoc (of_pos $startpos, EIf ($2, $4, $6)) }
+    { ELoc (of_pos $startpos $endpos, EIf ($2, $4, $6)) }
   | MATCH expr_or INDENT nonempty_list(match_arm) DEDENT
-    { ELoc (of_pos $startpos, EMatch ($2, $4)) }
+    { ELoc (of_pos $startpos $endpos, EMatch ($2, $4)) }
   | DO INDENT nonempty_list(stmt) DEDENT
-    { ELoc (of_pos $startpos, EDo $3) }
+    { ELoc (of_pos $startpos $endpos, EDo $3) }
   | UNDERSCORE FAT_ARROW expr_lam
-    { ELoc (of_pos $startpos, ELam ([PWild], $3)) }
+    { ELoc (of_pos $startpos $endpos, ELam ([PWild], $3)) }
   | expr_pipe FAT_ARROW expr_lam
-    { ELoc (of_pos $startpos, ELam ([expr_to_pat $1], $3)) }
+    { ELoc (of_pos $startpos $endpos, ELam ([expr_to_pat $1], $3)) }
   | expr_pipe
     { $1 }
 
@@ -488,34 +490,34 @@ section_op:
   | PIPE_RIGHT { "|>" }  | RCOMPOSE   { ">>" }  | LCOMPOSE   { "<<" }
 
 expr_atom:
-  | lit                                              { ELoc (of_pos $startpos, ELit $1) }
-  | IDENT                                            { ELoc (of_pos $startpos, EVar $1) }
-  | UPPER                                            { ELoc (of_pos $startpos, EVar $1) }
-  | UNDERSCORE                                       { ELoc (of_pos $startpos, EVar "_") }
-  | LPAREN RPAREN                                    { ELoc (of_pos $startpos, ELit LUnit) }
+  | lit                                              { ELoc (of_pos $startpos $endpos, ELit $1) }
+  | IDENT                                            { ELoc (of_pos $startpos $endpos, EVar $1) }
+  | UPPER                                            { ELoc (of_pos $startpos $endpos, EVar $1) }
+  | UNDERSCORE                                       { ELoc (of_pos $startpos $endpos, EVar "_") }
+  | LPAREN RPAREN                                    { ELoc (of_pos $startpos $endpos, ELit LUnit) }
   | LPAREN section_op expr_no_block RPAREN
     { let op = $2 and e = $3 in
-      ELoc (of_pos $startpos, ELam ([PVar "_s"], EBinOp (op, EVar "_s", e))) }
+      ELoc (of_pos $startpos $endpos, ELam ([PVar "_s"], EBinOp (op, EVar "_s", e))) }
   | LPAREN expr_no_block RPAREN
     { (* Left section: (e op _) desugars to \x -> e op x *)
       let rec strip = function ELoc (_, e) -> strip e | e -> e in
       match strip $2 with
       | EBinOp (op, lhs, rhs) when (match strip rhs with EVar "_" -> true | _ -> false) ->
-          ELoc (of_pos $startpos, ELam ([PVar "_s"], EBinOp (op, lhs, EVar "_s")))
+          ELoc (of_pos $startpos $endpos, ELam ([PVar "_s"], EBinOp (op, lhs, EVar "_s")))
       | _ -> $2 }
   | LPAREN expr_no_block COMMA
       separated_nonempty_list(COMMA, expr_no_block) RPAREN
-    { ELoc (of_pos $startpos, ETuple ($2 :: $4)) }
+    { ELoc (of_pos $startpos $endpos, ETuple ($2 :: $4)) }
   | LBRACKET RBRACKET
-    { ELoc (of_pos $startpos, EListLit []) }
+    { ELoc (of_pos $startpos $endpos, EListLit []) }
   | LBRACKET expr_no_block PIPE separated_nonempty_list(COMMA, lc_qual) RBRACKET
-    { ELoc (of_pos $startpos, EListComp ($2, $4)) }
+    { ELoc (of_pos $startpos $endpos, EListComp ($2, $4)) }
   | LBRACKET separated_nonempty_list(COMMA, expr_no_block) RBRACKET
-    { ELoc (of_pos $startpos, EListLit $2) }
+    { ELoc (of_pos $startpos $endpos, EListLit $2) }
   | LARRAY RARRAY
-    { ELoc (of_pos $startpos, EArrayLit []) }
+    { ELoc (of_pos $startpos $endpos, EArrayLit []) }
   | LARRAY separated_nonempty_list(COMMA, expr_no_block) RARRAY
-    { ELoc (of_pos $startpos, EArrayLit $2) }
+    { ELoc (of_pos $startpos $endpos, EArrayLit $2) }
   | UPPER LBRACE separated_list(COMMA, kv_or_e) RBRACE
     { let items = $3 and name = $1 in
       let has_field = List.exists (function Field _ -> true | _ -> false) items in
@@ -525,33 +527,33 @@ expr_atom:
         let fields = List.map (function
           | Field (k, v)  -> (k, v)
           | Elem (ELoc (_, EVar n)) | Elem (EVar n) ->
-              (n, ELoc (of_pos $startpos, EVar n))
+              (n, ELoc (of_pos $startpos $endpos, EVar n))
           | Elem _ ->
               failwith (Printf.sprintf "non-identifier in pun position in %s { ... }" name)
           | KV _ ->
               failwith (Printf.sprintf "map entry (=>) mixed with record fields in %s { ... }" name)
         ) items in
-        ELoc (of_pos $startpos, ERecordCreate (name, fields))
+        ELoc (of_pos $startpos $endpos, ERecordCreate (name, fields))
       else
         let all_kv = List.for_all (function KV _ -> true | _ -> false) items in
         if has_kv && not all_kv then
           failwith (Printf.sprintf "Mixed map/set entries in %s { ... }" name)
         else if has_kv then
-          ELoc (of_pos $startpos, EMapLit (name,
+          ELoc (of_pos $startpos $endpos, EMapLit (name,
             List.map (function KV (k,v) -> (k,v) | _ -> assert false) items))
         else
-          ELoc (of_pos $startpos, ESetLit (name,
+          ELoc (of_pos $startpos $endpos, ESetLit (name,
             List.map (function Elem e -> e | _ -> assert false) items)) }
   | LBRACE expr_no_block PIPE separated_nonempty_list(COMMA, record_field_expr) RBRACE
-    { ELoc (of_pos $startpos, ERecordUpdate ($2, $4)) }
+    { ELoc (of_pos $startpos $endpos, ERecordUpdate ($2, $4)) }
   | AT UPPER
-    { ELoc (of_pos $startpos, EVar ("@" ^ $2)) }
+    { ELoc (of_pos $startpos $endpos, EVar ("@" ^ $2)) }
   | interp_string
-    { ELoc (of_pos $startpos, EStringInterp $1) }
+    { ELoc (of_pos $startpos $endpos, EStringInterp $1) }
 
 record_field_expr:
   | IDENT EQUAL expr_no_block  { ($1, $3) }
-  | IDENT                      { ($1, ELoc (of_pos $startpos, EVar $1)) }
+  | IDENT                      { ($1, ELoc (of_pos $startpos $endpos, EVar $1)) }
 
 kv_or_e:
   | IDENT EQUAL expr_no_block          { Field ($1, $3) }
