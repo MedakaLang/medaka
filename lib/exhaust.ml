@@ -33,6 +33,7 @@ let rec desugar = function
   | PCons (h, t)       -> PCon ("Cons", [desugar h; desugar t])
   | PList []           -> PCon ("Nil",  [])
   | PList (h :: rest)  -> PCon ("Cons", [desugar h; desugar (PList rest)])
+  | PAs (_, p)         -> desugar p
 
 (* ── Matrix types ───────────────────────────────────── *)
 

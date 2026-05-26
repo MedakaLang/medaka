@@ -325,6 +325,38 @@ sign x =
       ])) -> ()
   | _ -> failwith "wrong"
 
+(* ── As-pattern tests ───────────────────────────────────── *)
+
+let test_as_pattern_cons () =
+  let src = {|
+f xs =
+  match xs
+    ys@(x::_) => x
+    _ => 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "xs"],
+      EMatch (EVar "xs", [
+        (PAs ("ys", PCons (PVar "x", PWild)), None, EVar "x");
+        (PWild, None, ELit (LInt 0));
+      ])) -> ()
+  | _ -> failwith "wrong"
+
+let test_as_pattern_var () =
+  let src = {|
+f xs =
+  match xs
+    ys@x => x
+    _ => 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "xs"],
+      EMatch (EVar "xs", [
+        (PAs ("ys", PVar "x"), None, EVar "x");
+        (PWild, None, ELit (LInt 0));
+      ])) -> ()
+  | _ -> failwith "wrong"
+
 (* ── Data type tests ─────────────────────────────────── *)
 
 let test_data_inline () =
@@ -598,6 +630,10 @@ let () =
     "match", [
       test_case "basic match"       `Quick test_match_basic;
       test_case "match with guard"  `Quick test_match_with_guard;
+    ];
+    "as-patterns", [
+      test_case "cons as-pattern"   `Quick test_as_pattern_cons;
+      test_case "var as-pattern"    `Quick test_as_pattern_var;
     ];
     "data types", [
       test_case "inline variants"     `Quick test_data_inline;

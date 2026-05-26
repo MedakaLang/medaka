@@ -29,6 +29,7 @@ type pat =
   | PCons  of pat * pat          (* x::xs *)
   | PTuple of pat list           (* (x, y) *)
   | PList  of pat list           (* [x, y, z] *)
+  | PAs    of ident * pat        (* x@pat *)
 
 (* Do-notation statements *)
 type do_stmt =
