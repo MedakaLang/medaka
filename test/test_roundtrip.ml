@@ -100,6 +100,20 @@ let m_constructor = mk
     None => 0
 |}
 
+let m_as_cons = mk
+{|f xs =
+  match xs
+    ys@(x::_) => x
+    _ => 0
+|}
+
+let m_as_list = mk
+{|f xs =
+  match xs
+    ys@[] => 0
+    ys@(x::_) => x
+|}
+
 (* Data types *)
 let d_inline     = mk "data Bool = True | False\n"
 let d_param      = mk "data Option a = Some a | None\n"
@@ -209,6 +223,8 @@ let () =
       test_case "basic"            `Quick m_basic;
       test_case "with guard"       `Quick m_guard;
       test_case "constructor arms" `Quick m_constructor;
+      test_case "as-pattern cons"  `Quick m_as_cons;
+      test_case "as-pattern list"  `Quick m_as_list;
     ];
     "data types", [
       test_case "inline"           `Quick d_inline;

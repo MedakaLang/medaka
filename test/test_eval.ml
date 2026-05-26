@@ -139,6 +139,20 @@ let t_match_list_head = assert_val {|head_or_zero xs =
 r = head_or_zero ([10, 20, 30])
 |} "r" (VInt 10)
 
+let t_as_pattern_head = assert_val {|first_and_all xs =
+  match xs
+    ys@(x::_) => (x, ys)
+    ys@[] => (0, ys)
+r = first_and_all ([10, 20, 30])
+|} "r" (VTuple [VInt 10; VList [VInt 10; VInt 20; VInt 30]])
+
+let t_as_pattern_empty = assert_val {|first_and_all xs =
+  match xs
+    ys@(x::_) => (x, ys)
+    ys@[] => (0, ys)
+r = first_and_all ([])
+|} "r" (VTuple [VInt 0; VList []])
+
 (* ── Records ────────────────────────────────────────────────────────────── *)
 
 let t_record = assert_val {|record Point
@@ -300,7 +314,9 @@ let () =
       test_case "tuple"       `Quick t_match_tuple;
       test_case "guard"       `Quick t_match_guard;
       test_case "constructor" `Quick t_match_constructor;
-      test_case "list_head"   `Quick t_match_list_head;
+      test_case "list_head"       `Quick t_match_list_head;
+      test_case "as-pattern cons" `Quick t_as_pattern_head;
+      test_case "as-pattern nil"  `Quick t_as_pattern_empty;
     ];
     "records", [
       test_case "create" `Quick t_record;

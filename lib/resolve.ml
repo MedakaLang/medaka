@@ -115,6 +115,7 @@ let rec pat_bindings = function
   | PCons (a, b) -> pat_bindings a @ pat_bindings b
   | PTuple ps    -> List.concat_map pat_bindings ps
   | PList ps     -> List.concat_map pat_bindings ps
+  | PAs (x, p)  -> x :: pat_bindings p
 
 (* ── Phase 1: build env from top-level decls ──── *)
 
@@ -288,6 +289,7 @@ let rec check_pat env errors p =
     check_pat env errors b
   | PTuple ps | PList ps ->
     List.iter (check_pat env errors) ps
+  | PAs (_, p) -> check_pat env errors p
 
 let rec check_type env errors t =
   match t with

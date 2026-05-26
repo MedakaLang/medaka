@@ -265,7 +265,11 @@ ty_atom:
 (* ── Patterns ────────────────────────────────────────── *)
 
 pat:
-  | pat_cons  { $1 }
+  | pat_as  { $1 }
+
+pat_as:
+  | IDENT AT pat_cons  { PAs ($1, $3) }
+  | pat_cons           { $1 }
 
 pat_cons:
   | pat_app CONS pat_cons   { PCons ($1, $3) }

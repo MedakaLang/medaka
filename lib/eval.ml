@@ -98,6 +98,10 @@ let rec match_pat pat value =
   | PList pats, VList vals when List.length pats = List.length vals ->
     match_pats pats vals
   | PList [], VList [] -> Some []
+  | PAs (x, p), v ->
+    (match match_pat p v with
+     | None -> None
+     | Some binds -> Some ((x, v) :: binds))
   | _ -> None
 
 and match_pats pats vals =

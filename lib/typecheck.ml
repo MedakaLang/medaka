@@ -538,6 +538,9 @@ let rec type_pat env = function
                       arg_types result_t in
     unify ctor_t expected;
     (result_t, bindings)
+  | PAs (x, p) ->
+    let (t, bindings) = type_pat env p in
+    (t, (x, monotype t) :: bindings)
 
 (* ── Record instantiation ───────────────────────── *)
 

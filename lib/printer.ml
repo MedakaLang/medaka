@@ -106,6 +106,8 @@ let rec print_pat p = function
     write p "[";
     List.iteri (fun i pat -> if i > 0 then write p ", "; print_pat p pat) ps;
     write p "]"
+  | PAs (x, inner) ->
+    write p x; write p "@"; print_pat_atom p inner
 
 and print_pat_atom p pat = match pat with
   | PVar _ | PWild | PLit _ | PCon (_, []) | PTuple _ | PList _ -> print_pat p pat
