@@ -261,6 +261,38 @@ let t_where_nested = assert_val {|r = outer 3 where
         inner k = k * 2
 |} "r" (VInt 7)
 
+(* ── Top-level function guards ──────────────────────────────────────────── *)
+
+let t_guard_basic_neg = assert_val {|
+classify n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | True = "zero"
+r = classify (-3)
+|} "r" (VString "neg")
+
+let t_guard_basic_pos = assert_val {|
+classify n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | True = "zero"
+r = classify 5
+|} "r" (VString "pos")
+
+let t_guard_basic_zero = assert_val {|
+classify n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | True = "zero"
+r = classify 0
+|} "r" (VString "zero")
+
+let t_guard_non_exhaustive = assert_runtime_err {|
+f x
+  | x > 0 = 1
+r = f 0
+|} "r"
+
 (* ── Test registration ──────────────────────────────────────────────────── *)
 
 let () =
@@ -345,5 +377,11 @@ let () =
       test_case "multiple helpers"  `Quick t_where_multi;
       test_case "sequential"        `Quick t_where_sequential;
       test_case "nested"            `Quick t_where_nested;
+    ];
+    "top-level function guards", [
+      test_case "neg branch"        `Quick t_guard_basic_neg;
+      test_case "pos branch"        `Quick t_guard_basic_pos;
+      test_case "zero branch"       `Quick t_guard_basic_zero;
+      test_case "non-exhaustive"    `Quick t_guard_non_exhaustive;
     ];
   ]

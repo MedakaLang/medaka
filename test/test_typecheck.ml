@@ -1245,6 +1245,29 @@ f = eq p1 p2
 |}
   "f" "Bool"
 
+(* ── Top-level function guards ──────────────────── *)
+
+let t_guard_int_to_string = assert_type {|
+classify n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | True = "zero"
+r = classify 5
+|} "r" "String"
+
+let t_guard_int_to_int = assert_type {|
+abs_val n
+  | n < 0 = 0 - n
+  | True = n
+r = abs_val (-3)
+|} "r" "Int"
+
+let e_guard_body_mismatch = assert_err {|
+f x
+  | x > 0 = 1
+  | True = "oops"
+|}
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -1487,5 +1510,10 @@ let () =
       test_case "Ord enum"               `Quick t_derive_ord_enum;
       test_case "multi-derive"           `Quick t_derive_multi;
       test_case "Eq record"              `Quick t_derive_eq_record;
+    ];
+    "top-level function guards", [
+      test_case "Int -> String"           `Quick t_guard_int_to_string;
+      test_case "Int -> Int"              `Quick t_guard_int_to_int;
+      test_case "err: body type mismatch" `Quick e_guard_body_mismatch;
     ];
   ]

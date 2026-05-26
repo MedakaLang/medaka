@@ -173,6 +173,10 @@ export impl Foldable List where
 -- Bool helpers
 
 export
+otherwise : Bool
+otherwise = True
+
+export
 not : Bool -> Bool
 not b = if b then False else True
 

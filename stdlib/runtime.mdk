@@ -18,3 +18,4 @@ extern readLine  : Unit -> <IO> String
 extern readFile  : String -> <IO> (Result String String)
 extern writeFile : String -> String -> <IO> (Result Unit String)
 extern exit      : Int -> <Panic> Unit
+extern panic     : String -> a
