@@ -6,9 +6,9 @@
    Example: project_dir=/p/src, file=/p/src/list/core.mdk → "list.core" *)
 
 type load_error =
-  | FileNotFound     of string          (* module_id *)
+  | FileNotFound     of string          (* file path *)
   | CyclicDependency of string list     (* module path forming the cycle *)
-  | UnknownModule    of string          (* module_id referenced but can't locate *)
+  | UnknownModule    of { mod_id: string; importer_file: string option }
 
 exception LoadError of load_error
 
@@ -47,17 +47,28 @@ let file_of_module_id project_dir mod_id =
 
 (* ── Parsing ──────────────────────────────────────── *)
 
-let read_file path =
-  if not (Sys.file_exists path) then raise (LoadError (FileNotFound path));
-  let ic = open_in path in
-  let n = in_channel_length ic in
-  let s = Bytes.create n in
-  really_input ic s 0 n;
-  close_in ic;
-  Bytes.to_string s
+(* read_file ~read path: try the buffer-override callback first; if it
+   returns Some s use that, else fall back to disk.  The LSP injects
+   `read` to surface unsaved buffer content; the CLI passes None. *)
+let read_file ?(read : (string -> string option) option) path =
+  let buffered =
+    match read with
+    | Some f -> f path
+    | None   -> None
+  in
+  match buffered with
+  | Some s -> s
+  | None ->
+    if not (Sys.file_exists path) then raise (LoadError (FileNotFound path));
+    let ic = open_in path in
+    let n = in_channel_length ic in
+    let s = Bytes.create n in
+    really_input ic s 0 n;
+    close_in ic;
+    Bytes.to_string s
 
-let parse_file path =
-  let source = read_file path in
+let parse_file ?read path =
+  let source = read_file ?read path in
   let lexbuf = Lexing.from_string source in
   lexbuf.Lexing.lex_curr_p <-
     { lexbuf.Lexing.lex_curr_p with Lexing.pos_fname = path };
@@ -112,10 +123,24 @@ let direct_imports (prog : Ast.program) : string list =
 
 type node_state = Unvisited | InStack | Done
 
+(* A file is "available" if the buffer override has content for it OR
+   the file exists on disk.  Used when discovering a dependency. *)
+let file_available ?read path =
+  let buffered =
+    match read with
+    | Some f -> f path
+    | None   -> None
+  in
+  match buffered with
+  | Some _ -> true
+  | None   -> Sys.file_exists path
+
 (* Returns modules in dependency-first order (leaves before roots) *)
 let topo_sort
+    ?read
     (project_dir : string)
     (root_id     : string)
+    (root_path   : string)
     (root_prog   : Ast.program)
   : (string * string * Ast.program) list =
   (* module_id → (file_path, program) *)
@@ -123,11 +148,9 @@ let topo_sort
   let state  : (string, node_state) Hashtbl.t = Hashtbl.create 8 in
   let result : (string * string * Ast.program) list ref = ref [] in
 
-  (* Seed root — its file path is just reconstructed for display purposes *)
-  let root_path = file_of_module_id project_dir root_id in
   Hashtbl.replace loaded root_id (root_path, root_prog);
 
-  let rec visit ~stack mod_id =
+  let rec visit ~stack ~importer mod_id =
     match Hashtbl.find_opt state mod_id with
     | Some Done -> ()
     | Some InStack ->
@@ -146,18 +169,19 @@ let topo_sort
         | Some p -> p
         | None ->
           let path = file_of_module_id project_dir mod_id in
-          if not (Sys.file_exists path) then
-            raise (LoadError (UnknownModule mod_id));
-          let prog = parse_file path in
+          if not (file_available ?read path) then
+            raise (LoadError (UnknownModule { mod_id; importer_file = importer }));
+          let prog = parse_file ?read path in
           Hashtbl.replace loaded mod_id (path, prog);
           (path, prog)
       in
-      List.iter (fun dep_id -> visit ~stack:(mod_id :: stack) dep_id)
-        (direct_imports prog);
+      List.iter (fun dep_id ->
+        visit ~stack:(mod_id :: stack) ~importer:(Some file_path) dep_id
+      ) (direct_imports prog);
       Hashtbl.replace state mod_id Done;
       result := (mod_id, file_path, prog) :: !result
   in
-  visit ~stack:[] root_id;
+  visit ~stack:[] ~importer:None root_id;
   List.rev !result
 
 (* ── Public entry point ───────────────────────────── *)
@@ -165,7 +189,7 @@ let topo_sort
 (* Load a root .mdk file and all its transitive dependencies.
    project_dir is the directory used to resolve module IDs to file paths.
    Returns (module_id, file_path, program) list in dependency-first order. *)
-let load_program root_file project_dir =
-  let root_id = module_id_of_path project_dir root_file in
-  let root_prog = parse_file root_file in
-  topo_sort project_dir root_id root_prog
+let load_program ?read root_file project_dir =
+  let root_id   = module_id_of_path project_dir root_file in
+  let root_prog = parse_file ?read root_file in
+  topo_sort ?read project_dir root_id root_file root_prog

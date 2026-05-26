@@ -1,12 +1,11 @@
 (* Phase 34 — Minimal LSP server.
+   Phase 34.5 — Multi-file analysis: on every change we load the open
+   document's import graph (with unsaved buffers overriding disk) and
+   publish per-file diagnostics, clearing URIs that no longer have
+   errors.
 
-   Capabilities advertised in v1:
-   - textDocumentSync = Full (we re-analyze the entire document on every
-     change; incremental sync is deferred until performance demands it).
-
-   No hover, completion, go-to-definition, or workspace operations yet —
-   diagnostics-only.  Document handling: keep the latest text per URI in a
-   Hashtbl, run Diagnostics.analyze, publish back to the client. *)
+   Capabilities advertised: textDocumentSync = Full.  No hover,
+   completion, go-to-definition, or workspace operations yet. *)
 
 open Lsp
 open Lsp.Types
@@ -45,9 +44,43 @@ end
 
 module Rpc_io = Io.Make (Identity) (Chan)
 
-(* ── Document store ────────────────────────────────────────── *)
+(* ── State ─────────────────────────────────────────────────── *)
 
+(* uri_string → source text (the latest version sent by the client) *)
 let docs : (string, string) Hashtbl.t = Hashtbl.create 8
+
+(* uri_string → project_dir (cached on first didOpen) *)
+let project_roots : (string, string) Hashtbl.t = Hashtbl.create 8
+
+(* Set of uri_strings we last published a non-empty diagnostic list for.
+   Used to clear stale diagnostics in files that have since become clean. *)
+let published_uris : (string, unit) Hashtbl.t = Hashtbl.create 16
+
+(* ── Project root inference ────────────────────────────────── *)
+
+let dir_has_marker dir =
+  Sys.file_exists (Filename.concat dir "medaka.toml")
+  || Sys.file_exists (Filename.concat dir ".git")
+  || Sys.file_exists (Filename.concat dir "core")
+
+let find_project_root (file_path : string) : string =
+  let start = Filename.dirname file_path in
+  let rec walk dir =
+    if dir_has_marker dir then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then start  (* hit / *)
+      else walk parent
+  in
+  walk start
+
+let project_root_for ~(uri_str : string) ~(file_path : string) : string =
+  match Hashtbl.find_opt project_roots uri_str with
+  | Some d -> d
+  | None ->
+    let d = find_project_root file_path in
+    Hashtbl.replace project_roots uri_str d;
+    d
 
 (* ── Diagnostic conversion ─────────────────────────────────── *)
 
@@ -69,20 +102,51 @@ let lsp_diag_of (d : Diagnostics.diagnostic) : Diagnostic.t =
     ~source:"medaka"
     ()
 
-let publish_diagnostics ~uri =
-  let file = DocumentUri.to_path uri in
-  let source =
-    try Hashtbl.find docs (DocumentUri.to_string uri)
-    with Not_found -> ""
-  in
-  let medaka_diags = Diagnostics.analyze ~file ~source in
-  let lsp_diags = List.map lsp_diag_of medaka_diags in
+let publish_for_uri (uri : DocumentUri.t) (diags : Diagnostics.diagnostic list) =
   let params = PublishDiagnosticsParams.create
-    ~diagnostics:lsp_diags ~uri ()
+    ~diagnostics:(List.map lsp_diag_of diags) ~uri ()
   in
   let notif = Server_notification.PublishDiagnostics params in
   let jsonrpc_notif = Server_notification.to_jsonrpc notif in
   Rpc_io.write stdout (Jsonrpc.Packet.Notification jsonrpc_notif)
+
+(* ── Multi-file publish ────────────────────────────────────── *)
+
+(* Run analyze_project rooted at [root_uri] and publish per-file.
+   Clears any URIs that previously had diagnostics but no longer do. *)
+let publish_project_diagnostics ~(root_uri : DocumentUri.t) =
+  let root_uri_str = DocumentUri.to_string root_uri in
+  let root_file    = DocumentUri.to_path root_uri in
+  let project_dir  = project_root_for ~uri_str:root_uri_str ~file_path:root_file in
+
+  let read (path : string) : string option =
+    let uri = DocumentUri.of_path path in
+    Hashtbl.find_opt docs (DocumentUri.to_string uri)
+  in
+
+  let results =
+    Diagnostics.analyze_project ~root_file ~project_dir ~read
+  in
+
+  let this_round : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+  List.iter (fun (file, diags) ->
+    let uri = DocumentUri.of_path file in
+    publish_for_uri uri diags;
+    if diags <> [] then
+      Hashtbl.replace this_round (DocumentUri.to_string uri) ()
+  ) results;
+
+  (* Clear URIs we previously reported errors for that are now clean
+     AND not in this round (e.g., dropped from the graph entirely). *)
+  Hashtbl.iter (fun uri_str () ->
+    if not (Hashtbl.mem this_round uri_str) then begin
+      let uri = DocumentUri.of_string uri_str in
+      publish_for_uri uri []
+    end
+  ) published_uris;
+
+  Hashtbl.reset published_uris;
+  Hashtbl.iter (fun u () -> Hashtbl.replace published_uris u ()) this_round
 
 (* ── Handlers ──────────────────────────────────────────────── *)
 
@@ -102,7 +166,7 @@ let handle_notification (n : Client_notification.t) =
   | Client_notification.TextDocumentDidOpen p ->
     let uri_str = DocumentUri.to_string p.textDocument.uri in
     Hashtbl.replace docs uri_str p.textDocument.text;
-    publish_diagnostics ~uri:p.textDocument.uri
+    publish_project_diagnostics ~root_uri:p.textDocument.uri
   | Client_notification.TextDocumentDidChange p ->
     let uri_str = DocumentUri.to_string p.textDocument.uri in
     (* Full sync: each change has no range and replaces the whole document.
@@ -119,17 +183,16 @@ let handle_notification (n : Client_notification.t) =
       ) "" p.contentChanges
     in
     Hashtbl.replace docs uri_str final_text;
-    publish_diagnostics ~uri:p.textDocument.uri
+    publish_project_diagnostics ~root_uri:p.textDocument.uri
   | Client_notification.TextDocumentDidClose p ->
     let uri_str = DocumentUri.to_string p.textDocument.uri in
     Hashtbl.remove docs uri_str;
-    (* Clear any squiggles the client might still be showing. *)
-    let params = PublishDiagnosticsParams.create
-      ~diagnostics:[] ~uri:p.textDocument.uri ()
-    in
-    let notif = Server_notification.PublishDiagnostics params in
-    Rpc_io.write stdout
-      (Jsonrpc.Packet.Notification (Server_notification.to_jsonrpc notif))
+    Hashtbl.remove project_roots uri_str;
+    (* Clear any squiggles the client might still be showing for this
+       file.  Don't touch other URIs — other open files in the project
+       will re-publish on their next change. *)
+    publish_for_uri p.textDocument.uri [];
+    Hashtbl.remove published_uris uri_str
   | _ -> ()
 
 let handle_request (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =

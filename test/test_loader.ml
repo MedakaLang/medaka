@@ -305,6 +305,36 @@ let test_private_import_not_reexported () =
       failwith "expected PrivateNameAccess error but got none"
   )
 
+(* The ?read buffer-override parameter takes precedence over disk
+   content.  Used by the LSP to surface unsaved editor buffers. *)
+let test_read_override () =
+  with_tmp_dir (fun dir ->
+    (* Disk has one definition... *)
+    let main_path = write_file dir "main.mdk" "answer = 42\n" in
+    (* ...but the override returns a different one. *)
+    let read path =
+      if path = main_path then Some "answer = 99\n" else None
+    in
+    let modules = Loader.load_program ~read main_path dir in
+    match modules with
+    | [(_mid, _fp, prog)] ->
+      (match prog with
+       | [Ast.DFunDef (false, "answer", [], body)] ->
+         (* Check it picked up the override (99), not disk (42). *)
+         let rec find_int = function
+           | Ast.ELoc (_, e) -> find_int e
+           | Ast.ELit (Ast.LInt n) -> Some n
+           | _ -> None
+         in
+         (match find_int body with
+          | Some 99 -> ()
+          | Some n -> failwith (Printf.sprintf
+                        "loader used disk content (%d), not override" n)
+          | None   -> failwith "couldn't find int literal in body")
+       | _ -> failwith "unexpected program shape")
+    | _ -> failwith "expected exactly 1 module"
+  )
+
 (* `import core.{...}` is a no-op: core is the implicit prelude, so the
    loader must not try to find core.mdk on disk.  This test deliberately
    uses a project dir without a core.mdk file. *)
@@ -340,6 +370,7 @@ let () =
       test_case "missing file"     `Quick test_missing_file;
       test_case "privacy violation" `Quick test_privacy_violation;
       test_case "import core no-op" `Quick test_import_core_is_noop;
+      test_case "?read override"    `Quick test_read_override;
     ];
     "re-exports", [
       test_case "selective (UseName)"          `Quick test_reexport_value_selective;

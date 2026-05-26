@@ -1346,15 +1346,66 @@ time; at runtime the VMulti default-dispatch fires regardless of the hint.
 **655 tests total** (7 new in `test_diagnostics`).
 
 **Known limitations.**
-- Diagnostics are computed only for the currently-open document; the
-  multi-file `use`/`import` loader isn't run, and `import` declarations
-  produce a warning diagnostic in the LSP path.
 - Typecheck still raises on the first error; accumulating multiple
   typecheck errors per file requires recovery types — deferred.
 - No hover, go-to-definition, or completion (design-doc Phase 6).
 - The VS Code client requires `npm install` to fetch
   `vscode-languageclient`; this is not run automatically by
   `editors/install-vscode.sh`.
+
+---
+
+### Phase 34.5: LSP — multi-file analysis ✅ DONE
+
+**What was added.**
+- `lib/loader.ml` — added `?read:(string -> string option)` to
+  `read_file`, `parse_file`, and `load_program`. When `read` returns
+  `Some s`, the loader uses that text instead of opening the file from
+  disk; this lets the LSP surface unsaved editor buffers without
+  touching the parser/resolver/typechecker.  CLI path unaffected
+  (default `?read = None`).  `UnknownModule` extended with
+  `{ mod_id; importer_file }` so callers know which file's `import`
+  references a missing module.
+- `lib/diagnostics.ml` — new `analyze_project ~root_file ~project_dir
+  ~read` returns `(file_path, diagnostic list) list` covering the
+  full import graph. Resolve errors and typecheck errors get bucketed
+  by `loc.file`, so a type error in `dep.mdk` is attributed to
+  `dep.mdk` even when the user opened `main.mdk`. Empty diagnostic
+  lists are seeded for every loaded file so callers can clear stale
+  diagnostics. `LoadError`s are converted to diagnostics: a
+  `scan_use_loc` helper re-lexes the importer's source to point an
+  `Unknown module` diagnostic at the offending `import` keyword.
+  The placeholder cross-file warning at the old line 84 is deleted.
+- `lib/lsp_server.ml` — `publish_project_diagnostics` replaces the
+  per-uri publish path. Maintains `project_roots` (uri → dir, cached
+  on first didOpen) and `published_uris` (so files that became clean
+  receive an explicit empty publish to clear their squiggles).
+  `find_project_root` walks parent directories looking for
+  `medaka.toml`, `.git`, or a `core/` directory; falls back to the
+  open file's parent dir if no marker is found.
+- `bin/main.ml` — pattern match for `UnknownModule` updated to the
+  new record shape.
+- `test/test_diagnostics.ml` — 5 new multi-file tests: clean project,
+  error in dep, unknown module (verifies `scan_use_loc` attribution),
+  cyclic dependency, buffer override beats disk. The single-file
+  `t_use_decl_warning` test is removed (the warning no longer
+  exists).
+- `test/test_loader.ml` — one new test for `?read` override.
+
+**678 tests total** (5 new in `test_diagnostics`, 1 new in
+`test_loader`, 1 removed).
+
+**Known limitations.**
+- One project root per file (no multi-root workspace support; each
+  open file infers its own root via the marker walk).
+- Re-parses every file in the graph on every keystroke — fine at the
+  stdlib's current scale (~10 files) but should grow an AST cache
+  before larger projects come online.
+- `CyclicDependency` diagnostics report once against the root file
+  rather than per-file in the cycle.
+- `TextDocumentDidClose` only clears the closed URI; dep diagnostics
+  in still-open files remain (which is correct), but a closed root's
+  dep diagnostics linger until another root in that project republishes.
 
 ---
 

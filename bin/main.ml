@@ -28,13 +28,24 @@ let has_use_decls prog =
   List.exists (function Medaka_lib.Ast.DUse _ -> true | _ -> false) prog
 
 let () =
-  let mode, filename = match Sys.argv with
-    | [| _; "repl" |] | [| _ |] -> Medaka_lib.Repl.run (); exit 0
-    | [| _; "lsp"  |]            -> Medaka_lib.Lsp_server.run (); exit 0
-    | [| _; "check"; file |] -> `Check, file
-    | [| _; "run";   file |] -> `Run,   file
-    | [| _; file |]           -> `Run,   file
-    | _ -> print_endline "Usage: medaka [check|run|repl|lsp] <file.mdk>"; exit 1
+  (* Permissive subcommand match: tolerate trailing args from clients
+     that pass --stdio or similar flags. *)
+  let argv = Sys.argv in
+  let argc = Array.length argv in
+  let has_sub s = argc >= 2 && argv.(1) = s in
+  if argc = 1 || has_sub "repl" then begin
+    Medaka_lib.Repl.run (); exit 0
+  end;
+  if has_sub "lsp" then begin
+    Medaka_lib.Lsp_server.run (); exit 0
+  end;
+  let mode, filename =
+    if has_sub "check" && argc >= 3 then `Check, argv.(2)
+    else if has_sub "run" && argc >= 3 then `Run, argv.(2)
+    else if argc = 2 then `Run, argv.(1)
+    else begin
+      print_endline "Usage: medaka [check|run|repl|lsp] <file.mdk>"; exit 1
+    end
   in
   let project_dir = Filename.dirname filename in
 
@@ -102,8 +113,8 @@ let () =
        | Medaka_lib.Loader.LoadError (Medaka_lib.Loader.CyclicDependency cycle) ->
          Printf.eprintf "error: cyclic dependency: %s\n"
            (String.concat " → " cycle); exit 1
-       | Medaka_lib.Loader.LoadError (Medaka_lib.Loader.UnknownModule m) ->
-         Printf.eprintf "error: unknown module: %s\n" m; exit 1
+       | Medaka_lib.Loader.LoadError (Medaka_lib.Loader.UnknownModule { mod_id; _ }) ->
+         Printf.eprintf "error: unknown module: %s\n" mod_id; exit 1
        | Failure msg ->
          Printf.eprintf "error: %s\n" msg; exit 1)
     in
