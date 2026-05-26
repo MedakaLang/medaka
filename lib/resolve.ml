@@ -50,8 +50,11 @@ let primitive_types = [
   "Array"; "MutArray"; "Map"; "HashMap"; "Set"; "HashSet";
 ]
 
+(* True/False are lexer keywords, not declared in stdlib/core.mdk like the
+   rest of the constructors (Some/None/Ok/Err/Lt/Eq/Gt — those flow in via
+   prelude_constructors below). *)
 let primitive_constructors = [
-  "True"; "False"; "Some"; "None"; "Ok"; "Err";
+  "True"; "False";
 ]
 
 let primitive_values = Runtime.names
