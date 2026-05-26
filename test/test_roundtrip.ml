@@ -297,4 +297,10 @@ let () =
       test_case "multi gen"  `Quick (mk "r = [(x, y) | x <- xs, y <- ys]\n");
       test_case "let"        `Quick (mk "r = [y | x <- xs, let y = x * x, y > 2]\n");
     ];
+    "record patterns", [
+      test_case "pun"          `Quick (mk "f p =\n  match p\n    Person { name } => name\n");
+      test_case "explicit"     `Quick (mk "f p =\n  match p\n    Person { age = 30 } => age\n");
+      test_case "rest only"    `Quick (mk "f p =\n  match p\n    Person { ... } => 0\n");
+      test_case "field + rest" `Quick (mk "f p =\n  match p\n    Person { name, ... } => name\n");
+    ];
   ]
