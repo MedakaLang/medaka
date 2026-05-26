@@ -293,6 +293,41 @@ let test_string_no_multiline () =
   | ELit (LString "hello world") -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
 
+let test_triple_basic () =
+  match parse_expr {|"""hello"""
+|} with
+  | ELit (LString "hello") -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_triple_multiline () =
+  let src = "v = \"\"\"\n  hello\n  world\n  \"\"\"\n" in
+  match parse src with
+  | [DFunDef (_, _, [], ELit (LString s))] ->
+    if s = "hello\nworld\n" then ()
+    else failwith (Printf.sprintf "wrong triple multiline content: %S" s)
+  | _ -> failwith "wrong parse"
+
+let test_triple_embedded_quotes () =
+  match parse_expr {|"""say "hi" to me"""
+|} with
+  | ELit (LString {|say "hi" to me|}) -> ()
+  | ELit (LString s) -> failwith (Printf.sprintf "wrong string: %S" s)
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_triple_escape () =
+  match parse_expr {|"""hello\tworld"""
+|} with
+  | ELit (LString "hello\tworld") -> ()
+  | ELit (LString s) -> failwith (Printf.sprintf "wrong string: %S" s)
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_triple_unterminated () =
+  try
+    ignore (parse_expr {|"""hello
+|});
+    failwith "expected exception"
+  with Failure _ -> ()
+
 (* ── Match expression tests ──────────────────────────── *)
 
 let test_match_basic () =
@@ -714,6 +749,11 @@ let () =
       test_case "string escape \\u{}"    `Quick test_string_escape_unicode;
       test_case "multiline string"       `Quick test_string_multiline;
       test_case "non-multiline unchanged"`Quick test_string_no_multiline;
+      test_case "triple basic"           `Quick test_triple_basic;
+      test_case "triple multiline"       `Quick test_triple_multiline;
+      test_case "triple embedded quotes" `Quick test_triple_embedded_quotes;
+      test_case "triple escape"          `Quick test_triple_escape;
+      test_case "triple unterminated"    `Quick test_triple_unterminated;
     ];
     "match", [
       test_case "basic match"       `Quick test_match_basic;
