@@ -380,8 +380,14 @@ let t_list   t = TApp (TCon "List",   t)
 let t_array  t = TApp (TCon "Array",  t)
 let t_map  k v = TApp (TApp (TCon "Map",  k), v)
 let t_set  e   = TApp (TCon "Set",  e)
+(* `Option` and `Result` are declared as data in stdlib/core.mdk and registered
+   via the regular DData pipeline.  Their TApp-encoded type expressions are
+   only needed where compiler code explicitly references those types, of which
+   there are currently no callers — the helpers are kept for clarity. *)
 let t_option t = TApp (TCon "Option", t)
 let t_result a b = TApp (TApp (TCon "Result", a), b)
+let _ = t_option
+let _ = t_result
 
 (* Expand type aliases in an AST type.  Collects the argument spine of a
    TyApp chain (e.g. `Parser Int` → head=TyCon "Parser", args=[TyCon "Int"]),
@@ -487,37 +493,25 @@ let from_ast_type_with_constraints ?(aliases=Hashtbl.create 0) ast_ty =
     (constraints, mono)
   | other -> ([], go other)
 
-(* Build the initial environment with built-in constructors and a few primitives.
-   These let our test programs compile without a stdlib in place. *)
+(* Build the initial environment with the few built-ins the prelude can't
+   declare itself.  Option / Result / Ordering and their constructors come
+   from stdlib/core.mdk via the regular DData pipeline; the seeds below are
+   only for syntactic specials (Bool literals, List's [] / (::) sugar, and
+   the synthetic __tuple__ singleton). *)
 let initial_env () =
   let env = empty_env () in
-  (* Create constructor TVars at level 1 so that generalize (called at level 0
-     below) will properly quantify them.  Without enter_level here the vars
-     would sit at level 0 and never get quantified, causing all uses of a
-     constructor to share the same TVar ref and spuriously unify. *)
   enter_level ();
-  (* Option *)
-  let a = fresh_var () in
-  Hashtbl.replace env.ctors "Some" (Forall ([], TFun (a, t_option a)));
-  let a = fresh_var () in
-  Hashtbl.replace env.ctors "None" (Forall ([], t_option a));
-  (* Result *)
-  let a = fresh_var () in
-  let b = fresh_var () in
-  Hashtbl.replace env.ctors "Ok"  (Forall ([], TFun (a, t_result a b)));
-  let a = fresh_var () in
-  let b = fresh_var () in
-  Hashtbl.replace env.ctors "Err" (Forall ([], TFun (b, t_result a b)));
-  (* Bool — TCon only, no polymorphic TVars needed *)
+  (* True/False: the lexer turns these into BOOL literals (not UPPER tokens),
+     and the evaluator stores them as VBool — but exhaustiveness checking and
+     a few pattern-matching paths still treat them as a closed two-ctor type. *)
   Hashtbl.replace env.ctors "True"  (monotype t_bool);
   Hashtbl.replace env.ctors "False" (monotype t_bool);
   exit_level ();
   (* type_ctors: closed types the exhaustiveness checker can enumerate.
-     Int, Float, String, Char intentionally absent (open types).
-     "__tuple__" is a synthetic singleton used for tuple patterns. *)
+     Int, Float, String, Char intentionally absent (open types).  Option,
+     Result, Ordering are registered by the prelude's DData; we only seed
+     types whose constructors aren't declared in stdlib/core.mdk. *)
   Hashtbl.replace env.type_ctors "Bool"      ["True"; "False"];
-  Hashtbl.replace env.type_ctors "Option"    ["Some"; "None"];
-  Hashtbl.replace env.type_ctors "Result"    ["Ok"; "Err"];
   Hashtbl.replace env.type_ctors "List"      ["Cons"; "Nil"];
   Hashtbl.replace env.type_ctors "__tuple__" ["__tuple__"];
   (* Generalize: vars are now at level 1, current_level = 0, so they get quantified *)
