@@ -687,6 +687,12 @@ let eval_program program =
         if not (List.mem name context_dependent_externs) then
           add_to_frame name VUnit
       ) methods
+    | DInterface { methods; _ } ->
+      List.iter (fun m ->
+        match m.method_default with
+        | None -> ()
+        | Some _ -> add_to_frame m.method_name VUnit
+      ) methods
     | _ -> ()
   ) program;
 
@@ -746,6 +752,24 @@ let eval_program program =
           let closures = List.map snd sorted in
           fill_cell name (match closures with [v] -> v | many -> VMulti many)
         end
+      ) methods
+    | DInterface { type_params; methods; _ } ->
+      (* Register default method bodies as fallbacks.  Score = number of type
+         params (more params = more generic) so concrete impls always win. *)
+      let score = List.length type_params in
+      List.iter (fun m ->
+        match m.method_default with
+        | None -> ()
+        | Some (pats, body) ->
+          let name = m.method_name in
+          let new_v = if pats = [] then wrap_match_errors (fun () -> eval env body)
+                      else VClosure (env, pats, body) in
+          let prev = try Hashtbl.find impl_acc name with Not_found -> [] in
+          let updated = prev @ [(score, new_v)] in
+          Hashtbl.replace impl_acc name updated;
+          let sorted  = List.stable_sort (fun (s1,_) (s2,_) -> compare s1 s2) updated in
+          let closures = List.map snd sorted in
+          fill_cell name (match closures with [v] -> v | many -> VMulti many)
       ) methods
     | _ -> ()
   ) program;
@@ -844,7 +868,35 @@ let eval_repl_decl (rs : repl_state) (decl : decl) : unit =
      ) methods
    | DNewtype (_, _, _, con, _, _) ->
      add con (make_ctor con 1)
-   | DRecord _ | DInterface _ | DTypeSig _ | DExtern _ | DUse _ | DTypeAlias _ -> ())
+   | DInterface { type_params; methods; _ } ->
+     let score = List.length type_params in
+     List.iter (fun m ->
+       match m.method_default with
+       | None -> ()
+       | Some (pats, body) ->
+         let name = m.method_name in
+         (match List.assoc_opt name !(rs.top_frame) with
+          | None -> add name VUnit
+          | Some _ -> ());
+         rs.eval_env := [!(rs.top_frame)];
+         let new_v = if pats = [] then wrap_match_errors (fun () -> eval !(rs.eval_env) body)
+                     else VClosure (!(rs.eval_env), pats, body) in
+         let merged =
+           match List.assoc_opt name !(rs.top_frame) with
+           | Some cell ->
+             let existing = match !cell with
+               | VMulti vs -> List.map (fun v -> (0, v)) vs
+               | VUnit     -> []
+               | old_v     -> [(0, old_v)]
+             in
+             let updated = existing @ [(score, new_v)] in
+             let sorted  = List.stable_sort (fun (s1,_) (s2,_) -> compare s1 s2) updated in
+             VMulti (List.map snd sorted)
+           | None -> new_v
+         in
+         fill name merged
+     ) methods
+   | DRecord _ | DTypeSig _ | DExtern _ | DUse _ | DTypeAlias _ -> ())
 
 let eval_repl_expr (rs : repl_state) (e : expr) : value =
   rs.eval_env := [!(rs.top_frame)];

@@ -1260,6 +1260,39 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
   let defaults = List.filter_map (fun m ->
     if m.Ast.method_default <> None then Some m.Ast.method_name else None
   ) methods in
+  (* Type-check each default method body.  Build a temporary env that includes
+     all interface methods so a default can call peer methods.
+     For methods whose type was inferred (TyVar "_"), update the scheme to the
+     inferred type so callers see the real type rather than a naked TVar. *)
+  let method_schemes = ref method_schemes in
+  let env_with_methods () =
+    List.fold_right (fun (n, s) e -> extend_var e n s) !method_schemes env
+  in
+  List.iter (fun m ->
+    match m.Ast.method_default with
+    | None -> ()
+    | Some (pats, body) ->
+      let mscheme = List.assoc m.Ast.method_name !method_schemes in
+      let expected_t = instantiate mscheme in
+      enter_level ();
+      let actual_t = infer (env_with_methods ()) (clause_to_expr (pats, body)) in
+      exit_level ();
+      (try unify expected_t actual_t
+       with
+       | Type_error (TypeMismatch (a, b), _) ->
+         fail (MethodTypeMismatch (m.Ast.method_name, a, b))
+       | Type_error (InfiniteType _ as e, _) -> fail e);
+      (* When no explicit type annotation was given, upgrade the scheme from the
+         generic placeholder to the actual inferred type. *)
+      (match m.Ast.method_type with
+       | Ast.TyVar "_" ->
+         let inferred_scheme = generalize (normalize actual_t) in
+         method_schemes := List.map (fun (n, s) ->
+           if n = m.Ast.method_name then (n, inferred_scheme) else (n, s)
+         ) !method_schemes
+       | _ -> ())
+  ) methods;
+  let method_schemes = !method_schemes in
   let info = {
     iface_param_ids = param_ids;
     iface_methods   = method_schemes;

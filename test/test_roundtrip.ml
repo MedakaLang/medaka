@@ -297,4 +297,8 @@ let () =
       test_case "multi gen"  `Quick (mk "r = [(x, y) | x <- xs, y <- ys]\n");
       test_case "let"        `Quick (mk "r = [y | x <- xs, let y = x * x, y > 2]\n");
     ];
+    "interface default where", [
+      test_case "where in default body" `Quick
+        (mk "interface Greeter a where\n  greet x = prefix ++ x where\n    prefix = \"Hi \"\n");
+    ];
   ]
