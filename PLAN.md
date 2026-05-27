@@ -1866,47 +1866,42 @@ Regression tests added under `test/thorough/thorough_typecheck.ml`
 in the "interfaces / constraints" group:
 `user impl over primitive` and `seeded fallback still works`.
 
-### Phase 45.7: Multi-line if-then-else parsing ⏳ TODO
+### Phase 45.7: Multi-line if-then-else parsing ✅ DONE
 
-Discovered while writing thorough tests.  The current grammar for `if`:
+Fixed in this session.  Four new grammar productions added:
 
-```
-expr_lam:
-  | IF expr_or THEN expr_lam ELSE expr_lam
-```
+1. `IF expr_or THEN expr_lam newlines ELSE expr_lam` — enables
+   else-if chains on multiple lines.
+2. `IF expr_or THEN INDENT stmts DEDENT newlines ELSE INDENT stmts DEDENT`
+   — both branches indented blocks.
+3. `IF expr_or THEN INDENT stmts DEDENT newlines ELSE expr_lam`
+   — indented THEN, inline ELSE.
+4. `IF expr_or THEN expr_lam ELSE INDENT stmts DEDENT`
+   — inline THEN, indented ELSE.
 
-…requires the THEN-branch and ELSE-branch expressions to inline directly
-after `then` / `else`.  These DO parse:
+No new menhir conflicts.
 
-```medaka
-f n = if n > 0 then 1 else 0                  -- single-line
-let x = if cond then a else b                 -- in a let
-f n = if n > 0 then 1 else (0 - 1)            -- parenthesized branch
-```
-
-These DO NOT parse (very common Haskell-style forms):
+All six previously-failing forms now parse and evaluate:
 
 ```medaka
-f n =                       -- if on its own indented line
-  if n > 0
-    then 1
-    else 0
-
-sign x =                    -- else-if chain on multi-line
-  if x > 0 then 1
-  else if x < 0 then -1
-  else 0
-
-main =                      -- do-bodies in branches
-  if cond then do
-    println "yes"
-  else do
-    println "no"
+if n > 0 then 1 else if n < 0 then -1 else 0     -- one line
+if n > 0 then 1
+else if n < 0 then -1
+else 0                                            -- else-if chain
+if n > 0 then
+  let a = n + 1
+  a * 2
+else
+  0                                               -- multi-stmt then
+if cond then
+  println "yes"
+else
+  println "no"                                    -- do-bodies in branches
 ```
 
-Adding alternative `if` grammar productions to accept these is a
-medium-sized parser change.  Probably requires careful interaction
-with the INDENT/DEDENT lexer hand-shake.
+Regression tests under `test/thorough/thorough_eval.ml` group
+"multi-line if (Phase 45.7)": both branches indented, only-then,
+only-else, multi-stmt then, else-if multi-line, do bodies.
 
 ### Phase 45.8: Multi-line match arm and lambda bodies ⏳ TODO
 
