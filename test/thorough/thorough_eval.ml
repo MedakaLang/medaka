@@ -701,6 +701,97 @@ let t_underscore_lit = assert_val "x = 1_000_000\n" "x" (VInt 1000000)
 let t_hex_arith = assert_val "x = 0xFF + 0x01\n" "x" (VInt 256)
 
 (* =====================================================================
+   21. Shadowing — let-bound and lambda-param shadowing
+   ===================================================================== *)
+
+let t_shadow_let =
+  assert_val {|x = 5
+y = let x = 10 in x + 1
+r = (x, y)
+|} "r" (VTuple [VInt 5; VInt 11])
+
+let t_shadow_lambda =
+  assert_val {|x = 5
+y = (x => x * 2) 10
+r = (x, y)
+|} "r" (VTuple [VInt 5; VInt 20])
+
+(* =====================================================================
+   22. Equality across types
+   ===================================================================== *)
+
+let t_eq_empty_string = assert_val {|r = "" == ""
+|} "r" (VBool true)
+
+let t_eq_tuple = assert_val {|r = (1, "x") == (1, "x")
+|} "r" (VBool true)
+
+let t_eq_tuple_diff = assert_val {|r = (1, "x") == (1, "y")
+|} "r" (VBool false)
+
+let t_eq_unit = assert_val "r = () == ()\n" "r" (VBool true)
+
+let t_eq_int_neg = assert_val "r = -5 == -5\n" "r" (VBool true)
+
+(* =====================================================================
+   23. Mutually-referencing record types
+   ===================================================================== *)
+
+let t_mutual_records =
+  assert_val
+    {|record A
+  b : Int
+record B
+  a : Int
+x : A
+x = A { b = 5 }
+y : B
+y = B { a = 10 }
+r = x.b + y.a
+|}
+    "r" (VInt 15)
+
+(* Self-referential record (via Option).  The match expression must
+   be parenthesized to bind correctly under `+`. *)
+let t_self_ref_record =
+  assert_val
+    {|record Node
+  val : Int
+  next : Option Node
+n = Node { val = 1, next = Some (Node { val = 2, next = None }) }
+nextVal = match n.next
+  Some n2 => n2.val
+  None => 0
+r = n.val + nextVal
+|}
+    "r" (VInt 3)
+
+(* =====================================================================
+   24. Match arm bodies via explicit do
+   ===================================================================== *)
+
+let t_match_arm_do =
+  assert_val
+    {|f xs = match xs
+  [] => 0
+  (x :: _) => do
+    let doubled = x * 2
+    doubled + 1
+r = f [10]
+|}
+    "r" (VInt 21)
+
+(* =====================================================================
+   25. Single-constructor data type
+   ===================================================================== *)
+
+let t_single_ctor_data =
+  assert_val {|data Singleton = Only
+r = match Only
+  Only => 42
+|} "r" (VInt 42)
+
+(* =====================================================================
    Test registration
    ===================================================================== *)
 
@@ -836,5 +927,26 @@ let () =
         ; test_case "0o17"                  `Quick t_oct_lit
         ; test_case "1_000_000"             `Quick t_underscore_lit
         ; test_case "hex arith"             `Quick t_hex_arith
+        ] );
+      ( "shadowing",
+        [ test_case "shadow let"            `Quick t_shadow_let
+        ; test_case "shadow lambda"         `Quick t_shadow_lambda
+        ] );
+      ( "equality",
+        [ test_case "empty string =="       `Quick t_eq_empty_string
+        ; test_case "tuple eq"              `Quick t_eq_tuple
+        ; test_case "tuple neq"             `Quick t_eq_tuple_diff
+        ; test_case "() == ()"              `Quick t_eq_unit
+        ; test_case "neg int eq"            `Quick t_eq_int_neg
+        ] );
+      ( "record types",
+        [ test_case "mutual records"        `Quick t_mutual_records
+        ; test_case "self-ref via Option"   `Quick t_self_ref_record
+        ] );
+      ( "match arm do",
+        [ test_case "list arm with do"      `Quick t_match_arm_do
+        ] );
+      ( "single-constructor data",
+        [ test_case "data Singleton"        `Quick t_single_ctor_data
         ] );
     ]

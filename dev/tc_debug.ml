@@ -1,5 +1,4 @@
-(* Quick type-check probe — not part of the test suite.
-   Edit src below and run:  dune exec dev/tc_debug.exe *)
+(* Quick type-check probe — not part of the test suite. *)
 
 open Medaka_lib
 open Typecheck

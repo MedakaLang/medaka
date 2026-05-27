@@ -1821,6 +1821,33 @@ Scope:
   prefixes in one brace (e.g. `{ p | address.city = ..., address.zip = ...}`);
   reject as a non-goal initially — explicit nesting is fine.
 
+### Phase 45.9: User-defined impl conflicts with seeded built-in ⏳ TODO
+
+`seed_builtin_impls` in `lib/typecheck.ml` pushes hardcoded
+impl_entries for `Num Int`, `Num Float`, `Ord Int`, `Ord Float`,
+`Ord String`, `Ord Char`, `Semigroup (List a)`, `Semigroup String`
+so that operator constraints (`+`, `<`, `++`, etc.) resolve.  These
+are seeded *unconditionally*, separately from anything in core.mdk.
+
+A user that writes `impl Ord Int where compare a b = ...` adds a
+second entry, and the next call to an Ord method (e.g. `lt 1 2`)
+finds *two* matching impls and errors with `Ambiguous: multiple
+impls of Ord for Int — use @ImplName to disambiguate`.  Worse: the
+seeded impl has no name, so `@` disambiguation only lets you pick
+the user's impl, never the built-in.
+
+Options:
+- Treat seeded impls as last-resort defaults — only consult them when
+  there is no user impl in scope.
+- Name the seeded impls (`@Builtin`?) so users can opt back in.
+- Skip seeding if the user has supplied their own impl for the same
+  (iface, type) pair.
+
+Related to PLAN.md §5 entry "Eq, Num, Ord stdlib interfaces
+disconnected from built-in operator constraints" (Phase 19) — the
+right long-term fix wires `+`/`<`/etc. through the stdlib's interfaces
+directly, which makes the seeded impls unnecessary.
+
 ### Phase 45.7: Multi-line if-then-else parsing ⏳ TODO
 
 Discovered while writing thorough tests.  The current grammar for `if`:
