@@ -1935,6 +1935,44 @@ g = (x =>                      -- BROKEN
 
 Same parser issue family as Phase 45.7; same area of grammar.
 
+### Phase 45.10: List monad in do-blocks ✅ DONE
+
+Fixed in this session.  Two-line change in `lib/eval.ml`:
+
+1. The `DoBind` handler also dispatches via Thenable when the bound
+   value is a `VList _` (in addition to the existing `VCon` check),
+   provided `monadic_ctors` contains "Cons" (which it does whenever
+   `impl Thenable List` is in scope — always, since core.mdk
+   provides it).
+2. `detect_monad` returns `Some "List"` for `VList _`, so when a
+   do-block's first bind is a list, `current_monad_type` is set to
+   "List" and the `pure` primitive can look up the List-specific
+   pure impl (`pure a = [a]`).
+
+Concretely:
+
+```medaka
+r = do
+  x <- [1, 2, 3]
+  pure (x * 2)
+-- previously: runtime error "unknown op '*' for [1,2,3], 2"
+-- now: [2, 4, 6]
+
+r = do
+  x <- [1, 2]
+  y <- [10, 20]
+  pure (x + y)
+-- [11, 21, 12, 22]   (cartesian product)
+```
+
+Regression tests added under `test/thorough/thorough_eval.ml` in the
+new "List monad in do" group: simple bind+pure, cross product, empty
+list short-circuits, andThen direct still works, list comprehension
+equivalent.
+
+PLAN.md §5's known limitation about List monad has been struck
+through.
+
 ### Phase 45.6: VRecord must carry its type name ✅ DONE
 
 Fixed in this session.  `VRecord of (string * value) list` became
@@ -2053,11 +2091,13 @@ These aren't blockers, but a less-careful change could trip over them:
 - do-block monad dispatch in `eval.ml` is a runtime heuristic: the monad is
   detected by inspecting the first `DoBind` result's constructor shape. This
   means (a) `pure` in a do-block with no `<-` statements returns the value
-  unwrapped (monad context unknown); (b) the List monad is not supported; (c)
-  higher-order functions that receive do-blocks don't thread monad context. The
-  clean fix is a type-annotated AST: after type-checking, tag `EDo` with its
-  resolved monad so `eval` doesn't need to guess. Deferred until Phase 11 or
-  later forces the issue.
+  unwrapped (monad context unknown); (b) ~~the List monad is not supported~~
+  (FIXED in this session — VList now dispatches via Thenable and detect_monad
+  recognizes VList → "List", so do-block list-monad concat-map semantics work);
+  (c) higher-order functions that receive do-blocks don't thread monad context.
+  The clean fix is a type-annotated AST: after type-checking, tag `EDo` with
+  its resolved monad so `eval` doesn't need to guess. Deferred until Phase 11
+  or later forces the issue.
 - `let mut` binding reassignment (`DoAssign`) is now type-checked in do-blocks,
   but `ELet(true, ...)` in expression context only tracks `mut_vars` — there is
   no syntax for reassigning a `let mut` binding outside a do-block. The `Ref`

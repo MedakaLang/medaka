@@ -215,6 +215,7 @@ let detect_monad = function
     (match Hashtbl.find_opt ctor_to_type cname with
      | Some tname -> Some tname
      | None -> None)
+  | VList _ -> Some "List"
   | _ -> None
 
 (* Runtime "head type" tag for a value.  Used to filter VMulti candidates
@@ -723,6 +724,12 @@ and eval_do env stmts =
     in
     (match v with
      | VCon (cname, _) when Hashtbl.mem monadic_ctors cname ->
+       dispatch_via_thenable ()
+     | VList _ when Hashtbl.mem monadic_ctors "Cons" ->
+       (* VList is its own OCaml value (not VCon ("Cons", ...) or
+          VCon ("Nil", [])) but it has a Thenable impl in the stdlib.
+          Dispatch through andThen so List acts as a monad in do-blocks
+          (concat-map semantics). *)
        dispatch_via_thenable ()
      | _ ->
        (match match_pat pat v with
