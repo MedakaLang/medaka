@@ -70,8 +70,11 @@ let rec expr_to_pat = function
   | EListLit es  -> PList  (List.map expr_to_pat es)
   | EBinOp ("::", a, b) -> PCons (expr_to_pat a, expr_to_pat b)
   | EApp _ as e ->
-    (* Constructor application: collect head + args, head must be uppercase *)
-    let rec collect acc = function
+    (* Constructor application: collect head + args, head must be uppercase.
+       Strip ELoc wrappers along the way — both the head and each arg come
+       out of the parser wrapped in ELoc. *)
+    let rec strip = function ELoc (_, e) -> strip e | e -> e in
+    let rec collect acc e = match strip e with
       | EApp (f, a) -> collect (a :: acc) f
       | EVar c when String.length c > 0
                   && Char.uppercase_ascii c.[0] = c.[0] ->

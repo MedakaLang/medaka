@@ -1,0 +1,38 @@
+; The "thorough" test suite — exhaustive edge-case coverage for the type
+; checker, evaluator, and feature interactions.  Excluded from the default
+; `dune test` target because these are `(executables ...)` rather than
+; `(tests ...)`.  Run explicitly via:
+;
+;   PATH=/Users/val/.opam/5.4.1/bin:$PATH dune build @thorough
+;
+; …or invoke individual binaries directly:
+;
+;   ./_build/default/test/thorough/thorough_typecheck.exe --compact
+;
+; Each `thorough_*.ml` file is its own executable so suites can run
+; independently.  All share the `Thorough_helpers` library for assertion
+; helpers (assert_type, assert_err, assert_val, …).
+;
+; Add new files to BOTH (names ...) and the `thorough` alias deps.
+
+(library
+ (name thorough_helpers)
+ (modules thorough_helpers)
+ (libraries medaka_lib alcotest))
+
+(executables
+ (names
+   thorough_typecheck
+   thorough_eval
+   thorough_interactions
+   thorough_stdlib)
+ (modules thorough_typecheck thorough_eval thorough_interactions thorough_stdlib)
+ (libraries thorough_helpers medaka_lib alcotest unix))
+
+(alias
+ (name thorough)
+ (deps
+   thorough_typecheck.exe
+   thorough_eval.exe
+   thorough_interactions.exe
+   thorough_stdlib.exe))

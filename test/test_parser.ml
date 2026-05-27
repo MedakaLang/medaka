@@ -121,6 +121,24 @@ let test_expr_lambda_multi_arg () =
   | ELam ([PTuple [PVar "x"; PVar "y"]], EBinOp ("+", EVar "x", EVar "y")) -> ()
   | _ -> failwith "wrong"
 
+(* Constructor-pattern lambda parameter: `(Some x) => x` should parse as
+   a lambda whose single parameter is the constructor pattern PCon.
+   Regression test for the bug fix where `expr_to_pat`'s nested
+   `collect` helper failed to strip ELoc wrappers, causing the parser
+   to reject this form with "Invalid lambda parameter pattern". *)
+let test_expr_lambda_ctor_pat () =
+  match parse_expr "(Some x) => x\n" with
+  | ELam ([PCon ("Some", [PVar "x"])], EVar "x") -> ()
+  | other ->
+    failwith (Printf.sprintf "wrong: got %s" (Ast.pp_expr other))
+
+(* Two-arg constructor pattern lambda. *)
+let test_expr_lambda_ctor_pat_two () =
+  match parse_expr "(Ok x y) => x\n" with
+  | ELam ([PCon ("Ok", [PVar "x"; PVar "y"])], EVar "x") -> ()
+  | other ->
+    failwith (Printf.sprintf "wrong: got %s" (Ast.pp_expr other))
+
 let test_expr_let () =
   match parse_expr "let x = 5 in x + 1\n" with
   | ELet (false, false, PVar "x", ELit (LInt 5), EBinOp ("+", EVar "x", ELit (LInt 1))) -> ()
@@ -1257,6 +1275,8 @@ let () =
     "expressions", [
       test_case "lambda"            `Quick test_expr_lambda;
       test_case "lambda multi-arg"  `Quick test_expr_lambda_multi_arg;
+      test_case "lambda ctor pat"   `Quick test_expr_lambda_ctor_pat;
+      test_case "lambda ctor pat 2 args" `Quick test_expr_lambda_ctor_pat_two;
       test_case "let"               `Quick test_expr_let;
       test_case "let mut"           `Quick test_expr_let_mut;
       test_case "let fn one arg"    `Quick test_expr_let_fn_one_arg;
