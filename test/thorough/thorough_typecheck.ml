@@ -373,6 +373,69 @@ let t_eff_option_pure =
 |}
     "f" "Option Int"
 
+(* Phase 54: DoAssign in a do-block infers <Mut>; DoFieldAssign too. *)
+
+(* Unannotated function with DoAssign: <Mut> is inferred but no error
+   (Phase 51 silences the ImpureFunction diagnostic; effects still
+   propagate to callers via eff_env). *)
+let t_mut_inferred_ok =
+  assert_type
+    {|f = do
+  let mut x = 0
+  x = 42
+  pure x
+|}
+    "f" "a Int"
+
+(* Explicit <Mut> annotation on a DoAssign function is accepted. *)
+let t_mut_do_assign_annotated =
+  assert_type
+    {|f : <Mut> (a Int)
+f = do
+  let mut x = 0
+  x = 42
+  pure x
+|}
+    "f" "a Int"
+
+(* Transitive Mut: annotated-pure caller of a DoAssign function → EffectEscape. *)
+let e_mut_escape_pure_caller =
+  assert_err
+    {|mutHelper x = do
+  let mut y = x
+  y = y + 1
+  pure y
+
+bad : Int -> a Int
+bad x = mutHelper x
+|}
+
+(* DoFieldAssign also triggers <Mut>: it propagates to callers. *)
+let e_mut_field_assign_escape =
+  assert_err
+    {|record Box
+  val : Int
+
+mutBox b newVal = do
+  let mut b2 = b
+  b2.val = newVal
+  pure b2
+
+bad : Box -> Int -> a Box
+bad b v = mutBox b v
+|}
+
+(* A function performing both IO and mutation can declare both effects. *)
+let t_mut_and_io_together =
+  assert_type
+    {|f : <IO, Mut> Unit
+f = do
+  let mut x = 0
+  x = 42
+  println x
+|}
+    "f" "Unit"
+
 (* =====================================================================
    6. Exhaustiveness — extra corners
    ===================================================================== *)
@@ -931,6 +994,11 @@ let () =
         ; test_case "err: escape via inferred callee" `Quick e_eff_escape_via_inferred_callee
         ; test_case "pure arithmetic"                 `Quick t_eff_pure_no_eff
         ; test_case "Option do is pure"               `Quick t_eff_option_pure
+        ; test_case "DoAssign infers <Mut> (ok)"      `Quick t_mut_inferred_ok
+        ; test_case "<Mut> annotation explicit"       `Quick t_mut_do_assign_annotated
+        ; test_case "err: Mut escapes pure caller"    `Quick e_mut_escape_pure_caller
+        ; test_case "err: DoFieldAssign Mut escape"   `Quick e_mut_field_assign_escape
+        ; test_case "<IO, Mut> combined"              `Quick t_mut_and_io_together
         ] );
       ( "exhaustiveness corners",
         [ test_case "warns: nested Some/None"  `Quick w_exhaust_nested_some
