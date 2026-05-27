@@ -1689,7 +1689,7 @@ Scope:
 Scope:
 - Parser only — desugar to lambda + match in the AST.
 
-### Phase 45: Nested record update sugar ⏳ TODO
+### Phase 45: Nested record update sugar ✅ DONE
 
 `{ p | address.city = "Boston" }` desugars to
 `{ p | address = { p.address | city = "Boston" } }`. LHS is a dotted
