@@ -792,6 +792,135 @@ r = match Only
 |} "r" (VInt 42)
 
 (* =====================================================================
+   26. Collection literals — Map / Set / HashMap
+   ===================================================================== *)
+
+(* Map literal currently evaluates to a VCon wrapping a VList of pairs:
+   `Map.fromList [(k, v), ...]` is the runtime shape (per Phase 16).
+   The actual collection runtime types (Map, Set, HashMap) are not yet
+   defined as stdlib types — pin via pp_value. *)
+let t_map_literal_pp () =
+  let v = run {|r = Map { 1 => "one", 2 => "two" }
+|} "r" in
+  let s = pp_value v in
+  if s <> "Map.fromList [(1, one), (2, two)]" then
+    failwith (Printf.sprintf "Got pp_value: %s" s)
+
+let t_set_literal_pp () =
+  let v = run {|r = Set { 1, 2, 3 }
+|} "r" in
+  let s = pp_value v in
+  if s <> "Set.fromList [1, 2, 3]" then
+    failwith (Printf.sprintf "Got pp_value: %s" s)
+
+(* =====================================================================
+   27. Unicode in strings and chars
+   ===================================================================== *)
+
+(* Multi-byte chars are stored as VString with the UTF-8 byte sequence. *)
+let t_unicode_string =
+  assert_val {|r = "héllo"
+|} "r" (VString "h\195\169llo")
+(* é = U+00E9 = bytes c3 a9 = "\195\169" in OCaml *)
+
+let t_unicode_escape_snowman =
+  assert_val {|r = "\u{2603}"
+|} "r" (VString "\xe2\x98\x83")
+
+(* =====================================================================
+   28. Records with function-typed fields
+   ===================================================================== *)
+
+let t_record_function_field =
+  assert_val
+    {|record Calc
+  add : Int -> Int -> Int
+c = Calc { add = (x => y => x + y) }
+r = c.add 3 4
+|}
+    "r" (VInt 7)
+
+(* =====================================================================
+   29. let mut outside do (preserves value)
+   ===================================================================== *)
+
+let t_let_mut_outside_do =
+  assert_val
+    {|f =
+  let mut x = 5
+  x
+r = f
+|}
+    "r" (VInt 5)
+
+(* =====================================================================
+   30. Negative integer comparisons
+   ===================================================================== *)
+
+let t_compare_negative =
+  assert_val "r = (-5 < 0, -5 > -10)\n" "r"
+    (VTuple [VBool true; VBool true])
+
+let t_compare_neg_eq =
+  assert_val "r = -5 == -5\n" "r" (VBool true)
+
+(* Mod with negatives *)
+let t_mod_neg_combinations =
+  assert_val
+    "r = ((-7) % 3, 7 % (-3), (-7) % (-3))\n"
+    "r" (VTuple [VInt (-1); VInt 1; VInt (-1)])
+
+(* =====================================================================
+   31. print / println outputs
+   ===================================================================== *)
+
+let t_print_int =
+  assert_stdout
+    {|main : <IO> Unit
+main = print 5
+|}
+    "5"
+
+let t_print_tuple =
+  assert_stdout
+    {|main : <IO> Unit
+main = print (1, "x", True)
+|}
+    "(1, x, true)"
+
+let t_println_list =
+  assert_stdout
+    {|main : <IO> Unit
+main = println [1, 2, 3]
+|}
+    "[1, 2, 3]\n"
+
+(* =====================================================================
+   32. Deep nesting
+   ===================================================================== *)
+
+let t_deep_list_literal =
+  assert_val
+    "r = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]\n"
+    "r" (VList [
+      VList [VList [VInt 1; VInt 2]; VList [VInt 3; VInt 4]];
+      VList [VList [VInt 5; VInt 6]; VList [VInt 7; VInt 8]]
+    ])
+
+(* =====================================================================
+   33. Recursive function with where helper (accumulator)
+   ===================================================================== *)
+
+let t_rec_with_where_acc =
+  assert_val
+    {|len xs = go 0 xs where
+  go acc [] = acc
+  go acc (_::rest) = go (acc + 1) rest
+r = len [1, 2, 3, 4, 5]
+|}
+    "r" (VInt 5)
+
+(* =====================================================================
    Test registration
    ===================================================================== *)
 
@@ -948,5 +1077,35 @@ let () =
         ] );
       ( "single-constructor data",
         [ test_case "data Singleton"        `Quick t_single_ctor_data
+        ] );
+      ( "collection literals",
+        [ test_case "Map literal pp"        `Quick t_map_literal_pp
+        ; test_case "Set literal pp"        `Quick t_set_literal_pp
+        ] );
+      ( "unicode",
+        [ test_case "héllo (UTF-8)"          `Quick t_unicode_string
+        ; test_case "\\u{2603} snowman"      `Quick t_unicode_escape_snowman
+        ] );
+      ( "record function field",
+        [ test_case "Calc.add"              `Quick t_record_function_field
+        ] );
+      ( "let mut outside do",
+        [ test_case "preserves value"       `Quick t_let_mut_outside_do
+        ] );
+      ( "negative comparisons",
+        [ test_case "< and >"               `Quick t_compare_negative
+        ; test_case "-5 == -5"              `Quick t_compare_neg_eq
+        ; test_case "mod combos"            `Quick t_mod_neg_combinations
+        ] );
+      ( "print / println",
+        [ test_case "print 5"               `Quick t_print_int
+        ; test_case "print tuple"           `Quick t_print_tuple
+        ; test_case "println list"          `Quick t_println_list
+        ] );
+      ( "deep nesting",
+        [ test_case "list of lists of lists" `Quick t_deep_list_literal
+        ] );
+      ( "rec where helper",
+        [ test_case "len with go acc"       `Quick t_rec_with_where_acc
         ] );
     ]
