@@ -479,18 +479,23 @@ r = wordCount ["the", "quick", "brown", "fox"]
 |}
     "r" "Int" (VInt 4)
 
-(* FizzBuzz-style classification.  Uses single-line if-else-if because
-   multi-line if-else-if doesn't parse (Phase 45.7 in PLAN.md). *)
+(* FizzBuzz-style classification.  Now uses multi-line if-else-if
+   chain (Phase 45.7 fix). *)
 let t_program_fizz =
   assert_typed_val
-    {|fizz n = if n % 15 == 0 then "FizzBuzz" else if n % 3 == 0 then "Fizz" else if n % 5 == 0 then "Buzz" else "n"
+    {|fizz n =
+  if n % 15 == 0 then "FizzBuzz"
+  else if n % 3 == 0 then "Fizz"
+  else if n % 5 == 0 then "Buzz"
+  else "n"
 r = (fizz 15, fizz 9, fizz 25, fizz 7)
 |}
     "r" "(String, String, String, String)"
     (VTuple [VString "FizzBuzz"; VString "Fizz"; VString "Buzz"; VString "n"])
 
-(* Binary tree: insert + flatten.  Match-arm bodies use single-line
-   if-else (Phase 45.7) and the helper `chooseInsert` for clarity. *)
+(* Binary tree: insert + flatten.  Match arm body still needs the
+   single-line if-else-if pattern because multi-line indented bodies
+   in match arms aren't fixed yet (Phase 45.8). *)
 let t_program_bst_inorder =
   assert_typed_val
     {|data Tree = Leaf | Node Tree Int Tree

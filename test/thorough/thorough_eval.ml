@@ -969,6 +969,73 @@ let t_list_comp_as_list_monad =
     "r" (VList [VInt 2; VInt 4; VInt 6])
 
 (* =====================================================================
+   34a. Multi-line if-then-else (Phase 45.7 fix)
+   ===================================================================== *)
+
+let t_if_both_indented =
+  assert_val
+    {|f n =
+  if n > 0 then
+    1
+  else
+    -1
+r = (f 5, f (-3))
+|}
+    "r" (VTuple [VInt 1; VInt (-1)])
+
+let t_if_only_then_indented =
+  assert_val
+    {|f n =
+  if n > 0 then
+    1
+  else (-1)
+r = f 5
+|}
+    "r" (VInt 1)
+
+let t_if_only_else_indented =
+  assert_val
+    {|f n =
+  if n > 0 then 1 else
+    -1
+r = f 5
+|}
+    "r" (VInt 1)
+
+let t_if_multi_stmt_then =
+  assert_val
+    {|f n =
+  if n > 0 then
+    let a = n + 1
+    a * 2
+  else
+    0
+r = f 5
+|}
+    "r" (VInt 12)
+
+let t_if_else_if_chain =
+  assert_val
+    {|sign x =
+  if x > 0 then 1
+  else if x < 0 then -1
+  else 0
+r = (sign 5, sign (-3), sign 0)
+|}
+    "r" (VTuple [VInt 1; VInt (-1); VInt 0])
+
+let t_if_do_in_branches =
+  assert_stdout
+    {|main : <IO> Unit
+main =
+  if True then
+    println "yes"
+  else
+    println "no"
+|}
+    "yes\n"
+
+(* =====================================================================
    35. Empty record pattern
    ===================================================================== *)
 
@@ -1180,5 +1247,13 @@ let () =
         ] );
       ( "empty record pat",
         [ test_case "P { ... }"             `Quick t_empty_record_pat
+        ] );
+      ( "multi-line if (Phase 45.7)",
+        [ test_case "both branches indented" `Quick t_if_both_indented
+        ; test_case "only then indented"     `Quick t_if_only_then_indented
+        ; test_case "only else indented"     `Quick t_if_only_else_indented
+        ; test_case "multi-stmt then body"   `Quick t_if_multi_stmt_then
+        ; test_case "else-if multi-line"     `Quick t_if_else_if_chain
+        ; test_case "do bodies in branches"  `Quick t_if_do_in_branches
         ] );
     ]

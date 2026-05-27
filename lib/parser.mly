@@ -487,6 +487,27 @@ expr_lam:
     { ELoc (of_pos $startpos $endpos, EMatch ($5, [($3, None, $7); (PWild, None, $9)])) }
   | IF expr_or THEN expr_lam ELSE expr_lam
     { ELoc (of_pos $startpos $endpos, EIf ($2, $4, $6)) }
+  (* Allow NEWLINE between an inline THEN branch and ELSE so that
+     `if a then 1 \n else if b then 2 \n else 3` (the classic
+     else-if chain laid out on multiple lines) parses. *)
+  | IF expr_or THEN expr_lam newlines ELSE expr_lam
+    { ELoc (of_pos $startpos $endpos, EIf ($2, $4, $7)) }
+  (* Phase 45.7: multi-line if-then-else.  Both branches may be indented
+     blocks (one stmt or more).  The lexer emits NEWLINE after each
+     DEDENT, so a `newlines` separator appears between the THEN block's
+     closing DEDENT and ELSE. *)
+  | IF expr_or THEN INDENT nonempty_list(stmt) DEDENT newlines ELSE INDENT nonempty_list(stmt) DEDENT
+    { ELoc (of_pos $startpos $endpos,
+            EIf ($2, stmts_to_expr $5, stmts_to_expr $10)) }
+  (* Mixed: indented then, inline else *)
+  | IF expr_or THEN INDENT nonempty_list(stmt) DEDENT newlines ELSE expr_lam
+    { ELoc (of_pos $startpos $endpos,
+            EIf ($2, stmts_to_expr $5, $9)) }
+  (* Mixed: inline then, indented else.  No `newlines` between expr_lam
+     and ELSE because expr_lam doesn't consume the trailing newline. *)
+  | IF expr_or THEN expr_lam ELSE INDENT nonempty_list(stmt) DEDENT
+    { ELoc (of_pos $startpos $endpos,
+            EIf ($2, $4, stmts_to_expr $7)) }
   | MATCH expr_or INDENT nonempty_list(match_arm) DEDENT
     { ELoc (of_pos $startpos $endpos, EMatch ($2, $4)) }
   | FUNCTION INDENT nonempty_list(match_arm) DEDENT
