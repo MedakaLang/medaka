@@ -363,6 +363,7 @@ type env = {
   constraint_obligations : (ident * mono list) list ref;
     (* (iface_name, mono_args) accumulated at call sites, verified post-HM *)
   type_ctors    : (ident, ident list) Hashtbl.t;  (* type name → ctor names in order *)
+  ctor_fields   : (ident, (ident * mono) list) Hashtbl.t;  (* named-field ctor → ordered (field, mono_ty) *)
   aliases       : (ident, ident list * Ast.ty) Hashtbl.t;  (* type alias name → (params, rhs) *)
   warnings      : string list ref;             (* accumulated warning messages *)
   mut_vars      : StringSet.t;                 (* bindings declared with let mut *)
@@ -380,6 +381,7 @@ let empty_env () = {
   fun_constraints        = Hashtbl.create 8;
   constraint_obligations = ref [];
   type_ctors    = Hashtbl.create 8;
+  ctor_fields   = Hashtbl.create 4;
   aliases       = Hashtbl.create 4;
   warnings      = ref [];
   mut_vars      = StringSet.empty;
@@ -654,31 +656,70 @@ let rec type_pat env = function
   | PAs (x, p) ->
     let (t, bindings) = type_pat env p in
     (t, (x, monotype t) :: bindings)
-  | PRec (record_name, fields, _rest) ->
-    let info =
-      try Hashtbl.find env.records record_name
-      with Not_found -> fail (UnknownRecord record_name)
-    in
-    let (result_t, field_types) = instantiate_record info in
-    let bindings =
-      List.concat_map (fun (fname, pat_opt) ->
-        let field_t =
-          match List.assoc_opt fname field_types with
-          | Some t -> t
-          | None   -> fail (UnknownField (fname, record_name))
-        in
-        match pat_opt with
-        | None ->
-          let v = fresh_var () in
-          unify v field_t;
-          [(fname, monotype v)]
-        | Some q ->
-          let (pt, bs) = type_pat env q in
-          unify pt field_t;
-          bs
-      ) fields
-    in
-    (result_t, bindings)
+  | PRec (name, fields, _rest) ->
+    (match Hashtbl.find_opt env.ctor_fields name with
+     | Some field_monos ->
+       (* Named-field constructor pattern *)
+       let field_types = List.map (fun (fn, mono) ->
+         let tv = fresh_var () in
+         unify tv mono;
+         (fn, tv)
+       ) field_monos in
+       let scheme =
+         try Hashtbl.find env.ctors name
+         with Not_found -> fail (UnknownCtor name)
+       in
+       let ctor_t = instantiate scheme in
+       let result_t = ref ctor_t in
+       List.iter (fun (_, ftype) ->
+         let ret = fresh_var () in
+         unify !result_t (TFun (ftype, [], ret));
+         result_t := ret
+       ) field_types;
+       let bindings =
+         List.concat_map (fun (fname, pat_opt) ->
+           let field_t =
+             match List.assoc_opt fname field_types with
+             | Some t -> t
+             | None   -> fail (UnknownField (fname, name))
+           in
+           match pat_opt with
+           | None ->
+             let v = fresh_var () in
+             unify v field_t;
+             [(fname, monotype v)]
+           | Some q ->
+             let (pt, bs) = type_pat env q in
+             unify pt field_t;
+             bs
+         ) fields
+       in
+       (!result_t, bindings)
+     | None ->
+       let info =
+         try Hashtbl.find env.records name
+         with Not_found -> fail (UnknownRecord name)
+       in
+       let (result_t, field_types) = instantiate_record info in
+       let bindings =
+         List.concat_map (fun (fname, pat_opt) ->
+           let field_t =
+             match List.assoc_opt fname field_types with
+             | Some t -> t
+             | None   -> fail (UnknownField (fname, name))
+           in
+           match pat_opt with
+           | None ->
+             let v = fresh_var () in
+             unify v field_t;
+             [(fname, monotype v)]
+           | Some q ->
+             let (pt, bs) = type_pat env q in
+             unify pt field_t;
+             bs
+         ) fields
+       in
+       (result_t, bindings))
 
 (* ── Expression typing ──────────────────────────── *)
 
@@ -1033,23 +1074,57 @@ let rec infer env = function
     type_stmts env stmts
 
   | ERecordCreate (name, provided) ->
-    let info =
-      try Hashtbl.find env.records name
-      with Not_found -> fail (UnknownRecord name)
-    in
-    let (result_t, field_types) = instantiate_record info in
-    (* Every declared field must be supplied. *)
-    List.iter (fun (fname, ftype) ->
-      match List.assoc_opt fname provided with
-      | None -> fail (MissingField (fname, name))
-      | Some expr -> unify (infer env expr) ftype
-    ) field_types;
-    (* No extra (unknown) fields. *)
-    List.iter (fun (fname, _) ->
-      if not (List.mem_assoc fname field_types) then
-        fail (UnknownField (fname, name))
-    ) provided;
-    result_t
+    (match Hashtbl.find_opt env.ctor_fields name with
+     | Some field_monos ->
+       (* Named-field constructor: instantiate fresh copies of field mono types *)
+       let field_types = List.map (fun (fn, mono) ->
+         let tv = fresh_var () in
+         unify tv mono;
+         (fn, tv)
+       ) field_monos in
+       (* Every declared field must be supplied. *)
+       List.iter (fun (fname, ftype) ->
+         match List.assoc_opt fname provided with
+         | None -> fail (MissingField (fname, name))
+         | Some expr -> unify (infer env expr) ftype
+       ) field_types;
+       (* No extra (unknown) fields. *)
+       List.iter (fun (fname, _) ->
+         if not (List.mem_assoc fname field_types) then
+           fail (UnknownField (fname, name))
+       ) provided;
+       (* Return the constructor's result type via its scheme *)
+       let scheme =
+         try Hashtbl.find env.ctors name
+         with Not_found -> fail (UnknownCtor name)
+       in
+       let ctor_t = instantiate scheme in
+       (* ctor_t is TFun (arg1, [], TFun (arg2, [], ..., result_t)) — strip args *)
+       let result_t = ref ctor_t in
+       List.iter (fun (_, ftype) ->
+         let ret = fresh_var () in
+         unify !result_t (TFun (ftype, [], ret));
+         result_t := ret
+       ) field_types;
+       !result_t
+     | None ->
+       let info =
+         try Hashtbl.find env.records name
+         with Not_found -> fail (UnknownRecord name)
+       in
+       let (result_t, field_types) = instantiate_record info in
+       (* Every declared field must be supplied. *)
+       List.iter (fun (fname, ftype) ->
+         match List.assoc_opt fname provided with
+         | None -> fail (MissingField (fname, name))
+         | Some expr -> unify (infer env expr) ftype
+       ) field_types;
+       (* No extra (unknown) fields. *)
+       List.iter (fun (fname, _) ->
+         if not (List.mem_assoc fname field_types) then
+           fail (UnknownField (fname, name))
+       ) provided;
+       result_t)
 
   | EFieldAccess (e, field) ->
     let te = infer env e in
@@ -1214,7 +1289,20 @@ let register_data ?(aliases=Hashtbl.create 0) env (name, params, variants) =
       | Ast.TyEffect (_, t) -> go t
       | Ast.TyConstrained (_, inner) -> go inner
     in
-    let arg_types = List.map (fun f -> go (expand_aliases aliases f)) v.con_fields in
+    let arg_types = match v.Ast.con_payload with
+      | Ast.ConPos tys    -> List.map (fun f -> go (expand_aliases aliases f)) tys
+      | Ast.ConNamed flds ->
+        let monos = List.map (fun f -> (f.Ast.field_name, go (expand_aliases aliases f.Ast.field_type))) flds in
+        (* Register field ownership and ordered field list for pattern/construction *)
+        List.iter (fun (fn, _) ->
+          if Hashtbl.mem env.field_owners fn then
+            fail (Other (Printf.sprintf
+              "Field name collision: '%s' is already declared by another type" fn));
+          Hashtbl.replace env.field_owners fn v.Ast.con_name
+        ) monos;
+        Hashtbl.replace env.ctor_fields v.Ast.con_name monos;
+        List.map snd monos
+    in
     let ctor_t =
       List.fold_right (fun a acc -> TFun (a, [], acc)) arg_types result_t
     in
@@ -1788,7 +1876,7 @@ let check_program (prog : program) : (ident * scheme) list * string list =
   List.iter (function
     | DTypeAlias _ -> ()  (* already handled *)
     | DNewtype (_, n, ps, con, fty, _) ->
-      register_data ~aliases:env.aliases env (n, ps, [{ Ast.con_name = con; con_fields = [fty] }])
+      register_data ~aliases:env.aliases env (n, ps, [{ Ast.con_name = con; con_payload = Ast.ConPos [fty] }])
     | DData (_, n, ps, vs, _) -> register_data ~aliases:env.aliases env (n, ps, vs)
     | DRecord (_, n, ps, fs, _) -> register_record ~aliases:env.aliases env (n, ps, fs)
     | DInterface { iface_name; type_params; methods; _ } ->
@@ -1987,7 +2075,7 @@ let typecheck_module
   List.iter (function
     | DTypeAlias _ -> ()  (* already handled *)
     | DNewtype (_, n, ps, con, fty, _) ->
-      register_data ~aliases:env.aliases env (n, ps, [{ Ast.con_name = con; con_fields = [fty] }])
+      register_data ~aliases:env.aliases env (n, ps, [{ Ast.con_name = con; con_payload = Ast.ConPos [fty] }])
     | DData (_, n, ps, vs, _) -> register_data ~aliases:env.aliases env (n, ps, vs)
     | DRecord (_, n, ps, fs, _) -> register_record ~aliases:env.aliases env (n, ps, fs)
     | DInterface { iface_name; type_params; methods; _ } ->
@@ -2151,6 +2239,7 @@ let copy_tc_env (e : env) : env = {
   fun_constraints        = Hashtbl.copy e.fun_constraints;
   constraint_obligations = ref !(e.constraint_obligations);
   type_ctors    = Hashtbl.copy e.type_ctors;
+  ctor_fields   = Hashtbl.copy e.ctor_fields;
   aliases       = Hashtbl.copy e.aliases;
   warnings      = ref !(e.warnings);
   mut_vars      = e.mut_vars;                  (* persistent set *)
@@ -2172,7 +2261,7 @@ let check_repl_decl (env : env ref) (decls : decl list)
   List.iter (function
     | DTypeAlias _ -> ()  (* already handled *)
     | DNewtype (_, n, ps, con, fty, _) ->
-      register_data ~aliases:(!env).aliases !env (n, ps, [{ Ast.con_name = con; con_fields = [fty] }])
+      register_data ~aliases:(!env).aliases !env (n, ps, [{ Ast.con_name = con; con_payload = Ast.ConPos [fty] }])
     | DData (_, n, ps, vs, _) -> register_data ~aliases:(!env).aliases !env (n, ps, vs)
     | DRecord (_, n, ps, fs, _) -> register_record ~aliases:(!env).aliases !env (n, ps, fs)
     | DInterface { iface_name; type_params; methods; _ } ->

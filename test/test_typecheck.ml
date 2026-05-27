@@ -1760,6 +1760,32 @@ let e_let_else_last_stmt =
     let Some x = opt else pure 0
 |}
 
+(* ── Named-field variants (Phase 39) ────────────── *)
+
+let named_event =
+  "data Event\n  | Click { x : Int, y : Int }\n  | Scroll Int\n"
+
+let t_named_ctor_create =
+  assert_type
+    (named_event ^ "v = Click { x = 1, y = 2 }\n")
+    "v" "Event"
+
+let t_named_ctor_pat_pun =
+  assert_type
+    (named_event ^ "getX e =\n  match e\n    Click { x, y } => x\n    Scroll _ => 0\n")
+    "getX" "Event -> Int"
+
+let t_named_ctor_mixed =
+  assert_type
+    (named_event ^ "f e =\n  match e\n    Click { x } => x\n    Scroll n => n\n")
+    "f" "Event -> Int"
+
+let e_named_ctor_missing_field =
+  assert_err (named_event ^ "v = Click { x = 1 }\n")
+
+let e_named_ctor_wrong_field_type =
+  assert_err (named_event ^ "v = Click { x = \"bad\", y = 2 }\n")
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -2088,11 +2114,20 @@ let () =
       test_case "err: type mismatch"       `Quick e_rec_pat_type_mismatch;
       test_case "err: unknown record"      `Quick e_rec_pat_unknown_record;
     ];
+<<<<<<< HEAD
     "if let / let else (Phase 38)", [
       test_case "if let match"             `Quick t_if_let_match;
       test_case "if let no match"          `Quick t_if_let_no_match;
       test_case "err: branch type mismatch" `Quick e_if_let_branch_mismatch;
       test_case "let else bind"            `Quick t_let_else_bind;
       test_case "err: let else last stmt"  `Quick e_let_else_last_stmt;
+=======
+    "named-field variants (Phase 39)", [
+      test_case "construction"             `Quick t_named_ctor_create;
+      test_case "pattern pun"              `Quick t_named_ctor_pat_pun;
+      test_case "mixed positional+named"   `Quick t_named_ctor_mixed;
+      test_case "err: missing field"       `Quick e_named_ctor_missing_field;
+      test_case "err: wrong field type"    `Quick e_named_ctor_wrong_field_type;
+>>>>>>> 3ec8f47 (Phase 39: variants with named fields)
     ];
   ]

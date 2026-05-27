@@ -20,7 +20,13 @@ let pp_decl d =
                                (String.concat "; " (List.map pp_pat ps))
                                (pp_expr e)
   | DData (_, n, ps, vs, _)  ->
-    let pv v = Printf.sprintf "%s [%s]" v.con_name (String.concat ", " (List.map pp_ty v.con_fields)) in
+    let pv v =
+      let fields_str = match v.con_payload with
+        | Ast.ConPos tys   -> String.concat ", " (List.map pp_ty tys)
+        | Ast.ConNamed fls -> "{" ^ String.concat ", " (List.map (fun f -> f.Ast.field_name ^ " : " ^ pp_ty f.Ast.field_type) fls) ^ "}"
+      in
+      Printf.sprintf "%s [%s]" v.con_name fields_str
+    in
     Printf.sprintf "DData(%s, [%s], [%s])" n (String.concat " " ps)
       (String.concat " | " (List.map pv vs))
   | DRecord (_, n, ps, fs, _) ->

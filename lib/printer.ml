@@ -430,7 +430,17 @@ let print_decl p = function
       List.iteri (fun i v ->
         if i > 0 then newline p;
         write p "| "; write p v.con_name;
-        List.iter (fun t -> write p " "; print_type_atom p t) v.con_fields
+        (match v.con_payload with
+         | Ast.ConPos tys ->
+           List.iter (fun t -> write p " "; print_type_atom p t) tys
+         | Ast.ConNamed fields ->
+           write p " { ";
+           List.iteri (fun i f ->
+             if i > 0 then write p ", ";
+             write p f.Ast.field_name; write p " : ";
+             print_type p f.Ast.field_type
+           ) fields;
+           write p " }")
       ) variants
     );
     if derives <> [] then begin

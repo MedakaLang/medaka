@@ -635,10 +635,19 @@ inner_data_decl:
     { fun is_pub -> DData (is_pub, $2, $3, $5, Option.value ~default:[] $6) }
 
 data_variant_line:
-  | PIPE UPPER list(ty_atom) newlines  { { con_name = $2; con_fields = $3 } }
+  | PIPE UPPER list(ty_atom) newlines
+    { { con_name = $2; con_payload = Ast.ConPos $3 } }
+  | PIPE UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE newlines
+    { { con_name = $2; con_payload = Ast.ConNamed $4 } }
 
 data_variant_inline:
-  | UPPER list(ty_atom)  { { con_name = $1; con_fields = $2 } }
+  | UPPER list(ty_atom)
+    { { con_name = $1; con_payload = Ast.ConPos $2 } }
+  | UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE
+    { { con_name = $1; con_payload = Ast.ConNamed $3 } }
+
+inline_field_decl:
+  | IDENT COLON ty  { { Ast.field_name = $1; field_type = $3 } }
 
 (* ── Record declarations ─────────────────────────────── *)
 

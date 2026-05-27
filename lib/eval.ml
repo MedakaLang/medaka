@@ -72,6 +72,10 @@ and pp_value_atom v = match v with
   | VCon (_, _ :: _) | VTuple _ -> "(" ^ pp_value v ^ ")"
   | _ -> pp_value v
 
+(* Named-field constructor name → field names in declaration order.
+   Populated from DData ConNamed variants at eval init. *)
+let ctor_field_order : (string, string list) Hashtbl.t = Hashtbl.create 4
+
 (* ── Pattern matching ────────────────────────────────────────────────────── *)
 
 let rec match_pat pat value =
@@ -107,6 +111,26 @@ let rec match_pat pat value =
     (match match_pat p v with
      | None -> None
      | Some binds -> Some ((x, v) :: binds))
+  | PRec (ctor, fields, _rest), VCon (ctor', vals) when ctor = ctor' ->
+    (match Hashtbl.find_opt ctor_field_order ctor with
+     | None -> None
+     | Some field_names ->
+       let field_assoc = List.combine field_names vals in
+       let result = ref (Some []) in
+       List.iter (fun (fname, pat_opt) ->
+         if !result <> None then
+           match List.assoc_opt fname field_assoc with
+           | None -> result := None
+           | Some v ->
+             (match pat_opt with
+              | None ->
+                result := Option.map (fun bs -> bs @ [(fname, v)]) !result
+              | Some q ->
+                match match_pat q v with
+                | None   -> result := None
+                | Some b -> result := Option.map (fun bs -> bs @ b) !result)
+       ) fields;
+       !result)
   | PRec (_, fields, _rest), VRecord record_fields ->
     let result = ref (Some []) in
     List.iter (fun (fname, pat_opt) ->
@@ -157,6 +181,7 @@ let monadic_ctors : (string, unit) Hashtbl.t = Hashtbl.create 8
    init.  Used by detect_monad to map a value's head constructor back to the
    type whose Applicative impl `pure` should dispatch into. *)
 let ctor_to_type : (string, string) Hashtbl.t = Hashtbl.create 8
+
 
 (* Type name → `pure` impl body.  Populated from `impl Applicative T` (and
    `impl Thenable T` if it overrides pure) declarations at eval init.  The
@@ -321,8 +346,17 @@ and eval env expr =
         | None -> raise (Eval_error ("unknown field: " ^ field, !current_loc)))
      | _ -> raise (Eval_error ("field access on non-record", !current_loc)))
 
-  | ERecordCreate (_, fields) ->
-    VRecord (List.map (fun (k, e) -> (k, eval env e)) fields)
+  | ERecordCreate (name, fields) ->
+    (match Hashtbl.find_opt ctor_field_order name with
+     | Some order ->
+       let vals = List.map (fun fn ->
+         match List.assoc_opt fn fields with
+         | Some e -> eval env e
+         | None -> raise (Eval_error ("missing field: " ^ fn, !current_loc))
+       ) order in
+       VCon (name, vals)
+     | None ->
+       VRecord (List.map (fun (k, e) -> (k, eval env e)) fields))
 
   | ERecordUpdate (base, fields) ->
     (match eval env base with
@@ -668,12 +702,20 @@ let eval_program program =
      target for impl lookup. *)
   Hashtbl.clear monadic_ctors;
   Hashtbl.clear ctor_to_type;
+  Hashtbl.clear ctor_field_order;
   let type_ctors : (string, string list) Hashtbl.t = Hashtbl.create 8 in
   List.iter (function
     | DData (_, n, _, vs, _) ->
       let cnames = List.map (fun v -> v.con_name) vs in
       Hashtbl.replace type_ctors n cnames;
-      List.iter (fun c -> Hashtbl.replace ctor_to_type c n) cnames
+      List.iter (fun v ->
+        Hashtbl.replace ctor_to_type v.con_name n;
+        (match v.con_payload with
+         | ConNamed fields ->
+           Hashtbl.replace ctor_field_order v.con_name
+             (List.map (fun f -> f.field_name) fields)
+         | ConPos _ -> ())
+      ) vs
     | _ -> ()
   ) program;
   (* Built-in types whose constructors are seeded in OCaml. *)
@@ -710,7 +752,11 @@ let eval_program program =
       add_to_frame con (make_ctor con 1)
     | DData (_, _, _, variants, _) ->
       List.iter (fun v ->
-        add_to_frame v.con_name (make_ctor v.con_name (List.length v.con_fields))
+        let arity = match v.con_payload with
+          | ConPos tys   -> List.length tys
+          | ConNamed fls -> List.length fls
+        in
+        add_to_frame v.con_name (make_ctor v.con_name arity)
       ) variants
     | DFunDef (_, name, _, _) ->
       add_to_frame name VUnit
@@ -826,8 +872,17 @@ let eval_repl_decl (rs : repl_state) (decl : decl) : unit =
   (match decl with
    | DData (_, type_name, _, variants, _) ->
      List.iter (fun v ->
-       add v.con_name (make_ctor v.con_name (List.length v.con_fields));
-       Hashtbl.replace ctor_to_type v.con_name type_name
+       let arity = match v.con_payload with
+         | ConPos tys   -> List.length tys
+         | ConNamed fls -> List.length fls
+       in
+       add v.con_name (make_ctor v.con_name arity);
+       Hashtbl.replace ctor_to_type v.con_name type_name;
+       (match v.con_payload with
+        | ConNamed fields ->
+          Hashtbl.replace ctor_field_order v.con_name
+            (List.map (fun f -> f.field_name) fields)
+        | ConPos _ -> ())
      ) variants
    | DFunDef (_, name, pats, body) ->
      add name VUnit;

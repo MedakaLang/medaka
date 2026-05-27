@@ -1,5 +1,9 @@
 open Ast
 
+let con_arity v = match v.con_payload with
+  | ConPos tys   -> List.length tys
+  | ConNamed fls -> List.length fls
+
 (* Left-fold string concatenations: e0 ++ e1 ++ ... *)
 let concat_strings parts =
   match parts with
@@ -36,7 +40,7 @@ let derive_eq_data type_name variants =
   (* One arm per constructor: same-constructor case compares fields pairwise.
      Final wildcard arm returns False for any cross-constructor pair. *)
   let same_con_arms = List.map (fun v ->
-    let n = List.length v.con_fields in
+    let n = con_arity v in
     let avars = List.init n (fun i -> Printf.sprintf "__a%d" i) in
     let bvars = List.init n (fun i -> Printf.sprintf "__b%d" i) in
     let apat = PCon (v.con_name, List.map (fun x -> PVar x) avars) in
@@ -88,7 +92,7 @@ let derive_eq_record type_name fields =
 
 let derive_show_data type_name variants =
   let arms = List.map (fun v ->
-    let n = List.length v.con_fields in
+    let n = con_arity v in
     let vars = List.init n (fun i -> Printf.sprintf "__a%d" i) in
     let pat =
       if n = 0 then PCon (v.con_name, [])
@@ -153,8 +157,8 @@ let derive_ord_data type_name variants =
   let indexed = List.mapi (fun i v -> (i, v)) variants in
   let arms = List.concat_map (fun (i, vi) ->
     List.map (fun (j, vj) ->
-      let ni = List.length vi.con_fields in
-      let nj = List.length vj.con_fields in
+      let ni = con_arity vi in
+      let nj = con_arity vj in
       let avars = List.init ni (fun k -> Printf.sprintf "__a%d" k) in
       let bvars = List.init nj (fun k -> Printf.sprintf "__b%d" k) in
       let apat = PCon (vi.con_name, List.map (fun x -> PVar x) avars) in

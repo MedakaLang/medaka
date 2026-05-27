@@ -543,6 +543,33 @@ let t_rec_pat_rest = assert_val
 |})
   "result" (VInt 99)
 
+(* ── Named-field variants (Phase 39) ───────────────────────────────────── *)
+
+let named_event_src = {|data Event
+  | Click { x : Int, y : Int }
+  | Scroll Int
+|}
+
+let t_named_ctor_create_eval = assert_val
+  (named_event_src ^ "result = Click { x = 10, y = 20 }\n")
+  "result" (VCon ("Click", [VInt 10; VInt 20]))
+
+let t_named_ctor_pat_eval = assert_val
+  (named_event_src ^ {|result =
+  match Click { x = 5, y = 7 }
+    Click { x, y } => x
+    Scroll _ => 0
+|})
+  "result" (VInt 5)
+
+let t_named_ctor_field_order_eval = assert_val
+  (named_event_src ^ {|result =
+  match Click { y = 99, x = 3 }
+    Click { x, y } => y
+    Scroll _ => 0
+|})
+  "result" (VInt 99)
+
 (* ── Interface default method bodies (Phase 33) ─────────────────────────── *)
 
 (* Default method runs when the impl doesn't override it *)
@@ -758,6 +785,11 @@ let () =
       test_case "pun binds field"            `Quick t_rec_pat_pun;
       test_case "explicit pattern match"     `Quick t_rec_pat_explicit;
       test_case "wildcard rest catch-all"    `Quick t_rec_pat_rest;
+    ];
+    "named-field variants (Phase 39)", [
+      test_case "construction"               `Quick t_named_ctor_create_eval;
+      test_case "pattern binding"            `Quick t_named_ctor_pat_eval;
+      test_case "field order in match"       `Quick t_named_ctor_field_order_eval;
     ];
     "interface default methods (Phase 33)", [
       test_case "default method runs"         `Quick t_iface_default_runs;

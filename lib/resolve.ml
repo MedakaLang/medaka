@@ -263,7 +263,14 @@ let build_env ?(known_modules : module_exports list = [])
     | DData (_, n, _, vs, _) ->
       add_unique env.types "type" n;
       List.iter (fun v ->
-        add_unique env.constructors "constructor" v.con_name
+        add_unique env.constructors "constructor" v.con_name;
+        (match v.con_payload with
+         | ConNamed fields ->
+           List.iter (fun f ->
+             add_or_skip env.fields f.field_name;
+             Hashtbl.replace env.field_owners f.field_name v.con_name
+           ) fields
+         | ConPos _ -> ())
       ) vs
     | DRecord (_, n, _, fs, _) ->
       add_unique env.types "type" n;
@@ -315,9 +322,10 @@ let build_env ?(known_modules : module_exports list = [])
            if Hashtbl.mem exp.exp_interfaces n then
              add_or_skip env.interfaces n
          ) names;
-         (* Copy field ownership for imported record types *)
+         (* Copy field ownership for imported record types and named-field ctors *)
          Hashtbl.iter (fun field owner ->
-           if Hashtbl.mem exp.exp_types owner then begin
+           if Hashtbl.mem exp.exp_types owner
+           || Hashtbl.mem exp.exp_constructors owner then begin
              add_or_skip env.fields field;
              Hashtbl.replace env.field_owners field owner
            end
@@ -357,14 +365,17 @@ let rec check_pat env errors p =
   | PTuple ps | PList ps ->
     List.iter (check_pat env errors) ps
   | PAs (_, p) -> check_pat env errors p
-  | PRec (record_name, fields, _rest) ->
-    if not (Hashtbl.mem env.types record_name) then
-      emit errors (UnknownType record_name);
+  | PRec (name, fields, _rest) ->
+    (* name can be a record type (DRecord) or a named-field constructor (DData ConNamed) *)
+    let is_record = Hashtbl.mem env.types name in
+    let is_named_ctor = (not is_record) && Hashtbl.mem env.constructors name in
+    if not is_record && not is_named_ctor then
+      emit errors (UnknownType name);
     List.iter (fun (fname, pat_opt) ->
       (match Hashtbl.find_opt env.field_owners fname with
        | None -> emit errors (UnknownField fname)
-       | Some owner when owner <> record_name ->
-         emit errors (FieldNotInRecord (fname, record_name))
+       | Some owner when owner <> name ->
+         emit errors (FieldNotInRecord (fname, name))
        | _ -> ());
       match pat_opt with
       | None   -> ()
@@ -448,10 +459,12 @@ let rec check_expr env scope errors e =
     (* Field name validation deferred to the type checker *)
     check_expr env scope errors e
   | ERecordCreate (name, fs) ->
-    if not (Hashtbl.mem env.types name || Hashtbl.mem env.imported name) then
+    let is_record = Hashtbl.mem env.types name || Hashtbl.mem env.imported name in
+    let is_ctor   = Hashtbl.mem env.constructors name in
+    if not is_record && not is_ctor then
       emit errors (UnknownType name)
     else begin
-      (* Each field must belong to the named record *)
+      (* Each field must belong to the named record or named-field constructor *)
       List.iter (fun (fname, _) ->
         match Hashtbl.find_opt env.field_owners fname with
         | None -> emit errors (UnknownField fname)
@@ -554,7 +567,11 @@ let check_decl env errors = function
   | DNewtype (_, _, _, _, fty, _) ->
     check_type env errors fty
   | DData (_, _, _, vs, _) ->
-    List.iter (fun v -> List.iter (check_type env errors) v.con_fields) vs
+    List.iter (fun v ->
+      match v.con_payload with
+      | ConPos tys   -> List.iter (check_type env errors) tys
+      | ConNamed flds -> List.iter (fun f -> check_type env errors f.field_type) flds
+    ) vs
   | DRecord (_, _, _, fs, _) ->
     List.iter (fun f -> check_type env errors f.field_type) fs
   | DUse _ -> ()
@@ -647,7 +664,14 @@ let build_exports ?(known_modules : module_exports list = [])
     | DData (true, n, _, vs, _) ->
       Hashtbl.replace exp.exp_types n ();
       List.iter (fun v ->
-        Hashtbl.replace exp.exp_constructors v.con_name ()
+        Hashtbl.replace exp.exp_constructors v.con_name ();
+        (match v.con_payload with
+         | ConNamed fields ->
+           List.iter (fun f ->
+             Hashtbl.replace exp.exp_fields f.field_name ();
+             Hashtbl.replace exp.exp_field_owners f.field_name v.con_name
+           ) fields
+         | ConPos _ -> ())
       ) vs
     | DRecord (true, n, _, fs, _) ->
       Hashtbl.replace exp.exp_types n ();

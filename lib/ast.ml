@@ -92,14 +92,18 @@ type use_path =
   | UseWild  of ident list                   (* use utils.* *)
   | UseAlias of ident list * ident           (* use utils as U *)
 
-type data_variant = {
-  con_name   : ident;
-  con_fields : ty list;
-}
-
 type record_field = {
   field_name : ident;
   field_type : ty;
+}
+
+type con_payload =
+  | ConPos   of ty list
+  | ConNamed of record_field list
+
+type data_variant = {
+  con_name    : ident;
+  con_payload : con_payload;
 }
 
 type iface_method = {

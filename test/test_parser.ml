@@ -496,16 +496,16 @@ r
 let test_data_inline () =
   match parse_one "data Bool = True | False\n" with
   | DData (false, "Bool", [], [
-      { con_name = "True";  con_fields = [] };
-      { con_name = "False"; con_fields = [] };
+      { con_name = "True";  con_payload = ConPos [] };
+      { con_name = "False"; con_payload = ConPos [] };
     ], []) -> ()
   | _ -> failwith "wrong"
 
 let test_data_with_fields () =
   match parse_one "data Option a = Some a | None\n" with
   | DData (false, "Option", ["a"], [
-      { con_name = "Some"; con_fields = [TyVar "a"] };
-      { con_name = "None"; con_fields = [] };
+      { con_name = "Some"; con_payload = ConPos [TyVar "a"] };
+      { con_name = "None"; con_payload = ConPos [] };
     ], []) -> ()
   | _ -> failwith "wrong"
 
@@ -517,8 +517,8 @@ data Shape
 |} in
   match parse_one src with
   | DData (false, "Shape", [], [
-      { con_name = "Circle";    con_fields = [TyCon "Float"] };
-      { con_name = "Rectangle"; con_fields = [TyCon "Float"; TyCon "Float"] };
+      { con_name = "Circle";    con_payload = ConPos [TyCon "Float"] };
+      { con_name = "Rectangle"; con_payload = ConPos [TyCon "Float"; TyCon "Float"] };
     ], []) -> ()
   | _ -> failwith "wrong"
 
@@ -880,6 +880,54 @@ f p =
       ])) -> ()
   | _ -> failwith "wrong"
 
+(* ── Phase 39: Named-field variant tests ─────────────── *)
+
+let test_data_named_inline () =
+  match parse_one "data Point = Pt { x : Int, y : Int }\n" with
+  | DData (false, "Point", [], [
+      { con_name = "Pt"; con_payload = ConNamed [
+        { field_name = "x"; field_type = TyCon "Int" };
+        { field_name = "y"; field_type = TyCon "Int" };
+      ] }
+    ], []) -> ()
+  | _ -> failwith "wrong"
+
+let test_data_named_block () =
+  let src = {|
+data Event
+  | Click { x : Int, y : Int }
+  | Scroll Int
+|} in
+  match parse_one src with
+  | DData (false, "Event", [], [
+      { con_name = "Click"; con_payload = ConNamed [
+        { field_name = "x"; field_type = TyCon "Int" };
+        { field_name = "y"; field_type = TyCon "Int" };
+      ] };
+      { con_name = "Scroll"; con_payload = ConPos [TyCon "Int"] };
+    ], []) -> ()
+  | _ -> failwith "wrong"
+
+let test_named_ctor_pat () =
+  let src = {|
+f e =
+  match e
+    Click { x, y } => x
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "e"],
+      EMatch (EVar "e", [
+        (PRec ("Click", [("x", None); ("y", None)], false), None, EVar "x");
+      ])) -> ()
+  | _ -> failwith "wrong"
+
+let test_named_ctor_create () =
+  let src = "v = Click { x = 1, y = 2 }\n" in
+  match parse_one src with
+  | DFunDef (false, "v", [],
+      ERecordCreate ("Click", [("x", ELit (LInt 1)); ("y", ELit (LInt 2))])) -> ()
+  | _ -> failwith "wrong"
+
 (* ── Interface default where ─────────────────────────── *)
 
 let test_iface_default_where () =
@@ -1106,6 +1154,12 @@ let () =
       test_case "explicit + pun"     `Quick test_record_pat_explicit;
       test_case "rest only"          `Quick test_record_pat_rest_only;
       test_case "field with rest"    `Quick test_record_pat_with_rest;
+    ];
+    "named-field variants (Phase 39)", [
+      test_case "inline declaration"  `Quick test_data_named_inline;
+      test_case "block declaration"   `Quick test_data_named_block;
+      test_case "pattern"             `Quick test_named_ctor_pat;
+      test_case "construction"        `Quick test_named_ctor_create;
     ];
     "interface default where", [
       test_case "where in default body" `Quick test_iface_default_where;

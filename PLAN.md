@@ -1505,7 +1505,7 @@ A non-diverging else branch typechecks (the rest of the block is silently skippe
 at runtime when the pattern fails). Full enforcement requires a `Never` type —
 deferred alongside Phase 37's `?` early-return operator.
 
-### Phase 39: Variants with named fields ⏳ TODO
+### Phase 39: Variants with named fields ✅ DONE
 
 Inline record-style payloads on `data` constructors:
 ```
