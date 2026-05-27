@@ -2211,7 +2211,7 @@ Annotated functions still enforce `inferred ⊆ declared` via
 
 161/108/288/142 tests pass; thorough effects group: 6 tests (3 new).
 
-### Phase 52: Eq/Num/Ord wiring to operators ⏳ TODO
+### Phase 52: Eq/Num/Ord wiring to operators ✅ DONE
 
 Currently `+`/`-`/`*`/`/` dispatch through a synthetic `__num__`
 witness, `<`/`>`/`<=`/`>=` through `__ord__`, and `==`/`!=` skip
