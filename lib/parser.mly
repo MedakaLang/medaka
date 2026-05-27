@@ -707,6 +707,12 @@ match_arm:
   (* Haskell-style `where` on its own indented line within a match arm. *)
   | pat option(guard) FAT_ARROW expr_no_block INDENT WHERE INDENT nonempty_list(where_binding) DEDENT newlines DEDENT newlines
     { ($1, $2, desugar_where $8 $4) }
+  (* Phase 45.8: indented-block body for a match arm.  Lowers to EDo
+     so the existing do-handling (let-chain, sequencing) applies.  The
+     EDo path also gives free monadic-bind dispatch if any stmt is a
+     `<-` bind. *)
+  | pat option(guard) FAT_ARROW INDENT nonempty_list(stmt) DEDENT newlines
+    { ($1, $2, stmts_to_expr $5) }
 
 guard:
   | IF expr_or  { $2 }

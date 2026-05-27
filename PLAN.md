@@ -1903,32 +1903,58 @@ Regression tests under `test/thorough/thorough_eval.ml` group
 "multi-line if (Phase 45.7)": both branches indented, only-then,
 only-else, multi-stmt then, else-if multi-line, do bodies.
 
-### Phase 45.8: Multi-line match arm and lambda bodies ⏳ TODO
+### Phase 45.8: Multi-line match arm bodies ✅ DONE (partial)
 
-A match arm body using indented stmts requires an explicit `do`:
+Fixed in this session — for match arm bodies.  A new `match_arm`
+production accepts `INDENT nonempty_list(stmt) DEDENT newlines` as
+the body:
 
-```medaka
-match xs                       -- BROKEN
-  (x::rest) =>
-    let s = x + 1
-    s
-
-match xs                       -- WORKS
-  (x::rest) => do
-    let s = x + 1
-    s
+```
+pat option(guard) FAT_ARROW INDENT nonempty_list(stmt) DEDENT newlines
+  { ($1, $2, stmts_to_expr $5) }
 ```
 
-Similarly, a parenthesized lambda body with indented stmts doesn't
-parse:
+No new menhir conflicts.  All these now parse and work:
 
 ```medaka
-g = (x =>                      -- BROKEN
+match xs
+  [] => 0
+  (x::_) =>
+    let s = x + 1
+    s              -- multi-stmt body
+
+match xs
+  [] => 0
+  (x::_) =>
+    if x > 0 then x
+    else 0         -- indented if as body
+
+match x
+  Some n =>
+    match n        -- nested match in arm body
+      0 => "zero"
+      _ => "non-zero"
+  None => "none"
+```
+
+Regression tests under `test/thorough/thorough_eval.ml` group
+"multi-line match arm (Phase 45.8)".
+
+**Not fixed (still TODO):** parenthesized lambda bodies with
+indented stmts.
+
+```medaka
+g = (x =>           -- BROKEN
   let a = x + 1
   a)
 ```
 
-Same parser issue family as Phase 45.7; same area of grammar.
+This is a less common pattern.  Workarounds: extract to a `where`
+binding, or use a named function definition.  Fixing it requires
+adding a similar indented-block variant to the lambda body grammar,
+but the lexer's indentation tracking inside parens makes the
+INDENT/DEDENT structure interact with `)` in ways that need more
+care than the match-arm case.
 
 ### Phase 45.10: List monad in do-blocks ✅ DONE
 

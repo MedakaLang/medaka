@@ -969,6 +969,60 @@ let t_list_comp_as_list_monad =
     "r" (VList [VInt 2; VInt 4; VInt 6])
 
 (* =====================================================================
+   34b. Multi-line match arm bodies (Phase 45.8 fix)
+   ===================================================================== *)
+
+(* Indented stmts inside a match arm body — no explicit `do` needed. *)
+let t_match_arm_indented_body =
+  assert_val
+    {|f xs = match xs
+  [] => 0
+  (x::_) =>
+    let s = x + 1
+    s
+r = f [10, 20, 30]
+|}
+    "r" (VInt 11)
+
+(* Indented if inside a match arm body. *)
+let t_match_arm_indented_if =
+  assert_val
+    {|f xs = match xs
+  [] => 0
+  (x::_) =>
+    if x > 0 then x
+    else 0
+r = f [5, 10]
+|}
+    "r" (VInt 5)
+
+(* Indented match arm body combining lets, if, and the value. *)
+let t_match_arm_combined =
+  assert_val
+    {|f xs = match xs
+  [] => 0
+  (x::_) =>
+    let doubled = x * 2
+    if doubled > 100 then 100
+    else doubled
+r = f [20]
+|}
+    "r" (VInt 40)
+
+(* Nested match inside an arm body. *)
+let t_match_arm_nested_match =
+  assert_val
+    {|f x = match x
+  Some n =>
+    match n
+      0 => "zero"
+      _ => "non-zero"
+  None => "none"
+r = (f (Some 0), f (Some 5), f None)
+|}
+    "r" (VTuple [VString "zero"; VString "non-zero"; VString "none"])
+
+(* =====================================================================
    34a. Multi-line if-then-else (Phase 45.7 fix)
    ===================================================================== *)
 
@@ -1247,6 +1301,12 @@ let () =
         ] );
       ( "empty record pat",
         [ test_case "P { ... }"             `Quick t_empty_record_pat
+        ] );
+      ( "multi-line match arm (Phase 45.8)",
+        [ test_case "indented body"          `Quick t_match_arm_indented_body
+        ; test_case "indented if"            `Quick t_match_arm_indented_if
+        ; test_case "lets + if combined"     `Quick t_match_arm_combined
+        ; test_case "nested match"           `Quick t_match_arm_nested_match
         ] );
       ( "multi-line if (Phase 45.7)",
         [ test_case "both branches indented" `Quick t_if_both_indented

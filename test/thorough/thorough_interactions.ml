@@ -493,15 +493,17 @@ r = (fizz 15, fizz 9, fizz 25, fizz 7)
     "r" "(String, String, String, String)"
     (VTuple [VString "FizzBuzz"; VString "Fizz"; VString "Buzz"; VString "n"])
 
-(* Binary tree: insert + flatten.  Match arm body still needs the
-   single-line if-else-if pattern because multi-line indented bodies
-   in match arms aren't fixed yet (Phase 45.8). *)
+(* Binary tree: insert + flatten.  Uses multi-line indented if inside
+   a match arm body (both Phase 45.7 and 45.8 fixes combined). *)
 let t_program_bst_inorder =
   assert_typed_val
     {|data Tree = Leaf | Node Tree Int Tree
 insert t v = match t
   Leaf => Node Leaf v Leaf
-  Node l x rest => if v < x then Node (insert l v) x rest else if v > x then Node l x (insert rest v) else t
+  Node l x rest =>
+    if v < x then Node (insert l v) x rest
+    else if v > x then Node l x (insert rest v)
+    else t
 flatten t = match t
   Leaf => []
   Node l x rest => flatten l ++ [x] ++ flatten rest
