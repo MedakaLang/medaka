@@ -662,6 +662,21 @@ Unescaped `{` is always literal.
 
 **Why no indexing:** String indexing by integer is almost always a bug waiting to happen in non-ASCII text. Elm takes this approach and it's been validated in practice. Interact with strings through functions — honest about what strings actually are.
 
+**Strings are not generic collections.** `String` (and `ByteString`) deliberately do *not* implement `Mappable`, `Foldable`, or the rest of the shared collection interfaces. To use those operations on a string, convert explicitly:
+
+```
+name |> toList |> filter isAlpha |> fromList
+```
+
+Two reasons:
+
+1. **Semantic honesty.** A grapheme-cluster sequence is not the same shape of thing as `List a`. Mapping over graphemes can produce sequences that re-cluster differently; filtering can break combining-character invariants. Pretending `String` is just another `Mappable` glosses over this. Forcing explicit conversion makes the user acknowledge "I am treating this as a sequence of characters" — the same instinct behind banning integer indexing.
+2. **Allocation visibility.** `chars`/`toList` allocates. The explicit conversion makes that cost visible at the call site instead of hiding it behind a uniform interface.
+
+The corollary is that the `String` module itself must be rich enough that reaching for `toList` is rare. Text-shaped operations (`toUpper`, `trim`, `split`, `replace`, `contains`, `startsWith`, `count`, `any`, `all`, `find`) live directly on `String`. Conversion is reserved for genuinely character-sequence-shaped work.
+
+This is also why Medaka does not need associated types or `Collection c e`-style multi-parameter interfaces: the generic interfaces stay restricted to parametric containers where HKT works naturally, and monomorphic containers stand on their own.
+
 ### Naming Conventions
 - Collection operations are consistent: `map`, `filter`, `fold`, `insert`, `remove`, `contains`
 - Backed by shared interfaces (`Mappable`, `Foldable`, etc.) so switching between collection types is low friction — change the data structure, operations stay the same
@@ -855,6 +870,8 @@ This is a direct lesson from Haskell's Prelude, which exports partial functions 
 
 ### Consistent Naming Across Collections
 `map`, `filter`, `fold`, `insert`, `remove`, `contains` work identically across `List`, `Array`, `Map`, `Set` etc. via shared interfaces. Switching collection types requires changing the data structure, not relearning the API.
+
+Monomorphic containers (`String`, `ByteString`) are deliberately excluded from these interfaces — see the Strings section for the rationale. They expose their own text/byte-shaped APIs and require explicit `toList`/`fromList` for character-sequence work.
 
 ### No Orphan Instances
 Interface instances must be defined either in the module that defines the type, or the module that defines the interface. Never in a third unrelated module. This prevents coherence problems and makes instance resolution predictable.
