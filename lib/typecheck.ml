@@ -2114,6 +2114,8 @@ let check_program (prog : program) : (ident * scheme) list * string list =
       ) !env prop_params in
       let body_ty = infer local_env prop_body in
       unify body_ty t_bool
+    | DBench { bench_body; _ } ->
+      ignore (infer !env bench_body)
     | _ -> ()
   ) prog;
 
@@ -2303,6 +2305,8 @@ let typecheck_module
       ) !env prop_params in
       let body_ty = infer local_env prop_body in
       unify body_ty t_bool
+    | DBench { bench_body; _ } ->
+      ignore (infer !env bench_body)
     | _ -> ()
   ) prog;
   check_method_usages !env;
@@ -2500,6 +2504,8 @@ let check_repl_decl (env : env ref) (decls : decl list)
       ) !env prop_params in
       let body_ty = infer local_env prop_body in
       unify body_ty t_bool
+    | DBench { bench_body; _ } ->
+      ignore (infer !env bench_body)
     | _ -> ()
   ) decls;
   check_method_usages !env;

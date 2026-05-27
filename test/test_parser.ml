@@ -33,6 +33,7 @@ let pp_decl d =
   | DTypeAlias (_, n, _, _) -> Printf.sprintf "DTypeAlias(%s, ...)" n
   | DNewtype (_, n, _, con, _, _) -> Printf.sprintf "DNewtype(%s, %s, ...)" n con
   | DProp { prop_name; _ } -> Printf.sprintf "DProp(%S, ...)" prop_name
+  | DBench { bench_name; _ } -> Printf.sprintf "DBench(%S, ...)" bench_name
 
 let parse_one src =
   match parse src with
@@ -1216,6 +1217,26 @@ let test_prop_list_param () =
             prop_params = [("xs", TyApp (TyCon "List", TyCon "Int"))]; _ } -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
+(* ── bench declarations (Phase 48) ─────────────────────── *)
+
+let test_bench_basic () =
+  match parse_one {|bench "identity" = 42
+|} with
+  | DBench { bench_name = "identity"; is_pub = false; _ } -> ()
+  | d -> failwith ("wrong: " ^ pp_decl d)
+
+let test_bench_expr () =
+  match parse_one {|bench "add" = 1 + 2
+|} with
+  | DBench { bench_name = "add"; bench_body = EBinOp ("+", ELit (LInt 1), ELit (LInt 2)); _ } -> ()
+  | d -> failwith ("wrong: " ^ pp_decl d)
+
+let test_bench_export () =
+  match parse_one {|export bench "exported" = 0
+|} with
+  | DBench { bench_name = "exported"; is_pub = true; _ } -> ()
+  | d -> failwith ("wrong: " ^ pp_decl d)
+
 (* ── function keyword (Phase 44) ────────────────────────── *)
 
 let test_function_basic () =
@@ -1464,6 +1485,11 @@ let () =
       test_case "single param"  `Quick test_prop_single_param;
       test_case "multi param"   `Quick test_prop_multi_param;
       test_case "list param"    `Quick test_prop_list_param;
+    ];
+    "bench declarations (Phase 48)", [
+      test_case "basic literal"  `Quick test_bench_basic;
+      test_case "expr body"      `Quick test_bench_expr;
+      test_case "export"         `Quick test_bench_export;
     ];
     "function keyword (Phase 44)", [
       test_case "basic two arms"   `Quick test_function_basic;

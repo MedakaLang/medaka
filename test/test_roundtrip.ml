@@ -339,4 +339,8 @@ let () =
       test_case "basic arms" `Quick
         (mk "classify =\n  function\n    0 => \"zero\"\n    _ => \"nonzero\"\n");
     ];
+    "bench declarations (Phase 48)", [
+      test_case "simple literal"  `Quick (mk "bench \"identity\" = 42\n");
+      test_case "expr body"       `Quick (mk "bench \"add\" = 1 + 2\n");
+    ];
   ]

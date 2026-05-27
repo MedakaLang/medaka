@@ -154,6 +154,11 @@ type decl =
       prop_params : (ident * ty) list;
       prop_body   : expr;
     }
+  | DBench of {
+      is_pub     : bool;
+      bench_name : string;
+      bench_body : expr;
+    }
 
 type program = decl list
 
@@ -356,6 +361,7 @@ let strip_locs_decl = function
   | DImpl d ->
     DImpl { d with methods = List.map (fun (n, ps, e) -> (n, ps, strip_locs_expr e)) d.methods }
   | DProp d -> DProp { d with prop_body = strip_locs_expr d.prop_body }
+  | DBench d -> DBench { d with bench_body = strip_locs_expr d.bench_body }
   | d -> d
 
 let strip_locs_program = List.map strip_locs_decl

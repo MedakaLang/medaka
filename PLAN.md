@@ -2122,12 +2122,16 @@ First run: `snapshots/greet.snap` is created and the test passes.
 Subsequent runs: content is compared.
 `medaka test --update-snapshots file.mdk` overwrites on change.
 
-### Phase 47: Coverage via `medaka test --coverage` ⏳ TODO
+### Phase 47: Coverage via `medaka test --coverage` ✅ DONE
 
 Line-coverage instrumentation as part of the standard toolchain.
-Depends on backend stability.
 
-### Phase 48: `medaka bench` ⏳ TODO
+- `lib/coverage.ml`: global hit table (`enabled` ref + `hit` hashtable), `record_hit`, `collect_executable` (AST walker over `DFunDef`/`DImpl`/`DInterface`/`DProp`/`DBench`), `pp_report` (per-file summary with uncovered line list).
+- `lib/eval.ml` `ELoc` handler: calls `Coverage.record_hit loc.file loc.line`.
+- `bin/main.ml` `medaka test` block: strips `--coverage` from argv, calls `Coverage.enable ()`, prints report after all tests via `collect_executable program` + `pp_report`.
+- `test/test_coverage.ml`: 12 tests across collect_executable, record_hit, eval integration, and pp_report formatting.
+
+### Phase 48: `medaka bench` ✅ DONE
 
 First-class benchmark target. `bench "name" = expr` declarations
 collected and run separately from `test`. Reports throughput and

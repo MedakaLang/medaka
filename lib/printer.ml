@@ -603,6 +603,12 @@ let print_decl p = function
     ) prop_params;
     write p " = ";
     print_expr p prec_top prop_body
+  | DBench { is_pub; bench_name; bench_body } ->
+    if is_pub then write p "export\n";
+    write p "bench ";
+    write p (Printf.sprintf "%S" bench_name);
+    write p " = ";
+    print_expr p prec_top bench_body
 
 let print_program p decls =
   List.iter (fun d ->
