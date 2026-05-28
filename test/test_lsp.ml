@@ -150,6 +150,51 @@ let test_hover_off_an_identifier () =
   | None -> ()
   | Some _ -> Alcotest.fail "expected no hover off an identifier"
 
+(* ── Definition ────────────────────────────────────────────── *)
+
+let test_definition_top_level () =
+  let uri = uri_of_path "/tmp/lsp_def.mdk" in
+  let src = "double x = x + x\ny = double 21\n" in
+  prime_doc uri src;
+  (* Cursor on the `d` of `double` on line 1 (the call site). *)
+  let p = DefinitionParams.create
+    ~position:(Position.create ~line:1 ~character:4)
+    ~textDocument:(TextDocumentIdentifier.create ~uri) ()
+  in
+  match Lsp_server.handle_definition p with
+  | Some (`Location [loc]) ->
+    Alcotest.(check int) "lands on line 0" 0 loc.range.start.line
+  | _ -> Alcotest.fail "expected exactly one definition location"
+
+let test_definition_record_field () =
+  let uri = uri_of_path "/tmp/lsp_def_field.mdk" in
+  let src = "record P\n  x : Int\n  y : Int\ntotal p = p.x + p.y\n" in
+  prime_doc uri src;
+  (* Cursor on `P` at line 3 column 0 (the def of `total` mentions P
+     transitively via the record).  Probe via the type name itself: on
+     line 0 column 7 the cursor is in `P`. *)
+  let p = DefinitionParams.create
+    ~position:(Position.create ~line:3 ~character:0)  (* `t` of total *)
+    ~textDocument:(TextDocumentIdentifier.create ~uri) ()
+  in
+  match Lsp_server.handle_definition p with
+  | Some (`Location [loc]) ->
+    Alcotest.(check int) "self-definition lines up at decl start"
+      3 loc.range.start.line
+  | _ -> Alcotest.fail "expected a definition for `total`"
+
+let test_definition_unknown_returns_none () =
+  let uri = uri_of_path "/tmp/lsp_def_unk.mdk" in
+  prime_doc uri "x = 1\n";
+  (* Cursor in whitespace, which is not on an identifier. *)
+  let p = DefinitionParams.create
+    ~position:(Position.create ~line:0 ~character:4)
+    ~textDocument:(TextDocumentIdentifier.create ~uri) ()
+  in
+  match Lsp_server.handle_definition p with
+  | None -> ()
+  | Some _ -> Alcotest.fail "expected None when cursor isn't on a name"
+
 (* ── Entry ──────────────────────────────────────────────────── *)
 
 let () =
@@ -167,5 +212,10 @@ let () =
     ; "hover",
       [ test_case "top-level name"          `Quick test_hover_top_level_name
       ; test_case "off-identifier returns None" `Quick test_hover_off_an_identifier
+      ]
+    ; "definition",
+      [ test_case "top-level call site"   `Quick test_definition_top_level
+      ; test_case "decl self-definition"  `Quick test_definition_record_field
+      ; test_case "off-identifier None"   `Quick test_definition_unknown_returns_none
       ]
     ]

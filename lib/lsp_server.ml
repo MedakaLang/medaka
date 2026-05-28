@@ -201,6 +201,7 @@ let handle_initialize (_p : InitializeParams.t) : InitializeResult.t =
     ~documentFormattingProvider:(`Bool true)
     ~documentSymbolProvider:(`Bool true)
     ~hoverProvider:(`Bool true)
+    ~definitionProvider:(`Bool true)
     ()
   in
   let info = InitializeResult.create_serverInfo
@@ -473,6 +474,70 @@ let handle_hover (p : HoverParams.t) : Hover.t option =
                 Some (Hover.create ~contents:(`MarkupContent value) ())
             with _ -> None))
 
+(* ── Go-to-definition ──────────────────────────────────────── *)
+
+(* Names a decl introduces into the top-level scope.  Used to match
+   the identifier at the cursor against a declaration site.  We don't
+   surface type-level names (data/record/interface/newtype) here
+   because go-to-definition on a *type* would normally be served by
+   typeDefinition, but we still include them so jumping to e.g.
+   `Point` in a constructor call lands somewhere useful. *)
+let decl_defines (d : Ast.decl) (name : Ast.ident) : bool =
+  let open Ast in
+  match inner_decl d with
+  | DTypeSig (_, n, _)        -> n = name
+  | DExtern  (_, n, _)        -> n = name
+  | DFunDef  (_, n, _, _)     -> n = name
+  | DLetGroup (_, binds)      -> List.exists (fun (n, _) -> n = name) binds
+  | DData (_, n, _, vs, _)    ->
+    n = name || List.exists (fun (v : data_variant) -> v.con_name = name) vs
+  | DRecord (_, n, _, fs, _)  ->
+    n = name
+    || List.exists (fun (f : record_field) -> f.field_name = name) fs
+  | DInterface { iface_name; methods; _ } ->
+    iface_name = name
+    || List.exists (fun (m : iface_method) -> m.method_name = name) methods
+  | DImpl { methods; _ } ->
+    List.exists (fun (n, _, _) -> n = name) methods
+  | DTypeAlias (_, n, _, _)   -> n = name
+  | DNewtype (_, n, _, c, _, _) -> n = name || c = name
+  | DUse _                    -> false
+  | DProp { prop_name; _ }    -> prop_name = name
+  | DBench { bench_name; _ }  -> bench_name = name
+  | DAttrib _                 -> false
+
+(* Return the location of the first decl that defines [name], if any. *)
+let find_definition_loc
+    (prog : Ast.program) (locs : Ast.loc list) (name : Ast.ident)
+  : Ast.loc option =
+  let rec walk ds ls = match ds, ls with
+    | d :: dr, l :: lr ->
+      if decl_defines d name then Some l else walk dr lr
+    | _ -> None
+  in
+  walk prog locs
+
+let handle_definition (p : DefinitionParams.t) : Locations.t option =
+  let uri = p.textDocument.uri in
+  let uri_str = DocumentUri.to_string uri in
+  match Hashtbl.find_opt docs uri_str with
+  | None -> None
+  | Some src ->
+    let line = p.position.line and col = p.position.character in
+    (match identifier_at src ~line ~col with
+     | None -> None
+     | Some (name, _, _) ->
+       (match parse_buffer src uri with
+        | None -> None
+        | Some (prog, locs) ->
+          (match find_definition_loc prog locs name with
+           | None -> None
+           | Some loc ->
+             let location =
+               Location.create ~uri ~range:(range_of_loc loc)
+             in
+             Some (`Location [location]))))
+
 (* Top-level catch-all: any exception from a notification handler is logged
    and swallowed.  Notifications have no response, so the client never
    learns about the failure — but the server stays alive. *)
@@ -506,6 +571,10 @@ let handle_request_unsafe (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
          (Client_request.yojson_of_result cr result)
      | Client_request.TextDocumentHover p as cr ->
        let result = handle_hover p in
+       Jsonrpc.Response.ok req.id
+         (Client_request.yojson_of_result cr result)
+     | Client_request.TextDocumentDefinition p as cr ->
+       let result = handle_definition p in
        Jsonrpc.Response.ok req.id
          (Client_request.yojson_of_result cr result)
      | _ ->
