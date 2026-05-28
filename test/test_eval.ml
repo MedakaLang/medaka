@@ -189,6 +189,20 @@ p2 = { p | address.city = "Boston" }
 r = p2.address.city
 |} "r" (VString "Boston")
 
+let t_record_update_nested_deep = assert_val {|record Country
+  code : String
+record Address
+  country : Country
+record Person
+  name : String
+  address : Address
+c = Country { code = "UK" }
+addr = Address { country = c }
+p = Person { name = "Alice", address = addr }
+p2 = { p | address.country.code = "US" }
+r = p2.address.country.code
+|} "r" (VString "US")
+
 let t_record_update_nested_unchanged = assert_val {|record Address
   city : String
 record Person
@@ -260,6 +274,10 @@ let t_list_comp_multi_gen = assert_val
 let t_list_comp_let = assert_val
   {|r = [y | x <- [1, 2, 3], let y = x * x, y > 2]
 |} "r" (VList [VInt 4; VInt 9])
+
+let t_list_comp_refutable_con = assert_val
+  {|r = [x | Some x <- [Some 1, None, Some 2, None, Some 3]]
+|} "r" (VList [VInt 1; VInt 2; VInt 3])
 
 (* ── Pipe operator ──────────────────────────────────────────────────────── *)
 
@@ -536,6 +554,44 @@ let t_interp_expr =
   assert_val
     "n = \"Alice\"\ngreeting = \"Hi\"\nx = \"\\{greeting}, \\{n}! Welcome.\"\n"
     "x" (VString "Hi, Alice! Welcome.")
+
+let t_interp_triple_basic =
+  assert_val
+    "name = \"world\"\nx = \"\"\"Hello, \\{name}!\"\"\"\n"
+    "x" (VString "Hello, world!")
+
+let t_interp_triple_two_holes =
+  assert_val
+    "a = \"foo\"\nb = \"bar\"\nx = \"\"\"\\{a} and \\{b}\"\"\"\n"
+    "x" (VString "foo and bar")
+
+(* Assert that lexing src raises Failure with a message containing substr *)
+let string_contains haystack needle =
+  let hn = String.length haystack and nn = String.length needle in
+  if nn = 0 then true
+  else if nn > hn then false
+  else
+    let found = ref false in
+    for i = 0 to hn - nn do
+      if not !found && String.sub haystack i nn = needle then found := true
+    done;
+    !found
+
+let assert_lex_err substr src () =
+  match (try ignore (parse src); None
+         with Failure msg -> Some msg) with
+  | Some msg when string_contains msg substr -> ()
+  | Some msg ->
+    failwith (Printf.sprintf
+      "Expected lex error containing %S, got: %s\nSource:\n%s" substr msg src)
+  | None ->
+    failwith (Printf.sprintf
+      "Expected lex error containing %S, but no error was raised\nSource:\n%s"
+      substr src)
+
+let t_int_overflow =
+  assert_lex_err "overflows"
+    "x = 99999999999999999999\n"
 
 (* ── Unary operators ────────────────────────────────────────────────────── *)
 
@@ -924,6 +980,7 @@ let () =
       test_case "create" `Quick t_record;
       test_case "update" `Quick t_record_update;
       test_case "update nested"           `Quick t_record_update_nested;
+      test_case "update nested deep"      `Quick t_record_update_nested_deep;
       test_case "update nested unchanged" `Quick t_record_update_nested_unchanged;
     ];
     "tuples", [
@@ -940,9 +997,10 @@ let () =
       test_case "foldMap user monoid" `Quick t_foldmap_user_monoid;
     ];
     "list comprehensions", [
-      test_case "guard"         `Quick t_list_comp_guard;
-      test_case "multi_gen"     `Quick t_list_comp_multi_gen;
-      test_case "let_binding"   `Quick t_list_comp_let;
+      test_case "guard"              `Quick t_list_comp_guard;
+      test_case "multi_gen"          `Quick t_list_comp_multi_gen;
+      test_case "let_binding"        `Quick t_list_comp_let;
+      test_case "refutable_con"      `Quick t_list_comp_refutable_con;
     ];
     "pipe/compose", [
       test_case "pipe"    `Quick t_pipe;
@@ -1014,9 +1072,14 @@ let () =
       test_case "int underscore arith" `Quick t_int_underscore_arith;
     ];
     "string interpolation", [
-      test_case "basic hole"    `Quick t_interp_basic;
-      test_case "two holes"     `Quick t_interp_two_holes;
-      test_case "greeting expr" `Quick t_interp_expr;
+      test_case "basic hole"          `Quick t_interp_basic;
+      test_case "two holes"           `Quick t_interp_two_holes;
+      test_case "greeting expr"       `Quick t_interp_expr;
+      test_case "triple basic"        `Quick t_interp_triple_basic;
+      test_case "triple two holes"    `Quick t_interp_triple_two_holes;
+    ];
+    "int literal errors", [
+      test_case "overflow" `Quick t_int_overflow;
     ];
     "@Name impl selection (Phase 30)", [
       test_case "@Additive selects +"       `Quick t_named_additive;
