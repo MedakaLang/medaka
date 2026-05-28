@@ -924,6 +924,89 @@ let t_range_array_inclusive =
   assert_val "r = [|1..=3|]\n" "r"
     (VArray [| VInt 1; VInt 2; VInt 3 |])
 
+(* ── Array primitives (stdlib/runtime.mdk externs) ─────────────────────── *)
+
+let t_array_length = assert_val
+  "r = arrayLength [|10, 20, 30|]\n" "r" (VInt 3)
+
+let t_array_length_empty = assert_val
+  "r = arrayLength [||]\n" "r" (VInt 0)
+
+let t_array_make = assert_val
+  "r = arrayMake 4 7\n" "r" (VArray [| VInt 7; VInt 7; VInt 7; VInt 7 |])
+
+let t_array_make_with = assert_val
+  "r = arrayMakeWith 5 (i => i * i)\n" "r"
+  (VArray [| VInt 0; VInt 1; VInt 4; VInt 9; VInt 16 |])
+
+let t_array_get_unsafe = assert_val
+  "r = arrayGetUnsafe 2 [|10, 20, 30, 40|]\n" "r" (VInt 30)
+
+let t_array_set_unsafe = assert_val
+  {|r =
+  let mut a = [|1, 2, 3|]
+  arraySetUnsafe 1 99 a
+  arrayGetUnsafe 1 a
+|}
+  "r" (VInt 99)
+
+let t_array_copy = assert_val
+  {|r =
+  let a = [|1, 2, 3|]
+  let b = arrayCopy a
+  arraySetUnsafe 0 999 b
+  arrayGetUnsafe 0 a
+|}
+  "r" (VInt 1)
+
+let t_array_blit = assert_val
+  {|r =
+  let mut dst = [|0, 0, 0, 0, 0|]
+  arrayBlit [|10, 20, 30|] 0 dst 1 3
+  dst
+|}
+  "r" (VArray [| VInt 0; VInt 10; VInt 20; VInt 30; VInt 0 |])
+
+let t_array_fill = assert_val
+  {|r =
+  let mut a = [|1, 2, 3|]
+  arrayFill 42 a
+  a
+|}
+  "r" (VArray [| VInt 42; VInt 42; VInt 42 |])
+
+let t_array_sort_in_place = assert_val
+  {|r =
+  let mut a = [|3, 1, 4, 1, 5, 9, 2, 6|]
+  arraySortInPlaceBy compare a
+  a
+|}
+  "r" (VArray [| VInt 1; VInt 1; VInt 2; VInt 3; VInt 4; VInt 5; VInt 6; VInt 9 |])
+
+let t_array_sort_by_pure = assert_val
+  {|r =
+  let a = [|3, 1, 4, 1, 5|]
+  let b = arraySortBy compare a
+  arrayGetUnsafe 0 b
+|}
+  "r" (VInt 1)
+
+(* `arraySortBy` returns a *fresh* sorted array; the input must be untouched. *)
+let t_array_sort_by_pure_no_mutate = assert_val
+  {|r =
+  let a = [|3, 1, 4|]
+  let _ = arraySortBy compare a
+  arrayGetUnsafe 0 a
+|}
+  "r" (VInt 3)
+
+let t_array_from_list = assert_val
+  "r = arrayFromList [10, 20, 30]\n" "r"
+  (VArray [| VInt 10; VInt 20; VInt 30 |])
+
+let t_array_from_list_empty = assert_val
+  "r = arrayFromList []\n" "r" (VArray [||])
+
 let t_range_pat_int_hit =
   assert_val
     "f n =\n  match n\n    1..9 => True\n    _ => False\nresult = f 5\n"
@@ -1266,6 +1349,20 @@ let () =
       test_case "list empty when lo > hi"            `Quick t_range_list_empty;
       test_case "array [|0..3|] = |0,1,2|"          `Quick t_range_array_half_open;
       test_case "array [|1..=3|] = |1,2,3|"         `Quick t_range_array_inclusive;
+      test_case "arrayLength"                        `Quick t_array_length;
+      test_case "arrayLength empty"                  `Quick t_array_length_empty;
+      test_case "arrayMake fills constant"           `Quick t_array_make;
+      test_case "arrayMakeWith calls per-index"      `Quick t_array_make_with;
+      test_case "arrayGetUnsafe"                     `Quick t_array_get_unsafe;
+      test_case "arraySetUnsafe mutates"             `Quick t_array_set_unsafe;
+      test_case "arrayCopy is independent"           `Quick t_array_copy;
+      test_case "arrayBlit range copy"               `Quick t_array_blit;
+      test_case "arrayFill overwrites all"           `Quick t_array_fill;
+      test_case "arraySortInPlaceBy"                 `Quick t_array_sort_in_place;
+      test_case "arraySortBy returns sorted"         `Quick t_array_sort_by_pure;
+      test_case "arraySortBy doesn't mutate input"   `Quick t_array_sort_by_pure_no_mutate;
+      test_case "arrayFromList"                      `Quick t_array_from_list;
+      test_case "arrayFromList empty"                `Quick t_array_from_list_empty;
       test_case "pat int hit (5 in 1..9)"            `Quick t_range_pat_int_hit;
       test_case "pat int miss (9 not in 1..9)"       `Quick t_range_pat_int_miss;
       test_case "pat int inclusive boundary (9 in 1..=9)" `Quick t_range_pat_int_inclusive_boundary;

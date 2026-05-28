@@ -625,6 +625,16 @@ let t_eff_infer_io = assert_type
 let e_eff_escape_annotated_pure = assert_err
   "f : String -> Unit\nf x = print x\n"
 
+(* Regression: a `Iface a =>` constraint in front of an effectful
+   signature must not hide the effect from declared_effects.  Before
+   the fix, this errored with "declared with <> but also performs
+   <Mut>" because TyConstrained wasn't unwrapped during effect lookup. *)
+(* The pretty-printer drops the `Ord a =>` prefix in the inferred
+   type; what matters here is that the function typechecks at all. *)
+let t_eff_constrained_signature = assert_type
+  "f : Ord a => Array a -> <Mut> Unit\nf arr = arraySetUnsafe 0 (arrayGetUnsafe 0 arr) arr\n"
+  "f" "Array a -> <Mut> Unit"
+
 (* Error: annotated as <Rand> but performs <IO> → EffectEscape (extra: IO) *)
 let e_eff_escape_wrong_effect = assert_err
   "f : <Rand> Unit\nf = print \"hi\"\n"
@@ -2321,6 +2331,7 @@ let () =
       test_case "infer IO no annot"         `Quick t_eff_infer_io;
       test_case "infer lambda effect"       `Quick t_eff_infer_lambda;
       test_case "err: escape pure annot"    `Quick e_eff_escape_annotated_pure;
+      test_case "constrained sig keeps effect" `Quick t_eff_constrained_signature;
       test_case "err: wrong effect"         `Quick e_eff_escape_wrong_effect;
       test_case "infer HOF effectful arg"   `Quick t_eff_infer_hof;
       test_case "infer HOF alias"           `Quick t_eff_infer_hof_alias;

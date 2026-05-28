@@ -28,3 +28,21 @@ extern charToStr   : Char -> String
 extern intToFloat  : Int -> Float
 extern floatToInt  : Float -> Int
 extern assert_snapshot : String -> String -> <IO> Unit
+
+-- Array primitives.  These are the minimal kernel; stdlib/array.mdk is
+-- built on top.  *Unsafe variants skip the bounds check — they're used by
+-- stdlib internals where the surrounding loop already enforces validity.
+-- Public, bounds-checked indexing goes through `arr[i]` (panics on OOB).
+extern arrayLength        : Array a -> Int
+extern arrayMake          : Int -> a -> Array a
+extern arrayMakeWith      : Int -> (Int -> a) -> Array a
+extern arrayGetUnsafe     : Int -> Array a -> a
+extern arraySetUnsafe     : Int -> a -> Array a -> <Mut> Unit
+extern arrayCopy          : Array a -> Array a
+extern arrayBlit          : Array a -> Int -> Array a -> Int -> Int -> <Mut> Unit
+extern arrayFill          : a -> Array a -> <Mut> Unit
+extern arraySortInPlaceBy : (a -> a -> Ordering) -> Array a -> <Mut> Unit
+-- Pure wrappers.  Encapsulate "alloc + locally mutate + return fresh" so
+-- the <Mut> doesn't leak into pure callers (Medaka has no effect masking).
+extern arraySortBy        : (a -> a -> Ordering) -> Array a -> Array a
+extern arrayFromList      : List a -> Array a

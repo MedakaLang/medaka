@@ -472,6 +472,66 @@ let test_single_root_compat () =
      | _ -> failwith (Printf.sprintf "unexpected order: [%s]"
                         (String.concat ", " ids))))
 
+(* ── Multi-file typecheck (regression) ───────────── *)
+
+(* Reproduces the bug where a non-leaf module defining an impl of a
+   Mappable/Foldable/etc. class would cause downstream modules to see
+   the prelude's default impls duplicated, surfacing as a spurious
+   "Multiple default impls" error.  Fix: filter prelude-seeded impls
+   out of te_impls so they only ever enter env via the explicit
+   Prelude prepend. *)
+let typecheck_module_chain modules =
+  let resolved =
+    List.fold_left (fun acc (mod_id, prog) ->
+      let (te, _) = Resolve.resolve_module acc mod_id prog in
+      te :: acc) [] modules
+  in
+  ignore resolved;
+  let tc_acc = ref [] in
+  List.iter (fun (mod_id, prog) ->
+    let (te, _, _) = Typecheck.typecheck_module !tc_acc mod_id prog in
+    tc_acc := te :: !tc_acc
+  ) modules
+
+let test_typecheck_impl_in_dep_module () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "arr.mdk"
+      "export impl Mappable Array where\n  map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))\n"
+    in
+    let main_path = write_file dir "main.mdk"
+      "import arr\nresult = 42\n"
+    in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, _fp, prog) ->
+      (mid, Desugar.desugar_program prog)) modules
+    in
+    (* Should NOT raise "Multiple default impls of Mappable for Result a" *)
+    try
+      typecheck_module_chain modules
+    with Typecheck.Type_error (e, _) ->
+      failwith ("unexpected type error: " ^ Typecheck.pp_error e)
+  )
+
+(* Regression: even when the impl is for a type the prelude already has
+   a non-default impl for, downstream typecheck must not double-count. *)
+let test_typecheck_impl_list_in_dep_module () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "lib.mdk"
+      "data Wrapper a = Wrapper a\nexport impl Mappable Wrapper where\n  map f (Wrapper x) = Wrapper (f x)\n"
+    in
+    let main_path = write_file dir "main.mdk"
+      "import lib.{Wrapper}\nresult = 42\n"
+    in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, _fp, prog) ->
+      (mid, Desugar.desugar_program prog)) modules
+    in
+    try
+      typecheck_module_chain modules
+    with Typecheck.Type_error (e, _) ->
+      failwith ("unexpected type error: " ^ Typecheck.pp_error e)
+  )
+
 (* ── Runner ──────────────────────────────────────── *)
 
 let () =
@@ -510,6 +570,10 @@ let () =
       test_case "public export: ctors visible"        `Quick test_public_export_ctors_visible;
       test_case "import abstract: ctor rejected"      `Quick test_import_abstract_ctor_rejected;
       test_case "import public export: ctor allowed"  `Quick test_import_public_ctor_allowed;
+    ];
+    "multi-file typecheck", [
+      test_case "impl Mappable Array in dep module" `Quick test_typecheck_impl_in_dep_module;
+      test_case "impl Mappable Wrapper in dep module" `Quick test_typecheck_impl_list_in_dep_module;
     ];
     "workspace / multi-root", [
       test_case "cross-member import"    `Quick test_workspace_cross_member_import;

@@ -965,6 +965,91 @@ let primitives : (string * value) list =
       match v with
       | VFloat f -> VInt (Int.of_float f)
       | _ -> raise (Eval_error ("floatToInt: expected Float", None))));
+    ("arrayLength", VPrim (fun v ->
+      match v with
+      | VArray a -> VInt (Array.length a)
+      | _ -> raise (Eval_error ("arrayLength: expected Array", None))));
+    ("arrayMake", VPrim (fun n_v ->
+      VPrim (fun x ->
+        match n_v with
+        | VInt n ->
+          if n < 0 then raise (Eval_error ("arrayMake: negative length", None))
+          else VArray (Array.make n x)
+        | _ -> raise (Eval_error ("arrayMake: expected Int", None)))));
+    ("arrayMakeWith", VPrim (fun n_v ->
+      VPrim (fun f ->
+        match n_v with
+        | VInt n ->
+          if n < 0 then raise (Eval_error ("arrayMakeWith: negative length", None))
+          else VArray (Array.init n (fun i -> apply f (VInt i)))
+        | _ -> raise (Eval_error ("arrayMakeWith: expected Int", None)))));
+    ("arrayGetUnsafe", VPrim (fun i_v ->
+      VPrim (fun arr ->
+        match i_v, arr with
+        | VInt i, VArray a -> a.(i)
+        | _ -> raise (Eval_error ("arrayGetUnsafe: expected Int, Array", None)))));
+    ("arraySetUnsafe", VPrim (fun i_v ->
+      VPrim (fun x ->
+        VPrim (fun arr ->
+          match i_v, arr with
+          | VInt i, VArray a -> a.(i) <- x; VUnit
+          | _ -> raise (Eval_error ("arraySetUnsafe: expected Int, _, Array", None))))));
+    ("arrayCopy", VPrim (fun v ->
+      match v with
+      | VArray a -> VArray (Array.copy a)
+      | _ -> raise (Eval_error ("arrayCopy: expected Array", None))));
+    ("arrayBlit", VPrim (fun src ->
+      VPrim (fun srcOff_v ->
+        VPrim (fun dst ->
+          VPrim (fun dstOff_v ->
+            VPrim (fun len_v ->
+              match src, srcOff_v, dst, dstOff_v, len_v with
+              | VArray sa, VInt so, VArray da, VInt dof, VInt len ->
+                if len < 0
+                   || so < 0 || so + len > Array.length sa
+                   || dof < 0 || dof + len > Array.length da
+                then raise (Eval_error ("arrayBlit: out of bounds", None))
+                else (Array.blit sa so da dof len; VUnit)
+              | _ -> raise (Eval_error ("arrayBlit: type mismatch", None))))))));
+    ("arrayFill", VPrim (fun x ->
+      VPrim (fun arr ->
+        match arr with
+        | VArray a -> Array.fill a 0 (Array.length a) x; VUnit
+        | _ -> raise (Eval_error ("arrayFill: expected Array", None)))));
+    ("arraySortBy", VPrim (fun cmp ->
+      VPrim (fun arr ->
+        match arr with
+        | VArray a ->
+          let copy = Array.copy a in
+          let cmp_int x y =
+            match apply (apply cmp x) y with
+            | VCon ("Lt", _) -> -1
+            | VCon ("Eq", _) -> 0
+            | VCon ("Gt", _) -> 1
+            | _ -> raise (Eval_error ("arraySortBy: comparator did not return Ordering", None))
+          in
+          Array.sort cmp_int copy; VArray copy
+        | _ -> raise (Eval_error ("arraySortBy: expected Array", None)))));
+    ("arrayFromList", VPrim (fun v ->
+      match v with
+      | VList xs -> VArray (Array.of_list xs)
+      | _ -> raise (Eval_error ("arrayFromList: expected List", None))));
+    ("arraySortInPlaceBy", VPrim (fun cmp ->
+      VPrim (fun arr ->
+        match arr with
+        | VArray a ->
+          (* Translate Medaka Ordering (Lt|Eq|Gt) to OCaml int.  OCaml's
+             Array.sort is not guaranteed stable; if/when we want stable,
+             swap to Array.stable_sort (no API change). *)
+          let cmp_int x y =
+            match apply (apply cmp x) y with
+            | VCon ("Lt", _) -> -1
+            | VCon ("Eq", _) -> 0
+            | VCon ("Gt", _) -> 1
+            | _ -> raise (Eval_error ("arraySortInPlaceBy: comparator did not return Ordering", None))
+          in
+          Array.sort cmp_int a; VUnit
+        | _ -> raise (Eval_error ("arraySortInPlaceBy: expected Array", None)))));
     ("assert_snapshot", VPrim (fun name_v ->
       VPrim (fun value_v ->
         match name_v, value_v with

@@ -1,4 +1,346 @@
 -- array.mdk — operations on Array a
--- See STDLIB.md for the full implementation plan.
+-- See STDLIB.md (Module 4) for the plan.
+--
+-- Design notes
+-- ────────────
+-- Arrays are fixed-size, O(1) random access, and backed by mutable memory
+-- under the hood.  Two design tensions shape this module:
+--
+--   1. Performance vs. functional feel.  The public API is a pure facade
+--      where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
+--      and explicitly effectful where mutation is the whole point
+--      (`set`, `swap`, `sortInPlace`, `<Mut>` in the signature).
+--
+--   2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
+--      matched like `List a`, so the impls below dispatch through the
+--      `array*` primitives declared in stdlib/runtime.mdk.  We implement
+--      `Mappable`, `Foldable`, `Eq`, `Show`, `Semigroup`, `Monoid` — and
+--      deliberately skip `Applicative` / `Thenable`, because the natural
+--      definitions would encode cartesian-style allocation that's a
+--      performance trap on bulk data.
+--
+-- The kernel of OCaml-backed primitives lives in stdlib/runtime.mdk and is
+-- the surface this module sits on top of.  Most operations here are one or
+-- two lines of Medaka built on `arrayMakeWith` + `arrayGetUnsafe`, which
+-- compile to a tight loop in the host runtime.
 
-import core.{Eq, Ord, Foldable, Mappable}
+import core.{Eq, Ord, Show, Foldable, Mappable, Semigroup, Monoid, Ordering, Option}
+
+-- ── Construction ────────────────────────────────────────────────────────
+
+export
+empty : Array a
+empty = [||]
+
+export
+singleton : a -> Array a
+singleton x = [|x|]
+
+export
+make : Int -> a -> Array a
+make n x = arrayMake n x
+
+export
+makeWith : Int -> (Int -> a) -> Array a
+makeWith n f = arrayMakeWith n f
+
+-- | Alias for `make`, included for symmetry with `List.replicate`.
+export
+replicate : Int -> a -> Array a
+replicate n x = arrayMake n x
+
+export
+fromList : List a -> Array a
+fromList xs = arrayFromList xs
+
+-- | Half-open `[lo, hi)`.  Empty when `hi <= lo`.
+export
+range : Int -> Int -> Array Int
+range lo hi = arrayMakeWith (if hi > lo then hi - lo else 0) (i => lo + i)
+
+-- | Fresh copy with the same contents.  Useful before in-place mutation
+-- when you want to preserve the original.
+export
+copy : Array a -> Array a
+copy arr = arrayCopy arr
+
+-- ── Observation ─────────────────────────────────────────────────────────
+--
+-- `length`, `isEmpty`, `toList` are provided by `impl Foldable Array`
+-- below; they're not re-exported as standalone names because that would
+-- collide with the polymorphic Foldable methods of the same name.
+
+-- | Bounds-checked indexing.  `arr[i]` (which panics on OOB) is the fast
+-- path; `get` is the safe one.
+export
+get : Int -> Array a -> Option a
+get i arr =
+  if i < 0 || i >= arrayLength arr then None else Some (arrayGetUnsafe i arr)
+
+export
+first : Array a -> Option a
+first arr = get 0 arr
+
+export
+last : Array a -> Option a
+last arr = get (arrayLength arr - 1) arr
+
+-- Tail-recursive list build, used by the Foldable Array impl's `toList`.
+toListGo : Array a -> Int -> List a -> List a
+toListGo arr i acc =
+  if i < 0 then acc
+  else toListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
+
+-- ── Pure transformation (return fresh arrays, no <Mut>) ─────────────────
+--
+-- `map` is provided by `impl Mappable Array` below; not re-exported as a
+-- standalone name to avoid colliding with `Mappable.map`.
+
+export
+reverse : Array a -> Array a
+reverse arr =
+  let n = arrayLength arr
+  arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) arr)
+
+-- | `slice lo hi arr` — half-open `[lo, hi)`.  Clamps to the array bounds:
+-- a request outside `[0, length arr]` is silently truncated, never panics.
+-- Use `arr[lo..hi]` if you want OOB to panic instead.
+export
+slice : Int -> Int -> Array a -> Array a
+slice lo hi arr =
+  let n = arrayLength arr
+  let lo' = if lo < 0 then 0 else if lo > n then n else lo
+  let hi' = if hi < lo' then lo' else if hi > n then n else hi
+  arrayMakeWith (hi' - lo') (i => arrayGetUnsafe (lo' + i) arr)
+
+export
+take : Int -> Array a -> Array a
+take n arr = slice 0 n arr
+
+export
+drop : Int -> Array a -> Array a
+drop n arr = slice n (arrayLength arr) arr
+
+export
+append : Array a -> Array a -> Array a
+append a b =
+  let na = arrayLength a
+  let nb = arrayLength b
+  arrayMakeWith (na + nb) (i => if i < na then arrayGetUnsafe i a else arrayGetUnsafe (i - na) b)
+
+-- | Flatten one level.  Two passes: sum lengths, then fill.
+export
+concat : Array (Array a) -> Array a
+concat arrs =
+  let outer = arrayLength arrs
+  let total = concatTotal arrs 0 0 outer
+  arrayMakeWith total (i => concatLookup arrs i 0 outer)
+
+concatTotal : Array (Array a) -> Int -> Int -> Int -> Int
+concatTotal arrs i acc outer =
+  if i >= outer then acc
+  else concatTotal arrs (i + 1) (acc + arrayLength (arrayGetUnsafe i arrs)) outer
+
+-- | Find element `i` by walking the outer array, subtracting inner
+-- lengths.  O(outer) per lookup → O(outer * total) overall.  Fine for
+-- typical use; a future optimisation could precompute a prefix-sum index.
+concatLookup : Array (Array a) -> Int -> Int -> Int -> a
+concatLookup arrs target k outer =
+  let inner = arrayGetUnsafe k arrs
+  let len = arrayLength inner
+  if target < len then arrayGetUnsafe target inner
+  else concatLookup arrs (target - len) (k + 1) outer
+
+export
+zip : Array a -> Array b -> Array (a, b)
+zip a b =
+  let n = if arrayLength a < arrayLength b then arrayLength a else arrayLength b
+  arrayMakeWith n (i => (arrayGetUnsafe i a, arrayGetUnsafe i b))
+
+export
+zipWith : (a -> b -> c) -> Array a -> Array b -> Array c
+zipWith f a b =
+  let n = if arrayLength a < arrayLength b then arrayLength a else arrayLength b
+  arrayMakeWith n (i => f (arrayGetUnsafe i a) (arrayGetUnsafe i b))
+
+-- | Filter via list intermediate (tail-recursive, builds reversed then
+-- `arrayFromList` after a final reverse).  Single O(N) traversal of the
+-- input + one O(M) list construction + one O(M) array copy.  Doesn't use
+-- mutation, so signature stays pure.
+-- | Named `filterA` (not `filter`) because `core.filter` is a List-
+-- specific standalone — overloading two top-level functions with the
+-- same name across modules isn't supported yet.  When `core.filter`
+-- moves to `list.mdk` (per the note in core.mdk), this can become
+-- plain `filter`.
+export
+filterA : (a -> Bool) -> Array a -> Array a
+filterA pred arr =
+  let n = arrayLength arr
+  arrayFromList (revList (filterGo pred arr 0 n []) [])
+
+filterGo : (a -> Bool) -> Array a -> Int -> Int -> List a -> List a
+filterGo pred arr i n acc =
+  if i >= n then acc
+  else if pred (arrayGetUnsafe i arr) then filterGo pred arr (i + 1) n (arrayGetUnsafe i arr :: acc)
+  else filterGo pred arr (i + 1) n acc
+
+export
+filterMap : (a -> Option b) -> Array a -> Array b
+filterMap f arr =
+  let n = arrayLength arr
+  arrayFromList (revList (filterMapGo f arr 0 n []) [])
+
+filterMapGo : (a -> Option b) -> Array a -> Int -> Int -> List b -> List b
+filterMapGo f arr i n acc =
+  if i >= n then acc
+  else filterMapStep f arr i n acc (f (arrayGetUnsafe i arr))
+
+filterMapStep : (a -> Option b) -> Array a -> Int -> Int -> List b -> Option b -> List b
+filterMapStep f arr i n acc (Some y) = filterMapGo f arr (i + 1) n (y :: acc)
+filterMapStep f arr i n acc None     = filterMapGo f arr (i + 1) n acc
+
+-- Local tail-recursive list reverse (avoids depending on stdlib/list.mdk).
+revList : List a -> List a -> List a
+revList [] acc = acc
+revList (x::xs) acc = revList xs (x :: acc)
+
+-- ── Effectful mutation (explicit <Mut>) ─────────────────────────────────
+
+-- | Bounds-checked write.  Panics on OOB.
+export
+set : Int -> a -> Array a -> <Mut> Unit
+set i x arr =
+  if i < 0 || i >= arrayLength arr then panic "Array.set: index out of bounds" else arraySetUnsafe i x arr
+
+export
+swap : Int -> Int -> Array a -> <Mut> Unit
+swap i j arr =
+  let xi = arrayGetUnsafe i arr
+  let xj = arrayGetUnsafe j arr
+  arraySetUnsafe i xj arr
+  arraySetUnsafe j xi arr
+
+export
+fill : a -> Array a -> <Mut> Unit
+fill x arr = arrayFill x arr
+
+export
+sortInPlaceBy : (a -> a -> Ordering) -> Array a -> <Mut> Unit
+sortInPlaceBy cmp arr = arraySortInPlaceBy cmp arr
+
+export
+sortInPlace : Ord a => Array a -> <Mut> Unit
+sortInPlace arr = arraySortInPlaceBy compare arr
+
+-- ── Pure sort (returns fresh sorted array) ──────────────────────────────
+
+export
+sortBy : (a -> a -> Ordering) -> Array a -> Array a
+sortBy cmp arr = arraySortBy cmp arr
+
+export
+sort : Ord a => Array a -> Array a
+sort arr = arraySortBy compare arr
+
+export
+sortOn : Ord b => (a -> b) -> Array a -> Array a
+sortOn key arr = arraySortBy (x y => compare (key x) (key y)) arr
+
+-- ── Folds and search ────────────────────────────────────────────────────
+--
+-- `fold`, `foldRight`, `any`, `all` are reachable via the Foldable
+-- machinery in core once `impl Foldable Array` is loaded.  We define the
+-- tail-recursive helpers here because the impl bodies and the search
+-- functions below both call them, but we don't re-export them as
+-- standalone names.
+
+foldGo : (b -> a -> b) -> Array a -> Int -> Int -> b -> b
+foldGo f arr i n acc =
+  if i >= n then acc
+  else foldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
+
+foldRightGo : (a -> b -> b) -> Array a -> Int -> b -> b
+foldRightGo f arr i acc =
+  if i < 0 then acc
+  else foldRightGo f arr (i - 1) (f (arrayGetUnsafe i arr) acc)
+
+export
+find : (a -> Bool) -> Array a -> Option a
+find pred arr = findGo pred arr 0 (arrayLength arr)
+
+findGo : (a -> Bool) -> Array a -> Int -> Int -> Option a
+findGo pred arr i n =
+  if i >= n then None
+  else if pred (arrayGetUnsafe i arr) then Some (arrayGetUnsafe i arr)
+  else findGo pred arr (i + 1) n
+
+export
+findIndex : (a -> Bool) -> Array a -> Option Int
+findIndex pred arr = findIndexGo pred arr 0 (arrayLength arr)
+
+findIndexGo : (a -> Bool) -> Array a -> Int -> Int -> Option Int
+findIndexGo pred arr i n =
+  if i >= n then None
+  else if pred (arrayGetUnsafe i arr) then Some i
+  else findIndexGo pred arr (i + 1) n
+
+export
+elem : Eq a => a -> Array a -> Bool
+elem x arr = any (y => x == y) arr
+
+-- | Integer sum.  A polymorphic `Num a` version belongs in core once
+-- `Num` dispatch is wired through `fold` cleanly.
+export
+sum : Array Int -> Int
+sum arr = foldGo (acc x => acc + x) arr 0 (arrayLength arr) 0
+
+export
+product : Array Int -> Int
+product arr = foldGo (acc x => acc * x) arr 0 (arrayLength arr) 1
+
+export
+maximum : Ord a => Array a -> Option a
+maximum arr =
+  if arrayLength arr == 0 then None
+  else Some (foldGo max arr 0 (arrayLength arr) (arrayGetUnsafe 0 arr))
+
+export
+minimum : Ord a => Array a -> Option a
+minimum arr =
+  if arrayLength arr == 0 then None
+  else Some (foldGo min arr 0 (arrayLength arr) (arrayGetUnsafe 0 arr))
+
+-- ── Typeclass impls ─────────────────────────────────────────────────────
+
+export impl Mappable Array where
+    map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
+
+export impl Foldable Array where
+    fold f z arr = foldGo f arr 0 (arrayLength arr) z
+    foldRight f z arr = foldRightGo f arr (arrayLength arr - 1) z
+    toList arr = toListGo arr (arrayLength arr - 1) []
+    isEmpty arr = arrayLength arr == 0
+    length arr = arrayLength arr
+
+export impl Semigroup (Array a) where
+    append a b = arrayMakeWith (arrayLength a + arrayLength b) (i => if i < arrayLength a then arrayGetUnsafe i a else arrayGetUnsafe (i - arrayLength a) b)
+
+export impl Monoid (Array a) where
+    empty = [||]
+
+export impl Eq (Array a) requires Eq a where
+    eq a b =
+      if arrayLength a != arrayLength b then False
+      else eqGo a b 0 (arrayLength a)
+
+eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
+eqGo a b i n =
+  if i >= n then True
+  else if eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) then eqGo a b (i + 1) n
+  else False
+
+-- TODO: `impl Show (Array a) requires Show a` — `show` now resolves
+-- (resolver gap closed) but the recursive `show (arrayGetUnsafe i arr)`
+-- on element type `a` needs `Show a` to actually dispatch.  Blocked on
+-- `impl Show Int`, `impl Show Float`, `impl Show Bool`, etc. landing
+-- in core.  See STDLIB.md Module 1.

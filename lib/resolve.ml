@@ -103,6 +103,13 @@ let prelude_values : string list =
     | Ast.DLetGroup (_, bs)    -> List.map fst bs
     | Ast.DTypeSig (_, n, _)   -> [n]
     | Ast.DImpl { methods; _ } -> List.map (fun (n, _, _) -> n) methods
+    (* Interface methods become global identifiers — `max`, `min`, `show`
+       etc. need to resolve in user files even when no impl in core
+       provides them (the interface default suffices at runtime).  This
+       mirrors what build_env does for interface decls in the user
+       program (see the DInterface case below). *)
+    | Ast.DInterface { methods; _ } ->
+      List.map (fun m -> m.Ast.method_name) methods
     | _ -> []) Prelude.program
 
 (* ── Module exports (public interface of a resolved module) ── *)

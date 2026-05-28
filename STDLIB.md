@@ -395,80 +395,124 @@ currently contains only an `import` line.
 
 ---
 
-## Module 4 — `array` ⏳ not started
+## Module 4 — `array` 🟡 partially implemented
 
 Depends on `core`. Arrays are fixed-size and support O(1) random access.
-Mutations use `Ref` or `let mut` internally; the external API can be pure or
-effectful, depending on what the language exposes cleanly. File
-`stdlib/array.mdk` currently contains only an `import` line.
+The runtime already exposes `VArray`, the `[|...|]` literal, range
+literals (`[|lo..hi|]`/`[|lo..=hi|]`), and panicking bracket indexing
+(`arr[i]`).
+
+**Design layering** (see `stdlib/array.mdk` for the full rationale):
+
+1. **Kernel** of OCaml-backed primitives in `stdlib/runtime.mdk`
+   (`arrayLength`, `arrayMake`, `arrayMakeWith`, `arrayGetUnsafe`,
+   `arraySetUnsafe`, `arrayCopy`, `arrayBlit`, `arrayFill`,
+   `arraySortInPlaceBy`, and the pure wrappers `arraySortBy`,
+   `arrayFromList`).  The two pure wrappers exist because Medaka has
+   no effect-masking: a function using `arrayBlit`/`arraySortInPlaceBy`
+   propagates `<Mut>` to all callers, which would force `sort`/`sortBy`
+   to surface `<Mut>` in their signatures.  Encapsulating "alloc +
+   mutate locally + return fresh" inside an extern keeps the pure API
+   honest.
+2. **Pure stdlib** (Medaka) built on the kernel via `arrayMakeWith`
+   and tail-recursive helpers.
+3. **Effectful stdlib** (Medaka) with explicit `<Mut>` in signatures.
+4. **Typeclass impls**: `Mappable`, `Foldable`, `Semigroup`, `Monoid`,
+   `Eq`.  Deliberately *not* `Applicative` / `Thenable` — the natural
+   definitions encode cartesian-style allocation that's a performance
+   trap on bulk data.  `Show` is blocked on a resolver gap (see below).
+
+**Resolver gap (closed).**  Previously, interface methods whose only
+body in core was a default on the interface itself (`max`, `min`,
+`show`) were not seeded into `prelude_values` and resolved as unbound
+in user files.  Fixed in `lib/resolve.ml` by extending
+`prelude_values` to include `DInterface` method names — so this
+module can now use `max`/`min` directly.  `impl Show (Array a)`
+remains deferred, but the blocker is now narrower: `show` resolves;
+what's missing is the actual `impl Show Int`/`Show Float`/etc. in
+core that the recursive call would dispatch through.
+
+**Multi-file loader (closed).**  `typecheck_module` previously
+re-prepended the prelude per module, and `te_impls` leaked the
+prelude's default impls into downstream modules, surfacing as a
+spurious `Multiple default impls of Mappable for Result a` when any
+non-leaf module defined an impl.  Fixed in `lib/typecheck.ml` by
+filtering `impl_seeded` entries out of `te_impls`.
+
+**Constraint + effect signatures (closed).**  Found and fixed during
+this work: `declared_effects` in `lib/typecheck.ml` didn't unwrap
+`TyConstrained`, so any signature combining a constraint with an
+effect — like `sortInPlace : Ord a => Array a -> <Mut> Unit` — was
+typechecked as if it had no declared effect, then errored on the
+`<Mut>` produced by the body.  Added the missing match case.
 
 ### Construction
 
-- ⏳ `make : Int -> a -> Array a` — array of length N filled with the value
-- ⏳ `makeWith : Int -> (Int -> a) -> Array a` — generate element at each index via the function
-- ⏳ `fromList : List a -> Array a` — copy list contents into a new array
-- ⏳ `singleton : a -> Array a` — one-element array
-- ⏳ `empty : Array a` — the empty array
-- ⏳ `range : Int -> Int -> Array Int` — `[lo, hi)` as an array
-- ⏳ `replicate : Int -> a -> Array a` — alias for `make`; included for symmetry with `List`
-- ⏳ `copy : Array a -> Array a` — fresh array with the same contents (useful before mutation)
+- ✅ `make : Int -> a -> Array a` — array of length N filled with the value
+- ✅ `makeWith : Int -> (Int -> a) -> Array a` — generate element at each index via the function
+- ✅ `fromList : List a -> Array a` — copy list contents into a new array
+- ✅ `singleton : a -> Array a` — one-element array
+- ✅ `empty : Array a` — the empty array
+- ✅ `range : Int -> Int -> Array Int` — `[lo, hi)` as an array
+- ✅ `replicate : Int -> a -> Array a` — alias for `make`; included for symmetry with `List`
+- ✅ `copy : Array a -> Array a` — fresh array with the same contents (useful before mutation)
 
 ### Observation
 
-- ⏳ `length : Array a -> Int` — element count (O(1))
-- ⏳ `isEmpty : Array a -> Bool` — true for length-0 arrays
-- ⏳ `get : Int -> Array a -> Option a` — bounds-checked indexing
-- ⏳ `getUnsafe : Int -> Array a -> a` — unchecked indexing; panics on out-of-range
-- ⏳ `first : Array a -> Option a` — element at index 0, or `None`
-- ⏳ `last : Array a -> Option a` — final element, or `None`
-- ⏳ `toList : Array a -> List a` — copy contents into a list
+- 🟡 `length` — provided by `impl Foldable Array`, not re-exported as standalone (would collide with the polymorphic `Foldable.length`)
+- 🟡 `isEmpty` — same; via `Foldable Array`
+- ✅ `get : Int -> Array a -> Option a` — bounds-checked indexing
+- *Not implemented as a separate name:* `getUnsafe` — use `arrayGetUnsafe` (the kernel primitive) directly, or the panicking `arr[i]` operator
+- ✅ `first : Array a -> Option a` — element at index 0, or `None`
+- ✅ `last : Array a -> Option a` — final element, or `None`
+- 🟡 `toList` — via `Foldable Array`
 
 ### Transformation (pure — return new arrays)
 
-- ⏳ `map : (a -> b) -> Array a -> Array b` — apply to each element
-- ⏳ `filter : (a -> Bool) -> Array a -> Array a` — keep matching elements
-- ⏳ `filterMap : (a -> Option b) -> Array a -> Array b` — keep `Some` results
-- ⏳ `reverse : Array a -> Array a` — fresh array in opposite order
-- ⏳ `slice : Int -> Int -> Array a -> Array a` — `[lo, hi)` slice as a new array
-- ⏳ `take : Int -> Array a -> Array a` — first N elements
-- ⏳ `drop : Int -> Array a -> Array a` — everything after the first N
-- ⏳ `append : Array a -> Array a -> Array a` — concatenate two arrays
-- ⏳ `concat : Array (Array a) -> Array a` — flatten one level
-- ⏳ `zip : Array a -> Array b -> Array (a, b)` — pair up by index; result length is the shorter input
-- ⏳ `zipWith : (a -> b -> c) -> Array a -> Array b -> Array c` — generalised `zip`
+- 🟡 `map` — via `impl Mappable Array`
+- ✅ `filterA : (a -> Bool) -> Array a -> Array a` — keep matching elements (two-pass via list intermediate; pure).  Named `filterA` not `filter` because `core.filter` is a List-specific standalone and Medaka doesn't yet allow two top-level functions to share a name across modules.  When `core.filter` moves to `list.mdk` (already noted as planned in core.mdk), this can be renamed to plain `filter`.
+- ✅ `filterMap : (a -> Option b) -> Array a -> Array b` — keep `Some` results
+- ✅ `reverse : Array a -> Array a` — fresh array in opposite order
+- ✅ `slice : Int -> Int -> Array a -> Array a` — `[lo, hi)`; clamps to bounds, does not panic (use `arr[lo..hi]` for the panicking variant)
+- ✅ `take : Int -> Array a -> Array a` — first N elements
+- ✅ `drop : Int -> Array a -> Array a` — everything after the first N
+- ✅ `append : Array a -> Array a -> Array a` — concatenate two arrays
+- ✅ `concat : Array (Array a) -> Array a` — flatten one level
+- ✅ `zip : Array a -> Array b -> Array (a, b)` — pair up by index; result length is the shorter input
+- ✅ `zipWith : (a -> b -> c) -> Array a -> Array b -> Array c` — generalised `zip`
 - ⏳ `unzip : Array (a, b) -> (Array a, Array b)` — split into two parallel arrays
 
 ### Mutation (effectful — modify in place)
 
-- ⏳ `set : Int -> a -> Array a -> <Mut> Unit` — write a value at the given index (bounds-checked; panic on OOB)
-- ⏳ `swap : Int -> Int -> Array a -> <Mut> Unit` — exchange the elements at two indices
-- ⏳ `fill : a -> Array a -> <Mut> Unit` — overwrite every cell with the value
-- ⏳ `sortInPlace : Ord a => Array a -> <Mut> Unit` — sort the array in place
-- ⏳ `sortInPlaceBy : (a -> a -> Ordering) -> Array a -> <Mut> Unit` — in-place sort with a custom comparator
+- ✅ `set : Int -> a -> Array a -> <Mut> Unit` — bounds-checked write (panics on OOB)
+- ✅ `swap : Int -> Int -> Array a -> <Mut> Unit`
+- ✅ `fill : a -> Array a -> <Mut> Unit`
+- ✅ `sortInPlace : Ord a => Array a -> <Mut> Unit`
+- ✅ `sortInPlaceBy : (a -> a -> Ordering) -> Array a -> <Mut> Unit`
 
 ### Folds and search
 
-- ⏳ `fold : (b -> a -> b) -> b -> Array a -> b` — left fold
-- ⏳ `foldRight : (a -> b -> b) -> b -> Array a -> b` — right fold
-- ⏳ `any : (a -> Bool) -> Array a -> Bool` — at least one element matches
-- ⏳ `all : (a -> Bool) -> Array a -> Bool` — every element matches
-- ⏳ `find : (a -> Bool) -> Array a -> Option a` — first match, or `None`
-- ⏳ `findIndex : (a -> Bool) -> Array a -> Option Int` — index of the first match
-- ⏳ `elem : Eq a => a -> Array a -> Bool` — value is present
-- ⏳ `sum : Array Int -> Int` — additive fold
-- ⏳ `product : Array Int -> Int` — multiplicative fold
-- ⏳ `maximum : Ord a => Array a -> Option a` — largest element, or `None` if empty
-- ⏳ `minimum : Ord a => Array a -> Option a` — smallest element, or `None` if empty
+- 🟡 `fold`, `foldRight`, `any`, `all` — via `impl Foldable Array` + core helpers
+- ✅ `find : (a -> Bool) -> Array a -> Option a` — first match, or `None`
+- ✅ `findIndex : (a -> Bool) -> Array a -> Option Int` — index of the first match
+- ✅ `elem : Eq a => a -> Array a -> Bool` — value is present
+- ✅ `sum : Array Int -> Int` — additive fold
+- ✅ `product : Array Int -> Int` — multiplicative fold
+- ✅ `maximum : Ord a => Array a -> Option a` — largest element, or `None` if empty
+- ✅ `minimum : Ord a => Array a -> Option a` — smallest element, or `None` if empty
 
 ### Sorting (pure)
 
-- ⏳ `sort : Ord a => Array a -> Array a` — return a freshly sorted copy
-- ⏳ `sortBy : (a -> a -> Ordering) -> Array a -> Array a` — custom comparator, fresh array
-- ⏳ `sortOn : Ord b => (a -> b) -> Array a -> Array a` — sort by a derived key, fresh array
+- ✅ `sort : Ord a => Array a -> Array a` — fresh sorted copy (kernel-level `arraySortBy compare`)
+- ✅ `sortBy : (a -> a -> Ordering) -> Array a -> Array a`
+- ✅ `sortOn : Ord b => (a -> b) -> Array a -> Array a`
 
 ### Instances
 
-- ⏳ `impl Eq (Array a)` where `Eq a` — element-wise
-- ⏳ `impl Show (Array a)` where `Show a` — bracketed comma-separated
-- ⏳ `impl Mappable Array`
-- ⏳ `impl Foldable Array`
+- ✅ `impl Eq (Array a)` where `Eq a` — element-wise
+- ⏳ `impl Show (Array a)` where `Show a` — blocked on the prelude-method-resolution gap (see note above)
+- ✅ `impl Mappable Array`
+- ✅ `impl Foldable Array`
+- ✅ `impl Semigroup (Array a)` — array concatenation
+- ✅ `impl Monoid (Array a)` — identity is `[||]`
+- **Skipped:** `Applicative Array`, `Thenable Array` — semantically definable but encourage O(N·M) allocation; arrays should drop into `List` for monadic non-determinism and convert back at the boundary

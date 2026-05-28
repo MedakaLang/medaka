@@ -64,10 +64,10 @@ type impl_entry = {
   impl_is_default : bool;
   impl_type_mono  : mono list;  (* from_ast_type of each type_arg *)
   impl_requires   : (ident * mono list) list;  (* constraint: iface, type args *)
-  impl_seeded     : bool;  (* currently always false; reserved for future use
-                              where a built-in fallback might be needed again.
-                              When true, user-defined impls take priority over
-                              seeded ones for the same (iface, ty). *)
+  impl_seeded     : bool;  (* True for impls registered from the prelude
+                              (Prelude.program), false for user-defined.
+                              Used by typecheck_module's te_impls filter
+                              so prelude impls aren't leaked across modules. *)
 }
 
 (* Public type-level interface of a processed module *)
@@ -1990,6 +1990,10 @@ let effect_union a b = List.sort_uniq String.compare (a @ b)
 let rec declared_effects : Ast.ty -> effect_set = function
   | Ast.TyFun (_, ret) -> declared_effects ret
   | Ast.TyEffect (effs, _) -> List.sort_uniq String.compare effs
+  (* A constraint wrapper around the signature is transparent for the
+     purposes of effect detection — `Ord a => Array a -> <Mut> Unit`
+     still performs <Mut>. *)
+  | Ast.TyConstrained (_, t) -> declared_effects t
   | _ -> []
 
 (* Compute the effect set that evaluating expression `e` produces.
@@ -2532,8 +2536,14 @@ let typecheck_module
     te_records   = pub_records;
     te_ctors     = pub_ctors;
     te_interfaces = pub_interfaces;
+    (* Filter out prelude-seeded impls (those registered via Prelude.program
+       at line ~2429, not from user_prog).  Otherwise downstream modules
+       re-register them via env.impls := te.te_impls @ ..., then re-add
+       them via their own Prelude prepend, and check_coherence fires
+       a spurious "Multiple default impls" error. *)
     te_impls     = List.filter (fun ie ->
-      List.exists (fun d -> match Ast.inner_decl d with
+      not ie.impl_seeded
+      && List.exists (fun d -> match Ast.inner_decl d with
         | DImpl { is_pub = true; iface_name; _ } -> ie.impl_iface = iface_name
         | _ -> false) user_prog
     ) !(!env.impls);

@@ -228,6 +228,27 @@ let e_constraint_unknown_iface =
   assert_err (unknown_iface "Bogus")
     "f : Bogus a => a -> Bool\nf x = True\n"
 
+(* Methods declared in core.mdk's interfaces must be in scope in user
+   files even when no impl in core provides them — bare interface
+   defaults count.  Regression test for the resolver gap that left
+   `max`/`min`/`show` unbound (see project_resolver_prelude_methods.md). *)
+let v_prelude_method_max_in_scope =
+  assert_ok "result = max 3 5\n"
+
+let v_prelude_method_min_in_scope =
+  assert_ok "result = min 3 5\n"
+
+let v_prelude_method_show_in_scope =
+  assert_ok "result = show 42\n"
+
+(* Methods that already had core-provided impls should still resolve —
+   guard against the fix accidentally double-seeding and breaking these. *)
+let v_prelude_method_eq_in_scope =
+  assert_ok "result = eq 3 3\n"
+
+let v_prelude_method_compare_in_scope =
+  assert_ok "result = compare 3 5\n"
+
 (* ── Type alias tests ────────────────────────── *)
 
 let v_alias_simple =
@@ -353,6 +374,13 @@ let () =
     "constraint annotations", [
       test_case "known iface ok"       `Quick v_constraint_known_iface;
       test_case "err: unknown iface"   `Quick e_constraint_unknown_iface;
+    ];
+    "prelude methods in user scope", [
+      test_case "max ok"     `Quick v_prelude_method_max_in_scope;
+      test_case "min ok"     `Quick v_prelude_method_min_in_scope;
+      test_case "show ok"    `Quick v_prelude_method_show_in_scope;
+      test_case "eq still ok" `Quick v_prelude_method_eq_in_scope;
+      test_case "compare still ok" `Quick v_prelude_method_compare_in_scope;
     ];
     "type aliases", [
       test_case "simple alias ok"      `Quick v_alias_simple;
