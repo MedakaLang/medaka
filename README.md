@@ -30,8 +30,9 @@ Frontend and interpreter complete; standard library underway; codegen not yet st
 - **Formatter** — `lib/fmt.ml` (comment-preserving pretty printer with `--check` / `--write` / `--stdout`)
 - **Project config** — `lib/project_config.ml` (minimal `medaka.toml` reader; shared project-root walk-up between CLI and LSP)
 - **Diagnostics** — `lib/diagnostics.ml` (accumulating error pipeline)
-- **Language server** — `lib/lsp_server.ml` (stdio LSP server with
-  document open/change/close → publishDiagnostics)
+- **Language server** — `lib/lsp_server.ml` (stdio LSP server: diagnostics,
+  formatting, document symbols, hover, go-to-definition, document
+  highlight, completion, inlay hints)
 - **Test suite** — parser, roundtrip, resolve, typecheck, eval, run,
   repl, loader, diagnostics, fmt, project_config, and new_cmd suites
 
@@ -289,7 +290,9 @@ lib/
   runtime.ml      Parses `stdlib/runtime.mdk` to derive primitive schemes
   repl.ml         REPL loop (`:load`, `:reload`, `:browse`, `:type`, …)
   diagnostics.ml  Accumulating parse/resolve/typecheck pipeline (no exit-on-error)
-  lsp_server.ml   LSP server: stdio JSON-RPC, publishDiagnostics on edit
+  lsp_server.ml   LSP server: stdio JSON-RPC, diagnostics + formatting,
+                  document symbols, hover, definition, highlight,
+                  completion, inlay hints
   fmt.ml          `medaka fmt` — comment-preserving formatter
   new_cmd.ml      `medaka new` — project scaffolder
   project_config.ml  `medaka.toml` reader + project-root walk-up
@@ -317,6 +320,11 @@ test/
   test_fmt.ml         Formatter: idempotency, round-trip, comment preservation
   test_project_config.ml  `medaka.toml` parsing + project-root walk-up
   test_new_cmd.ml     `medaka new` scaffolding
+  test_lsp.ml         LSP request handlers (formatting, hover, definition,
+                      highlight, completion, inlay hints, …)
+  thorough/           Exhaustive edge-case suites: typecheck, eval,
+                      cross-feature interactions, stdlib usage, recent
+                      phase coverage (run via `dune build @thorough`)
 dev/
   debug.ml            Ad-hoc parse-and-print probe
   tc_debug.ml         Ad-hoc type-check probe
