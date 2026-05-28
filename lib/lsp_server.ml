@@ -56,6 +56,13 @@ let project_roots : (string, string) Hashtbl.t = Hashtbl.create 8
    Used to clear stale diagnostics in files that have since become clean. *)
 let published_uris : (string, unit) Hashtbl.t = Hashtbl.create 16
 
+(* file path → most recent source that parsed cleanly.
+   Passed into [Diagnostics.analyze_project] so the analyzer can keep
+   producing useful resolve/typecheck diagnostics even while a buffer
+   is mid-edit and has a transient parse error.  Keyed by path (not URI)
+   to match the [read] callback's argument type. *)
+let last_good_source : (string, string) Hashtbl.t = Hashtbl.create 8
+
 (* ── Project root inference ──────────────────────────────────
 
    Prefer the canonical `medaka.toml` marker (shared with the CLI via
@@ -131,7 +138,8 @@ let publish_project_diagnostics ~(root_uri : DocumentUri.t) =
   in
 
   let results =
-    Diagnostics.analyze_project ~root_file ~project_dir ~read
+    Diagnostics.analyze_project
+      ~root_file ~project_dir ~read ~last_good_source ()
   in
 
   let this_round : (string, unit) Hashtbl.t = Hashtbl.create 8 in
@@ -201,8 +209,10 @@ let handle_notification_unsafe (n : Client_notification.t) =
     publish_project_diagnostics ~root_uri:p.textDocument.uri
   | Client_notification.TextDocumentDidClose p ->
     let uri_str = DocumentUri.to_string p.textDocument.uri in
+    let path    = DocumentUri.to_path p.textDocument.uri in
     Hashtbl.remove docs uri_str;
     Hashtbl.remove project_roots uri_str;
+    Hashtbl.remove last_good_source path;
     (* Clear any squiggles the client might still be showing for this
        file.  Don't touch other URIs — other open files in the project
        will re-publish on their next change. *)

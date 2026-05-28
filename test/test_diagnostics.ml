@@ -125,7 +125,7 @@ let t_project_clean () =
       "import dep.{double}\nmain : <IO> Unit\nmain = print (double 3)\n"
     in
     let results = analyze_project ~root_file:main ~project_dir:dir
-                    ~read:no_override in
+                    ~read:no_override () in
     let dm = diags_for results main in
     let dd = diags_for results dep in
     if dm <> [] || dd <> [] then
@@ -143,7 +143,7 @@ let t_project_error_in_dep () =
       "import dep.{broken}\nmain : <IO> Unit\nmain = print broken\n"
     in
     let results = analyze_project ~root_file:main ~project_dir:dir
-                    ~read:no_override in
+                    ~read:no_override () in
     let dd = diags_for results dep in
     if not (List.exists (fun d ->
       is_error d && msg_contains "Unbound" d) dd) then
@@ -158,7 +158,7 @@ let t_project_unknown_module () =
       "import nope.{foo}\nmain : <IO> Unit\nmain = print foo\n"
     in
     let results = analyze_project ~root_file:main ~project_dir:dir
-                    ~read:no_override in
+                    ~read:no_override () in
     let dm = diags_for results main in
     match List.find_opt (fun d ->
       is_error d && msg_contains "Unknown module" d) dm
@@ -181,7 +181,7 @@ let t_project_cycle () =
     let _ = write_file dir "a.mdk" "import b.{y}\nexport x = 1\n" in
     let b = write_file dir "b.mdk" "import a.{x}\nexport y = 2\n" in
     let results = analyze_project ~root_file:b ~project_dir:dir
-                    ~read:no_override in
+                    ~read:no_override () in
     let any_cycle =
       List.exists (fun (_, ds) ->
         List.exists (fun d -> msg_contains "Cyclic" d) ds
@@ -209,7 +209,7 @@ let t_project_buffered_override () =
       else None
     in
     let results = analyze_project ~root_file:main_path ~project_dir:dir
-                    ~read in
+                    ~read () in
     let dm = diags_for results main_path in
     let dd = diags_for results dep_path in
     if dm <> [] || dd <> [] then
@@ -272,7 +272,7 @@ let t_analyze_project_no_escape () =
       let path = write_file dir "main.mdk" src in
       try
         let _ : (string * diagnostic list) list =
-          analyze_project ~root_file:path ~project_dir:dir ~read:no_override
+          analyze_project ~root_file:path ~project_dir:dir ~read:no_override ()
         in
         ()
       with e ->
@@ -288,11 +288,133 @@ let t_cyclic_with_garbage_no_escape () =
     let _ = write_file dir "a.mdk" "import b.{y}\nexport x = ((( nope\n" in
     let b = write_file dir "b.mdk" "import a.{x}\nexport y = \"unterminated\n" in
     try
-      let _ = analyze_project ~root_file:b ~project_dir:dir ~read:no_override in
+      let _ = analyze_project ~root_file:b ~project_dir:dir ~read:no_override () in
       ()
     with e ->
       failwith (Printf.sprintf
         "analyze_project raised on cycle+garbage: %s"
+        (Printexc.to_string e))
+  )
+
+(* ── Last-good-source cache ──────────────────
+
+   When the active buffer currently has a parse error but [last_good_source]
+   has a prior parseable version, [analyze_project] substitutes the cached
+   source for Loader so downstream stages keep producing useful diagnostics.
+   The actual parse error is still reported on the file being edited. *)
+
+let t_cache_fallback_single_file () =
+  with_tmp_dir (fun dir ->
+    let path = write_file dir "main.mdk" "f = 1\n" in
+    let cache : (string, string) Hashtbl.t = Hashtbl.create 1 in
+
+    (* Round 1: valid buffer — populates cache. *)
+    let read_valid p =
+      if p = path then Some "f = 1\n" else None
+    in
+    let r1 = analyze_project ~root_file:path ~project_dir:dir
+               ~read:read_valid ~last_good_source:cache () in
+    let d1 = diags_for r1 path in
+    if d1 <> [] then
+      failwith (Printf.sprintf
+        "Round 1 expected clean, got:\n%s" (pp_results r1));
+    if not (Hashtbl.mem cache path) then
+      failwith "Cache not populated after clean parse";
+
+    (* Round 2: broken buffer, warm cache.
+       Expect: parse-error diagnostic on the file, NO internal-error
+       diagnostic (the substitution kept Loader happy). *)
+    let read_broken p =
+      if p = path then Some "f =" else None
+    in
+    let r2 = analyze_project ~root_file:path ~project_dir:dir
+               ~read:read_broken ~last_good_source:cache () in
+    let d2 = diags_for r2 path in
+    if not (List.exists (fun d ->
+      is_error d && msg_contains "Parse" d) d2) then
+      failwith (Printf.sprintf
+        "Round 2 expected parse error, got:\n%s" (pp_results r2));
+    if List.exists (fun d ->
+      msg_contains "Internal error" d) d2 then
+      failwith (Printf.sprintf
+        "Round 2 should not have internal-error diag, got:\n%s"
+        (pp_results r2))
+  )
+
+let t_cache_preserves_cross_file_diags () =
+  with_tmp_dir (fun dir ->
+    let dep_path  = Filename.concat dir "dep.mdk"  in
+    let main_path = Filename.concat dir "main.mdk" in
+    let _ = write_file dir "dep.mdk"
+              "export double x = x * 2\n" in
+    let _ = write_file dir "main.mdk"
+              "import dep.{double}\nfoo = double 3\nbar = nope\n" in
+    let cache : (string, string) Hashtbl.t = Hashtbl.create 2 in
+
+    (* Round 1: both valid (but main references `nope`).  Cache populates,
+       and main gets its Unbound diagnostic. *)
+    let read_valid p =
+      if p = dep_path  then Some "export double x = x * 2\n"
+      else if p = main_path then
+        Some "import dep.{double}\nfoo = double 3\nbar = nope\n"
+      else None
+    in
+    let r1 = analyze_project ~root_file:main_path ~project_dir:dir
+               ~read:read_valid ~last_good_source:cache () in
+    let dm1 = diags_for r1 main_path in
+    let has_nope_unbound ds =
+      List.exists (fun d ->
+        is_error d && msg_contains "Unbound" d && msg_contains "nope" d
+      ) ds
+    in
+    if not (has_nope_unbound dm1) then
+      failwith (Printf.sprintf
+        "Round 1 expected Unbound 'nope' on main, got:\n%s"
+        (pp_results r1));
+
+    (* Round 2: dep buffer is now broken (parse error); cache still has
+       the parseable version.  Expect:
+       - dep gets its parse-error diagnostic
+       - main's existing Unbound 'nope' diagnostic still appears
+       - main does NOT get a spurious 'Unknown module dep' cascade *)
+    let read_broken_dep p =
+      if p = dep_path  then Some "export double x = x *"  (* parse error *)
+      else if p = main_path then
+        Some "import dep.{double}\nfoo = double 3\nbar = nope\n"
+      else None
+    in
+    let r2 = analyze_project ~root_file:main_path ~project_dir:dir
+               ~read:read_broken_dep ~last_good_source:cache () in
+    let dd2 = diags_for r2 dep_path in
+    let dm2 = diags_for r2 main_path in
+    if not (List.exists (fun d ->
+      is_error d && msg_contains "Parse" d) dd2) then
+      failwith (Printf.sprintf
+        "Round 2 expected parse error on dep, got:\n%s" (pp_results r2));
+    if not (has_nope_unbound dm2) then
+      failwith (Printf.sprintf
+        "Round 2 expected main's Unbound 'nope' to still appear, got:\n%s"
+        (pp_results r2));
+    if List.exists (fun d ->
+      msg_contains "Unknown module" d || msg_contains "Internal error" d
+    ) dm2 then
+      failwith (Printf.sprintf
+        "Round 2 main should not have cascade/internal errors, got:\n%s"
+        (pp_results r2))
+  )
+
+let t_cache_no_entry_no_crash () =
+  with_tmp_dir (fun dir ->
+    let path = write_file dir "main.mdk" "f =" in  (* broken on disk *)
+    let cache : (string, string) Hashtbl.t = Hashtbl.create 1 in
+    let read p = if p = path then Some "f =" else None in
+    try
+      let _ = analyze_project ~root_file:path ~project_dir:dir
+                ~read ~last_good_source:cache () in
+      ()
+    with e ->
+      failwith (Printf.sprintf
+        "analyze_project raised with empty cache + broken source: %s"
         (Printexc.to_string e))
   )
 
@@ -325,5 +447,13 @@ let () =
         `Quick t_analyze_project_no_escape;
       test_case "cyclic + garbage: no exception escapes"
         `Quick t_cyclic_with_garbage_no_escape;
+    ];
+    "last-good-source", [
+      test_case "fallback on single file"
+        `Quick t_cache_fallback_single_file;
+      test_case "preserves cross-file diagnostics"
+        `Quick t_cache_preserves_cross_file_diags;
+      test_case "empty cache: no crash"
+        `Quick t_cache_no_entry_no_crash;
     ];
   ]

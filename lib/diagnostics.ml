@@ -59,35 +59,52 @@ let push_internal_error push ~file ~stage e =
                  stage (Printexc.to_string e);
   }
 
-let analyze ~(file : string) ~(source : string) : diagnostic list =
-  let diags = ref [] in
-  let push d = diags := d :: !diags in
-
+(* Lex+parse [source] for [file].  Returns the program AST (if any) and the
+   parse-error diagnostic (if any).  Used both by [analyze] (which then
+   continues with the AST) and by the last-good-source cache in
+   [analyze_project] (which only needs the bool for "did it parse?"). *)
+let parse_with_diag ~(file : string) ~(source : string)
+  : Ast.program option * diagnostic option =
   let lexbuf = Lexing.from_string source in
   lexbuf.Lexing.lex_curr_p <-
     { lexbuf.Lexing.lex_curr_p with Lexing.pos_fname = file };
   Lexer.reset ();
+  try (Some (Parser.program Lexer.token lexbuf), None) with
+  | Parser.Error ->
+    let d = {
+      severity = Error;
+      loc      = loc_of_lex_pos lexbuf.lex_curr_p;
+      message  = "Parse error";
+    } in
+    (None, Some d)
+  | Failure msg ->
+    let d = {
+      severity = Error;
+      loc      = loc_of_lex_pos lexbuf.lex_curr_p;
+      message  = msg;
+    } in
+    (None, Some d)
+  | e ->
+    Lsp_log.exn
+      (Printf.sprintf "internal error in parse for %s" file) e;
+    let d = {
+      severity = Error;
+      loc      = dummy_loc ~file;
+      message  = Printf.sprintf "Internal error in parse: %s"
+                   (Printexc.to_string e);
+    } in
+    (None, Some d)
 
-  let program_opt =
-    try Some (Parser.program Lexer.token lexbuf) with
-    | Parser.Error ->
-      push {
-        severity = Error;
-        loc      = loc_of_lex_pos lexbuf.lex_curr_p;
-        message  = "Parse error";
-      };
-      None
-    | Failure msg ->
-      push {
-        severity = Error;
-        loc      = loc_of_lex_pos lexbuf.lex_curr_p;
-        message  = msg;
-      };
-      None
-    | e ->
-      push_internal_error push ~file ~stage:"parse" e;
-      None
-  in
+(* Returns [None] if [source] parses cleanly; [Some diag] otherwise. *)
+let parse_only ~(file : string) ~(source : string) : diagnostic option =
+  snd (parse_with_diag ~file ~source)
+
+let analyze ~(file : string) ~(source : string) : diagnostic list =
+  let diags = ref [] in
+  let push d = diags := d :: !diags in
+
+  let (program_opt, parse_err) = parse_with_diag ~file ~source in
+  (match parse_err with Some d -> push d | None -> ());
   (match program_opt with
    | None -> ()
    | Some prog ->
@@ -297,6 +314,8 @@ let analyze_project
     ~(root_file : string)
     ~(project_dir : string)
     ~(read : string -> string option)
+    ?(last_good_source : (string, string) Hashtbl.t option)
+    ()
   : (string * diagnostic list) list =
   let buckets : buckets = Hashtbl.create 8 in
 
@@ -311,19 +330,45 @@ let analyze_project
     }
   in
 
+  (* Last-good-source substitution.  When the editor buffer for [path]
+     currently has a parse error but the cache has a prior version that
+     parses, swap it in so Loader can still build the import graph and
+     downstream stages (resolve/typecheck) produce useful diagnostics for
+     the rest of the project.  Files that go stale this round get their
+     real parse-error diagnostic appended after analysis runs. *)
+  let cache =
+    match last_good_source with
+    | Some c -> c
+    | None   -> Hashtbl.create 0  (* throwaway; never read elsewhere *)
+  in
+  let stale : (string, diagnostic) Hashtbl.t = Hashtbl.create 4 in
+  let wrapped_read path =
+    match read path with
+    | None -> None
+    | Some src ->
+      (match parse_only ~file:path ~source:src with
+       | None ->
+         Hashtbl.replace cache path src;
+         Some src
+       | Some parse_err ->
+         Hashtbl.replace stale path parse_err;
+         (match Hashtbl.find_opt cache path with
+          | Some good -> Some good
+          | None      -> Some src))
+  in
+
   let modules_opt =
-    try Some (Loader.load_program ~read root_file [project_dir])
+    try Some (Loader.load_program ~read:wrapped_read root_file [project_dir])
     with
     | Loader.LoadError e ->
-      attribute_load_error buckets ~root_file ~read e;
+      attribute_load_error buckets ~root_file ~read:wrapped_read e;
       None
     | e ->
       push_module_internal_error ~file_path:root_file ~stage:"loader" e;
       None
   in
-  match modules_opt with
-  | None ->
-    Hashtbl.fold (fun file r acc -> (file, List.rev !r) :: acc) buckets []
+  (match modules_opt with
+  | None -> ()
   | Some modules ->
     (* Seed an empty bucket for every loaded file so they appear in the
        result (with an empty diag list if clean). *)
@@ -387,6 +432,14 @@ let analyze_project
         }
       | e ->
         push_module_internal_error ~file_path ~stage:"typecheck" e
-    ) modules;
+    ) modules);
 
-    Hashtbl.fold (fun file r acc -> (file, List.rev !r) :: acc) buckets []
+  (* Surface the real parse-error diagnostic for any file we substituted
+     a cached source for, so the user still sees the squiggle in the
+     buffer they're typing in. *)
+  Hashtbl.iter (fun path diag ->
+    push_into buckets path diag;
+    let _ = bucket_for buckets path in ()
+  ) stale;
+
+  Hashtbl.fold (fun file r acc -> (file, List.rev !r) :: acc) buckets []
