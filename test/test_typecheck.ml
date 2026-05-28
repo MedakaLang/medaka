@@ -131,6 +131,19 @@ let t_left_section_map    = assert_type
 let t_left_section_filter = assert_type
   "result = filter (0 < _) [1, -1, 2, -2]\n" "result" "List Int"
 
+(* ── Bare operator sections ─────────────────────── *)
+
+let t_bare_section_plus  = assert_type "f : Int -> Int -> Int\nf = (+)\n"  "f" "Int -> Int -> Int"
+let t_bare_section_minus = assert_type "f : Int -> Int -> Int\nf = (-)\n"  "f" "Int -> Int -> Int"
+let t_bare_section_mul   = assert_type "f : Int -> Int -> Int\nf = (*)\n"  "f" "Int -> Int -> Int"
+let t_bare_section_eq    = assert_type "f : Int -> Int -> Bool\nf = (==)\n" "f" "Int -> Int -> Bool"
+let t_bare_section_cons  = assert_type "f : Int -> List Int -> List Int\nf = (::)\n"
+  "f" "Int -> List Int -> List Int"
+let t_bare_section_append = assert_type "f : String -> String -> String\nf = (++)\n"
+  "f" "String -> String -> String"
+let t_bare_section_fold = assert_type
+  "result = fold (+) 0 [1, 2, 3]\n" "result" "Int"
+
 (* ── Polymorphism in use ────────────────────────── *)
 
 let t_use_id_twice = assert_type
@@ -2220,6 +2233,15 @@ let () =
       test_case "(0 < _)"             `Quick t_left_section_cmp;
       test_case "map (2 * _) list"    `Quick t_left_section_map;
       test_case "filter (0 < _) list" `Quick t_left_section_filter;
+    ];
+    "bare operator sections", [
+      test_case "(+)"                 `Quick t_bare_section_plus;
+      test_case "(-)"                 `Quick t_bare_section_minus;
+      test_case "(*)"                 `Quick t_bare_section_mul;
+      test_case "(==)"                `Quick t_bare_section_eq;
+      test_case "(::)"                `Quick t_bare_section_cons;
+      test_case "(++)"                `Quick t_bare_section_append;
+      test_case "fold (+) 0 list"     `Quick t_bare_section_fold;
     ];
     "polymorphism", [
       test_case "id twice"            `Quick t_use_id_twice;

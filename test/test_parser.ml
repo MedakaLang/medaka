@@ -334,6 +334,39 @@ let test_expr_left_section_app () =
   | ELam ([PVar "_s"], EBinOp ("*", EApp (EVar "foo", ELit (LInt 1)), EVar "_s")) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
 
+let test_expr_bare_section_plus () =
+  (* (+) desugars to \a b -> a + b *)
+  match parse_expr "(+)\n" with
+  | ELam ([PVar "_a"; PVar "_b"], EBinOp ("+", EVar "_a", EVar "_b")) -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_expr_bare_section_minus () =
+  match parse_expr "(-)\n" with
+  | ELam ([PVar "_a"; PVar "_b"], EBinOp ("-", EVar "_a", EVar "_b")) -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_expr_bare_section_eq () =
+  match parse_expr "(==)\n" with
+  | ELam ([PVar "_a"; PVar "_b"], EBinOp ("==", EVar "_a", EVar "_b")) -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_expr_bare_section_cons () =
+  match parse_expr "(::)\n" with
+  | ELam ([PVar "_a"; PVar "_b"], EBinOp ("::", EVar "_a", EVar "_b")) -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_expr_bare_section_append () =
+  match parse_expr "(<>)\n" with
+  | ELam ([PVar "_a"; PVar "_b"], EBinOp ("<>", EVar "_a", EVar "_b")) -> ()
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
+let test_expr_unary_minus_paren () =
+  (* (-e) still parses as unary negation, not a section *)
+  match parse_expr "(-5)\n" with
+  | EUnOp ("-", ELit (LInt 5)) -> ()
+  | ELit (LInt (-5)) -> ()  (* lexer may fold negative literals *)
+  | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
+
 let test_expr_list_arg () =
   (* f [1, 2] should parse as application, not indexing *)
   match parse_expr "f [1, 2]\n" with
@@ -1380,6 +1413,12 @@ let () =
       test_case "left section (2 * _)"  `Quick test_expr_left_section;
       test_case "left section (3 - _)"  `Quick test_expr_left_section_minus;
       test_case "left section app lhs"  `Quick test_expr_left_section_app;
+      test_case "bare section (+)"      `Quick test_expr_bare_section_plus;
+      test_case "bare section (-)"      `Quick test_expr_bare_section_minus;
+      test_case "bare section (==)"     `Quick test_expr_bare_section_eq;
+      test_case "bare section (::)"     `Quick test_expr_bare_section_cons;
+      test_case "bare section (<>)"     `Quick test_expr_bare_section_append;
+      test_case "(-5) unary negation"   `Quick test_expr_unary_minus_paren;
       test_case "list as arg"       `Quick test_expr_list_arg;
       test_case "modulo"            `Quick test_expr_modulo;
     ];

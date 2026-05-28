@@ -2465,6 +2465,81 @@ A grab-bag of small grammar holes closed in one pass:
   OCaml-hosted compiler.  See Phase 45.8 design limitation.  Could
   be revisited with a stateful lexer in the self-hosted compiler.
 
+### Phase 59.5: Top-level binding order shouldn't matter ⏳ TODO
+
+Today the evaluator processes top-level decls in source order, and a
+value binding (no params) is evaluated **eagerly** the moment its
+`DFunDef` is reached — see `eval.ml:1095-1102`.  If the RHS references
+an interface method whose impl appears later in the file, the method
+is still bound to its Pass-1 `VUnit` placeholder, and evaluation fails
+with `applied non-function: ()`.
+
+Concrete example (surfaced while landing operator sections):
+`sum = fold (+) 0` placed before `impl Foldable List` in
+`stdlib/core.mdk` parses and type-checks fine, but panics at load
+time.  Multi-clause function bindings dodge the issue because
+`pats ≠ []` → eval builds a `VClosure` instead of forcing the body,
+so the lookup is deferred until call time.  Point-free value
+bindings have no such escape hatch.
+
+This is brittle: refactoring core/stdlib or a user library can
+silently reorder a binding past an impl it depends on, and the
+typechecker won't catch it.
+
+Proposed fix (pick one when this is picked up):
+
+- **Lazy value bindings.**  In Pass 2, instead of `eval env body`
+  for `DFunDef (_, _, [], body)`, install a thunk in the cell that
+  forces on first read.  Smallest change; matches how `let rec`
+  groups already defer.
+- **Dependency sort.**  Topologically sort top-level decls by
+  free-variable dependency before Pass 2 (with cycle-detection
+  pointing at the offending decl).  More invasive but gives clearer
+  errors and naturally orders mutually-recursive groups.
+
+Either way: add a regression test that `x = f 0` followed by an
+`impl` that defines `f` (in that order, at the top level) evaluates
+correctly, and that a genuine forward reference to a non-existent
+name still produces a clear error rather than a generic
+`applied non-function: ()`.
+
+### Phase 59.6: Multi-variable lambdas `x y => body` ⏳ TODO
+
+Haskell writes multi-param lambdas as `\x y -> body`, desugared to
+`\x -> \y -> body`.  Medaka today only accepts a single pattern on
+the LHS of `=>`: the grammar is
+`expr_pipe FAT_ARROW expr_lam { ELam ([expr_to_pat $1], $3) }`
+(`parser.mly:598`), and `expr_to_pat` rejects `x y` because the head
+of an application must be an uppercase constructor (`parser.mly:75-85`).
+So `add = x y => x + y` errors with `Invalid lambda parameter pattern`,
+and users must write `x => y => x + y`.
+
+This is a small ergonomic gap.  Top-level and `let`-bound function
+clauses already accept multi-arg patterns (`f x y = …`), so the
+asymmetry is mostly surprise.
+
+Sketch of the fix:
+
+- Extend the lambda production so the LHS is `nonempty_list(expr_atom)`
+  (or a dedicated `lam_pats` non-terminal), then map each atom through
+  `expr_to_pat` and build `ELam (pats, body)`.  The evaluator and
+  typechecker already handle multi-pat `ELam`, so no downstream changes.
+- Watch the `expr_to_pat` head-of-application logic: today a single
+  `EApp (Ctor, arg)` LHS encodes constructor destructuring like
+  `(Some x) => …`.  The new rule has to keep `Some x => …` working
+  (still one pattern, a constructor application) while making
+  `x y => …` two patterns.  Easiest disambiguation: if every atom
+  on the LHS would parse to a `PVar`/`PWild`/literal/tuple/list, treat
+  them as separate pattern args; otherwise fall back to the
+  single-pattern expr-to-pat path that handles `Some x`, `Ok x y`, etc.
+  An explicit rule on `expr_atom+` is cleaner than the current
+  expression-then-reinterpret approach and worth doing while we're here.
+- Update the printer to emit multi-pat lambdas as `x y => …` so the
+  formatter round-trip stays canonical.
+- Tests: parser, typecheck, eval, and `fmt` round-trip for
+  `x y => x + y`, `f a b c => …`, and constructor-pattern parity
+  (`(Some x) => x`, `(Ok x y) => x` still work).
+
 ### Phase 60: Pre-self-host parser-conflict audit ⏳ TODO
 
 Before reimplementing the parser in Medaka, walk through every

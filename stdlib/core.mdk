@@ -278,6 +278,18 @@ export impl Foldable List where
     length [] = 0
     length (_::xs) = 1 + length xs
 
+export
+sum : (Foldable t, Num a) => t a -> a
+sum = fold (+) 0
+
+export
+product : (Foldable t, Num a) => t a -> a
+product = fold (*) 1
+
+export
+elem : (Foldable t, Eq a) => a -> t a -> Bool
+elem a = fold (acc => x => acc || x == a) False
+
 -- Bool helpers
 
 export

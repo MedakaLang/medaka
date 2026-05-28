@@ -94,6 +94,15 @@ let t_left_section_sub = assert_val "r = (10 - _) 3\n" "r" (VInt 7)
 let t_left_section_map = assert_val
   "r = map (2 * _) [1, 2, 3]\n" "r" (VList [VInt 2; VInt 4; VInt 6])
 
+let t_bare_section_plus     = assert_val "r = (+) 2 3\n"      "r" (VInt 5)
+let t_bare_section_minus    = assert_val "r = (-) 10 4\n"     "r" (VInt 6)
+let t_bare_section_eq_true  = assert_val "r = (==) 1 1\n"     "r" (VBool true)
+let t_bare_section_eq_false = assert_val "r = (==) 1 2\n"     "r" (VBool false)
+let t_bare_section_cons     = assert_val "r = (::) 1 [2, 3]\n"
+  "r" (VList [VInt 1; VInt 2; VInt 3])
+let t_bare_section_fold     = assert_val
+  "r = fold (+) 0 [1, 2, 3, 4]\n" "r" (VInt 10)
+
 (* ── Recursion ──────────────────────────────────────────────────────────── *)
 
 let t_factorial = assert_val {|fact n =
@@ -958,6 +967,12 @@ let () =
       test_case "left section (2 * _)"  `Quick t_left_section_mul;
       test_case "left section (10 - _)" `Quick t_left_section_sub;
       test_case "left section map"      `Quick t_left_section_map;
+      test_case "bare section (+)"      `Quick t_bare_section_plus;
+      test_case "bare section (-)"      `Quick t_bare_section_minus;
+      test_case "bare section (==) T"   `Quick t_bare_section_eq_true;
+      test_case "bare section (==) F"   `Quick t_bare_section_eq_false;
+      test_case "bare section (::)"     `Quick t_bare_section_cons;
+      test_case "bare section fold (+)" `Quick t_bare_section_fold;
     ];
     "recursion", [
       test_case "factorial" `Quick t_factorial;

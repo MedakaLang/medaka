@@ -693,12 +693,24 @@ section_op:
   | CONS       { "::" }  | PLUSPLUS   { "++" }  | STRAPPEND  { "<>" }
   | PIPE_RIGHT { "|>" }  | RCOMPOSE   { ">>" }  | LCOMPOSE   { "<<" }
 
+(* Bare operator sections (op) — like section_op but also allows MINUS.
+   MINUS is excluded from section_op above because (-e) means unary
+   negation, but (- ) has no such ambiguity and means subtraction. *)
+section_op_bare:
+  | section_op { $1 }
+  | MINUS      { "-" }
+
 expr_atom:
   | lit                                              { ELoc (of_pos $startpos $endpos, ELit $1) }
   | IDENT                                            { ELoc (of_pos $startpos $endpos, EVar $1) }
   | UPPER                                            { ELoc (of_pos $startpos $endpos, EVar $1) }
   | UNDERSCORE                                       { ELoc (of_pos $startpos $endpos, EVar "_") }
   | LPAREN RPAREN                                    { ELoc (of_pos $startpos $endpos, ELit LUnit) }
+  | LPAREN section_op_bare RPAREN
+    { let op = $2 in
+      ELoc (of_pos $startpos $endpos,
+            ELam ([PVar "_a"; PVar "_b"],
+                  EBinOp (op, EVar "_a", EVar "_b"))) }
   | LPAREN section_op expr_no_block RPAREN
     { let op = $2 and e = $3 in
       ELoc (of_pos $startpos $endpos, ELam ([PVar "_s"], EBinOp (op, EVar "_s", e))) }
