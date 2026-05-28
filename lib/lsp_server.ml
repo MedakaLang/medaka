@@ -204,6 +204,7 @@ let handle_initialize (_p : InitializeParams.t) : InitializeResult.t =
     ~definitionProvider:(`Bool true)
     ~documentHighlightProvider:(`Bool true)
     ~completionProvider:(CompletionOptions.create ())
+    ~inlayHintProvider:(`Bool true)
     ()
   in
   let info = InitializeResult.create_serverInfo
@@ -683,6 +684,91 @@ let handle_completion (p : CompletionParams.t)
            Some (`List items)
          with _ -> None)
 
+(* ── Inlay hints ───────────────────────────────────────────── *)
+
+(* Return the column right after the declaration's name in the source
+   line that starts at [loc.line].  Concretely: starting at
+   [loc.col], scan forward while we're still inside the identifier;
+   that gives us the position immediately following the name where
+   a `: Type` hint reads cleanly.  Returns None if the line/column
+   is out of bounds (defensive — the parser side channel should
+   keep us honest). *)
+let column_after_name (src : string) (loc : Ast.loc) : int option =
+  let lines = String.split_on_char '\n' src in
+  match List.nth_opt lines (loc.line - 1) with
+  | None -> None
+  | Some line ->
+    let len = String.length line in
+    let i = ref loc.col in
+    while !i < len && is_ident_char line.[!i] do incr i done;
+    if !i = loc.col then None else Some !i
+
+(* For inlay hints, we want only top-level decls that:
+   - bind a value (DFunDef or zero-arg, etc.)
+   - have no accompanying DTypeSig in the program
+   - whose name appears in the typecheck env
+   This keeps the noise low — already-annotated code stays clean. *)
+let decl_binding_name (d : Ast.decl) : Ast.ident option =
+  let open Ast in
+  match inner_decl d with
+  | DFunDef (_, n, _, _)         -> Some n
+  | DLetGroup (_, (n, _) :: _)   -> Some n  (* hint on the first name *)
+  | _                            -> None
+
+let has_explicit_sig (prog : Ast.program) (name : Ast.ident) : bool =
+  List.exists (fun d -> match Ast.inner_decl d with
+    | Ast.DTypeSig (_, n, _) -> n = name
+    | _ -> false
+  ) prog
+
+let handle_inlay_hint (p : InlayHintParams.t) : InlayHint.t list option =
+  let uri = p.textDocument.uri in
+  let uri_str = DocumentUri.to_string uri in
+  match Hashtbl.find_opt docs uri_str with
+  | None -> None
+  | Some src ->
+    (match parse_buffer src uri with
+     | None -> None
+     | Some (prog, locs) ->
+       let prog_d = Desugar.desugar_program prog in
+       if Resolve.resolve_program prog_d <> [] then None
+       else
+         try
+           let (env, _) = Typecheck.check_program prog_d in
+           (* Pair each parse-side decl with its source position.
+              Filter to bindings with no explicit signature, then turn
+              each into a hint placed after the name. *)
+           let rec zip ds ls = match ds, ls with
+             | d :: dr, l :: lr -> (d, l) :: zip dr lr
+             | _ -> []
+           in
+           let hints =
+             zip prog locs
+             |> List.filter_map (fun (d, loc) ->
+               match decl_binding_name d with
+               | None -> None
+               | Some name when has_explicit_sig prog name -> None
+               | Some name ->
+                 match List.assoc_opt name env with
+                 | None -> None
+                 | Some sch ->
+                   (match column_after_name src loc with
+                    | None -> None
+                    | Some col ->
+                      let pos =
+                        Position.create ~line:(loc.line - 1) ~character:col
+                      in
+                      let label =
+                        Printf.sprintf ": %s" (Typecheck.pp_scheme sch)
+                      in
+                      Some (InlayHint.create
+                              ~position:pos
+                              ~paddingLeft:true
+                              ~label:(`String label) ())))
+           in
+           Some hints
+         with _ -> None)
+
 (* Top-level catch-all: any exception from a notification handler is logged
    and swallowed.  Notifications have no response, so the client never
    learns about the failure — but the server stays alive. *)
@@ -728,6 +814,10 @@ let handle_request_unsafe (req : Jsonrpc.Request.t) : Jsonrpc.Response.t =
          (Client_request.yojson_of_result cr result)
      | Client_request.TextDocumentCompletion p as cr ->
        let result = handle_completion p in
+       Jsonrpc.Response.ok req.id
+         (Client_request.yojson_of_result cr result)
+     | Client_request.InlayHint p as cr ->
+       let result = handle_inlay_hint p in
        Jsonrpc.Response.ok req.id
          (Client_request.yojson_of_result cr result)
      | _ ->

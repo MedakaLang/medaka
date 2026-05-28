@@ -273,6 +273,56 @@ let test_completion_no_prefix_returns_env () =
   Alcotest.(check bool) "alpha in completions" true (List.mem "alpha" labels);
   Alcotest.(check bool) "beta in completions"  true (List.mem "beta" labels)
 
+(* ── Inlay hints ───────────────────────────────────────────── *)
+
+let test_inlay_hint_unannotated () =
+  let uri = uri_of_path "/tmp/lsp_inlay.mdk" in
+  (* `double` has no signature; `triple` has one and should NOT get
+     a hint (avoids cluttering already-annotated code). *)
+  let src = "double x = x + x\ntriple : Int -> Int\ntriple x = x * 3\n" in
+  prime_doc uri src;
+  let p = InlayHintParams.create
+    ~textDocument:(TextDocumentIdentifier.create ~uri)
+    ~range:(Range.create
+              ~start:(Position.create ~line:0 ~character:0)
+              ~end_:(Position.create ~line:10 ~character:0)) ()
+  in
+  match Lsp_server.handle_inlay_hint p with
+  | None -> Alcotest.fail "expected at least one inlay hint"
+  | Some hints ->
+    (* `double` is on line 0; the hint must land there. *)
+    let line0 = List.filter (fun (h : InlayHint.t) ->
+      h.position.line = 0) hints
+    in
+    if line0 = [] then
+      Alcotest.fail "expected an inlay hint for `double`";
+    (* `triple` already has a signature: no hint for either of its
+       two source lines (lines 1 and 2). *)
+    let triple_lines = List.filter (fun (h : InlayHint.t) ->
+      h.position.line = 1 || h.position.line = 2) hints
+    in
+    Alcotest.(check int) "no hint for annotated `triple`" 0
+      (List.length triple_lines)
+
+let test_inlay_hint_column_after_name () =
+  let uri = uri_of_path "/tmp/lsp_inlay_col.mdk" in
+  (* `f` ends at column 1, so the hint should sit at column 1. *)
+  let src = "f x = x + x\n" in
+  prime_doc uri src;
+  let p = InlayHintParams.create
+    ~textDocument:(TextDocumentIdentifier.create ~uri)
+    ~range:(Range.create
+              ~start:(Position.create ~line:0 ~character:0)
+              ~end_:(Position.create ~line:2 ~character:0)) ()
+  in
+  match Lsp_server.handle_inlay_hint p with
+  | Some [h] ->
+    Alcotest.(check int) "hint column lands right after `f`" 1
+      h.position.character
+  | Some hs ->
+    Alcotest.failf "expected one hint, got %d" (List.length hs)
+  | None -> Alcotest.fail "expected a hint"
+
 (* ── Entry ──────────────────────────────────────────────────── *)
 
 let () =
@@ -303,5 +353,9 @@ let () =
     ; "completion",
       [ test_case "prefix filters env"    `Quick test_completion_prefix_filters_env
       ; test_case "no prefix lists env"   `Quick test_completion_no_prefix_returns_env
+      ]
+    ; "inlay hints",
+      [ test_case "shows unannotated only" `Quick test_inlay_hint_unannotated
+      ; test_case "column after name"      `Quick test_inlay_hint_column_after_name
       ]
     ]
