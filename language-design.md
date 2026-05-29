@@ -114,6 +114,35 @@ head []     = None
 head (x::_) = Some x
 ```
 
+#### Guards
+
+Equation heads, `where`-bindings, and `match` arms may carry guards. A guard is a
+comma-separated sequence of qualifiers; the arm fires only when every qualifier
+succeeds, otherwise control falls through to the next arm. Each qualifier is either a
+boolean test or a **pattern bind** `pat <- expr` (the arm is skipped if the pattern
+doesn't match). Bindings introduced by an earlier qualifier are in scope for later
+qualifiers and the body:
+```
+classify : Int -> String
+classify n
+  | n < 0     = "neg"
+  | n > 0     = "pos"
+  | otherwise = "zero"
+
+filterMap : (a -> Option b) -> List a -> List b
+filterMap f [] = []
+filterMap f (x::xs)
+  | Some y <- f x = y :: filterMap f xs
+  | None  <- f x  = filterMap f xs
+```
+The same qualifiers work in `match` arms, after `if`:
+```
+describe o =
+  match o
+    n if Some y <- n, y > 0 => "some-pos"
+    _                       => "other"
+```
+
 ### Currying
 Functions are curried by default. Partial application falls out naturally:
 ```

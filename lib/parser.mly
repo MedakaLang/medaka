@@ -9,12 +9,21 @@ let of_pos sp ep =
     end_col  = ep.Lexing.pos_cnum - ep.Lexing.pos_bol }
 
 (* Record the position of a top-level declaration on the shared
-   `Parser_state.decl_positions` list.  The end_line is taken from the
-   lexer's `last_content_line` side channel, which excludes the trailing
-   newlines/indentation that `$endpos` would otherwise span. *)
+   `Parser_state.decl_positions` list.  When the lexer is wrapped by
+   `Fmt.tracking_token`, the `last_content_line` side channel holds the
+   line where the decl's last non-trivia token sat — preferable to
+   `$endpos` for the formatter because $endpos spans trailing
+   newlines/indentation that the parser already consumed.  Other callers
+   (the LSP, the CLI) use the plain `Lexer.token` and leave the side
+   channel at 0; in that case we just keep `ep.pos_lnum`. *)
 let record_decl_pos sp ep =
   let loc = of_pos sp ep in
-  let loc = { loc with end_line = !Parser_state.last_content_line } in
+  let lcl = !Parser_state.last_content_line in
+  let loc =
+    if lcl >= sp.Lexing.pos_lnum && lcl <= ep.Lexing.pos_lnum
+    then { loc with end_line = lcl }
+    else loc
+  in
   Parser_state.record_decl_pos loc
 
 let fold_ty_app = function
@@ -107,11 +116,19 @@ and expr_to_pats e =
        List.map expr_to_pat (head :: args))
   | e -> [expr_to_pat e]
 
-(* Desugar top-level guard arms into a nested if-then-else chain.
-   A missing catch-all panics at runtime, matching Haskell's behaviour. *)
+(* Desugar guard arms (a sequence of qualifiers + body each) into a nested
+   if/match chain that threads a fallback continuation.  A boolean qualifier
+   lowers to `if`; a pattern-bind qualifier lowers to a 2-arm `match` whose
+   wildcard arm is the fallback (so it stays exhaustive).  A missing catch-all
+   panics at runtime, matching Haskell's behaviour. *)
 let desugar_guards arms =
+  let rec arm quals body els = match quals with
+    | []                 -> body
+    | GBool e :: qs      -> EIf (e, arm qs body els, els)
+    | GBind (p, e) :: qs -> EMatch (e, [(p, [], arm qs body els); (PWild, [], els)])
+  in
   List.fold_right
-    (fun (cond, body) else_ -> EIf (cond, body, else_))
+    (fun (quals, body) els -> arm quals body els)
     arms
     (EApp (EVar "panic", ELit (LString "Non-exhaustive guards")))
 
@@ -426,7 +443,11 @@ inner_fun_def:
     { fun is_pub -> DFunDef (is_pub, $1, $2, desugar_guards $4) }
 
 guard_arm:
-  | PIPE expr_or EQUAL fun_body newlines  { ($2, $4) }
+  | PIPE separated_nonempty_list(COMMA, guard_qual) EQUAL fun_body newlines  { ($2, $4) }
+
+guard_qual:
+  | pat LARROW expr_or  { GBind ($1, $3) }
+  | expr_or             { GBool $1 }
 
 fun_body:
   | expr_no_block                                                    { $1 }
@@ -582,7 +603,7 @@ expr_lam:
     { ELoc (of_pos $startpos $endpos,
             ELet (true, false, PVar $3, EAnnot ($7, $5), $9)) }
   | IF LET pat EQUAL expr_or THEN expr_lam ELSE expr_lam
-    { ELoc (of_pos $startpos $endpos, EMatch ($5, [($3, None, $7); (PWild, None, $9)])) }
+    { ELoc (of_pos $startpos $endpos, EMatch ($5, [($3, [], $7); (PWild, [], $9)])) }
   | IF expr_or THEN expr_lam ELSE expr_lam
     { ELoc (of_pos $startpos $endpos, EIf ($2, $4, $6)) }
   (* Allow NEWLINE between an inline THEN branch and ELSE so that
@@ -811,21 +832,23 @@ kv_or_e:
 (* ── Match arms ──────────────────────────────────────── *)
 
 match_arm:
-  | pat option(guard) FAT_ARROW expr_no_block newlines  { ($1, $2, $4) }
-  | pat option(guard) FAT_ARROW expr_no_block WHERE INDENT nonempty_list(where_binding) DEDENT newlines
+  | pat guard_opt FAT_ARROW expr_no_block newlines  { ($1, $2, $4) }
+  | pat guard_opt FAT_ARROW expr_no_block WHERE INDENT nonempty_list(where_binding) DEDENT newlines
     { ($1, $2, desugar_where $7 $4) }
   (* Haskell-style `where` on its own indented line within a match arm. *)
-  | pat option(guard) FAT_ARROW expr_no_block INDENT WHERE INDENT nonempty_list(where_binding) DEDENT newlines DEDENT newlines
+  | pat guard_opt FAT_ARROW expr_no_block INDENT WHERE INDENT nonempty_list(where_binding) DEDENT newlines DEDENT newlines
     { ($1, $2, desugar_where $8 $4) }
   (* Phase 45.8: indented-block body for a match arm.  Lowers to EDo
      so the existing do-handling (let-chain, sequencing) applies.  The
      EDo path also gives free monadic-bind dispatch if any stmt is a
      `<-` bind. *)
-  | pat option(guard) FAT_ARROW INDENT nonempty_list(stmt) DEDENT newlines
+  | pat guard_opt FAT_ARROW INDENT nonempty_list(stmt) DEDENT newlines
     { ($1, $2, stmts_to_expr $5) }
 
-guard:
-  | IF expr_or  { $2 }
+(* Guard qualifier sequence for a match arm; empty list = unguarded. *)
+guard_opt:
+  | (* empty *)                                       { [] }
+  | IF separated_nonempty_list(COMMA, guard_qual)     { $2 }
 
 (* ── List comprehension qualifiers ──────────────────── *)
 

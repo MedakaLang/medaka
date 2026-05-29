@@ -27,8 +27,8 @@ let rec lex_compare_exprs = function
   | (ea, eb) :: rest ->
     EMatch (
       EApp (EApp (EVar "compare", ea), eb),
-      [ (PCon ("Eq", []), None, lex_compare_exprs rest)
-      ; (PVar "__c",      None, EVar "__c")
+      [ (PCon ("Eq", []), [], lex_compare_exprs rest)
+      ; (PVar "__c",      [], EVar "__c")
       ]
     )
 
@@ -52,9 +52,9 @@ let derive_eq_data type_name variants =
           EApp (EApp (EVar "eq", EVar a), EVar b)
         ) avars bvars)
     in
-    (PTuple [apat; bpat], None, body)
+    (PTuple [apat; bpat], [], body)
   ) variants in
-  let wild_arm = (PTuple [PWild; PWild], None, EVar "False") in
+  let wild_arm = (PTuple [PWild; PWild], [], EVar "False") in
   let body = EMatch (ETuple [EVar "__x"; EVar "__y"], same_con_arms @ [wild_arm]) in
   DImpl {
     is_pub     = true;
@@ -111,7 +111,7 @@ let derive_show_data type_name variants =
         in
         concat_strings parts
     in
-    (pat, None, body)
+    (pat, [], body)
   ) variants in
   let body = EMatch (EVar "__x", arms) in
   DImpl {
@@ -168,7 +168,7 @@ let derive_ord_data type_name variants =
         else if i > j then EVar "Gt"
         else lex_compare_exprs (List.map2 (fun a b -> (EVar a, EVar b)) avars bvars)
       in
-      (PTuple [apat; bpat], None, body)
+      (PTuple [apat; bpat], [], body)
     ) indexed
   ) indexed in
   let body = EMatch (ETuple [EVar "__x"; EVar "__y"], arms) in
@@ -296,7 +296,7 @@ let derive_arbitrary_data type_name variants =
           ) named_fields in
           ERecordCreate (v.con_name, field_exprs)
       in
-      (pat, None, body)
+      (pat, [], body)
     ) variants
   in
   let gen_body =
@@ -386,8 +386,12 @@ let rec map_expr f e =
         ) bs,
         map_expr f e2)
     | EMatch (e0, arms)       ->
+        let map_qual = function
+          | GBool g      -> GBool (map_expr f g)
+          | GBind (p, g) -> GBind (p, map_expr f g)
+        in
         EMatch (map_expr f e0,
-          List.map (fun (p, g, b) -> (p, Option.map (map_expr f) g, map_expr f b)) arms)
+          List.map (fun (p, gs, b) -> (p, List.map map_qual gs, map_expr f b)) arms)
     | EIf (c, t, el)          -> EIf (map_expr f c, map_expr f t, map_expr f el)
     | EBinOp (op, e1, e2)    -> EBinOp (op, map_expr f e1, map_expr f e2)
     | EUnOp (op, e0)          -> EUnOp (op, map_expr f e0)
@@ -477,8 +481,8 @@ let desugar_list_comp body quals =
           if is_refutable pat then
             ELam ([PVar "__lc_x"],
                   EMatch (EVar "__lc_x",
-                          [(pat,  None, acc);
-                           (PWild, None, EListLit [])]))
+                          [(pat,  [], acc);
+                           (PWild, [], EListLit [])]))
           else
             ELam ([pat], acc)
         in

@@ -885,11 +885,23 @@
           "value": "|"
         },
         {
-          "type": "FIELD",
-          "name": "guard",
+          "type": "SYMBOL",
+          "name": "guard_qual"
+        },
+        {
+          "type": "REPEAT",
           "content": {
-            "type": "SYMBOL",
-            "name": "_expr"
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": ","
+              },
+              {
+                "type": "SYMBOL",
+                "name": "guard_qual"
+              }
+            ]
           }
         },
         {
@@ -907,6 +919,44 @@
         {
           "type": "SYMBOL",
           "name": "_newline"
+        }
+      ]
+    },
+    "guard_qual": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "pat",
+              "content": {
+                "type": "SYMBOL",
+                "name": "pat"
+              }
+            },
+            {
+              "type": "STRING",
+              "value": "<-"
+            },
+            {
+              "type": "FIELD",
+              "name": "value",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_expr"
+              }
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "guard",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expr"
+          }
         }
       ]
     },
@@ -2572,11 +2622,23 @@
                   "value": "if"
                 },
                 {
-                  "type": "FIELD",
-                  "name": "guard",
+                  "type": "SYMBOL",
+                  "name": "guard_qual"
+                },
+                {
+                  "type": "REPEAT",
                   "content": {
-                    "type": "SYMBOL",
-                    "name": "_expr"
+                    "type": "SEQ",
+                    "members": [
+                      {
+                        "type": "STRING",
+                        "value": ","
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "guard_qual"
+                      }
+                    ]
                   }
                 }
               ]
@@ -4329,6 +4391,10 @@
     ],
     [
       "lc_qual",
+      "_expr"
+    ],
+    [
+      "guard_qual",
       "_expr"
     ],
     [

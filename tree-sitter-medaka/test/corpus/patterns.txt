@@ -139,6 +139,62 @@ head xs =
                 (int_lit)))))))))
 
 ==================
+Match arm — boolean and pattern-bind guards
+==================
+
+classify m x =
+  match get x m
+    Some y if y > 0 => "pos"
+    Some y => "nonpos"
+    None => "missing"
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    param: (pat_atom
+      var: (ident))
+    param: (pat_atom
+      var: (ident))
+    body: (do_body
+      (stmt
+        (do_stmt_expr
+          value: (match_expr
+            scrutinee: (expr_app
+              function: (expr_app
+                function: (ident)
+                argument: (ident))
+              argument: (ident))
+            (match_arm
+              pattern: (pat
+                (pat_app
+                  constructor: (upper)
+                  arg: (pat_atom
+                    var: (ident))))
+              (guard_qual
+                guard: (binary_expr
+                  left: (ident)
+                  right: (literal
+                    (int_lit))))
+              body: (literal
+                (string_lit)))
+            (match_arm
+              pattern: (pat
+                (pat_app
+                  constructor: (upper)
+                  arg: (pat_atom
+                    var: (ident))))
+              body: (literal
+                (string_lit)))
+            (match_arm
+              pattern: (pat
+                (pat_atom
+                  constructor: (upper)))
+              body: (literal
+                (string_lit)))))))))
+
+==================
 Tuple pattern in match
 ==================
 

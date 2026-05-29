@@ -495,6 +495,54 @@ f x
 r = f 0
 |} "r"
 
+(* ── Pattern guards (boolean + pattern-bind qualifiers) ─────────────────── *)
+
+(* Pattern-bind that matches takes its arm. *)
+let t_pguard_bind_match = assert_val {|
+classify o
+  | Some y <- o, y > 0 = "pos"
+  | Some y <- o        = "nonpos"
+  | otherwise          = "missing"
+r = classify (Some 7)
+|} "r" (VString "pos")
+
+(* First arm's boolean qualifier fails, falls through to second arm. *)
+let t_pguard_bind_fallthrough = assert_val {|
+classify o
+  | Some y <- o, y > 0 = "pos"
+  | Some y <- o        = "nonpos"
+  | otherwise          = "missing"
+r = classify (Some (-2))
+|} "r" (VString "nonpos")
+
+(* Pattern-bind itself fails (None), falls through to catch-all. *)
+let t_pguard_bind_fail = assert_val {|
+classify o
+  | Some y <- o, y > 0 = "pos"
+  | Some y <- o        = "nonpos"
+  | otherwise          = "missing"
+r = classify None
+|} "r" (VString "missing")
+
+(* filterMap-style: pattern-bind guards over a list (the list.mdk trigger). *)
+let t_pguard_filter_map = assert_val {|
+keepPos [] = []
+keepPos (x::xs)
+  | Some y <- x = y::(keepPos xs)
+  | None  <- x  = keepPos xs
+r = keepPos [Some 1, None, Some 3]
+|} "r" (VList [VInt 1; VInt 3])
+
+(* Pattern bind in a match-arm guard, with fallthrough between arms. *)
+let t_pguard_match_arm = assert_val {|
+describe o =
+  match o
+    n if Some y <- n, y > 0 => "some-pos"
+    n if Some _ <- n        => "some-nonpos"
+    _                       => "none"
+r = describe (Some (-1))
+|} "r" (VString "some-nonpos")
+
 (* ── Newtype tests ──────────────────────────────────────────────────── *)
 
 let t_newtype_wrap =
@@ -1246,6 +1294,11 @@ let () =
       test_case "pos branch"        `Quick t_guard_basic_pos;
       test_case "zero branch"       `Quick t_guard_basic_zero;
       test_case "non-exhaustive"    `Quick t_guard_non_exhaustive;
+      test_case "pguard bind match"       `Quick t_pguard_bind_match;
+      test_case "pguard bind fallthrough" `Quick t_pguard_bind_fallthrough;
+      test_case "pguard bind fail"        `Quick t_pguard_bind_fail;
+      test_case "pguard filterMap"        `Quick t_pguard_filter_map;
+      test_case "pguard match arm"        `Quick t_pguard_match_arm;
     ];
     "newtype declarations", [
       test_case "wrap value"        `Quick t_newtype_wrap;

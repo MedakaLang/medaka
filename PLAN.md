@@ -2743,7 +2743,8 @@ This was assembled after reviewing `lib/parser.mly`, `lib/ast.ml`,
 
 | Feature | Description | Notes |
 |---------|-------------|-------|
-| **Top-level function guards** | Guards directly on equation heads: `classify n \| n < 0 = "neg" \| otherwise = "pos"` | Medaka supports guards inside `match` arms. This form is sugar over `match` but reads more naturally for numeric/boolean logic. |
+| **Top-level function guards** | Guards directly on equation heads: `classify n \| n < 0 = "neg" \| otherwise = "pos"` | ✅ Done. Supported on function clauses, `where`-bindings, and `match` arms. Sugar over `match`/`if` but reads more naturally for numeric/boolean logic. |
+| **Pattern guards** | Comma-separated guard qualifiers, each a boolean test or a pattern bind `pat <- expr`: `filterMap f (x::xs) \| Some y <- f x = y::… \| None <- f x = …` | ✅ Done. Available in function/`where` guards and `match`-arm guards (`pat if q1, q2 => …`). A bind that fails to match falls through to the next arm; earlier binds scope over later qualifiers and the body. |
 | **List comprehensions** | `[x*2 \| x <- xs, x > 0]` | Expressible via `map`/`filter`/`concatMap`; nice to have for readability. Not blocking anything. |
 | **String interpolation** | `"Hello, \{name}!"` | ✅ Phase 23 done. `\{expr}` syntax; embedded expr must be `String` (use `show` explicitly for other types). |
 | **`otherwise` alias** | `otherwise = True` so guard chains have a named catch-all | Trivial to add as a stdlib `extern`-free binding; purely cosmetic. |

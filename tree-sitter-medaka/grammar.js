@@ -73,6 +73,8 @@ module.exports = grammar({
     [$.list_comp, $.list_expr],
     /* lc_qual guard form is just _expr — needs GLR to try both */
     [$.lc_qual, $._expr],
+    /* guard_qual guard form is just _expr — needs GLR to try both */
+    [$.guard_qual, $._expr],
     /* record_pat_field: ident vs ident = pat; pun form same start as _expr */
     [$.record_pat_field],
     [$.record_pat_field, $._expr],
@@ -270,13 +272,22 @@ module.exports = grammar({
       $._newline,
     ),
 
-    /* Guard arm:  | condition = body */
+    /* Guard arm:  | qual, qual ... = body
+     * Each qualifier is a boolean condition or a pattern-bind `pat <- expr`. */
     guard_arm: $ => seq(
       '|',
-      field('guard', $._expr),
+      $.guard_qual,
+      repeat(seq(',', $.guard_qual)),
       '=',
       field('body', $._fun_body),
       $._newline,
+    ),
+
+    /* A single guard qualifier — `pat <- expr` (pattern bind) or a boolean expr.
+     * Mirrors lc_qual; the bind form needs GLR vs the bare-expr form. */
+    guard_qual: $ => choice(
+      seq(field('pat', $.pat), '<-', field('value', $._expr)),
+      field('guard', $._expr),
     ),
 
     /* _fun_body is transparent: callers see the concrete expression directly */
@@ -572,7 +583,7 @@ module.exports = grammar({
 
     match_arm: $ => seq(
       field('pattern', $.pat),
-      optional(seq('if', field('guard', $._expr))),
+      optional(seq('if', $.guard_qual, repeat(seq(',', $.guard_qual)))),
       '=>',
       field('body', $._expr),
       optional(seq('where', $._indent, repeat1($.where_binding), $._dedent)),

@@ -468,17 +468,26 @@ and eval env expr =
     let sv = eval env scrut in
     let rec try_arms = function
       | [] -> raise Impl_no_match
-      | (pat, guard, body) :: rest ->
+      | (pat, guards, body) :: rest ->
         (match match_pat pat sv with
          | None -> try_arms rest
          | Some binds ->
-           let env' = extend env binds in
-           let guard_ok = match guard with
-             | None -> true
-             | Some g -> eval env' g = VBool true
+           (* Run guard qualifiers in order; pattern binds extend the env for
+              later qualifiers and the body.  Any failure falls through. *)
+           let rec run env_cur = function
+             | [] -> Some env_cur
+             | GBool g :: qs ->
+               (match eval env_cur g with
+                | VBool true | VCon ("True", []) -> run env_cur qs
+                | _ -> None)
+             | GBind (p, e) :: qs ->
+               (match match_pat p (eval env_cur e) with
+                | Some b -> run (extend env_cur b) qs
+                | None -> None)
            in
-           if guard_ok then eval env' body
-           else try_arms rest)
+           (match run (extend env binds) guards with
+            | Some env' -> eval env' body
+            | None -> try_arms rest))
     in
     try_arms arms
 

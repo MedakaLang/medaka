@@ -305,12 +305,20 @@ and print_expr_raw p = function
     write p "match ";
     print_expr p prec_top sc;
     indented p (fun () ->
-      List.iteri (fun i (pat, guard, body) ->
+      List.iteri (fun i (pat, guards, body) ->
         if i > 0 then newline p;
         print_pat p pat;
-        (match guard with
-         | None -> ()
-         | Some g -> write p " if "; print_expr p prec_top g);
+        (match guards with
+         | [] -> ()
+         | _ ->
+           write p " if ";
+           List.iteri (fun j q ->
+             if j > 0 then write p ", ";
+             match q with
+             | GBool g      -> print_expr p prec_top g
+             | GBind (gp, g) ->
+               print_pat p gp; write p " <- "; print_expr p prec_top g
+           ) guards);
         write p " => ";
         print_expr_body p body
       ) arms

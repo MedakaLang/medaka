@@ -45,3 +45,9 @@ get 0 (x::_) = Some x
 get i (_::xs) = get (i - 1) xs
 
 -- Transformation
+
+filterMap : (a -> Option b) -> List a -> List b
+filterMap f [] = []
+filterMap f (x::xs)
+    | Some y <- f x = y::(filterMap f xs)
+    | None <- f x = filterMap f xs

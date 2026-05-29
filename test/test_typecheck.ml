@@ -1752,6 +1752,23 @@ f x
   | True = "oops"
 |}
 
+(* Pattern-bind guard: the bound var is typed from the scrutinee and is
+   usable in later qualifiers and the body. *)
+let t_pguard_bind_scopes = assert_type {|
+classify o
+  | Some y <- o, y > 0 = y
+  | otherwise          = 0
+r = classify (Some 5)
+|} "r" "Int"
+
+(* Ill-typed: comparing the bound String against an Int must be rejected. *)
+let e_pguard_bind_mismatch = assert_err {|
+f o
+  | Some y <- o, y > 0 = y
+r : Option String -> Int
+r = f
+|}
+
 (* ── Type alias tests ─────────────────────────────── *)
 
 let t_alias_simple =
@@ -2527,6 +2544,8 @@ let () =
       test_case "Int -> String"           `Quick t_guard_int_to_string;
       test_case "Int -> Int"              `Quick t_guard_int_to_int;
       test_case "err: body type mismatch" `Quick e_guard_body_mismatch;
+      test_case "pattern-bind scopes"      `Quick t_pguard_bind_scopes;
+      test_case "err: bind type mismatch"  `Quick e_pguard_bind_mismatch;
     ];
     "type aliases", [
       test_case "simple alias"           `Quick t_alias_simple;

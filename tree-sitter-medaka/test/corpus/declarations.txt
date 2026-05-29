@@ -405,21 +405,77 @@ abs n
     param: (pat_atom
       var: (ident))
     (guard_arm
-      guard: (binary_expr
-        left: (ident)
-        right: (literal
-          (int_lit)))
+      (guard_qual
+        guard: (binary_expr
+          left: (ident)
+          right: (literal
+            (int_lit))))
       body: (expr_app
         function: (literal
           (int_lit))
         argument: (unary_expr
           operand: (ident))))
     (guard_arm
-      guard: (binary_expr
-        left: (ident)
-        right: (literal
-          (int_lit)))
+      (guard_qual
+        guard: (binary_expr
+          left: (ident)
+          right: (literal
+            (int_lit))))
       body: (ident))))
+
+==================
+Function definition — pattern guards
+==================
+
+filterMap f (x::xs)
+  | Some y <- f x = y::(filterMap f xs)
+  | None <- f x = filterMap f xs
+
+---
+
+(source_file
+  (fun_def
+    name: (ident)
+    param: (pat_atom
+      var: (ident))
+    param: (pat_atom
+      (pat
+        (pat_cons
+          head: (pat_atom
+            var: (ident))
+          tail: (pat
+            (pat_atom
+              var: (ident))))))
+    (guard_arm
+      (guard_qual
+        pat: (pat
+          (pat_app
+            constructor: (upper)
+            arg: (pat_atom
+              var: (ident))))
+        value: (expr_app
+          function: (ident)
+          argument: (ident)))
+      body: (binary_expr
+        left: (ident)
+        right: (expr_app
+          function: (expr_app
+            function: (ident)
+            argument: (ident))
+          argument: (ident))))
+    (guard_arm
+      (guard_qual
+        pat: (pat
+          (pat_atom
+            constructor: (upper)))
+        value: (expr_app
+          function: (ident)
+          argument: (ident)))
+      body: (expr_app
+        function: (expr_app
+          function: (ident)
+          argument: (ident))
+        argument: (ident)))))
 
 ==================
 Function definition — where clause

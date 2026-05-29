@@ -30,8 +30,11 @@ let rec collect_expr acc = function
     collect_expr acc' e
   | Ast.EMatch (e, arms) ->
     let acc' = collect_expr acc e in
-    List.fold_left (fun a (_, guard, body) ->
-      let a' = match guard with Some g -> collect_expr a g | None -> a in
+    List.fold_left (fun a (_, guards, body) ->
+      let a' = List.fold_left (fun a q ->
+        match q with
+        | Ast.GBool g      -> collect_expr a g
+        | Ast.GBind (_, g) -> collect_expr a g) a guards in
       collect_expr a' body
     ) acc' arms
   | Ast.EIf (c, t, e) -> collect_expr (collect_expr (collect_expr acc c) t) e

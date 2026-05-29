@@ -51,6 +51,13 @@ and lc_qual =
   | LCGuard of expr                (* boolean guard *)
   | LCLet   of bool * pat * expr   (* let [mut] p = e *)
 
+(* Guard qualifiers (match arms and desugared function/where guards).
+   A sequence succeeds when every qualifier does; on failure control
+   falls through to the next arm. *)
+and guard_qual =
+  | GBool of expr                  (* boolean condition *)
+  | GBind of pat * expr            (* pat <- expr *)
+
 (* Do-notation statements *)
 and do_stmt =
   | DoBind   of pat * expr          (* x <- e *)
@@ -67,7 +74,7 @@ and expr =
   | ELam          of pat list * expr                    (* pat+ => body *)
   | ELet          of bool * bool * pat * expr * expr    (* let [mut] [is_fun_def] p = e1 in e2 *)
   | ELetGroup     of (ident * (pat list * expr) list) list * expr  (* mutually-recursive where group; each name has >=1 clauses *)
-  | EMatch        of expr * (pat * expr option * expr) list  (* match e; pat [if g] => e *)
+  | EMatch        of expr * (pat * guard_qual list * expr) list  (* match e; pat [if g1, g2, ...] => e *)
   | EIf           of expr * expr * expr
   | EBinOp        of string * expr * expr
   | EUnOp         of string * expr
@@ -252,8 +259,14 @@ let rec pp_expr = function
     let pp_b (n, clauses) = String.concat "; " (List.map (pp_clause n) clauses) in
     Printf.sprintf "(where [%s] in %s)" (String.concat "; " (List.map pp_b bs)) (pp_expr e2)
   | EMatch (e, arms) ->
-    let pp_arm (p, g, body) =
-      let guard = match g with None -> "" | Some ge -> Printf.sprintf " if %s" (pp_expr ge) in
+    let pp_qual = function
+      | GBool ge      -> pp_expr ge
+      | GBind (p, ge) -> Printf.sprintf "%s <- %s" (pp_pat p) (pp_expr ge)
+    in
+    let pp_arm (p, gs, body) =
+      let guard = match gs with
+        | [] -> ""
+        | _  -> Printf.sprintf " if %s" (String.concat ", " (List.map pp_qual gs)) in
       Printf.sprintf "%s%s => %s" (pp_pat p) guard (pp_expr body)
     in
     Printf.sprintf "(match %s %s)" (pp_expr e) (String.concat " | " (List.map pp_arm arms))
@@ -322,8 +335,12 @@ let rec strip_locs_expr = function
       (n, List.map (fun (ps, body) -> (ps, strip_locs_expr body)) clauses)) bs,
       strip_locs_expr e)
   | EMatch (e, arms)       ->
+    let strip_qual = function
+      | GBool ge      -> GBool (strip_locs_expr ge)
+      | GBind (p, ge) -> GBind (p, strip_locs_expr ge)
+    in
     EMatch (strip_locs_expr e,
-            List.map (fun (p, g, b) -> (p, Option.map strip_locs_expr g, strip_locs_expr b)) arms)
+            List.map (fun (p, gs, b) -> (p, List.map strip_qual gs, strip_locs_expr b)) arms)
   | EIf (c, t, e)         -> EIf (strip_locs_expr c, strip_locs_expr t, strip_locs_expr e)
   | EBinOp (op, l, r)     -> EBinOp (op, strip_locs_expr l, strip_locs_expr r)
   | EUnOp (op, e)         -> EUnOp (op, strip_locs_expr e)

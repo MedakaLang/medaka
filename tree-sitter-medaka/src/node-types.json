@@ -1904,10 +1904,154 @@
             "named": true
           }
         ]
-      },
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "guard_qual",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "guard_qual",
+    "named": true,
+    "fields": {
       "guard": {
         "multiple": true,
-        "required": true,
+        "required": false,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "array_expr",
+            "named": true
+          },
+          {
+            "type": "binary_expr",
+            "named": true
+          },
+          {
+            "type": "do_expr",
+            "named": true
+          },
+          {
+            "type": "expr_app",
+            "named": true
+          },
+          {
+            "type": "field_access",
+            "named": true
+          },
+          {
+            "type": "ident",
+            "named": true
+          },
+          {
+            "type": "if_expr",
+            "named": true
+          },
+          {
+            "type": "impl_selection",
+            "named": true
+          },
+          {
+            "type": "index_expr",
+            "named": true
+          },
+          {
+            "type": "interp_string",
+            "named": true
+          },
+          {
+            "type": "lambda_expr",
+            "named": true
+          },
+          {
+            "type": "let_expr",
+            "named": true
+          },
+          {
+            "type": "list_comp",
+            "named": true
+          },
+          {
+            "type": "list_expr",
+            "named": true
+          },
+          {
+            "type": "literal",
+            "named": true
+          },
+          {
+            "type": "map_lit",
+            "named": true
+          },
+          {
+            "type": "match_expr",
+            "named": true
+          },
+          {
+            "type": "operator_section",
+            "named": true
+          },
+          {
+            "type": "record_create",
+            "named": true
+          },
+          {
+            "type": "record_update",
+            "named": true
+          },
+          {
+            "type": "set_lit",
+            "named": true
+          },
+          {
+            "type": "tuple_expr",
+            "named": true
+          },
+          {
+            "type": "type_annotation",
+            "named": true
+          },
+          {
+            "type": "unary_expr",
+            "named": true
+          },
+          {
+            "type": "unit_expr",
+            "named": true
+          },
+          {
+            "type": "upper",
+            "named": true
+          }
+        ]
+      },
+      "pat": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "pat",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": false,
         "types": [
           {
             "type": "(",
@@ -4617,124 +4761,6 @@
           }
         ]
       },
-      "guard": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "(",
-            "named": false
-          },
-          {
-            "type": ")",
-            "named": false
-          },
-          {
-            "type": "array_expr",
-            "named": true
-          },
-          {
-            "type": "binary_expr",
-            "named": true
-          },
-          {
-            "type": "do_expr",
-            "named": true
-          },
-          {
-            "type": "expr_app",
-            "named": true
-          },
-          {
-            "type": "field_access",
-            "named": true
-          },
-          {
-            "type": "ident",
-            "named": true
-          },
-          {
-            "type": "if_expr",
-            "named": true
-          },
-          {
-            "type": "impl_selection",
-            "named": true
-          },
-          {
-            "type": "index_expr",
-            "named": true
-          },
-          {
-            "type": "interp_string",
-            "named": true
-          },
-          {
-            "type": "lambda_expr",
-            "named": true
-          },
-          {
-            "type": "let_expr",
-            "named": true
-          },
-          {
-            "type": "list_comp",
-            "named": true
-          },
-          {
-            "type": "list_expr",
-            "named": true
-          },
-          {
-            "type": "literal",
-            "named": true
-          },
-          {
-            "type": "map_lit",
-            "named": true
-          },
-          {
-            "type": "match_expr",
-            "named": true
-          },
-          {
-            "type": "operator_section",
-            "named": true
-          },
-          {
-            "type": "record_create",
-            "named": true
-          },
-          {
-            "type": "record_update",
-            "named": true
-          },
-          {
-            "type": "set_lit",
-            "named": true
-          },
-          {
-            "type": "tuple_expr",
-            "named": true
-          },
-          {
-            "type": "type_annotation",
-            "named": true
-          },
-          {
-            "type": "unary_expr",
-            "named": true
-          },
-          {
-            "type": "unit_expr",
-            "named": true
-          },
-          {
-            "type": "upper",
-            "named": true
-          }
-        ]
-      },
       "pattern": {
         "multiple": false,
         "required": true,
@@ -4750,6 +4776,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "guard_qual",
+          "named": true
+        },
         {
           "type": "where_binding",
           "named": true

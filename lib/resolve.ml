@@ -486,12 +486,19 @@ let rec check_expr env scope errors e =
     check_expr env scope' errors body
   | EMatch (sc, arms) ->
     check_expr env scope errors sc;
-    List.iter (fun (pat, guard, body) ->
+    List.iter (fun (pat, guards, body) ->
       check_pat env errors pat;
-      let scope' = pat_bindings pat @ scope in
-      (match guard with
-       | None -> ()
-       | Some g -> check_expr env scope' errors g);
+      let scope0 = pat_bindings pat @ scope in
+      (* Resolve qualifiers in order; pattern binds bring their vars into
+         scope for later qualifiers and the body. *)
+      let scope' = List.fold_left (fun sc_cur q ->
+        match q with
+        | GBool g -> check_expr env sc_cur errors g; sc_cur
+        | GBind (p, e) ->
+          check_expr env sc_cur errors e;
+          check_pat env errors p;
+          pat_bindings p @ sc_cur
+      ) scope0 guards in
       check_expr env scope' errors body
     ) arms
   | EIf (c, t, e) ->

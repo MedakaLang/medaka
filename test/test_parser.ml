@@ -539,8 +539,8 @@ f x =
   match parse_one src with
   | DFunDef (false, "f", [PVar "x"],
       EMatch (EVar "x", [
-        (PLit (LInt 0), None, ELit (LString "zero"));
-        (PWild, None, ELit (LString "nonzero"));
+        (PLit (LInt 0), [], ELit (LString "zero"));
+        (PWild, [], ELit (LString "nonzero"));
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -555,9 +555,9 @@ sign x =
   match parse_one src with
   | DFunDef (false, "sign", [PVar "x"],
       EMatch (EVar "x", [
-        (PVar "n", Some (EBinOp (">", EVar "n", ELit (LInt 0))), ELit (LInt 1));
-        (PVar "n", Some (EBinOp ("<", EVar "n", ELit (LInt 0))), EUnOp ("-", ELit (LInt 1)));
-        (PWild, None, ELit (LInt 0));
+        (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0)))], ELit (LInt 1));
+        (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0)))], EUnOp ("-", ELit (LInt 1)));
+        (PWild, [], ELit (LInt 0));
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -573,8 +573,8 @@ f xs =
   match parse_one src with
   | DFunDef (false, "f", [PVar "xs"],
       EMatch (EVar "xs", [
-        (PAs ("ys", PCons (PVar "x", PWild)), None, EVar "x");
-        (PWild, None, ELit (LInt 0));
+        (PAs ("ys", PCons (PVar "x", PWild)), [], EVar "x");
+        (PWild, [], ELit (LInt 0));
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -588,8 +588,8 @@ f xs =
   match parse_one src with
   | DFunDef (false, "f", [PVar "xs"],
       EMatch (EVar "xs", [
-        (PAs ("ys", PVar "x"), None, EVar "x");
-        (PWild, None, ELit (LInt 0));
+        (PAs ("ys", PVar "x"), [], EVar "x");
+        (PWild, [], ELit (LInt 0));
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -634,6 +634,58 @@ r
       EIf (EVar "True", ELit (LInt 42),
         EIf (EVar "otherwise", ELit (LInt 0),
           EApp (EVar "panic", ELit (LString "Non-exhaustive guards"))))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+(* Pattern-bind guard lowers to a 2-arm match whose wildcard arm is the
+   fallback (here: the next guard arm / final panic). *)
+let test_guard_pattern_bind () =
+  let src = {|
+f o
+  | Some y <- o = y
+  | otherwise = 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "o"],
+      EMatch (EVar "o",
+        [ (PCon ("Some", [PVar "y"]), [], EVar "y")
+        ; (PWild, [],
+           EIf (EVar "otherwise", ELit (LInt 0),
+             EApp (EVar "panic", ELit (LString "Non-exhaustive guards")))) ])) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+(* Comma-separated qualifiers: a pattern bind followed by a boolean test.
+   The boolean's fallback is the same continuation as the bind's miss. *)
+let test_guard_bind_then_bool () =
+  let src = {|
+f o
+  | Some y <- o, y > 0 = y
+  | otherwise = 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "f", [PVar "o"],
+      EMatch (EVar "o",
+        [ (PCon ("Some", [PVar "y"]), [],
+           EIf (EBinOp (">", EVar "y", ELit (LInt 0)), EVar "y", fallback1))
+        ; (PWild, [], fallback2) ]))
+    when fallback1 = fallback2 -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+(* Pattern-bind qualifier inside a match-arm guard. *)
+let test_match_arm_pattern_bind () =
+  let src = {|
+describe o =
+  match o
+    n if Some y <- n, y > 0 => 1
+    _ => 0
+|} in
+  match parse_one src with
+  | DFunDef (false, "describe", [PVar "o"],
+      EMatch (EVar "o",
+        [ (PVar "n",
+           [ GBind (PCon ("Some", [PVar "y"]), EVar "n")
+           ; GBool (EBinOp (">", EVar "y", ELit (LInt 0))) ],
+           ELit (LInt 1))
+        ; (PWild, [], ELit (LInt 0)) ])) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 (* ── Data type tests ─────────────────────────────────── *)
@@ -1011,7 +1063,7 @@ f p =
   match parse_one src with
   | DFunDef (false, "f", [PVar "p"],
       EMatch (EVar "p", [
-        (PRec ("Person", [("name", None)], false), None, EVar "name");
+        (PRec ("Person", [("name", None)], false), [], EVar "name");
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1025,7 +1077,7 @@ f p =
   | DFunDef (false, "f", [PVar "p"],
       EMatch (EVar "p", [
         (PRec ("Person", [("name", Some (PLit (LString "Alice"))); ("age", None)], false),
-         None, EVar "age");
+         [], EVar "age");
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1038,7 +1090,7 @@ f p =
   match parse_one src with
   | DFunDef (false, "f", [PVar "p"],
       EMatch (EVar "p", [
-        (PRec ("Person", [], true), None, ELit (LInt 0));
+        (PRec ("Person", [], true), [], ELit (LInt 0));
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1051,7 +1103,7 @@ f p =
   match parse_one src with
   | DFunDef (false, "f", [PVar "p"],
       EMatch (EVar "p", [
-        (PRec ("Person", [("name", None)], true), None, EVar "name");
+        (PRec ("Person", [("name", None)], true), [], EVar "name");
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1092,7 +1144,7 @@ f e =
   match parse_one src with
   | DFunDef (false, "f", [PVar "e"],
       EMatch (EVar "e", [
-        (PRec ("Click", [("x", None); ("y", None)], false), None, EVar "x");
+        (PRec ("Click", [("x", None); ("y", None)], false), [], EVar "x");
       ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1180,16 +1232,16 @@ let test_where_on_new_line () =
 let test_if_let_some () =
   match parse_expr "if let Some x = opt then x else 0\n" with
   | EMatch (EVar "opt", [
-      (PCon ("Some", [PVar "x"]), None, EVar "x");
-      (PWild, None, ELit (LInt 0));
+      (PCon ("Some", [PVar "x"]), [], EVar "x");
+      (PWild, [], ELit (LInt 0));
     ]) -> ()
   | e -> failwith ("wrong: " ^ Ast.pp_expr e)
 
 let test_if_let_tuple () =
   match parse_expr "if let (a, b) = pair then a else 0\n" with
   | EMatch (EVar "pair", [
-      (PTuple [PVar "a"; PVar "b"], None, EVar "a");
-      (PWild, None, ELit (LInt 0));
+      (PTuple [PVar "a"; PVar "b"], [], EVar "a");
+      (PWild, [], ELit (LInt 0));
     ]) -> ()
   | e -> failwith ("wrong: " ^ Ast.pp_expr e)
 
@@ -1211,8 +1263,8 @@ f opt =
 let test_if_let_nested () =
   match parse_expr "if let Some x = f y then x + 1 else 0\n" with
   | EMatch (EApp (EVar "f", EVar "y"), [
-      (PCon ("Some", [PVar "x"]), None, EBinOp ("+", EVar "x", ELit (LInt 1)));
-      (PWild, None, ELit (LInt 0));
+      (PCon ("Some", [PVar "x"]), [], EBinOp ("+", EVar "x", ELit (LInt 1)));
+      (PWild, [], ELit (LInt 0));
     ]) -> ()
   | e -> failwith ("wrong: " ^ Ast.pp_expr e)
 
@@ -1258,8 +1310,8 @@ classify n =
   match parse_one src with
   | DFunDef (false, "classify", [PVar "n"],
       EMatch (EVar "n", [
-        (PRng (LInt 1, LInt 9, false), None, ELit (LString "single"));
-        (PWild, None, ELit (LString "other"));
+        (PRng (LInt 1, LInt 9, false), [], ELit (LString "single"));
+        (PWild, [], ELit (LString "other"));
       ])) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
@@ -1273,8 +1325,8 @@ isLower c =
   match parse_one src with
   | DFunDef (false, "isLower", [PVar "c"],
       EMatch (EVar "c", [
-        (PRng (LChar "a", LChar "z", true), None, EVar "True");
-        (PWild, None, EVar "False");
+        (PRng (LChar "a", LChar "z", true), [], EVar "True");
+        (PWild, [], EVar "False");
       ])) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
@@ -1333,8 +1385,8 @@ classify =
   | DFunDef (false, "classify", [],
       ELam ([PVar "__fn_arg"],
             EMatch (EVar "__fn_arg", [
-              (PLit (LInt 0), None, ELit (LString "zero"));
-              (PWild, None, ELit (LString "nonzero"));
+              (PLit (LInt 0), [], ELit (LString "zero"));
+              (PWild, [], ELit (LString "nonzero"));
             ]))) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
@@ -1350,9 +1402,9 @@ sign =
   | DFunDef (false, "sign", [],
       ELam ([PVar "__fn_arg"],
             EMatch (EVar "__fn_arg", [
-              (PVar "n", Some (EBinOp (">", EVar "n", ELit (LInt 0))), ELit (LInt 1));
-              (PVar "n", Some (EBinOp ("<", EVar "n", ELit (LInt 0))), EUnOp ("-", ELit (LInt 1)));
-              (PWild, None, ELit (LInt 0));
+              (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0)))], ELit (LInt 1));
+              (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0)))], EUnOp ("-", ELit (LInt 1)));
+              (PWild, [], ELit (LInt 0));
             ]))) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
@@ -1479,6 +1531,9 @@ let () =
       test_case "single guard"   `Quick test_guard_single;
       test_case "multi guards"   `Quick test_guard_multi;
       test_case "no-param guard" `Quick test_guard_no_params;
+      test_case "pattern-bind guard"     `Quick test_guard_pattern_bind;
+      test_case "bind-then-bool guard"   `Quick test_guard_bind_then_bool;
+      test_case "match-arm pattern bind" `Quick test_match_arm_pattern_bind;
     ];
     "data types", [
       test_case "inline variants"     `Quick test_data_inline;

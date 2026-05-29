@@ -915,14 +915,22 @@ let rec infer env = function
   | EMatch (sc, arms) ->
     let tsc = infer env sc in
     let result = fresh_var () in
-    List.iter (fun (pat, guard, body) ->
+    List.iter (fun (pat, guards, body) ->
       let tp, bindings = type_pat env pat in
       unify tp tsc;
       let env' = extend_vars env bindings in
-      (match guard with
-       | None -> ()
-       | Some g -> unify (infer env' g) t_bool);
-      unify (infer env' body) result
+      (* Thread guard qualifiers left-to-right; pattern binds extend the env
+         for later qualifiers and the body. *)
+      let env_body = List.fold_left (fun env_cur q ->
+        match q with
+        | GBool g -> unify (infer env_cur g) t_bool; env_cur
+        | GBind (p, e) ->
+          let te = infer env_cur e in
+          let tp', binds = type_pat env_cur p in
+          unify tp' te;
+          extend_vars env_cur binds
+      ) env' guards in
+      unify (infer env_body body) result
     ) arms;
     (* Phase 6: exhaustiveness + redundancy checking *)
     let rec follow t = match t with
@@ -984,7 +992,7 @@ let rec infer env = function
       ~warnings:env.warnings
       ~col0_type
       ~match_loc:!current_loc
-      (List.map (fun (p, g, _) -> (p, g <> None)) arms);
+      (List.map (fun (p, gs, _) -> (p, gs <> [])) arms);
     result
 
   | ETuple es ->
@@ -2073,9 +2081,13 @@ let expr_effects
     | EUnOp (_, e)         -> sub e
     | EMatch (sc, arms)    ->
       List.fold_left
-        (fun acc (pat, guard, body) ->
-          let bound' = add_pats [pat] bound in
-          let ge = match guard with None -> [] | Some g -> go bound' g in
+        (fun acc (pat, guards, body) ->
+          let bound0 = add_pats [pat] bound in
+          let (bound', ge) = List.fold_left (fun (b, eff) q ->
+            match q with
+            | GBool g      -> (b, effect_union eff (go b g))
+            | GBind (p, e) -> (add_pats [p] b, effect_union eff (go b e)))
+            (bound0, []) guards in
           effect_union acc (effect_union ge (go bound' body)))
         (sub sc) arms
     | EBlock stmts | EDo (_, stmts) ->
