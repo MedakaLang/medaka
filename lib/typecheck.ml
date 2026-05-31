@@ -133,6 +133,7 @@ type type_error =
   | FieldAssignInDo     of ident * ident           (* `x.field = e` inside a do block *)
   | NotARecord          of ident                   (* field assignment on non-record type *)
   | RecursiveTypeAlias  of ident                   (* type alias that expands to itself *)
+  | TypeAliasArity      of ident * int * int        (* alias, expected params, got args *)
   | LetRecNonFunction   of ident                   (* `let rec x = ...` where RHS isn't a lambda *)
   | Other              of string
 
@@ -502,6 +503,10 @@ let pp_error = function
     Printf.sprintf "Field assignment on '%s': type is not a record or Ref" x
   | RecursiveTypeAlias n ->
     Printf.sprintf "Recursive type alias: '%s' expands to itself" n
+  | TypeAliasArity (n, exp, got) ->
+    Printf.sprintf
+      "Type alias '%s' expects %d type argument(s) but got %d — type aliases must be fully applied"
+      n exp got
   | LetRecNonFunction n ->
     Printf.sprintf
       "'%s' is bound by 'let rec' but its right-hand side is not a function. Recursive value bindings must have a lambda right-hand side; cyclic data structures are not supported."
@@ -602,7 +607,10 @@ let rec expand_aliases ?(seen=StringSet.empty) aliases t =
          raise (Type_error (RecursiveTypeAlias n, None))
        else
          expand_aliases ~seen:(StringSet.add n seen) aliases rhs
-     | _ -> t)
+     | Some (params, _) ->
+       (* A parametric alias used bare (zero args) is under-applied. *)
+       raise (Type_error (TypeAliasArity (n, List.length params, 0), None))
+     | None -> t)
   | Ast.TyApp _ ->
     (* Collect the application spine *)
     let rec spine acc = function
@@ -635,7 +643,13 @@ let rec expand_aliases ?(seen=StringSet.empty) aliases t =
                   apply_subst s u)
             in
             expand_aliases ~seen:seen' aliases (apply_subst subst rhs)
-        | _ ->
+        | Some (params, _) ->
+          (* Known alias applied to the wrong number of arguments: a partially-
+             applied (or over-applied) alias would otherwise be left as a raw
+             TyApp and surface later as a confusing TCon mismatch. *)
+          raise (Type_error
+            (TypeAliasArity (n, List.length params, List.length args), None))
+        | None ->
           List.fold_left (fun acc arg -> Ast.TyApp (acc, arg)) (go head) args)
      | other ->
        List.fold_left (fun acc arg -> Ast.TyApp (acc, arg)) (go other) args)

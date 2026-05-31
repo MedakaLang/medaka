@@ -2885,6 +2885,28 @@ unbox b = match b
   Box x => x
 |} "unbox" "Box a -> a"
 
+(* Type-alias arity (Phase 70): a parametric alias must be fully applied; an
+   under- or over-applied alias is a clear arity error instead of a confusing
+   downstream TCon mismatch. *)
+let e_alias_under_applied = assert_err_msg "expects 1 type argument(s) but got 0"
+  {|type Pair a = (a, a)
+f : Pair -> Int
+f p = 0
+|}
+
+let e_alias_over_applied = assert_err_msg "expects 1 type argument(s) but got 2"
+  {|type Pair a = (a, a)
+f : Pair Int Bool -> Int
+f p = 0
+|}
+
+let t_alias_fully_applied_ok = assert_type
+  {|type Pair a = (a, a)
+swap : Pair a -> Pair a
+swap (x, y) = (y, x)
+r = swap (1, 2)
+|} "r" "(Int, Int)"
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -3358,5 +3380,8 @@ let () =
       test_case "err: unbound payload tyvar (nested)"  `Quick e_unbound_payload_data_nested;
       test_case "err: unbound payload tyvar (record)"  `Quick e_unbound_payload_record;
       test_case "bound payload tyvar ok"               `Quick t_payload_bound_ok;
+      test_case "err: alias under-applied"             `Quick e_alias_under_applied;
+      test_case "err: alias over-applied"              `Quick e_alias_over_applied;
+      test_case "alias fully applied ok"               `Quick t_alias_fully_applied_ok;
     ];
   ]
