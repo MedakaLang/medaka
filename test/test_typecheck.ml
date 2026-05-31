@@ -2919,6 +2919,23 @@ let t_slice_list   = assert_type "r = [1, 2, 3, 4].[1..3]\n"   "r" "List Int"
 let t_slice_string = assert_type "r = \"hello\".[1..3]\n"      "r" "String"
 let e_slice_non_container = assert_err "r = True.[0..1]\n"
 
+(* EAnnot polymorphism check (Phase 70): a polymorphic annotation must match a
+   genuinely polymorphic expression; a concrete one is rejected. *)
+let t_annot_poly_ok = assert_type
+  "good = ((x => x) : a -> a)\n" "good" "a -> a"
+
+let t_annot_concrete_ok = assert_type
+  "n = (5 : Int)\n" "n" "Int"
+
+let e_annot_too_general_concrete = assert_err_msg "more polymorphic"
+  {|intId : Int -> Int
+intId x = x
+bad = (intId : a -> a)
+|}
+
+let e_annot_too_general_collapse = assert_err_msg "more polymorphic"
+  "bad = ((x => x) : a -> b)\n"
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -3400,5 +3417,9 @@ let () =
       test_case "slice list preserves type"            `Quick t_slice_list;
       test_case "slice string preserves type"          `Quick t_slice_string;
       test_case "err: slice non-container"             `Quick e_slice_non_container;
+      test_case "annot polymorphic ok"                 `Quick t_annot_poly_ok;
+      test_case "annot concrete ok"                    `Quick t_annot_concrete_ok;
+      test_case "err: annot too general (concrete)"    `Quick e_annot_too_general_concrete;
+      test_case "err: annot too general (collapse)"    `Quick e_annot_too_general_collapse;
     ];
   ]

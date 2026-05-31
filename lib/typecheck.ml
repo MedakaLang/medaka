@@ -134,6 +134,7 @@ type type_error =
   | NotARecord          of ident                   (* field assignment on non-record type *)
   | RecursiveTypeAlias  of ident                   (* type alias that expands to itself *)
   | TypeAliasArity      of ident * int * int        (* alias, expected params, got args *)
+  | AnnotationTooGeneral of Ast.ty                  (* annotation claims more polymorphism than expr has *)
   | LetRecNonFunction   of ident                   (* `let rec x = ...` where RHS isn't a lambda *)
   | Other              of string
 
@@ -507,6 +508,10 @@ let pp_error = function
     Printf.sprintf
       "Type alias '%s' expects %d type argument(s) but got %d — type aliases must be fully applied"
       n exp got
+  | AnnotationTooGeneral t ->
+    Printf.sprintf
+      "Type annotation '%s' is more polymorphic than the expression — a type variable in the annotation is actually a specific type (or two annotation variables are the same type)"
+      (Ast.pp_ty t)
   | LetRecNonFunction n ->
     Printf.sprintf
       "'%s' is bound by 'let rec' but its right-hand side is not a function. Recursive value bindings must have a lambda right-hand side; cyclic data structures are not supported."
@@ -1240,8 +1245,25 @@ let rec infer env = function
 
   | EAnnot (e, ast_t) ->
     let te = infer env e in
-    let ta = from_ast_type ~aliases:env.aliases ast_t in
+    let tbl = Hashtbl.create 4 in
+    let ta = from_ast_type ~aliases:env.aliases ~tbl ast_t in
     unify te ta;
+    (* Skolemization-by-identity check: each type variable named in the
+       annotation asserts polymorphism, so after unification it must still be a
+       *distinct, unbound* variable.  If one ground to a concrete type, or two
+       annotation variables collapsed to the same variable, the expression is
+       less polymorphic than the annotation claims — e.g. `(intId : a -> a)`
+       where intId : Int -> Int grounds `a := Int`.  (Equivalent to skolemizing
+       the annotation vars and checking none escaped to a non-variable.) *)
+    let resolved = Hashtbl.fold (fun _ v acc -> normalize v :: acc) tbl [] in
+    let rec all_distinct_tvars seen = function
+      | [] -> true
+      | TVar r :: rest ->
+        if List.memq r seen then false else all_distinct_tvars (r :: seen) rest
+      | _ -> false
+    in
+    if not (all_distinct_tvars [] resolved) then
+      fail (AnnotationTooGeneral ast_t);
     te
 
   | EInfix (op, l, r) ->
