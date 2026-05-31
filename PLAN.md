@@ -3308,7 +3308,11 @@ These aren't blockers, but a less-careful change could trip over them:
 - Primitive values (`pure`, `print`, `map`, …) now live exclusively in
   `lib/runtime.ml` (Phase 9 ✅). Primitive types (`List`, `Option`, …) are
   still hard-coded in `resolve.ml`/`typecheck.ml` until the stdlib lands.
-- `EUnOp "-"` only types as `Int -> Int`. Float negation isn't supported.
+- ~~`EUnOp "-"` only types as `Int -> Int`. Float negation isn't supported.~~
+  ✅ Phase 70: unary `-` (and `%`) now carry a `Num a` constraint, so they
+  work on Int, Float, and any user `Num` impl.  (Caveat: `%` on an exotic
+  `Num` impl whose values aren't `VInt`/`VFloat` type-checks but has no
+  `eval_arith` case — it would panic at runtime, same shape as other ops.)
 - `==`/`!=` accept any two values of the same type (already polymorphic via
   `unify tl tr`). An `Eq` constraint is not yet checked — deferred until
   `impl Eq (List a)`, `impl Eq (Option a)` etc. can be registered so
@@ -3417,11 +3421,10 @@ a phase in §6 unless noted.
   inside a `"""..."""` string is emitted as a literal `\{expr}`.  Easy fix:
   extend `read_triple_string` with the same INTERP_OPEN logic
   `read_string` uses.  Scheduled as a small follow-up to Phase 23.
-- **Float unary negation rejected by the type checker.** `EUnOp "-"` unifies
-  its argument with `t_int`, so `-3.14` is a type error and `let f = -x` for
-  `x : Float` is too.  The evaluator already does the right thing on `VFloat`
-  values; the fix is to lift the type rule to a `Num a` constraint so
-  negation works for any `Num` impl.  Scheduled with Phase 17 follow-ups.
+- **Float unary negation rejected by the type checker.** ✅ Phase 70 (done).
+  `EUnOp "-"` now records a `Num.negate` usage instead of unifying with
+  `t_int`, so `-3.14` and `let f = -x` for `x : Float` type-check; the
+  evaluator already handled `VFloat`.
 - **Single-file `check core.mdk` formerly produced duplicate-declaration
   errors.** Fixed in the 2026-05-26 audit by detecting `program_is_core`
   (presence of `data Ordering` + `interface Foldable`) and skipping the
