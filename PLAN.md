@@ -3159,9 +3159,45 @@ unless noted. New tests live in `test/test_typecheck.ml`'s "diagnostics
   `test/test_run.ml`) so doctests share the typed dispatch path. Deliberately
   deferred when Phase 69 landed.
 
-### Phase 71: Typechecker robustness — no `assert false` / raw `Not_found` / leaked levels ⏳ TODO
+### Phase 71: Typechecker robustness — no `assert false` / raw `Not_found` / leaked levels ✅ DONE
 
-**Goal.** A bug elsewhere surfaces as a Medaka diagnostic, not an opaque
+**Done (2026-05-31).** All `assert false` in `lib/typecheck.ml` are gone:
+- A new `InternalError of string` `type_error` (+ `pp_error` case: "Internal
+  type-checker error: … (this is a compiler bug — please report it)").
+- The `Link _ -> assert false` invariant guards in `unify` / `instantiate_raw`
+  / `instantiate_with` / `instantiate_method` / `instantiate_record` and the
+  `interface param` extraction now `fail (InternalError …)`.  `pp_mono`'s guard
+  returns the placeholder `"_"` instead — it runs while *formatting* an error
+  and must never raise.
+- The desugar-elimination guards (`EListComp` / `EGuards` / `EFunction` /
+  `ESection` / `EQuestion`) in both `infer` and the effects pass now
+  `fail (InternalError "… reached typecheck — desugar pass was not run")`.
+- The empty-`do`/empty-block `[] -> assert false` and the
+  `fresh_var did not yield a TVar` guards likewise became `InternalError`.
+
+Cross-module `Hashtbl.find` that could raise raw `Not_found` is guarded:
+`EFieldAccess` / `ERecordUpdate` fall back to `UnknownRecord`; the
+method-dispatch interface lookup falls back to `UnknownInterface`;
+`check_method_usages`' `n_iface_params` degrades to `0` (skips that usage)
+rather than crashing the REPL.  The stray `field_owners`→`List.assoc` guard now
+raises `UnknownField` instead of `assert false`.
+
+Level bracketing: `check_repl_decl` resets `current_level := 0` at each input
+boundary (`check_program` / `typecheck_module` already do via `reset_state`), so
+a type error that fails *between* an `enter_level`/`exit_level` pair in one input
+can't carry a leaked level into the next.  (Note: a uniform leak is *relative*
+and self-corrects per input, so it doesn't actually corrupt generalization — but
+the reset restores the absolute "top-level names pre-bound at level 1" invariant
+the codebase documents in §2.9, cheap insurance.)
+
+Tests: `test_typecheck` "robustness (Phase 71)" — a non-desugared list
+comprehension yields a catchable `InternalError`, not `Assert_failure`;
+`test_repl` "robustness (Phase 71)" — the session recovers from a prior type
+error and a later polymorphic `id` still generalizes.
+
+---
+
+**Original goal.** A bug elsewhere surfaces as a Medaka diagnostic, not an opaque
 "Internal error" or a wedged REPL.
 
 **Why it matters now.** During heavy stdlib editing these landmines turn small
