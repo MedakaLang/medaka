@@ -118,6 +118,11 @@ Abstract concepts get accessible names:
 - GADTs
 - Existential types
 - Dependent types
+- Row polymorphism (structural records). Field-name reuse across record types
+  is supported via receiver-type-directed resolution; structural abstraction
+  over "any record with field `x`" is intentionally declined so it does not
+  compete with interfaces. See *Field-name reuse and the decision against row
+  polymorphism* under Product Types.
 - Anything that significantly damages inference or error message quality
 
 ### Error Message Quality
@@ -404,6 +409,58 @@ record Person
   Equivalent to `{ p | address = { p.address | city = "Boston" } }`. The path can only appear on the LHS; the RHS is a plain expression.
 - **Construction requires all fields** — no partial construction, no runtime surprises
 - **Fields are namespaced** to the type — no global namespace pollution
+
+#### Field-name reuse and the decision against row polymorphism
+
+Because fields are namespaced to their type, two record types may declare the
+same field name:
+
+```
+record Person
+  name : String
+
+record Company
+  name : String
+```
+
+Field access resolves by the **record type inferred for the receiver**: in
+`p.name` the compiler already knows `p : Person`, so `name` resolves to
+`Person.name`. There is no global field namespace, so no collision arises.
+
+When a field name is declared by **only one** record, access still resolves
+even if the receiver's type isn't yet known — the single owner drives
+inference (`getName p = p.name` infers `p : Person`). When a field name is
+**shared** by several records, the receiver's type must be determinable at the
+access site; otherwise the compiler reports an *ambiguous field access* error.
+The receiver type is known when it comes from construction (`(Person { … }).name`)
+or an annotation (`(p : Person).name`). A top-level function signature does
+**not** yet disambiguate (`getName : Person -> String; getName p = p.name`
+fails on a shared field), because signatures are unified against the body
+*after* it is inferred rather than pushed into the parameters — see the
+bidirectional-checking phase in PLAN.md.
+
+We deliberately stop there. We do **not** support *row polymorphism* — i.e.
+inferring `\r => r.x` as "any record with a field `x`" via row variables. That
+would add a second, *structural* axis of abstraction ("any value shaped like
+`{ x, .. }`") alongside our existing *nominal* one (interfaces / typeclasses).
+The two overlap heavily for "abstract over things that have capability X," and
+carrying both fractures the language into two idioms for the same job. Medaka's
+abstraction-over-capability mechanism is the interface; records stay concrete.
+
+This is a conscious narrowing, not an oversight:
+
+- The practical pain we needed to fix was field-name *reuse* across record
+  types — receiver-type-directed resolution solves that completely.
+- "Haskell doesn't have row polymorphism" is sometimes cited as a reason to
+  skip it, but the honest reading is the opposite: Haskell's pre-`HasField`
+  record story (no field reuse at all) is widely regarded as one of its weakest
+  features, and PureScript added rows specifically to fix it. We take the
+  lesson as *fix field reuse* (done above) while *declining* the structural
+  abstraction that competes with interfaces.
+- It is not a one-way door. If a concrete program ever needs polymorphic
+  `\r => r.x` that an interface method genuinely cannot express, row variables
+  can be layered onto `mono` later. Shipping them speculatively and walking
+  them back would be far costlier.
 
 ### Combining Them
 ```

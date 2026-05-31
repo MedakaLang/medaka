@@ -126,6 +126,16 @@ let prelude_field_owners : (string * string) list =
         | Ast.ConPos _ -> []) vs
     | _ -> []) Prelude.program
 
+(* Phase 72: field_owners is a multimap — a field name may belong to several
+   record/ctor types, and access resolves by the receiver's inferred type in the
+   type checker.  These helpers keep insertion idempotent and read membership. *)
+let add_field_owner tbl field owner =
+  if not (List.mem owner (Hashtbl.find_all tbl field)) then
+    Hashtbl.add tbl field owner
+
+let field_belongs tbl field owner = List.mem owner (Hashtbl.find_all tbl field)
+let field_known   tbl field = Hashtbl.find_all tbl field <> []
+
 (* ── Module exports (public interface of a resolved module) ── *)
 
 type module_exports = {
@@ -180,7 +190,7 @@ let create_env ?(with_prelude=true) () =
     List.iter (fun n -> Hashtbl.replace env.values n ()) prelude_values;
     List.iter (fun (fname, owner) ->
       Hashtbl.replace env.fields fname ();
-      Hashtbl.replace env.field_owners fname owner
+      add_field_owner env.field_owners fname owner
     ) prelude_field_owners
   end;
   env
@@ -312,7 +322,7 @@ let build_env ?(known_modules : module_exports list = [])
          | ConNamed fields ->
            List.iter (fun f ->
              add_or_skip env.fields f.field_name;
-             Hashtbl.replace env.field_owners f.field_name v.con_name
+             add_field_owner env.field_owners f.field_name v.con_name
            ) fields
          | ConPos _ -> ())
       ) vs
@@ -320,7 +330,7 @@ let build_env ?(known_modules : module_exports list = [])
       add_unique env.types "type" n;
       List.iter (fun f ->
         add_or_skip env.fields f.field_name;
-        Hashtbl.replace env.field_owners f.field_name n
+        add_field_owner env.field_owners f.field_name n
       ) fs
     | DInterface { iface_name; methods; _ } ->
       add_unique env.interfaces "interface" iface_name;
@@ -372,7 +382,7 @@ let build_env ?(known_modules : module_exports list = [])
            if Hashtbl.mem exp.exp_types owner
            || Hashtbl.mem exp.exp_constructors owner then begin
              add_or_skip env.fields field;
-             Hashtbl.replace env.field_owners field owner
+             add_field_owner env.field_owners field owner
            end
          ) exp.exp_field_owners;
          (* Register module alias / qualified-access name *)
@@ -419,11 +429,12 @@ let rec check_pat env errors p =
     if not is_record && not is_named_ctor then
       emit errors (UnknownType name);
     List.iter (fun (fname, pat_opt) ->
-      (match Hashtbl.find_opt env.field_owners fname with
-       | None -> emit errors (UnknownField fname)
-       | Some owner when owner <> name ->
-         emit errors (FieldNotInRecord (fname, name))
-       | _ -> ());
+      (* Phase 72: a field name may be owned by several records; accept it iff
+         the named record/ctor is among the owners. *)
+      if not (field_known env.field_owners fname) then
+        emit errors (UnknownField fname)
+      else if not (field_belongs env.field_owners fname name) then
+        emit errors (FieldNotInRecord (fname, name));
       match pat_opt with
       | None   -> ()
       | Some q -> check_pat env errors q
@@ -539,38 +550,27 @@ let rec check_expr env scope errors e =
     if not is_record && not is_ctor then
       emit errors (UnknownType name)
     else begin
-      (* Each field must belong to the named record or named-field constructor *)
+      (* Each field must belong to the named record or named-field constructor.
+         Phase 72: a field name may have several owners; accept iff [name] is one. *)
       List.iter (fun (fname, _) ->
-        match Hashtbl.find_opt env.field_owners fname with
-        | None -> emit errors (UnknownField fname)
-        | Some owner when owner <> name ->
+        if not (field_known env.field_owners fname) then
+          emit errors (UnknownField fname)
+        else if not (field_belongs env.field_owners fname name) then
           emit errors (FieldNotInRecord (fname, name))
-        | Some _ -> ()
       ) fs
     end;
     List.iter (fun (_, v) -> check_expr env scope errors v) fs
   | ERecordUpdate (e, fs) ->
     check_expr env scope errors e;
-    (* All updated fields must belong to the same record *)
-    let record_name =
-      match fs with
-      | [] -> None
-      | (fname, _) :: _ ->
-        (match Hashtbl.find_opt env.field_owners fname with
-         | None ->
-           emit errors (UnknownField fname); None
-         | Some r -> Some r)
-    in
+    (* Phase 72: with shared field names the receiver's record type can no longer
+       be pinned from a field name alone, so the "all fields belong to the same
+       record" consistency check moves to the type checker (which resolves by the
+       receiver's inferred type).  Here we only flag a field unknown to every
+       record. *)
     List.iter (fun (fname, v) ->
       check_expr env scope errors v;
-      (match record_name with
-       | None -> ()
-       | Some r ->
-         match Hashtbl.find_opt env.field_owners fname with
-         | None -> emit errors (UnknownField fname)
-         | Some owner when owner <> r ->
-           emit errors (FieldNotInRecord (fname, r))
-         | Some _ -> ())
+      if not (field_known env.field_owners fname) then
+        emit errors (UnknownField fname)
     ) fs
   | EArrayLit es | EListLit es | ETuple es ->
     List.iter (check_expr env scope errors) es
@@ -762,7 +762,7 @@ let build_exports ?(known_modules : module_exports list = [])
     Hashtbl.iter (fun field owner ->
       if Hashtbl.mem exp.exp_types owner then begin
         Hashtbl.replace exp.exp_fields field ();
-        Hashtbl.replace exp.exp_field_owners field owner
+        add_field_owner exp.exp_field_owners field owner
       end
     ) src_exp.exp_field_owners
   in
@@ -785,7 +785,7 @@ let build_exports ?(known_modules : module_exports list = [])
          | ConNamed fields ->
            List.iter (fun f ->
              Hashtbl.replace exp.exp_fields f.field_name ();
-             Hashtbl.replace exp.exp_field_owners f.field_name v.con_name
+             add_field_owner exp.exp_field_owners f.field_name v.con_name
            ) fields
          | ConPos _ -> ())
       ) vs
@@ -795,7 +795,7 @@ let build_exports ?(known_modules : module_exports list = [])
       Hashtbl.replace exp.exp_types n ();
       List.iter (fun f ->
         Hashtbl.replace exp.exp_fields f.field_name ();
-        Hashtbl.replace exp.exp_field_owners f.field_name n
+        add_field_owner exp.exp_field_owners f.field_name n
       ) fs
     | DRecord (DataAbstract, n, _, _, _) ->
       Hashtbl.replace exp.exp_types n ()
@@ -831,7 +831,7 @@ let build_exports ?(known_modules : module_exports list = [])
             Hashtbl.iter (fun n () -> Hashtbl.replace exp.exp_interfaces n ()) src_exp.exp_interfaces;
             Hashtbl.iter (fun n ms -> Hashtbl.replace exp.exp_iface_methods n ms) src_exp.exp_iface_methods;
             Hashtbl.iter (fun f () -> Hashtbl.replace exp.exp_fields f ()) src_exp.exp_fields;
-            Hashtbl.iter (fun f owner -> Hashtbl.replace exp.exp_field_owners f owner) src_exp.exp_field_owners
+            Hashtbl.iter (fun f owner -> add_field_owner exp.exp_field_owners f owner) src_exp.exp_field_owners
           | UseAlias _ ->
             (* export import foo as F: module-alias re-export not yet supported *)
             ()))
@@ -913,7 +913,7 @@ let resolve_repl_item (env : module_env) (item : Ast.repl_item)
       add_unique env.types "type" n;
       List.iter (fun f ->
         add_or_skip env.fields f.Ast.field_name;
-        Hashtbl.replace env.field_owners f.Ast.field_name n
+        add_field_owner env.field_owners f.Ast.field_name n
       ) fs
     | Ast.DInterface { iface_name; methods; _ } ->
       add_unique env.interfaces "interface" iface_name;

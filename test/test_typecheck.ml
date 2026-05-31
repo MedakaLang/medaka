@@ -475,6 +475,82 @@ let e_rec_update_type_mismatch = assert_err
 bad p = { p | x = "nope" }
 |}
 
+(* ── Phase 72: shared field names, receiver-directed resolution ── *)
+
+(* Two records share field `x`; a receiver annotation picks the Int one. *)
+let t_rec_shared_field_annot_int = assert_type
+  {|record Point
+  x : Int
+  y : Int
+
+record Vec
+  x : Float
+  z : Float
+
+getXi p = (p : Point).x
+|} "getXi" "Point -> Int"
+
+(* The same shared field, annotated to the Float-typed record. *)
+let t_rec_shared_field_annot_float = assert_type
+  {|record Point
+  x : Int
+  y : Int
+
+record Vec
+  x : Float
+  z : Float
+
+getXf v = (v : Vec).x
+|} "getXf" "Vec -> Float"
+
+(* Receiver type known via construction — no annotation needed. *)
+let t_rec_shared_field_from_create = assert_type
+  {|record Point
+  x : Int
+
+record Vec
+  x : Float
+
+f = (Point { x = 1 }).x
+|} "f" "Int"
+
+(* Update on a shared field resolves by the (constructed) receiver type. *)
+let t_rec_shared_field_update = assert_type
+  {|record Point
+  x : Int
+
+record Vec
+  x : Float
+
+g = { (Vec { x = 1.0 }) | x = 2.0 }
+|} "g" "Vec"
+
+(* Field shared by two records + unknown receiver type → ambiguous (the new
+   AmbiguousField error). Disambiguate with an annotation, as above. *)
+let e_rec_shared_field_ambiguous = assert_err
+  {|record Point
+  x : Int
+
+record Vec
+  x : Float
+
+bad r = r.x
+|}
+
+(* A cross-record update (field belongs to a *different* record than the
+   receiver) is now caught at typecheck, after the resolve-stage check relaxed
+   for shared field names (Phase 72). *)
+let e_rec_cross_record_update = assert_err
+  {|record Point
+  x : Int
+  y : Int
+
+record Person
+  name : String
+
+bad = { (Point { x = 0, y = 0 }) | name = "Alice" }
+|}
+
 (* ── Do notation ───────────────────────────────────── *)
 
 (* Single DoExpr in a `do` block: a do-block ALWAYS introduces a per-block
@@ -3105,6 +3181,12 @@ let () =
       test_case "err: unknown access" `Quick e_rec_unknown_field_access;
       test_case "err: field type mismatch" `Quick e_rec_field_type_mismatch;
       test_case "err: update type mismatch" `Quick e_rec_update_type_mismatch;
+      test_case "shared field, annot Int"   `Quick t_rec_shared_field_annot_int;
+      test_case "shared field, annot Float" `Quick t_rec_shared_field_annot_float;
+      test_case "shared field via create"   `Quick t_rec_shared_field_from_create;
+      test_case "shared field update"       `Quick t_rec_shared_field_update;
+      test_case "err: shared field ambiguous" `Quick e_rec_shared_field_ambiguous;
+      test_case "err: cross-record update"  `Quick e_rec_cross_record_update;
     ];
     "effects", [
       test_case "pure fn no annotation"     `Quick t_eff_pure;

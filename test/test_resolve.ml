@@ -186,9 +186,13 @@ let e_unknown_field_in_update =
 bad p = { p | z = 1 }
 |}
 
-(* Field from different record in record update *)
-let e_cross_record_update =
-  assert_err (field_not_in "name" "Point")
+(* Phase 72: with shared field names the resolver can no longer pin the
+   receiver's record type from a field name, so a cross-record update is no
+   longer rejected at resolve time — both `x` and `name` are known fields. The
+   inconsistency is now caught by the type checker (see test_typecheck's
+   e_rec_cross_record_update). Resolution should succeed here. *)
+let v_cross_record_update_resolves =
+  assert_ok
 {|record Point
   x : Int
   y : Int
@@ -197,6 +201,31 @@ record Person
   name : String
 
 bad p = { p | x = 0, name = "Alice" }
+|}
+
+(* Phase 72: two records may share a field name; construction and pattern
+   resolution accept the field for either owner. *)
+let v_shared_field_create =
+  assert_ok
+{|record Point
+  x : Int
+
+record Vec
+  x : Float
+
+a = Point { x = 1 }
+b = Vec { x = 2.0 }
+|}
+
+let v_shared_field_pattern =
+  assert_ok
+{|record Point
+  x : Int
+
+record Vec
+  x : Float
+
+getp (Point { x = v }) = v
 |}
 
 (* ── Extern declarations ─────────────────────── *)
@@ -352,6 +381,9 @@ let () =
       test_case "use group"         `Quick v_use_group;
       test_case "record create"     `Quick v_record_create;
       test_case "field access"      `Quick v_field_access;
+      test_case "shared field create"  `Quick v_shared_field_create;
+      test_case "shared field pattern" `Quick v_shared_field_pattern;
+      test_case "cross-record update resolves" `Quick v_cross_record_update_resolves;
       test_case "effect type"       `Quick v_effect;
       test_case "type vars OK"      `Quick v_typevars;
       test_case "shadowing OK"      `Quick v_shadowing;
@@ -376,7 +408,6 @@ let () =
       test_case "field not in record"  `Quick e_field_not_in_record;
       test_case "unknown field create" `Quick e_unknown_field_in_create;
       test_case "unknown field update" `Quick e_unknown_field_in_update;
-      test_case "cross-record update"  `Quick e_cross_record_update;
       test_case "? in arith"           `Quick e_question_in_arith;
       test_case "? in fn arg"          `Quick e_question_in_arg;
       test_case "let value self-ref"   `Quick e_let_value_self_ref;

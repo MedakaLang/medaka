@@ -111,6 +111,7 @@ type type_error =
   | UnboundTypeVar of ident * ident        (* tyvar, declaring type name *)
   | UnknownRecord  of ident
   | UnknownField   of ident * ident       (* field, record *)
+  | AmbiguousField of ident * ident list   (* field, candidate records — type unknown *)
   | MissingField   of ident * ident       (* field, record *)
   | EffectEscape   of ident * effect_set * effect_set  (* fn, declared, undeclared extras *)
   | UnknownInterface   of ident               (* impl references unknown interface *)
@@ -435,6 +436,10 @@ let pp_error = function
   | UnknownRecord r -> Printf.sprintf "Unknown record type: %s" r
   | UnknownField (f, r) ->
     Printf.sprintf "Field %s does not belong to record %s" f r
+  | AmbiguousField (f, rs) ->
+    Printf.sprintf
+      "Ambiguous field access: '.%s' is declared by %s. I can't tell which record this value is — add a type annotation on it (e.g. '(r : %s).%s')."
+      f (String.concat ", " rs) (List.hd rs) f
   | MissingField (f, r) ->
     Printf.sprintf "Missing field %s in construction of record %s" f r
   | EffectEscape (name, declared, extras) ->
@@ -815,6 +820,25 @@ let instantiate_record info =
   let result = walk info.rec_result in
   let fields = List.map (fun (n, t) -> (n, walk t)) info.rec_fields in
   (result, fields)
+
+(* The head type-constructor of a mono, peeling the TApp spine: `Result e` →
+   "Result", `Int` → "Int", a bare TVar → None.  Mirrors eval's AST `head_tycon`
+   so the string a `RHeadKey` carries matches the head tag eval stamps on a
+   `VTypedImpl`. *)
+let rec head_tycon_mono m = match normalize m with
+  | TCon n -> Some n
+  | TApp (a, _) -> head_tycon_mono a
+  | _ -> None
+
+(* Phase 72: [field_owners] is a multimap (field name → every record that
+   declares it).  Insert (field, record) only if absent so per-module prelude
+   re-registration and export seeding stay idempotent. *)
+let add_field_owner tbl field record =
+  if not (List.mem record (Hashtbl.find_all tbl field)) then
+    Hashtbl.add tbl field record
+
+(* All records that declare [field], in unspecified order. *)
+let field_candidates env field = Hashtbl.find_all env.field_owners field
 
 (* ── Pattern typing ─────────────────────────────── *)
 
@@ -1548,47 +1572,77 @@ let rec infer env = function
 
   | EFieldAccess (e, field) ->
     let te = infer env e in
+    let nte = normalize te in
     (* Special case: (Ref a).value → a *)
-    (match normalize te, field with
+    (match nte, field with
      | TApp (TCon "Ref", inner), "value" -> inner
      | _ ->
-       let record_name =
-         try Hashtbl.find env.field_owners field
-         with Not_found -> fail (UnknownField (field, "<unknown>"))
+       (* Resolve [field] inside a known record: instantiate, unify the receiver
+          against it, return the field's type. *)
+       let resolve_in record_name =
+         let info =
+           try Hashtbl.find env.records record_name
+           with Not_found -> fail (UnknownRecord record_name)
+         in
+         let (result_t, field_types) = instantiate_record info in
+         unify te result_t;
+         (try List.assoc field field_types
+          with Not_found -> fail (UnknownField (field, record_name)))
        in
-       let info =
-         try Hashtbl.find env.records record_name
-         with Not_found -> fail (UnknownRecord record_name)
-       in
-       let (result_t, field_types) = instantiate_record info in
-       unify te result_t;
-       (try List.assoc field field_types
-        with Not_found -> fail (UnknownField (field, record_name)))
+       (* Phase 72: resolve by the receiver's inferred record type when known;
+          otherwise fall back to the field's candidate owners. *)
+       (match head_tycon_mono nte with
+        | Some r when Hashtbl.mem env.records r -> resolve_in r
+        | _ ->
+          (match nte with
+           | TVar { contents = Unbound _ } ->
+             (match field_candidates env field with
+              | []  -> fail (UnknownField (field, "<unknown>"))
+              | [r] -> resolve_in r
+              | rs  -> fail (AmbiguousField (field, List.sort_uniq compare rs)))
+           | _ ->
+             (* Receiver is a concrete non-record type: unify against any
+                candidate so the existing TypeMismatch surfaces. *)
+             (match field_candidates env field with
+              | []     -> fail (UnknownField (field, "<unknown>"))
+              | r :: _ -> resolve_in r)))
     )
 
   | ERecordUpdate (e, updated) ->
     let te = infer env e in
     if updated = [] then te
     else begin
-      let first_field = fst (List.hd updated) in
-      let record_name =
-        try Hashtbl.find env.field_owners first_field
-        with Not_found -> fail (UnknownField (first_field, "<unknown>"))
-      in
-      let info =
-        try Hashtbl.find env.records record_name
-        with Not_found -> fail (UnknownRecord record_name)
-      in
-      let (result_t, field_types) = instantiate_record info in
-      unify te result_t;
-      List.iter (fun (fname, expr) ->
-        let ftype =
-          try List.assoc fname field_types
-          with Not_found -> fail (UnknownField (fname, record_name))
+      let resolve_in record_name =
+        let info =
+          try Hashtbl.find env.records record_name
+          with Not_found -> fail (UnknownRecord record_name)
         in
-        unify (infer env expr) ftype
-      ) updated;
-      result_t
+        let (result_t, field_types) = instantiate_record info in
+        unify te result_t;
+        List.iter (fun (fname, expr) ->
+          let ftype =
+            try List.assoc fname field_types
+            with Not_found -> fail (UnknownField (fname, record_name))
+          in
+          unify (infer env expr) ftype
+        ) updated;
+        result_t
+      in
+      let first_field = fst (List.hd updated) in
+      let nte = normalize te in
+      (match head_tycon_mono nte with
+       | Some r when Hashtbl.mem env.records r -> resolve_in r
+       | _ ->
+         (match nte with
+          | TVar { contents = Unbound _ } ->
+            (match field_candidates env first_field with
+             | []  -> fail (UnknownField (first_field, "<unknown>"))
+             | [r] -> resolve_in r
+             | rs  -> fail (AmbiguousField (first_field, List.sort_uniq compare rs)))
+          | _ ->
+            (match field_candidates env first_field with
+             | []     -> fail (UnknownField (first_field, "<unknown>"))
+             | r :: _ -> resolve_in r)))
     end
 
   | EIndex (arr, idx) ->
@@ -1912,12 +1966,11 @@ let register_data ?(aliases=Hashtbl.create 0) env (name, params, variants) =
       | Ast.ConPos tys    -> List.map (fun f -> go (expand_aliases aliases f)) tys
       | Ast.ConNamed flds ->
         let monos = List.map (fun f -> (f.Ast.field_name, go (expand_aliases aliases f.Ast.field_type))) flds in
-        (* Register field ownership and ordered field list for pattern/construction *)
+        (* Register field ownership (multimap — a field name may be shared across
+           records/ctors, Phase 72) and the ordered field list for
+           pattern/construction. *)
         List.iter (fun (fn, _) ->
-          if Hashtbl.mem env.field_owners fn then
-            fail (Other (Printf.sprintf
-              "Field name collision: '%s' is already declared by another type" fn));
-          Hashtbl.replace env.field_owners fn v.Ast.con_name
+          add_field_owner env.field_owners fn v.Ast.con_name
         ) monos;
         Hashtbl.replace env.ctor_fields v.Ast.con_name monos;
         List.map snd monos
@@ -1976,16 +2029,12 @@ let register_record ?(aliases=Hashtbl.create 0) env (name, params, fields) =
   let rec_params = free_unbound [] result_t in
   let info = { rec_params; rec_result = result_t; rec_fields = field_monos } in
   Hashtbl.replace env.records name info;
+  (* Phase 72: field_owners is a multimap — two record types may share a field
+     name, and field access resolves by the receiver's inferred type.
+     add_field_owner dedups, so per-module prelude re-registration and export
+     seeding stay idempotent. *)
   List.iter (fun (fname, _) ->
-    (* A genuine collision is the same field owned by a *different* record.
-       Re-registering the same record (prelude prepended per-module in the
-       multi-file path, plus seeded from module exports) is idempotent. *)
-    (match Hashtbl.find_opt env.field_owners fname with
-     | Some owner when owner <> name ->
-       fail (Other (Printf.sprintf
-         "Field name collision: '%s' is already declared by another record" fname))
-     | _ -> ());
-    Hashtbl.replace env.field_owners fname name
+    add_field_owner env.field_owners fname name
   ) field_monos
 
 let register_alias env (name, params, rhs) =
@@ -2463,15 +2512,6 @@ let rec is_concrete = function
   | TCon _ -> true
   | TApp (a, b) | TFun (a, _, b) -> is_concrete a && is_concrete b
   | TTuple ts -> List.for_all is_concrete ts
-
-(* Phase 69.x-c: the head type-constructor of a mono, if it is concrete (the
-   spine bottoms out at a TCon) — `Result e` → "Result", `Int` → "Int", a bare
-   TVar → None.  Mirrors eval's AST `head_tycon` so the string a `RHeadKey`
-   carries matches the head tag eval stamps on a `VTypedImpl`. *)
-let rec head_tycon_mono m = match normalize m with
-  | TCon n -> Some n
-  | TApp (a, _) -> head_tycon_mono a
-  | _ -> None
 
 (* One-directional structural matching: pattern (from impl type_args) may
    contain unbound TVars that act as wildcards; concrete must be fully resolved. *)
@@ -3227,7 +3267,7 @@ let typecheck_module
     List.iter (fun (n, ri) -> Hashtbl.replace env.records n ri) te.te_records;
     List.iter (fun (n, _) ->
       List.iter (fun (fn, _) ->
-        Hashtbl.replace env.field_owners fn n
+        add_field_owner env.field_owners fn n
       ) (try (Hashtbl.find env.records n).rec_fields with Not_found -> [])
     ) te.te_records;
     List.iter (fun (n, ii) ->

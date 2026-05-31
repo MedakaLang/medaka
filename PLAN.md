@@ -3274,10 +3274,23 @@ diagnostic; a type error mid-`register_*` doesn't corrupt the next REPL input.
 **Done when.** No `assert false` on the error path; REPL state survives a type
 error without leaking levels.
 
-### Phase 72: Record row polymorphism (or, at minimum, drop the field-name collision error) ⏳ TODO
+### Phase 72: Field-name reuse across record types (receiver-type-directed resolution) ✅ DONE (2026-05-31)
 
-**Goal.** Allow two records to share a field name, and let `\r => r.x` be
-polymorphic over "any record with field `x`".
+**Goal.** Allow two record types to declare the same field name, and resolve
+field access (`p.name`) by the record type inferred for the receiver.
+
+**Scope decision (settled 2026-05-31).** Go with the **interim** option:
+receiver-type-directed field resolution, **not** full row polymorphism. Row
+variables (`\r => r.x` over "any record with field `x`") are explicitly
+declined — they add a structural abstraction axis that competes with
+interfaces and fracture the language into two idioms for the same job. See
+*Field-name reuse and the decision against row polymorphism* under Product
+Types in `language-design.md`, and the *Explicitly Out of Scope* list. This
+realizes intent already stated in the design doc ("Fields are namespaced to
+the type — no global namespace pollution"), which the current global
+`field_owners` collision behavior violates. The decision is not a one-way
+door: row variables can be layered onto `mono` later if a concrete need that
+interfaces cannot meet ever appears.
 
 **Why it matters now.** The stdlib will define many records; today a field name
 may be declared by only one record type — `Field name collision: 'name' is
@@ -3289,19 +3302,65 @@ multi-file prelude path no longer fires — and seeded prelude `field_owners` in
 `resolve.ml`. A genuine cross-type collision is still a hard error, so the
 limitation this phase targets is unchanged.)
 
-**Where.** `lib/typecheck.ml`: `EFieldAccess` (~:1281), the (now idempotent)
-collision check in `register_record` (~:1631), `field_owners`;
-`lib/resolve.ml` `prelude_field_owners` seeding.
+**What landed.** `field_owners` (in both `typecheck.ml` and `resolve.ml`)
+became a **multimap** (field → every owning record), populated with
+`Hashtbl.add` via a dedup-on-insert `add_field_owner` helper and read with
+`Hashtbl.find_all`. Both `Field name collision` errors (`register_record`,
+`register_data` ConNamed) are gone. `EFieldAccess`/`ERecordUpdate` resolve by
+the receiver's head type constructor when known (`head_tycon_mono`); when the
+receiver is still an unbound type variable they fall back to the field's
+candidate owners — a single owner drives inference (backward-compatible), and
+multiple owners raise the new `AmbiguousField` type error (rendered Elm-style,
+naming candidates and suggesting an annotation). `resolve.ml`'s three
+field-validation sites (`PRec`, `ERecordCreate`, `ERecordUpdate`) became
+multimap-aware; the update site relaxed to existence-only (the cross-field
+consistency check moved to typecheck, where the receiver type is known). Eval
+was unchanged (it looks fields up directly on the `VRecord` value).
 
-**Scope.** The full fix is row-polymorphic record types (a `mono` extension
-with row variables) — a substantial design change; write a `language-design.md`
-note first. A cheaper interim step: scope field resolution by the record type
-inferred for the receiver (allowing reuse of field names across types) without
-full row polymorphism. Decide which with the user before committing. Tests:
-two records sharing a field name coexist; field access picks the right one.
+**Known limitation (deferred to Phase 73).** A shared field needs the
+receiver's type known *at the access site*: construction-pinning
+(`(Point { … }).x`) and receiver annotations (`(p : Point).x`) work, but a
+top-level signature (`f : Point -> Int; f p = p.x`) does **not** disambiguate —
+signatures unify against the body *after* it is inferred, so the parameter type
+isn't available at the field access. Single-owner fields are unaffected
+(inference still resolves them). See Phase 73.
 
-**Done when.** Field-name reuse across record types is allowed; pick the scope
-(interim vs. full rows) deliberately.
+**Done when.** ✅ Two records sharing a field name coexist; field access picks
+the right one by the receiver's inferred type; the collision errors are gone;
+ambiguous shared-field access reports `AmbiguousField`. Full row polymorphism
+remains out of scope. Tests: `test_typecheck` (shared-field success +
+ambiguity + cross-record update), `test_resolve` (shared-field create/pattern,
+relaxed update).
+
+---
+
+### Phase 73: Signature-driven parameter typing (bidirectional checking for signed defs) ⏳ TODO
+
+**Goal.** When a top-level definition carries a type signature, push the
+signature's argument types into the function's parameter patterns *before*
+inferring the body, so the parameters' types are known inside the body. Makes
+`f : Point -> Int; f p = p.x` resolve a shared field by the signature alone
+(today only construction-pinning or a `(p : Point).x` annotation works — Phase
+72 limitation).
+
+**Why.** Beyond the shared-field case, this is the generally-expected behavior
+of a type signature (a checking-mode / bidirectional pass). It improves error
+locality and lets annotations on the signature flow to the body.
+
+**Where.** `lib/typecheck.ml` `process_letrec_group` (~:1868): currently
+`unify placeholder sig_t` runs, then each clause is inferred as a bare lambda
+(`clause_to_expr`, ~:979) whose parameter vars are fresh and only unify with
+the placeholder's domain *after* the body. Decompose `sig_t` into argument
+types and bind each clause's parameter pattern to the corresponding argument
+type in the env before inferring the body. Handle multi-clause functions,
+guards, partial application, and effect annotations on the arrow; preserve the
+value restriction (Phase 66) and constraint extraction. Treat as
+`add-language-feature` (delicate inference path), not a small `harden`.
+
+**Done when.** A signed definition type-checks its body against the declared
+parameter types; `f : Point -> Int; f p = p.x` resolves a shared field; no
+regression in `test_typecheck`/`@thorough` (especially polymorphic and
+constrained signatures, and the value restriction).
 
 ---
 

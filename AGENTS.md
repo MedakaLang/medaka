@@ -136,14 +136,22 @@ fix lands, then load. (A `UserPromptSubmit` hook,
 - **debug-pipeline** — diagnose a parse/typecheck/eval failure.
 - **add-lsp-capability** — add/extend an LSP feature.
 - **harden-typechecker** — typechecker-*internal* correctness/diagnostics work
-  (most of the Phase 62–72 arc): add a `type_error`, tighten constraint/
+  (much of the Phase 62–72 arc): add a `type_error`, tighten constraint/
   coherence/unification logic, without breaking error accumulation or level
-  bracketing. Note: not every Phase 62–72 item lives in the typechecker —
-  cross-cutting dispatch work (Phase 69 done; 69.x dictionary passing touches
-  resolve/typecheck/eval + a marker pass) and `desugar.ml`-rooted work (e.g.
-  Phase 63, fixing `deriving` for parametric types) are *not* this skill —
-  treat them like **add-language-feature** (thread the change through the
-  pipeline). Check where the fix actually lands before loading this skill.
+  bracketing. Note: not every typechecker-flavored Phase item lives *only* in
+  the typechecker — and adding a `type_error` does NOT by itself make a task
+  this skill. Cross-cutting work is **add-language-feature** instead:
+  - Phase 69 dispatch / 69.x dictionary passing — touches resolve/typecheck/eval
+    + a marker pass.
+  - Phase 63 — `desugar.ml`-rooted (`deriving` for parametric types).
+  - Phase 72 (done) — field-name reuse / receiver-directed resolution: added the
+    `AmbiguousField` `type_error` but the bulk was a `field_owners` multimap
+    threaded through *both* `resolve.ml` and `typecheck.ml`. Looked like harden;
+    wasn't.
+  - Phase 73 (TODO) — signature-driven parameter typing (bidirectional checking):
+    pure inference work, yet a delicate cross-cutting change to the letrec-group
+    path, so add-language-feature.
+  Check where the fix actually lands before loading this skill.
 
 ## Doc index
 
