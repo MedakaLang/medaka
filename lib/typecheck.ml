@@ -92,6 +92,10 @@ type module_type_exports = {
     (* Phase 69.x: public constrained functions' constraints, so importers wrap
        their occurrences in EDictApp and dict_pass gives them dict parameters.
        Bound var ids are the same ones in the exported te_schemes entry. *)
+  te_method_constraints : (ident * (ident * int list) list) list;
+    (* Phase 69.x-e: public interface methods' own method-level constraints
+       (super-expanded), so importers can stamp res_method_dicts at call sites
+       and dict_pass gives the method bodies matching dict parameters. *)
 }
 
 (* ── Effects ─────────────────────────────────────── *)
@@ -533,9 +537,20 @@ type env = {
   interfaces    : (ident, iface_info) Hashtbl.t;  (* interface name → info *)
   method_iface  : (ident, ident) Hashtbl.t;    (* method name → interface name *)
   impls         : impl_entry list ref;          (* all registered impls *)
-  method_usages : (ident * ident * tyvar_info ref list * string option * Ast.resolved option ref option * Ast.loc option) list ref;  (* (method, iface, param_var_refs, impl_hint, method_occurrence_ref, call_site_loc) *)
+  method_usages : (ident * ident * tyvar_info ref list * string option * (ident * mono list) list * Ast.resolved option ref option * Ast.loc option) list ref;  (* (method, iface, param_var_refs, impl_hint, method_dict_args, method_occurrence_ref, call_site_loc) *)
   fun_constraints : (ident, (ident * int list) list) Hashtbl.t;
     (* fn_name → [(iface_name, [bound_var_ids_in_scheme])] *)
+  method_constraints : (ident, (ident * int list) list) Hashtbl.t;
+    (* Phase 69.x-e: interface-method name → its *own* method-level constraints
+       (e.g. foldMap → [(Monoid,[m_id]); (Semigroup,[m_id])]), super-expanded,
+       with scheme-level var ids.  Drives the leading dict params dict_pass adds
+       to the method's bodies, the dict routes stamped on each call site's
+       res_method_dicts, and the slot order all three sides agree on. *)
+  method_dict_routes : (ident, (ident * int list) list) Hashtbl.t;
+    (* Phase 69.x-e: like method_constraints but keyed by the *instantiated*
+       constraint var ids as seen inside the method's default body, so
+       find_enclosing_dict routes an in-body method ref (e.g. `empty`/`++` inside
+       foldMap's default) to the enclosing method's `$dict_<method>_<slot>`. *)
   dict_app_usages : (ident * (ident * mono list) list * Ast.res_route list option ref * Ast.loc option) list ref;
     (* Phase 69.x: (fn_name, [(constraint_iface, instantiated_args)] in slot order,
        EDictApp_routes_ref, call_site_loc).  Recorded at each constrained-function
@@ -561,6 +576,8 @@ let empty_env () = {
   impls         = ref [];
   method_usages = ref [];
   fun_constraints        = Hashtbl.create 8;
+  method_constraints     = Hashtbl.create 8;
+  method_dict_routes     = Hashtbl.create 8;
   constraint_obligations = ref [];
   dict_app_usages        = ref [];
   type_ctors    = Hashtbl.create 8;
@@ -986,17 +1003,24 @@ let rec infer env = function
         current_impl_hint := None;
         let mref = !current_method_ref in
         current_method_ref := None;
-        env.method_usages := (x, iface_name, param_vars, hint, mref, !current_loc) :: !(env.method_usages);
+        (* Phase 69.x-e: this method's own method-level constraints, instantiated
+           at this occurrence (one entry per slot, in method_constraints order).
+           Emitted as obligations *and* carried on the usage so a post-pass can
+           resolve each to a dict route (RKey/RDict) for res_method_dicts. *)
+        let method_dict_args =
+          match Hashtbl.find_opt env.method_constraints x with
+          | None -> []
+          | Some cs ->
+            List.map (fun (iface, var_ids) ->
+              (iface, List.filter_map (fun id -> List.assoc_opt id sub) var_ids)) cs
+        in
+        env.method_usages := (x, iface_name, param_vars, hint, method_dict_args, mref, !current_loc) :: !(env.method_usages);
         (* Emit obligations for any extra method-level constraints
            (e.g. the `Monoid m` in `foldMap : Monoid m => (a -> m) -> t a -> m`). *)
-        (match List.assoc_opt x info.iface_method_constraints with
-         | None -> ()
-         | Some cs ->
-           List.iter (fun (iface, var_ids) ->
-             let args = List.filter_map (fun id -> List.assoc_opt id sub) var_ids in
-             if args <> [] then
-               env.constraint_obligations := (iface, args, !current_loc) :: !(env.constraint_obligations)
-           ) cs);
+        List.iter (fun (iface, args) ->
+          if args <> [] then
+            env.constraint_obligations := (iface, args, !current_loc) :: !(env.constraint_obligations)
+        ) method_dict_args;
         t
       | None ->
         current_method_ref := None;  (* not a method occurrence; don't leak the ref *)
@@ -1128,7 +1152,7 @@ let rec infer env = function
     let r = match a with TVar r -> r | _ -> fail (InternalError "fresh_var did not yield a TVar") in
     unify te a;
     env.method_usages :=
-      ("negate", "Num", [r], None, None, !current_loc) :: !(env.method_usages);
+      ("negate", "Num", [r], None, [], None, !current_loc) :: !(env.method_usages);
     a
   | EUnOp ("!", e) ->
     unify (infer env e) t_bool; t_bool
@@ -1632,7 +1656,7 @@ and binop_type env op l r =
     let a = fresh_var () in
     let r = match a with TVar r -> r | _ -> fail (InternalError "fresh_var did not yield a TVar") in
     unify tl a; unify tr a;
-    env.method_usages := (method_name, iface_name, [r], None, None, !current_loc) :: !(env.method_usages);
+    env.method_usages := (method_name, iface_name, [r], None, [], None, !current_loc) :: !(env.method_usages);
     a
   in
   let iface_and_method_of op =
@@ -1736,6 +1760,34 @@ let group_fundefs decls
 let flatten_groups groups =
   List.concat_map snd groups
 
+(* Phase 69.x: append the *direct* superinterface obligations of each constraint
+   in [cs] as extra constraint entries, mapping each super's declaration param
+   ids to this constraint's instantiated ids positionally.  Used so a body that
+   calls a superinterface method (e.g. foldMap's default calls Semigroup's `++`
+   while only `Monoid m` is declared) gets an honest super dict in its own slot.
+   Appended after the declared constraints, so existing slot indices are
+   unchanged, and de-duplicated.  One level deep — transitive supers fall out
+   because each interface's own [iface_supers] already records its direct ones. *)
+let expand_supers interfaces (cs : (ident * int list) list) : (ident * int list) list =
+  let seen = Hashtbl.create 8 in
+  List.iter (fun key -> Hashtbl.replace seen key ()) cs;
+  let supers = List.concat_map (fun (iface, ids) ->
+    match Hashtbl.find_opt interfaces iface with
+    | Some info when List.length info.iface_param_ids = List.length ids ->
+      let subst = List.combine info.iface_param_ids ids in
+      List.filter_map (fun (super, super_decl_ids) ->
+        let super_ids =
+          List.filter_map (fun d -> List.assoc_opt d subst) super_decl_ids in
+        if List.length super_ids = List.length super_decl_ids
+        then Some (super, super_ids) else None
+      ) info.iface_supers
+    | _ -> []
+  ) cs in
+  let extra = List.filter (fun key ->
+    if Hashtbl.mem seen key then false else (Hashtbl.replace seen key (); true)
+  ) supers in
+  cs @ extra
+
 (* Recognize syntactic lambdas, peeling location wrappers. *)
 let rec is_syntactic_lambda = function
   | ELam _      -> true
@@ -1814,32 +1866,7 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
           superinterface impl is guaranteed to exist by the Phase-64 obligation
           check, so callers can always supply it.  Dead slots (super not used in
           the body) are harmless. *)
-       let cs =
-         let seen = Hashtbl.create 8 in
-         List.iter (fun key -> Hashtbl.replace seen key ()) cs;
-         let supers = List.concat_map (fun (iface, ids) ->
-           match Hashtbl.find_opt (!env_ref).interfaces iface with
-           | None -> []
-           | Some info
-             when List.length info.iface_param_ids = List.length ids ->
-             (* iface_supers carries the interface *declaration* tyvar ids of each
-                super's params; map them to this constraint's instantiated ids,
-                positionally through the interface's own param ids. *)
-             let subst = List.combine info.iface_param_ids ids in
-             List.filter_map (fun (super, super_decl_ids) ->
-               let super_ids =
-                 List.filter_map (fun d -> List.assoc_opt d subst) super_decl_ids in
-               if List.length super_ids = List.length super_decl_ids
-               then Some (super, super_ids) else None
-             ) info.iface_supers
-           | Some _ -> []
-         ) cs in
-         let extra = List.filter (fun key ->
-           if Hashtbl.mem seen key then false
-           else (Hashtbl.replace seen key (); true)
-         ) supers in
-         cs @ extra
-       in
+       let cs = expand_supers (!env_ref).interfaces cs in
        if cs <> [] then
          Hashtbl.replace (!env_ref).fun_constraints name cs
      | _ -> ());
@@ -2042,6 +2069,31 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
   let defaults = List.filter_map (fun m ->
     if m.Ast.method_default <> None then Some m.Ast.method_name else None
   ) methods in
+  (* Phase 69.x-e: each method's *own* method-level constraints (scheme-level var
+     ids), super-expanded so a default body that calls a superinterface method
+     (foldMap's `++`, a Semigroup method, under a declared `Monoid m`) gets a
+     slot.  Computed before the default-body loop so we can map these scheme ids
+     through each default's instantiation into method_dict_routes (below). *)
+  let iface_method_constraints =
+    List.filter_map (fun (name, _mono, cs) ->
+      if cs = [] then None
+      else begin
+        let extract_id m = match normalize m with
+          | TVar {contents = Unbound (id, _)} -> Some id
+          | _ -> None
+        in
+        let cs' = List.filter_map (fun (iface, args) ->
+          let ids = List.filter_map extract_id args in
+          if ids <> [] then Some (iface, ids) else None
+        ) cs in
+        if cs' = [] then None
+        else Some (name, expand_supers env.interfaces cs')
+      end
+    ) method_results
+  in
+  List.iter (fun (name, cs) ->
+    Hashtbl.replace env.method_constraints name cs
+  ) iface_method_constraints;
   (* Type-check each default method body.  Build a temporary env that includes
      all interface methods so a default can call peer methods.
      For methods whose type was inferred (TyVar "_"), update the scheme to the
@@ -2071,7 +2123,22 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
     | None -> ()
     | Some (pats, body) ->
       let mscheme = List.assoc m.Ast.method_name !method_schemes in
-      let expected_t = instantiate mscheme in
+      let (sub, expected_t) = instantiate_raw mscheme in
+      (* Phase 69.x-e: record, per slot, the *instantiated* id of each
+         method-level constraint var as it appears in this default body, so an
+         in-body method ref unified to it (e.g. `empty`/`++` against foldMap's
+         `m`) routes via find_enclosing_dict to `$dict_<method>_<slot>`. *)
+      (match List.assoc_opt m.Ast.method_name iface_method_constraints with
+       | None -> ()
+       | Some cs ->
+         let inst_id id = match List.assoc_opt id sub with
+           | Some t -> (match normalize t with
+                        | TVar {contents = Unbound (iid, _)} -> Some iid | _ -> None)
+           | None -> None
+         in
+         let inst_cs = List.map (fun (iface, ids) ->
+           (iface, List.filter_map inst_id ids)) cs in
+         Hashtbl.replace env.method_dict_routes m.Ast.method_name inst_cs);
       enter_level ();
       let actual_t = infer (env_with_methods ()) (clause_to_expr (pats, body)) in
       exit_level ();
@@ -2091,22 +2158,6 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
        | _ -> ())
   ) methods;
   let method_schemes = !method_schemes in
-  let iface_method_constraints =
-    List.filter_map (fun (name, _mono, cs) ->
-      if cs = [] then None
-      else begin
-        let extract_id m = match normalize m with
-          | TVar {contents = Unbound (id, _)} -> Some id
-          | _ -> None
-        in
-        let cs' = List.filter_map (fun (iface, args) ->
-          let ids = List.filter_map extract_id args in
-          if ids <> [] then Some (iface, ids) else None
-        ) cs in
-        if cs' = [] then None else Some (name, cs')
-      end
-    ) method_results
-  in
   (* Resolve each superinterface obligation's type-arg names to the bound ids of
      the interface's own params, so check_superinterface_obligations can later
      substitute an impl's concrete type args positionally. *)
@@ -2524,14 +2575,21 @@ let rec mono_unbound_ids m =
    globally unique, so at most one (function, slot) matches. *)
 let find_enclosing_dict env iface (ids_present : int list) : Ast.ident option =
   let result = ref None in
-  Hashtbl.iter (fun fname constraints ->
-    if !result = None then
-      List.iteri (fun slot (ci, cids) ->
-        if !result = None && ci = iface
-           && List.exists (fun id -> List.mem id cids) ids_present
-        then result := Some (Ast.dict_param_name fname slot)
-      ) constraints
-  ) env.fun_constraints;
+  let search table =
+    Hashtbl.iter (fun fname constraints ->
+      if !result = None then
+        List.iteri (fun slot (ci, cids) ->
+          if !result = None && ci = iface
+             && List.exists (fun id -> List.mem id cids) ids_present
+          then result := Some (Ast.dict_param_name fname slot)
+        ) constraints
+    ) table
+  in
+  search env.fun_constraints;
+  (* Phase 69.x-e: also the enclosing *method's* own constraints, so an in-body
+     ref inside a default method body (e.g. `empty`/`++` in foldMap's default)
+     reads `$dict_<method>_<slot>`.  Keyed by the instantiated default-body ids. *)
+  if !result = None then search env.method_dict_routes;
   !result
 
 (* After HM inference, check every recorded method call site against the impl
@@ -2546,14 +2604,17 @@ let check_method_usages env =
     | Some info -> List.length info.iface_param_ids
     | None -> 0
   in
-  List.iter (fun (_method_name, iface_name, param_vars, hint_opt, occ_ref, loc) ->
+  List.iter (fun (_method_name, iface_name, param_vars, hint_opt, _method_dict_args, occ_ref, loc) ->
     let n = n_iface_params iface_name in
     (* Phase 69: stamp the resolved impl's route onto this method occurrence (if
        it carries an EMethodRef) so eval routes return-position / multi-param
-       dispatch to the impl the checker actually picked. *)
+       dispatch to the impl the checker actually picked.  res_method_dicts is
+       filled later by resolve_method_dicts (needs pick_dispatch_impl). *)
     let set_route route =
       match occ_ref with
-      | Some cell -> cell := Some { Ast.res_iface = iface_name; res_route = route }
+      | Some cell ->
+        cell := Some { Ast.res_iface = iface_name; res_route = route;
+                       res_method_dicts = [] }
       | None -> ()
     in
     if n = 0 || List.length param_vars <> n then ()
@@ -2701,22 +2762,46 @@ let pick_dispatch_impl env iface concrete : impl_entry option =
      has no dict param) → a sentinel empty key, so eval still supplies a
      dictionary for arity but select_impl_by_key falls back to arg-tag dispatch —
      never worse than pre-69.x behaviour. *)
+(* Resolve one constraint occurrence (iface + instantiated args) to its dict
+   route — shared by constrained-function occurrences (resolve_dict_apps) and
+   method-level-constraint occurrences (resolve_method_dicts, Phase 69.x-e). *)
+let resolve_one_route env (iface, args) =
+  let args = List.map normalize args in
+  if args <> [] && List.for_all is_concrete args then
+    (match pick_dispatch_impl env iface args with
+     | Some e -> Ast.RKey e.impl_key
+     | None -> Ast.RKey "")
+  else
+    let ids = List.concat_map mono_unbound_ids args in
+    (match find_enclosing_dict env iface ids with
+     | Some dvar -> Ast.RDict dvar
+     | None -> Ast.RKey "")
+
 let resolve_dict_apps env =
   List.iter (fun (_fname, per_constraint, routes_ref, _loc) ->
-    let routes = List.map (fun (iface, args) ->
-      let args = List.map normalize args in
-      if args <> [] && List.for_all is_concrete args then
-        (match pick_dispatch_impl env iface args with
-         | Some e -> Ast.RKey e.impl_key
-         | None -> Ast.RKey "")
-      else
-        let ids = List.concat_map mono_unbound_ids args in
-        (match find_enclosing_dict env iface ids with
-         | Some dvar -> Ast.RDict dvar
-         | None -> Ast.RKey "")
-    ) per_constraint in
-    routes_ref := Some routes
+    routes_ref := Some (List.map (resolve_one_route env) per_constraint)
   ) !(env.dict_app_usages)
+
+(* Phase 69.x-e: fill res_method_dicts on each method occurrence whose interface
+   method carries method-level constraints (e.g. foldMap's `Monoid m`).  One
+   route per slot, in method_constraints order, so eval applies them as leading
+   dictionaries to the method binding (alongside its arg-tag t-dispatch) and the
+   default/impl bodies — given matching `$dict_<method>_<slot>` params by
+   dict_pass — read them.  Runs after check_method_usages has stamped res_route. *)
+let resolve_method_dicts env =
+  List.iter (fun (_m, _iface, _pv, _hint, method_dict_args, occ_ref, _loc) ->
+    match occ_ref, method_dict_args with
+    | Some cell, (_ :: _) ->
+      let routes = List.map (resolve_one_route env) method_dict_args in
+      (match !cell with
+       | Some r -> cell := Some { r with Ast.res_method_dicts = routes }
+       | None ->
+         (* check_method_usages left no t-route (polymorphic/non-ground site);
+            still carry the method dicts so eval can supply them. *)
+         cell := Some { Ast.res_iface = _iface; res_route = Ast.RKey "";
+                        res_method_dicts = routes })
+    | _ -> ()
+  ) !(env.method_usages)
 
 (* Phase 64: enforce superinterface (`requires`) obligations at impl sites.
    For `interface Ord a requires Eq a`, every concrete `impl Ord T` must be
@@ -3082,6 +3167,7 @@ let check_program (prog : program) : (ident * scheme) list * string list =
   check_method_usages !env;
   check_constraint_obligations !env;
   resolve_dict_apps !env;
+  resolve_method_dicts !env;
   check_superinterface_obligations !env;
 
   (* Phase 5: effect inference and checking *)
@@ -3157,6 +3243,9 @@ let typecheck_module
        recorded as dict applications and dict_pass agrees on their arity. *)
     List.iter (fun (n, cs) -> Hashtbl.replace env.fun_constraints n cs)
       te.te_fun_constraints;
+    (* Phase 69.x-e: import method-level constraints likewise. *)
+    List.iter (fun (n, cs) -> Hashtbl.replace env.method_constraints n cs)
+      te.te_method_constraints;
   ) known_modules;
 
   (* Build the set of module-imported schemes from DUse decls *)
@@ -3260,6 +3349,7 @@ let typecheck_module
   check_method_usages !env;
   check_constraint_obligations !env;
   resolve_dict_apps !env;
+  resolve_method_dicts !env;
   check_superinterface_obligations !env;
   let user_extern_decls =
     List.filter_map (fun d -> match Ast.inner_decl d with DExtern (_, n, t) -> Some (n, t) | _ -> None) prog
@@ -3356,6 +3446,12 @@ let typecheck_module
         match Hashtbl.find_opt (!env).fun_constraints n with
         | Some cs -> Some (n, cs)
         | None -> None) pub_schemes;
+    (* Phase 69.x-e: export public methods' method-level constraints similarly. *)
+    te_method_constraints =
+      List.filter_map (fun (n, _) ->
+        match Hashtbl.find_opt (!env).method_constraints n with
+        | Some cs -> Some (n, cs)
+        | None -> None) pub_schemes;
   } in
   (te, all_schemes, warnings)
 
@@ -3375,6 +3471,8 @@ let copy_tc_env (e : env) : env = {
   impls         = ref !(e.impls);
   method_usages = ref !(e.method_usages);
   fun_constraints        = Hashtbl.copy e.fun_constraints;
+  method_constraints     = Hashtbl.copy e.method_constraints;
+  method_dict_routes     = Hashtbl.copy e.method_dict_routes;
   constraint_obligations = ref !(e.constraint_obligations);
   dict_app_usages        = ref !(e.dict_app_usages);
   type_ctors    = Hashtbl.copy e.type_ctors;
@@ -3461,6 +3559,7 @@ let check_repl_decl ?(seeded=false) (env : env ref) (decls : decl list)
   check_method_usages !env;
   check_constraint_obligations !env;
   resolve_dict_apps !env;
+  resolve_method_dicts !env;
   check_superinterface_obligations !env;
   let user_extern_decls =
     List.filter_map (fun d -> match Ast.inner_decl d with DExtern (_, n, t) -> Some (n, t) | _ -> None) decls
@@ -3494,6 +3593,7 @@ let infer_repl_expr (env : env) (e : expr) : mono * string list =
      are re-checked idempotently (concrete usages re-fill to the same key). *)
   check_method_usages env;
   resolve_dict_apps env;
+  resolve_method_dicts env;
   let scheme = generalize t in
   let (Forall (_, mono)) = scheme in
   (mono, List.rev !(env.warnings))

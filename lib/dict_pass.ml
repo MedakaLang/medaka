@@ -25,7 +25,11 @@
 
 open Ast
 
-(* Collect fn_name → dict-arity from the filled EDictApp nodes across the tree. *)
+(* Collect name → dict-arity from the filled EDictApp / EMethodRef nodes across
+   the tree.  EDictApp routes give a constrained function's arity; an
+   EMethodRef's res_method_dicts (Phase 69.x-e) gives an interface method's
+   method-level-constraint arity, so dict_pass adds matching leading params to
+   that method's default body and impl clauses. *)
 let collect_arities (prog : program) : (ident, int) Hashtbl.t =
   let tbl = Hashtbl.create 32 in
   let note e =
@@ -34,6 +38,11 @@ let collect_arities (prog : program) : (ident, int) Hashtbl.t =
        (match !r with
         | Some routes -> Hashtbl.replace tbl f (List.length routes)
         | None -> ())
+     | EMethodRef (r, m) ->
+       (match !r with
+        | Some { Ast.res_method_dicts = (_ :: _ as ds); _ } ->
+          Hashtbl.replace tbl m (List.length ds)
+        | _ -> ())
      | _ -> ());
     e
   in
@@ -65,6 +74,24 @@ let rec run_decl arities d =
       if k = 0 then (n, clauses)
       else (n, List.map (fun (pats, body) -> (dict_pats n k @ pats, body)) clauses)
     ) bindings)
+  (* Phase 69.x-e: a method with method-level constraints (e.g. foldMap) takes
+     leading dict params on its default body and on every explicit impl clause,
+     so call sites can apply the Monoid/Semigroup dictionaries as leading args.
+     Params are named after the *method* (dict_param_name foldMap slot) to match
+     the RDict routes stamped on the bodies' inner method refs. *)
+  | DInterface ({ methods; _ } as i) ->
+    DInterface { i with methods = List.map (fun m ->
+      let k = arity_of m.method_name in
+      if k = 0 then m
+      else { m with method_default =
+        Option.map (fun (pats, body) -> (dict_pats m.method_name k @ pats, body))
+          m.method_default }
+    ) methods }
+  | DImpl ({ methods; _ } as i) ->
+    DImpl { i with methods = List.map (fun (n, pats, body) ->
+      let k = arity_of n in
+      if k = 0 then (n, pats, body) else (n, dict_pats n k @ pats, body)
+    ) methods }
   | DAttrib (attrs, inner) -> DAttrib (attrs, run_decl arities inner)
   | other -> other
 
@@ -76,9 +103,20 @@ let arities_of_fun_constraints (fc : (ident, (ident * int list) list) Hashtbl.t)
   Hashtbl.iter (fun n cs -> Hashtbl.replace tbl n (List.length cs)) fc;
   tbl
 
-let run ?fun_constraints (prog : program) : program =
-  let arities = match fun_constraints with
-    | Some fc -> arities_of_fun_constraints fc
-    | None -> collect_arities prog
+let run ?fun_constraints ?method_constraints (prog : program) : program =
+  let arities = match fun_constraints, method_constraints with
+    | None, None -> collect_arities prog
+    | _ ->
+      (* REPL path: a definition's batch may hold no reference to learn arity
+         from, so take it from typecheck's tables directly.  Method-level
+         constraints (Phase 69.x-e) merge in alongside function-level ones. *)
+      let tbl = match fun_constraints with
+        | Some fc -> arities_of_fun_constraints fc
+        | None -> Hashtbl.create 32
+      in
+      (match method_constraints with
+       | Some mc -> Hashtbl.iter (fun n cs -> Hashtbl.replace tbl n (List.length cs)) mc
+       | None -> ());
+      tbl
   in
   List.map (run_decl arities) prog

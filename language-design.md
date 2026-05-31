@@ -97,6 +97,15 @@ impl:
   type) or forwards its own (when it's itself still generic). Dictionaries are
   lightweight — just the identity of the chosen impl — so this reuses the same
   resolution machinery rather than duplicating it.
+- **Method-level constraints** — a constraint on an interface method's *own*
+  signature, e.g. `foldMap : Monoid m => (a -> m) -> t a -> m` — are dictionaries
+  too. Such a method is dispatched on its interface type (`t`, by the container
+  argument) *and* carries a `Monoid m` dictionary for the constraint on `m`;
+  inside its default body a return-position method like `empty` resolves through
+  that dictionary. The caller supplies it the same way as for a constrained
+  function (concrete key when `m` is fixed, forwarded when the caller is itself
+  `Monoid m =>`), so `foldMap MkSum xs : Sum` folds with the user's `Sum` monoid
+  rather than the first registered one.
 
 ### Friendly Naming
 Abstract concepts get accessible names:

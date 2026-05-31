@@ -145,7 +145,8 @@ let process_item source resolve_env tc_env eval_state pending_sigs user_bindings
          (* Phase 69.x: add dictionary parameters to any constrained functions
             defined here (arity from fun_constraints, since this batch may hold no
             reference to learn it from) before eval registers their closures. *)
-         let decls = Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints decls in
+         let decls = Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints
+           ~method_constraints:(!tc_env).Typecheck.method_constraints decls in
          List.iter (Eval.eval_repl_decl eval_state) decls;
          user_bindings := !user_bindings @ bindings;
          List.iter (fun (name, scheme) ->
@@ -191,6 +192,7 @@ let copy_ht src dst =
    seeded the prelude, and dict_pass preserves those body refs. *)
 let dict_passed_prelude tc_env =
   Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints
+    ~method_constraints:(!tc_env).Typecheck.method_constraints
     Method_marker.marked_prelude
 
 let reset_session resolve_env tc_env eval_state =
@@ -308,7 +310,8 @@ let load_file path resolve_env tc_env eval_state pending_sigs user_bindings =
        in
        let (bindings, warnings) = Typecheck.check_repl_decl tc_env program in
        List.iter (fun w -> Printf.eprintf "%s\n%!" w) warnings;
-       let program = Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints program in
+       let program = Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints
+         ~method_constraints:(!tc_env).Typecheck.method_constraints program in
        List.iter (Eval.eval_repl_decl eval_state) program;
        user_bindings := !user_bindings @ bindings;
        let n = List.length bindings in

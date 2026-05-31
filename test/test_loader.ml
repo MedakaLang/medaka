@@ -635,6 +635,53 @@ let test_eval_super_dict_cross_module () =
       failwith (Printf.sprintf "Expected \"Box 5\\nBag 7\\n\" from cross-module super dispatch, got %S" out)
   )
 
+(* Phase 69.x-e: method-level-constraint dictionary passing across modules.  A
+   user `Monoid`/`Semigroup` impl (for `Sum`) lives in one module; `foldMap`
+   (a prelude Foldable method carrying `Monoid m`) is used in another.  Mirrors
+   bin/main.ml's multi-module pipeline: mark → typecheck chain → Dict_pass over
+   `marked_prelude @ modules` → eval ~prelude:false, so foldMap's default body
+   gets its dict param and `empty` resolves to the imported Sum monoid. *)
+let test_eval_method_dict_cross_module () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "summod.mdk"
+      "public export data Sum = MkSum Int\n\n\
+       export impl Semigroup Sum where\n\
+      \  append (MkSum a) (MkSum b) = MkSum (a + b)\n\n\
+       export impl Monoid Sum where\n\
+      \  empty = MkSum 0\n\n\
+       export unwrap : Sum -> Int\n\
+       unwrap (MkSum n) = n\n" in
+    let main_path = write_file dir "main.mdk"
+      "import summod.{Sum, MkSum, unwrap}\n\n\
+       main : <IO> Unit\n\
+       main =\n\
+      \  let r = foldMap MkSum [1, 2, 3, 4]\n\
+      \  if unwrap r == 10 then println \"OK\" else println \"BAD\"\n" in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Desugar.desugar_program prog)) modules in
+    let method_names = Method_marker.interface_method_names
+      (Prelude.program :: List.map (fun (_, _, p) -> p) modules) in
+    let constrained = Method_marker.constrained_fn_names
+      (List.map (fun (_, _, p) -> p) modules) in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Method_marker.mark_program method_names constrained prog)) modules in
+    let te_acc = ref [] in
+    List.iter (fun (mid, _, prog) ->
+      let (te, _, _) = Typecheck.typecheck_module !te_acc mid prog in
+      te_acc := te :: !te_acc) modules;
+    let combined = List.concat_map (fun (_, _, p) -> p) modules in
+    let combined = Dict_pass.run (Method_marker.marked_prelude @ combined) in
+    let buf = Buffer.create 32 in
+    let saved = !Eval.output_hook in
+    Eval.output_hook := Buffer.add_string buf;
+    Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
+      ignore (Eval.eval_program ~prelude:false combined));
+    let out = Buffer.contents buf in
+    if out <> "OK\n" then
+      failwith (Printf.sprintf "Expected \"OK\\n\" from cross-module foldMap method dict, got %S" out)
+  )
+
 (* ── Runner ──────────────────────────────────────── *)
 
 let () =
@@ -681,6 +728,7 @@ let () =
     "multi-file dictionary passing (Phase 69.x)", [
       test_case "cross-module constrained dispatch" `Quick test_eval_dict_passing_cross_module;
       test_case "cross-module super dispatch" `Quick test_eval_super_dict_cross_module;
+      test_case "cross-module method-level dict (foldMap)" `Quick test_eval_method_dict_cross_module;
     ];
     "workspace / multi-root", [
       test_case "cross-member import"    `Quick test_workspace_cross_member_import;

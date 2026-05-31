@@ -156,6 +156,89 @@ main =
 |}
   "S\nT\n"
 
+(* Phase 69.x-e: method-level constraint dict (foldMap's `Monoid m`) routed at a
+   *concrete* call site.  foldMap's default body resolves `empty` to the chosen
+   Monoid impl via a dictionary (not arg-tag), so the user `Sum` monoid folds. *)
+let t_foldmap_method_dict_concrete = assert_output_typed
+  {|data Sum = MkSum Int
+
+impl Semigroup Sum where
+  append (MkSum a) (MkSum b) = MkSum (a + b)
+
+impl Monoid Sum where
+  empty = MkSum 0
+
+unwrap (MkSum n) = n
+
+main : <IO> Unit
+main =
+  let r = foldMap MkSum [1, 2, 3, 4]
+  if unwrap r == 10 then println "OK" else println "BAD"
+|}
+  "OK\n"
+
+(* Phase 69.x-e: method-level constraint dict routed *polymorphically*.  `combine`
+   carries `Monoid m` and calls foldMap, so its dictionary forwards transitively
+   into foldMap's method-level slot; two concrete call sites pick distinct
+   monoids (Sum=10, Prod=24) from the same polymorphic body. *)
+let t_foldmap_method_dict_polymorphic = assert_output_typed
+  {|data Sum = MkSum Int
+data Prod = MkProd Int
+
+impl Semigroup Sum where
+  append (MkSum a) (MkSum b) = MkSum (a + b)
+impl Monoid Sum where
+  empty = MkSum 0
+
+impl Semigroup Prod where
+  append (MkProd a) (MkProd b) = MkProd (a * b)
+impl Monoid Prod where
+  empty = MkProd 1
+
+combine : Monoid m => (Int -> m) -> m
+combine f = foldMap f [1, 2, 3, 4]
+
+sumU (MkSum n) = n
+prodU (MkProd n) = n
+
+main : <IO> Unit
+main =
+  if sumU (combine MkSum) == 10 then println "S" else println "BAD"
+  if prodU (combine MkProd) == 24 then println "P" else println "BAD"
+|}
+  "S\nP\n"
+
+(* Phase 69.x-e: an *explicit* foldMap impl (not the default) coexists with the
+   prelude default fallback.  dict_pass prepends the Monoid dict param to the
+   explicit impl too, so eval's arg-tag dispatch positions shift by the dict
+   arity — the `Pair` argument must still select the Pair impl, and `[..]` the
+   List default. *)
+let t_foldmap_explicit_impl_offset = assert_output_typed
+  {|data Pair a = MkPair a a
+data Sum = MkSum Int
+
+impl Semigroup Sum where
+  append (MkSum a) (MkSum b) = MkSum (a + b)
+impl Monoid Sum where
+  empty = MkSum 0
+
+impl Foldable Pair where
+  fold f acc (MkPair x y) = f (f acc x) y
+  foldRight f acc (MkPair x y) = f x (f y acc)
+  toList (MkPair x y) = [x, y]
+  isEmpty _ = False
+  length _ = 2
+  foldMap f (MkPair x y) = append (f x) (f y)
+
+unwrap (MkSum n) = n
+
+main : <IO> Unit
+main =
+  if unwrap (foldMap MkSum (MkPair 3 4)) == 7 then println "P" else println "BAD"
+  if unwrap (foldMap MkSum [1, 2, 3, 4]) == 10 then println "L" else println "BAD"
+|}
+  "P\nL\n"
+
 (* ── Phase 69.x-c: head-concrete (RHeadKey) dispatch ─────────────────────── *)
 (* `wrap : a -> f a` discriminates on its result head `f`.  Inside `mkBox`, `f`
    is fixed to `Box` by the annotation but its arg is still free, so the site is
@@ -314,6 +397,9 @@ let () = Alcotest.run "Run"
     "super dict dispatch",      `Quick, t_super_dict_dispatch;
     "dict polymorphic helper",  `Quick, t_dict_polymorphic_helper;
     "dict transitive",          `Quick, t_dict_transitive;
+    "foldMap method dict (concrete)",    `Quick, t_foldmap_method_dict_concrete;
+    "foldMap method dict (polymorphic)", `Quick, t_foldmap_method_dict_polymorphic;
+    "foldMap explicit impl offset",      `Quick, t_foldmap_explicit_impl_offset;
     "hello world",   `Quick, t_hello;
     "factorial",     `Quick, t_factorial;
     "adt match",     `Quick, t_adt_match;

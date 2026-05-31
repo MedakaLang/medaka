@@ -2706,6 +2706,54 @@ main =
   if (mk 5 : Bool) then println "T" else println "F"
 |}
 
+(* Phase 69.x-e: collect each EMethodRef's *method-level* dict routes
+   (res_method_dicts), so we can assert foldMap's concrete call site supplies a
+   Monoid (and super Semigroup) dictionary key. *)
+let method_dict_routes_of src =
+  let prog = Method_marker.mark_with_prelude (Desugar.desugar_program (parse src)) in
+  ignore (check_program prog);
+  let out = ref [] in
+  let collect = function
+    | Ast.EMethodRef (r, m) as e ->
+      (match !r with
+       | Some { Ast.res_method_dicts = (_ :: _ as ds); _ } ->
+         let s = List.map (function
+           | Ast.RKey k -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h) ds in
+         out := Printf.sprintf "%s{%s}" m (String.concat "," s) :: !out
+       | _ -> ());
+      e
+    | e -> e
+  in
+  List.iter (fun d -> ignore (Desugar.map_decl collect d)) prog;
+  List.sort compare !out
+
+let assert_method_dict_routes expected src () =
+  let actual = method_dict_routes_of src in
+  if actual <> List.sort compare expected then
+    failwith (Printf.sprintf "Expected method-dict routes [%s]\nGot [%s]\nSource:\n%s"
+                (String.concat "; " (List.sort compare expected))
+                (String.concat "; " actual) src)
+
+(* foldMap at a concrete site carries its method-level `Monoid m` dict (plus the
+   super `Semigroup m` slot) resolved to the user `Sum` impl keys. *)
+let t_foldmap_method_dict_routes = assert_method_dict_routes
+  ["foldMap{K:Monoid|Sum|,K:Semigroup|Sum|}"]
+  {|data Sum = MkSum Int
+
+impl Semigroup Sum where
+  append (MkSum a) (MkSum b) = MkSum (a + b)
+
+impl Monoid Sum where
+  empty = MkSum 0
+
+unwrap (MkSum n) = n
+
+main : <IO> Unit
+main =
+  let r = foldMap MkSum [1, 2, 3, 4]
+  if unwrap r == 10 then println "ok" else println "no"
+|}
+
 (* ── Phase 64: superinterface (`requires`) obligations ── *)
 
 (* impl Child Int with no impl Parent Int → rejected. *)
@@ -3400,6 +3448,7 @@ let () =
     ];
     "dictionary passing (Phase 69.x)", [
       test_case "RDict in body, RKey at sites" `Quick t_dict_routes_helper;
+      test_case "foldMap method-level dict keys" `Quick t_foldmap_method_dict_routes;
     ];
     "superinterface obligations (Phase 64)", [
       test_case "err: missing super impl"      `Quick e_super_missing;

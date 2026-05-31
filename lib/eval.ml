@@ -273,6 +273,22 @@ let lookup_dispatch_positions (iface_name : string) (method_name : string) : int
   try Hashtbl.find iface_dispatch (iface_name, method_name)
   with Not_found -> [0]
 
+(* Phase 69.x-e: count the leading dictionary parameters dict_pass prepended to a
+   method body ($dict_<method>_<slot>).  Argument-tag dispatch positions, computed
+   from the method's *surface* type, must shift right by this count so the filter
+   still fires on the discriminating value argument and not on a leading dict. *)
+let leading_dict_params (pats : Ast.pat list) : int =
+  let is_dict = function
+    | Ast.PVar n ->
+      String.length n >= 6 && String.sub n 0 6 = "$dict_"
+    | _ -> false
+  in
+  let rec count = function
+    | p :: rest when is_dict p -> 1 + count rest
+    | _ -> 0
+  in
+  count pats
+
 
 (* Type name → arbitrary generator function.  Populated from `impl Arbitrary T`
    declarations at eval init.  Used by prop_runner to generate random values
@@ -328,6 +344,15 @@ let select_impl_by_head head = function
      | [c] -> c
      | _ -> v)
   | v -> v
+
+(* Phase 69.x: build the runtime dictionary (a VDict carrying an impl key) for a
+   dict route.  RKey is a literal key; RDict forwards an enclosing dict param;
+   RHeadKey never appears in dict-application routes (resolve_dict_apps /
+   resolve_method_dicts emit only RKey/RDict) — empty key falls back to arg-tag. *)
+let dict_of_route env = function
+  | Ast.RKey key -> VDict key
+  | Ast.RDict d  -> (match lookup env d with VDict _ as vd -> vd | _ -> VDict "")
+  | Ast.RHeadKey _ -> VDict ""
 
 (* Convert Impl_no_match → Eval_error at the boundary of user-visible code.
    Used at every eval site that is NOT inside a VMulti dispatch chain. *)
@@ -459,13 +484,21 @@ and eval env expr =
   | EMethodRef (r, x) ->
     let v = lookup env x in
     (match !r with
-     | Some { Ast.res_route = RKey key; _ } -> select_impl_by_key key v
-     | Some { Ast.res_route = RHeadKey head; _ } -> select_impl_by_head head v
-     | Some { Ast.res_route = RDict d; _ } ->
-       (match lookup env d with
-        | VDict key -> select_impl_by_key key v
-        | _ -> v)
-     | None -> v)
+     | None -> v
+     | Some { Ast.res_route; res_method_dicts; _ } ->
+       (* First narrow by the t-dispatch route (return-position / multi-param). *)
+       let v = match res_route with
+         | RKey key -> select_impl_by_key key v
+         | RHeadKey head -> select_impl_by_head head v
+         | RDict d -> (match lookup env d with VDict key -> select_impl_by_key key v | _ -> v)
+       in
+       (* Phase 69.x-e: then apply the method's own method-level-constraint dicts
+          (e.g. foldMap's Monoid dict) as leading arguments, matching the leading
+          params dict_pass prepended to the method's bodies; the body's inner refs
+          (`empty`) read them via RDict.  Empty list ⇒ no-op (untyped path / a
+          method with no method-level constraint), preserving arg-tag fallback. *)
+       List.fold_left (fun f route -> apply f (dict_of_route env route))
+         v res_method_dicts)
 
   (* Phase 69.x: constrained-function occurrence.  Evaluate the function value,
      then apply the resolved dictionaries (one per constraint) as leading
@@ -478,13 +511,7 @@ and eval env expr =
     (match !r with
      | None -> vf
      | Some routes ->
-       List.fold_left (fun f route ->
-         let dict = match route with
-           | RKey key -> VDict key
-           | RDict d -> (match lookup env d with VDict _ as vd -> vd | _ -> VDict "")
-           | RHeadKey _ -> VDict ""  (* resolve_dict_apps never emits RHeadKey *)
-         in
-         apply f dict) vf routes)
+       List.fold_left (fun f route -> apply f (dict_of_route env route)) vf routes)
 
   | EApp (f_expr, EVar hint)
   | EApp (f_expr, ELoc (_, EVar hint))
@@ -1386,7 +1413,9 @@ let eval_program ?(prelude = true) program =
            collected here so the regular VMulti dispatch path picks them up. *)
         let new_v = if pats = [] then wrap_match_errors (fun () -> eval env body)
                     else VClosure (env, pats, body) in
-        let positions = lookup_dispatch_positions iface_name name in
+        let positions =
+          List.map ((+) (leading_dict_params pats))
+            (lookup_dispatch_positions iface_name name) in
         let typed_v = match impl_type_tag with
           | Some t -> VTypedImpl (t, impl_key, positions, 0, new_v)
           | None   -> new_v
@@ -1522,7 +1551,9 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
          let new_v = wrap_match_errors (fun () ->
            if pats = [] then eval !(rs.eval_env) body
            else VClosure (!(rs.eval_env), pats, body)) in
-         let positions = lookup_dispatch_positions iface_name name in
+         let positions =
+          List.map ((+) (leading_dict_params pats))
+            (lookup_dispatch_positions iface_name name) in
          let typed_v = match impl_type_tag with
            | Some t -> VTypedImpl (t, impl_key, positions, 0, new_v)
            | None   -> new_v

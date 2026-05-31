@@ -2954,7 +2954,7 @@ that do leak into `te_interfaces` are filtered out explicitly). Named impls
 line*; resolution is order-independent — the checker commits the most-specific
 impl and eval honors it; orphan impls are rejected at declaration time. *(Done.)*
 
-### Phase 69: Type-directed / return-position dispatch (dictionary passing) ✅ DONE (69.x-a/b/c/d done; 69.x-e TODO)
+### Phase 69: Type-directed / return-position dispatch (dictionary passing) ✅ DONE (69.x-a..e all done)
 
 **Status.** Phase 69 (elaboration at concrete sites) landed: the five-part
 design below is implemented (`EMethodRef` node in `ast.ml`, marker pass in
@@ -2965,9 +2965,10 @@ multi-param repros route correctly end-to-end — see `test/test_run.ml`
 (`t_return_position_dispatch`, `t_multiparam_dispatch`) and the key-agreement
 tests in `test/test_typecheck.ml` ("impl-key dispatch (Phase 69)"). The marker
 is wired into single-file `check`/`run`, multi-module, and the repl. **Phase
-69.x dictionary passing is done through 69.x-d** (the `pure`/`current_monad_type`
-workaround is retired); only **69.x-e** (method-level-constraint dicts for
-`foldMap`) remains — see carve-out below.
+69.x dictionary passing is complete through 69.x-e**: the
+`pure`/`current_monad_type` workaround is retired (69.x-c/d), and method-level
+interface-method constraints (`foldMap`'s `Monoid m`) now route by dictionary
+too (69.x-e) — see carve-out below.
 
 **Known gaps / follow-ups (not regressions; pre-existing, surfaced during 69):**
 - **Doctests are not type-directed.** The doctest runner has no typecheck phase,
@@ -3107,26 +3108,53 @@ on a concrete call site.
   `t_dict_transitive`), `test_typecheck` (`t_dict_routes_helper`),
   `test_repl` (cross-input), `test_loader` (cross-module).
 
-**69.x-c/d ⏳ TODO (attempted, reverted).** Retiring the
-`pure_impls` + `current_monad_type` workaround (and the EDo monad tag) needs
-`pure` to become an ordinary VMulti method routed by dictionary. That requires
-**marking + dict-passing the prelude** (its `when`/`unless` use return-position
-`pure`), which Phase 69 deliberately avoided. A spike got prelude marking +
-combined dict-pass green *with the workaround intact*, but removing the
-workaround destabilized parametric monads and prelude interface-method defaults:
-`pure x : Result e a` is only head-concrete (`e`/`a` free) so the strict
-`is_concrete` gate doesn't route it, and `foldMap`'s default body uses a
-*method-level* `Monoid m` constraint (`iface_method_constraints`, not
-`fun_constraints`) that the dict mechanism doesn't parameterize, so its `empty`
-mis-routed once the prelude was marked. Closing 69.x-c needs (a) head/partial
-dispatch that doesn't regress prelude method defaults, and (b) dictionary
-passing for method-level constraints — a dedicated follow-up.
+**69.x-c/d ✅ DONE (2026-05-31, commit `600d5c1`).** Retired the
+`pure_impls` + `current_monad_type` workaround (and the EDo monad tag): `pure`
+is now an ordinary Applicative VMulti method routed through the dictionary /
+elaboration machinery. Landed in four steps — (1) the **`RHeadKey`** route
+(`ast.ml`/`typecheck.ml`/`eval.ml`) for return-position calls whose
+discriminating type is head-concrete but args-free (`pure x : Result e a`, every
+do-block `pure`); (2) **per-super dict params** so a constrained function's slot
+list is expanded with the direct superinterfaces of each declared constraint
+(`when`/`unless`, `Thenable m =>` calling Applicative's `pure`, thread an honest
+Applicative dict); (3) **marking + dict-passing the prelude** (`marked_prelude`;
+typed drivers build `marked_prelude @ user`, `Dict_pass.run`, eval
+`~prelude:false`); (4) deleting the workaround in both batch and repl paths.
+
+**69.x-e ✅ DONE (2026-05-31).** Method-level interface-method constraints —
+the `Monoid m` on `foldMap : Monoid m => (a -> m) -> t a -> m` — now route by
+dictionary, where 69.x-c left them on arg-tag fallback. Mechanism, mirroring
+`fun_constraints`:
+- **`resolved.res_method_dicts : res_route list`** (`ast.ml`) on each
+  `EMethodRef` — the method's own method-level-constraint dicts, applied by eval
+  as leading args to the method binding (alongside its arg-tag `t`-dispatch).
+- **Typecheck** records per-method method-level constraints (super-expanded via
+  the shared `expand_supers`) in `env.method_constraints`, keyed by method name;
+  the default-body inference maps them through its instantiation into
+  `env.method_dict_routes` so `find_enclosing_dict` routes the body's inner
+  `empty` ref to `$dict_foldMap_0`. `resolve_method_dicts` (sibling of
+  `resolve_dict_apps`, sharing `resolve_one_route`) stamps each call site's
+  `res_method_dicts` (concrete → `RKey`, enclosing-constraint var → `RDict`).
+  Threaded across modules via `te_method_constraints`.
+- **`dict_pass.ml`** prepends `$dict_<method>_<slot>` params to `DInterface`
+  default bodies and `DImpl` method clauses; arity from filled `res_method_dicts`
+  (whole-program) or `method_constraints` (repl).
+- **Eval** applies `res_method_dicts` at `EMethodRef`; explicit-impl dispatch
+  positions shift right by the leading dict-param count so the discriminating
+  value arg still tag-dispatches. (`++`, an operator, stays on arg-tag against
+  the now-concrete accumulator, so only the zero-arg `empty` needs a dict.)
+  Tests: `test_run` (`t_foldmap_method_dict_concrete`, `..._polymorphic`,
+  `..._explicit_impl_offset`), `test_typecheck` (`t_foldmap_method_dict_routes`),
+  `test_loader` (cross-module). The untyped path keeps `res_method_dicts = []`,
+  preserving the arg-tag fallback (`test_eval` `t_foldmap_*`).
 
 **Done when.** *(69)* Result-typed and multi-param method calls at concrete
 sites run the impl the type checker chose; the `fromInt`/`Convert` repros are
-correct and Generic decode works. *(69.x-a/b)* Polymorphic call sites in user
-code resolve via dictionaries. *(69.x-c/d)* `pure_impls`/`current_monad_type`
-gone; prelude monadic functions route via dictionaries.
+correct and Generic decode works. ✅ *(69.x-a/b)* Polymorphic call sites in user
+code resolve via dictionaries. ✅ *(69.x-c/d)* `pure_impls`/`current_monad_type`
+gone; prelude monadic functions route via dictionaries. ✅ *(69.x-e)*
+method-level interface-method constraints (`foldMap`'s `Monoid m`) route via
+dictionaries at both concrete and polymorphic call sites. ✅
 
 ### Phase 70: Smaller typechecker correctness & diagnostics fixes ✅ DONE
 

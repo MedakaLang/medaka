@@ -70,6 +70,13 @@ type res_route =
 type resolved = {
   res_iface : ident;
   res_route : res_route;
+  (* Phase 69.x-e: dictionaries for the method's *own* method-level constraints
+     (e.g. the `Monoid m` in `foldMap : Monoid m => …`), one route per
+     constraint in slot order.  Applied by eval as leading arguments to the
+     method binding, mirroring EDictApp.  Empty for methods with no method-level
+     constraint, and always empty on the untyped path (no marker/typecheck), so
+     eval's arg-tag fallback is preserved. *)
+  res_method_dicts : res_route list;
 }
 
 (* String interpolation parts *)
