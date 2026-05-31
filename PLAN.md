@@ -2789,7 +2789,7 @@ Tests: an impl whose `requires` is unsatisfiable is rejected at the call site.
 **Done when.** Constrained impls only resolve when their `requires` hold; the
 `Box (Int -> Int)` repro is a clean type error.
 
-### Phase 66: Value restriction — stop over-generalizing non-value `let` bindings ⏳ TODO
+### Phase 66: Value restriction — stop over-generalizing non-value `let` bindings ✅ DONE
 
 **Goal.** Don't assign a polymorphic scheme to a `let x = <effectful/non-value>`
 binding. Classic ML soundness fix.
@@ -2813,6 +2813,27 @@ self-recursive lambda path. Tests: `let r = newRef []` does not generalize;
 
 **Done when.** The polymorphic-reference unsoundness is closed; existing
 let-polymorphism tests still pass.
+
+**What was done.** Added `is_nonexpansive` (value iff literal/var/lambda, or
+tuple/list-literal of values; `ELoc`/`EAnnot` transparent), plus
+`lower_to_current` + `gen_restricted` helpers in `lib/typecheck.ml` (after
+`monotype`). Replaced unconditional `generalize` at all four inner sites — `ELet`
+`PVar`, `DoLet` in `EBlock` and `EDo`, and per-binding in `ELetGroup` — and at
+the **top-level** non-letrec path in `process_letrec_group` (gated on the
+binding's clauses; `let rec` members are always functions). The self-recursive
+lambda path and the existing non-`PVar` guard are untouched.
+
+Two deviations from the original write-up: (1) the top-level path was included
+(the real stdlib motivation — top-level `mut_array`/`hash_map`), beyond the
+inner-only "Where" list. (2) `Ref` is a *constructor* (`extern Ref : a -> Ref a`),
+not a `newRef` function, so — like SML/OCaml's `ref` — **all applications
+(including constructor applications) are treated as expansive**; the
+"constructor application of values" carve-out would have reopened the `Ref []`
+hole. No regression: every constructor-application binding in the suite has a
+concrete type, so generalizing it was already a no-op. Tests in
+`test/test_typecheck.ml` ("value restriction (Phase 66)"): `r = Ref []` used at
+two element types is rejected (top-level + in-block paths), `empty = []` stays
+polymorphic.
 
 ### Phase 67: Resolver validates `requires` / `super` interface names ✅ DONE
 
