@@ -12,7 +12,8 @@ let parse src =
                 (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
                 src)
 
-(* Run src and return the value bound to name *)
+(* Run src and return the value bound to name (untyped eval — used by the bulk
+   of eval-mechanics tests). *)
 let run src name =
   let prog = Desugar.desugar_program (parse src) in
   let env  = eval_program prog in
@@ -24,9 +25,39 @@ let run src name =
                 (String.concat ", " (List.map fst env))
                 src)
 
+(* Phase 69.x-c: `pure` (and other return-position methods) no longer dispatch
+   via a runtime monad-tag workaround — they need the impl the typechecker chose,
+   stamped on their EMethodRef.  This runner mirrors the real run-mode pipeline
+   (mark -> typecheck -> dict-pass the marked prelude with user code -> eval
+   without re-prepending) so monadic tests route `pure` correctly. *)
+let run_typed src name =
+  let prog = Desugar.desugar_program (parse src) in
+  (match Resolve.resolve_program prog with
+   | [] -> ()
+   | (err, _) :: _ -> failwith ("resolve error: " ^ Resolve.pp_error err));
+  let marked = Method_marker.mark_with_prelude prog in
+  ignore (Typecheck.check_program marked);
+  let combined = Dict_pass.run (Method_marker.marked_prelude @ marked) in
+  let env = eval_program ~prelude:false combined in
+  match List.assoc_opt name env with
+  | Some v -> v
+  | None ->
+    failwith (Printf.sprintf "Name '%s' not in env.\nEnv: %s\nSource:\n%s"
+                name
+                (String.concat ", " (List.map fst env))
+                src)
+
 (* Assert that name evaluates to the expected value *)
 let assert_val src name expected () =
   let actual = run src name in
+  if actual <> expected then
+    failwith (Printf.sprintf
+      "Expected %s = %s\nGot: %s\n\nSource:\n%s"
+      name (pp_value expected) (pp_value actual) src)
+
+(* Like assert_val but through the typed pipeline (return-position dispatch). *)
+let assert_val_typed src name expected () =
+  let actual = run_typed src name in
   if actual <> expected then
     failwith (Printf.sprintf
       "Expected %s = %s\nGot: %s\n\nSource:\n%s"
@@ -305,13 +336,13 @@ r = double_then_inc 3
 
 (* ── do-block: Option monad ─────────────────────────────────────────────── *)
 
-let t_do_option_some = assert_val {|r = do
+let t_do_option_some = assert_val_typed {|r = do
   x <- Some 5
   y <- Some 3
   pure (x + y)
 |} "r" (VCon ("Some", [VInt 8]))
 
-let t_do_option_none = assert_val {|r = do
+let t_do_option_none = assert_val_typed {|r = do
   x <- Some 5
   _ <- None
   pure x
@@ -319,13 +350,13 @@ let t_do_option_none = assert_val {|r = do
 
 (* ── do-block: Result monad ─────────────────────────────────────────────── *)
 
-let t_do_result_ok = assert_val {|r = do
+let t_do_result_ok = assert_val_typed {|r = do
   x <- Ok 10
   y <- Ok 5
   pure (x - y)
 |} "r" (VCon ("Ok", [VInt 5]))
 
-let t_do_result_err = assert_val {|r = do
+let t_do_result_err = assert_val_typed {|r = do
   x <- Ok 10
   _ <- Err "oops"
   pure x
@@ -333,35 +364,35 @@ let t_do_result_err = assert_val {|r = do
 
 (* ── `?` operator: desugars to andThen ──────────────────────────────────── *)
 
-let t_question_ok = assert_val {|r =
+let t_question_ok = assert_val_typed {|r =
   let x = Ok 5 ?
   pure (x + 1)
 |} "r" (VCon ("Ok", [VInt 6]))
 
-let t_question_err = assert_val {|r =
+let t_question_err = assert_val_typed {|r =
   let x = Err "bad" ?
   pure (x + 1)
 |} "r" (VCon ("Err", [VString "bad"]))
 
-let t_question_some = assert_val {|r =
+let t_question_some = assert_val_typed {|r =
   let x = Some 42 ?
   pure (x + 1)
 |} "r" (VCon ("Some", [VInt 43]))
 
-let t_question_none = assert_val {|r =
+let t_question_none = assert_val_typed {|r =
   let x = None ?
   pure 99
 |} "r" (VCon ("None", []))
 
 (* Multiple ?-binds chain via nested andThen *)
-let t_question_chain = assert_val {|r =
+let t_question_chain = assert_val_typed {|r =
   let x = Ok 10 ?
   let y = Ok 5 ?
   pure (x - y)
 |} "r" (VCon ("Ok", [VInt 5]))
 
 (* Short-circuit hits the second ? *)
-let t_question_chain_err = assert_val {|r =
+let t_question_chain_err = assert_val_typed {|r =
   let x = Ok 10 ?
   let y = Err "stop" ?
   pure (x - y)
@@ -369,13 +400,13 @@ let t_question_chain_err = assert_val {|r =
 
 (* ── Ref mutation ───────────────────────────────────────────────────────── *)
 
-(* Use an Option bind to establish monad context so pure wraps the result *)
-let t_ref = assert_val {|r = do
-  _ <- Some ()
+(* Ref mutation in a bare sequential block (let mut / set_ref aren't allowed in
+   a `do` block; this exercises the eval mechanics, not monad wrapping). *)
+let t_ref = assert_val {|r =
   let mut count = Ref 0
   set_ref count 42
-  pure count.value
-|} "r" (VCon ("Some", [VInt 42]))
+  count.value
+|} "r" (VInt 42)
 
 (* ── Runtime errors ─────────────────────────────────────────────────────── *)
 
@@ -946,34 +977,32 @@ let person_src = {|record Person
 
 |}
 
-(* Assign a record field and read it back *)
+(* Assign a record field and read it back (bare sequential block — field
+   assignment and let mut aren't allowed inside a `do` block). *)
 let t_field_assign_record = assert_val
   (person_src ^ {|result =
-  do
-    let mut p = Person { name = "Alice", age = 30 }
-    p.age = 31
-    pure p.age
+  let mut p = Person { name = "Alice", age = 30 }
+  p.age = 31
+  p.age
 |})
   "result" (VInt 31)
 
 (* Multiple sequential field assignments *)
 let t_field_assign_multi = assert_val
   (person_src ^ {|result =
-  do
-    let mut p = Person { name = "Alice", age = 30 }
-    p.age = 99
-    p.name = "Bob"
-    pure p.name
+  let mut p = Person { name = "Alice", age = 30 }
+  p.age = 99
+  p.name = "Bob"
+  p.name
 |})
   "result" (VString "Bob")
 
-(* Ref .value assignment via DoFieldAssign *)
+(* Ref .value assignment *)
 let t_field_assign_ref_value = assert_val
   {|result =
-  do
-    let mut r = Ref 0
-    r.value = 42
-    pure r.value
+  let mut r = Ref 0
+  r.value = 42
+  r.value
 |}
   "result" (VInt 42)
 
@@ -1066,8 +1095,9 @@ let t_if_let_match =
 let t_if_let_no_match =
   assert_val "r = if let Some x = None then x else 0\n" "r" (VInt 0)
 
-(* Establish Option monad context via DoBind so pure wraps the result *)
-let t_let_else_match = assert_val
+(* Establish Option monad context via DoBind so pure wraps the result.
+   Typed runner: `pure` is now return-position-dispatched (Phase 69.x-c). *)
+let t_let_else_match = assert_val_typed
   {|r = do
   _ <- Some ()
   let Some x = Some 42 else None
@@ -1075,7 +1105,7 @@ let t_let_else_match = assert_val
 |}
   "r" (VCon ("Some", [VInt 42]))
 
-let t_let_else_no_match = assert_val
+let t_let_else_no_match = assert_val_typed
   {|r = do
   _ <- Some ()
   let Some x = None else None

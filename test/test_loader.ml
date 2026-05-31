@@ -580,6 +580,61 @@ let test_eval_dict_passing_cross_module () =
       failwith (Printf.sprintf "Expected \"S\\nT\\n\" from cross-module dispatch, got %S" out)
   )
 
+(* Phase 69.x-c: per-super dictionary passing across module boundaries.  `mk`
+   is constrained on `Sub m` but calls the direct-super method `base`; the super
+   dict slot appended to `mk`'s constraints must survive the te_fun_constraints
+   export so the importing module supplies a `Base` dict.  `Bag` impls first, so
+   "first impl wins" would print Bag without the super dict. *)
+let test_eval_super_dict_cross_module () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "submod.mdk"
+      "export data Box a = Box a\n\
+       export data Bag a = Bag a\n\n\
+       export interface Base f where\n\
+      \  base : a -> f a\n\n\
+       export interface Sub f requires Base f where\n\
+      \  same : f a -> f a\n\n\
+       export impl Base Bag where\n\
+      \  base x = Bag x\n\
+       export impl Sub Bag where\n\
+      \  same x = x\n\n\
+       export impl Base Box where\n\
+      \  base x = Box x\n\
+       export impl Sub Box where\n\
+      \  same x = x\n\n\
+       export mk : Sub m => a -> m a\n\
+       mk x = same (base x)\n" in
+    let main_path = write_file dir "main.mdk"
+      "import submod.{Box, Bag, Base, Sub, base, same, mk}\n\n\
+       main : <IO> Unit\n\
+       main =\n\
+      \  println (mk 5 : Box Int)\n\
+      \  println (mk 7 : Bag Int)\n" in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Desugar.desugar_program prog)) modules in
+    let method_names = Method_marker.interface_method_names
+      (Prelude.program :: List.map (fun (_, _, p) -> p) modules) in
+    let constrained = Method_marker.constrained_fn_names
+      (List.map (fun (_, _, p) -> p) modules) in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Method_marker.mark_program method_names constrained prog)) modules in
+    let te_acc = ref [] in
+    List.iter (fun (mid, _, prog) ->
+      let (te, _, _) = Typecheck.typecheck_module !te_acc mid prog in
+      te_acc := te :: !te_acc) modules;
+    let combined = List.concat_map (fun (_, _, p) -> p) modules in
+    let combined = Dict_pass.run combined in
+    let buf = Buffer.create 32 in
+    let saved = !Eval.output_hook in
+    Eval.output_hook := Buffer.add_string buf;
+    Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
+      ignore (Eval.eval_program combined));
+    let out = Buffer.contents buf in
+    if out <> "Box 5\nBag 7\n" then
+      failwith (Printf.sprintf "Expected \"Box 5\\nBag 7\\n\" from cross-module super dispatch, got %S" out)
+  )
+
 (* ── Runner ──────────────────────────────────────── *)
 
 let () =
@@ -625,6 +680,7 @@ let () =
     ];
     "multi-file dictionary passing (Phase 69.x)", [
       test_case "cross-module constrained dispatch" `Quick test_eval_dict_passing_cross_module;
+      test_case "cross-module super dispatch" `Quick test_eval_super_dict_cross_module;
     ];
     "workspace / multi-root", [
       test_case "cross-member import"    `Quick test_workspace_cross_member_import;

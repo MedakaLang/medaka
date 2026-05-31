@@ -184,6 +184,15 @@ let copy_ht src dst =
   Hashtbl.reset dst;
   Hashtbl.iter (Hashtbl.replace dst) src
 
+(* Phase 69.x-c: the marked prelude, dict-passed with the (just-seeded) repl tc
+   env's fun_constraints, so prelude constrained functions (`when`/`unless`)
+   carry dict params that line up with the EDictApp call sites the repl marks in
+   user input.  marked_prelude's refs were filled in place when make_repl_tc_env
+   seeded the prelude, and dict_pass preserves those body refs. *)
+let dict_passed_prelude tc_env =
+  Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints
+    Method_marker.marked_prelude
+
 let reset_session resolve_env tc_env eval_state =
   let fresh_r = Resolve.make_repl_resolve_env () in
   copy_ht fresh_r.Resolve.values        resolve_env.Resolve.values;
@@ -195,7 +204,7 @@ let reset_session resolve_env tc_env eval_state =
   copy_ht fresh_r.Resolve.iface_methods resolve_env.Resolve.iface_methods;
   copy_ht fresh_r.Resolve.imported      resolve_env.Resolve.imported;
   tc_env := !(Typecheck.make_repl_tc_env ());
-  let fresh_e = Eval.make_repl_eval_state () in
+  let fresh_e = Eval.make_repl_eval_state ~prelude:(dict_passed_prelude tc_env) () in
   eval_state.Eval.top_frame := !(fresh_e.Eval.top_frame);
   eval_state.Eval.eval_env  := !(fresh_e.Eval.eval_env)
 
@@ -326,7 +335,7 @@ let load_file path resolve_env tc_env eval_state pending_sigs user_bindings =
 let run () =
   let resolve_env = Resolve.make_repl_resolve_env () in
   let tc_env      = Typecheck.make_repl_tc_env () in
-  let eval_state  = Eval.make_repl_eval_state () in
+  let eval_state  = Eval.make_repl_eval_state ~prelude:(dict_passed_prelude tc_env) () in
   let pending_sigs  : Ast.decl list ref = ref [] in
   let user_bindings : (Ast.ident * Typecheck.scheme) list ref = ref [] in
   let last_load     : string option ref = ref None in

@@ -637,7 +637,7 @@ let rewrite_question_expr = function
     (* If any DoLet has `?` on its RHS, the whole block is implicitly monadic
        (Result/Option chaining via `andThen`).  Promote the EBlock to an EDo
        and rewrite the `?` stmts to DoBind, so the existing EDo dispatch
-       (which sets current_monad_type) handles `pure` correctly inside. *)
+       handles `pure` correctly inside (routed by its EMethodRef). *)
     let has_question =
       List.exists (function
         | DoLet (_, _, e) ->

@@ -42,10 +42,14 @@ let capture_run_typed src =
    | (err, _) :: _ -> failwith ("resolve error: " ^ Resolve.pp_error err));
   let prog = Method_marker.mark_with_prelude prog in
   ignore (Typecheck.check_program prog);
-  let prog = Dict_pass.run prog in  (* Phase 69.x: insert dictionary parameters *)
+  (* Phase 69.x-c: dict-pass the marked prelude together with user code (the
+     same marked_prelude object typecheck filled refs on), then eval without
+     re-prepending. *)
+  let combined = Method_marker.marked_prelude @ prog in
+  let combined = Dict_pass.run combined in
   let buf = Buffer.create 64 in
   output_hook := Buffer.add_string buf;
-  (try ignore (eval_program prog)
+  (try ignore (eval_program ~prelude:false combined)
    with e -> output_hook := print_string; raise e);
   output_hook := print_string;
   Buffer.contents buf
@@ -152,6 +156,77 @@ main =
 |}
   "S\nT\n"
 
+(* ── Phase 69.x-c: head-concrete (RHeadKey) dispatch ─────────────────────── *)
+(* `wrap : a -> f a` discriminates on its result head `f`.  Inside `mkBox`, `f`
+   is fixed to `Box` by the annotation but its arg is still free, so the site is
+   head-concrete (not fully ground) — neither RKey nor RDict applies.  RHeadKey
+   narrows by the impl's head tycon.  `Bag` is declared first and `wrap`'s arg
+   carries no `f`, so arg-tag "first impl wins" would print `Bag` — distinct
+   output proves head-key selection. *)
+let t_head_key_dispatch = assert_output_typed
+  {|data Box a = Box a
+data Bag a = Bag a
+
+interface Wrap f where
+  wrap : a -> f a
+
+impl Wrap Bag where
+  wrap x = Bag x
+
+impl Wrap Box where
+  wrap x = Box x
+
+mkBox : a -> Box a
+mkBox x = wrap x
+
+mkBag : a -> Bag a
+mkBag x = wrap x
+
+main : <IO> Unit
+main =
+  println (mkBox 5)
+  println (mkBag 7)
+|}
+  "Box 5\nBag 7\n"
+
+(* ── Phase 69.x-c: per-super dictionary passing ──────────────────────────── *)
+(* `mk` is constrained on `Sub m` but its body calls `base`, a method of the
+   *direct superinterface* `Base` (Sub requires Base).  `base : a -> f a` is
+   return-position, so arg-tag dispatch can't pick the impl; the body needs a
+   `Base m` dictionary.  Phase 69.x-c appends a super dict slot to `mk`'s
+   constraints, so the caller supplies an honest `Base` dict and the inner `base`
+   routes to it.  `Bag` impls are declared first, so without the super dict
+   "first impl wins" would print `Bag`. *)
+let t_super_dict_dispatch = assert_output_typed
+  {|data Box a = Box a
+data Bag a = Bag a
+
+interface Base f where
+  base : a -> f a
+
+interface Sub f requires Base f where
+  same : f a -> f a
+
+impl Base Bag where
+  base x = Bag x
+impl Sub Bag where
+  same x = x
+
+impl Base Box where
+  base x = Box x
+impl Sub Box where
+  same x = x
+
+mk : Sub m => a -> m a
+mk x = same (base x)
+
+main : <IO> Unit
+main =
+  println (mk 5 : Box Int)
+  println (mk 7 : Bag Int)
+|}
+  "Box 5\nBag 7\n"
+
 (* ── Hello world ─────────────────────────────────────────────────────────── *)
 
 let t_hello = assert_output
@@ -235,6 +310,8 @@ let () = Alcotest.run "Run"
   [("run", [
     "return-position dispatch", `Quick, t_return_position_dispatch;
     "multi-param dispatch",     `Quick, t_multiparam_dispatch;
+    "head-key dispatch",        `Quick, t_head_key_dispatch;
+    "super dict dispatch",      `Quick, t_super_dict_dispatch;
     "dict polymorphic helper",  `Quick, t_dict_polymorphic_helper;
     "dict transitive",          `Quick, t_dict_transitive;
     "hello world",   `Quick, t_hello;

@@ -1804,6 +1804,42 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
          let ids = List.filter_map extract_id arg_monos in
          if ids <> [] then Some (iface, ids) else None
        ) cs_monos in
+       (* Phase 69.x-c: append a dictionary slot for each *direct* superinterface
+          of a declared constraint (`when : Thenable m =>` body calls `pure`, an
+          Applicative method — Thenable requires Applicative).  Making the super a
+          real fun_constraints entry means find_enclosing_dict resolves the inner
+          method to an honest super dict, and dict_pass / the EDictApp recorder
+          give it a matching slot — all three read this same list.  Appended after
+          the declared constraints so existing slot indices are unchanged; the
+          superinterface impl is guaranteed to exist by the Phase-64 obligation
+          check, so callers can always supply it.  Dead slots (super not used in
+          the body) are harmless. *)
+       let cs =
+         let seen = Hashtbl.create 8 in
+         List.iter (fun key -> Hashtbl.replace seen key ()) cs;
+         let supers = List.concat_map (fun (iface, ids) ->
+           match Hashtbl.find_opt (!env_ref).interfaces iface with
+           | None -> []
+           | Some info
+             when List.length info.iface_param_ids = List.length ids ->
+             (* iface_supers carries the interface *declaration* tyvar ids of each
+                super's params; map them to this constraint's instantiated ids,
+                positionally through the interface's own param ids. *)
+             let subst = List.combine info.iface_param_ids ids in
+             List.filter_map (fun (super, super_decl_ids) ->
+               let super_ids =
+                 List.filter_map (fun d -> List.assoc_opt d subst) super_decl_ids in
+               if List.length super_ids = List.length super_decl_ids
+               then Some (super, super_ids) else None
+             ) info.iface_supers
+           | Some _ -> []
+         ) cs in
+         let extra = List.filter (fun key ->
+           if Hashtbl.mem seen key then false
+           else (Hashtbl.replace seen key (); true)
+         ) supers in
+         cs @ extra
+       in
        if cs <> [] then
          Hashtbl.replace (!env_ref).fun_constraints name cs
      | _ -> ());
@@ -2377,6 +2413,15 @@ let rec is_concrete = function
   | TApp (a, b) | TFun (a, _, b) -> is_concrete a && is_concrete b
   | TTuple ts -> List.for_all is_concrete ts
 
+(* Phase 69.x-c: the head type-constructor of a mono, if it is concrete (the
+   spine bottoms out at a TCon) — `Result e` → "Result", `Int` → "Int", a bare
+   TVar → None.  Mirrors eval's AST `head_tycon` so the string a `RHeadKey`
+   carries matches the head tag eval stamps on a `VTypedImpl`. *)
+let rec head_tycon_mono m = match normalize m with
+  | TCon n -> Some n
+  | TApp (a, _) -> head_tycon_mono a
+  | _ -> None
+
 (* One-directional structural matching: pattern (from impl type_args) may
    contain unbound TVars that act as wildcards; concrete must be fully resolved. *)
 let rec mono_matches ~pattern ~concrete =
@@ -2520,15 +2565,46 @@ let check_method_usages env =
         check_entry_requires env loc entry concrete_args
       in
       if not (List.for_all is_concrete concrete_args) then begin
-        (* Phase 69.x: not ground at this site, but the discriminating var may be
-           the enclosing constrained function's type variable — route to its
-           runtime dictionary so eval picks the impl the caller passed in. *)
+        (* Not ground at this site.  Two ways to still route it:
+           - Phase 69.x-c: the discriminating type is *head-concrete* (head tycon
+             fixed, args free — `pure x : Result e a`, or a do-block `pure`).  For
+             a single-param interface the head uniquely picks an impl, so stamp
+             RHeadKey and let eval narrow by head tag.
+           - Phase 69.x-a/b: the discriminating var is the enclosing constrained
+             function's type variable — route to its runtime dictionary. *)
+        let try_head_key () =
+          if n <> 1 then None else
+          match concrete_args with
+          | [arg] ->
+            (match head_tycon_mono arg with
+             | None -> None  (* head is a bare TVar — not head-concrete *)
+             | Some h ->
+               (* mono_matches tolerates the arg's free TVars only where the impl
+                  head is a wildcard, so a nonempty matching set means the head
+                  matched.  Phase-45.9 user-over-seeded mirrors the ground path. *)
+               let matching = List.filter (fun e ->
+                 e.impl_iface = iface_name &&
+                 List.length e.impl_type_mono = 1 &&
+                 List.for_all2
+                   (fun p c -> mono_matches ~pattern:p ~concrete:c)
+                   e.impl_type_mono [arg]
+               ) !(env.impls) in
+               let matching =
+                 if List.exists (fun e -> not e.impl_seeded) matching
+                 then List.filter (fun e -> not e.impl_seeded) matching
+                 else matching in
+               if matching <> [] then Some h else None)
+          | _ -> None
+        in
         match occ_ref with
         | Some _ ->
-          let ids = List.concat_map mono_unbound_ids concrete_args in
-          (match find_enclosing_dict env iface_name ids with
-           | Some dvar -> set_route (Ast.RDict dvar)
-           | None -> ())
+          (match try_head_key () with
+           | Some h -> set_route (Ast.RHeadKey h)
+           | None ->
+             let ids = List.concat_map mono_unbound_ids concrete_args in
+             (match find_enclosing_dict env iface_name ids with
+              | Some dvar -> set_route (Ast.RDict dvar)
+              | None -> ()))
         | None -> ()
       end
       else begin
@@ -2914,7 +2990,7 @@ let check_program (prog : program) : (ident * scheme) list * string list =
      (Num/Ord/Eq on Int/Float/etc.) come from core.mdk declarations.
      Skip prepending when type-checking core.mdk itself (would duplicate). *)
   let user_prog = prog in
-  let prog = if program_is_core prog then prog else Prelude.program @ prog in
+  let prog = if program_is_core prog then prog else Method_marker.marked_prelude @ prog in
 
   register_attrs env prog;
 
@@ -2955,7 +3031,7 @@ let check_program (prog : program) : (ident * scheme) list * string list =
   if program_is_core user_prog then
     List.iter (fun d -> register_impl env (Ast.inner_decl d)) prog
   else begin
-    List.iter (fun d -> register_impl ~seeded:true  env (Ast.inner_decl d)) Prelude.program;
+    List.iter (fun d -> register_impl ~seeded:true  env (Ast.inner_decl d)) Method_marker.marked_prelude;
     List.iter (fun d -> register_impl ~seeded:false env (Ast.inner_decl d)) user_prog
   end;
   check_coherence env;
@@ -3055,7 +3131,7 @@ let typecheck_module
      Keep a reference to the user-only decls for export filtering — otherwise
      prelude impls would leak into every module's te_impls. *)
   let user_prog = prog in
-  let prog = if program_is_core prog then prog else Prelude.program @ prog in
+  let prog = if program_is_core prog then prog else Method_marker.marked_prelude @ prog in
 
   register_attrs env prog;
 
@@ -3148,7 +3224,7 @@ let typecheck_module
   if program_is_core user_prog then
     List.iter (fun d -> register_impl env (Ast.inner_decl d)) prog
   else begin
-    List.iter (fun d -> register_impl ~seeded:true  env (Ast.inner_decl d)) Prelude.program;
+    List.iter (fun d -> register_impl ~seeded:true  env (Ast.inner_decl d)) Method_marker.marked_prelude;
     List.iter (fun d -> register_impl ~seeded:false env (Ast.inner_decl d)) user_prog
   end;
   check_coherence env;
@@ -3401,7 +3477,7 @@ let check_repl_decl ?(seeded=false) (env : env ref) (decls : decl list)
 let make_repl_tc_env () : env ref =
   let env = initial_env () in
   let env_ref = ref env in
-  let _ = check_repl_decl ~seeded:true env_ref Prelude.program in
+  let _ = check_repl_decl ~seeded:true env_ref Method_marker.marked_prelude in
   env_ref
 
 (* Infer the type of a bare expression without updating the env.

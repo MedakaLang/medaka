@@ -171,18 +171,21 @@ let run_file (filename : string) : run_result =
        Dict_pass.run).  If typecheck fails, fall back to evaluating the original
        (unmarked) program so a doctest's own type error doesn't mask its result
        — eval then degrades to the old arg-tag dispatch. *)
-    let combined =
+    (* Phase 69.x-c: on a successful typecheck, dict-pass the marked prelude with
+       the marked program and eval without re-prepending; on failure, fall back
+       to the original (unmarked) program with the legacy raw-prelude prepend. *)
+    let (combined, prepend_prelude) =
       let marked = Method_marker.mark_with_prelude combined in
       match (try Some (Typecheck.check_program marked) with _ -> None) with
-      | Some _ -> Dict_pass.run marked
-      | None   -> combined
+      | Some _ -> (Dict_pass.run (Method_marker.marked_prelude @ marked), false)
+      | None   -> (combined, true)
     in
 
     (* Suppress side-effect output during doctest evaluation *)
     let buf = Buffer.create 64 in
     Eval.output_hook := Buffer.add_string buf;
     let env_result =
-      (try Ok (Eval.eval_program combined)
+      (try Ok (Eval.eval_program ~prelude:prepend_prelude combined)
        with
        | Eval.Eval_error (msg, _) -> Error ("runtime error: " ^ msg)
        | Eval.Impl_no_match       -> Error "non-exhaustive match"

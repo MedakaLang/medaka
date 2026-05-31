@@ -101,13 +101,17 @@ Dev probes (build to `_build/default/dev/`):
 - **`lib/dune` has an explicit `(modules …)` list.** A new `lib/<name>.ml` is
   *not* picked up automatically — add it to that stanza or the build fails with
   `Unbound module Medaka_lib.<Name>`.
-- **The prelude is prepended *raw and unmarked*.** `Typecheck.check_program` /
-  `typecheck_module` and `Eval.eval_program` each do `Prelude.program @ prog`
-  internally; the marker pass (Phase 69) only marks *user* code. So
-  dispatch-elaboration features (EMethodRef/Phase 69, EDictApp/69.x) are
-  user-code-only by default — prelude methods fall back to arg-tag dispatch.
-  Extending elaboration into the prelude means marking + transforming it too,
-  which is a deliberate, larger change (see PLAN.md Phase 69.x-c/d).
+- **The prelude is marked + dict-passed in the typed pipeline (Phase 69.x-c).**
+  `Method_marker.marked_prelude` is the prelude marked against its own interface
+  methods + constrained fns; `Typecheck.check_program`/`typecheck_module` prepend
+  *it* (filling its `EMethodRef`/`EDictApp` refs in place), and the typed eval
+  drivers build `marked_prelude @ user`, `Dict_pass.run` it, and call
+  `Eval.eval_program ~prelude:false`.  So elaboration (EMethodRef/EDictApp)
+  reaches prelude methods like `pure`/`when`/`unless`.  **Untyped**
+  `Eval.eval_program` (default `~prelude:true`, no marker/typecheck — e.g. quick
+  eval tests) prepends the *raw* prelude and falls back to arg-tag "first impl
+  wins" for return-position methods: `pure` needs types to dispatch, so route it
+  through the typed pipeline (see `run_typed` in `test/test_eval.ml`).
 - Development is organized by numbered **Phases** — see `PLAN.md`. Commit
   messages and code comments reference them.
 

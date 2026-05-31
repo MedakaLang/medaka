@@ -76,6 +76,16 @@ Run the suite for each stage you touched (from repo root):
 ./_build/default/test/test_run.exe --compact
 ```
 
+If the change is **cross-cutting** — a marker/elaboration pass, dispatch, or
+anything threaded through the eval drivers — also run the driver-specific
+suites: `test_loader` (multi-module), `test_repl` (incremental; seeds its own
+prelude), and `test_doctest`. Each driver assembles the prelude + pipeline
+slightly differently, so a change that's green in `test_run` can still break
+one of them. Note `test_eval`'s default `run` helper is **untyped**
+(`Eval.eval_program`, no marker/typecheck), so return-position dispatch (e.g.
+`pure`) only resolves through its `run_typed` helper — use that for monadic /
+return-position cases.
+
 Then `dune build @thorough`. Add new cases to the matching `test/test_*.ml`
 suites. While iterating, a scratch `.mdk` plus
 `./_build/default/bin/main.exe check`/`run` is the fastest loop; for raw

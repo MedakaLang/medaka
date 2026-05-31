@@ -81,12 +81,28 @@ let mark_program (methods : (ident, unit) Hashtbl.t)
                  (constrained : (ident, unit) Hashtbl.t) (prog : program) : program =
   List.map (mark_decl methods constrained) prog
 
+(* Phase 69.x-c: the prelude, marked against its own interface methods and
+   constrained functions, computed once.  typecheck prepends *this* tree (so it
+   fills each prelude EMethodRef/EDictApp ref in place) and the typed eval
+   drivers prepend the same value before dict_pass, so a prelude function like
+   `when b m = if b then m else pure ()` routes its return-position `pure`
+   through the dictionary mechanism instead of the legacy monad-tag workaround.
+   Structurally identical to `Prelude.program` (same decls), so impl/iface/type
+   scans are unaffected; only expression bodies carry the marker nodes.  Its
+   body refs are refilled idempotently on each typecheck (prelude resolution is
+   program-independent), and dict_pass never mutates it in place. *)
+let marked_prelude : program =
+  let methods = interface_method_names [Prelude.program] in
+  let constrained = constrained_fn_names [Prelude.program] in
+  mark_program methods constrained Prelude.program
+
 (* Convenience: mark a user program against the prelude's interface methods
-   plus its own, and against its own constrained functions.  Used by the
-   single-file driver paths. *)
+   plus its own, and against the prelude's *and* its own constrained functions
+   (so a user reference to a prelude constrained fn like `when` becomes an
+   EDictApp that supplies its dictionaries).  Used by the single-file drivers. *)
 let mark_with_prelude (prog : program) : program =
   let methods = interface_method_names [Prelude.program; prog] in
-  let constrained = constrained_fn_names [prog] in
+  let constrained = constrained_fn_names [Prelude.program; prog] in
   mark_program methods constrained prog
 
 (* Mark a single repl item against a pre-built method-name set (the session's

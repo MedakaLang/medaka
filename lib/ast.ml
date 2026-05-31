@@ -58,8 +58,14 @@ type pat =
    `None` until both passes run; an unfilled ref means eval falls back to
    arg-tag dispatch (genuinely unconstrained-but-runtime-polymorphic code). *)
 type res_route =
-  | RKey  of string     (* concrete: select_impl_by_key this literal key *)
-  | RDict of ident      (* polymorphic: read this synthetic dict-param var *)
+  | RKey     of string     (* concrete: select_impl_by_key this literal key *)
+  | RDict    of ident      (* polymorphic: read this synthetic dict-param var *)
+  | RHeadKey of string     (* head-concrete (Phase 69.x-c): the discriminating
+                              param's head tycon is fixed but its args are free
+                              (e.g. `pure x : Result e a`, or a do-block `pure`).
+                              eval selects the VMulti candidate whose head tag
+                              matches; emitted only for single-param interfaces
+                              where the head alone disambiguates. *)
 
 type resolved = {
   res_iface : ident;

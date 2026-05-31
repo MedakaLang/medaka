@@ -2954,7 +2954,7 @@ that do leak into `te_interfaces` are filtered out explicitly). Named impls
 line*; resolution is order-independent — the checker commits the most-specific
 impl and eval honors it; orphan impls are rejected at declaration time. *(Done.)*
 
-### Phase 69: Type-directed / return-position dispatch (dictionary passing) ✅ DONE (69.x-a/b done; 69.x-c/d TODO)
+### Phase 69: Type-directed / return-position dispatch (dictionary passing) ✅ DONE (69.x-a/b/c/d done; 69.x-e TODO)
 
 **Status.** Phase 69 (elaboration at concrete sites) landed: the five-part
 design below is implemented (`EMethodRef` node in `ast.ml`, marker pass in
@@ -2965,7 +2965,9 @@ multi-param repros route correctly end-to-end — see `test/test_run.ml`
 (`t_return_position_dispatch`, `t_multiparam_dispatch`) and the key-agreement
 tests in `test/test_typecheck.ml` ("impl-key dispatch (Phase 69)"). The marker
 is wired into single-file `check`/`run`, multi-module, and the repl. **Phase
-69.x (dictionary passing) remains TODO** — see carve-out below.
+69.x dictionary passing is done through 69.x-d** (the `pure`/`current_monad_type`
+workaround is retired); only **69.x-e** (method-level-constraint dicts for
+`foldMap`) remains — see carve-out below.
 
 **Known gaps / follow-ups (not regressions; pre-existing, surfaced during 69):**
 - **Doctests are not type-directed.** The doctest runner has no typecheck phase,

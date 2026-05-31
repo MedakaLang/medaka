@@ -5,7 +5,7 @@ open Medaka_lib
 let make_state () =
   let r  = Resolve.make_repl_resolve_env () in
   let tc = Typecheck.make_repl_tc_env () in
-  let ev = Eval.make_repl_eval_state () in
+  let ev = Eval.make_repl_eval_state ~prelude:(Repl.dict_passed_prelude tc) () in
   let ps = ref [] in
   let ub = ref [] in
   (r, tc, ev, ps, ub)

@@ -145,10 +145,15 @@ let () =
        Printf.eprintf "%s: %s\n" (pp_loc loc_opt) (Medaka_lib.Typecheck.pp_error e);
        show_snippet source loc_opt;
        exit 1);
-    let program = Medaka_lib.Dict_pass.run program in  (* Phase 69.x: dict params *)
+    (* Phase 69.x-c: dict-pass the marked prelude together with user code (same
+       marked_prelude object typecheck filled), then eval without re-prepending.
+       Prop/coverage keep the pre-dict-pass user `program` — dict_pass only
+       alters DFunDef arities, not prop bodies or line coverage. *)
+    let combined =
+      Medaka_lib.Dict_pass.run (Medaka_lib.Method_marker.marked_prelude @ program) in
     let prop_ok =
       (try
-         let eval_env = Medaka_lib.Eval.eval_program program in
+         let eval_env = Medaka_lib.Eval.eval_program ~prelude:false combined in
          Medaka_lib.Prop_runner.run_all eval_env program
        with Medaka_lib.Eval.Eval_error (msg, loc_opt) ->
          Printf.eprintf "%s: panic: %s\n" (pp_loc loc_opt) msg;
@@ -213,9 +218,10 @@ let () =
        Printf.eprintf "%s: %s\n" (pp_loc loc_opt) (Medaka_lib.Typecheck.pp_error e);
        show_snippet source loc_opt;
        exit 1);
-    let program = Medaka_lib.Dict_pass.run program in  (* Phase 69.x: dict params *)
+    let combined =
+      Medaka_lib.Dict_pass.run (Medaka_lib.Method_marker.marked_prelude @ program) in
     (try
-       let eval_env = Medaka_lib.Eval.eval_program program in
+       let eval_env = Medaka_lib.Eval.eval_program ~prelude:false combined in
        Medaka_lib.Bench_runner.run_all eval_env program
      with Medaka_lib.Eval.Eval_error (msg, loc_opt) ->
        Printf.eprintf "%s: panic: %s\n" (pp_loc loc_opt) msg;
@@ -423,9 +429,12 @@ cd into a member or specify a file\n"; exit 1
          (try
            (* Phase 69.x: insert dictionary parameters on constrained functions
               (their refs were filled in place by check_program above) so eval
-              routes polymorphic methods by the dictionaries EDictApp passes. *)
-           let root_program = Medaka_lib.Dict_pass.run root_program in
-           let top_env = Medaka_lib.Eval.eval_program root_program in
+              routes polymorphic methods by the dictionaries EDictApp passes.
+              Phase 69.x-c: dict-pass the marked prelude with user code and eval
+              without re-prepending. *)
+           let combined =
+             Medaka_lib.Dict_pass.run (Medaka_lib.Method_marker.marked_prelude @ root_program) in
+           let top_env = Medaka_lib.Eval.eval_program ~prelude:false combined in
            if not (List.mem_assoc "main" top_env) then begin
              Printf.eprintf "error: program has no 'main' binding\n"; exit 1
            end
@@ -500,10 +509,11 @@ cd into a member or specify a file\n"; exit 1
     in
     (* Phase 69.x: constrained functions may be referenced across modules, so
        wrap occurrences against the union of every user module's constrained
-       signatures (the prelude is excluded — its constrained fns stay arg-tag). *)
+       signatures.  Phase 69.x-c: include the prelude's constrained fns (e.g.
+       `when`/`unless`) so cross-module references to them become EDictApp. *)
     let constrained_names =
       Medaka_lib.Method_marker.constrained_fn_names
-        (List.map (fun (_, _, p) -> p) modules)
+        (Medaka_lib.Prelude.program :: List.map (fun (_, _, p) -> p) modules)
     in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Medaka_lib.Method_marker.mark_program method_names constrained_names prog)
@@ -535,10 +545,13 @@ cd into a member or specify a file\n"; exit 1
        (* Evaluate all modules; later modules' eval envs shadow earlier ones *)
        let combined_program = List.concat_map (fun (_, _, prog) -> prog) modules in
        (* Phase 69.x: insert dictionary parameters on constrained functions
-          across all modules (EDictApp refs were filled by typecheck_module). *)
-       let combined_program = Medaka_lib.Dict_pass.run combined_program in
+          across all modules (EDictApp refs were filled by typecheck_module).
+          Phase 69.x-c: prepend the marked prelude so its `when`/`unless` get dict
+          params too, then eval without re-prepending. *)
+       let combined_program =
+         Medaka_lib.Dict_pass.run (Medaka_lib.Method_marker.marked_prelude @ combined_program) in
        (try
-         let top_env = Medaka_lib.Eval.eval_program combined_program in
+         let top_env = Medaka_lib.Eval.eval_program ~prelude:false combined_program in
          if not (List.mem_assoc "main" top_env) then begin
            Printf.eprintf "error: program has no 'main' binding\n"; exit 1
          end
