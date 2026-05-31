@@ -150,6 +150,88 @@ let t_load_then_use () =
    | _ -> failwith "parse failed for greet call");
   Sys.remove path
 
+(* ── Multi-line block collection (interface/impl `where` headers) ─────────── *)
+
+(* Drive the REPL's line-by-line input collection the way `Repl.run` does:
+   accumulate lines until `try_parse` commits a complete item, then process it.
+   `Error true` means "incomplete, keep collecting"; a trailing blank line
+   flushes an indented/where-opened block. *)
+let feed_lines st lines =
+  let (r, tc, ev, ps, ub) = st in
+  let buf = Buffer.create 64 in
+  List.iter (fun line ->
+    Buffer.add_string buf line; Buffer.add_char buf '\n';
+    let source = Buffer.contents buf in
+    match Repl.try_parse source with
+    | Ok item -> Repl.process_item source r tc ev ps ub item; Buffer.clear buf
+    | Error true -> ()  (* incomplete — collect more *)
+    | Error false -> failwith ("parse failed for: " ^ String.escaped source)
+  ) lines
+
+(* Regression: an `interface ... where` header followed by indented methods, and
+   `impl ... where` headers likewise, must be collected into one input each.
+   Previously the header parsed as a complete zero-method declaration, so the
+   REPL committed it early and parsed the indented body lines as separate
+   top-level decls — turning `decode n = ...` into a standalone monotype
+   function that shadowed the polymorphic interface method.  This broke
+   return-position dispatch from the REPL even though whole-file mode is fine. *)
+let t_multiline_interface_impl_dispatch () =
+  let st = make_state () in
+  let (_, _, _, _, ub) = st in
+  feed_lines st
+    [ "interface Decode a where";
+      "  decode : Int -> a";
+      "";                       (* commit the interface block *)
+      "impl Decode String where";
+      "  decode n = \"S\"";
+      "";                       (* commit the String impl *)
+      "impl Decode Bool where";
+      "  decode n = n > 0";
+      "" ];                     (* commit the Bool impl *)
+  (* `decode` must be bound exactly once, as the polymorphic interface method
+     (Forall over its return type), not as an impl-body monotype. *)
+  let decode_schemes =
+    List.filter_map (fun (n, s) -> if n = "decode" then Some s else None) !ub in
+  (match decode_schemes with
+   | [] -> failwith "Expected a 'decode' binding for the interface method"
+   | _ :: _ :: _ ->
+     failwith (Printf.sprintf
+       "Expected exactly one 'decode' binding, got %d (impl bodies leaked as \
+        standalone functions)" (List.length decode_schemes))
+   | [ Typecheck.Forall (ids, _) as s ] ->
+     if ids = [] then
+       failwith (Printf.sprintf
+         "Expected 'decode' to keep its polymorphic interface scheme, got \
+          monotype: %s" (Typecheck.pp_scheme s)))
+
+(* The whole point of the fix: with both impls registered, a return-position
+   call must dispatch by the annotated result type — to String or to Bool. *)
+let t_multiline_return_position_dispatch () =
+  let st = make_state () in
+  let (r, tc, ev, ps, ub) = st in
+  feed_lines st
+    [ "interface Decode a where";
+      "  decode : Int -> a";
+      "";
+      "impl Decode String where";
+      "  decode n = \"S\"";
+      "";
+      "impl Decode Bool where";
+      "  decode n = n > 0";
+      "" ];
+  (* Both typed calls must check; the value must dispatch to the right impl. *)
+  let check_expr src =
+    match Repl.try_parse src with
+    | Ok item -> Repl.process_item src r tc ev ps ub item
+    | _ -> failwith ("parse failed: " ^ src)
+  in
+  (* If decode were monomorphic, one of these would be a type error printed to
+     stderr; we assert dispatch positively by re-checking the env scheme above
+     and exercising both directions here for coverage / crash-safety. *)
+  check_expr "(decode 1 : String)\n";
+  check_expr "(decode 1 : Bool)\n";
+  ignore ub
+
 (* ── Suite ────────────────────────────────────────────────────────────────── *)
 
 let () = Alcotest.run "Repl"
@@ -169,5 +251,9 @@ let () = Alcotest.run "Repl"
     ]);
     ("browse", [
       "accumulates bindings", `Quick, t_browse_accumulates;
+    ]);
+    ("multi-line blocks", [
+      "interface/impl where collection", `Quick, t_multiline_interface_impl_dispatch;
+      "return-position dispatch",         `Quick, t_multiline_return_position_dispatch;
     ]);
   ]

@@ -42,6 +42,25 @@ ad-hoc: you edit the hardcoded `src` string in the source, rebuild, and run**
   to dump the parsed AST.
 - `dev/tc_debug.ml` — same pattern; dumps inferred types.
 
+### Custom probe for a library-internal function
+
+When the bug is in a specific function the CLI never exercises in isolation —
+a parser entry point (`Parser.program` vs `Parser.repl_expr`), a repl helper
+(`Repl.try_parse`, `Repl.ends_indented`), `Typecheck.check_repl_decl`, the
+marker pass — write a throwaway probe rather than reasoning from the source.
+`medaka_lib` exposes everything (no `.mli`s), so:
+
+1. add a file `dev/probe_tmp.ml` that `open Medaka_lib` and calls the function
+   directly, printing what you need;
+2. add its name to `dev/dune`'s `(names …)`;
+3. `dune build dev/probe_tmp.exe && ./_build/default/dev/probe_tmp.exe`;
+4. delete the file and revert `dev/dune` when done.
+
+This is often faster than the CLI for narrowing *which* function misbehaves —
+e.g. feeding a whole multi-line string to `check_repl_decl` (works) vs. driving
+it line-by-line through `try_parse` (reproduces) cleanly bisects a repl bug to
+the input-collection layer rather than the typechecker.
+
 ## Build a minimal repro
 
 Shrink the failing program to the smallest snippet that still reproduces. Once

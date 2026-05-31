@@ -30,7 +30,7 @@ Two debug binaries in `dev/` (not run as part of `dune test`):
 | Type checker      | `test/test_typecheck.ml`        | 291   | Inferred types, type errors, exhaustiveness warnings  |
 | Evaluator         | `test/test_eval.ml`             | 142   | Runtime values, recursion, do-blocks, Ref, errors, escapes, @Name dispatch, Generic `to_rep` |
 | Run               | `test/test_run.ml`              | 6     | Stdout capture, factorial, ADT match, do-block, Ref, panic |
-| REPL              | `test/test_repl.ml`             | 9     | process_item, :load atomicity, rollback, :browse      |
+| REPL              | `test/test_repl.ml`             | 11    | process_item, :load atomicity, rollback, :browse, multi-line `where` block collection |
 | Loader            | `test/test_loader.ml`           | 27    | Multi-file imports, topo sort, cycle detection, prelude no-op, abstract exports |
 | Diagnostics       | `test/test_diagnostics.ml`      | 11    | LSP diagnostic output, multi-file analysis            |
 | Formatter         | `test/test_fmt.ml`              | 10    | `medaka fmt` round-trip and --check mode              |
@@ -2857,11 +2857,21 @@ is wired into single-file `check`/`run`, multi-module, and the repl. **Phase
   Deliberately skipped for Phase 69 (decided with the user). Fix requires
   running mark + typecheck before doctest eval, or threading resolved keys some
   other way. Tracked under Phase 70.
-- **Repl rebinds method names across multiple impls.** Defining several `impl`s
-  of one interface in the repl overwrites the interface method's polymorphic
-  scheme with the last impl's concrete type, so typed calls like
-  `(decode 1 : String)` fail to check interactively (works in whole-file mode).
-  Pre-existing repl behavior, independent of 69; spun out as a separate task.
+- **Repl multi-impl dispatch ✅ FIXED (2026-05-30).** Symptom: defining several
+  `impl`s of one interface in the repl made typed calls like `(decode 1 : String)`
+  fail to check interactively (worked in whole-file mode). The hypothesized cause
+  (typecheck overwriting the method's polymorphic scheme with an impl monotype)
+  was wrong — `check_repl_decl` handles the whole block correctly. **Real root
+  cause:** the repl's line-by-line input collector (`ends_indented` in
+  `lib/repl.ml`) committed a `where`-header too early. `interface Decode a where`
+  and `impl Decode String where` each parse as a *complete* zero-method
+  declaration (marker-interface grammar `parser.mly`:953, empty-impl-body
+  `parser.mly`:1018), so the indented body lines below them were parsed as
+  *separate* top-level decls — turning `decode n = …` into a standalone monotype
+  `DFunDef` that shadowed the (empty) interface. Fix: keep collecting when the
+  last non-empty line ends with the `where` keyword (a layout-block opener),
+  flushed by a blank line like other indented blocks. Regression tests in
+  `test/test_repl.ml` ("multi-line blocks").
 
 **Goal.** Methods discriminated by their *result* type (`fromInt : Int -> a`,
 `pure`, `empty`, `minBound`, **`from_rep : Rep -> a`**) and multi-parameter

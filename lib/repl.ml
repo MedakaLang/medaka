@@ -24,9 +24,28 @@ let show_snippet source loc_opt =
 let at_or_past_eof pos source =
   pos.Lexing.pos_cnum >= String.length source
 
-(* True when the last non-empty line is indented and no blank line was entered.
-   A successful parse while still indented means the user may have more match arms
-   to add; we keep collecting (Python-style: blank line commits). *)
+let is_ident_char c =
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+  || (c >= '0' && c <= '9') || c = '_'
+
+(* True when the trimmed [line] ends with the keyword [kw] as a whole word
+   (so "where" matches but "elsewhere" does not). *)
+let ends_with_keyword line kw =
+  let s = String.trim line in
+  let ls = String.length s and lk = String.length kw in
+  ls >= lk
+  && String.sub s (ls - lk) lk = kw
+  && (ls = lk || not (is_ident_char s.[ls - lk - 1]))
+
+(* True when the input should keep collecting lines and no blank line was
+   entered.  Two cases (Python-style: a blank line always commits):
+   - the last non-empty line is indented — the user may have more match arms /
+     methods to add;
+   - the last non-empty line ends with `where`, which opens a layout block.
+     `interface X where` / `impl T X where` each parse as a *complete*
+     zero-method declaration (marker-interface / empty-impl grammar forms), so
+     without this the REPL would commit the header and parse the indented body
+     lines below it as separate top-level declarations. *)
 let ends_indented source =
   let len = String.length source in
   if len >= 2 && source.[len-2] = '\n' then false  (* blank line → flush *)
@@ -35,7 +54,9 @@ let ends_indented source =
     let non_empty = List.filter (fun l -> String.trim l <> "") lines in
     match List.rev non_empty with
     | [] -> false
-    | last :: _ -> String.length last > 0 && (last.[0] = ' ' || last.[0] = '\t')
+    | last :: _ ->
+      (String.length last > 0 && (last.[0] = ' ' || last.[0] = '\t'))
+      || ends_with_keyword last "where"
 
 let try_parse source =
   (* First attempt: parse as a program (declarations) *)
