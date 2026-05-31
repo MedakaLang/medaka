@@ -810,6 +810,18 @@ let rec type_pat env = function
       with Not_found -> fail (UnknownCtor c)
     in
     let ctor_t = instantiate scheme in
+    (* Arity check before unification: a constructor's instantiated type is a
+       spine of arrows ending in its (non-function) result type, so the number
+       of leading arrows is its arity.  Catching a wrong-arity pattern here
+       gives a precise ArityMismatch instead of a confusing "T vs a -> b". *)
+    let rec arrow_arity t = match normalize t with
+      | TFun (_, _, r) -> 1 + arrow_arity r
+      | _ -> 0
+    in
+    let expected_arity = arrow_arity ctor_t in
+    let got_arity = List.length args in
+    if got_arity <> expected_arity then
+      fail (ArityMismatch (c, expected_arity, got_arity));
     let typed_args = List.map (type_pat env) args in
     let arg_types = List.map fst typed_args in
     let bindings  = List.concat_map snd typed_args in

@@ -2827,6 +2827,42 @@ g x = x 1
 bad = fst g
 |}
 
+(* Constructor-pattern arity (Phase 70): a wrong number of sub-patterns is now
+   a precise ArityMismatch, not a generic "T vs a -> b" type mismatch. *)
+let e_pat_arity_under = assert_err_msg "expects 2 args, got 1"
+  {|data Pair = Pair Int Int
+f p = match p
+  Pair x => x
+|}
+
+let e_pat_arity_over = assert_err_msg "expects 1 args, got 2"
+  {|data Wrap = Wrap Int
+f p = match p
+  Wrap x y => x
+|}
+
+let e_pat_arity_nullary = assert_err_msg "expects 0 args, got 1"
+  {|data Color = Red | Green
+f c = match c
+  Red x => x
+  Green => 0
+|}
+
+let t_pat_arity_ok = assert_type
+  {|data Pair = Pair Int Int
+f : Pair -> Int
+f p = match p
+  Pair x y => x + y
+|} "f" "Pair -> Int"
+
+(* A constructor whose payload is itself a function type still has arity 1. *)
+let t_pat_arity_fn_payload = assert_type
+  {|data Thunk = Thunk (Int -> Int)
+run : Thunk -> Int
+run t = match t
+  Thunk f => f 1
+|} "run" "Thunk -> Int"
+
 (* ── Runner ─────────────────────────────────────── *)
 
 let () =
@@ -3291,5 +3327,10 @@ let () =
     ];
     "diagnostics (Phase 70)", [
       test_case "mismatch shares tyvar naming" `Quick t_mismatch_shared_naming;
+      test_case "err: ctor pat under-applied"  `Quick e_pat_arity_under;
+      test_case "err: ctor pat over-applied"   `Quick e_pat_arity_over;
+      test_case "err: nullary ctor pat w/ arg" `Quick e_pat_arity_nullary;
+      test_case "ctor pat correct arity ok"    `Quick t_pat_arity_ok;
+      test_case "ctor pat fn payload arity 1"  `Quick t_pat_arity_fn_payload;
     ];
   ]
