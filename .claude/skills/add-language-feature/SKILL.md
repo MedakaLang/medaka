@@ -57,9 +57,16 @@ a pass that only fills mutable refs can mutate in place and needs no rewiring.
 ## Surrounding surfaces
 
 - **Tree-sitter** — `tree-sitter-medaka/grammar.js`. Mirror the syntax for
-  editor highlighting; regenerate (`npx tree-sitter generate`) and update
-  `queries/highlights.scm` + corpus tests. The generated `src/parser.c` is
-  committed.
+  editor highlighting and update `queries/highlights.scm` + corpus tests
+  (`test/corpus/*.txt`). **`npx tree-sitter generate` fails locally** (CLI
+  0.21.0 rejects the block-comment rule's `\{-[^]*?-\}` regex — reproduces at
+  HEAD, unrelated to your edit), so you usually **cannot** regenerate the
+  committed `src/parser.c` / `src/grammar.json` here. Hand-edit `grammar.js` +
+  corpus, leave the generated artifacts at HEAD (consistent with each other),
+  and let CI / a compatible tree-sitter regenerate — never commit a
+  half-generated `grammar.json`. Note `tree-sitter-medaka/` lives in the **main**
+  git repo (not a submodule), so `git stash`/`checkout` run from inside it act
+  on the *whole* working tree — commit a WIP checkpoint before any risky git op.
 - **LSP** — usually inherited via the pipeline, but check `lib/lsp_server.ml`
   if the feature affects hover/completion/symbols. For substantial LSP work use
   the `add-lsp-capability` skill.
