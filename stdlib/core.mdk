@@ -89,6 +89,19 @@ export impl Eq (Result e a) requires Eq e, Eq a where
   eq (Err x) (Err y) = eq x y
   eq _ _ = False
 
+-- Structural equality for tuples (arities 2–5): equal iff every field is.
+export impl Eq (a, b) requires Eq a, Eq b where
+  eq (a1, b1) (a2, b2) = eq a1 a2 && eq b1 b2
+
+export impl Eq (a, b, c) requires Eq a, Eq b, Eq c where
+  eq (a1, b1, c1) (a2, b2, c2) = eq a1 a2 && eq b1 b2 && eq c1 c2
+
+export impl Eq (a, b, c, d) requires Eq a, Eq b, Eq c, Eq d where
+  eq (a1, b1, c1, d1) (a2, b2, c2, d2) = eq a1 a2 && eq b1 b2 && eq c1 c2 && eq d1 d2
+
+export impl Eq (a, b, c, d, e) requires Eq a, Eq b, Eq c, Eq d, Eq e where
+  eq (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) = eq a1 a2 && eq b1 b2 && eq c1 c2 && eq d1 d2 && eq e1 e2
+
 {- | Associative combine.  Backs the `++` operator and is the parent of
    `Monoid`.  Implementations *must* satisfy
        append a (append b c) == append (append a b) c. -}
@@ -171,6 +184,26 @@ export impl Ord String where
 export impl Ord Char where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
 
+-- | Lexicographic chaining: take the first non-`Eq` result, else the second.
+-- Private helper backing the tuple `Ord` impls below.
+thenCmp : Ordering -> Ordering -> Ordering
+thenCmp Eq o = o
+thenCmp o _ = o
+
+-- Lexicographic ordering for tuples (arities 2–5): compare field by field,
+-- left to right, stopping at the first that differs.
+export impl Ord (a, b) requires Ord a, Ord b where
+  compare (a1, b1) (a2, b2) = thenCmp (compare a1 a2) (compare b1 b2)
+
+export impl Ord (a, b, c) requires Ord a, Ord b, Ord c where
+  compare (a1, b1, c1) (a2, b2, c2) = thenCmp (compare a1 a2) (thenCmp (compare b1 b2) (compare c1 c2))
+
+export impl Ord (a, b, c, d) requires Ord a, Ord b, Ord c, Ord d where
+  compare (a1, b1, c1, d1) (a2, b2, c2, d2) = thenCmp (compare a1 a2) (thenCmp (compare b1 b2) (thenCmp (compare c1 c2) (compare d1 d2)))
+
+export impl Ord (a, b, c, d, e) requires Ord a, Ord b, Ord c, Ord d, Ord e where
+  compare (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) = thenCmp (compare a1 a2) (thenCmp (compare b1 b2) (thenCmp (compare c1 c2) (thenCmp (compare d1 d2) (compare e1 e2))))
+
 {- | Human-readable string rendering.
    Impls live in their owning module: `Show Int`/`Show Float` live in
    `core` once an `intToString` extern lands; `Show String` and `Show Char`
@@ -178,6 +211,21 @@ export impl Ord Char where
 export
 interface Show a where
   show : a -> String
+
+-- Tuple rendering (arities 2–5): `(a, b)`, matching the interpreter's own
+-- value printer.  Inert until base `Show` impls (e.g. `Show Int`) land —
+-- there is no component `show` to call before then.
+export impl Show (a, b) requires Show a, Show b where
+  show (a, b) = "(" ++ show a ++ ", " ++ show b ++ ")"
+
+export impl Show (a, b, c) requires Show a, Show b, Show c where
+  show (a, b, c) = "(" ++ show a ++ ", " ++ show b ++ ", " ++ show c ++ ")"
+
+export impl Show (a, b, c, d) requires Show a, Show b, Show c, Show d where
+  show (a, b, c, d) = "(" ++ show a ++ ", " ++ show b ++ ", " ++ show c ++ ", " ++ show d ++ ")"
+
+export impl Show (a, b, c, d, e) requires Show a, Show b, Show c, Show d, Show e where
+  show (a, b, c, d, e) = "(" ++ show a ++ ", " ++ show b ++ ", " ++ show c ++ ", " ++ show d ++ ", " ++ show e ++ ")"
 
 {- | Numeric arithmetic.  Backs `+`, `-`, `*`, `/` for user-defined numeric
    types; the operators are hard-wired for `Int` and `Float` and only

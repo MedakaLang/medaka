@@ -899,17 +899,18 @@ let t_iface_zero_param = assert_type
 |}
   "defaultSep" "String"
 
-(* Multi-method interface *)
+(* Multi-method interface — fresh names so it doesn't collide with the
+   prelude's `Show` (which now carries tuple impls providing only `show`). *)
 let t_iface_multi_method = assert_type
-  {|interface Show a where
-  show : a -> String
-  showList : List a -> String
+  {|interface Pretty a where
+  pp : a -> String
+  ppList : List a -> String
 
-impl Show Int where
-  show x = "int"
-  showList xs = "list"
+impl Pretty Int where
+  pp x = "int"
+  ppList xs = "list"
 |}
-  "show" "a -> String"
+  "pp" "a -> String"
 
 (* Polymorphic impl — Show for Option *)
 let t_iface_poly_impl = assert_type
