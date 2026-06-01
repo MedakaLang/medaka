@@ -3637,7 +3637,7 @@ the existing `ESlice` branch; back it with a codepoint get (or
 `stringSlice i (i+1)`) in `eval.ml`. Panic-on-OOB to match the array bracket.
 Skill: **add-language-feature** (threads typecheck + eval).
 
-### Phase 78: Prelude name shadowing ⏳ TODO
+### Phase 78: Prelude name shadowing ✅ DONE (78a + 78b; 78c won't-do)
 
 The prelude (`core.mdk`) is **prepended source** (re-elaborated and concatenated
 ahead of every user program), so its names (`length`, `isEmpty`, `count`, `map`,
@@ -3703,9 +3703,9 @@ re-declared it constrained, so the user's reference stays a bare `EVar`.
 Wired at the single-file driver chokepoints only: `check_program`
 (`typecheck.ml`), the paired eval prepends in `bin/main.ml` (run/prop/bench),
 `doctest.ml`, and the `test_run` typed helper. **Multi-module** (`typecheck_module`
-+ combined eval) and the **REPL** still use the full prelude — per-module
-shadowing across the flat eval namespace is deferred (it's what actually
-unblocks `array.mdk`, and pairs naturally with 78b).
++ combined eval) and the **REPL** still use the full prelude — multi-module
+shadowing was investigated and dropped (see 78c: `array.mdk` already gets these
+names via interface impls, so it has no consumer).
 
 Diagnostic: shadowing a **non**-droppable name (one the prelude uses internally)
 still coalesces the user clause with the prelude's. A *compatible* merge keeps
@@ -3748,20 +3748,41 @@ consistent). `check_program` strips the sentinel from returned env keys
 
 Tests: `test_run` `prelude method shadow` (user `length` wins; `isEmpty`/`toList`
 still dispatch for List/Option), `test_typecheck` `user fn shadows prelude
-method`. Limitations: single-file only (multi-module → 78c); shadowing a method
-name that is also locally rebound is rejected with the diagnostic rather than
-renamed.
+method`. Limitations: single-file only (multi-module investigated and dropped —
+see 78c); shadowing a method name that is also locally rebound is rejected with
+the diagnostic rather than renamed.
 
-#### Phase 78c: Multi-module method shadowing ⏳ TODO
+#### Phase 78c: Multi-module method shadowing 🚫 WON'T DO (investigated 2026-06-01)
 
-The actual `array.mdk` unblocker. Extend 78a/78b shadowing across the
-multi-module path (`typecheck_module` + combined eval) with **per-module** scope:
-`array.mdk` reclaims `length`/`isEmpty`/`toList` and its importers see those,
-while other modules keep the prelude's. Needs the export/import name handling
-(the user-side rename must keep the original name in the module's exports) and a
-per-module rather than whole-program shadow set. Done when: `array.mdk` defines
-its own `length`/`isEmpty`/`toList`, those win for it and its importers, and
-Foldable dispatch for List/Option/Result elsewhere is unchanged.
+Investigated and dropped — the motivating need is already met without it.
+
+- **`array.mdk` doesn't need standalone shadowing.** It already provides
+  `length`/`isEmpty`/`toList` via `impl Foldable Array` (and `map` via
+  `impl Mappable Array`), with an O(1) `length arr = arrayLength arr`
+  ([array.mdk:83-85](stdlib/array.mdk) documents this as deliberate). The
+  interface-impl mechanism is the idiomatic solution; `length someArray` already
+  works. So 78c's stated goal is already achieved.
+- **`string.mdk` can't use that route** (`String : *`, but `Foldable` needs
+  `* -> *`), so it uses the global `stringLength` / `s == ""`
+  ([string.mdk:32-34](stdlib/string.mdk)). That is the only genuinely unsolved
+  case — and standalone shadowing doesn't safely solve it either: **exporting** a
+  bare `length : String -> Int` would shadow `Foldable.length` in every importer
+  (so `length [1,2,3]` on a List would type-error). The only safe benefit is
+  internal cosmetics (string.mdk's own body writing `length` over `stringLength`).
+- **Cost vs benefit.** Extending the 78b user-side rename to the multi-module
+  path (per-module `shadow_rename` in `bin/main.ml`'s mark step +
+  `typecheck_module` + combined eval) also needs a **module-unique** sentinel —
+  the flat combined-eval namespace ([bin/main.ml:546](bin/main.ml)) would
+  otherwise collide two modules' `name#shadow` bindings. ~40-60 lines of intricate
+  plumbing for a cosmetic gain with no safe export path.
+- **The real user-facing fix is stdlib design, not a compiler feature**: make
+  `length` a separate `Sized`/`HasLength` interface (`length : a -> Int`, `a : *`)
+  implemented for String/Array/List, instead of a `Foldable` method — sidestepping
+  shadowing entirely. That belongs to the stdlib author, not this phase.
+
+Phase 78 ships as **78a** (plain-function shadowing) + **78b** (single-file
+interface-method shadowing). Reopen 78c only if a future module has a genuine,
+non-cosmetic need that interface impls can't serve.
 
 ### Phase 79: Effect-polymorphic higher-order functions ⏳ TODO
 
