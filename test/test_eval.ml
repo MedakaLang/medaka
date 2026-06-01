@@ -1113,6 +1113,53 @@ let t_let_else_no_match = assert_val_typed
 |}
   "r" (VCon ("None", []))
 
+(* ── Phase 74 follow-up: recursive constrained functions ──────────────────
+   A top-level recursive function with a typeclass constraint must forward its
+   own dictionary on the self-recursive call.  Pre-fix the self-call dropped the
+   dictionary (the group's own constraints weren't yet in fun_constraints when
+   the body was inferred), so it mis-dispatched / had the wrong arity — the
+   recursive `allEq y rest` returned a partial application instead of a Bool, and
+   the Show analogue stack-overflowed.  Typed runner: dictionary passing only
+   happens in the marked/typechecked/dict-passed pipeline. *)
+let t_rec_eq_constraint_true = assert_val_typed
+  {|allEq : Eq a => a -> List a -> Bool
+allEq _ [] = True
+allEq y (x::rest) = eq y x && allEq y rest
+r = allEq 1 [1, 1, 1]
+|}
+  "r" (VBool true)
+
+let t_rec_eq_constraint_false = assert_val_typed
+  {|allEq : Eq a => a -> List a -> Bool
+allEq _ [] = True
+allEq y (x::rest) = eq y x && allEq y rest
+r = allEq 1 [1, 2, 1]
+|}
+  "r" (VBool false)
+
+(* Show-constrained recursive helper: `show` dispatches per element through the
+   forwarded dictionary; pre-fix this stack-overflowed. *)
+let t_rec_show_constraint = assert_val_typed
+  {|showAll : Show a => List a -> String
+showAll [] = ""
+showAll (x::rest) = show x ++ showAll rest
+r = showAll [1, 2, 3]
+|}
+  "r" (VString "123")
+
+(* Mutually-recursive constrained functions: each forwards a dictionary to the
+   other; the group's names must all be visible before any body is inferred. *)
+let t_rec_mutual_constraint = assert_val_typed
+  {|isEvenLen : Eq a => a -> List a -> Bool
+isEvenLen _ [] = True
+isEvenLen z (_::rest) = isOddLen z rest
+isOddLen : Eq a => a -> List a -> Bool
+isOddLen _ [] = False
+isOddLen z (_::rest) = isEvenLen z rest
+r = isEvenLen 0 [1, 2, 3, 4]
+|}
+  "r" (VBool true)
+
 (* ── Range literals (Phase 40) ──────────────────────────────────────────── *)
 
 let t_range_list_half_open =
@@ -1370,6 +1417,10 @@ let () =
       test_case "let rec top mutual"      `Quick t_letrec_top_mutual;
       test_case "let rec inline"          `Quick t_letrec_inline;
       test_case "let rec inline mutual"   `Quick t_letrec_inline_mutual;
+      test_case "rec Eq-constraint true"  `Quick t_rec_eq_constraint_true;
+      test_case "rec Eq-constraint false" `Quick t_rec_eq_constraint_false;
+      test_case "rec Show-constraint"     `Quick t_rec_show_constraint;
+      test_case "rec mutual constraint"   `Quick t_rec_mutual_constraint;
     ];
     "pattern match", [
       test_case "literal"     `Quick t_match_lit;

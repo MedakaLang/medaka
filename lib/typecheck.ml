@@ -267,6 +267,24 @@ let instantiate s = snd (instantiate_raw s)
 
 let monotype t = Forall ([], t)
 
+(* Phase 74 follow-up: find the live (still-unbound) tyvar carrying [id] inside a
+   mono type, if present.  instantiate_raw produces an empty substitution for a
+   monomorphic recursive placeholder, so a self/mutual-recursive constrained
+   call can't map its constraint var ids through `sub`; instead the var is one of
+   the enclosing function's own live tyvars, recoverable by id from the
+   occurrence's type. *)
+let rec find_tvar_in_mono t id =
+  match normalize t with
+  | TVar { contents = Unbound (id', _) } as v -> if id' = id then Some v else None
+  | TVar _ -> None
+  | TCon _ -> None
+  | TApp (a, b) | TFun (a, _, b) ->
+    (match find_tvar_in_mono a id with Some _ as r -> r | None -> find_tvar_in_mono b id)
+  | TTuple ts ->
+    List.fold_left
+      (fun acc t -> match acc with Some _ -> acc | None -> find_tvar_in_mono t id)
+      None ts
+
 (* ── Value restriction (Phase 66) ───────────────── *)
 
 (* A syntactically non-expansive (value) expression may be generalized; every
@@ -1054,8 +1072,20 @@ let rec infer env = function
         (match Hashtbl.find_opt env.fun_constraints x with
          | None -> ()
          | Some constraints ->
+           (* Map a constraint's tyvar id to its type at this occurrence.  For a
+              normal (generalized) callee that's the fresh instantiation var from
+              `sub`.  For a self/mutual-recursive call the callee is the group's
+              monomorphic placeholder, so `sub` is empty and the constraint var
+              is one of the *enclosing* function's own live tyvars — recover it
+              from `mono` so resolve_dict_apps routes it to that function's own
+              dictionary (RDict) instead of dropping it (Phase 74 follow-up). *)
+           let resolve_arg id =
+             match List.assoc_opt id sub with
+             | Some _ as r -> r
+             | None -> find_tvar_in_mono mono id
+           in
            List.iter (fun (iface, var_ids) ->
-             let args = List.filter_map (fun id -> List.assoc_opt id sub) var_ids in
+             let args = List.filter_map resolve_arg var_ids in
              if args <> [] then
                env.constraint_obligations := (iface, args, !current_loc) :: !(env.constraint_obligations)
            ) constraints;
@@ -1068,7 +1098,7 @@ let rec infer env = function
             | None -> ()
             | Some r ->
               let per_constraint = List.map (fun (iface, var_ids) ->
-                (iface, List.filter_map (fun id -> List.assoc_opt id sub) var_ids))
+                (iface, List.filter_map resolve_arg var_ids))
                 constraints in
               env.dict_app_usages :=
                 (x, per_constraint, r, !current_loc) :: !(env.dict_app_usages)));
@@ -1867,7 +1897,16 @@ let rec first_loc = function
    have a lambda RHS — strict-evaluation rules out cyclic non-function data. *)
 let process_letrec_group env_ref placeholders (is_letrec, members) =
   enter_level ();
-  let cs_monos_list = List.map (fun (name, sig_opt, clauses) ->
+  (* Pass A: parse each member's signature, unify it into the placeholder, and
+     PRE-REGISTER its fun_constraints entry *before* any body is inferred.  A
+     self- or mutually-recursive constrained call in a body (Pass B) looks the
+     callee up in fun_constraints to record its dictionary route and obligation;
+     without this the group's own names aren't there yet (they were registered
+     only after the bodies), so the recursive call silently dropped its
+     dictionary — wrong arity / mis-dispatch at eval (Phase 74 follow-up).  The
+     authoritative post-inference pass below replaces or clears this entry once
+     the real generalized constraint set is known. *)
+  let prepared = List.map (fun (name, sig_opt, clauses) ->
     let placeholder = List.assoc name placeholders in
     let (cs_monos, sig_t_opt) =
       match sig_opt with
@@ -1878,6 +1917,23 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
         unify placeholder sig_t;
         (cs, Some sig_t)
     in
+    (* Mirror the post-inference registration below, minus its bound-ids filter
+       (nothing is generalized yet): a top-level member generalizes all its arg
+       tyvars, so the ids agree. *)
+    let extract_id m = match normalize m with
+      | TVar { contents = Unbound (id, _) } -> Some id
+      | _ -> None in
+    let pre_cs = List.filter_map (fun (iface, arg_monos) ->
+      let ids = List.filter_map extract_id arg_monos in
+      if ids <> [] then Some (iface, ids) else None) cs_monos in
+    let pre_cs = expand_supers (!env_ref).interfaces pre_cs in
+    if pre_cs <> [] then
+      Hashtbl.replace (!env_ref).fun_constraints name pre_cs;
+    (name, cs_monos, sig_t_opt, clauses)
+  ) members in
+  (* Pass B: infer the bodies now that every member's constraints are visible. *)
+  let cs_monos_list = List.map (fun (name, cs_monos, sig_t_opt, clauses) ->
+    let placeholder = List.assoc name placeholders in
     if is_letrec then
       List.iter (fun (pats, rhs) ->
         if pats = [] && not (is_syntactic_lambda rhs) then begin
@@ -1932,7 +1988,7 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
     let is_val = is_letrec
       || List.for_all (fun (pats, rhs) -> pats <> [] || is_nonexpansive rhs) clauses in
     (name, cs_monos, is_val)
-  ) members in
+  ) prepared in
   exit_level ();
   List.map (fun (name, cs_monos, is_val) ->
     let placeholder = List.assoc name placeholders in
@@ -1960,6 +2016,11 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
        let cs = expand_supers (!env_ref).interfaces cs in
        if cs <> [] then
          Hashtbl.replace (!env_ref).fun_constraints name cs
+       else
+         (* Constraints didn't survive generalization (e.g. the var was pinned by
+            an outer monomorphic scope): undo Pass A's pre-registration so this
+            function gets no phantom dict parameter. *)
+         Hashtbl.remove (!env_ref).fun_constraints name
      | _ -> ());
     env_ref := extend_var !env_ref name scheme;
     (name, scheme)

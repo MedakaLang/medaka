@@ -230,8 +230,13 @@ export impl Show Unit where
 
 -- The element join recurses in a `where`-local helper (closing over the
 -- impl's `Show a` dict lexically) rather than a top-level constrained
--- function: a recursive top-level `Show a => …` self-call currently drops its
--- dictionary (Phase 69.x bug — see PLAN.md follow-up).
+-- `showListItems : Show a => List a -> String`.  The top-level form works for
+-- user code (the Phase 74 self-call dictionary-drop bug is fixed), but
+-- `medaka test stdlib/core.mdk` prepends the prelude to itself, so a top-level
+-- helper here is *duplicated* — two `Show (List a)` impls plus two helpers make
+-- `show` on an element resolve to an ambiguous VMulti, which sends `++` into the
+-- `append` method (`xs ++ ys`) and loops forever.  The `where`-local helper
+-- introduces no duplicated top-level name, so it survives that doubling.
 export impl Show (List a) requires Show a where
   show xs = "[" ++ go xs ++ "]" where
     go [] = ""

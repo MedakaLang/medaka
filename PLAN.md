@@ -3411,13 +3411,34 @@ expected line* as `show (<expr>)` (smoke examples stay raw); `pp_value (VString)
   rendering path"). Needs a `Show a =>` constraint on the print builtins —
   breaking (every printed value needs a `Show` instance), so deferred.
 - **Recursive constrained functions drop their dictionary on the self-call.**
-  A top-level `Show a => List a -> String` (or any `C a => …`) that calls itself
-  recursively mis-dispatches: the self-call resolves to an empty dict route
-  instead of forwarding the enclosing dict param (`resolve_one_route` /
-  `find_enclosing_dict` in `lib/typecheck.ml`), so the recursive call gets the
-  wrong arity/dict and returns a partial application (`Eq`-constrained recursion
-  → non-Bool; `Show` → stack overflow). Worked around in `Show (List a)` with a
-  `where`-local helper (closes over the dict lexically). Needs a focused fix.
+  ✅ FIXED (2026-05-31). A top-level `Show a => List a -> String` (or any
+  `C a => …`) that called itself recursively mis-dispatched: the self-call
+  resolved to an empty dict route instead of forwarding the enclosing dict param,
+  so the recursive call got the wrong arity/dict and returned a partial
+  application (`Eq`-constrained recursion → non-Bool; `Show` → stack overflow).
+  Two root causes in `lib/typecheck.ml`'s `process_letrec_group`: (1) a group's
+  own `fun_constraints` entries were registered only *after* the bodies were
+  inferred, so a self/mutual-recursive constrained occurrence saw no entry and
+  recorded no dict route at all (`r` stayed `None` → eval applied zero dicts) —
+  fixed by a Pass A that pre-registers each member's constraints before any body
+  is inferred (the post-inference pass stays authoritative, clearing the
+  pre-registration if the constraint var doesn't generalize); (2) the recursive
+  callee is the group's *monomorphic* placeholder, so `instantiate_raw` yields an
+  empty substitution and the constraint var ids couldn't be mapped to a type —
+  fixed by `find_tvar_in_mono`, which recovers the enclosing function's own live
+  tyvar by id from the occurrence's type so `find_enclosing_dict` routes the
+  self-call to that function's dict (`RDict`). Regression tests:
+  `test/test_eval.ml` "recursion" group (`rec Eq-constraint`,
+  `rec Show-constraint`, `rec mutual constraint`).
+  - **The `Show (List a)` `where`-local helper in `stdlib/core.mdk` stays.** The
+    top-level form now works for user code, but it can't replace the helper:
+    `medaka test stdlib/core.mdk` prepends the prelude to the file under test —
+    which *is* the prelude — duplicating every top-level decl. A duplicated
+    top-level constrained helper makes `show` on a list element resolve to an
+    ambiguous `VMulti`, sending `++` into the `append` method (`xs ++ ys`) →
+    infinite loop. The `where`-local helper introduces no duplicated top-level
+    name, so it survives. (A real fix would be to stop the doctest harness
+    self-prepending the prelude when the file under test is itself the prelude.)
 - **`showsPrec`-style precedence** for `deriving (Show)` and `Show
   Option`/`Result`: nested constructors render ambiguously (`Some (Some 1)` →
   `Some Some 1`). No doctest nests constructors, so non-blocking.
