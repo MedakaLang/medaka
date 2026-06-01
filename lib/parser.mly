@@ -76,6 +76,7 @@ let desugar_where bindings main_expr =
 let rec expr_to_pat = function
   | ELoc (_, e)  -> expr_to_pat e
   | EVar x when x = "_" -> PWild  (* shouldn't normally reach here; UNDERSCORE has its own rule *)
+  | EVar x when String.length x > 0 && x.[0] >= 'A' && x.[0] <= 'Z' -> PCon (x, [])  (* bare nullary constructor, e.g. `None` *)
   | EVar x       -> PVar x
   | ELit l       -> PLit l
   | ETuple es    -> PTuple (List.map expr_to_pat es)
@@ -907,7 +908,17 @@ lc_qual:
 (* ── Do-notation statements ──────────────────────────── *)
 
 stmt:
-  | pat LARROW expr_no_block newlines         { DoBind ($1, $3) }
+  (* DoBind LHS is parsed as an expression and converted to a pattern in the
+     action — NOT as a `pat`.  A `pat`-LHS here shares its `[`/`(`/UPPER/lit
+     prefix with the DoExpr `expr_no_block` production, and the resulting
+     reduce/reduce conflict (expr_atom vs pat_atom on COMMA/RBRACKET/CONS/…)
+     was resolved toward the pattern, so any list/tuple/ctor/cons *expression*
+     in statement position failed to parse (it committed to the pattern path,
+     then died for lack of a `<-`).  Parsing an `expr_no_block` first and
+     letting the `LARROW` lookahead decide bind-vs-expr removes `pat_atom` from
+     statement start entirely, killing the conflict.  Mirrors the assignment
+     production below, which already converts its expression LHS by hand. *)
+  | expr_no_block LARROW expr_no_block newlines { DoBind (expr_to_pat $1, $3) }
   | LET MUT pat EQUAL expr_no_block newlines  { DoLet (true,  $3, $5) }
   | LET pat EQUAL expr_no_block ELSE expr_no_block newlines { DoLetElse ($2, $4, $6) }
   | LET pat EQUAL expr_no_block newlines      { DoLet (false, $2, $4) }

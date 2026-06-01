@@ -774,6 +774,48 @@ go r =
     ])) -> ()
   | _ -> failwith "wrong"
 
+(* Regression: a block-body statement that is a `[`/`(`/UPPER/`::`-led
+   *expression* must parse as a DoExpr, not get swallowed by the DoBind
+   pattern path.  Previously `j =\n  [1, 2]` (and tuple/ctor/cons forms)
+   reported a parse error because the stmt grammar committed to a `pat` LHS
+   and then died for lack of `<-`. *)
+let test_block_body_list_literal () =
+  match parse_one "j =\n  [1, 2]\n" with
+  | DFunDef (false, "j", [], EListLit [ELit (LInt 1); ELit (LInt 2)]) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
+let test_block_body_tuple_literal () =
+  match parse_one "j =\n  (1, 2)\n" with
+  | DFunDef (false, "j", [], ETuple [ELit (LInt 1); ELit (LInt 2)]) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
+let test_block_body_cons_and_ctor () =
+  (* list-led first stmt followed by a ctor-app stmt, in a two-stmt block *)
+  match parse_one "j =\n  1 :: [2]\n  Some 3\n" with
+  | DFunDef (false, "j", [], EBlock [
+      DoExpr (EBinOp ("::", ELit (LInt 1), EListLit [ELit (LInt 2)]));
+      DoExpr (EApp (EVar "Some", ELit (LInt 3)));
+    ]) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
+(* The expression-LHS DoBind still recovers tuple and constructor patterns
+   via expr_to_pat, so monadic binds keep working. *)
+let test_do_bind_tuple_and_ctor () =
+  let src = {|
+go =
+  do
+    (a, b) <- pair
+    Some x <- maybe
+    pure a
+|} in
+  match parse_one src with
+  | DFunDef (false, "go", [], EDo (_, [
+      DoBind (PTuple [PVar "a"; PVar "b"], EVar "pair");
+      DoBind (PCon ("Some", [PVar "x"]), EVar "maybe");
+      DoExpr (EApp (EVar "pure", EVar "a"));
+    ])) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
 (* ── Import/export declaration tests ─────────────────── *)
 
 let test_use_simple () =
@@ -1632,6 +1674,10 @@ let () =
       test_case "basic do"            `Quick test_do_basic;
       test_case "field assign"        `Quick test_do_field_assign;
       test_case "ref value assign"    `Quick test_do_ref_value_assign;
+      test_case "block body list literal"   `Quick test_block_body_list_literal;
+      test_case "block body tuple literal"  `Quick test_block_body_tuple_literal;
+      test_case "block body cons + ctor"    `Quick test_block_body_cons_and_ctor;
+      test_case "do bind tuple + ctor LHS"  `Quick test_do_bind_tuple_and_ctor;
     ];
     "import declarations", [
       test_case "simple"                   `Quick test_use_simple;
