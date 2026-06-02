@@ -189,6 +189,13 @@ fix lands, then load. (A `UserPromptSubmit` hook,
   - Phase 73 (TODO) — signature-driven parameter typing (bidirectional checking):
     pure inference work, yet a delicate cross-cutting change to the letrec-group
     path, so add-language-feature.
+  - Phase 83/84 dict-threading (e.g. instance-`requires` dicts into return-position
+    impl bodies) — feels like typechecker-internal dispatch work, but a route
+    threads through `ast.ml` (resolved record) + `typecheck.ml` + `dict_pass.ml` +
+    `eval.ml` together, so add-language-feature. Gotchas: register dict-route
+    var-ids *after* inference (unify picks the surviving id); gate to
+    return-position methods (arg-position stay on arg-tag); the flat impl-key dict
+    can't carry nested dicts.
   Check where the fix actually lands before loading this skill.
 
 ## Doc index
