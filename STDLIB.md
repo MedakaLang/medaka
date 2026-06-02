@@ -5,7 +5,8 @@ checklist, not a spec: implementation order within a module is yours to choose.
 No code snippets — just the names, grouped so nothing slips through.
 
 Work interactively via the REPL (`:load stdlib/core.mdk`, `:reload` after edits).
-Expect to discover language gaps as you go; record them in PLAN.md §5.
+Expect to discover language gaps as you go; record them in PLAN.md's open
+roadmap.
 
 **Status legend**
 

@@ -38,7 +38,8 @@ Frontend and interpreter complete; standard library underway; codegen not yet st
 
 The standard library is being developed in Medaka itself on top of the
 `extern` primitives — see [STDLIB.md](./STDLIB.md). Codegen has not started.
-See [PLAN.md](./PLAN.md) for the roadmap.
+See [PLAN.md](./PLAN.md) for the roadmap (and
+[PLAN-ARCHIVE.md](./PLAN-ARCHIVE.md) for the completed-phase history).
 
 ## Building
 

@@ -2,7 +2,7 @@
 # Phase 34 — sanity check that `medaka lsp` responds with diagnostics for a
 # broken Medaka source.  Not part of `dune test` because it spawns the binary
 # and pipes JSON-RPC through stdio (the harness can't reliably drive
-# interactive processes per PLAN.md §2.2).
+# interactive processes; see AGENTS.md, "`dune test` hangs").
 #
 # Usage: dev/lsp_smoke.sh
 # Exits 0 on success, non-zero with stderr explaining the failure.

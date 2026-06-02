@@ -619,7 +619,7 @@ let t_sig_returns_function = assert_type
 add x = y => x + y
 |} "add" "Int -> Int -> Int"
 
-(* Dependency-ordered top-level groups (PLAN.md §2.9): an explicitly-signed
+(* Dependency-ordered top-level groups (PLAN-ARCHIVE.md §2.9): an explicitly-signed
    polymorphic HOF must stay polymorphic even when
    a *later* top-level binding instantiates it at a concrete (here tuple) type.
    `sortB` forward-references `mrg`/`splt`, so before dependency-ordering it shared

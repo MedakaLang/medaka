@@ -286,7 +286,7 @@ n = sz @DoesNotExist 5
 
 (* Constraint propagation: a function annotated `Eq a => ...` is
    accepted; calling it requires the caller's type to satisfy `Eq`.
-   PLAN.md §5 notes: the stdlib `Eq` interface does NOT have a built-in
+   PLAN-ARCHIVE.md §5 notes: the stdlib `Eq` interface does NOT have a built-in
    Int impl (core.mdk only registers `Eq (List a) requires Eq a`).  So
    we use a user-defined Eq impl over a user-defined data type. *)
 let t_constraint_explicit_eq =

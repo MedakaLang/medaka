@@ -1,6 +1,6 @@
 ---
 name: harden-typechecker
-description: Typechecker-internal correctness and diagnostics work in lib/typecheck.ml — add or refine a type_error, tighten constraint/coherence/unification logic, or fix an over/under-generalization bug. Use for the PLAN.md Phase 62–72 hardening arc, or whenever the fix lives inside the type checker rather than threading new surface syntax.
+description: Typechecker-internal correctness and diagnostics work in lib/typecheck.ml — add or refine a type_error, tighten constraint/coherence/unification logic, or fix an over/under-generalization bug. Use for the PLAN-ARCHIVE.md Phase 62–72 hardening arc, or whenever the fix lives inside the type checker rather than threading new surface syntax.
 ---
 
 # Harden the typechecker
@@ -10,7 +10,7 @@ narrower than `add-language-feature` (no lexer/parser/AST changes): you are
 making the checker *reject more*, *diagnose better*, or *generalize correctly*,
 without disturbing the two invariants below.
 
-Read the relevant PLAN.md phase first — each entry has a **Where.** section with
+Read the relevant PLAN-ARCHIVE.md phase first — each entry has a **Where.** section with
 approximate line numbers and a **Done when.** acceptance test. Those line
 numbers drift; confirm with `grep` before trusting them.
 

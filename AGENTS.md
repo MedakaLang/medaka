@@ -132,8 +132,9 @@ Dev probes (build to `_build/default/dev/`):
   eval tests) prepends the *raw* prelude and falls back to arg-tag "first impl
   wins" for return-position methods: `pure` needs types to dispatch, so route it
   through the typed pipeline (see `run_typed` in `test/test_eval.ml`).
-- Development is organized by numbered **Phases** — see `PLAN.md`. Commit
-  messages and code comments reference them.
+- Development is organized by numbered **Phases**. Open/forward work is in
+  `PLAN.md`; the completed Phases 1–97 (with implementation notes) are in
+  `PLAN-ARCHIVE.md`. Commit messages and code comments reference phase numbers.
 
 ## Writing tests
 
@@ -182,6 +183,7 @@ fix lands, then load. (A `UserPromptSubmit` hook,
 |-----|--------------|
 | `README.md` | Full build/test/CLI usage, editor setup, layout |
 | `language-design.md` | Language design & semantics |
-| `PLAN.md` | Phase roadmap |
+| `PLAN.md` | Forward-looking roadmap (open phases) |
+| `PLAN-ARCHIVE.md` | Completed Phases 1–97 + per-phase implementation notes |
 | `STDLIB.md` | Stdlib module plan |
 | `stdlib/README.md` | Conventions for adding extern primitives |

@@ -11,7 +11,7 @@
 
    Not yet covered: `@Name` impl selection at runtime; constraint inference
    (callers of a constrained function must carry the explicit constraint
-   annotation).  See PLAN.md §5 for the full list. *)
+   annotation).  See PLAN-ARCHIVE.md §5 for the full list. *)
 
 open Ast
 
@@ -2104,7 +2104,7 @@ and binop_type env op l r =
 (* Reorder top-level groups so that a group's *non-cyclic* callees are processed
    (and generalized) before it.
 
-   Why this matters (see PLAN.md §2.9): every top-level name is pre-bound as a
+   Why this matters (see PLAN-ARCHIVE.md §2.9): every top-level name is pre-bound as a
    monomorphic placeholder var, and a forward reference to a not-yet-processed
    name unifies with that placeholder rather than instantiating a real scheme.
    That is the right treatment for genuine mutual recursion, but for a plain

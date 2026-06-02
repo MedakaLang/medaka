@@ -437,7 +437,7 @@ or an annotation (`(p : Person).name`). A top-level function signature does
 **not** yet disambiguate (`getName : Person -> String; getName p = p.name`
 fails on a shared field), because signatures are unified against the body
 *after* it is inferred rather than pushed into the parameters — see the
-bidirectional-checking phase in PLAN.md.
+bidirectional-checking phase (Phase 73) in PLAN-ARCHIVE.md.
 
 We deliberately stop there. We do **not** support *row polymorphism* — i.e.
 inferring `\r => r.x` as "any record with a field `x`" via row variables. That
