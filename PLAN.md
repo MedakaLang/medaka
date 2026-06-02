@@ -270,17 +270,14 @@ above, it is flagged ⭐.
   for any module using imported ADTs. Lands in the oracle construction in
   `lib/typecheck.ml` (feed imported `te_ctors`). Skill: **harden-typechecker**.
 
-- **Phase 106 — import a type with its constructors in one token (low
-  priority).** `import map.{Map}` does *not* bring `Tip`/`Bin`; each constructor
-  must be listed. A Haskell-style `import map.{Map(..)}` (or auto-importing a
-  `public` type's constructors) would cut friction for ADT-exporting modules.
-  Lands in `lib/resolve.ml` + parser import syntax.
-  - *(Non-issue, verified 2026-06-02 and dropped: the `Ordering` constructor
-    `Eq` does NOT clash with the `Eq` interface. Constructors and interfaces are
-    already in separate namespaces — core ships both `interface Eq` and
-    `data Ordering = … | Eq | …`, and `match compare … Eq => …` resolves fine
-    even under `Ord k =>` with `Eq` imported. map.mdk's earlier "use `_` for the
-    equal case" comment was mistaken and has been corrected to name `Eq`.)*
+*(Two "minor ergonomics" candidates from the Module 5 work were investigated
+and dropped as non-issues, both verified 2026-06-02: (1) bulk-importing a type's
+constructors — `import map.{Map(..)}` already works, implemented in Phase 100;
+(2) the `Ordering` constructor `Eq` does NOT clash with the `Eq` interface —
+constructors and interfaces are already separately namespaced, so `match compare
+… Eq => …` resolves fine even under `Ord k =>` with `Eq` imported. map.mdk's
+earlier "use `_` for the equal case" comment was mistaken and has been corrected
+to name `Eq`.)*
 
 - ⭐ **Phase 83 / 84 (residuals, deferred — layered like 69.x→74).** Lower priority;
   each is a known limitation with a correct-enough fallback today:
