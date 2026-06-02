@@ -189,7 +189,7 @@ above, it is flagged ⭐.
   constructors at bind time). Re-measure parser conflicts after the grammar
   change. Skill: **add-language-feature**.
 
-- **Phase 99 — drive property generation/shrinking through the `Arbitrary`
+- **Phase 101 — drive property generation/shrinking through the `Arbitrary`
   interface.** Phase 42's generator gaps are closed (`lib/prop_runner.ml` now
   generates `Array`, tuples, and parametric user types structurally, with
   matching shrinking — see PLAN-ARCHIVE.md Phase 42). What remains is the

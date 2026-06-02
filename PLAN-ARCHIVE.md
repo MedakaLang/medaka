@@ -1650,7 +1650,7 @@ Scope:
   evaluated form's `show` output against the expected text.
 - `medaka doc`: render examples back into generated HTML/markdown.
 
-### Phase 42: Property testing (`prop` + `Arbitrary`) ✅ DONE (core + generators); interface-unification residual → Phase 99 (re-marked 2026-06-02)
+### Phase 42: Property testing (`prop` + `Arbitrary`) ✅ DONE (core + generators); interface-unification residual → Phase 101 (re-marked 2026-06-02)
 
 `prop "name" (x : T) = ...` declares a property quantified over `T`,
 generated automatically via an `Arbitrary` interface (derivable).
@@ -1687,14 +1687,14 @@ stale.** The pipeline is all there:
   unbound type variable now fails with a clear message instead of
   mis-generating. All changes are self-contained in `lib/prop_runner.ml`.
 
-**Residual → Phase 99 (the principled unification):**
+**Residual → Phase 101 (the principled unification):**
 - Generation/shrinking are still native OCaml in `gen_for_type`/`shrink_value`,
   so the `Arbitrary` interface's `arbitrary`/`shrink` methods aren't *called* by
   the runner for built-in or structurally-generated types. Driving everything
   through the Medaka-level interface (so a hand-written `arbitrary`/`shrink`
   wins, and element dictionaries flow into parametric instances via the
   dict-passed pipeline) is deferred — it intersects the Phase 83/84
-  return-position dispatch residuals. Tracked as Phase 99 in PLAN.md.
+  return-position dispatch residuals. Tracked as Phase 101 in PLAN.md.
 
 ### Phase 42.5: `where`-binding fixes ✅ DONE
 
