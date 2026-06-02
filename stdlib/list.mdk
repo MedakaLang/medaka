@@ -85,7 +85,7 @@ zip3 (x::xs) (y::ys) (z::zs) = (x, y, z) :: zip3 xs ys zs
    > zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
    [10, 40] -}
 export
-zipWith : (a -> b -> c) -> List a -> List b -> List c
+zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 zipWith _ [] _ = []
 zipWith _ _ [] = []
 zipWith f (x::xs) (y::ys) = f x y :: zipWith f xs ys
