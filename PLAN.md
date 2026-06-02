@@ -186,6 +186,30 @@ above, it is flagged ⭐.
   return-position dispatch residuals (a post-typecheck marker re-run / pipeline
   restructure). Lands in `lib/prop_runner.ml` + the typed/dict-passing pipeline.
   Skill: **add-language-feature** (cross-cutting).
+  - **101a — DONE (2026-06-02).** `lib/eval.ml` gains a `shrink_registry`
+    (mirror of `arbitrary_registry`, populated from an `impl Arbitrary T` that
+    *overrides* `shrink`); `lib/prop_runner.ml` `gen_for_type`/`shrink_value`
+    consult the registries first (generation gated to nullary head) with native
+    fallback, so a hand-written/`deriving` `arbitrary`/`shrink` actually wins —
+    **including container elements**, because native `gen_for_type` recurses and
+    each element routes through `arbitrary_registry` (`List Tagged` →
+    `[Tagged 7,…]`, all nesting handled). Also fixes a pre-existing bug: native
+    generation only matched single-arg `Result`; two-arg `Result e a` now
+    generates (`Ok a` / `Err e`) instead of crashing.
+  - **101b (synthesized typed generators + parametric `core.mdk` Arbitrary impls)
+    — DEFERRED, reassess later.** Phase 83/84 (now in main) made single-level
+    interface-driven generation work (`impl Arbitrary (List a)` correctly
+    generates `List Int`/`List Tagged`/`Option Int`), but **nested** parametric
+    elements (`List (List Int)`) still fail — the flat `VDict of string` dict
+    model can't carry a recursive element dict. Since 101a (native + registry
+    recursion) already handles every case **including nesting** and makes
+    hand-written element impls win, 101b's only unique gain is honoring a user's
+    custom `impl Arbitrary (List a)` *generation strategy* — a niche case that
+    also needs a native fallback for nested/tuple/`Result`. Revisit only if a
+    concrete need for custom container-generation strategies arises (would also
+    want structured/recursive dicts to lift the nesting limit). The synthesized-
+    generator WIP is on branch `claude/suspicious-sammet-21d73e` (commit
+    `860ba12`) for reference.
 
 - ✅ **Phase 102 — plain multi-clause exhaustiveness. DONE.** A plain
   multi-clause function (`f Nil = ..` with no `Cons` clause) never becomes an

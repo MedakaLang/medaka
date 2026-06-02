@@ -397,6 +397,12 @@ let leading_dict_params (pats : Ast.pat list) : int =
    for user-defined types without going through VMulti dispatch. *)
 let arbitrary_registry : (string, unit -> value) Hashtbl.t = Hashtbl.create 8
 
+(* Type name → shrink function.  Populated from an `impl Arbitrary T` that
+   *overrides* `shrink` (the interface default `shrink _ = []` is not an impl
+   method, so a non-overriding impl registers nothing).  Used by prop_runner so
+   a hand-written/derived `shrink` wins over the native shrinker. *)
+let shrink_registry : (string, value -> value) Hashtbl.t = Hashtbl.create 8
+
 (* Runtime "head type" tag for a value.  Used to filter VMulti candidates
    tagged via VTypedImpl when dispatching on a value of known shape. *)
 let rec runtime_type_tag = function
@@ -1503,6 +1509,7 @@ let eval_program ?(prelude = true) program =
   Hashtbl.clear ctor_to_type;
   Hashtbl.clear ctor_field_order;
   Hashtbl.clear arbitrary_registry;
+  Hashtbl.clear shrink_registry;
   List.iter (fun d -> match Ast.inner_decl d with
     | DData (_, n, _, vs, _) ->
       List.iter (fun v ->
@@ -1612,23 +1619,31 @@ let eval_program ?(prelude = true) program =
       ) bindings
     | DImpl { iface_name; type_args; methods; impl_name; _ } ->
       let score = tyvars_in_args type_args in
-      (* For Arbitrary impls: register in arbitrary_registry so prop_runner can
-         look up generators for user-defined types by type name. *)
+      (* For Arbitrary impls: register `arbitrary` (and, when the impl overrides
+         it, `shrink`) so prop_runner can look up generators/shrinkers for a type
+         by name without going through VMulti dispatch. *)
       if iface_name = "Arbitrary" then begin
-        match List.find_opt (fun (n, _, _) -> n = "arbitrary") methods with
-        | Some (_, pats, body) ->
-          let type_key = match type_args with
-            | [t] -> (match head_tycon t with Some n -> Some n | None -> None)
-            | _ -> None
-          in
-          (match type_key with
-           | Some tname ->
+        let type_key = match type_args with
+          | [t] -> head_tycon t
+          | _ -> None
+        in
+        match type_key with
+        | None -> ()
+        | Some tname ->
+          (match List.find_opt (fun (n, _, _) -> n = "arbitrary") methods with
+           | Some (_, pats, body) ->
              let v = if pats = [] then wrap_match_errors (fun () -> eval env body)
                      else VClosure (env, pats, body) in
-             Hashtbl.replace arbitrary_registry tname
-               (fun () -> apply v VUnit)
+             Hashtbl.replace arbitrary_registry tname (fun () -> apply v VUnit)
+           | None -> ());
+          (* The interface default `shrink _ = []` lives on the interface, not
+             the impl, so `methods` carries `shrink` only when overridden. *)
+          (match List.find_opt (fun (n, _, _) -> n = "shrink") methods with
+           | Some (_, pats, body) ->
+             let v = if pats = [] then wrap_match_errors (fun () -> eval env body)
+                     else VClosure (env, pats, body) in
+             Hashtbl.replace shrink_registry tname (fun a -> apply v a)
            | None -> ())
-        | None -> ()
       end;
       let impl_type_tag = match type_args with
         | t :: _ -> head_tycon t

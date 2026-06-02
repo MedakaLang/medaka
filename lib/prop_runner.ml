@@ -50,11 +50,23 @@ let rec ty_spine acc = function
   | TyCon n      -> Some (n, acc)
   | _            -> None
 
-(* Generate a random value for the given AST type.  `subst` maps the in-scope
-   type parameters to their concrete arguments; built-ins are handled natively,
-   user data/record types are generated structurally from their definitions in
-   `tydefs`, and remaining nullary types fall back to arbitrary_registry. *)
+(* Generate a random value for the given AST type.  A type whose head
+   constructor has a registered (hand-written / `deriving` / built-in)
+   `arbitrary` impl is driven through the Arbitrary interface so user impls win;
+   element-bearing heads (containers, parametric user types) still generate
+   natively here, recursing per element (so a `List Tagged` with a custom
+   `Tagged` impl yields `Tagged`s via the registry).  `subst` maps the in-scope
+   type parameters to their concrete arguments. *)
 let rec gen_for_type tydefs subst ty =
+  match ty_spine [] ty with
+  | Some (name, []) when Hashtbl.mem Eval.arbitrary_registry name ->
+    (try (Hashtbl.find Eval.arbitrary_registry name) ()
+     with Eval.Eval_error _ | Eval.Impl_no_match -> gen_native tydefs subst ty)
+  | _ -> gen_native tydefs subst ty
+
+(* Native fallback generation: built-ins natively, user data/record types
+   structurally from `tydefs`, remaining nullary types via arbitrary_registry. *)
+and gen_native tydefs subst ty =
   match ty with
   | TyVar v ->
     (match List.assoc_opt v subst with
@@ -77,9 +89,10 @@ let rec gen_for_type tydefs subst ty =
   | TyApp (TyCon "Option", t) ->
     if Random.bool () then Eval.VCon ("None", [])
     else Eval.VCon ("Some", [gen_for_type tydefs subst t])
-  | TyApp (TyCon "Result", t) ->
-    if Random.bool () then Eval.VCon ("Ok",  [gen_for_type tydefs subst t])
-    else Eval.VCon ("Err", [gen_for_type tydefs subst t])
+  (* `Result e a` is `TyApp (TyApp (Result, e), a)`: Ok carries `a`, Err `e`. *)
+  | TyApp (TyApp (TyCon "Result", e), a) ->
+    if Random.bool () then Eval.VCon ("Ok",  [gen_for_type tydefs subst a])
+    else Eval.VCon ("Err", [gen_for_type tydefs subst e])
   | TyTuple ts -> Eval.VTuple (List.map (gen_for_type tydefs subst) ts)
   | _ ->
     (match ty_spine [] ty with
@@ -126,8 +139,20 @@ and gen_user tydefs subst name tydef args =
       List.map (fun f ->
         (f.field_name, gen_for_type tydefs subst' f.field_type)) fields)
 
-(* Produce candidate smaller values for shrinking. *)
+(* Produce candidate smaller values for shrinking.  A type whose head
+   constructor has a registered (overriding) `shrink` impl is shrunk through the
+   Arbitrary interface so user impls win; everything else uses the native
+   shrinker below. *)
 let rec shrink_value ty v =
+  match ty_spine [] ty with
+  | Some (name, _) when Hashtbl.mem Eval.shrink_registry name ->
+    (try (match (Hashtbl.find Eval.shrink_registry name) v with
+          | Eval.VList vs -> vs
+          | _ -> shrink_native ty v)
+     with Eval.Eval_error _ | Eval.Impl_no_match -> shrink_native ty v)
+  | _ -> shrink_native ty v
+
+and shrink_native ty v =
   match ty, v with
   | TyCon "Int", Eval.VInt n ->
     List.filter_map (fun x ->
