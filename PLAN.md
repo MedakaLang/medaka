@@ -3889,17 +3889,53 @@ non-package-manager gaps:
 (`add`/`remove`/`update` need a package manager — out of scope until one
 exists.) Skill: none specific; lands in `bin/main.ml` + `diagnostics.ml`.
 
-### Phase 83: Constraint inference for constrained functions ⏳ TODO
+### Phase 83: Constraint inference for constrained functions ✅ DONE
 
 Phase 20 added constraint *syntax* and call-site obligation checking, but not
-constraint **inference**: a caller that uses a constrained function
-polymorphically must re-annotate the constraint itself (e.g. a wrapper over
-`eq` must carry `Eq a =>` explicitly or it fails to type-check).
+constraint **inference**: a caller that used a constrained function
+polymorphically had to re-annotate the constraint itself (e.g. a wrapper over
+`eq` had to carry `Eq a =>` explicitly or it lost the constraint silently —
+`myEq x y = eq x y` type-checked but `myEq Blob Blob` slipped past the checker).
 
-Scope: propagate inferred constraints from a binding's body into its
-generalized scheme so wrappers acquire the needed constraints automatically;
-keep coherent with the Phase 64/65 `requires`-discharge machinery.
-Skill: **harden-typechecker**.
+Done in `lib/typecheck.ml`, all in `process_letrec_group`:
+
+- **Harvest.** Snapshot `constraint_obligations` *and* `method_usages` around the
+  Pass-B body inference; the entries added are the constraints the bodies impose
+  (a direct method call like `eq` lands in `method_usages` carrying the interface
+  + its instantiated param vars; a call to another constrained function lands in
+  `constraint_obligations`).
+- **Attribute.** After `gen_restricted`, an obligation/usage whose discriminating
+  var lands in the binding's generalized `bound_ids` is polymorphic in that
+  scheme; concrete ones are left to the post-HM obligation pass.
+- **Unsignatured binding** → register the inferred constraints (super-expanded)
+  in a **new** `env.inferred_constraints` table.  The EVar call-site recorder
+  consults it so a polymorphic wrapper's missing-impl error fires and propagates
+  transitively.  It is **deliberately invisible to `find_enclosing_dict` /
+  `dict_pass`**: the marker runs before inference and never wraps these calls in
+  `EDictApp`, so routing an inner method to a `$dict_<fn>_<slot>` param that
+  dict_pass never creates would crash at eval.  Inner methods in such bodies
+  dispatch by runtime arg tag instead — correct for argument-dispatched wrappers
+  (the realistic case).  Exported/imported across modules alongside
+  `te_fun_constraints` for obligation-checking only.
+- **Signatured binding with an insufficient context** → a new
+  `UnsatisfiedConstraint` `type_error`: the body's required constraints must be
+  entailed by the declared set (incl. superinterfaces via `expand_supers`), else
+  reject at the offending call site (`fail_at`).  (A prelude-name collision in a
+  test — redefining `identity : a -> a` — surfaced this correctly and was fixed
+  by renaming the test fixture.)
+
+Tests: `test/test_typecheck.ml` "constraint inference (Phase 83)" (propagation,
+transitivity, concrete-ok, concrete-pins-no-constraint, insufficient-signature,
+superinterface-entailment) and `test/test_eval.ml` "inferred wrapper true/false"
+(runtime arg-tag dispatch end-to-end).
+
+**Residual / deferred follow-up:** full runtime dict-threading *into* an inferred
+body (so it works in return-position / higher-order dispatch) would require
+re-running the marker after typecheck against the final constraint tables — a
+pipeline restructure touching the single-file / multi-module / REPL drivers.
+Likewise self-/mutually-recursive *unsignatured* wrappers under-infer their own
+recursive-call routing (Pass A only pre-registers from explicit signatures).
+Both are deferred, mirroring the Phase 69.x → 74 layering.
 
 ---
 
@@ -4048,7 +4084,7 @@ a phase in §6 unless noted.
   inert — deleting it would not break anything. To make the interface load-bearing,
   `<-` should desugar to `andThen` calls (Haskell style) so the `Thenable`
   constraint is actually checked. Scheduled with Phase 19 stdlib/typeclass wiring.
-- **Constraint syntax in function type signatures.** ✅ Phase 20 done. `f : Eq a => a -> a -> Bool` now parses, round-trips, and type-checks. Constraint obligations are emitted at call sites and verified post-HM. Known limitation: constraint inference is not implemented — callers that use a constrained function polymorphically must also carry the explicit constraint annotation. → Phase 83.
+- **Constraint syntax in function type signatures.** ✅ Phase 20 done. `f : Eq a => a -> a -> Bool` now parses, round-trips, and type-checks. Constraint obligations are emitted at call sites and verified post-HM. Constraint *inference* (✅ Phase 83): an unsignatured binding now infers the constraints its body requires (e.g. `myEq x y = eq x y` acquires `Eq a` automatically and `myEq Blob Blob` is rejected), and an explicit signature whose context is insufficient for its body is rejected with `UnsatisfiedConstraint`. Inferred constraints drive call-site obligation checking only; runtime dictionary-threading *into* an inferred body still uses arg-tag dispatch (correct for argument-dispatched wrappers) — full threading is a deferred follow-up requiring a post-typecheck marker re-run.
 
 ### Additional gaps surfaced during the 2026-05-26 audit
 
