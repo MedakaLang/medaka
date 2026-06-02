@@ -98,28 +98,32 @@ let process_item source resolve_env tc_env eval_state pending_sigs user_bindings
     (* Phase 69: mark interface-method occurrences so typecheck can stamp the
        resolved impl and eval routes by it.  The method-name set is the session's
        known methods (tc_env.method_iface — prelude + interfaces from prior
-       inputs) plus any this item itself declares. *)
-    let item =
-      let item_progs = match item with
-        | Ast.ReplDecl decls -> [decls]
-        | Ast.ReplExpr _ -> []
-      in
-      let methods =
-        let tbl = Method_marker.interface_method_names item_progs in
-        Hashtbl.iter (fun m _ -> Hashtbl.replace tbl m ())
-          (!tc_env).Typecheck.method_iface;
-        tbl
-      in
-      (* Constrained functions: this item's own constrained signatures plus any
-         declared on prior inputs (fun_constraints accrues across the session). *)
+       inputs) plus any this item itself declares.  Marking is a closure so the
+       Phase 87 two-pass can re-mark with extra promoted names (see ReplDecl). *)
+    let item_progs = match item with
+      | Ast.ReplDecl decls -> [decls]
+      | Ast.ReplExpr _ -> []
+    in
+    let methods =
+      let tbl = Method_marker.interface_method_names item_progs in
+      Hashtbl.iter (fun m _ -> Hashtbl.replace tbl m ())
+        (!tc_env).Typecheck.method_iface;
+      tbl
+    in
+    (* Constrained functions: this item's own constrained signatures plus any
+       declared on prior inputs (fun_constraints accrues across the session),
+       plus any [extra] names promoted to dict-routable on a second pass. *)
+    let mark_item extra it =
       let constrained =
         let tbl = Method_marker.constrained_fn_names item_progs in
         Hashtbl.iter (fun f _ -> Hashtbl.replace tbl f ())
           (!tc_env).Typecheck.fun_constraints;
+        Hashtbl.iter (fun f () -> Hashtbl.replace tbl f ()) extra;
         tbl
       in
-      Method_marker.mark_repl_item methods constrained item
+      Method_marker.mark_repl_item methods constrained it
     in
+    let no_extra = Hashtbl.create 0 in
     match item with
     | Ast.ReplDecl decls -> (* already desugared above *)
       (* Augment with pending type sigs from prior inputs, then update the list *)
@@ -140,13 +144,40 @@ let process_item source resolve_env tc_env eval_state pending_sigs user_bindings
       pending_sigs := new_pending_sigs @ standalone_sigs;
       let augmented_decls = relevant_sigs @ decls in
       (try
-         let (bindings, warnings) = Typecheck.check_repl_decl tc_env augmented_decls in
+         (* Phase 87: two-pass elaboration, mirroring Elaborate.elaborate for the
+            single-file driver.  Pass 1 marks against the session's known
+            constrained fns and type-checks, which discovers any unsignatured
+            binding here whose *inferred* constraints make a return-position
+            method (a polymorphic-monad do-block's `pure`) mis-dispatch under
+            arg-tag fallback.  If any qualify, restore the pre-pass env, re-mark
+            with those names treated as constrained, and re-check with them
+            promoted — so their inferred constraints land in fun_constraints
+            (route-bearing) and dict_pass threads a dictionary into the body.
+            When nothing is promotable (the common case) pass 1's result stands. *)
+         let snap = Typecheck.copy_tc_env !tc_env in
+         let mark_decls extra =
+           match mark_item extra (Ast.ReplDecl augmented_decls) with
+           | Ast.ReplDecl d -> d | Ast.ReplExpr _ -> augmented_decls
+         in
+         let marked1 = mark_decls no_extra in
+         let (bindings1, warnings1) = Typecheck.check_repl_decl tc_env marked1 in
+         let promotable = Typecheck.promotable_from !tc_env decls in
+         let (final_decls, bindings, warnings) =
+           if Hashtbl.length promotable = 0 then (marked1, bindings1, warnings1)
+           else begin
+             tc_env := snap;
+             let marked2 = mark_decls promotable in
+             let (b2, w2) =
+               Typecheck.check_repl_decl ~promoted:promotable tc_env marked2 in
+             (marked2, b2, w2)
+           end
+         in
          List.iter (fun w -> Printf.eprintf "%s\n%!" w) warnings;
          (* Phase 69.x: add dictionary parameters to any constrained functions
             defined here (arity from fun_constraints, since this batch may hold no
             reference to learn it from) before eval registers their closures. *)
          let decls = Dict_pass.run ~fun_constraints:(!tc_env).Typecheck.fun_constraints
-           ~method_constraints:(!tc_env).Typecheck.method_constraints decls in
+           ~method_constraints:(!tc_env).Typecheck.method_constraints final_decls in
          List.iter (Eval.eval_repl_decl eval_state) decls;
          user_bindings := !user_bindings @ bindings;
          List.iter (fun (name, scheme) ->
@@ -167,7 +198,12 @@ let process_item source resolve_env tc_env eval_state pending_sigs user_bindings
        | Eval.Eval_error (msg, loc_opt) ->
          Printf.eprintf "%s: panic: %s\n%!" (pp_loc loc_opt) msg;
          show_snippet source loc_opt)
-    | Ast.ReplExpr e ->
+    | Ast.ReplExpr e0 ->
+      (* A bare expression carries no new binding, so there is nothing to
+         promote — just mark it (method / constrained-fn occurrences) once.
+         Names defined earlier were already promoted when they were entered. *)
+      let e = match mark_item no_extra (Ast.ReplExpr e0) with
+        | Ast.ReplExpr e -> e | Ast.ReplDecl _ -> e0 in
       (try
          let (t, warnings) = Typecheck.infer_repl_expr !tc_env e in
          List.iter (fun w -> Printf.eprintf "%s\n%!" w) warnings;

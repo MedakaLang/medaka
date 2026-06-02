@@ -270,6 +270,38 @@ let t_multiline_dict_passing () =
     failwith (Printf.sprintf "Expected \"S\\nT\\n\" from cross-input dispatch, got %S" out);
   ignore ub
 
+(* Phase 87: a polymorphic-monad do-block defined in the REPL must dispatch its
+   return-position `pure` by the *caller's* monad, like the single-file driver
+   (Phase 84).  `f`'s inferred `Applicative m` is invisible to dict-routing
+   unless the REPL's two-pass elaboration promotes it; without the fix, `pure`
+   falls back to arg-tag "first impl wins" (List), so `f (Some 5)` would render
+   as `[5]` (or fail).  Distinct, monad-faithful output proves the promotion. *)
+let t_poly_monad_pure_dispatch () =
+  let st = make_state () in
+  let (r, tc, ev, ps, ub) = st in
+  feed_lines st
+    [ "f m = do";
+      "  x <- m";
+      "  pure x";
+      "" ];
+  let buf = Buffer.create 32 in
+  let saved = !Eval.output_hook in
+  Eval.output_hook := Buffer.add_string buf;
+  let check_expr src =
+    match Repl.try_parse src with
+    | Ok item -> Repl.process_item src r tc ev ps ub item
+    | _ -> failwith ("parse failed: " ^ src)
+  in
+  (Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
+     check_expr "println (show (f (Some 5)))\n";
+     check_expr "println (show (f [1, 2, 3]))\n"));
+  let out = Buffer.contents buf in
+  if out <> "Some 5\n[1, 2, 3]\n" then
+    failwith (Printf.sprintf
+      "Expected \"Some 5\\n[1, 2, 3]\\n\" from poly-monad `pure` dispatch, got %S"
+      out);
+  ignore ub
+
 (* ── Phase 71: REPL recovers cleanly from a type error ────────────────────── *)
 
 (* A type error in one input fails *between* an enter_level/exit_level pair.
@@ -322,6 +354,9 @@ let () = Alcotest.run "Repl"
     ]);
     ("dictionary passing (Phase 69.x)", [
       "cross-input constrained dispatch", `Quick, t_multiline_dict_passing;
+    ]);
+    ("two-pass elaboration (Phase 87)", [
+      "poly-monad pure dispatch", `Quick, t_poly_monad_pure_dispatch;
     ]);
     ("robustness (Phase 71)", [
       "recovers from prior type error", `Quick, t_repl_recovers_from_type_error;

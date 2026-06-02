@@ -4113,31 +4113,35 @@ application-argument (`combine @Additive 3 4`) and standalone (`r = @Foo`) forms
 through the single `EVar` path. Landed in `lib/resolve.ml`; regression cases in
 `test/test_resolve.ml` (`v_at_impl_hint`, `v_at_hint_standalone`).
 
-### Phase 87: Phase 84 two-pass elaboration in the REPL ⏳ TODO
+### Phase 87: Phase 84 two-pass elaboration in the REPL ✅ DONE
 
 Phase 84 fixed polymorphic-monad do-block `pure` dispatch for the single-file
 drivers via `Elaborate.elaborate` (mark → typecheck → re-mark `~promoted` →
-re-typecheck → dict_pass). The **REPL** is still single-pass, so a polymorphic
-monad wrapper defined interactively mis-dispatches its `pure` (arg-tag fallback).
-Repro at the `medaka repl` prompt:
+re-typecheck → dict_pass). The **REPL** was still single-pass, so a polymorphic
+monad wrapper defined interactively mis-dispatched its `pure` (arg-tag fallback):
+`f m = do { x <- m; pure x }` then `f (Some 5)` rendered `[5]` (List) instead of
+`Some 5`.
 
-```
-f m = do
-  x <- m
-  pure x
-f (Some 5)   -- should be Some 5; currently mis-routes
-```
+**Fix.** `lib/repl.ml` `process_item`'s `ReplDecl` branch now mirrors
+`Elaborate.elaborate`: snapshot the tc env (`copy_tc_env`), mark+`check_repl_decl`
+(pass 1) to discover promotable names, and if any qualify, restore the snapshot,
+re-mark the input with those names treated as constrained, and
+`check_repl_decl ~promoted` (pass 2) — so their inferred `Applicative` lands in
+`fun_constraints` and `dict_pass` threads a dictionary into the body.  When
+nothing is promotable (the common case) pass 1 stands, so non-monadic inputs pay
+a single pass.  The marker is now a `mark_item extra` closure so pass 2 can
+expand the constrained set; the `ReplExpr` branch marks once (a bare expression
+introduces no binding to promote — names were promoted when first defined).
 
-The REPL is incremental: it marks each input against the session's accrued
-`fun_constraints`, type-checks via `Typecheck.check_repl_decl` (not
-`check_program`), then dict-passes that input (`lib/repl.ml` ~108–150). Scope:
-after `check_repl_decl`, read the new names in `(!tc_env).inferred_constraints`
-that pass the Phase 84 filter (non-recursive, `Applicative`-bearing), fold them
-into `(!tc_env).fun_constraints`, then re-mark + re-check + re-dict-pass *that
-input* (the env already re-reads `fun_constraints` for both marking and
-dict_pass). Thread a `?promoted` set into `check_repl_decl` mirroring
-`check_program_promoting`. Lands in `lib/repl.ml` + a `check_repl_decl` tweak in
-`lib/typecheck.ml`; add a `test_repl` case. Skill: **add-language-feature**.
+- `lib/typecheck.ml`: extracted the Phase 84 promotable-name filter into a
+  shared `promotable_from env user_prog` (now used by both `check_program_impl`
+  and the REPL); `check_repl_decl` gained `?promoted`, which it installs into
+  `env.promoted` after clearing the prior input's set (env persists across REPL
+  inputs).
+- Regression: `test_repl`'s "two-pass elaboration (Phase 87) / poly-monad pure
+  dispatch" — `f (Some 5)` → `Some 5` and `f [1,2,3]` → `[1, 2, 3]` from one
+  session; fails `[5]` without the fix.  All base suites green; no new
+  `@thorough` failures.
 
 ### Phase 88: Phase 84 two-pass elaboration across modules ⏳ TODO
 

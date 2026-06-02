@@ -3538,6 +3538,38 @@ let program_is_core (prog : program) : bool =
     | DInterface { iface_name = "Foldable"; _ } -> true | _ -> false) prog in
   has_ordering && has_foldable
 
+(* Phase 84 / 87: given an env whose inferred_constraints are already populated
+   (post-typecheck) and the *user* declarations of this pass, return the names
+   that should be promoted to dict-routable on a re-elaboration pass.  Three
+   filters, each guarding a concrete hazard (see check_program_impl's call site):
+   defined in [user_prog] (keys line up), constraint set mentions `Applicative`
+   (the do-block `pure` case; argument-dispatched wrappers stay on arg tag), and
+   non-recursive (a recursive wrapper's own EDictApp call would go unrouted).
+   Shared by the single-file driver and the REPL (Phase 87). *)
+let promotable_from (env : env) (user_prog : program) : (ident, unit) Hashtbl.t =
+  let user_names = Hashtbl.create 16 in
+  List.iter (fun d -> match Ast.inner_decl d with
+    | DFunDef (_, n, _, _) -> Hashtbl.replace user_names n ()
+    | DLetGroup (_, bs)    -> List.iter (fun (n, _) -> Hashtbl.replace user_names n ()) bs
+    | _ -> ()) user_prog;
+  let recursive_names = Hashtbl.create 16 in
+  List.iter (fun d ->
+    let defined = Method_marker.decl_defined_names d in
+    if defined <> [] then begin
+      let refd = Hashtbl.create 16 in
+      Method_marker.decl_referenced_names refd d;
+      if List.exists (fun n -> Hashtbl.mem refd n) defined then
+        List.iter (fun n -> Hashtbl.replace recursive_names n ()) defined
+    end) user_prog;
+  let out = Hashtbl.create 8 in
+  Hashtbl.iter (fun k cs ->
+    if Hashtbl.mem user_names k
+       && not (Hashtbl.mem recursive_names k)
+       && List.exists (fun (iface, _) -> iface = "Applicative") cs
+    then Hashtbl.replace out k ())
+    env.inferred_constraints;
+  out
+
 let check_program_impl ?(promoted : (ident, unit) Hashtbl.t option)
     (prog : program)
     : (ident * scheme) list * string list * (ident, unit) Hashtbl.t =
@@ -3700,27 +3732,7 @@ let check_program_impl ?(promoted : (ident, unit) Hashtbl.t option)
        but its own recursive EDictApp call goes unrouted (Pass A pre-registers
        only signatured fns), the same arity-mismatch crash.  Recursive monad
        wrappers stay on arg-tag dispatch — deferred, but never worse than today. *)
-  let user_names = Hashtbl.create 16 in
-  List.iter (fun d -> match Ast.inner_decl d with
-    | DFunDef (_, n, _, _) -> Hashtbl.replace user_names n ()
-    | DLetGroup (_, bs)    -> List.iter (fun (n, _) -> Hashtbl.replace user_names n ()) bs
-    | _ -> ()) user_prog;
-  let recursive_names = Hashtbl.create 16 in
-  List.iter (fun d ->
-    let defined = Method_marker.decl_defined_names d in
-    if defined <> [] then begin
-      let refd = Hashtbl.create 16 in
-      Method_marker.decl_referenced_names refd d;
-      if List.exists (fun n -> Hashtbl.mem refd n) defined then
-        List.iter (fun n -> Hashtbl.replace recursive_names n ()) defined
-    end) user_prog;
-  let promoted_out = Hashtbl.create 8 in
-  Hashtbl.iter (fun k cs ->
-    if Hashtbl.mem user_names k
-       && not (Hashtbl.mem recursive_names k)
-       && List.exists (fun (iface, _) -> iface = "Applicative") cs
-    then Hashtbl.replace promoted_out k ())
-    final_env.inferred_constraints;
+  let promoted_out = promotable_from final_env user_prog in
   (List.map unshadow (results @ !iface_method_schemes @ !extern_schemes),
    List.rev !(final_env.warnings),
    promoted_out)
@@ -4065,10 +4077,21 @@ let copy_tc_env (e : env) : env = {
    Updates env in place and returns (new_bindings, warnings).
    ~seeded:true marks any registered impls as prelude-seeded so that later
    user-defined impls for the same (iface, ty) take priority without ambiguity. *)
-let check_repl_decl ?(seeded=false) (env : env ref) (decls : decl list)
+let check_repl_decl ?(seeded=false)
+    ?(promoted : (ident, unit) Hashtbl.t option)
+    (env : env ref) (decls : decl list)
     : (ident * scheme) list * string list =
   current_loc := None;
   current_impl_hint := None;
+  (* Phase 87: env persists across REPL inputs, so clear last input's promotion
+     set and install this one's.  [promoted] names have their inferred
+     constraints registered in fun_constraints (dict-routable) by
+     process_letrec_group — pass 2 of the REPL's two-pass elaboration, mirroring
+     check_program_impl for the single-file driver. *)
+  Hashtbl.reset (!env).promoted;
+  (match promoted with
+   | Some p -> Hashtbl.iter (fun k () -> Hashtbl.replace (!env).promoted k ()) p
+   | None -> ());
   (* Phase 71: the REPL deliberately keeps the TVar counter across inputs (so it
      doesn't call reset_state), but a prior input that failed *between* an
      enter_level/exit_level pair would leave current_level > 0 and corrupt
