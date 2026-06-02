@@ -71,13 +71,29 @@ let test_typesig_typevar () =
 
 let test_typesig_effect () =
   match parse_one "readFile : String -> <IO> String\n" with
-  | DTypeSig (false, "readFile", TyFun (TyCon "String", TyEffect (["IO"], TyCon "String"))) -> ()
+  | DTypeSig (false, "readFile", TyFun (TyCon "String", TyEffect (["IO"], None, TyCon "String"))) -> ()
   | _ -> failwith "wrong"
 
 let test_typesig_multieffect () =
   match parse_one "fetch : String -> <Async, IO> String\n" with
-  | DTypeSig (false, "fetch", TyFun (TyCon "String", TyEffect (["Async"; "IO"], TyCon "String"))) -> ()
+  | DTypeSig (false, "fetch", TyFun (TyCon "String", TyEffect (["Async"; "IO"], None, TyCon "String"))) -> ()
   | _ -> failwith "wrong"
+
+(* Phase 79: a bare effect variable `<e>` is a pure-but-open row (no labels). *)
+let test_typesig_effvar () =
+  match parse_one "applyTo : (a -> <e> b) -> a -> b\n" with
+  | DTypeSig (false, "applyTo",
+      TyFun (TyFun (TyVar "a", TyEffect ([], Some "e", TyVar "b")),
+             TyFun (TyVar "a", TyVar "b"))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
+
+(* Phase 79: a row with labels plus a tail variable, `<IO | e>`. *)
+let test_typesig_effrow () =
+  match parse_one "run : (Unit -> <IO | e> a) -> <IO | e> a\n" with
+  | DTypeSig (false, "run",
+      TyFun (TyFun (TyCon "Unit", TyEffect (["IO"], Some "e", TyVar "a")),
+             TyEffect (["IO"], Some "e", TyVar "a"))) -> ()
+  | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 let test_typesig_typeapp () =
   match parse_one "head : List a -> Option a\n" with
@@ -1010,7 +1026,7 @@ let test_extern_typevar () =
 
 let test_extern_effect () =
   match parse_one "extern print : a -> <IO> Unit\n" with
-  | DExtern (false, "print", TyFun (TyVar "a", TyEffect (["IO"], TyCon "Unit"))) -> ()
+  | DExtern (false, "print", TyFun (TyVar "a", TyEffect (["IO"], None, TyCon "Unit"))) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 let test_extern_constant () =
@@ -1021,7 +1037,7 @@ let test_extern_constant () =
 let test_extern_multiarg () =
   match parse_one "extern set_ref : Ref a -> a -> <Mut> Unit\n" with
   | DExtern (false, "set_ref", TyFun (TyApp (TyCon "Ref", TyVar "a"),
-                                 TyFun (TyVar "a", TyEffect (["Mut"], TyCon "Unit")))) -> ()
+                                 TyFun (TyVar "a", TyEffect (["Mut"], None, TyCon "Unit")))) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 (* ── Constraint type signature tests ────────────────── *)
@@ -1579,6 +1595,8 @@ let () =
       test_case "type variable"    `Quick test_typesig_typevar;
       test_case "effect"           `Quick test_typesig_effect;
       test_case "multi-effect"     `Quick test_typesig_multieffect;
+      test_case "effect var"       `Quick test_typesig_effvar;
+      test_case "effect row"       `Quick test_typesig_effrow;
       test_case "type application" `Quick test_typesig_typeapp;
     ];
     "function definitions", [

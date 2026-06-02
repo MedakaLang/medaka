@@ -861,6 +861,26 @@ let t_hof_pure_arg = assert_type
   "runWith f = f ()\nresult = runWith (x => x)\n"
   "result" "Unit"
 
+(* Phase 79b: the same named tail variable in two `<e>` positions of one
+   signature must resolve to ONE shared effvar — that shared ref is what later
+   lets unification link a HOF callback's effect to the HOF's result effect. *)
+let t_effrow_shares_tail () =
+  let ty =
+    match List.filter_map
+            (function Ast.DTypeSig (_, "f", t) -> Some t | _ -> None)
+            (parse "f : (a -> <e> b) -> c -> <e> d\n")
+    with
+    | [t] -> t
+    | _   -> failwith "expected one DTypeSig for f"
+  in
+  match from_ast_type ty with
+  | TFun (TFun (_, row1, _), _, TFun (_, row2, _)) ->
+    (match row1.tail, row2.tail with
+     | Some r1, Some r2 when r1 == r2 -> ()
+     | Some _, Some _ -> failwith "the two <e> tails are distinct effvars, not shared"
+     | _ -> failwith "expected both arrows to carry open effect rows")
+  | m -> failwith ("unexpected mono shape: " ^ pp_mono m)
+
 (* ── Interfaces ─────────────────────────────────── *)
 
 (* Interface method is bound with the right polymorphic type *)
@@ -3322,6 +3342,7 @@ let () =
       test_case "infer HOF alias"           `Quick t_eff_infer_hof_alias;
       test_case "err: escape via inferred"  `Quick e_eff_escape_via_inferred;
       test_case "HOF pure arg ok"           `Quick t_hof_pure_arg;
+      test_case "effrow shares tail var"    `Quick t_effrow_shares_tail;
     ];
     "pipe and compose", [
       test_case "pipe Int"               `Quick t_pipe_int;

@@ -43,6 +43,8 @@ let ts_simple    = mk "add : Int -> Int -> Int\n"
 let ts_typevar   = mk "id : a -> a\n"
 let ts_effect    = mk "readFile : String -> <IO> String\n"
 let ts_multieff  = mk "fetch : String -> <Async, IO> String\n"
+let ts_effvar    = mk "applyTo : (a -> <e> b) -> a -> b\n"
+let ts_effrow    = mk "run : (Unit -> <IO | e> a) -> <IO | e> a\n"
 let ts_typeapp   = mk "head : List a -> Option a\n"
 let ts_nested    = mk "foo : List (Option a) -> Option (List a)\n"
 let ts_funarg    = mk "apply : (a -> b) -> a -> b\n"
@@ -236,6 +238,8 @@ let () =
       test_case "type var"        `Quick ts_typevar;
       test_case "effect"          `Quick ts_effect;
       test_case "multi-effect"    `Quick ts_multieff;
+      test_case "effect var"      `Quick ts_effvar;
+      test_case "effect row"      `Quick ts_effrow;
       test_case "type app"        `Quick ts_typeapp;
       test_case "nested app"      `Quick ts_nested;
       test_case "function arg"    `Quick ts_funarg;

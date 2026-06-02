@@ -356,11 +356,11 @@ let dispatch_positions_of (method_ty : Ast.ty) (iface_params : Ast.ident list)
     | Ast.TyCon _ -> false
     | Ast.TyApp (a, b) | Ast.TyFun (a, b) -> mentions a || mentions b
     | Ast.TyTuple ts -> List.exists mentions ts
-    | Ast.TyEffect (_, t) | Ast.TyConstrained (_, t) -> mentions t
+    | Ast.TyEffect (_, _, t) | Ast.TyConstrained (_, t) -> mentions t
   in
   let rec args_of = function
     | Ast.TyConstrained (_, t) -> args_of t
-    | Ast.TyEffect (_, t) -> args_of t
+    | Ast.TyEffect (_, _, t) -> args_of t
     | Ast.TyFun (a, b) -> a :: args_of b
     | _ -> []
   in
@@ -1473,7 +1473,7 @@ let rec count_tyvars_ty = function
   | TyApp (a, b)     -> count_tyvars_ty a + count_tyvars_ty b
   | TyFun (a, b)     -> count_tyvars_ty a + count_tyvars_ty b
   | TyTuple ts       -> List.fold_left (fun n t -> n + count_tyvars_ty t) 0 ts
-  | TyEffect (_, t)  -> count_tyvars_ty t
+  | TyEffect (_, _, t)  -> count_tyvars_ty t
   | TyConstrained (_, t) -> count_tyvars_ty t
   | TyCon _          -> 0
 
@@ -1559,7 +1559,7 @@ let eval_program ?(prelude = true) program =
   let rec head_tycon = function
     | Ast.TyCon n          -> Some n
     | Ast.TyApp (a, _)     -> head_tycon a
-    | Ast.TyConstrained (_, t) | Ast.TyEffect (_, t) -> head_tycon t
+    | Ast.TyConstrained (_, t) | Ast.TyEffect (_, _, t) -> head_tycon t
     | Ast.TyTuple _        -> Some "__tuple__"
     | _ -> None
   in
@@ -1805,7 +1805,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
      let rec head_tycon = function
        | Ast.TyCon n      -> Some n
        | Ast.TyApp (a, _) -> head_tycon a
-       | Ast.TyConstrained (_, t) | Ast.TyEffect (_, t) -> head_tycon t
+       | Ast.TyConstrained (_, t) | Ast.TyEffect (_, _, t) -> head_tycon t
        | Ast.TyTuple _    -> Some "__tuple__"
        | _ -> None
      in

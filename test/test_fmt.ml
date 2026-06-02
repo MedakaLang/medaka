@@ -169,6 +169,10 @@ let rt_no_paren_type_app () =
 
 let id_type_app = idempotent "g : Result e a -> Int\ng x = 0\n"
 
+(* Phase 79: effect-variable signatures format idempotently. *)
+let id_effect_var = idempotent "applyTo : (a -> <e> b) -> a -> b\napplyTo f x = f x\n"
+let id_effect_row = idempotent "run : (Unit -> <IO | e> a) -> <IO | e> a\nrun f = f ()\n"
+
 (* A short `data` declaration stays on one line rather than splitting to the
    one-variant-per-line form. *)
 let rt_short_data_one_line () =
@@ -267,6 +271,8 @@ let () =
       Alcotest.test_case "negative arg"   `Quick id_negative_arg;
       Alcotest.test_case "con pattern arg" `Quick id_con_pattern_arg;
       Alcotest.test_case "type app"       `Quick id_type_app;
+      Alcotest.test_case "effect var"     `Quick id_effect_var;
+      Alcotest.test_case "effect row"     `Quick id_effect_row;
       Alcotest.test_case "short data"     `Quick id_short_data;
       Alcotest.test_case "short data deriving" `Quick id_short_data_deriving;
       Alcotest.test_case "wide data"      `Quick id_wide_data;

@@ -221,6 +221,24 @@ let rec effrow_norm r =
 (* The concrete labels currently known for a row (ignores the open tail). *)
 let effrow_labels r = (effrow_norm r).labels
 
+let fresh_effvar () =
+  incr effvar_counter;
+  ref (EUnbound (!effvar_counter, !current_level))
+
+(* Build an effect row from an arrow's return-position AST type.  A named tail
+   variable (`<IO | e>`) is resolved through [etbl] so the same source name
+   shares one effvar across the whole signature — that shared effvar is what
+   links a HOF's callback effect to its result effect. *)
+let ast_effrow etbl = function
+  | Ast.TyEffect (es, tl, _) ->
+    let tail = Option.map (fun name ->
+      match Hashtbl.find_opt etbl name with
+      | Some v -> v
+      | None -> let v = fresh_effvar () in Hashtbl.add etbl name v; v) tl
+    in
+    { labels = List.sort_uniq String.compare es; tail }
+  | _ -> pure_row
+
 (* ── Following links and union-find compaction ──── *)
 
 let rec normalize = function
@@ -733,7 +751,7 @@ let rec expand_aliases ?(seen=StringSet.empty) aliases t =
                   (Ast.TyApp (apply_subst s a, apply_subst s b))
               | Ast.TyFun (a, b) -> Ast.TyFun (apply_subst s a, apply_subst s b)
               | Ast.TyTuple ts   -> Ast.TyTuple (List.map (apply_subst s) ts)
-              | Ast.TyEffect (es, u) -> Ast.TyEffect (es, apply_subst s u)
+              | Ast.TyEffect (es, tl, u) -> Ast.TyEffect (es, tl, apply_subst s u)
               | Ast.TyConstrained (cs, u) ->
                 Ast.TyConstrained (
                   List.map (fun (iface, as_) -> (iface, List.map (apply_subst s) as_)) cs,
@@ -752,7 +770,7 @@ let rec expand_aliases ?(seen=StringSet.empty) aliases t =
        List.fold_left (fun acc arg -> Ast.TyApp (acc, arg)) (go other) args)
   | Ast.TyFun (a, b)    -> Ast.TyFun (go a, go b)
   | Ast.TyTuple ts       -> Ast.TyTuple (List.map go ts)
-  | Ast.TyEffect (es, u) -> Ast.TyEffect (es, go u)
+  | Ast.TyEffect (es, tl, u) -> Ast.TyEffect (es, tl, go u)
   | Ast.TyConstrained (cs, u) ->
     Ast.TyConstrained (
       List.map (fun (iface, as_) -> (iface, List.map go as_)) cs,
@@ -764,7 +782,8 @@ let rec expand_aliases ?(seen=StringSet.empty) aliases t =
    same name maps to the same fresh TVar within one type.
    TyEffect wrappers are stripped — effects are tracked separately.
    If ~aliases is provided, type alias names are expanded before conversion. *)
-let from_ast_type ?(aliases=Hashtbl.create 0) ?(tbl=Hashtbl.create 4) t =
+let from_ast_type ?(aliases=Hashtbl.create 0) ?(tbl=Hashtbl.create 4)
+                  ?(etbl=Hashtbl.create 4) t =
   let t = expand_aliases aliases t in
   let env = tbl in
   let rec go = function
@@ -777,11 +796,10 @@ let from_ast_type ?(aliases=Hashtbl.create 0) ?(tbl=Hashtbl.create 4) t =
          v)
     | Ast.TyApp (a, b) -> TApp (go a, go b)
     | Ast.TyFun (a, b) ->
-      let effs = match b with Ast.TyEffect (es, _) -> List.sort_uniq String.compare es | _ -> [] in
-      let bm   = match b with Ast.TyEffect (_, t)  -> go t | t -> go t in
-      TFun (go a, closed_row effs, bm)
+      let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
+      TFun (go a, ast_effrow etbl b, bm)
     | Ast.TyTuple ts -> TTuple (List.map go ts)
-    | Ast.TyEffect (_, t) -> go t
+    | Ast.TyEffect (_, _, t) -> go t
     | Ast.TyConstrained (_, inner) -> go inner  (* constraints handled by from_ast_type_with_constraints *)
   in
   go t
@@ -792,6 +810,7 @@ let from_ast_type ?(aliases=Hashtbl.create 0) ?(tbl=Hashtbl.create 4) t =
 let from_ast_type_with_constraints ?(aliases=Hashtbl.create 0) ast_ty =
   let ast_ty = expand_aliases aliases ast_ty in
   let tbl = Hashtbl.create 4 in
+  let etbl = Hashtbl.create 4 in
   let lookup n =
     match Hashtbl.find_opt tbl n with
     | Some v -> v
@@ -805,11 +824,10 @@ let from_ast_type_with_constraints ?(aliases=Hashtbl.create 0) ast_ty =
     | Ast.TyVar n             -> lookup n
     | Ast.TyApp (a, b)        -> TApp (go a, go b)
     | Ast.TyFun (a, b)        ->
-      let effs = match b with Ast.TyEffect (es, _) -> List.sort_uniq String.compare es | _ -> [] in
-      let bm   = match b with Ast.TyEffect (_, t)  -> go t | t -> go t in
-      TFun (go a, closed_row effs, bm)
+      let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
+      TFun (go a, ast_effrow etbl b, bm)
     | Ast.TyTuple ts          -> TTuple (List.map go ts)
-    | Ast.TyEffect (_, t)     -> go t
+    | Ast.TyEffect (_, _, t)  -> go t
     | Ast.TyConstrained (_, inner) -> go inner
   in
   match ast_ty with
@@ -2093,6 +2111,7 @@ let register_data ?(aliases=Hashtbl.create 0) env (name, params, variants) =
       param_vars
   in
   let ctor_monos = List.map (fun v ->
+    let etbl = Hashtbl.create 4 in
     let rec go = function
       | Ast.TyCon n ->
         (try List.assoc n param_vars
@@ -2106,11 +2125,10 @@ let register_data ?(aliases=Hashtbl.create 0) env (name, params, variants) =
            fail (UnboundTypeVar (n, name)))
       | Ast.TyApp (a, b) -> TApp (go a, go b)
       | Ast.TyFun (a, b) ->
-        let effs = match b with Ast.TyEffect (es, _) -> List.sort_uniq String.compare es | _ -> [] in
-        let bm   = match b with Ast.TyEffect (_, t)  -> go t | t -> go t in
-        TFun (go a, closed_row effs, bm)
+        let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
+        TFun (go a, ast_effrow etbl b, bm)
       | Ast.TyTuple ts -> TTuple (List.map go ts)
-      | Ast.TyEffect (_, t) -> go t
+      | Ast.TyEffect (_, _, t) -> go t
       | Ast.TyConstrained (_, inner) -> go inner
     in
     let arg_types = match v.Ast.con_payload with
@@ -2153,6 +2171,7 @@ let register_record ?(aliases=Hashtbl.create 0) env (name, params, fields) =
   in
   let go_ty ast_ty =
     let ast_ty = expand_aliases aliases ast_ty in
+    let etbl = Hashtbl.create 4 in
     let rec go = function
       | Ast.TyCon n ->
         (try List.assoc n param_vars with Not_found -> TCon n)
@@ -2161,11 +2180,10 @@ let register_record ?(aliases=Hashtbl.create 0) env (name, params, fields) =
          with Not_found -> fail (UnboundTypeVar (n, name)))
       | Ast.TyApp (a, b)  -> TApp (go a, go b)
       | Ast.TyFun (a, b)  ->
-        let effs = match b with Ast.TyEffect (es, _) -> List.sort_uniq String.compare es | _ -> [] in
-        let bm   = match b with Ast.TyEffect (_, t)  -> go t | t -> go t in
-        TFun (go a, closed_row effs, bm)
+        let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
+        TFun (go a, ast_effrow etbl b, bm)
       | Ast.TyTuple ts    -> TTuple (List.map go ts)
-      | Ast.TyEffect (_, t) -> go t
+      | Ast.TyEffect (_, _, t) -> go t
       | Ast.TyConstrained (_, inner) -> go inner
     in
     go ast_ty
@@ -2209,6 +2227,7 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
   let go_ty ast_ty =
     let ast_ty = expand_aliases aliases ast_ty in
     let method_vars = Hashtbl.create 4 in
+    let etbl = Hashtbl.create 4 in
     let rec go = function
       | Ast.TyCon n ->
         (try List.assoc n param_vars with Not_found -> TCon n)
@@ -2223,11 +2242,10 @@ let register_interface ?(aliases=Hashtbl.create 0) env (iface_name, type_params,
               v))
       | Ast.TyApp (a, b)  -> TApp (go a, go b)
       | Ast.TyFun (a, b)  ->
-        let effs = match b with Ast.TyEffect (es, _) -> List.sort_uniq String.compare es | _ -> [] in
-        let bm   = match b with Ast.TyEffect (_, t)  -> go t | t -> go t in
-        TFun (go a, closed_row effs, bm)
+        let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
+        TFun (go a, ast_effrow etbl b, bm)
       | Ast.TyTuple ts    -> TTuple (List.map go ts)
-      | Ast.TyEffect (_, t) -> go t
+      | Ast.TyEffect (_, _, t) -> go t
       | Ast.TyConstrained (_, inner) -> go inner
     in
     (* Extract per-method extra constraints. Constraint args share TVar refs
@@ -2595,7 +2613,7 @@ let rec tycons_of (t : Ast.ty) : ident list =
   | Ast.TyApp (f, a) -> tycons_of f @ tycons_of a
   | Ast.TyFun (a, b) -> tycons_of a @ tycons_of b
   | Ast.TyTuple ts -> List.concat_map tycons_of ts
-  | Ast.TyEffect (_, t) -> tycons_of t
+  | Ast.TyEffect (_, _, t) -> tycons_of t
   | Ast.TyConstrained (cs, t) ->
     List.concat_map (fun (_, args) -> List.concat_map tycons_of args) cs
     @ tycons_of t
@@ -3038,7 +3056,7 @@ let effect_union a b = List.sort_uniq String.compare (a @ b)
    is the function's declared effect.  `String -> <IO> Unit` → ["IO"]. *)
 let rec declared_effects : Ast.ty -> effect_set = function
   | Ast.TyFun (_, ret) -> declared_effects ret
-  | Ast.TyEffect (effs, _) -> List.sort_uniq String.compare effs
+  | Ast.TyEffect (effs, _, _) -> List.sort_uniq String.compare effs
   (* A constraint wrapper around the signature is transparent for the
      purposes of effect detection — `Ord a => Array a -> <Mut> Unit`
      still performs <Mut>. *)

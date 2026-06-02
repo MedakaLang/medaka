@@ -559,8 +559,16 @@ ty_atom:
   | LPAREN ty RPAREN                        { $2 }
   | LPAREN ty COMMA separated_nonempty_list(COMMA, ty) RPAREN
     { TyTuple ($2 :: $4) }
-  | LT separated_nonempty_list(COMMA, UPPER) GT ty_atom
-    { TyEffect ($2, $4) }
+  | LT eff_row GT ty_atom
+    { let (labels, tail) = $2 in TyEffect (labels, tail, $4) }
+
+(* An effect row: concrete labels (uppercase), optionally followed by a
+   lowercase tail variable after `|` (`<IO | e>`), or a bare tail variable
+   (`<e>`) for a pure-but-open row.  Phase 79. *)
+eff_row:
+  | separated_nonempty_list(COMMA, UPPER)               { ($1, None) }
+  | separated_nonempty_list(COMMA, UPPER) PIPE IDENT    { ($1, Some $3) }
+  | IDENT                                               { ([], Some $1) }
 
 (* ── Patterns ────────────────────────────────────────── *)
 

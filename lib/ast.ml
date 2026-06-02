@@ -23,7 +23,7 @@ type ty =
   | TyApp    of ty * ty          (* List a, Option a *)
   | TyFun    of ty * ty          (* a -> b *)
   | TyTuple  of ty list          (* (Int, String) *)
-  | TyEffect      of ident list * ty       (* <IO, Mut> t *)
+  | TyEffect      of ident list * ident option * ty  (* <IO, Mut | e> t — labels + optional tail var *)
   | TyConstrained of (ident * ty list) list * ty  (* [(Iface, args); ...] => ty *)
 
 (* Patterns *)
@@ -254,8 +254,13 @@ let rec pp_ty_prec p = function
   | TyFun (a, b)    ->
     let s = Printf.sprintf "%s -> %s" (pp_ty_prec 1 a) (pp_ty_prec 0 b) in
     if p >= 1 then "(" ^ s ^ ")" else s
-  | TyEffect (effs, t) ->
-    let s = Printf.sprintf "<%s> %s" (String.concat ", " effs) (pp_ty_prec 0 t) in
+  | TyEffect (effs, tail, t) ->
+    let inside = match effs, tail with
+      | _, None        -> String.concat ", " effs
+      | [], Some v     -> v
+      | _,  Some v     -> String.concat ", " effs ^ " | " ^ v
+    in
+    let s = Printf.sprintf "<%s> %s" inside (pp_ty_prec 0 t) in
     if p >= 1 then "(" ^ s ^ ")" else s
   | TyConstrained (cs, t) ->
     let pp_c (iface, args) =

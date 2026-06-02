@@ -450,7 +450,9 @@ let rec check_type env errors t =
     check_type env errors a; check_type env errors b
   | TyTuple ts ->
     List.iter (check_type env errors) ts
-  | TyEffect (es, t) ->
+  | TyEffect (es, _tail, t) ->
+    (* labels are validated against the known effects; the optional tail is a
+       lowercase effect *variable* (Phase 79) and needs no such check. *)
     List.iter (fun e ->
       if not (List.mem e built_in_effects) then
         emit errors (UnknownEffect e)

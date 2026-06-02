@@ -137,9 +137,13 @@ let rec print_type t = match t with
     print_type_fun_lhs a ^^ text " -> " ^^ print_type b
   | TyTuple ts ->
     text "(" ^^ sep_by (text ", ") (List.map print_type ts) ^^ text ")"
-  | TyEffect (es, t) ->
-    text "<" ^^ sep_by (text ", ") (List.map text es) ^^ text "> "
-    ^^ print_type_atom t
+  | TyEffect (es, tail, t) ->
+    let inside = match es, tail with
+      | _, None    -> sep_by (text ", ") (List.map text es)
+      | [], Some v -> text v
+      | _,  Some v -> sep_by (text ", ") (List.map text es) ^^ text " | " ^^ text v
+    in
+    text "<" ^^ inside ^^ text "> " ^^ print_type_atom t
   | TyConstrained (cs, t) ->
     let pp_c (iface, args) =
       text iface ^^ concat (List.map (fun a -> text " " ^^ print_type_atom a) args)
