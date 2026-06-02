@@ -1650,7 +1650,7 @@ Scope:
   evaluated form's `show` output against the expected text.
 - `medaka doc`: render examples back into generated HTML/markdown.
 
-### Phase 42: Property testing (`prop` + `Arbitrary`) ✅ DONE (core); residual generators ⏳ (re-marked 2026-06-02)
+### Phase 42: Property testing (`prop` + `Arbitrary`) ✅ DONE (core + generators); interface-unification residual → Phase 101 (re-marked 2026-06-02)
 
 `prop "name" (x : T) = ...` declares a property quantified over `T`,
 generated automatically via an `Arbitrary` interface (derivable).
@@ -1672,16 +1672,29 @@ stale.** The pipeline is all there:
   `bin/main.ml`. `prop` declarations are exercised in `stdlib/core.mdk` and
   `stdlib/list.mdk`.
 
-**Residual ⏳ (the only gaps vs. the original scope):**
-- `prop_runner.gen_for_type` hard-codes `Int`/`Bool`/`Float`/`Char`/`String`/
-  `Unit`/`List`/`Option`/`Result` and looks up nullary `TyCon` user types in
-  `arbitrary_registry`. **No generation for `Array a` or tuples**, and a
-  *parametric* user type (`TyApp (TyCon custom, _)`) isn't routed through the
-  registry — only nullary `TyCon custom` is.
-- Generation is done natively in OCaml (`gen_for_type`), so the `Arbitrary`
-  interface's `arbitrary`/`shrink` methods aren't actually *called* by the
-  runner for the built-in types — the registry path is `deriving`-only. Unifying
-  the two (drive everything through the Medaka-level interface) is open.
+**Generators completed (2026-06-02, structural-native approach):**
+- `prop_runner.gen_for_type` now also generates **`Array a`** and **tuples**
+  (`TyTuple`), with matching shrinking in `shrink_value` (halve an array; vary
+  one tuple component at a time).
+- **Parametric user types** (`Tree Int`, records, newtypes) generate
+  *structurally*: `run_all` builds a `tydef` map from the program's
+  `DData`/`DRecord`/`DNewtype` declarations, and `gen_for_type` peels the
+  `TyApp` spine, binds the type's parameters to the concrete arguments
+  (`subst_ty`), and recurses over each field's type. So `Tree Int` produces
+  `Int` leaves and `Tree String` strings — no dictionary threading needed,
+  because the runner does the type-argument substitution itself. Nullary user
+  types with a hand-written impl still fall back to `arbitrary_registry`; an
+  unbound type variable now fails with a clear message instead of
+  mis-generating. All changes are self-contained in `lib/prop_runner.ml`.
+
+**Residual → Phase 101 (the principled unification):**
+- Generation/shrinking are still native OCaml in `gen_for_type`/`shrink_value`,
+  so the `Arbitrary` interface's `arbitrary`/`shrink` methods aren't *called* by
+  the runner for built-in or structurally-generated types. Driving everything
+  through the Medaka-level interface (so a hand-written `arbitrary`/`shrink`
+  wins, and element dictionaries flow into parametric instances via the
+  dict-passed pipeline) is deferred — it intersects the Phase 83/84
+  return-position dispatch residuals. Tracked as Phase 101 in PLAN.md.
 
 ### Phase 42.5: `where`-binding fixes ✅ DONE
 
@@ -4331,7 +4344,7 @@ a conservative "guards may not be exhaustive" warning is the realistic target)
 and `lib/parser.mly`/`lib/lexer.mll` (inline form — re-measure parser conflicts).
 Skill: **add-language-feature**.
 
-### Phase 92: Doctest harness can't reach cross-module instances — String/Char ✅ DONE; general case ⏳ TODO
+### Phase 92: Doctest harness can't reach cross-module instances — String/Char ✅ DONE; general case ✅ DONE
 
 `medaka test <file>` builds its combined program from the **core prelude + that
 file only**, so an instance defined in a *sibling* stdlib module was invisible.
@@ -4359,8 +4372,33 @@ into one multi-clause function), corrupting dispatch.  So a genuine
 "any sibling instance reachable" fix (e.g. a `core` doctest that `show`s an
 `Array`, whose `Show Array` is in `array.mdk`) needs the doctest harness to run
 the **multi-module** typecheck path (`typecheck_module` chain) instead of
-`check_program` — a `lib/doctest.ml` rewrite.  Tracked here as the residual ⏳
-TODO; no dedicated skill (see the `extend-stdlib` skill's doctest-harness notes).
+`check_program` — a `lib/doctest.ml` rewrite.
+
+**Fix (general case).** `lib/doctest.ml`'s `run_file` now branches: a file with
+`import`/`use` declarations goes through `run_file_multi`, which mirrors the
+multi-file path of `medaka run`/`check` (`bin/main.ml`) — `Loader.load_program`
+the dependency graph, inject the synthetic `__dt_i__` bindings into the **root**
+module (the file under test), then resolve → mark → two-pass `typecheck_module`
+each module *separately* (so the `find`/`map` name-merge hazard never arises),
+then `Dict_pass.run (marked_prelude @ concat modules)` and eval.  A doctest sees
+exactly what its module imports.  Two guards keep this honest:
+- `run_file_multi` returns `None` (caller falls back to the single-file path)
+  when the loader resolved **no real sibling** — i.e. every import was the
+  implicit prelude `core`, which `is_prelude_module` filters.  This is what keeps
+  `string.mdk` (which redefines the prelude standalone `count`) green: the
+  single-file path's `prelude_for` shadow-drops the redefined name, whereas this
+  path's full `marked_prelude` would coalesce the two `count`s and fail
+  (`core.mdk:627 String vs a -> b`).
+- on a multi-module typecheck failure every example reports the type error
+  (`build_details` with an `Error` env) rather than degrading to arg-tag eval.
+
+**Non-goal (intentional).** A *reverse* dependency — a `core`/prelude doctest
+reaching a downstream module (`Show Array` in `array.mdk`) — is unsupported: the
+prelude reaching into a module that imports it is a layering inversion, and the
+import graph is the source of truth.  Regressions: `test_doctest`'s "cross-module
+instance (Phase 92)" / "cross-module tc failure honest (Phase 92)" (a temp-dir
+fixture: a root importing a sibling that exports a smart constructor + `Show`
+impl); all stdlib doctests and base suites stay green.
 
 ### Phase 93: `Bounded Int` / `Bounded Char` impls (+ bound externs) ✅ DONE
 
@@ -4585,6 +4623,45 @@ as the nested `EApp` path does.  Three `test_typecheck` regressions
 (`e_eff_escape_backtick`, `e_eff_escape_prefix_parity`, `t_eff_backtick_infer`)
 pin: an annotated-pure caller using an effectful ordinary fn infix is rejected, at
 parity with the prefix form, and an unannotated backtick caller infers `<IO>`.
+
+---
+
+### Phase 98: make `do` load-bearing on `Thenable` ✅ DONE
+
+`do`-notation was **structurally duck-typed**: the `EDo` handler
+(`lib/typecheck.ml`) invented a fresh monad tyvar `m`, unified every statement
+against `m a`, and **never consulted the `Thenable` interface** — so a `do`
+block over a type with no `Thenable` impl type-checked, then either fell through
+to direct pattern-matching at eval or misbehaved.  `Thenable` was *inert at the
+type level but load-bearing at runtime* (`eval.ml`'s `monadic_ctors` is built
+from its impls).  The design question (wire vs. delete) was resolved (with the
+user) as **wire via a typecheck constraint** — the minimal option; `Thenable`
+stays (it anchors `Mappable → Applicative → Thenable` and feeds `monadic_ctors`),
+and eval is untouched.
+
+**Resolution (2026-06-02).**  The `EDo` arm now emits a single constraint
+obligation — `("Thenable", [m], loc)` onto `env.constraint_obligations` —
+**but only when the block contains at least one `DoBind`**.  Rationale: `<-` *is*
+`andThen`, and eval only routes `DoBind` through the `andThen` VMulti — a bare /
+`pure`-only / sequencing-only block uses no `andThen` and needs only
+`Applicative`, so constraining it to `Thenable` would over-reject (e.g.
+`do pure 5` over an Applicative-but-not-Thenable type stays legal).  The
+obligation rides the existing post-HM `check_constraint_obligations` pipeline:
+concrete `m` with no impl → `NoImplFound (Thenable, …)` (+ transitive
+`check_entry_requires` on the impl's `requires Applicative`); polymorphic /
+ungrounded `m` is concrete-gated and skipped, so the Phase 83/84 dispatch
+residuals don't regress.  No new `type_error` constructor; eval, desugar, and
+the runtime bind dispatch are unchanged.  The one arm is shared by both
+whole-program entry points (all three `check_constraint_obligations` call sites
+discharge it).  Tests: `test_typecheck` gains `e_do_bind_requires_thenable`
+(bind over a non-Thenable ADT → "Thenable" error), `t_do_bind_custom_thenable`
+(a user `Mappable`/`Applicative`/`Thenable Box` binds and checks — proving the
+gate is interface-driven, not a hardcoded monad list), and
+`t_do_pure_only_no_thenable` (the refinement: a `pure`-only `do` over an
+Applicative-not-Thenable type still checks); `test_eval` gains
+`t_do_custom_thenable` (the `Box` stack evaluates end-to-end).  The existing
+`t_poly_monad_signatured` was tightened from `Applicative m =>` to the now-honest
+`Thenable m =>`.  Skill: **add-language-feature**.
 
 ---
 
@@ -4894,12 +4971,6 @@ open work**, consolidated so the next session can pick from one list.
   "guards may not be exhaustive" warning in `exhaust.ml`. (3) No inline guard
   form (`f n | n <= 0 = []` on one line is a parse error). Fall-through (item 1)
   is done.
-- **Phase 92 general case.** Doctest harness type-checks single-file
-  (`check_program`), so a doctest can't reach an instance defined in a *sibling*
-  stdlib module (e.g. a `core` doctest that `show`s an `Array`, whose
-  `Show Array` lives in `array.mdk`). String/Char were special-cased into the
-  prelude; the general fix needs `doctest.ml` on the multi-module
-  (`typecheck_module`) path.
 - **Phase 42 residual generators.** No `Arbitrary` generation for `Array a` or
   tuples; parametric user types (`TyApp (TyCon custom, _)`) aren't routed through
   `arbitrary_registry`; built-in generation bypasses the Medaka-level

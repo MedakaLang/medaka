@@ -60,8 +60,9 @@ What's missing is the supporting surface a real multi-thousand-line program need
 - **Language stability / completeness.** Close the sharp edges that would bite a
   large codebase, then *freeze the surface syntax and semantics* for the duration
   of the port:
-  - Resolve the `do`→`Thenable` question (Phase 98) — monad-heavy compiler code
-    will lean on `do`.
+  - ~~Resolve the `do`→`Thenable` question (Phase 98)~~ — **DONE.** `do` is now
+    load-bearing on `Thenable`: a `<-` bind over a non-`Thenable` type is a
+    compile-time error (see PLAN-ARCHIVE.md Phase 98).
   - Multi-module / return-position dispatch residuals (Phase 83/84) shouldn't
     force arg-tag workarounds in compiler code.
   - ✅ Guard exhaustiveness + inline guards (Phase 91) — done. (Plain
@@ -116,17 +117,33 @@ above, it is flagged ⭐.
 
 ### Compiler / language
 
-- ⭐ **Phase 98 — `do`→`Thenable` desugar.** `<-` is currently handled
-  *structurally* in the typechecker (each line unifies its expression against
-  `m a` for a fresh `m`); the `Thenable` interface in `core.mdk` is never
-  consulted, so it is inert at the type level (eval already routes bind through
-  the `andThen` VMulti at runtime). To make the constraint load-bearing, `<-`
-  should desugar to checked `andThen` calls. **Design question first:** is this
-  worth doing, or should `Thenable` instead be *deleted*? `do` already works on
-  anything shaped like `m a`, so the interface currently earns nothing — wiring
-  it adds a constraint that could reject programs that work today. Decide the
-  direction before implementing. Lands in `lib/typecheck.ml` (+ `lib/desugar.ml`
-  if wiring). Skill: **add-language-feature**.
+- **Phase 99 — lower `do` to `andThen`/`pure` (make it true sugar).** Follow-up
+  to Phase 98, which took the self-contained route: a `Thenable` *constraint* on
+  the block monad, with eval still binding `<-` at runtime via the
+  `monadic_ctors` hashtable + the `andThen` VMulti (`lib/eval.ml`'s `eval_do`).
+  The more principled approach deferred there is to **desugar `EDo` into nested
+  `andThen` / `pure` calls** so `do` is pure sugar over the interface and eval's
+  `eval_do` / `monadic_ctors` special-casing can be deleted — bind dispatch then
+  flows through the same typed dictionary elaboration (`EMethodRef`/`EDictApp`)
+  as any other constrained call, instead of an eval-time arg-tag/hashtable
+  lookup. Payoff: one dispatch path, correct routing for polymorphic
+  `Thenable m => … do …` (overlaps the Phase 83/84 `pure`-dispatch residuals),
+  and less runtime machinery.
+  - **Crux (why it's more than a `desugar.ml` edit):** for the lowered
+    `andThen`/`pure` to be dictionary-dispatched, the lowering must happen
+    **before `method_marker` + typecheck** (the marker rewrites method `EVar`s to
+    `EMethodRef` *before* typecheck; the post-typecheck `desugar.ml` stage is too
+    late). So this is a pipeline-placement change, not just a new lowering.
+  - **Semantics to audit:** today a non-final `DoExpr` (`lib/eval.ml`) evaluates
+    and *discards* its value — it does **not** sequence through `andThen`.
+    Lowering `e; rest` to `andThen e (\_ => rest)` makes sequencing genuinely
+    monadic (e.g. `None; …` short-circuits), which is *more* correct but a
+    behavior change to confirm against existing tests. Also handle `DoLet` /
+    `DoLetElse` (lower to plain `let`) and the do-block forbidden forms.
+  - Keep Phase 98's win: a `<-` over a non-`Thenable` type must still be a
+    compile-time error (it will be, since the lowered `andThen` carries the
+    `Thenable` constraint at its use site). Skill: **add-language-feature**
+    (cross-cutting: pipeline ordering + `desugar.ml` + `eval.ml`).
 
 - ✅ **Phase 91 — guard gaps (done).** All three items complete:
   - (1) Fall-through (archived).
@@ -153,26 +170,54 @@ above, it is flagged ⭐.
   The Phase 91(2) guard lint deliberately scoped this out. Skill:
   **harden-typechecker** / **add-language-feature**.
 
-- **Phase 92 (continued) — doctest harness reaches cross-module instances.**
-  `medaka test <file>` type-checks via the single-file `check_program`, so a
-  doctest can't see an instance defined in a *sibling* stdlib module (e.g. a
-  `core` doctest that `show`s an `Array`, whose `Show Array` lives in
-  `array.mdk`). String/Char were special-cased into the prelude; the general fix
-  routes `lib/doctest.ml` through the multi-module (`typecheck_module`) path.
-  Note the hazard documented in the archive: flattening `list.mdk` + `array.mdk`
-  into one module merges their deliberately-reused top-level names — the fix must
-  preserve module separation. Skill: **add-language-feature** (touches the
-  doctest harness, not just the typechecker).
+- **Phase 92 — doctest harness reaches cross-module instances. ✅ DONE.**
+  `medaka test <file>` now routes a file that imports real sibling modules
+  through the multi-module (`typecheck_module`) path in `lib/doctest.ml`
+  (`run_file_multi`), mirroring `medaka run`/`check`: load the dependency graph
+  via `Loader`, inject the synthetic `__dt_i__` doctest bindings into the root
+  module, resolve + mark + two-pass-typecheck each module separately (so
+  deliberately-reused top-level names stay unmerged), then dict-pass + eval. A
+  doctest sees what its module **imports**. A file with no imports — or whose only
+  imports were the implicit prelude `core` (which the loader filters, so no real
+  sibling loads) — keeps the single-file path, which `prelude_for`-shadow-drops
+  redefined names (this is what lets `stdlib/string.mdk`, which redefines the
+  prelude standalone `count`, still doctest cleanly).
+  - **Non-goal (intentional):** a *reverse* dependency — a `core` doctest that
+    `show`s an `Array`, whose `Show Array` lives downstream in `array.mdk` — is
+    **not** supported. The prelude reaching into a module that imports *it* is a
+    layering inversion; String/Char already live in the prelude for exactly this
+    reason, and no such doctest exists. The import graph is the source of truth.
 
-- **Phase 42 (residual) — property-test generators.** The `prop`/`Arbitrary`
-  machinery is done, but `lib/prop_runner.ml`'s `gen_for_type` has gaps:
-  - No generation for `Array a` or tuples.
-  - Parametric user types (`TyApp (TyCon custom, _)`) aren't routed through
-    `Eval.arbitrary_registry` — only nullary `TyCon custom` is.
-  - Built-in generation is native OCaml and bypasses the Medaka-level
-    `arbitrary`/`shrink` methods; unifying both paths (drive everything through
-    the interface) is open.
-  - Skill: **add-primitive** / **add-language-feature** depending on approach.
+- **Phase 100 — `import m.{T(..)}` bulk-constructor import (sugar).** Data
+  visibility is already a deliberate three levels — `data T` (private),
+  `export data T` (abstract: type name only), `public export data T` (type +
+  constructors) — and a `public export` type's constructors *can* be imported,
+  but only by listing each one (`import m.{T, A, B}`). The Haskell-style
+  `import m.{T(..)}` shorthand for "the type and all its exported constructors"
+  is currently a **parse error**: `import_ident` inside the `{…}` group
+  (`UseGroup`, `lib/parser.mly:1053`/`1061`) accepts only a bare name. Pure
+  convenience — explicit listing already covers the need — so it's low priority.
+  Lands in `lib/parser.mly` (a new `import_ident` form), `lib/ast.ml` (the
+  `use_path` group element must carry a "with constructors" marker, today a bare
+  `ident`), and `lib/resolve.ml` (expand `T(..)` to the type + its exported
+  constructors at bind time). Re-measure parser conflicts after the grammar
+  change. Skill: **add-language-feature**.
+
+- **Phase 101 — drive property generation/shrinking through the `Arbitrary`
+  interface.** Phase 42's generator gaps are closed (`lib/prop_runner.ml` now
+  generates `Array`, tuples, and parametric user types structurally, with
+  matching shrinking — see PLAN-ARCHIVE.md Phase 42). What remains is the
+  *principled* version: `gen_for_type`/`shrink_value` are still native OCaml, so
+  a user's hand-written `arbitrary`/`shrink` impl is not actually called for
+  built-in or structurally-generated types, and parametric generation works by
+  the runner substituting type arguments itself rather than by passing element
+  dictionaries. Unifying both paths — drive every generator/shrink through the
+  Medaka-level interface via the dict-passed typed pipeline — would let
+  hand-written impls win and element dictionaries flow into parametric
+  instances. It is deferred because it intersects the Phase 83/84
+  return-position dispatch residuals (a post-typecheck marker re-run / pipeline
+  restructure). Lands in `lib/prop_runner.ml` + the typed/dict-passing pipeline.
+  Skill: **add-language-feature** (cross-cutting).
 
 - ⭐ **Phase 83 / 84 (residuals, deferred — layered like 69.x→74).** Lower priority;
   each is a known limitation with a correct-enough fallback today:
