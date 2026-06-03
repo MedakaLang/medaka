@@ -822,8 +822,53 @@ let t_io_getenv_unset = assert_output_typed
   "main = println (getEnv \"__MEDAKA_NOPE_XYZ__\")\n"
   "None\n"
 
+(* ── Phase 121: point-free dispatched impl method bodies ─────────────────── *)
+(* The prelude's `impl Foldable List` defines `toList = identity` point-free.
+   Pre-Phase-121 this eagerly evaluated `identity` at impl-binding time — before
+   the prelude's `identity` cell was filled — capturing the VUnit placeholder, so
+   the VTypedImpl dispatch wrapper later applied `()` and panicked
+   `applied non-function: ()`.  Eval now eta-expands a point-free argument-
+   dispatched method body, deferring it to call time.  Exercises the prelude
+   point-free body directly. *)
+let t_pointfree_prelude_tolist = assert_output_typed
+  {|main : <IO> Unit
+main = println (toList [1, 2, 3])
+|}
+  "[1, 2, 3]\n"
+
+(* A user impl whose point-free method body forward-references a helper defined
+   later in the module: same eager-eval-too-early trap, now deferred. *)
+let t_pointfree_impl_forward_ref = assert_output_typed
+  {|interface Bar a where
+  bar : a -> List a
+
+impl Bar Int where
+  bar = wrap
+
+wrap x = [x, x]
+
+main : <IO> Unit
+main = println (bar 7)
+|}
+  "[7, 7]\n"
+
+(* The eta-expansion must NOT fire for a nullary return-position method: `empty`
+   has no argument to dispatch on, so it stays value-shaped and still resolves by
+   result type. *)
+let t_pointfree_nullary_empty_unaffected = assert_output_typed
+  {|xs : List Int
+xs = empty
+
+main : <IO> Unit
+main = println (length xs)
+|}
+  "0\n"
+
 let () = Alcotest.run "Run"
   [("run", [
+    "point-free prelude toList (Phase 121)", `Quick, t_pointfree_prelude_tolist;
+    "point-free impl forward ref (Phase 121)", `Quick, t_pointfree_impl_forward_ref;
+    "point-free nullary empty unaffected (Phase 121)", `Quick, t_pointfree_nullary_empty_unaffected;
     "io: args empty in test context", `Quick, t_io_args_empty;
     "io: getEnv unset is None",       `Quick, t_io_getenv_unset;
     "poly-monad do-block (Phase 84)", `Quick, t_poly_monad_do;

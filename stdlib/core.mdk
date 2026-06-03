@@ -585,7 +585,7 @@ export impl Foldable List where
   fold f acc (x::xs) = fold f (f acc x) xs
   foldRight _ acc [] = acc
   foldRight f acc (x::xs) = f x (foldRight f acc xs)
-  toList xs = xs
+  toList = identity
   isEmpty [] = True
   isEmpty _ = False
   length = fold (acc _ => acc + 1) 0
