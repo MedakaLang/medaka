@@ -5289,6 +5289,43 @@ annotation to disambiguate* — was **not** fixed: it is inherent to head-pinnin
 both and an annotation (`m : Map _ _ = …`) is the intended disambiguator. Recorded
 as a permanent limitation, not a bug. Skill: **add-language-feature**.
 
+### Phase 121: point-free dispatched method bodies in `impl`s panic at eval ✅ DONE (2026-06-03)
+
+Phase 89 fixed point-free *standalone constrained* defs; the residual was a
+*dispatched method body* in an `impl` written point-free panicking
+`applied non-function: ()` at eval. Skill: **debug-pipeline** → the eval
+method-binding path (`lib/eval.ml`).
+
+- **Root cause.** A point-free impl method body (`pats = []`) was *eagerly
+  evaluated* at impl-binding time and then wrapped in the `VTypedImpl` dispatch
+  wrapper. When the body referenced a global not yet filled at that point — e.g.
+  the prelude's `impl Foldable List` doing `toList = identity`, where `identity`'s
+  cell is filled later — the eager eval captured the `VUnit` cell *placeholder*.
+  Dispatch then applied `()` as a function → the panic. A bare-name body whose
+  target *was* already bound survived, which is why it looked arity/shape-specific;
+  the real discriminator was *binding order*, and the bug only reproduced through
+  the prelude/loader path (single-file masked it). Top-level point-free `DFunDef`s
+  already dodged this via `VThunk (lazy …)`; impl methods had no analogue.
+- **Fix (`lib/eval.ml`).** New `impl_method_value env iface name pats body`
+  helper, routed through *both* impl-method binding sites (`eval_decl_into` and
+  the REPL `eval_repl_decl`). For a point-free body it eta-expands to
+  `VClosure(env, [$eta], EApp(body, $eta))` — deferring evaluation to call time
+  *and* giving the dispatcher a real parameter at the discriminating slot — but
+  **only** for an *argument*-dispatched method (`lookup_dispatch_positions`
+  non-empty). A nullary **return-position** method (`empty`/`minBound`/`pure`-style,
+  positions `[]`) keeps its eager value shape, so result-type dispatch is
+  unaffected. One `$eta` param suffices even for later-arg dispatch: `VTypedImpl`'s
+  `apply` re-wraps and bumps `seen` on each application, so curried returns still
+  reach the discriminating slot. `$eta` can't collide with a source identifier.
+- **Stdlib cleanup.** Reverted the manual workaround `toList xs = xs` →
+  point-free `toList = identity` in `stdlib/core.mdk` (commit `0dd8e14`'s
+  band-aid), now a live regression check through the embedded prelude. Audited all
+  `stdlib/*.mdk` impl bodies for other eta-expansion workarounds — none remained.
+- **Tests.** `test/test_run.ml` (typed pipeline): point-free prelude `toList`
+  (the exact panic, now passing), a user impl whose point-free body forward-
+  references a later helper, and a guard that nullary `empty` stays value-shaped.
+  `@thorough` + all stdlib doctests green.
+
 ---
 
 ## 4. Smaller cleanups (good warm-up tasks)

@@ -1673,6 +1673,24 @@ let prealloc_cells ~add_global ~add_local program =
     | _ -> ()
   ) program
 
+(* Phase 121: build the value bound for an impl method clause.  A point-free
+   (no-clause-param) body for an *argument*-dispatched method is eta-expanded
+   into a closure that (a) defers the body's evaluation to call time and (b)
+   supplies a real parameter at the discriminating slot.  Without it, eager
+   evaluation at impl-binding time can capture a not-yet-bound global as its
+   VUnit cell placeholder — e.g. `toList = identity` in the prelude, where
+   `identity` is filled later — and the VTypedImpl dispatch wrapper then applies
+   that value as a function (`applied non-function: ()`).  Top-level point-free
+   DFunDefs already dodge this via VThunk; this is the impl-method analogue.
+   A return-position / nullary method (`lookup_dispatch_positions` returns [])
+   has no argument to dispatch on, so it keeps its eager value shape.  `$eta`
+   cannot collide with a source identifier (idents are `lower alnum*`). *)
+let impl_method_value env iface_name name pats body =
+  if pats <> [] then VClosure (env, pats, body)
+  else match lookup_dispatch_positions iface_name name with
+    | [] -> wrap_match_errors (fun () -> eval env body)
+    | _  -> VClosure (env, [Ast.PVar "$eta"], Ast.EApp (body, Ast.EVar "$eta"))
+
 (* Pass 2: evaluate one declaration's bodies.  [env] is the eval environment
    closures capture; [fill_local] installs DFunDef/DLetGroup values,
    [fill_global] installs ctor/impl/interface-default values (the same function
@@ -1731,8 +1749,7 @@ let eval_decl_into ~env ~fill_local ~fill_global ~impl_acc ~fundef_acc ~deferred
     in
     let impl_key = Ast.impl_key ~iface:iface_name ~type_args ~name:impl_name in
     List.iter (fun (name, pats, body) ->
-      let new_v = if pats = [] then wrap_match_errors (fun () -> eval env body)
-                  else VClosure (env, pats, body) in
+      let new_v = impl_method_value env iface_name name pats body in
       let positions =
         List.map ((+) (leading_dict_params pats))
           (lookup_dispatch_positions iface_name name) in
@@ -2117,9 +2134,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
      let impl_key = Ast.impl_key ~iface:iface_name ~type_args ~name:impl_name in
      List.iter (fun (name, pats, body) ->
        begin
-         let new_v = wrap_match_errors (fun () ->
-           if pats = [] then eval !(rs.eval_env) body
-           else VClosure (!(rs.eval_env), pats, body)) in
+         let new_v = impl_method_value !(rs.eval_env) iface_name name pats body in
          let positions =
           List.map ((+) (leading_dict_params pats))
             (lookup_dispatch_positions iface_name name) in
