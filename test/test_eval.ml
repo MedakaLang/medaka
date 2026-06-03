@@ -1083,6 +1083,39 @@ let t_named_multiplicative =
   assert_val (named_impl_src ^ "r = combine @Multiplicative 3 4\n")
     "r" (VInt 12)
 
+(* Regression (typed path): an explicit `@Impl` selector must dispatch through
+   the real `medaka run` pipeline (Method_marker → Typecheck EMethodRef stamping
+   → Eval), not just the untyped `Eval.eval_program` fallback.  Before the fix,
+   the typed EMethodRef RKey-narrowed the VMulti to a bare VNamedImpl, which the
+   hint arm returned as-is and `apply` could not consume — panicking with
+   `applied non-function: <impl:First>`. *)
+let t_named_additive_typed =
+  assert_val_typed (named_impl_src ^ "r = combine @Additive 3 4\n")
+    "r" (VInt 7)
+
+let t_named_multiplicative_typed =
+  assert_val_typed (named_impl_src ^ "r = combine @Multiplicative 3 4\n")
+    "r" (VInt 12)
+
+(* Three distinct named impls of one interface, each selected by `@Impl` on the
+   typed path, evaluated together so all three coexist in the same VMulti. *)
+let t_named_three_typed =
+  let src = {|
+interface Combine a where
+    combine : a -> a -> a
+impl First of Combine Int where
+    combine x y = x
+impl Last of Combine Int where
+    combine x y = y
+impl Sum of Combine Int where
+    combine x y = x + y
+a = combine @First 3 4
+b = combine @Last 3 4
+c = combine @Sum 3 4
+r = (a, b, c)
+|} in
+  assert_val_typed src "r" (VTuple [VInt 3; VInt 4; VInt 7])
+
 (* @Name hint used standalone evaluates to VUnit (matches typechecker's Unit inference) *)
 let t_at_name_standalone =
   assert_val "r = @Foo\n" "r" VUnit
@@ -1921,6 +1954,9 @@ let () =
     "@Name impl selection (Phase 30)", [
       test_case "@Additive selects +"       `Quick t_named_additive;
       test_case "@Multiplicative selects *" `Quick t_named_multiplicative;
+      test_case "@Additive selects + (typed)"       `Quick t_named_additive_typed;
+      test_case "@Multiplicative selects * (typed)" `Quick t_named_multiplicative_typed;
+      test_case "three named impls (typed)" `Quick t_named_three_typed;
       test_case "@Name standalone = Unit"   `Quick t_at_name_standalone;
       test_case "@Unknown raises error"     `Quick t_named_unknown;
     ];

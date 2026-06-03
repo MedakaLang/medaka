@@ -281,8 +281,13 @@ let t_list_comp_with_irrefutable =
    8. @Name dispatch ⊗ multiple impl candidates
    ===================================================================== *)
 
+(* Asserts BOTH eval paths.  The untyped `assert_typed_val` path always worked;
+   the bug was that `medaka run`'s *typed* pipeline (Method_marker stamps the
+   EMethodRef, eval RKey-narrows the VMulti to a bare VNamedImpl) panicked with
+   `applied non-function: <impl:First>` because `apply` had no VNamedImpl arm.
+   `assert_val_typed` exercises that path, so this no longer masks the bug. *)
 let t_named_dispatch_among_three =
-  assert_typed_val
+  let src =
     {|interface Combine a where
   combine : a -> a -> a
 impl First of Combine Int where
@@ -296,8 +301,10 @@ b = combine @Last 3 4
 c = combine @Sum 3 4
 r = (a, b, c)
 |}
-    "r" "(Int, Int, Int)"
-    (VTuple [VInt 3; VInt 4; VInt 7])
+  in
+  fun () ->
+    assert_typed_val src "r" "(Int, Int, Int)" (VTuple [VInt 3; VInt 4; VInt 7]) ();
+    assert_val_typed src "r" (VTuple [VInt 3; VInt 4; VInt 7]) ()
 
 (* =====================================================================
    9. Typecheck/eval skew — found via this very test suite
