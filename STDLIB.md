@@ -95,8 +95,8 @@ and prepended to every program by the compiler.
   - `max : a -> a -> a` (default from `compare`) — pick the larger of two values
   - ✅ `clamp : Ord a => a -> a -> a -> a` (standalone) — `clamp lo hi x` constrains `x` to `[lo, hi]`
 
-- ✅ `Show a` — human-readable string representation
-  - `show : a -> String` — render a value as a `String` for display
+- ✅ `Debug a` — human-readable string representation
+  - `debug : a -> String` — render a value as a `String` for display
 
 - ✅ `Semigroup a` — associative combine (used by the `++` operator)
   - `append : a -> a -> a` — combine two values; must be associative
@@ -170,7 +170,7 @@ and prepended to every program by the compiler.
   - ✅ `fromOption : a -> Option a -> a` — extract value or fall back to default (also known as `withDefault` in some langs)
   - ✅ `toResult : e -> Option a -> Result e a` — `Some x → Ok x`, `None → Err e`
   - ✅ `fromResult : Result e a -> Option a` — `Ok x → Some x`, `Err _ → None` *(was named `toOption` in earlier draft)*
-  - ✅ Instances: `Eq (Option a)`, `Ord (Option a)`, `Show (Option a)`, `Mappable Option`, `Foldable Option`, `Applicative Option`, `Thenable Option`
+  - ✅ Instances: `Eq (Option a)`, `Ord (Option a)`, `Debug (Option a)`, `Mappable Option`, `Foldable Option`, `Applicative Option`, `Thenable Option`
 
 - ✅ `Result e a` — `Ok a | Err e` — success-or-error value
   Helpers:
@@ -178,7 +178,7 @@ and prepended to every program by the compiler.
   - ✅ `isErr : Result e a -> Bool` — true if `Err _`
   - ✅ `fromResultOr : a -> Result e a -> a` — extract `Ok` value or fall back to default (renamed from the earlier draft's `fromResult` to avoid collision with `Option`'s)
   - ✅ `mapErr : (e -> f) -> Result e a -> Result f a` — apply to the `Err` side, pass `Ok` through
-  - ✅ Instances: `Eq (Result e a)`, `Ord (Result e a)`, `Show (Result e a)`, `Mappable (Result e)`, `Thenable (Result e)`
+  - ✅ Instances: `Eq (Result e a)`, `Ord (Result e a)`, `Debug (Result e a)`, `Mappable (Result e)`, `Thenable (Result e)`
 
 ### Utility functions
 
@@ -216,7 +216,7 @@ method; see the interface above and `impl Filterable List` below.)
 - ✅ `impl Semigroup (List a)`, `impl Semigroup String` (explicit impls in `core.mdk`)
 - ✅ `impl Eq` for `Int`, `Float`, `Bool`, `Char`, `String`, `Unit`, `Option a`, `Result e a`, tuples
 - ✅ `impl Ord` for `Int`, `Float`, `Char`, `String`, `Option a`, `Result e a`, tuples, `List a`
-- ✅ `impl Show` for every built-in type and for `Option`, `Result`, `List`, tuples (and `Array`, in `array.mdk`)
+- ✅ `impl Debug` for every built-in type and for `Option`, `Result`, `List`, tuples (and `Array`, in `array.mdk`)
 - ✅ `impl Num Int`, `impl Num Float`
 - ✅ `impl Bounded Int`, `impl Bounded Char` (Phase 93) — backed by native bound externs (`intMinBound`/`intMaxBound` = the 63-bit OCaml `int` limits; `charMinBound`/`charMaxBound` = U+0000 / U+10FFFF). The bounds dispatch by result type via Phase 96's nullary return-position fix.
 - ✅ `impl Foldable Option`, `impl Foldable (Result e)`, `impl Foldable Array`
@@ -312,7 +312,7 @@ implementations here — use the dispatch path instead:
 
 - ✅ `impl Eq (List a)` where `Eq a` — *(in `core.mdk`)*
 - ✅ `impl Ord (List a)` where `Ord a` — lexicographic ordering *(in `core.mdk`, beside `Eq`)*
-- ✅ `impl Show (List a)` where `Show a` — bracketed comma-separated form *(in `core.mdk`)*
+- ✅ `impl Debug (List a)` where `Debug a` — bracketed comma-separated form *(in `core.mdk`)*
 - ✅ `impl Mappable List` — *(in `core.mdk`)*
 - ✅ `impl Foldable List` — *(in `core.mdk`)*
 - ✅ `impl Filterable List` — *(in `core.mdk`)*
@@ -326,7 +326,7 @@ implementations here — use the dispatch path instead:
 ## Module 3 — `string` ✅ implemented (kernel Phase 75; `string.mdk` complete)
 
 Depends on `core`. Also provides `Char` utilities. File `stdlib/string.mdk`
-currently contains only an `import` line (the `Show String`/`Show Char` impls).
+currently contains only an `import` line (the `Debug String`/`Debug Char` impls).
 
 **Design — locked 2026-05-31.** Mirrors the array layering (Module 4): a tiny
 host-backed kernel in `stdlib/runtime.mdk`, with the bulk of this module
@@ -476,11 +476,11 @@ Already present and reused: `charToStr` (= `fromChar`), `showStringLit`,
 
 - ✅ `impl Eq String` — *(in `core.mdk`)*
 - ✅ `impl Ord String` — lexicographic codepoint order *(in `core.mdk`)*
-- ✅ `impl Show String` — quoted, escaped (in `string.mdk`, via `showStringLit`)
+- ✅ `impl Debug String` — quoted, escaped (in `string.mdk`, via `showStringLit`)
 - ✅ `impl Semigroup String` — in `core.mdk` (alongside `Monoid String`)
 - ✅ `impl Eq Char` — *(in `core.mdk`)*
 - ✅ `impl Ord Char` — codepoint order *(in `core.mdk`)*
-- ✅ `impl Show Char` — quoted (in `string.mdk`, via `showCharLit`)
+- ✅ `impl Debug Char` — quoted (in `string.mdk`, via `showCharLit`)
 
 ---
 
@@ -509,16 +509,16 @@ literals (`[|lo..hi|]`/`[|lo..=hi|]`), and panicking bracket indexing
 4. **Typeclass impls**: `Mappable`, `Foldable`, `Filterable`, `Semigroup`,
    `Monoid`, `Eq`.  Deliberately *not* `Applicative` / `Thenable` — the natural
    definitions encode cartesian-style allocation that's a performance
-   trap on bulk data.  `Show` is blocked on a resolver gap (see below).
+   trap on bulk data.  `Debug` is blocked on a resolver gap (see below).
 
 **Resolver gap (closed).**  Previously, interface methods whose only
 body in core was a default on the interface itself (`max`, `min`,
-`show`) were not seeded into `prelude_values` and resolved as unbound
+`debug`) were not seeded into `prelude_values` and resolved as unbound
 in user files.  Fixed in `lib/resolve.ml` by extending
 `prelude_values` to include `DInterface` method names — so this
-module can now use `max`/`min` directly.  `impl Show (Array a)`
-remains deferred, but the blocker is now narrower: `show` resolves;
-what's missing is the actual `impl Show Int`/`Show Float`/etc. in
+module can now use `max`/`min` directly.  `impl Debug (Array a)`
+remains deferred, but the blocker is now narrower: `debug` resolves;
+what's missing is the actual `impl Debug Int`/`Debug Float`/etc. in
 core that the recursive call would dispatch through.
 
 **Multi-file loader (closed).**  `typecheck_module` previously
@@ -594,7 +594,7 @@ typechecked as if it had no declared effect, then errored on the
 ### Instances
 
 - ✅ `impl Eq (Array a)` where `Eq a` — element-wise
-- ✅ `impl Show (Array a)` where `Show a` — bracketed `[|1, 2, 3|]` form (now unblocked: `Show Int`/`Float`/… landed in core)
+- ✅ `impl Debug (Array a)` where `Debug a` — bracketed `[|1, 2, 3|]` form (now unblocked: `Debug Int`/`Float`/… landed in core)
 - ✅ `impl Mappable Array`
 - ✅ `impl Foldable Array`
 - ✅ `impl Filterable Array`
@@ -646,7 +646,7 @@ will work once `set.mdk` adds the matching impl. See PLAN.md Phase 108.
 - **Combining:** `union` (left-biased), `unionWith`, `difference`,
   `intersectionWith`
 - **Invariant checker:** `wellFormed` (exported; backs the property tests)
-- **Instances:** ✅ `Mappable (Map k)` (over values), `Eq`/`Show` (via the
+- **Instances:** ✅ `Mappable (Map k)` (over values), `Eq`/`Debug` (via the
   canonical ascending assoc list), `Semigroup (Map k v) requires Ord k`
   (`++` = left-biased `union`)
 - **⛔ `Monoid (Map k v)` — intentionally not provided.** `Monoid.empty` is
@@ -677,7 +677,7 @@ ascending inserts).
 - **Min/max:** `minView`, `maxView`, `lookupMin`, `lookupMax`
 - **Set algebra:** `union`, `intersection`, `difference`, `isSubsetOf`
 - **Invariant checker:** `wellFormed` (backs the property tests)
-- **Instances:** `Foldable Set`, `Eq`/`Show` (via the ascending element list),
+- **Instances:** `Foldable Set`, `Eq`/`Debug` (via the ascending element list),
   `Semigroup` (`++` = `union`), `Monoid` (empty = `Tip`)
 - **Literal:** `Set { 1, 2, 3 }` works (Phase 108) via `impl FromEntries (Set a)
   a requires Ord a`.
@@ -711,7 +711,7 @@ would break it. Iteration order is unspecified.
 - **Mutation (`<Mut>`):** `insert` (overwrites), `delete`.
 - **Iteration (pure, unspecified order):** `entries` (the pairs), `toList`
   (alias of `entries`), `keys`, `values`.
-- **Instances:** `Eq` (order-independent — same entries), `Show` (`fromList […]`
+- **Instances:** `Eq` (order-independent — same entries), `Debug` (`fromList […]`
   in hash order). *Not* `Foldable` (its `toList` means pairs, which would clash
   with `Foldable.toList`'s element meaning — hence the internal `entries` name).
 - 8 doctests.
@@ -726,7 +726,7 @@ over `HashMap a Unit`, same reasoning as `set` over `Map a Unit`).
   `Foldable HashSet` (a set's elements *are* its `toList`, so no clash — unlike
   `hash_map`).
 - **Mutation (`<Mut>`):** `insert`, `delete`.
-- **Instances:** `Foldable`, `Eq` (order-independent), `Show`.
+- **Instances:** `Foldable`, `Eq` (order-independent), `Debug`.
 - 7 doctests.
 
 ### `mut_array` ⏳ unstarted
@@ -802,7 +802,7 @@ empty vector needs no default value of `a`.
 - ✅ Mutation (`<Mut>`): `push` (amortized O(1), doubling), `pop` (returns
   `Option`), `set` (panics OOB), `swap`, `clear` (keeps capacity), `mapInPlace`
 - ✅ Instances: `Foldable MutArray` (index-based folds, never allocates a list),
-  `Eq` (element-wise over the live range), `Show` (`fromList [..]`)
+  `Eq` (element-wise over the live range), `Debug` (`fromList [..]`)
 - 11 doctests. **Skipped:** `Mappable` (use `mapInPlace`, or `toList`→`map`);
   growth/shrink heuristics beyond doubling.
 
@@ -824,7 +824,7 @@ tracked in the dict-passing internals notes; filed for a future phase.
 A from-scratch JSON value type, parser, and serializer — `stdlib/json.mdk`.
 Written primarily to **exercise the stdlib**: a recursive ADT, `Array`-backed
 storage, `Char`/`String` kernel handling, `Result` error threading, and the
-`Eq`/`Show`/`Display` interfaces. Built **on** the stdlib it exercises —
+`Eq`/`Debug`/`Display` interfaces. Built **on** the stdlib it exercises —
 `list.reverse`, `string.join`/`fromChars`/`isDigit`/`toInt`, plus the global
 `array*`/`string*`/`char*` externs (the first stdlib module to import real
 siblings). Only genuinely JSON-specific logic (`isWs`, hex/`\u`, escaping, the
@@ -854,7 +854,7 @@ parser) is local.
 - ✅ Accessors: `lookup` (object key), `index` (array element, O(1)), `asString`/
   `asInt`/`asFloat`/`asBool`/`asArray`.
 - ✅ Instances: `Eq Json` (hand-rolled element-wise, **positional** object
-  equality), `Show Json` / `Display Json` (both render compact JSON text).
+  equality), `Debug Json` / `Display Json` (both render compact JSON text).
 - 12 doctests; nested round-trip identity, escapes, `\u` decoding, floats, and
   error cases validated via a `run` probe.
 

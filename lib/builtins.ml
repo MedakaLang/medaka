@@ -42,8 +42,8 @@ let ifaces : iface_role list = [
     methods = ["append"] };
   { role = "eq";        iface = "Eq";        arity = 1;
     methods = ["eq"] };
-  { role = "show";      iface = "Show";      arity = 1;
-    methods = ["show"] };
+  { role = "debug";     iface = "Debug";      arity = 1;
+    methods = ["debug"] };
   { role = "thenable";  iface = "Thenable";  arity = 1;
     methods = ["andThen"] };
   { role = "mappable";  iface = "Mappable";  arity = 1;

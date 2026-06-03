@@ -15,7 +15,7 @@
    `Foldable HashSet` makes `toList`/`elem`/`length`/`any`/… work (a set's
    elements *are* its `toList`, unlike a map's pairs). -}
 
-import core.{Eq, Show, Foldable}
+import core.{Eq, Debug, Foldable}
 
 {- `HashSet buckets count`: chains in `buckets.value`, live count in
    `count.value`; both mutated in place. -}
@@ -200,5 +200,5 @@ export default impl Eq (HashSet a) requires Eq a where
 
 {- | Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
    equality). -}
-export default impl Show (HashSet a) requires Show a where
-  show s = "fromList \{show (elemList s)}"
+export default impl Debug (HashSet a) requires Debug a where
+  debug s = "fromList \{debug (elemList s)}"

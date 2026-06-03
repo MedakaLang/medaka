@@ -17,7 +17,7 @@
    first `push`, using the pushed element as the fill — so no dummy/default
    value is needed to construct one. -}
 
-import core.{Eq, Show, Foldable, Option}
+import core.{Eq, Debug, Foldable, Option}
 
 {- `MutArray backing len`: `backing.value` is the capacity-sized store,
    `len.value` the live count; both mutated in place. -}
@@ -104,7 +104,7 @@ elems : MutArray a -> List a
 elems (MutArray backing len) = elemsGo backing.value (len.value - 1) []
 
 {- | Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
-   the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Show` live in
+   the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
    `array.mdk`, which this module does not import.)
 
    > arrayLength (toArray (fromList [1, 2, 3]))
@@ -218,7 +218,7 @@ export default impl Eq (MutArray a) requires Eq a where
 
 {- | Rendered as `fromList [a, …]` over the live range.
 
-   > show (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+   > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
    True -}
-export default impl Show (MutArray a) requires Show a where
-  show ma = "fromList \{show (elems ma)}"
+export default impl Debug (MutArray a) requires Debug a where
+  debug ma = "fromList \{debug (elems ma)}"

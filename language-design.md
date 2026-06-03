@@ -383,9 +383,9 @@ data Event
   | Scroll Int
 
 handle : Event -> <IO> Unit
-handle (Click { x, y })          = println "click at \{show x},\{show y}"
-handle (KeyPress { key, shift }) = println "key \{show key} (shift=\{show shift})"
-handle (Scroll n)                = println "scroll \{show n}"
+handle (Click { x, y })          = println "click at \{debug x},\{debug y}"
+handle (KeyPress { key, shift }) = println "key \{debug key} (shift=\{debug shift})"
+handle (Scroll n)                = println "scroll \{debug n}"
 ```
 
 Field punning works in patterns (`{ x, y }` is shorthand for `{ x = x, y = y }`). Positional variants and named-field variants can coexist in the same `data` declaration. Field names are namespaced to the variant.
@@ -643,7 +643,7 @@ The same applies to `record` types: `export record Foo` exposes the type name; `
 
 **Why default-abstract:** library invariants (`Map` balance, `NonEmpty` non-emptiness, `Email` well-formedness) need compiler enforcement, not convention. Defaulting to abstract pushes authors toward designing a public API; defaulting to concrete bakes the representation into every call site. The cost is one extra word (`public`) when you want full transparency.
 
-Derived instances survive abstract export: `deriving (Show, Eq)` on an abstract type still gives downstream users working `show` and `eq` — only pattern matching and direct construction are gated.
+Derived instances survive abstract export: `deriving (Debug, Eq)` on an abstract type still gives downstream users working `debug` and `eq` — only pattern matching and direct construction are gated.
 
 ### To Be Decided (follow Rust's lead)
 - Selective imports: `import utils.{greet, helper}`
@@ -819,12 +819,12 @@ let multiline = "
   "
 ```
 
-String interpolation uses `\{expr}` — the same escape-sequence model as `\n`, `\t`, `\u{XXXX}`. Each hole `\{e}` desugars to `display e`, so the embedded expression only needs a `Display` instance — no explicit `show`:
+String interpolation uses `\{expr}` — the same escape-sequence model as `\n`, `\t`, `\u{XXXX}`. Each hole `\{e}` desugars to `display e`, so the embedded expression only needs a `Display` instance — no explicit `debug`:
 ```
 greeting = "Hello, \{name}!"
 summary  = "Count: \{n}, total: \{total}"
 ```
-`Display` is the display half of the Debug-vs-`Show` split: unlike `show`, it does *not* quote `String`/`Char` (interpolating a string splices its characters), and it renders every other type the same as `show` while recursing with `display` so nested strings stay unquoted. The base instances live in `core.mdk` (interpolation is core syntax, so they can't depend on an imported module); user types get one via `deriving (Display)`. A hole whose type has no `Display` instance is a type error. Unescaped `{` is always literal.
+`Display` is the user-facing half of the `Debug`-vs-`Display` split: unlike `debug`, it does *not* quote `String`/`Char` (interpolating a string splices its characters), and it renders every other type the same as `debug` while recursing with `display` so nested strings stay unquoted. The base instances live in `core.mdk` (interpolation is core syntax, so they can't depend on an imported module); user types get one via `deriving (Display)`. A hole whose type has no `Display` instance is a type error. Unescaped `{` is always literal.
 
 **Why no indexing:** String indexing by integer is almost always a bug waiting to happen in non-ASCII text. Elm takes this approach and it's been validated in practice. Interact with strings through functions — honest about what strings actually are.
 

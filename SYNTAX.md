@@ -39,7 +39,7 @@ String escapes: `\n \t \\ \" \{` and unicode `\u{48}`.
 ## String interpolation (`\{ }`)
 
 ```
-"hello \{name}!"            -- desugars to `display name` (auto Display, no manual show)
+"hello \{name}!"            -- desugars to `display name` (auto Display, no manual debug)
 "\{a} and \{b}"            -- multiple holes
 "result: \{1 + 2}"          -- arbitrary expression
 """multi \{name}"""         -- works in triple-quoted too
@@ -181,7 +181,7 @@ arr.[0..=3]   -- slice, inclusive
 ```
 match x
   0           => "zero"          -- literal
-  n           => show n          -- variable
+  n           => debug n          -- variable
   _           => "other"         -- wildcard
   (a, b)      => ...             -- tuple
   x :: rest   => ...             -- cons
@@ -272,7 +272,7 @@ data Event                                          -- named-field variant (bloc
   = Click { x : Int, y : Int }
   | Scroll Int
 
-data Bool = True | False deriving (Show)          -- deriving
+data Bool = True | False deriving (Debug)          -- deriving
 ```
 
 ## Records
@@ -289,7 +289,7 @@ person.name                            -- field access
 { p | address.city = "Boston" }        -- nested update sugar
 record Person                          -- deriving
   x : Int
-  deriving (Show)
+  deriving (Debug)
 ```
 
 ## Type aliases & newtypes

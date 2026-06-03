@@ -7,7 +7,7 @@
    Layout:
      1. Foundational data types (Ordering, Option, Result)
      2. Interface hierarchy in dependency order:
-          Eq → Ord, Semigroup → Monoid, Show, Num, Bounded,
+          Eq → Ord, Semigroup → Monoid, Debug, Num, Bounded,
           Mappable → Applicative → Thenable, Foldable
         Each interface is followed by its impls for built-in types.
      3. Standalone helpers (Bool, Option, Result, Foldable, utility)
@@ -230,88 +230,88 @@ export impl Ord (Result e a) requires Ord e, Ord a where
   compare (Ok x) (Ok y) = compare x y
 
 {- | Human-readable string rendering.  Backs `medaka test` doctests, which
-   compare a result's `show` against the expected text (GHCi/doctest parity).
-   `Show Int`/`Float`/`Bool`/`Unit`/`List`/`Option`/`Result` and the tuple
-   impls live here; `Show String`/`Show Char` live in `string.mdk`.
-   Numeric/Bool `show` matches the interpreter's `pp_value` (so it agrees with
-   `println`); `String`/`Char` render *quoted* (round-trippable, so `show`
-   intentionally differs from `println` — cf. Haskell `show` vs `putStr`). -}
-export interface Show a where
-  show : a -> String
+   compare a result's `debug` against the expected text (GHCi/doctest parity).
+   `Debug Int`/`Float`/`Bool`/`Unit`/`List`/`Option`/`Result` and the tuple
+   impls live here; `Debug String`/`Debug Char` live in `string.mdk`.
+   Numeric/Bool `debug` matches the interpreter's `pp_value` (so it agrees with
+   `println`); `String`/`Char` render *quoted* (round-trippable, so `debug`
+   intentionally differs from `println` — cf. Haskell `debug` vs `putStr`). -}
+export interface Debug a where
+  debug : a -> String
 
-export impl Show Int where
-  show n = intToString n
+export impl Debug Int where
+  debug n = intToString n
 
-export impl Show Float where
-  show x = floatToString x
+export impl Debug Float where
+  debug x = floatToString x
 
-export impl Show Bool where
-  show True = "True"
-  show False = "False"
+export impl Debug Bool where
+  debug True = "True"
+  debug False = "False"
 
-export impl Show Unit where
-  show _ = "()"
+export impl Debug Unit where
+  debug _ = "()"
 
-export impl Show Ordering where
-  show Lt = "Lt"
-  show Eq = "Eq"
-  show Gt = "Gt"
+export impl Debug Ordering where
+  debug Lt = "Lt"
+  debug Eq = "Eq"
+  debug Gt = "Gt"
 
--- `Show String`/`Show Char` render a *quoted, escaped literal* (`show "hi"` is
--- `"hi"`, `show 'a'` is `'a'`) via the `showStringLit`/`showCharLit` externs —
+-- `Debug String`/`Debug Char` render a *quoted, escaped literal* (`debug "hi"` is
+-- `"hi"`, `debug 'a'` is `'a'`) via the `debugStringLit`/`debugCharLit` externs —
 -- round-trippable, matching Haskell, and distinct from `println`'s raw output.
--- They live here in the prelude (not `string.mdk`) so that `show`-ing a String
+-- They live here in the prelude (not `string.mdk`) so that `debug`-ing a String
 -- or Char — the most common doctest result type — resolves without importing
--- `string`, alongside the other primitive `Show` impls (Phase 92).
-export impl Show String where
-  show s = showStringLit s
+-- `string`, alongside the other primitive `Debug` impls (Phase 92).
+export impl Debug String where
+  debug s = debugStringLit s
 
-export impl Show Char where
-  show c = showCharLit c
+export impl Debug Char where
+  debug c = debugCharLit c
 
--- Comma-joined element rendering for `Show (List a)`: a top-level recursive
--- constrained helper.  Its self-call forwards the `Show a` dictionary and the
--- impl body forwards its own `requires Show a` dict into it (Phase 74 follow-up
+-- Comma-joined element rendering for `Debug (List a)`: a top-level recursive
+-- constrained helper.  Its self-call forwards the `Debug a` dictionary and the
+-- impl body forwards its own `requires Debug a` dict into it (Phase 74 follow-up
 -- fix to dictionary passing for recursive constrained functions).
-showListItems : Show a => List a -> String
-showListItems [] = ""
-showListItems [x] = show x
-showListItems (y::rest) = "\{show y}, \{showListItems rest}"
+debugListItems : Debug a => List a -> String
+debugListItems [] = ""
+debugListItems [x] = debug x
+debugListItems (y::rest) = "\{debug y}, \{debugListItems rest}"
 
-export impl Show (List a) requires Show a where
-  show xs = "[\{showListItems xs}]"
+export impl Debug (List a) requires Debug a where
+  debug xs = "[\{debugListItems xs}]"
 
-export impl Show (Option a) requires Show a where
-  show None = "None"
-  show (Some x) = "Some " ++ show x
+export impl Debug (Option a) requires Debug a where
+  debug None = "None"
+  debug (Some x) = "Some " ++ debug x
 
-export impl Show (Result e a) requires Show e, Show a where
-  show (Ok x) = "Ok " ++ show x
-  show (Err e) = "Err " ++ show e
+export impl Debug (Result e a) requires Debug e, Debug a where
+  debug (Ok x) = "Ok " ++ debug x
+  debug (Err e) = "Err " ++ debug e
 
 -- Tuple rendering (arities 2–5): `(a, b)`, matching the interpreter's
 -- value printer.
-export impl Show (a, b) requires Show a, Show b where
-  show (a, b) = "(\{show a}, \{show b})"
+export impl Debug (a, b) requires Debug a, Debug b where
+  debug (a, b) = "(\{debug a}, \{debug b})"
 
-export impl Show (a, b, c) requires Show a, Show b, Show c where
-  show (a, b, c) = "(\{show a}, \{show b}, \{show c})"
+export impl Debug (a, b, c) requires Debug a, Debug b, Debug c where
+  debug (a, b, c) = "(\{debug a}, \{debug b}, \{debug c})"
 
-export impl Show (a, b, c, d) requires Show a, Show b, Show c, Show d where
-  show (a, b, c, d) = "(\{show a}, \{show b}, \{show c}, \{show d})"
+export impl Debug (a, b, c, d) requires Debug a, Debug b, Debug c, Debug d where
+  debug (a, b, c, d) = "(\{debug a}, \{debug b}, \{debug c}, \{debug d})"
 
-export impl Show (a, b, c, d, e) requires Show a, Show b, Show c, Show d, Show e where
-  show (a, b, c, d, e) = "(\{show a}, \{show b}, \{show c}, \{show d}, \{show e})"
+export impl Debug (a, b, c, d, e) requires Debug a, Debug b, Debug c, Debug d, Debug e where
+  debug (a, b, c, d, e) = "(\{debug a}, \{debug b}, \{debug c}, \{debug d}, \{debug e})"
 
 {- | Display rendering for string interpolation.  A `"\{e}"` hole desugars to
-   `display e`, so this is what `\{...}` calls.  Unlike `Show`, `Display` does
+   `display e`, so this is what `\{...}` calls.  Unlike `Debug`, `Display` does
    *not* quote `String`/`Char` (interpolating a string splices its characters,
-   it doesn't show a quoted literal) — this is the Debug-vs-Display split.  For
-   every other type `display` matches `show`'s output, recursing with `display`
+   it doesn't debug a quoted literal) — this is the Debug-vs-Display split.  For
+   every other type `display` matches `debug`'s output, recursing with `display`
    so nested strings stay unquoted too.  Lives in `core.mdk` (not `string.mdk`
-   like `Show String`) because interpolation is core syntax: a bare `"\{name}"`
+   like `Debug String`) because interpolation is core syntax: a bare `"\{name}"`
    can't depend on an imported module.  `deriving (Display)` mirrors
-   `deriving (Show)`. -}
+   `deriving (Debug)`. -}
 export interface Display a where
   display : a -> String
 
@@ -340,7 +340,7 @@ export impl Display Char where
   display c = charToStr c
 
 -- Comma-joined element rendering for `Display (List a)`, mirroring
--- `showListItems`: a top-level recursive constrained helper that forwards its
+-- `debugListItems`: a top-level recursive constrained helper that forwards its
 -- `Display a` dictionary on the self-call.
 displayListItems : Display a => List a -> String
 displayListItems [] = ""

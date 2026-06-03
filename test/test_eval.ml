@@ -781,11 +781,11 @@ r = mul (Dist 3) (Dist 4)
 |}
     "r" (VCon ("Dist", [VInt 12]))
 
-(* Newtypes derive Show/Display via the data deriver: tagged rendering
-   (`Con x`), matching Haskell's default `deriving Show`. *)
+(* Newtypes derive Debug/Display via the data deriver: tagged rendering
+   (`Con x`), matching Haskell's default `deriving Debug`. *)
 let t_newtype_deriving_show =
   assert_val
-    "newtype UserId = UserId Int deriving (Show)\nx = show (UserId 42)\n"
+    "newtype UserId = UserId Int deriving (Debug)\nx = debug (UserId 42)\n"
     "x" (VString "UserId 42")
 
 let t_newtype_deriving_display =
@@ -844,7 +844,7 @@ r = to_rep (Wrap 5)
 
 (* End-to-end: derive Generic once, write one function over Rep, and get a
    ToJson instance for any deriving type (a data type and a record).  Uses
-   String/Bool fields only since the prelude has no Int Show yet. *)
+   String/Bool fields only since the prelude has no Int Debug yet. *)
 let t_generic_tojson_loop =
   assert_val
     {|interface ToJson a where
@@ -919,15 +919,15 @@ r = to_rep (Box 5)
 |}
     "r" (VCon ("RCon", [VString "Box"; VList [rint 5]]))
 
-(* Deriving Show on a parametric record renders fields via the field's Show. *)
+(* Deriving Debug on a parametric record renders fields via the field's Debug. *)
 let t_derive_show_param_record =
   assert_val
-    {|impl Show Int where
-  show x = if x == 5 then "5" else "?"
+    {|impl Debug Int where
+  debug x = if x == 5 then "5" else "?"
 record Box a
   value : a
-deriving (Show)
-r = show (Box { value = 5 })
+deriving (Debug)
+r = debug (Box { value = 5 })
 |}
     "r" (VString "Box { value = 5 }")
 
@@ -1006,7 +1006,7 @@ let t_interp_triple_two_holes =
     "a = \"foo\"\nb = \"bar\"\nx = \"\"\"\\{a} and \\{b}\"\"\"\n"
     "x" (VString "foo and bar")
 
-(* Non-String hole auto-displays (no manual `show`); `Display Int` is unquoted. *)
+(* Non-String hole auto-displays (no manual `debug`); `Display Int` is unquoted. *)
 let t_interp_int_hole =
   assert_val
     "n = 42\nx = \"count: \\{n}\"\n"
@@ -1019,7 +1019,7 @@ let t_interp_char_hole =
     "x" (VString "got z")
 
 (* Structural recursion: a String inside a list stays unquoted under Display,
-   so the hole renders `[a, b]`, not `["a", "b"]` (the Show form). *)
+   so the hole renders `[a, b]`, not `["a", "b"]` (the Debug form). *)
 let t_interp_nested_unquoted =
   assert_val
     "xs = [\"a\", \"b\"]\nx = \"items: \\{xs}\"\n"
@@ -1512,7 +1512,7 @@ let t_let_else_no_match = assert_val_typed
    dictionary (the group's own constraints weren't yet in fun_constraints when
    the body was inferred), so it mis-dispatched / had the wrong arity — the
    recursive `allEq y rest` returned a partial application instead of a Bool, and
-   the Show analogue stack-overflowed.  Typed runner: dictionary passing only
+   the Debug analogue stack-overflowed.  Typed runner: dictionary passing only
    happens in the marked/typechecked/dict-passed pipeline. *)
 let t_rec_eq_constraint_true = assert_val_typed
   {|allEq : Eq a => a -> List a -> Bool
@@ -1530,12 +1530,12 @@ r = allEq 1 [1, 2, 1]
 |}
   "r" (VBool false)
 
-(* Show-constrained recursive helper: `show` dispatches per element through the
+(* Debug-constrained recursive helper: `debug` dispatches per element through the
    forwarded dictionary; pre-fix this stack-overflowed. *)
 let t_rec_show_constraint = assert_val_typed
-  {|showAll : Show a => List a -> String
+  {|showAll : Debug a => List a -> String
 showAll [] = ""
-showAll (x::rest) = show x ++ showAll rest
+showAll (x::rest) = debug x ++ showAll rest
 r = showAll [1, 2, 3]
 |}
   "r" (VString "123")
@@ -1819,7 +1819,7 @@ let () =
       test_case "let rec inline mutual"   `Quick t_letrec_inline_mutual;
       test_case "rec Eq-constraint true"  `Quick t_rec_eq_constraint_true;
       test_case "rec Eq-constraint false" `Quick t_rec_eq_constraint_false;
-      test_case "rec Show-constraint"     `Quick t_rec_show_constraint;
+      test_case "rec Debug-constraint"     `Quick t_rec_show_constraint;
       test_case "rec mutual constraint"   `Quick t_rec_mutual_constraint;
     ];
     "pattern match", [
@@ -1943,7 +1943,7 @@ let () =
       test_case "pattern unwrap"    `Quick t_newtype_unwrap;
       test_case "deriving Num add"  `Quick t_newtype_deriving_num_add;
       test_case "deriving Num mul"  `Quick t_newtype_deriving_num_mul;
-      test_case "deriving Show"     `Quick t_newtype_deriving_show;
+      test_case "deriving Debug"     `Quick t_newtype_deriving_show;
       test_case "deriving Display"  `Quick t_newtype_deriving_display;
       test_case "deriving Eq"       `Quick t_newtype_deriving_eq;
       test_case "deriving Ord"      `Quick t_newtype_deriving_ord;
@@ -1959,7 +1959,7 @@ let () =
       test_case "Eq param data true"  `Quick t_derive_eq_param_true;
       test_case "Eq param data false" `Quick t_derive_eq_param_false;
       test_case "Generic param data"  `Quick t_derive_generic_param;
-      test_case "Show param record"   `Quick t_derive_show_param_record;
+      test_case "Debug param record"   `Quick t_derive_show_param_record;
     ];
     "Semigroup / Monoid (Phase 22)", [
       test_case "List ++ List"              `Quick t_list_semigroup;

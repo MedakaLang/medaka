@@ -21,7 +21,7 @@
    and avoids the per-node `Unit` payload. The balancing mirrors map.mdk's,
    which the property tests below re-verify. -}
 
-import core.{Eq, Ord, Show, Display, Foldable, Semigroup, Monoid, Ordering, Option, FromEntries}
+import core.{Eq, Ord, Debug, Display, Foldable, Semigroup, Monoid, Ordering, Option, FromEntries}
 
 {- The representation. `Tip` is the empty set; `Bin size elem left right` is an
    interior node whose cached `size` is `1 + size left + size right`. -}
@@ -346,12 +346,12 @@ export default impl Ord (Set a) requires Ord a where
 
 {- | Rendered as `fromList [a, …]`, the re-evaluable form (the `Set { … }`
    literal is the *display* form — see PLAN.md Phase 111). Doctest compares
-   against a literal: `Show String` is out of this module's test context.
+   against a literal: `Debug String` is out of this module's test context.
 
-   > show (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+   > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
    True -}
-export default impl Show (Set a) requires Show a where
-  show s = "fromList \{show (toList s)}"
+export default impl Debug (Set a) requires Debug a where
+  debug s = "fromList \{debug (toList s)}"
 
 -- Comma-joined elements for `Display (Set a)`; renders via `display` (unquoted).
 displaySetItems : Display a => List a -> String
@@ -360,7 +360,7 @@ displaySetItems [x] = "\{x}"
 displaySetItems (y::rest) = "\{y}, \{displaySetItems rest}"
 
 {- | The *display* form — the Phase-108 literal `Set { x, … }` (empty →
-   `Set {}`), as opposed to Show's re-evaluable `fromList [x, …]`.
+   `Set {}`), as opposed to Debug's re-evaluable `fromList [x, …]`.
 
    > display (fromList [1, 2, 3]) == "Set { 1, 2, 3 }"
    True

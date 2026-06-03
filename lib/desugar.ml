@@ -116,10 +116,10 @@ let derive_eq_record type_name fields =
   }
 
 (* ------------------------------------------------------------------ *)
-(* Derive Show                                                         *)
+(* Derive Debug                                                        *)
 (* ------------------------------------------------------------------ *)
 
-let derive_show_data type_name variants =
+let derive_debug_data type_name variants =
   let arms = List.map (fun v ->
     let n = con_arity v in
     let vars = List.init n (fun i -> Printf.sprintf "__a%d" i) in
@@ -130,12 +130,12 @@ let derive_show_data type_name variants =
     let body =
       if n = 0 then ELit (LString v.con_name)
       else
-        (* "ConName " ++ show a0 ++ " " ++ show a1 ++ ... *)
+        (* "ConName " ++ debug a0 ++ " " ++ debug a1 ++ ... *)
         let parts =
           ELit (LString (v.con_name ^ " ")) ::
           (List.concat_map (fun (i, var) ->
-            if i = 0 then [EApp (EVar "show", EVar var)]
-            else [ELit (LString " "); EApp (EVar "show", EVar var)]
+            if i = 0 then [EApp (EVar "debug", EVar var)]
+            else [ELit (LString " "); EApp (EVar "debug", EVar var)]
           ) (List.mapi (fun i v -> (i, v)) vars))
         in
         concat_strings parts
@@ -147,20 +147,20 @@ let derive_show_data type_name variants =
     is_pub     = true;
     is_default = false;
     impl_loc   = None;
-    iface_name = "Show";
+    iface_name = "Debug";
     type_args  = [TyCon type_name];
     impl_name  = None;
     requires   = [];
-    methods    = [("show", [PVar "__x"], body)];
+    methods    = [("debug", [PVar "__x"], body)];
   }
 
-let derive_show_record type_name fields =
+let derive_debug_record type_name fields =
   let parts =
     [ELit (LString (type_name ^ " {"))]
     @ (List.concat_map (fun (i, f) ->
         let prefix = if i = 0 then " " else ", " in
         [ ELit (LString (prefix ^ f.field_name ^ " = "))
-        ; EApp (EVar "show", EFieldAccess (EVar "__r", f.field_name))
+        ; EApp (EVar "debug", EFieldAccess (EVar "__r", f.field_name))
         ]
       ) (List.mapi (fun i f -> (i, f)) fields))
     @ [ELit (LString " }")]
@@ -170,11 +170,11 @@ let derive_show_record type_name fields =
     is_pub     = true;
     is_default = false;
     impl_loc   = None;
-    iface_name = "Show";
+    iface_name = "Debug";
     type_args  = [TyCon type_name];
     impl_name  = None;
     requires   = [];
-    methods    = [("show", [PVar "__r"], body)];
+    methods    = [("debug", [PVar "__r"], body)];
   }
 
 (* ------------------------------------------------------------------ *)
@@ -352,7 +352,7 @@ let generic_rcon con_name vars =
 
 let derive_generic_data type_name variants =
   (* One arm per constructor; named-field constructors are matched
-     positionally, consistent with derive_eq_data/derive_show_data. *)
+     positionally, consistent with derive_eq_data/derive_debug_data. *)
   let arms = List.map (fun v ->
     let n = con_arity v in
     let vars = List.init n (fun i -> Printf.sprintf "__a%d" i) in
@@ -414,7 +414,7 @@ let derive_for_newtype type_name params con_name fty iface =
   match iface with
   | "Num"     -> mk derive_num_newtype
   | "Generic" -> mk derive_generic_newtype
-  | "Show"    -> mk_data derive_show_data
+  | "Debug"    -> mk_data derive_debug_data
   | "Display" -> mk_data derive_display_data
   | "Eq"      -> mk_data derive_eq_data
   | "Ord"     -> mk_data derive_ord_data
@@ -507,7 +507,7 @@ let derive_for_data type_name params variants iface =
   let mk f = Some (apply_derive_params type_name params (f type_name variants)) in
   match iface with
   | "Eq"        -> mk derive_eq_data
-  | "Show"      -> mk derive_show_data
+  | "Debug"      -> mk derive_debug_data
   | "Display"   -> mk derive_display_data
   | "Ord"       -> mk derive_ord_data
   | "Arbitrary" -> mk derive_arbitrary_data
@@ -518,7 +518,7 @@ let derive_for_record type_name params fields iface =
   let mk f = Some (apply_derive_params type_name params (f type_name fields)) in
   match iface with
   | "Eq"        -> mk derive_eq_record
-  | "Show"      -> mk derive_show_record
+  | "Debug"      -> mk derive_debug_record
   | "Display"   -> mk derive_display_record
   | "Ord"       -> mk derive_ord_record
   | "Arbitrary" -> mk derive_arbitrary_record

@@ -14,7 +14,7 @@
    9. Typecheck-eval skew — programs accepted by one but rejected by
       the other (a smoke test for the divide-and-conquer test
       organization that hides these gaps).
-   10. Interpolation ⊗ records / show
+   10. Interpolation ⊗ records / debug
 
    Each test runs the full pipeline (typecheck + eval) where possible,
    making it strict: a regression in either layer is caught. *)
@@ -27,39 +27,39 @@ open Thorough_helpers
    ===================================================================== *)
 
 (* Phase 45.6 FIXED — VRecord now carries its type name, so VMulti
-   dispatch on a method like `show` routes to the correct impl even
-   when another impl with a wildcard pattern (like `impl Show Int
-   where show x = "I"`) is in scope. *)
+   dispatch on a method like `debug` routes to the correct impl even
+   when another impl with a wildcard pattern (like `impl Debug Int
+   where debug x = "I"`) is in scope. *)
 
-(* Custom Show Int + derived Show Point: each dispatches correctly. *)
-(* A custom Show impl dispatches by type and flows into a record's derived
-   Show.  Uses a user newtype (`Tag`) rather than `impl Show Int`: the prelude
-   now provides a builtin `Show Int` (Phase 92) that a user `impl Show Int`
+(* Custom Debug Int + derived Debug Point: each dispatches correctly. *)
+(* A custom Debug impl dispatches by type and flows into a record's derived
+   Debug.  Uses a user newtype (`Tag`) rather than `impl Debug Int`: the prelude
+   now provides a builtin `Debug Int` (Phase 92) that a user `impl Debug Int`
    can't shadow at eval time, so overriding a builtin no longer demonstrates the
    by-type dispatch this test is about. *)
 let t_record_show_with_int_show =
   assert_val_typed
     {|newtype Tag = Tag Int
-impl Show Tag where
-  show t = "I"
+impl Debug Tag where
+  debug t = "I"
 record Point
   x : Tag
   y : Tag
-deriving (Show)
+deriving (Debug)
 p = Point { x = Tag 3, y = Tag 4 }
-tagShow = show (Tag 5)
-recShow = show p
+tagShow = debug (Tag 5)
+recShow = debug p
 r = (tagShow, recShow)
 |}
     "r" (VTuple [VString "I"; VString "Point { x = I, y = I }"])
 
-(* Simple derived Show case (single impl in scope). *)
+(* Simple derived Debug case (single impl in scope). *)
 let t_record_deriving_show_no_other_impl =
   assert_val
     {|record Point
   x : Int
   y : Int
-deriving (Show)
+deriving (Debug)
 p = Point { x = 3, y = 4 }
 r = match p
   Point { x = 0, y = 0 } => "origin"
@@ -320,25 +320,25 @@ let tc_eval_skew_interp_int_hole_tc =
 |} "x" "String"
 
 (* =====================================================================
-   10. Interpolation ⊗ records / show
+   10. Interpolation ⊗ records / debug
    ===================================================================== *)
 
-(* show on a record (deriving Show) used inside an interpolation hole.
-   The hole expects String, and `show p` returns String — should work.
-   Combines a custom Show impl (on a user newtype `Tag`, since the prelude's
-   builtin `Show Int` can't be shadowed at eval time), deriving (Show) on the
+(* debug on a record (deriving Debug) used inside an interpolation hole.
+   The hole expects String, and `debug p` returns String — should work.
+   Combines a custom Debug impl (on a user newtype `Tag`, since the prelude's
+   builtin `Debug Int` can't be shadowed at eval time), deriving (Debug) on the
    record, and interpolation. *)
 let t_interp_with_show_record =
   assert_typed_val
     {|newtype Tag = Tag Int
-impl Show Tag where
-  show t = "I"
+impl Debug Tag where
+  debug t = "I"
 record P
   x : Tag
   y : Tag
-deriving (Show)
+deriving (Debug)
 p = P { x = Tag 1, y = Tag 2 }
-r = "point: \{show p}"
+r = "point: \{debug p}"
 |}
     "r" "String"
     (VString "point: P { x = I, y = I }")
@@ -721,8 +721,8 @@ let () =
   run "thorough interactions"
     [
       ( "records + interfaces",
-        [ test_case "Show dispatches by type"   `Quick t_record_show_with_int_show
-        ; test_case "deriving Show (sole impl)" `Quick t_record_deriving_show_no_other_impl
+        [ test_case "Debug dispatches by type"   `Quick t_record_show_with_int_show
+        ; test_case "deriving Debug (sole impl)" `Quick t_record_deriving_show_no_other_impl
         ; test_case "deriving Eq picks up prelude Int Eq" `Quick e_record_deriving_eq_no_int_impl
         ; test_case "deriving Eq w/ Int Eq"     `Quick t_record_deriving_eq_with_int_eq
         ; test_case "user impl over record"     `Quick t_record_user_impl
@@ -758,8 +758,8 @@ let () =
       ( "tc/eval agree",
         [ test_case "interp int hole accepted" `Quick tc_eval_skew_interp_int_hole_tc
         ] );
-      ( "interp + show",
-        [ test_case "record via show"       `Quick t_interp_with_show_record
+      ( "interp + debug",
+        [ test_case "record via debug"       `Quick t_interp_with_show_record
         ; test_case "string hole"           `Quick t_interp_with_show_string
         ] );
       ( "effects + do",

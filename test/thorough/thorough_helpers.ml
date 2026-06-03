@@ -126,7 +126,7 @@ let run src name =
          src)
 
 (* Typed eval (Phase 69.x-c): return-position methods (`pure`, `when`,
-   `unless`, derived/dispatched Show, …) need the impl the typechecker chose,
+   `unless`, derived/dispatched Debug, …) need the impl the typechecker chose,
    stamped on their EMethodRef.  The untyped `run` above falls back to arg-tag
    "first impl wins" and so mis-dispatches `pure` (wraps in List, not the
    caller's monad).  This runner mirrors the real run-mode pipeline

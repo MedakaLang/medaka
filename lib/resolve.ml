@@ -120,7 +120,7 @@ let prelude_values : string list =
     | Ast.DLetGroup (_, bs)    -> List.map fst bs
     | Ast.DTypeSig (_, n, _)   -> [n]
     | Ast.DImpl { methods; _ } -> List.map (fun (n, _, _) -> n) methods
-    (* Interface methods become global identifiers — `max`, `min`, `show`
+    (* Interface methods become global identifiers — `max`, `min`, `debug`
        etc. need to resolve in user files even when no impl in core
        provides them (the interface default suffices at runtime).  This
        mirrors what build_env does for interface decls in the user

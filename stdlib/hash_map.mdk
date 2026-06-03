@@ -23,7 +23,7 @@
    line, since its single-application body can't soft-break) and the recursion
    base-cases (`reinsertAll`, `collectBuckets`), where `| i >= n` reads best. -}
 
-import core.{Eq, Show, Option, Mappable}
+import core.{Eq, Debug, Option, Mappable}
 
 {- `HashMap buckets count`: `buckets.value` is the bucket array (each slot a
    chain), `count.value` is the live entry count. Both are mutated in place. -}
@@ -252,5 +252,5 @@ export default impl Eq (HashMap k v) requires Eq k, Eq v where
 
 {- | Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
    layout-dependent — don't rely on it for equality; use `eq`). -}
-export default impl Show (HashMap k v) requires Show k, Show v where
-  show m = "fromList \{show (entries m)}"
+export default impl Debug (HashMap k v) requires Debug k, Debug v where
+  debug m = "fromList \{debug (entries m)}"

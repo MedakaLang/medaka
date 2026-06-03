@@ -1,7 +1,7 @@
 -- list.mdk — operations on List a
 -- See STDLIB.md for the full implementation plan.
 
-import core.{Eq, Ord, Show, Foldable, Mappable, Ordering, Option}
+import core.{Eq, Ord, Debug, Foldable, Mappable, Ordering, Option}
 
 -- Re-export the Filterable container ops so they're discoverable as
 -- `list.filter` / `list.filterMap`.

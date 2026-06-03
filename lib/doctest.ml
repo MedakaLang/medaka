@@ -163,18 +163,18 @@ let has_use_decls prog =
   List.exists (function Ast.DUse _ -> true | _ -> false) prog
 
 (* Parse each example as a synthetic top-level binding.  Examples with an
-   expected line are rendered through the user-facing `show` (Show), à la
+   expected line are rendered through the user-facing `debug` (Debug), à la
    GHCi/doctest, so the comparison is against the language's own rendering
    contract rather than the interpreter-internal pp_value.  The parens keep
    precedence (`ex.input` may be an application or operator expression).
-   Examples with no expected line stay raw — forcing `show` on an effectful or
-   non-Show result would turn a passing smoke example into an error (and
-   needlessly enlarge the Show-constraint surface). *)
+   Examples with no expected line stay raw — forcing `debug` on an effectful or
+   non-Debug result would turn a passing smoke example into an error (and
+   needlessly enlarge the Debug-constraint surface). *)
 let build_synth_results all_examples =
   List.mapi (fun i ex ->
     let name = synth_name i in
     let rhs = match ex.expected with
-      | Some _ -> "show (" ^ ex.input ^ ")"
+      | Some _ -> "debug (" ^ ex.input ^ ")"
       | None   -> ex.input
     in
     let src = name ^ " = " ^ rhs in
@@ -239,8 +239,8 @@ let build_details
            (match List.assoc_opt (synth_name i) env with
             | None -> Error (Printf.sprintf "could not evaluate: %s" ex.input)
             | Some v ->
-              (* For comparison examples the synth binding is `show (...)`, so
-                 `v` is the VString that `show` produced; pp_value (VString s)
+              (* For comparison examples the synth binding is `debug (...)`, so
+                 `v` is the VString that `debug` produced; pp_value (VString s)
                  = s extracts it verbatim.  Smoke examples (expected = None)
                  are unwrapped, and their actual value is never compared. *)
               let actual = Eval.pp_value v in
@@ -409,7 +409,7 @@ let run_file_single base_decls synth_results synth_decls all_examples
 
      When the file under test *is* the prelude (`medaka test stdlib/core.mdk`),
      it already declares everything the prelude provides, so prepending the
-     prelude here would duplicate every top-level decl — two `Show (List a)`
+     prelude here would duplicate every top-level decl — two `Debug (List a)`
      impls, etc. — which corrupts dispatch (a duplicated constrained helper can
      send `++` into an infinite `append` loop).  `Typecheck.check_program`
      already skips its internal prelude prepend via `program_is_core`; mirror

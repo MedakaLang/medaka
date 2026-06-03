@@ -79,8 +79,8 @@ let () =
         "import cont.{Bag, fromL}\n\n\
          main : <IO> Unit\n\
          main =\n\
-        \  println (show (sum (fromL [1, 2, 3])))\n\
-        \  println (show (maximum (fromL [3, 1, 2])))\n";
+        \  println (debug (sum (fromL [1, 2, 3])))\n\
+        \  println (debug (maximum (fromL [3, 1, 2])))\n";
       (Filename.concat dir "main.mdk", [dir])
   in
   let modules = pipeline entry roots in

@@ -16,7 +16,7 @@ type value =
   | VRecord of string * (string * value) list
                                   (* type_name, fields.  The type name is
                                      used by runtime_type_tag so that VMulti
-                                     dispatch on a method like `show` can
+                                     dispatch on a method like `debug` can
                                      route through to the right impl when
                                      multiple candidates exist. *)
   | VRef    of value ref
@@ -158,7 +158,7 @@ and pp_value_atom v = match v with
 (* Escape a string into the body of a Medaka double-quoted literal, mirroring
    the escapes lexer.mll's read_string understands (backslash n, t, dquote,
    backslash, r, 0) so the result is valid, round-trippable source.  Backs
-   showStringLit. *)
+   debugStringLit. *)
 let escape_string_lit s =
   let b = Buffer.create (String.length s + 2) in
   String.iter (fun c -> match c with
@@ -699,7 +699,7 @@ and eval env expr =
           dispatches and `apply` strips the tag on application.  But a *nullary*
           return-position method (`empty`, `minBound`) is a value, never applied —
           so the wrapper would leak into the program and break downstream
-          pattern-matching / show.  Once the route has pinned a single impl, strip
+          pattern-matching / debug.  Once the route has pinned a single impl, strip
           the wrapper iff its payload is a terminal value (not a function still
           awaiting application). *)
        let v =
@@ -1311,20 +1311,20 @@ let primitives : (string * value) list =
     ("floatToString", VPrim (fun v ->
       match v with
       | VFloat f ->
-        (* Mirror pp_value's Float case exactly so show == println for floats. *)
+        (* Mirror pp_value's Float case exactly so debug == println for floats. *)
         let s = string_of_float f in
         VString (if String.contains s '.' || String.contains s 'e' then s else s ^ ".0")
       | _ -> raise (Eval_error ("floatToString: expected Float", None))));
-    ("showStringLit", VPrim (fun v ->
+    ("debugStringLit", VPrim (fun v ->
       match v with
       | VString s -> VString ("\"" ^ escape_string_lit s ^ "\"")
-      | _ -> raise (Eval_error ("showStringLit: expected String", None))));
-    ("showCharLit", VPrim (fun v ->
+      | _ -> raise (Eval_error ("debugStringLit: expected String", None))));
+    ("debugCharLit", VPrim (fun v ->
       (* Medaka char literals do no escape processing (`'<bytes>'`), so the
          round-trippable form is just the bytes wrapped in single quotes. *)
       match v with
       | VChar c -> VString ("'" ^ c ^ "'")
-      | _ -> raise (Eval_error ("showCharLit: expected Char", None))));
+      | _ -> raise (Eval_error ("debugCharLit: expected Char", None))));
     ("arrayLength", VPrim (fun v ->
       match v with
       | VArray a -> VInt (Array.length a)

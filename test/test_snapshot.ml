@@ -135,7 +135,7 @@ main = assert_snapshot "my value/test" "42"
   if not (Sys.file_exists path) then
     failwith (Printf.sprintf "expected file %s to exist" path)
 
-(* Snapshot inside a doctest: assert_snapshot "..." (show x) => ()
+(* Snapshot inside a doctest: assert_snapshot "..." (debug x) => ()
    The doctest runner evaluates the expression and the result is VUnit,
    which prints as "()" — matching the expected line. *)
 let t_snapshot_doctest_integration () =

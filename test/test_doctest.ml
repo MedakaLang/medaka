@@ -195,10 +195,10 @@ let t_references_file_binding () =
       failwith (Printf.sprintf "expected pass using file binding, got passed=%d failed=%d"
                   r.passed r.failed))
 
-(* Phase 92: a doctest whose result is a String renders via `show`, which needs
-   `Show String`.  That impl now lives in the core prelude (moved from
+(* Phase 92: a doctest whose result is a String renders via `debug`, which needs
+   `Debug String`.  That impl now lives in the core prelude (moved from
    string.mdk), so the doctest resolves without importing `string`.  Before the
-   move this errored ("No impl of Show for String" → arg-tag fallback to
+   move this errored ("No impl of Debug for String" → arg-tag fallback to
    intToString), and the all-or-nothing harness failed every example. *)
 let t_string_result_resolves () =
   let src = {|greet name = "hi " ++ name
@@ -212,7 +212,7 @@ let t_string_result_resolves () =
         "expected String-result doctest to pass, got passed=%d failed=%d errors=%d"
         r.passed r.failed r.errors))
 
-(* …and a Char result likewise (`Show Char` also moved to core). *)
+(* …and a Char result likewise (`Debug Char` also moved to core). *)
 let t_char_result_resolves () =
   let src = {|first c = c
 -- > first 'a'
@@ -304,11 +304,11 @@ let t_multiple_examples () =
    When the file under test is itself the prelude (`program_is_core` true) the
    harness must NOT prepend the prelude — doing so duplicates every top-level
    decl, and the prelude's top-level constrained `showListItems` helper then has
-   two copies, which (in `medaka test stdlib/core.mdk`) made `show` on a list
+   two copies, which (in `medaka test stdlib/core.mdk`) made `debug` on a list
    element resolve to an ambiguous VMulti, sending `++` into the `append` method
    and looping forever.  Using the embedded `core.mdk` keeps this CWD-independent
    and in lock-step with the actual prelude (its `filter`/etc. examples render
-   lists via `Show (List a)`, exercising the constrained helper end-to-end). *)
+   lists via `Debug (List a)`, exercising the constrained helper end-to-end). *)
 let t_prelude_self_doctest_no_duplication () =
   with_tmp_file Prelude_content.core_mdk (fun path ->
     let r = Doctest.run_file path in
@@ -317,8 +317,8 @@ let t_prelude_self_doctest_no_duplication () =
         "expected prelude self-doctest to pass cleanly (no prelude duplication), \
          got passed=%d failed=%d errors=%d" r.passed r.failed r.errors))
 
-(* A sibling module exporting a type, a smart constructor, and a `Show` impl.
-   `widget` needs no imports of its own — the prelude (`Show`/`Semigroup
+(* A sibling module exporting a type, a smart constructor, and a `Debug` impl.
+   `widget` needs no imports of its own — the prelude (`Debug`/`Semigroup
    String`) is prepended in the multi-module typecheck. *)
 let widget_module = {|export
 data Widget = Widget Int
@@ -328,17 +328,17 @@ mkWidget : Int -> Widget
 mkWidget n = Widget n
 
 export
-impl Show Widget where
-  show (Widget n) = "W" ++ show n
+impl Debug Widget where
+  debug (Widget n) = "W" ++ debug n
 |}
 
 (* Phase 92: a doctest in a file that imports a *real* sibling module resolves
-   the sibling's `Show Widget` instance through the multi-module typecheck path.
+   the sibling's `Debug Widget` instance through the multi-module typecheck path.
    The single-file path (file + prelude only) never loads `widget`, so the impl
    is invisible and the example would error. *)
 let t_cross_module_instance_resolves () =
   let main = {|import widget.{mkWidget}
--- > show (mkWidget 5)
+-- > debug (mkWidget 5)
 -- "W5"
 |} in
   with_tmp_modules [("widget.mdk", widget_module); ("main.mdk", main)] "main.mdk"
@@ -354,7 +354,7 @@ let t_cross_module_instance_resolves () =
    Here `mkWidget` expects an Int but the doctest applies it to a String. *)
 let t_cross_module_typecheck_failure_is_honest () =
   let main = {|import widget.{mkWidget}
--- > show (mkWidget "oops")
+-- > debug (mkWidget "oops")
 -- "W?"
 |} in
   with_tmp_modules [("widget.mdk", widget_module); ("main.mdk", main)] "main.mdk"
