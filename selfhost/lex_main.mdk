@@ -1,0 +1,30 @@
+-- Entry point that drives the self-hosted lexer as a runnable program, so the
+-- differential harness can shell out to it:
+--
+--   medaka run selfhost/lex_main.mdk <source.mdk>
+--
+-- reads <source.mdk>, tokenizes it, and prints one token per line in the same
+-- canonical form as the OCaml reference's `Lexer.tokenize_string`.  Uses only
+-- prelude + global externs (no stdlib import), so it resolves with `selfhost/`
+-- as the sole project root.
+
+import lexer.{Token, tokenize, tokenToString}
+
+-- Join with newlines; no trailing newline (matches the golden TOKENS section).
+joinNl : List String -> String
+joinNl xs =
+  match xs
+    [] => ""
+    [x] => x
+    y :: rest => y ++ "\n" ++ joinNl rest
+
+emit : String -> <IO> Unit
+emit path =
+  match readFile path
+    Ok src => putStr (joinNl (map tokenToString (tokenize src)))
+    Err msg => ePutStrLn msg
+
+main =
+  match args ()
+    [path] => emit path
+    _ => ePutStrLn "usage: medaka run selfhost/lex_main.mdk <file>"

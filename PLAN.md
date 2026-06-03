@@ -28,7 +28,7 @@ constraint and delegated the remaining modules.
 **Conventions.** Work is still organized by numbered **Phases**; commit messages
 and code comments reference them. Phases that were left *partial* keep their
 original number (e.g. Phase 82, 101); genuinely new work gets the next free
-number (last used: 131). At task triage, match the work against AGENTS.md's
+number (last used: 132). At task triage, match the work against AGENTS.md's
 task-playbook table and load the matching skill before planning.
 
 ---
@@ -106,6 +106,13 @@ the OCaml compiler, and ultimately compiles *itself*. The output of this stage i
 a validated language and a compiler whose only slow part is the interpreter
 underneath it.
 
+**Started 2026-06-03 (Phase 132).** The self-host tree lives in `selfhost/`
+(see `selfhost/README.md`), and the validation loop is wired: `sh
+test/diff_selfhost_lexer.sh` runs the Medaka lexer on the interpreter over
+`test/diff_fixtures/` and diffs its token stream against the OCaml-emitted golden
+`=== TOKENS ===` sections. Scaffold + harness are in place; the lexer's
+`tokenize` is still a stub — porting it is the active slice.
+
 ### Stage 2 — LLVM backend (after self-host)
 
 With the language proven, build native codegen. The heavy, decision-dense work
@@ -138,6 +145,25 @@ strict priority. Where an item is a **Stage 0 prerequisite** for the north star
 above, it is flagged ⭐.
 
 ### Compiler / language
+
+- ⭐ **Phase 132 — self-host Stage 1: port the lexer to Medaka. IN PROGRESS
+  (started 2026-06-03).** First stage of the self-hosting effort (North star →
+  Stage 1). **Done so far:** the `selfhost/` scaffold + differential validation
+  loop — `selfhost/lexer.mdk` (the `Token` ADT and `tokenToString`, mirroring
+  `lib/lexer.mll`'s `token_to_string` byte-for-byte), `selfhost/lex_main.mdk` (a
+  runnable entry), and `test/diff_selfhost_lexer.sh` (runs the Medaka lexer over
+  `test/diff_fixtures/` and diffs token streams against the golden `=== TOKENS
+  ===` sections). Positive control (empty source) passes; 0/15 fixtures pass
+  because **`tokenize` is still a stub**. **Next slice:** port real tokenization —
+  literals → idents/keywords → operators/punctuation → the stateful
+  INDENT/DEDENT/NEWLINE layout algorithm (the hard part; `lib/lexer.mll` is the
+  reference). Lexer uses prelude + global externs only (no stdlib import), so
+  `selfhost/` is a single-root project; **stdlib access** (multi-root loader, or a
+  vendored stdlib) is the open decision for later stages (parser onward will want
+  `Map`/`List`/`string`). Byte-for-byte caveats already mapped: OCaml `%S`
+  escapes non-ASCII as decimal byte escapes (matters for `STRING`/`CHAR` tokens —
+  `debugStringLit` agrees on ASCII, verify on non-ASCII), and `FLOAT` uses `%g`
+  (vs `floatToString`). See `selfhost/README.md`.
 
 - **Phase 131 — add token-stream section to the diff harness. ✅ DONE
   (2026-06-03).** Added `Lexer.tokenize_string : string -> string list` +

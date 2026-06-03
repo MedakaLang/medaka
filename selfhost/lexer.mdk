@@ -1,0 +1,205 @@
+-- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
+--
+-- STATUS: scaffold.  `Token` and `tokenToString` mirror the OCaml reference
+-- (`lib/lexer.mll`'s `token_to_string`) byte-for-byte, so the differential
+-- harness (`test/diff_selfhost_lexer.sh`) can validate every future line of the
+-- port against the committed golden TOKENS sections in `test/diff_fixtures/`.
+-- `tokenize` itself is still a STUB — porting it is the next slice.
+
+public export data Token
+  = TInt Int
+  | TFloat Float
+  | TString String
+  | TChar String
+  | TBool Bool
+  | TInterpOpen String
+  | TInterpMid String
+  | TInterpEnd String
+  | TIdent String
+  | TUpper String
+  | TBacktickIdent String
+  | TLet
+  | TRec
+  | TWith
+  | TMut
+  | TIn
+  | TIf
+  | TThen
+  | TElse
+  | TMatch
+  | TData
+  | TRecord
+  | TInterface
+  | TDefault
+  | TImpl
+  | TImport
+  | TExport
+  | TPublic
+  | TWhere
+  | TOf
+  | TRequires
+  | TDo
+  | TAs
+  | TExtern
+  | TDeriving
+  | TType
+  | TNewtype
+  | TProp
+  | TTest
+  | TBench
+  | TFunction
+  | TPlus
+  | TMinus
+  | TStar
+  | TSlash
+  | TMod
+  | TEqEq
+  | TNeq
+  | TLt
+  | TGt
+  | TLeq
+  | TGeq
+  | TAnd
+  | TOr
+  | TCons
+  | TPlusPlus
+  | TStrAppend
+  | TPipeRight
+  | TRCompose
+  | TLCompose
+  | TFatArrow
+  | TArrow
+  | TLArrow
+  | TAt
+  | TBang
+  | TQuestion
+  | TAsAt
+  | TEqual
+  | TColon
+  | TComma
+  | TDot
+  | TPipe
+  | TUnderscore
+  | TLParen
+  | TRParen
+  | TLBracket
+  | TRBracket
+  | TLBrace
+  | TRBrace
+  | TLArray
+  | TRArray
+  | TDotLBrace
+  | TDotStar
+  | TEllipsis
+  | TDotDot
+  | TDotDotEq
+  | TNewline
+  | TIndent
+  | TDedent
+  | TEof
+
+-- Mirrors `lib/lexer.mll` `token_to_string`.  String-bearing tokens use
+-- `debugStringLit` (the `%S`-style quoted/escaped form); ints use `intToString`;
+-- bools render lowercase `true`/`false` (OCaml `%b`).
+export
+tokenToString : Token -> String
+tokenToString t =
+  match t
+    TInt n => "INT " ++ intToString n
+    TFloat f => "FLOAT " ++ floatToString f
+    TString s => "STRING " ++ debugStringLit s
+    TChar s => "CHAR " ++ debugStringLit s
+    TBool b => "BOOL " ++ (if b then "true" else "false")
+    TInterpOpen s => "INTERP_OPEN " ++ debugStringLit s
+    TInterpMid s => "INTERP_MID " ++ debugStringLit s
+    TInterpEnd s => "INTERP_END " ++ debugStringLit s
+    TIdent s => "IDENT " ++ debugStringLit s
+    TUpper s => "UPPER " ++ debugStringLit s
+    TBacktickIdent s => "BACKTICK_IDENT " ++ debugStringLit s
+    TLet => "LET"
+    TRec => "REC"
+    TWith => "WITH"
+    TMut => "MUT"
+    TIn => "IN"
+    TIf => "IF"
+    TThen => "THEN"
+    TElse => "ELSE"
+    TMatch => "MATCH"
+    TData => "DATA"
+    TRecord => "RECORD"
+    TInterface => "INTERFACE"
+    TDefault => "DEFAULT"
+    TImpl => "IMPL"
+    TImport => "IMPORT"
+    TExport => "EXPORT"
+    TPublic => "PUBLIC"
+    TWhere => "WHERE"
+    TOf => "OF"
+    TRequires => "REQUIRES"
+    TDo => "DO"
+    TAs => "AS"
+    TExtern => "EXTERN"
+    TDeriving => "DERIVING"
+    TType => "TYPE"
+    TNewtype => "NEWTYPE"
+    TProp => "PROP"
+    TTest => "TEST"
+    TBench => "BENCH"
+    TFunction => "FUNCTION"
+    TPlus => "PLUS"
+    TMinus => "MINUS"
+    TStar => "STAR"
+    TSlash => "SLASH"
+    TMod => "MOD"
+    TEqEq => "EQ_EQ"
+    TNeq => "NEQ"
+    TLt => "LT"
+    TGt => "GT"
+    TLeq => "LEQ"
+    TGeq => "GEQ"
+    TAnd => "AND"
+    TOr => "OR"
+    TCons => "CONS"
+    TPlusPlus => "PLUSPLUS"
+    TStrAppend => "STRAPPEND"
+    TPipeRight => "PIPE_RIGHT"
+    TRCompose => "RCOMPOSE"
+    TLCompose => "LCOMPOSE"
+    TFatArrow => "FAT_ARROW"
+    TArrow => "ARROW"
+    TLArrow => "LARROW"
+    TAt => "AT"
+    TBang => "BANG"
+    TQuestion => "QUESTION"
+    TAsAt => "AS_AT"
+    TEqual => "EQUAL"
+    TColon => "COLON"
+    TComma => "COMMA"
+    TDot => "DOT"
+    TPipe => "PIPE"
+    TUnderscore => "UNDERSCORE"
+    TLParen => "LPAREN"
+    TRParen => "RPAREN"
+    TLBracket => "LBRACKET"
+    TRBracket => "RBRACKET"
+    TLBrace => "LBRACE"
+    TRBrace => "RBRACE"
+    TLArray => "LARRAY"
+    TRArray => "RARRAY"
+    TDotLBrace => "DOT_LBRACE"
+    TDotStar => "DOT_STAR"
+    TEllipsis => "ELLIPSIS"
+    TDotDot => "DOTDOT"
+    TDotDotEq => "DOTDOT_EQ"
+    TNewline => "NEWLINE"
+    TIndent => "INDENT"
+    TDedent => "DEDENT"
+    TEof => "EOF"
+
+-- STUB.  The real tokenizer (literals, idents, keywords, operators, then the
+-- INDENT/DEDENT/NEWLINE layout algorithm) is the next slice.  For now it returns
+-- only the layout-terminated empty stream, which matches an empty source — just
+-- enough for the harness pass/fail loop to be exercised end-to-end.
+export
+tokenize : String -> List Token
+tokenize src = [TNewline, TEof]
