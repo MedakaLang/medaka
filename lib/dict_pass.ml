@@ -93,7 +93,7 @@ let rec run_decl arities d =
      method-level params, so a return-position ref in the body reads the impl's
      element dict.  Only return-position methods qualify — typecheck stamps an
      RDict route to `$dict_<method>_<slot>` only for those, so we add the params
-     exactly when the body references one (arg-position methods like show/eq stay
+     exactly when the body references one (arg-position methods like debug/eq stay
      on arg-tag).  Params named `dict_param_name method (k_method + slot)` to
      match the routes and the order eval applies res_impl_dicts. *)
   | DImpl ({ methods; requires; _ } as i) ->

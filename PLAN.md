@@ -297,7 +297,7 @@ above, it is flagged ⭐.
     promotion (`promotable_from`) from the hard-coded `Applicative` to *any*
     interface with a return-position method (`iface_has_return_position_method`),
     so `mk n = tag n` over a user `interface Tag a where tag : Int -> a` now
-    dispatches by result type. Argument-dispatched wrappers (`Eq`/`Show`/`Ord`)
+    dispatches by result type. Argument-dispatched wrappers (`Eq`/`Debug`/`Ord`)
     stay on arg tag (unchanged).
   - ~~Self-/mutually-recursive *unsignatured* wrappers under-infer their own
     recursive-call routing~~ — **DONE (Phase 115 #2).** Dropped the non-recursive

@@ -42,13 +42,13 @@
 -- caller who prefers the other container converts in one call rather than us
 -- doubling the API surface.
 
-import core.{Eq, Ord, Show, Foldable, Mappable, Option, Ordering}
+import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
 
 -- ── Rendering ─────────────────────────────────────────────────────────────
--- `Show String` and `Show Char` now live in the core prelude (`core.mdk`)
--- alongside the other primitive `Show` impls, so `show`-ing a String/Char
+-- `Debug String` and `Debug Char` now live in the core prelude (`core.mdk`)
+-- alongside the other primitive `Debug` impls, so `debug`-ing a String/Char
 -- resolves without importing `string` (Phase 92).  Both render a quoted,
--- escaped, round-trippable literal — `show "hi"` is `"hi"`, `show 'a'` is `'a'`
+-- escaped, round-trippable literal — `debug "hi"` is `"hi"`, `debug 'a'` is `'a'`
 -- — distinct from `println`, which emits the raw characters.
 
 -- ── Char operations ─────────────────────────────────────────────────────────

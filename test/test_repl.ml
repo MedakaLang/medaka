@@ -293,8 +293,8 @@ let t_poly_monad_pure_dispatch () =
     | _ -> failwith ("parse failed: " ^ src)
   in
   (Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
-     check_expr "println (show (f (Some 5)))\n";
-     check_expr "println (show (f [1, 2, 3]))\n"));
+     check_expr "println (debug (f (Some 5)))\n";
+     check_expr "println (debug (f [1, 2, 3]))\n"));
   let out = Buffer.contents buf in
   if out <> "Some 5\n[1, 2, 3]\n" then
     failwith (Printf.sprintf

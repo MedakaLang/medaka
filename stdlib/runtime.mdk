@@ -58,15 +58,15 @@ extern intMinBound : Int
 extern intMaxBound : Int
 extern charMinBound : Char
 extern charMaxBound : Char
--- Leaf renderers backing the `Show` impls in core.mdk / string.mdk.  These
--- expose the same OCaml formatting `pp_value` uses, so `show` agrees with
--- `println` on numbers.  `showStringLit`/`showCharLit` produce the *quoted,
--- escaped* literal form (round-trippable into source), so `show` on a String
+-- Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
+-- expose the same OCaml formatting `pp_value` uses, so `debug` agrees with
+-- `println` on numbers.  `debugStringLit`/`debugCharLit` produce the *quoted,
+-- escaped* literal form (round-trippable into source), so `debug` on a String
 -- intentionally differs from `println` (cf. Haskell `show` vs `putStr`).
 extern intToString : Int -> String
 extern floatToString : Float -> String
-extern showStringLit : String -> String
-extern showCharLit : Char -> String
+extern debugStringLit : String -> String
+extern debugCharLit : Char -> String
 extern assert_snapshot : String -> String -> <IO> Unit
 
 -- Array primitives.  These are the minimal kernel; stdlib/array.mdk is

@@ -136,7 +136,7 @@ List Int
 loaded stdlib/core.mdk — 12 bindings
 > :browse
 eq : a -> a -> Bool
-show : a -> String
+debug : a -> String
 ...
 > :quit
 ```
@@ -147,7 +147,7 @@ REPL meta-commands:
 |---------|-------|-------------|
 | `:quit` | `:q` | Exit the REPL |
 | `:reset` | | Clear all session bindings |
-| `:type <expr>` | `:t` | Show inferred type of an expression |
+| `:type <expr>` | `:t` | Print inferred type of an expression |
 | `:load <path>` | | Load a `.mdk` file into the session |
 | `:reload` | `:r` | Reload the last loaded file |
 | `:browse` | `:env` | List all bindings currently in scope |
@@ -174,7 +174,7 @@ available in all programs without an explicit import. See
 
 `stdlib/core.mdk` is automatically prepended (as a "prelude") to every user
 program at type-check and eval time, so its data types (`Option`, `Result`,
-`Ordering`), interfaces (`Eq`, `Ord`, `Show`, `Num`, `Mappable`, `Foldable`,
+`Ordering`), interfaces (`Eq`, `Ord`, `Debug`, `Num`, `Mappable`, `Foldable`,
 `Applicative`, `Thenable`, `Semigroup`, `Monoid`, …) and helpers (`identity`,
 `flip`, `compose`, `filter`, …) are available without an explicit import.
 The remaining stdlib modules (`list`, `string`, `array`, …) are written in

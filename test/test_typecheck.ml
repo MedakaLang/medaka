@@ -620,8 +620,8 @@ f xs = xs.[1..3]
 (* A constrained signature still type-checks (constraint vars are shared with
    the peeled arrow domains; constraint extraction is unchanged). *)
 let t_sig_constrained = assert_type
-  {|f : Show a => a -> String
-f x = show x
+  {|f : Debug a => a -> String
+f x = debug x
 |} "f" "a -> String"
 
 (* A fully polymorphic signature is neither over- nor under-generalized. *)
@@ -1075,7 +1075,7 @@ let t_iface_zero_param = assert_type
   "defaultSep" "String"
 
 (* Multi-method interface — fresh names so it doesn't collide with the
-   prelude's `Show` (which now carries tuple impls providing only `show`). *)
+   prelude's `Debug` (which now carries tuple impls providing only `debug`). *)
 let t_iface_multi_method = assert_type
   {|interface Pretty a where
   pp : a -> String
@@ -1087,18 +1087,18 @@ impl Pretty Int where
 |}
   "pp" "a -> String"
 
-(* Polymorphic impl — Show for Option *)
+(* Polymorphic impl — Debug for Option *)
 let t_iface_poly_impl = assert_type
-  {|interface Show a where
-  show : a -> String
+  {|interface Debug a where
+  debug : a -> String
 
-impl Show Int where
-  show x = "int"
+impl Debug Int where
+  debug x = "int"
 
-impl Show Bool where
-  show x = "bool"
+impl Debug Bool where
+  debug x = "bool"
 |}
-  "show" "a -> String"
+  "debug" "a -> String"
 
 (* Higher-kinded interface — MyMappable f (named distinctly from the prelude's
    Mappable so the prelude's existing impls don't conflict with the test's
@@ -1287,13 +1287,13 @@ f = mempty
 
 (* Polymorphic impl (Option a) matches a call on Option Int *)
 let t_constraint_poly_impl = assert_type
-  {|interface Show a where
-  show : a -> String
+  {|interface Debug a where
+  debug : a -> String
 
-impl Show (Option a) where
-  show x = "option"
+impl Debug (Option a) where
+  debug x = "option"
 
-f x = show (Some x)
+f x = debug (Some x)
 |}
   "f" "a -> String"
 
@@ -1569,12 +1569,12 @@ let e_orphan_impl_rejected = assert_orphan
   [ m_iface; m_type;
     ("c", "impl Iface T where\n  m x = 0\n") ]
 
-(* Orphan on a *core* interface: `impl Show T` in c, where T comes from b.  The
+(* Orphan on a *core* interface: `impl Debug T` in c, where T comes from b.  The
    prelude interface isn't an imported-user name, but the remote type T is — so
    the te_types path catches it. *)
 let e_orphan_core_iface_remote_type = assert_orphan
   [ m_type;
-    ("c", "impl Show T where\n  show x = \"T\"\n") ]
+    ("c", "impl Debug T where\n  debug x = \"T\"\n") ]
 
 (* OK: the impl lives in the module that defines the head type (interface
    imported). *)
@@ -1592,14 +1592,14 @@ let t_orphan_named_exempt = assert_modules_ok
   [ m_iface; m_type;
     ("c", "impl mine of Iface T where\n  m x = 0\n") ]
 
-(* OK (regression): a single-file prelude override — `impl Show Int` — has no
+(* OK (regression): a single-file prelude override — `impl Debug Int` — has no
    imported modules, so it is never an orphan. *)
 let t_orphan_prelude_override_ok = assert_type
-  {|impl Show Int where
-  show n = "int"
+  {|impl Debug Int where
+  debug n = "int"
 
 f : String
-f = show 5
+f = debug 5
 |}
   "f" "String"
 
@@ -1631,12 +1631,12 @@ f = eq Blob Blob
 |}
 
 (* Error: method called on a type entirely absent from the impl registry.
-   (Uses a fresh ADT with no `Show` impl — `show` on a prelude type like Bool
-   now resolves, since core carries base `Show` impls.) *)
+   (Uses a fresh ADT with no `Debug` impl — `debug` on a prelude type like Bool
+   now resolves, since core carries base `Debug` impls.) *)
 let e_constraint_missing_impl = assert_err
   {|data Widget = Widget
 
-g = show Widget
+g = debug Widget
 |}
 
 (* Error: multiple non-default impls, no disambiguation, at a concrete type *)
@@ -2563,25 +2563,25 @@ f = eq (Pair 1 2) (Pair 3 4)
 |}
   "f" "Bool"
 
-(* deriving Show on an enum: show on concrete value type-checks *)
+(* deriving Debug on an enum: debug on concrete value type-checks *)
 let t_derive_show_enum = assert_type
   {|
-interface Show a where
-  show : a -> String
-data Dir = North | South | East | West deriving (Show)
-f = show North
+interface Debug a where
+  debug : a -> String
+data Dir = North | South | East | West deriving (Debug)
+f = debug North
 |}
   "f" "String"
 
-(* deriving Show on a type with fields *)
+(* deriving Debug on a type with fields *)
 let t_derive_show_fields = assert_type
   {|
-interface Show a where
-  show : a -> String
-impl Show Int where
-  show x = "int"
-data Box = Box Int deriving (Show)
-f = show (Box 42)
+interface Debug a where
+  debug : a -> String
+impl Debug Int where
+  debug x = "int"
+data Box = Box Int deriving (Debug)
+f = debug (Box 42)
 |}
   "f" "String"
 
@@ -2603,11 +2603,11 @@ let t_derive_multi = assert_type
   {|
 interface Eq a where
   eq : a -> a -> Bool
-interface Show a where
-  show : a -> String
-data Suit = Clubs | Diamonds | Hearts | Spades deriving (Eq, Show)
+interface Debug a where
+  debug : a -> String
+data Suit = Clubs | Diamonds | Hearts | Spades deriving (Eq, Debug)
 useEq = eq Clubs Diamonds
-useShow = show Hearts
+useShow = debug Hearts
 |}
   "useEq" "Bool"
 
@@ -2643,15 +2643,15 @@ f = eq (Box 1) (Box 2)
 |}
   "f" "Bool"
 
-(* deriving Show on a parametric data type. *)
+(* deriving Debug on a parametric data type. *)
 let t_derive_show_param_data = assert_type
   {|
-interface Show a where
-  show : a -> String
-impl Show Int where
-  show x = "int"
-data Box a = Box a deriving (Show)
-f = show (Box 1)
+interface Debug a where
+  debug : a -> String
+impl Debug Int where
+  debug x = "int"
+data Box a = Box a deriving (Debug)
+f = debug (Box 1)
 |}
   "f" "String"
 
@@ -2670,7 +2670,7 @@ f = compare (Box 1) (Box 2)
 |}
   "f" "Ordering"
 
-(* deriving Eq/Show/Ord on a parametric record with two params. *)
+(* deriving Eq/Debug/Ord on a parametric record with two params. *)
 let t_derive_param_record = assert_type
   {|
 interface Eq a where
@@ -2850,7 +2850,7 @@ let t_interp_empty_ok =
     "a = \"start\"\nb = \"end\"\nx = \"\\{a}\\{b}\"\n"
     "x" "String"
 
-(* A non-String hole no longer needs explicit `show`: the hole desugars to
+(* A non-String hole no longer needs explicit `debug`: the hole desugars to
    `display e`, and `Display Int` renders it unquoted. *)
 let t_interp_int_in_hole =
   assert_type "x = \"value: \\{42}\"\n" "x" "String"
@@ -4265,15 +4265,15 @@ let () =
     "deriving (Phase 19)", [
       test_case "Eq enum"                `Quick t_derive_eq_enum;
       test_case "Eq with fields"         `Quick t_derive_eq_fields;
-      test_case "Show enum"              `Quick t_derive_show_enum;
-      test_case "Show with fields"       `Quick t_derive_show_fields;
+      test_case "Debug enum"              `Quick t_derive_show_enum;
+      test_case "Debug with fields"       `Quick t_derive_show_fields;
       test_case "Ord enum"               `Quick t_derive_ord_enum;
       test_case "multi-derive"           `Quick t_derive_multi;
       test_case "Eq record"              `Quick t_derive_eq_record;
     ];
     "deriving on parametric types (Phase 63)", [
       test_case "Eq param data"          `Quick t_derive_eq_param_data;
-      test_case "Show param data"        `Quick t_derive_show_param_data;
+      test_case "Debug param data"        `Quick t_derive_show_param_data;
       test_case "Ord param data"         `Quick t_derive_ord_param_data;
       test_case "Eq param record"        `Quick t_derive_param_record;
     ];

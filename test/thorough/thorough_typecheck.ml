@@ -734,7 +734,7 @@ let t_list_filter_returns_same =
 let t_list_fold_int_sum =
   assert_type "r = fold (a => b => a + b) 0 [1, 2, 3]\n" "r" "Int"
 
-(* fold to convert list of ints to string concatenation? — uses show. *)
+(* fold to convert list of ints to string concatenation? — uses debug. *)
 
 (* =====================================================================
    15. Match arms — exhaustiveness + types
@@ -1125,6 +1125,6 @@ let () =
       ( "interpolation typing",
         [ test_case "int hole via Display"  `Quick t_interp_int_hole
         ; test_case "string hole"           `Quick t_interp_string_hole
-        ; test_case "err: no Show"          `Quick e_interp_no_show
+        ; test_case "err: no Debug"          `Quick e_interp_no_show
         ] );
     ]

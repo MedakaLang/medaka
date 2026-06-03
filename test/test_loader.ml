@@ -857,7 +857,7 @@ let test_eval_poly_monad_cross_module () =
       \  x <- m\n\
       \  pure x\n\n\
        main : <IO> Unit\n\
-       main = println (show (h (Some (id2 5))))\n" in
+       main = println (debug (h (Some (id2 5))))\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in
@@ -913,7 +913,7 @@ let test_eval_poly_monad_imported_module () =
     let main_path = write_file dir "main.mdk"
       "import dep.{f}\n\n\
        main : <IO> Unit\n\
-       main = println (show (f (Some 5)))\n" in
+       main = println (debug (f (Some 5)))\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in
@@ -985,10 +985,10 @@ let test_eval_foldable_derived_imported_instance () =
       "import cont.{Bag, fromL}\n\n\
        main : <IO> Unit\n\
        main =\n\
-      \  println (show (sum (fromL [1, 2, 3])))\n\
-      \  println (show (maximum (fromL [3, 1, 2])))\n\
-      \  println (show (product (fromL [2, 3, 4])))\n\
-      \  println (show (length (fromL [1, 2, 3])))\n" in
+      \  println (debug (sum (fromL [1, 2, 3])))\n\
+      \  println (debug (maximum (fromL [3, 1, 2])))\n\
+      \  println (debug (product (fromL [2, 3, 4])))\n\
+      \  println (debug (length (fromL [1, 2, 3])))\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in

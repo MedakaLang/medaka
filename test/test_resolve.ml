@@ -292,7 +292,7 @@ let v_at_hint_standalone =
 (* Methods declared in core.mdk's interfaces must be in scope in user
    files even when no impl in core provides them — bare interface
    defaults count.  Regression test for the resolver gap that left
-   `max`/`min`/`show` unbound (see project_resolver_prelude_methods.md). *)
+   `max`/`min`/`debug` unbound (see project_resolver_prelude_methods.md). *)
 let v_prelude_method_max_in_scope =
   assert_ok "result = max 3 5\n"
 
@@ -300,7 +300,7 @@ let v_prelude_method_min_in_scope =
   assert_ok "result = min 3 5\n"
 
 let v_prelude_method_show_in_scope =
-  assert_ok "result = show 42\n"
+  assert_ok "result = debug 42\n"
 
 (* Methods that already had core-provided impls should still resolve —
    guard against the fix accidentally double-seeding and breaking these. *)
@@ -449,7 +449,7 @@ let () =
     "prelude methods in user scope", [
       test_case "max ok"     `Quick v_prelude_method_max_in_scope;
       test_case "min ok"     `Quick v_prelude_method_min_in_scope;
-      test_case "show ok"    `Quick v_prelude_method_show_in_scope;
+      test_case "debug ok"    `Quick v_prelude_method_show_in_scope;
       test_case "eq still ok" `Quick v_prelude_method_eq_in_scope;
       test_case "compare still ok" `Quick v_prelude_method_compare_in_scope;
     ];

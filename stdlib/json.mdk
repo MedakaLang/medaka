@@ -3,7 +3,7 @@
    A from-scratch recursive-descent JSON implementation, written to exercise a
    wide cross-section of the stdlib: a recursive ADT, `Array`-backed storage,
    `Char`/`String` kernel handling, `Result` error threading, and the
-   `Eq`/`Show`/`Display` interfaces.
+   `Eq`/`Debug`/`Display` interfaces.
 
    **Value model.**
    ```
@@ -32,7 +32,7 @@
    **Not handled (v1):** `\uXXXX` surrogate pairs (astral codepoints); strict
    leading-zero / number-grammar rejection (the number scan is lenient). -}
 
-import core.{Eq, Show, Display, Option, Result}
+import core.{Eq, Debug, Display, Option, Result}
 import list.{reverse}
 import string.{join, fromChars, isDigit, toInt}
 
@@ -531,9 +531,9 @@ export impl Eq Json where
   eq (JObject a) (JObject b) = arrayLength a == arrayLength b && objEqJson a b 0
   eq _ _ = False
 
-{- | `show` renders compact JSON text (same as `stringify`). -}
-export impl Show Json where
-  show j = stringify j
+{- | `debug` renders compact JSON text (same as `stringify`). -}
+export impl Debug Json where
+  debug j = stringify j
 
 {- | `display`/`\{…}` also render compact JSON text. -}
 export impl Display Json where

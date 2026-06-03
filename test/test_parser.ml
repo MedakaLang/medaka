@@ -1289,10 +1289,10 @@ let test_constraint_multi () =
   | d -> failwith ("wrong: " ^ pp_decl d)
 
 let test_constraint_no_args () =
-  match parse_one "f : Show a => a -> String\n" with
+  match parse_one "f : Debug a => a -> String\n" with
   | DTypeSig (false, "f",
       TyConstrained (
-        [("Show", [TyVar "a"])],
+        [("Debug", [TyVar "a"])],
         TyFun (TyVar "a", TyCon "String"))) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 

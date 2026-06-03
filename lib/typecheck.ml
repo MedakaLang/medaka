@@ -2442,7 +2442,7 @@ let process_letrec_group env_ref placeholders (is_letrec, members) =
      entries prepended while inferring this group's bodies can be harvested below.
      A constraint the body imposes comes from two sources: a call to another
      constrained function (constraint_obligations) or a direct interface-method
-     call like `eq`/`show` (method_usages, carrying the interface + its
+     call like `eq`/`debug` (method_usages, carrying the interface + its
      instantiated param vars).  When the discriminating var lands in a binding's
      generalized [bound_ids] the constraint is polymorphic in that scheme —
      inferred for an unsignatured binding, and checked for sufficiency against a
@@ -3082,7 +3082,7 @@ let check_impl env (decl : decl) = match decl with
     if impl_inst_cs <> [] then begin
       let this_key = Ast.impl_key ~iface:iface_name ~type_args ~name:impl_name in
       (* Only return-position methods need the dict; arg-position methods
-         (show/eq/compare) stay on arg-tag dispatch, which handles nesting. *)
+         (debug/eq/compare) stay on arg-tag dispatch, which handles nesting. *)
       List.iter (fun (n, _, _) ->
         match List.assoc_opt n info.iface_methods with
         | Some msc when not (method_param_in_arg_position msc info.iface_param_ids) ->
@@ -3280,8 +3280,8 @@ let rec tycons_of (t : Ast.ty) : ident list =
 (* Interface and type names declared by the implicit prelude (core).  Used to
    strip prelude entries that leak into every module's te_interfaces (built from
    the prelude-prepended `prog`): otherwise a module that merely *imports* a user
-   module would see Show/Eq/etc. attributed to it, and a legitimate prelude
-   override like `impl Show Int` would be mis-flagged as an orphan. *)
+   module would see Debug/Eq/etc. attributed to it, and a legitimate prelude
+   override like `impl Debug Int` would be mis-flagged as an orphan. *)
 let iface_names_of_decls decls =
   List.filter_map (fun d -> match Ast.inner_decl d with
     | DInterface { iface_name; _ } -> Some iface_name | _ -> None) decls
@@ -3466,7 +3466,7 @@ let find_enclosing_dict env iface (ids_present : int list) : Ast.ident option =
   if !result = None then
     Hashtbl.iter (fun mname impls ->
       (* Impl-requires params follow the method's own method-level params, so
-         offset the impl-local slot by that count (0 for Arbitrary/Eq/Ord/Show). *)
+         offset the impl-local slot by that count (0 for Arbitrary/Eq/Ord/Debug). *)
       let method_off = match Hashtbl.find_opt env.method_constraints mname with
         | Some cs -> List.length cs | None -> 0 in
       if !result = None then
@@ -3574,7 +3574,7 @@ let check_method_usages env =
       (* Only stamp impl dicts for return-position methods — the same gate as
          check_impl's registration and dict_pass's param insertion, so the dicts
          eval applies match the params on the impl clause. Arg-position methods
-         (show/eq/compare) stay on arg-tag dispatch. *)
+         (debug/eq/compare) stay on arg-tag dispatch. *)
       let method_is_return_pos =
         match Hashtbl.find_opt env.interfaces iface_name with
         | Some info ->
@@ -3859,7 +3859,7 @@ let program_is_core (prog : program) : bool =
    a value of that type and cannot be arg-tag-dispatched?  Such a constraint, when
    inferred on an unsignatured wrapper, must be promoted to a dictionary or its
    return-position ref mis-dispatches under arg-tag fallback.  Interfaces whose
-   params are all arg-position (`Eq`/`Ord`/`Show`/`Num`/`Mappable`) need no
+   params are all arg-position (`Eq`/`Ord`/`Debug`/`Num`/`Mappable`) need no
    promotion — arg tag already dispatches them correctly. *)
 let iface_has_return_position_method (env : env) (iface : ident) : bool =
   match Hashtbl.find_opt env.interfaces iface with

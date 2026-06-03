@@ -240,16 +240,16 @@ main =
    `maxBound`) dispatched purely by its result type.  The typechecker stamps an
    RKey route correctly, but eval must strip the chosen impl's dispatch wrapper
    before the bare value (never applied) flows into the program — otherwise it
-   leaks a VTypedImpl and downstream show / pattern-match / append panic. *)
+   leaks a VTypedImpl and downstream debug / pattern-match / append panic. *)
 let t_nullary_empty_stdlib_monoid = assert_output_typed
   {|e : List Int
 e = empty
 
 main : <IO> Unit
 main =
-  println (show e)
-  println (show (empty : List Int))
-  println (show (append (empty : List Int) [1, 2]))
+  println (debug e)
+  println (debug (empty : List Int))
+  println (debug (append (empty : List Int) [1, 2]))
 |}
   "[]\n[]\n[1, 2]\n"
 
@@ -321,14 +321,14 @@ hi = maxBound
 
 main : <IO> Unit
 main =
-  println (show lo)
-  println (show hi)
+  println (debug lo)
+  println (debug hi)
 |}
   "False\nTrue\n"
 
 (* Phase 93: the *stdlib* `Bounded Int` / `Bounded Char` impls (no local impl),
    each dispatched purely by an annotated result type.  `Char` bounds go through
-   `charCode` to keep the result an Int (Show Char isn't reachable here). *)
+   `charCode` to keep the result an Int (Debug Char isn't reachable here). *)
 let t_nullary_bounded_int = assert_output_typed
   {|lo : Int
 lo = minBound
@@ -337,15 +337,15 @@ hi = maxBound
 
 main : <IO> Unit
 main =
-  println (show (lo < hi))
+  println (debug (lo < hi))
 |}
   "True\n"
 
 let t_nullary_bounded_char = assert_output_typed
   {|main : <IO> Unit
 main =
-  println (show (charCode (minBound : Char)))
-  println (show (charCode (maxBound : Char)))
+  println (debug (charCode (minBound : Char)))
+  println (debug (charCode (maxBound : Char)))
 |}
   "0\n1114111\n"
 
@@ -570,7 +570,7 @@ tk _ [] = []
 tk n (x :: xs) = x :: tk (n - 1) xs
 
 main : <IO> Unit
-main = println (show (tk 2 [10, 20, 30, 40]))
+main = println (debug (tk 2 [10, 20, 30, 40]))
 |}
   "[10, 20]\n"
 
