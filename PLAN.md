@@ -147,23 +147,34 @@ above, it is flagged ⭐.
 ### Compiler / language
 
 - ⭐ **Phase 132 — self-host Stage 1: port the lexer to Medaka. IN PROGRESS
-  (started 2026-06-03).** First stage of the self-hosting effort (North star →
-  Stage 1). **Done so far:** the `selfhost/` scaffold + differential validation
-  loop — `selfhost/lexer.mdk` (the `Token` ADT and `tokenToString`, mirroring
-  `lib/lexer.mll`'s `token_to_string` byte-for-byte), `selfhost/lex_main.mdk` (a
-  runnable entry), and `test/diff_selfhost_lexer.sh` (runs the Medaka lexer over
-  `test/diff_fixtures/` and diffs token streams against the golden `=== TOKENS
-  ===` sections). Positive control (empty source) passes; 0/15 fixtures pass
-  because **`tokenize` is still a stub**. **Next slice:** port real tokenization —
-  literals → idents/keywords → operators/punctuation → the stateful
-  INDENT/DEDENT/NEWLINE layout algorithm (the hard part; `lib/lexer.mll` is the
-  reference). Lexer uses prelude + global externs only (no stdlib import), so
-  `selfhost/` is a single-root project; **stdlib access** (multi-root loader, or a
-  vendored stdlib) is the open decision for later stages (parser onward will want
-  `Map`/`List`/`string`). Byte-for-byte caveats already mapped: OCaml `%S`
-  escapes non-ASCII as decimal byte escapes (matters for `STRING`/`CHAR` tokens —
-  `debugStringLit` agrees on ASCII, verify on non-ASCII), and `FLOAT` uses `%g`
-  (vs `floatToString`). See `selfhost/README.md`.
+  (started 2026-06-03); lexer fixture-complete.** First stage of the self-hosting
+  effort (North star → Stage 1). **Done:** the `selfhost/` scaffold + differential
+  validation loop (`selfhost/lexer.mdk`, `selfhost/lex_main.mdk`,
+  `test/diff_selfhost_lexer.sh`), and the full tokenizer — literals, idents/
+  keywords, operators/punctuation, line comments, string interpolation, and a
+  faithful port of `lib/lexer.mll`'s INDENT/DEDENT/NEWLINE layout algorithm +
+  else-continuation filter + leading-operator continuation. **All 15/15 fixtures
+  in `test/diff_fixtures/` match the OCaml reference byte-for-byte.** Pure
+  two-pass design (scan → RawTok stream with `RNewline` markers; layout pass →
+  INDENT/DEDENT/NEWLINE). Lexer uses prelude + global externs only (no stdlib
+  import), so `selfhost/` is a single-root project.
+  **Remaining for full `lib/lexer.mll` equivalence** (no fixture exercises them,
+  but needed before the lexer can tokenize real compiler/stdlib source):
+  hex/bin/oct int literals, triple-quoted strings, `{- … -}` block comments, the
+  `@`/`AS_AT` adjacency rule, nested interpolation. **Next validation step:** diff
+  the Medaka lexer against the OCaml lexer on real `.mdk` files (stdlib) — a
+  stronger test than the curated fixtures, which will surface exactly which of the
+  above are needed. Then the parser stage (which forces the **stdlib-access**
+  decision: multi-root loader or vendored `Map`/`List`/`string`).
+  **Two self-host-surfaced compiler quirks to file/fix:** (1) char literals do no
+  escape processing, so newline/tab/quote/backslash must be matched by `charCode`
+  (worked around in `lexer.mdk`); (2) an `<IO>`-returning *helper* called from a
+  `match` arm is not forced by the eval driver — the action is returned but never
+  run (clean exit, no output) — while the inline form runs (`lex_main.mdk` is
+  written inline to dodge it). (2) deserves a minimal repro + fix. Byte-for-byte
+  serialization caveats mapped: OCaml `%S` escapes non-ASCII as decimal byte
+  escapes (`debugStringLit` agrees on ASCII), `FLOAT` uses `%g` (vs
+  `floatToString`). See `selfhost/README.md`.
 
 - **Phase 131 — add token-stream section to the diff harness. ✅ DONE
   (2026-06-03).** Added `Lexer.tokenize_string : string -> string list` +

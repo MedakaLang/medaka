@@ -1,14 +1,17 @@
 -- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
 --
--- STATUS: tokenizer ported (literals, idents/keywords, operators/punctuation,
--- comments, and the INDENT/DEDENT/NEWLINE layout algorithm + else-continuation
--- filter + leading-operator continuation).  Validated against the OCaml
--- reference by `test/diff_selfhost_lexer.sh`: 13/15 fixtures match byte-for-byte.
--- NOT YET DONE: string interpolation (`\{expr}` → INTERP_OPEN/MID/END) — the two
--- remaining fixtures (`adt_maybe`, `string_ops`) need it.  Also deferred (no
--- fixture exercises them): triple-quoted strings, block comments, `@`/`AS_AT`
--- adjacency.  `Token`/`tokenToString` mirror `lib/lexer.mll`'s `token_to_string`
--- byte-for-byte.
+-- STATUS: tokenizer ported — literals (int/float/string/char), idents/keywords,
+-- operators/punctuation, line comments, string interpolation (`\{expr}` →
+-- INTERP_OPEN/MID/END), and a faithful port of lib/lexer.mll's
+-- INDENT/DEDENT/NEWLINE layout algorithm + else-continuation filter +
+-- leading-operator continuation.  **All 15/15 fixtures in test/diff_fixtures/
+-- match the OCaml reference byte-for-byte** (via test/diff_selfhost_lexer.sh).
+--
+-- Not yet ported (no fixture exercises them; needed for full lib/lexer.mll
+-- equivalence before the lexer can tokenize real compiler source): hex/bin/oct
+-- int literals, triple-quoted strings, `{- … -}` block comments, the `@`/`AS_AT`
+-- adjacency rule, and nested interpolation (`\{` reset). `Token`/`tokenToString`
+-- mirror `token_to_string` byte-for-byte.
 
 public export data Token
   = TInt Int
@@ -287,23 +290,27 @@ keywordOrIdent s
   | otherwise = TIdent s
 
 -- ── Scanner ─────────────────────────────────────────────────────────────
--- scan : src len pos parenDepth -> List RawTok
-scan src len pos depth
+-- scan : src len pos parenDepth interpDepth -> List RawTok
+-- `id` (interp depth) is 0 outside string interpolation; inside a `\{ … }`
+-- interpolation it is the brace nesting (1 = the interpolation's own braces),
+-- so a `}` that brings it back to 0 resumes string scanning rather than closing
+-- a paren group. Mirrors lib/lexer.mll's `interp_depth`.
+scan src len pos depth id
   | pos >= len = []
-  | otherwise = scanAt src len pos depth (at src pos)
+  | otherwise = scanAt src len pos depth id (at src pos)
 
-scanAt src len pos depth c
-  | isSpace c = scan src len (pos + 1) depth
-  | isNL c || isCR c = handleNewline src len pos depth
+scanAt src len pos depth id c
+  | isSpace c = scan src len (pos + 1) depth id
+  | isNL c || isCR c = handleNewline src len pos depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
-      scan src len (skipLineComment src len pos) depth
-  | isDigit c = scanNumber src len pos depth
-  | isQuote c = scanStr src len (pos + 1) depth ""
-  | isApos c = scanChar src len pos depth
-  | isLower c || c == '_' = scanLower src len pos depth
-  | isUpper c = scanUpper src len pos depth
-  | isBacktick c = scanBacktick src len pos depth
-  | otherwise = scanOp src len pos depth c
+      scan src len (skipLineComment src len pos) depth id
+  | isDigit c = scanNumber src len pos depth id
+  | isQuote c = scanStr src len (pos + 1) depth id ""
+  | isApos c = scanChar src len pos depth id
+  | isLower c || c == '_' = scanLower src len pos depth id
+  | isUpper c = scanUpper src len pos depth id
+  | isBacktick c = scanBacktick src len pos depth id
+  | otherwise = scanOp src len pos depth id c
 
 skipLineComment src len p
   | p >= len = p
@@ -315,21 +322,21 @@ identEnd src len p
   | p < len && isAlnum (at src p) = identEnd src len (p + 1)
   | otherwise = p
 
-scanLower src len pos depth =
+scanLower src len pos depth id =
   let e = identEnd src len (pos + 1)
-  RTok (identToken src pos e) :: scan src len e depth
+  RTok (identToken src pos e) :: scan src len e depth id
 
 identToken src pos e
   | at src pos == '_' && e - pos == 1 = TUnderscore
   | otherwise = keywordOrIdent (substr src pos e)
 
-scanUpper src len pos depth =
+scanUpper src len pos depth id =
   let e = identEnd src len (pos + 1)
-  RTok (TUpper (substr src pos e)) :: scan src len e depth
+  RTok (TUpper (substr src pos e)) :: scan src len e depth id
 
-scanBacktick src len pos depth =
+scanBacktick src len pos depth id =
   let e = btClose src len (pos + 1)
-  RTok (TBacktickIdent (substr src (pos + 1) e)) :: scan src len (e + 1) depth
+  RTok (TBacktickIdent (substr src (pos + 1) e)) :: scan src len (e + 1) depth id
 
 btClose src len p
   | p >= len = p
@@ -341,39 +348,58 @@ digitsEnd src len p
   | p < len && (isDigit (at src p) || at src p == '_') = digitsEnd src len (p + 1)
   | otherwise = p
 
-scanNumber src len pos depth = numFinish src len pos (digitsEnd src len pos) depth
+scanNumber src len pos depth id = numFinish src len pos (digitsEnd src len pos) depth id
 
 isFloatAt src len e1 =
   e1 < len && at src e1 == '.' && e1 + 1 < len && isDigit (at src (e1 + 1))
 
-numFinish src len pos e1 depth
-  | isFloatAt src len e1 = floatTok src len pos e1 depth
-  | otherwise = RTok (TInt (parseIntFrom src pos e1 0)) :: scan src len e1 depth
+numFinish src len pos e1 depth id
+  | isFloatAt src len e1 = floatTok src len pos e1 depth id
+  | otherwise = RTok (TInt (parseIntFrom src pos e1 0)) :: scan src len e1 depth id
 
-floatTok src len pos e1 depth =
+floatTok src len pos e1 depth id =
   let e2 = digitsEnd src len (e1 + 1)
-  RTok (TFloat (fromOption 0.0 (stringToFloat (substrNoUs src pos e2)))) :: scan src len e2 depth
+  RTok (TFloat (fromOption 0.0 (stringToFloat (substrNoUs src pos e2)))) :: scan src len e2 depth id
 
--- strings (escapes processed into the content; interpolation \{ deferred)
-scanStr src len p depth acc
-  | p >= len = RTok (TString acc) :: scan src len p depth
-  | isQuote (at src p) = RTok (TString acc) :: scan src len (p + 1) depth
-  | isBackslash (at src p) && p + 1 < len = scanStrEsc src len p depth acc (at src (p + 1))
-  | otherwise = scanStr src len (p + 1) depth (acc ++ charToStr (at src p))
+-- strings (escapes processed into the content; `\{` opens an interpolation)
+scanStr src len p depth id acc
+  | p >= len = RTok (TString acc) :: scan src len p depth id
+  | isQuote (at src p) = RTok (TString acc) :: scan src len (p + 1) depth id
+  | isBackslash (at src p) && p + 1 < len = scanStrEsc src len p depth id acc (at src (p + 1))
+  | otherwise = scanStr src len (p + 1) depth id (acc ++ charToStr (at src p))
 
-scanStrEsc src len p depth acc e
-  | e == 'n' = scanStr src len (p + 2) depth (acc ++ "\n")
-  | e == 't' = scanStr src len (p + 2) depth (acc ++ "\t")
-  | isQuote e = scanStr src len (p + 2) depth (acc ++ "\"")
-  | isBackslash e = scanStr src len (p + 2) depth (acc ++ "\\")
-  | e == 'r' = scanStr src len (p + 2) depth (acc ++ "\r")
-  | e == '0' = scanStr src len (p + 2) depth (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
-  | otherwise = scanStr src len (p + 2) depth (acc ++ charToStr e)
+scanStrEsc src len p depth id acc e
+  | e == '{' = RTok (TInterpOpen acc) :: scan src len (p + 2) depth 1
+  | e == 'n' = scanStr src len (p + 2) depth id (acc ++ "\n")
+  | e == 't' = scanStr src len (p + 2) depth id (acc ++ "\t")
+  | isQuote e = scanStr src len (p + 2) depth id (acc ++ "\"")
+  | isBackslash e = scanStr src len (p + 2) depth id (acc ++ "\\")
+  | e == 'r' = scanStr src len (p + 2) depth id (acc ++ "\r")
+  | e == '0' = scanStr src len (p + 2) depth id (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | otherwise = scanStr src len (p + 2) depth id (acc ++ charToStr e)
+
+-- string part after an interpolation's `}` closes (`\{`→INTERP_MID, `"`→INTERP_END)
+scanInterpCont src len p depth acc
+  | p >= len = RTok (TInterpEnd acc) :: scan src len p depth 0
+  | isQuote (at src p) = RTok (TInterpEnd acc) :: scan src len (p + 1) depth 0
+  | isBackslash (at src p) && p + 1 < len && at src (p + 1) == '{' =
+      RTok (TInterpMid acc) :: scan src len (p + 2) depth 1
+  | isBackslash (at src p) && p + 1 < len = scanInterpEsc src len p depth acc (at src (p + 1))
+  | otherwise = scanInterpCont src len (p + 1) depth (acc ++ charToStr (at src p))
+
+scanInterpEsc src len p depth acc e
+  | e == 'n' = scanInterpCont src len (p + 2) depth (acc ++ "\n")
+  | e == 't' = scanInterpCont src len (p + 2) depth (acc ++ "\t")
+  | isQuote e = scanInterpCont src len (p + 2) depth (acc ++ "\"")
+  | isBackslash e = scanInterpCont src len (p + 2) depth (acc ++ "\\")
+  | e == 'r' = scanInterpCont src len (p + 2) depth (acc ++ "\r")
+  | e == '0' = scanInterpCont src len (p + 2) depth (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | otherwise = scanInterpCont src len (p + 2) depth (acc ++ charToStr e)
 
 -- char literals (raw inner bytes, no escape processing — matches the runtime)
-scanChar src len pos depth =
+scanChar src len pos depth id =
   let e = charClose src len (pos + 1)
-  RTok (TChar (substr src (pos + 1) e)) :: scan src len (e + 1) depth
+  RTok (TChar (substr src (pos + 1) e)) :: scan src len (e + 1) depth id
 
 charClose src len p
   | p >= len = p
@@ -381,62 +407,72 @@ charClose src len p
   | otherwise = charClose src len (p + 1)
 
 -- operators + punctuation
-emit src len pos depth tok length ddelta =
-  RTok tok :: scan src len (pos + length) (depth + ddelta)
+emit src len pos depth id tok length ddelta =
+  RTok tok :: scan src len (pos + length) (depth + ddelta) id
 
-scanOp src len pos depth c
-  | is3 src len pos '.' '.' '.' = emit src len pos depth TEllipsis 3 0
-  | is3 src len pos '.' '.' '=' = emit src len pos depth TDotDotEq 3 0
-  | is2 src len pos '[' '|' = emit src len pos depth TLArray 2 1
-  | is2 src len pos '|' ']' = emit src len pos depth TRArray 2 (0 - 1)
-  | is2 src len pos '=' '>' = emit src len pos depth TFatArrow 2 0
-  | is2 src len pos '-' '>' = emit src len pos depth TArrow 2 0
-  | is2 src len pos '<' '-' = emit src len pos depth TLArrow 2 0
-  | is2 src len pos ':' ':' = emit src len pos depth TCons 2 0
-  | is2 src len pos '+' '+' = emit src len pos depth TPlusPlus 2 0
-  | is2 src len pos '<' '>' = emit src len pos depth TStrAppend 2 0
-  | is2 src len pos '=' '=' = emit src len pos depth TEqEq 2 0
-  | is2 src len pos '!' '=' = emit src len pos depth TNeq 2 0
-  | is2 src len pos '<' '=' = emit src len pos depth TLeq 2 0
-  | is2 src len pos '>' '=' = emit src len pos depth TGeq 2 0
-  | is2 src len pos '&' '&' = emit src len pos depth TAnd 2 0
-  | is2 src len pos '|' '|' = emit src len pos depth TOr 2 0
-  | is2 src len pos '|' '>' = emit src len pos depth TPipeRight 2 0
-  | is2 src len pos '>' '>' = emit src len pos depth TRCompose 2 0
-  | is2 src len pos '<' '<' = emit src len pos depth TLCompose 2 0
-  | is2 src len pos '.' '{' = emit src len pos depth TDotLBrace 2 1
-  | is2 src len pos '.' '*' = emit src len pos depth TDotStar 2 0
-  | is2 src len pos '.' '.' = emit src len pos depth TDotDot 2 0
-  | otherwise = singleOp src len pos depth c
+scanOp src len pos depth id c
+  | is3 src len pos '.' '.' '.' = emit src len pos depth id TEllipsis 3 0
+  | is3 src len pos '.' '.' '=' = emit src len pos depth id TDotDotEq 3 0
+  | is2 src len pos '[' '|' = emit src len pos depth id TLArray 2 1
+  | is2 src len pos '|' ']' = emit src len pos depth id TRArray 2 (0 - 1)
+  | is2 src len pos '=' '>' = emit src len pos depth id TFatArrow 2 0
+  | is2 src len pos '-' '>' = emit src len pos depth id TArrow 2 0
+  | is2 src len pos '<' '-' = emit src len pos depth id TLArrow 2 0
+  | is2 src len pos ':' ':' = emit src len pos depth id TCons 2 0
+  | is2 src len pos '+' '+' = emit src len pos depth id TPlusPlus 2 0
+  | is2 src len pos '<' '>' = emit src len pos depth id TStrAppend 2 0
+  | is2 src len pos '=' '=' = emit src len pos depth id TEqEq 2 0
+  | is2 src len pos '!' '=' = emit src len pos depth id TNeq 2 0
+  | is2 src len pos '<' '=' = emit src len pos depth id TLeq 2 0
+  | is2 src len pos '>' '=' = emit src len pos depth id TGeq 2 0
+  | is2 src len pos '&' '&' = emit src len pos depth id TAnd 2 0
+  | is2 src len pos '|' '|' = emit src len pos depth id TOr 2 0
+  | is2 src len pos '|' '>' = emit src len pos depth id TPipeRight 2 0
+  | is2 src len pos '>' '>' = emit src len pos depth id TRCompose 2 0
+  | is2 src len pos '<' '<' = emit src len pos depth id TLCompose 2 0
+  | is2 src len pos '.' '{' = emit src len pos depth id TDotLBrace 2 1
+  | is2 src len pos '.' '*' = emit src len pos depth id TDotStar 2 0
+  | is2 src len pos '.' '.' = emit src len pos depth id TDotDot 2 0
+  | otherwise = singleOp src len pos depth id c
 
-singleOp src len pos depth c
-  | c == '+' = emit src len pos depth TPlus 1 0
-  | c == '-' = emit src len pos depth TMinus 1 0
-  | c == '*' = emit src len pos depth TStar 1 0
-  | c == '/' = emit src len pos depth TSlash 1 0
-  | c == '<' = emit src len pos depth TLt 1 0
-  | c == '>' = emit src len pos depth TGt 1 0
-  | c == '=' = emit src len pos depth TEqual 1 0
-  | c == ':' = emit src len pos depth TColon 1 0
-  | c == ',' = emit src len pos depth TComma 1 0
-  | c == '.' = emit src len pos depth TDot 1 0
-  | c == '|' = emit src len pos depth TPipe 1 0
-  | c == '(' = emit src len pos depth TLParen 1 1
-  | c == ')' = emit src len pos depth TRParen 1 (0 - 1)
-  | c == '[' = emit src len pos depth TLBracket 1 1
-  | c == ']' = emit src len pos depth TRBracket 1 (0 - 1)
-  | c == '{' = emit src len pos depth TLBrace 1 1
-  | c == '}' = emit src len pos depth TRBrace 1 (0 - 1)
-  | c == '!' = emit src len pos depth TBang 1 0
-  | c == '?' = emit src len pos depth TQuestion 1 0
-  | c == '%' = emit src len pos depth TMod 1 0
-  | c == '@' = emit src len pos depth TAt 1 0
-  | otherwise = scan src len (pos + 1) depth
+singleOp src len pos depth id c
+  | c == '+' = emit src len pos depth id TPlus 1 0
+  | c == '-' = emit src len pos depth id TMinus 1 0
+  | c == '*' = emit src len pos depth id TStar 1 0
+  | c == '/' = emit src len pos depth id TSlash 1 0
+  | c == '<' = emit src len pos depth id TLt 1 0
+  | c == '>' = emit src len pos depth id TGt 1 0
+  | c == '=' = emit src len pos depth id TEqual 1 0
+  | c == ':' = emit src len pos depth id TColon 1 0
+  | c == ',' = emit src len pos depth id TComma 1 0
+  | c == '.' = emit src len pos depth id TDot 1 0
+  | c == '|' = emit src len pos depth id TPipe 1 0
+  | c == '(' = emit src len pos depth id TLParen 1 1
+  | c == ')' = emit src len pos depth id TRParen 1 (0 - 1)
+  | c == '[' = emit src len pos depth id TLBracket 1 1
+  | c == ']' = emit src len pos depth id TRBracket 1 (0 - 1)
+  | c == '{' = openBrace src len pos depth id
+  | c == '}' = closeBrace src len pos depth id
+  | c == '!' = emit src len pos depth id TBang 1 0
+  | c == '?' = emit src len pos depth id TQuestion 1 0
+  | c == '%' = emit src len pos depth id TMod 1 0
+  | c == '@' = emit src len pos depth id TAt 1 0
+  | otherwise = scan src len (pos + 1) depth id
+
+-- `{` and `}` route through interp depth when inside a `\{ … }` interpolation.
+openBrace src len pos depth id
+  | id > 0 = RTok TLBrace :: scan src len (pos + 1) depth (id + 1)
+  | otherwise = RTok TLBrace :: scan src len (pos + 1) (depth + 1) id
+
+closeBrace src len pos depth id
+  | id > 1 = RTok TRBrace :: scan src len (pos + 1) depth (id - 1)
+  | id == 1 = scanInterpCont src len (pos + 1) depth ""
+  | otherwise = RTok TRBrace :: scan src len (pos + 1) (depth - 1) id
 
 -- newline + indentation handling
-handleNewline src len pos depth =
+handleNewline src len pos depth id =
   match consumeNl src len pos 0
-    (indent, np) => afterNl src len np depth indent
+    (indent, np) => afterNl src len np depth id indent
 
 -- consume one or more (newline white*) runs; returns (indentOfLastLine, newPos)
 consumeNl src len p indent
@@ -448,10 +484,10 @@ consumeNl src len p indent
   | isTab (at src p) = consumeNl src len (p + 1) ((indent / 8 + 1) * 8)
   | otherwise = (indent, p)
 
-afterNl src len np depth indent
-  | depth > 0 = scan src len np depth
-  | isContinuation src len np = emit src len np depth (continuationTok src len np) 2 0
-  | otherwise = RNewline indent :: scan src len np depth
+afterNl src len np depth id indent
+  | depth > 0 = scan src len np depth id
+  | isContinuation src len np = emit src len np depth id (continuationTok src len np) 2 0
+  | otherwise = RNewline indent :: scan src len np depth id
 
 -- leading-operator line continuation (|> >> << && || ++ <>)
 isContinuation src len np =
@@ -516,4 +552,4 @@ tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
-  elseFilter (layout (scan src len 0 0) [0])
+  elseFilter (layout (scan src len 0 0 0) [0])

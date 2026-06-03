@@ -32,13 +32,15 @@ the stage is done when all pass.
 
 - ✅ Scaffold + harness wiring (token ADT, canonical serializer, runnable entry,
   diff loop).
-- ✅ Tokenizer ported: literals, idents/keywords, operators/punctuation,
-  comments, and the INDENT/DEDENT/NEWLINE layout algorithm (plus the
-  else-continuation filter and leading-operator continuation). **13/15 fixtures
-  match the OCaml reference byte-for-byte.**
-- ⏳ Remaining: **string interpolation** (`\{expr}` → `INTERP_OPEN`/`MID`/`END`)
-  for the last 2 fixtures (`adt_maybe`, `string_ops`). Deferred (no fixture
-  exercises them): triple-quoted strings, block comments, `@`/`AS_AT` adjacency.
+- ✅ Tokenizer ported: literals, idents/keywords, operators/punctuation, line
+  comments, **string interpolation**, and the INDENT/DEDENT/NEWLINE layout
+  algorithm (plus the else-continuation filter and leading-operator
+  continuation). **All 15/15 fixtures match the OCaml reference byte-for-byte.**
+- ⏳ Not yet ported (no fixture exercises them; needed for full equivalence
+  before the lexer can tokenize real compiler source): hex/bin/oct int literals,
+  triple-quoted strings, `{- … -}` block comments, the `@`/`AS_AT` adjacency
+  rule, nested interpolation. Next validation step: diff the Medaka lexer against
+  the OCaml lexer on real `.mdk` source (e.g. stdlib files) to surface these.
 
 ## Known eval quirk (self-host-surfaced)
 
