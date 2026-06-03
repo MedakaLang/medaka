@@ -28,7 +28,7 @@ constraint and delegated the remaining modules.
 **Conventions.** Work is still organized by numbered **Phases**; commit messages
 and code comments reference them. Phases that were left *partial* keep their
 original number (e.g. Phase 82, 101); genuinely new work gets the next free
-number (last used: 134). At task triage, match the work against AGENTS.md's
+number (last used: 135). At task triage, match the work against AGENTS.md's
 task-playbook table and load the matching skill before planning.
 
 ---
@@ -106,12 +106,16 @@ the OCaml compiler, and ultimately compiles *itself*. The output of this stage i
 a validated language and a compiler whose only slow part is the interpreter
 underneath it.
 
-**Started 2026-06-03 (Phase 132).** The self-host tree lives in `selfhost/`
-(see `selfhost/README.md`), and the validation loop is wired: `sh
-test/diff_selfhost_lexer.sh` runs the Medaka lexer on the interpreter over
-`test/diff_fixtures/` and diffs its token stream against the OCaml-emitted golden
-`=== TOKENS ===` sections. Scaffold + harness are in place; the lexer's
-`tokenize` is still a stub — porting it is the active slice.
+**Started 2026-06-03.** The self-host tree lives in `selfhost/` (see
+`selfhost/README.md`), each stage validated against the OCaml reference via a
+differential harness on the interpreter.
+- **Lexer — done (Phase 132).** Matches the reference byte-for-byte on all 15
+  curated fixtures *and* all 13 real `.mdk` files (every stdlib module + the lexer
+  lexing itself). `sh test/diff_selfhost_lexer.sh` / `…_lex_files.sh`.
+- **Parser — in progress (Phase 135).** Recursive-descent over the lexer's
+  tokens, validated by a structural S-expr dump (`dev/astdump.ml` ↔
+  `selfhost/sexp.mdk`, `sh test/diff_selfhost_parse.sh`). Scaffold + dump format
+  validated; the recursive-descent logic is the active slice.
 
 ### Stage 2 — LLVM backend (after self-host)
 
@@ -146,6 +150,36 @@ above, it is flagged ⭐.
 
 ### Compiler / language
 
+- ⭐ **Phase 135 — self-host Stage 1: port the parser to Medaka. IN PROGRESS
+  (started 2026-06-03); scaffold done.** Second pipeline stage. The Menhir LR
+  grammar (`lib/parser.mly`, 1146 lines) becomes a **hand-written
+  recursive-descent** parser over `List Token` from the (validated) lexer — no
+  parser generator in Medaka. Tractable because precedence is a **stratified
+  ladder, not `%left/%right`** (`expr_annot → expr_lam → expr_pipe → … →
+  expr_add → expr_mul → expr_unary → expr_app → expr_atom`, ~18 levels), one
+  recursive function per level. Target AST = **pre-desugar** (the parser emits
+  surface sugar `EGuards`/`EDo`/`EStringInterp`/`EListComp`/`ESection`/`EQuestion`;
+  desugar lowers them later). Stays **prelude-only** (`List`/`Array`/string
+  externs + local AST type) — `Map`/stdlib isn't needed until *resolve*, so the
+  stdlib-access decision (multi-root loader, which already exists, vs vendoring)
+  is deferred again.
+  **Validation = structural S-expression dump** (decided): no AST dumper existed
+  (unlike the lexer's `token_to_string`), so added `dev/astdump.ml`
+  (`Ast`-`to_sexp`, location-stripped, one decl per line; tags = `ast.ml`
+  constructor names) + a Medaka mirror `selfhost/sexp.mdk`, diffed by
+  `test/diff_selfhost_parse.sh`. Chose this over porting the 912-line
+  `printer.ml` (less code, no whitespace/paren fragility). FLOAT text normalized
+  away, like the lexer.
+  **Done so far (scaffold, validation-first like Phase 132):** `selfhost/ast.mdk`
+  (core node type — grows per slice), the dual dumpers (format **validated
+  byte-for-byte** via the positive control), `parse_main.mdk` (dumps a hand-built
+  control AST until the parser exists), and the harness. **Next slices:**
+  expressions (the ladder + atoms) → patterns → declarations → types, each
+  growing `ast.mdk` + `sexp.mdk` coverage and validated on fixtures, then hardened
+  on real `.mdk` source (the lexer's 13/13 analog). **Chief risk:** layout-driven
+  blocks (the parser consumes INDENT/DEDENT/NEWLINE to structure
+  `let`/`match`/`do`/`where`/decl boundaries). See `selfhost/README.md`.
+
 - ⭐ **Phase 132 — self-host Stage 1: port the lexer to Medaka. IN PROGRESS
   (started 2026-06-03); lexer fixture-complete.** First stage of the self-hosting
   effort (North star → Stage 1). **Done:** the `selfhost/` scaffold + differential
@@ -158,14 +192,21 @@ above, it is flagged ⭐.
   two-pass design (scan → RawTok stream with `RNewline` markers; layout pass →
   INDENT/DEDENT/NEWLINE). Lexer uses prelude + global externs only (no stdlib
   import), so `selfhost/` is a single-root project.
-  **Remaining for full `lib/lexer.mll` equivalence** (no fixture exercises them,
-  but needed before the lexer can tokenize real compiler/stdlib source):
-  hex/bin/oct int literals, triple-quoted strings, `{- … -}` block comments, the
-  `@`/`AS_AT` adjacency rule, nested interpolation. **Next validation step:** diff
-  the Medaka lexer against the OCaml lexer on real `.mdk` files (stdlib) — a
-  stronger test than the curated fixtures, which will surface exactly which of the
-  above are needed. Then the parser stage (which forces the **stdlib-access**
-  decision: multi-root loader or vendored `Map`/`List`/`string`).
+  **Now also validated on real source** (2026-06-03): added `{- … -}` nestable
+  block comments, hex/bin/oct int literals, and the `@`/`AS_AT` adjacency rule —
+  the gaps surfaced by self-lexing. `dev/lextok.exe` dumps the OCaml reference
+  token stream for any file, and `test/diff_selfhost_lex_files.sh` diffs the
+  Medaka lexer against it over **all 13 real `.mdk` files (every stdlib module +
+  the lexer lexing itself) — 13/13 match byte-for-byte** (FLOAT text normalized:
+  OCaml `%g` vs `floatToString`, same TFloat value). **Still deferred** (no real
+  file or fixture uses them): triple-quoted strings (+ `strip_indent`) and nested
+  interpolation. **Incorporated Phase 133** (char-literal escapes): `scanChar`
+  now processes `\n \t \r \0 \\ \'` + `\u{…}` (mirroring the new `read_char`), so
+  the lexer still self-lexes 13/13 after that landed — surfaced one more
+  serialization-only nuance (a NUL char renders `\0` via `debugStringLit` vs
+  `\000` via `%S`; unused in real files). **Next:** the parser stage, which forces
+  the **stdlib-access** decision (multi-root loader or vendored
+  `Map`/`List`/`string`).
   **Two self-host-surfaced compiler quirks to file/fix:** (1) char literals do no
   escape processing, so newline/tab/quote/backslash must be matched by `charCode`
   (worked around in `lexer.mdk`); (2) ✅ FIXED (Phase 134): an `<IO>`-returning
@@ -206,20 +247,14 @@ above, it is flagged ⭐.
   masks this). `selfhost/lex_main.mdk` now uses the helper form (named `emit` on
   purpose), so the diff harness exercises the fix over all 15 fixtures.
 
-- **Phase 133 — char literals do no escape processing (surfaced by Phase 132).**
-  TODO — decide + (maybe) fix. A Medaka char literal `'…'` captures its inner
-  bytes **raw**: `'\n'` is the two bytes backslash-n (not a newline), `'\t'` is
-  backslash-t, and a single-quote or backslash char literal can't be written at
-  all (`'\''`/`'\\'` mis-lex, since the rule is `'\'' [^']+ '\''` with no escape
-  handling — `lib/lexer.mll` ~line 296; `debugCharLit` in `lib/eval.ml` documents
-  the no-escape choice as deliberate). The self-host lexer worked around it by
-  comparing via `charCode` instead of char literals, so this is **not blocking**.
-  **Open question (decide first):** is the raw-bytes behavior intentional
-  (keep, document more loudly) or a gap to close (process `\n \t \r \0 \\ \'` and
-  allow `\u{…}`, mirroring `read_string`)? If closing it: the fix is the char
-  rule in `lib/lexer.mll` plus the `CHAR` value/`debugCharLit` round-trip — a
-  surface-syntax change threading lexer→eval. **Skill: add-language-feature**
-  (small; mostly `lib/lexer.mll`). Lower priority than Phase 134.
+- **Phase 133 — char literal escape processing. ✅ DONE (2026-06-03).**
+  Char literals now process the same escape suite as string literals: `\n \t \r \0 \\ \'`
+  and `\u{…}`. The fix replaced the single-regex rule in `lib/lexer.mll` with a
+  `read_char` auxiliary (matching the `read_string` / `read_triple_string` pattern);
+  `lib/printer.ml` gained `escape_char_lit` so `LChar` round-trips correctly;
+  `debugCharLit` in `lib/eval.ml` likewise escapes special chars. The `selfhost/lexer.mdk`
+  workaround (comparing via `charCode` for `\t`/`\n`/`\'`/`\\`) was replaced with
+  direct char literals. 7 new parser test cases cover every new escape form.
 
 - **Phase 131 — add token-stream section to the diff harness. ✅ DONE
   (2026-06-03).** Added `Lexer.tokenize_string : string -> string list` +
