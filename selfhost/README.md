@@ -31,8 +31,19 @@ the stage is done when all pass.
 ## Status
 
 - ✅ Scaffold + harness wiring (token ADT, canonical serializer, runnable entry,
-  diff loop). Positive control (empty source → `NEWLINE`/`EOF`) passes.
-- ⏳ `tokenize` is a **stub** (emits only the layout-terminated empty stream).
-  Next slice: port real tokenization — literals, idents, keywords, operators,
-  then the stateful INDENT/DEDENT/NEWLINE layout algorithm. 0/15 fixtures pass
-  until then.
+  diff loop).
+- ✅ Tokenizer ported: literals, idents/keywords, operators/punctuation,
+  comments, and the INDENT/DEDENT/NEWLINE layout algorithm (plus the
+  else-continuation filter and leading-operator continuation). **13/15 fixtures
+  match the OCaml reference byte-for-byte.**
+- ⏳ Remaining: **string interpolation** (`\{expr}` → `INTERP_OPEN`/`MID`/`END`)
+  for the last 2 fixtures (`adt_maybe`, `string_ops`). Deferred (no fixture
+  exercises them): triple-quoted strings, block comments, `@`/`AS_AT` adjacency.
+
+## Known eval quirk (self-host-surfaced)
+
+An `<IO>`-returning **helper** called from a `match` arm is not forced by the
+eval driver — the action is returned but never run (clean exit, no output) —
+whereas the same logic **inlined** runs correctly. `lex_main.mdk` is written
+inline to dodge this. Worth reducing to a minimal repro and filing as a compiler
+bug.

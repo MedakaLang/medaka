@@ -1,10 +1,14 @@
 -- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
 --
--- STATUS: scaffold.  `Token` and `tokenToString` mirror the OCaml reference
--- (`lib/lexer.mll`'s `token_to_string`) byte-for-byte, so the differential
--- harness (`test/diff_selfhost_lexer.sh`) can validate every future line of the
--- port against the committed golden TOKENS sections in `test/diff_fixtures/`.
--- `tokenize` itself is still a STUB — porting it is the next slice.
+-- STATUS: tokenizer ported (literals, idents/keywords, operators/punctuation,
+-- comments, and the INDENT/DEDENT/NEWLINE layout algorithm + else-continuation
+-- filter + leading-operator continuation).  Validated against the OCaml
+-- reference by `test/diff_selfhost_lexer.sh`: 13/15 fixtures match byte-for-byte.
+-- NOT YET DONE: string interpolation (`\{expr}` → INTERP_OPEN/MID/END) — the two
+-- remaining fixtures (`adt_maybe`, `string_ops`) need it.  Also deferred (no
+-- fixture exercises them): triple-quoted strings, block comments, `@`/`AS_AT`
+-- adjacency.  `Token`/`tokenToString` mirror `lib/lexer.mll`'s `token_to_string`
+-- byte-for-byte.
 
 public export data Token
   = TInt Int
@@ -196,10 +200,320 @@ tokenToString t =
     TDedent => "DEDENT"
     TEof => "EOF"
 
--- STUB.  The real tokenizer (literals, idents, keywords, operators, then the
--- INDENT/DEDENT/NEWLINE layout algorithm) is the next slice.  For now it returns
--- only the layout-terminated empty stream, which matches an empty source — just
--- enough for the harness pass/fail loop to be exercised end-to-end.
+-- ── Raw scanner output ──────────────────────────────────────────────────
+-- The scanner produces real tokens interleaved with `RNewline col` markers
+-- (one per significant source line break, carrying the indentation of the
+-- following line). A second `layout` pass turns those markers into
+-- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
+data RawTok
+  = RTok Token
+  | RNewline Int
+
+-- ── Character classification (ASCII, matching lib/lexer.mll's char classes) ──
+-- NB: Medaka char literals are raw bytes with NO escape processing, so newline,
+-- tab, CR, '"', '\'' and '\\' must be tested by codepoint, not by char literal.
+isSp c = c == ' '
+isTab c = charCode c == 9
+isNL c = charCode c == 10
+isCR c = charCode c == 13
+isQuote c = charCode c == 34
+isApos c = charCode c == 39
+isBackslash c = charCode c == 92
+isBacktick c = charCode c == 96
+isSpace c = isSp c || isTab c
+isDigit c = c >= '0' && c <= '9'
+isLower c = c >= 'a' && c <= 'z'
+isUpper c = c >= 'A' && c <= 'Z'
+isAlnum c = isLower c || isUpper c || isDigit c || c == '_' || isApos c
+
+-- ── Low-level source access ─────────────────────────────────────────────
+at src i = arrayGetUnsafe i src
+
+is2 src len pos a b =
+  pos + 1 < len && at src pos == a && at src (pos + 1) == b
+
+is3 src len pos a b c =
+  pos + 2 < len && at src pos == a && at src (pos + 1) == b && at src (pos + 2) == c
+
+substr src start endp =
+  stringFromChars (arrayMakeWith (endp - start) (i => at src (start + i)))
+
+collectNoUs src p endp
+  | p >= endp = []
+  | at src p == '_' = collectNoUs src (p + 1) endp
+  | otherwise = at src p :: collectNoUs src (p + 1) endp
+
+substrNoUs src start endp = stringFromChars (arrayFromList (collectNoUs src start endp))
+
+parseIntFrom src p endp acc
+  | p >= endp = acc
+  | at src p == '_' = parseIntFrom src (p + 1) endp acc
+  | otherwise = parseIntFrom src (p + 1) endp (acc * 10 + (charCode (at src p) - 48))
+
+-- ── Keyword table ───────────────────────────────────────────────────────
+-- True/False are NOT here: they start uppercase, so the OCaml lexer emits them
+-- as UPPER (keyword_or_ident only fires for lowercase/underscore lexemes).
+keywordOrIdent s
+  | s == "let" = TLet
+  | s == "rec" = TRec
+  | s == "with" = TWith
+  | s == "mut" = TMut
+  | s == "in" = TIn
+  | s == "if" = TIf
+  | s == "then" = TThen
+  | s == "else" = TElse
+  | s == "match" = TMatch
+  | s == "data" = TData
+  | s == "record" = TRecord
+  | s == "interface" = TInterface
+  | s == "default" = TDefault
+  | s == "impl" = TImpl
+  | s == "import" = TImport
+  | s == "export" = TExport
+  | s == "public" = TPublic
+  | s == "where" = TWhere
+  | s == "of" = TOf
+  | s == "do" = TDo
+  | s == "as" = TAs
+  | s == "extern" = TExtern
+  | s == "requires" = TRequires
+  | s == "deriving" = TDeriving
+  | s == "type" = TType
+  | s == "newtype" = TNewtype
+  | s == "prop" = TProp
+  | s == "test" = TTest
+  | s == "bench" = TBench
+  | s == "function" = TFunction
+  | otherwise = TIdent s
+
+-- ── Scanner ─────────────────────────────────────────────────────────────
+-- scan : src len pos parenDepth -> List RawTok
+scan src len pos depth
+  | pos >= len = []
+  | otherwise = scanAt src len pos depth (at src pos)
+
+scanAt src len pos depth c
+  | isSpace c = scan src len (pos + 1) depth
+  | isNL c || isCR c = handleNewline src len pos depth
+  | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
+      scan src len (skipLineComment src len pos) depth
+  | isDigit c = scanNumber src len pos depth
+  | isQuote c = scanStr src len (pos + 1) depth ""
+  | isApos c = scanChar src len pos depth
+  | isLower c || c == '_' = scanLower src len pos depth
+  | isUpper c = scanUpper src len pos depth
+  | isBacktick c = scanBacktick src len pos depth
+  | otherwise = scanOp src len pos depth c
+
+skipLineComment src len p
+  | p >= len = p
+  | isNL (at src p) = p
+  | otherwise = skipLineComment src len (p + 1)
+
+-- identifiers / keywords / underscore
+identEnd src len p
+  | p < len && isAlnum (at src p) = identEnd src len (p + 1)
+  | otherwise = p
+
+scanLower src len pos depth =
+  let e = identEnd src len (pos + 1)
+  RTok (identToken src pos e) :: scan src len e depth
+
+identToken src pos e
+  | at src pos == '_' && e - pos == 1 = TUnderscore
+  | otherwise = keywordOrIdent (substr src pos e)
+
+scanUpper src len pos depth =
+  let e = identEnd src len (pos + 1)
+  RTok (TUpper (substr src pos e)) :: scan src len e depth
+
+scanBacktick src len pos depth =
+  let e = btClose src len (pos + 1)
+  RTok (TBacktickIdent (substr src (pos + 1) e)) :: scan src len (e + 1) depth
+
+btClose src len p
+  | p >= len = p
+  | isBacktick (at src p) = p
+  | otherwise = btClose src len (p + 1)
+
+-- numbers (int / float; underscores allowed)
+digitsEnd src len p
+  | p < len && (isDigit (at src p) || at src p == '_') = digitsEnd src len (p + 1)
+  | otherwise = p
+
+scanNumber src len pos depth = numFinish src len pos (digitsEnd src len pos) depth
+
+isFloatAt src len e1 =
+  e1 < len && at src e1 == '.' && e1 + 1 < len && isDigit (at src (e1 + 1))
+
+numFinish src len pos e1 depth
+  | isFloatAt src len e1 = floatTok src len pos e1 depth
+  | otherwise = RTok (TInt (parseIntFrom src pos e1 0)) :: scan src len e1 depth
+
+floatTok src len pos e1 depth =
+  let e2 = digitsEnd src len (e1 + 1)
+  RTok (TFloat (fromOption 0.0 (stringToFloat (substrNoUs src pos e2)))) :: scan src len e2 depth
+
+-- strings (escapes processed into the content; interpolation \{ deferred)
+scanStr src len p depth acc
+  | p >= len = RTok (TString acc) :: scan src len p depth
+  | isQuote (at src p) = RTok (TString acc) :: scan src len (p + 1) depth
+  | isBackslash (at src p) && p + 1 < len = scanStrEsc src len p depth acc (at src (p + 1))
+  | otherwise = scanStr src len (p + 1) depth (acc ++ charToStr (at src p))
+
+scanStrEsc src len p depth acc e
+  | e == 'n' = scanStr src len (p + 2) depth (acc ++ "\n")
+  | e == 't' = scanStr src len (p + 2) depth (acc ++ "\t")
+  | isQuote e = scanStr src len (p + 2) depth (acc ++ "\"")
+  | isBackslash e = scanStr src len (p + 2) depth (acc ++ "\\")
+  | e == 'r' = scanStr src len (p + 2) depth (acc ++ "\r")
+  | e == '0' = scanStr src len (p + 2) depth (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | otherwise = scanStr src len (p + 2) depth (acc ++ charToStr e)
+
+-- char literals (raw inner bytes, no escape processing — matches the runtime)
+scanChar src len pos depth =
+  let e = charClose src len (pos + 1)
+  RTok (TChar (substr src (pos + 1) e)) :: scan src len (e + 1) depth
+
+charClose src len p
+  | p >= len = p
+  | isApos (at src p) = p
+  | otherwise = charClose src len (p + 1)
+
+-- operators + punctuation
+emit src len pos depth tok length ddelta =
+  RTok tok :: scan src len (pos + length) (depth + ddelta)
+
+scanOp src len pos depth c
+  | is3 src len pos '.' '.' '.' = emit src len pos depth TEllipsis 3 0
+  | is3 src len pos '.' '.' '=' = emit src len pos depth TDotDotEq 3 0
+  | is2 src len pos '[' '|' = emit src len pos depth TLArray 2 1
+  | is2 src len pos '|' ']' = emit src len pos depth TRArray 2 (0 - 1)
+  | is2 src len pos '=' '>' = emit src len pos depth TFatArrow 2 0
+  | is2 src len pos '-' '>' = emit src len pos depth TArrow 2 0
+  | is2 src len pos '<' '-' = emit src len pos depth TLArrow 2 0
+  | is2 src len pos ':' ':' = emit src len pos depth TCons 2 0
+  | is2 src len pos '+' '+' = emit src len pos depth TPlusPlus 2 0
+  | is2 src len pos '<' '>' = emit src len pos depth TStrAppend 2 0
+  | is2 src len pos '=' '=' = emit src len pos depth TEqEq 2 0
+  | is2 src len pos '!' '=' = emit src len pos depth TNeq 2 0
+  | is2 src len pos '<' '=' = emit src len pos depth TLeq 2 0
+  | is2 src len pos '>' '=' = emit src len pos depth TGeq 2 0
+  | is2 src len pos '&' '&' = emit src len pos depth TAnd 2 0
+  | is2 src len pos '|' '|' = emit src len pos depth TOr 2 0
+  | is2 src len pos '|' '>' = emit src len pos depth TPipeRight 2 0
+  | is2 src len pos '>' '>' = emit src len pos depth TRCompose 2 0
+  | is2 src len pos '<' '<' = emit src len pos depth TLCompose 2 0
+  | is2 src len pos '.' '{' = emit src len pos depth TDotLBrace 2 1
+  | is2 src len pos '.' '*' = emit src len pos depth TDotStar 2 0
+  | is2 src len pos '.' '.' = emit src len pos depth TDotDot 2 0
+  | otherwise = singleOp src len pos depth c
+
+singleOp src len pos depth c
+  | c == '+' = emit src len pos depth TPlus 1 0
+  | c == '-' = emit src len pos depth TMinus 1 0
+  | c == '*' = emit src len pos depth TStar 1 0
+  | c == '/' = emit src len pos depth TSlash 1 0
+  | c == '<' = emit src len pos depth TLt 1 0
+  | c == '>' = emit src len pos depth TGt 1 0
+  | c == '=' = emit src len pos depth TEqual 1 0
+  | c == ':' = emit src len pos depth TColon 1 0
+  | c == ',' = emit src len pos depth TComma 1 0
+  | c == '.' = emit src len pos depth TDot 1 0
+  | c == '|' = emit src len pos depth TPipe 1 0
+  | c == '(' = emit src len pos depth TLParen 1 1
+  | c == ')' = emit src len pos depth TRParen 1 (0 - 1)
+  | c == '[' = emit src len pos depth TLBracket 1 1
+  | c == ']' = emit src len pos depth TRBracket 1 (0 - 1)
+  | c == '{' = emit src len pos depth TLBrace 1 1
+  | c == '}' = emit src len pos depth TRBrace 1 (0 - 1)
+  | c == '!' = emit src len pos depth TBang 1 0
+  | c == '?' = emit src len pos depth TQuestion 1 0
+  | c == '%' = emit src len pos depth TMod 1 0
+  | c == '@' = emit src len pos depth TAt 1 0
+  | otherwise = scan src len (pos + 1) depth
+
+-- newline + indentation handling
+handleNewline src len pos depth =
+  match consumeNl src len pos 0
+    (indent, np) => afterNl src len np depth indent
+
+-- consume one or more (newline white*) runs; returns (indentOfLastLine, newPos)
+consumeNl src len p indent
+  | p >= len = (indent, p)
+  | isCR (at src p) && p + 1 < len && isNL (at src (p + 1)) = consumeNl src len (p + 2) 0
+  | isNL (at src p) = consumeNl src len (p + 1) 0
+  | isCR (at src p) = consumeNl src len (p + 1) 0
+  | isSp (at src p) = consumeNl src len (p + 1) (indent + 1)
+  | isTab (at src p) = consumeNl src len (p + 1) ((indent / 8 + 1) * 8)
+  | otherwise = (indent, p)
+
+afterNl src len np depth indent
+  | depth > 0 = scan src len np depth
+  | isContinuation src len np = emit src len np depth (continuationTok src len np) 2 0
+  | otherwise = RNewline indent :: scan src len np depth
+
+-- leading-operator line continuation (|> >> << && || ++ <>)
+isContinuation src len np =
+  is2 src len np '|' '>' || is2 src len np '>' '>' || is2 src len np '<' '<'
+    || is2 src len np '&' '&' || is2 src len np '|' '|' || is2 src len np '+' '+'
+    || is2 src len np '<' '>'
+
+continuationTok src len np
+  | is2 src len np '|' '>' = TPipeRight
+  | is2 src len np '>' '>' = TRCompose
+  | is2 src len np '<' '<' = TLCompose
+  | is2 src len np '&' '&' = TAnd
+  | is2 src len np '|' '|' = TOr
+  | is2 src len np '+' '+' = TPlusPlus
+  | otherwise = TStrAppend
+
+-- ── Layout pass: RawTok stream -> Token stream ──────────────────────────
+-- Mirrors lib/lexer.mll `handle_indent` + the EOF unwind.
+layout raws stack =
+  match raws
+    [] => closeAll stack
+    RTok t :: rest => t :: layout rest stack
+    RNewline col :: rest => applyIndent col stack rest
+
+applyIndent col stack rest =
+  match stack
+    top :: _ => applyIndentTop col top stack rest
+    [] => TNewline :: layout rest stack
+
+applyIndentTop col top stack rest
+  | col > top = TIndent :: layout rest (col :: stack)
+  | col == top = TNewline :: layout rest stack
+  | otherwise = TNewline :: popDedents col stack rest
+
+popDedents col stack rest =
+  match stack
+    top :: tl => popDedentsTop col top tl stack rest
+    [] => layout rest stack
+
+popDedentsTop col top tl stack rest
+  | top > col = TDedent :: TNewline :: popDedents col tl rest
+  | otherwise = layout rest stack
+
+-- end of input: NEWLINE, then DEDENT/NEWLINE pairs back to base, then EOF
+closeAll stack = TNewline :: closeDedents stack
+
+closeDedents stack =
+  match stack
+    [] => [TEof]
+    [_] => [TEof]
+    _ :: tl => TDedent :: TNewline :: closeDedents tl
+
+-- Phase 122 else-continuation filter: drop a NEWLINE immediately before ELSE.
+elseFilter toks =
+  match toks
+    TNewline :: TElse :: rest => TElse :: elseFilter rest
+    t :: rest => t :: elseFilter rest
+    [] => []
+
 export
 tokenize : String -> List Token
-tokenize src = [TNewline, TEof]
+tokenize s =
+  let src = stringToChars s
+  let len = arrayLength src
+  elseFilter (layout (scan src len 0 0) [0])

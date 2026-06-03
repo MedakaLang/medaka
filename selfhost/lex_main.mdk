@@ -10,21 +10,23 @@
 
 import lexer.{Token, tokenize, tokenToString}
 
--- Join with newlines; no trailing newline (matches the golden TOKENS section).
-joinNl : List String -> String
-joinNl xs =
-  match xs
+-- Render the token stream, one per line, no trailing newline (matches the
+-- golden TOKENS section).  Direct recursion rather than `map`/`join`.
+renderToks toks =
+  match toks
     [] => ""
-    [x] => x
-    y :: rest => y ++ "\n" ++ joinNl rest
+    [t] => tokenToString t
+    t :: rest => tokenToString t ++ "\n" ++ renderToks rest
 
-emit : String -> <IO> Unit
-emit path =
-  match readFile path
-    Ok src => putStr (joinNl (map tokenToString (tokenize src)))
-    Err msg => ePutStrLn msg
-
+-- NB: the body is fully inlined into `main` rather than factored into an
+-- `emit path = …` helper.  An `<IO>`-returning helper called from a match arm
+-- is currently not forced by the eval driver (the action is returned but never
+-- run — clean exit, no output), while the inline form runs correctly.  Filed as
+-- a self-host-surfaced eval quirk; see PLAN.md Phase 132.
 main =
   match args ()
-    [path] => emit path
+    [path] =>
+      match readFile path
+        Ok src => putStr (renderToks (tokenize src))
+        Err msg => ePutStrLn msg
     _ => ePutStrLn "usage: medaka run selfhost/lex_main.mdk <file>"
