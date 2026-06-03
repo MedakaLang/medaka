@@ -18,15 +18,19 @@ renderToks toks =
     [t] => tokenToString t
     t :: rest => tokenToString t ++ "\n" ++ renderToks rest
 
--- NB: the body is fully inlined into `main` rather than factored into an
--- `emit path = …` helper.  An `<IO>`-returning helper called from a match arm
--- is currently not forced by the eval driver (the action is returned but never
--- run — clean exit, no output), while the inline form runs correctly.  Filed as
--- a self-host-surfaced eval quirk; see PLAN.md Phase 132.
+-- Read <path>, tokenize, and print the canonical token stream.  Factored into a
+-- helper called from `main`'s match arm — the obvious refactor.  This helper is
+-- deliberately named `emit`, the same name as lexer.mdk's (private, `Num`-
+-- constrained) 8-arg `emit`: it exercises the Phase 134 fix end-to-end (the old
+-- joint dict-pass would have prepended spurious dict params to this unconstrained
+-- `emit`, so `emit path` returned an un-run partial closure — clean exit, no
+-- output).
+emit path =
+  match readFile path
+    Ok src => putStr (renderToks (tokenize src))
+    Err msg => ePutStrLn msg
+
 main =
   match args ()
-    [path] =>
-      match readFile path
-        Ok src => putStr (renderToks (tokenize src))
-        Err msg => ePutStrLn msg
+    [path] => emit path
     _ => ePutStrLn "usage: medaka run selfhost/lex_main.mdk <file>"

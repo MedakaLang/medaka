@@ -169,19 +169,31 @@ Dev probes (build to `_build/default/dev/`):
   wins" for return-position methods: `pure` needs types to dispatch, so route it
   through the typed pipeline (see `run_typed` in `test/test_eval.ml`).
 - **A dispatch bug that reproduces through the loader but is a green single-file
-  doctest is almost always the EVAL DRIVER, not typecheck/dict-passing** — even
-  when a PLAN entry says otherwise. This exact shape has recurred at Phases 96,
-  103, 121, and 125, and the filed root cause has *repeatedly* blamed
-  dict-passing and been wrong. Why the split exists: single-file `eval_program`
-  merges everything into one by-name frame and forces deferred thunks only after
-  every impl is installed; the loader's `eval_modules` uses per-module frames and
-  a separate prelude/Phase-B install order, so **binding-order and
-  impl-install-order** bugs surface *only* there. Diagnose with
-  `dev/module_debug.exe`: it evals the *same* typechecked + dict-passed tree
-  through both drivers — identical tree but only `eval_modules` panics ⇒ it's the
-  eval driver (load **debug-pipeline**, fix in `lib/eval.ml`), not a routing bug.
-  Corollary: because single-file masks these, the regression test must go in
-  `test_loader` (drives `eval_modules`), never `test_run`/doctest.
+  doctest is *usually* the EVAL DRIVER, not typecheck/dict-passing** — even when a
+  PLAN entry says otherwise. This shape recurred at Phases 96, 103, 121, and 125,
+  where the filed root cause blamed dict-passing and was wrong. Why the split
+  exists: single-file `eval_program` merges everything into one by-name frame and
+  forces deferred thunks only after every impl is installed; the loader's
+  `eval_modules` uses per-module frames and a separate prelude/Phase-B install
+  order, so **binding-order and impl-install-order** bugs surface *only* there.
+  Diagnose with `dev/module_debug.exe`: it evals the *same* typechecked +
+  dict-passed tree through both drivers — identical tree but only `eval_modules`
+  panics ⇒ eval driver (load **debug-pipeline**, fix in `lib/eval.ml`).
+  **But VERIFY empirically — this heuristic has a documented exception (Phase
+  134), where a loader-only bug WAS dict-passing.** `eval_modules` dict-passes
+  the prelude + all modules *jointly* and `Dict_pass.collect_arities` keys arity
+  by **bare name**, so a genuinely-constrained function in one module forces
+  spurious leading dict params onto an *unconstrained same-named* function in
+  another → its call site under-applies → an un-run partial closure (clean exit,
+  no output). Two traps that hid it: (1) `module_debug` mirrors that joint
+  dict-pass for its flat path too, so both drivers behaved identically — **"no
+  divergence" does NOT exonerate dict-passing**; (2) the printer renders
+  `EDictApp`/`EMethodRef` transparently as the bare name, so the dict-passed dump
+  *looks* clean. What nailed it: instrument eval's `EVar`/`EMethodRef`/`EDictApp`
+  arms to see how the name *actually* resolves (Phase 134 was a secret `EDictApp`
+  with `routes=None arity=3`). Corollary (unchanged): because single-file masks
+  these, the regression test must go in `test_loader` (drives `eval_modules`),
+  never `test_run`/doctest.
 - Development is organized by numbered **Phases**. Open/forward work is in
   `PLAN.md`; the completed Phases 1–97 (with implementation notes) are in
   `PLAN-ARCHIVE.md`. Commit messages and code comments reference phase numbers.
@@ -209,10 +221,12 @@ fix lands, then load. (A `UserPromptSubmit` hook,
   for externs — that's add-primitive. Normally user-reserved; load when asked.
 - **debug-pipeline** — diagnose a parse/typecheck/eval failure. **Reach here
   first for a dispatch bug that reproduces through the loader but works
-  single-file** (Phases 96/103/121/125): that shape is an `eval.ml` ordering bug,
-  *not* the dict-passing machinery a PLAN entry may name (the entry's skill label
-  encodes the *filed* root cause, which for these is repeatedly wrong — confirm
-  with `dev/module_debug.exe` before loading add-language-feature). See Gotchas.
+  single-file** (Phases 96/103/121/125): that shape is *usually* an `eval.ml`
+  ordering bug, not the dict-passing machinery a PLAN entry may name. But confirm
+  empirically — Phase 134 was the inverse (loader-only AND dict-passing: the
+  *joint* dict-pass conflating same-named cross-module fns), and `module_debug`
+  did not flag it. See Gotchas for the full counterexample and the
+  instrument-eval's-resolution-arms technique.
 - **add-lsp-capability** — add/extend an LSP feature.
 - **harden-typechecker** — typechecker-*internal* correctness/diagnostics work
   (much of the Phase 62–72 arc): add a `type_error`, tighten constraint/

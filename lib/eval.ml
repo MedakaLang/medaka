@@ -1899,30 +1899,64 @@ let eval_program ?(prelude = true) program =
    a single frame, so imported names and prelude operators must be present. *)
 let eval_modules_ex (modules : (string * string * Ast.program) list)
   : (string * value) list * (string * value) list =
-  (* Slice a list into the first [n] and the rest. *)
-  let rec take n xs =
-    if n <= 0 then ([], xs)
-    else match xs with
-      | [] -> ([], [])
-      | x :: rest -> let (a, b) = take (n - 1) rest in (x :: a, b)
+  (* 1. Dict-pass the marked prelude and each module.  Dict_pass adds leading
+     dict *parameters* to a constrained function's *definition*, keyed by name —
+     the arity coming from the routed call sites (`collect_arities`).  Doing this
+     over one *joint* tree conflates two modules that define the same name with
+     different constraint arities: a `Num`-constrained `emit` in module A forces
+     dict params onto an unrelated, *unconstrained* `emit` in module B, whose own
+     call sites then under-apply it — silently returning a partial closure that
+     is never run (Phase 134: an `<IO>` helper called from a `match` arm produced
+     no output).  Fix: scope each module's arity table to the references that can
+     actually resolve to *its* definitions — the module's own decls plus the
+     decls of its (transitive) importers, where the external call sites of its
+     exported constrained functions live.  A private constrained function (only
+     referenced inside its own module, like the lexer's `emit`) is covered by the
+     own-decls part; a public one referenced only by importers (like a `mk : Tag a
+     => …`) is covered by the importer part.  The prelude is imported by every
+     module, so it keeps the full joint scope. *)
+  let prelude = Method_marker.marked_prelude in
+  let all_module_decls = List.concat_map (fun (_, _, p) -> p) modules in
+
+  (* Module id → the module ids it imports directly (mirrors build_imports'
+     path→module-id mapping used for value imports below). *)
+  let imports_of = Hashtbl.create 16 in
+  List.iter (fun (mid, _, p) ->
+    let direct =
+      List.filter_map (fun d -> match Ast.inner_decl d with
+        | DUse (_, path) ->
+          Some (match path with
+            | UseName ns ->
+              if List.length ns > 1
+              then String.concat "." (List.rev (List.tl (List.rev ns)))
+              else List.hd ns
+            | UseGroup (ns, _) | UseWild ns | UseAlias (ns, _) ->
+              String.concat "." ns)
+        | _ -> None) p
+    in
+    Hashtbl.replace imports_of mid direct) modules;
+  (* Transitive dependency set of [mid] (the module ids it imports, directly or
+     through those imports). *)
+  let rec add_deps acc mid =
+    List.fold_left (fun acc dep ->
+      if List.mem dep acc then acc else add_deps (dep :: acc) dep)
+      acc
+      (match Hashtbl.find_opt imports_of mid with Some xs -> xs | None -> [])
   in
 
-  (* 1. Dict-pass the marked prelude + all module decls *jointly* (so the arity
-     table covers cross-module references exactly as the flat path did), then
-     slice the result back by decl count — Dict_pass.run is a 1:1 decl map, so
-     counts and order are preserved. *)
-  let prelude = Method_marker.marked_prelude in
-  let seg_lengths = List.map (fun (_, _, p) -> List.length p) modules in
-  let joint = prelude @ List.concat_map (fun (_, _, p) -> p) modules in
-  let dict_joint = Dict_pass.run joint in
-  let (prelude', rest0) = take (List.length prelude) dict_joint in
+  (* Prelude: full joint scope (every module imports it). *)
+  let prelude_arities = Dict_pass.collect_arities (prelude @ all_module_decls) in
+  let prelude' = List.map (Dict_pass.run_decl prelude_arities) prelude in
+  (* Each module: scope = its own decls ∪ the decls of its transitive importers. *)
   let modules' =
-    let cur = ref rest0 in
-    List.map2 (fun (mid, fp, _) len ->
-      let (seg, rest) = take len !cur in
-      cur := rest;
-      (mid, fp, seg)
-    ) modules seg_lengths
+    List.map (fun (mid, fp, p) ->
+      let importer_decls =
+        List.concat_map (fun (j, _, pj) ->
+          if j <> mid && List.mem mid (add_deps [] j) then pj else [])
+          modules in
+      let arities = Dict_pass.collect_arities (p @ importer_decls) in
+      (mid, fp, List.map (Dict_pass.run_decl arities) p))
+      modules
   in
 
   (* 2. Build the shared global frame: primitives, ctors, interface dispatch +

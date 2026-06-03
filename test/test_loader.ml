@@ -840,6 +840,61 @@ let test_eval_module_isolation () =
         "Expected \"7\\n500\\n\" from per-module isolated singleton, got %S" out)
   )
 
+(* Phase 134: a same-named cross-module collision in the *dict-passing*
+   machinery (sibling of test_eval_module_isolation, which is the VMulti sibling).
+   `lexmod` defines a private, genuinely `Num`-constrained `emit` used internally,
+   so dict_pass adds a leading dict parameter to *its* `emit`.  `main` defines its
+   OWN unrelated, unconstrained 1-arg `emit` that returns an `<IO>` action and is
+   called from a `match` arm.  Under the old *joint* dict-pass the arity table was
+   keyed by bare name, so main's `emit` definition also got a spurious dict param;
+   its call site (which resolves no dict route) then applied only one arg to the
+   two-param closure, yielding a partial closure that was silently discarded — the
+   program exited 0 with NO output (the inline form ran fine).  Surfaced by the
+   self-hosted lexer (selfhost/lexer.mdk has an 8-arg `Num`-constrained `emit`).
+   The fix scopes each module's dict-arity table to references that can resolve to
+   its own definitions, so main's `emit` gets no params and the IO runs.  MUST go
+   through `Eval.eval_modules`: the flat single-file path can't even express two
+   top-level `emit`s, so it masks this entirely. *)
+let test_eval_dict_arity_no_cross_module_collision () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "lexmod.mdk"
+      "export render : Int -> String\n\
+       render n = intToString (emit n n)\n\n\
+       emit : Num a => a -> a -> a\n\
+       emit a b = a + b\n" in
+    let main_path = write_file dir "main.mdk"
+      "import lexmod.{render}\n\n\
+       emit x = putStrLn (render x)\n\n\
+       main : <IO> Unit\n\
+       main =\n\
+      \  match [99]\n\
+      \    [v] => emit v\n\
+      \    _ => putStrLn \"none\"\n" in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Desugar.desugar_program prog)) modules in
+    let method_names = Method_marker.interface_method_names
+      (Prelude.program :: List.map (fun (_, _, p) -> p) modules) in
+    let constrained = Method_marker.constrained_fn_names
+      (List.map (fun (_, _, p) -> p) modules) in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Method_marker.mark_program method_names constrained prog)) modules in
+    let te_acc = ref [] in
+    List.iter (fun (mid, _, prog) ->
+      let (te, _, _) = Typecheck.typecheck_module !te_acc mid prog in
+      te_acc := te :: !te_acc) modules;
+    let buf = Buffer.create 32 in
+    let saved = !Eval.output_hook in
+    Eval.output_hook := Buffer.add_string buf;
+    Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
+      ignore (Eval.eval_modules modules));
+    let out = Buffer.contents buf in
+    if out <> "198\n" then
+      failwith (Printf.sprintf
+        "Expected \"198\\n\" from the IO helper called via a match arm, got %S \
+         (empty ⇒ the Phase 134 dict-arity collision regressed)" out)
+  )
+
 (* Phase 112: a name that is BOTH an explicitly-imported standalone function and
    an interface method.  `box.mdk` exports standalone `toList`/`isEmpty` over a
    2-param `Box k v` that does NOT impl Foldable; `toList`'s return type `List
@@ -1216,6 +1271,7 @@ let () =
     ];
     "per-module eval isolation (Phase 110)", [
       test_case "same-named fn, different arity" `Quick test_eval_module_isolation;
+      test_case "same-named fn, no dict-arity collision" `Quick test_eval_dict_arity_no_cross_module_collision;
     ];
     "standalone vs no-impl method (Phase 112)", [
       test_case "imported toList/isEmpty shadow Foldable per receiver" `Quick test_eval_standalone_vs_method;

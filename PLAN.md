@@ -168,50 +168,43 @@ above, it is flagged ⭐.
   decision: multi-root loader or vendored `Map`/`List`/`string`).
   **Two self-host-surfaced compiler quirks to file/fix:** (1) char literals do no
   escape processing, so newline/tab/quote/backslash must be matched by `charCode`
-  (worked around in `lexer.mdk`); (2) an `<IO>`-returning *helper* called from a
-  `match` arm is not forced by the eval driver — the action is returned but never
-  run (clean exit, no output) — while the inline form runs (`lex_main.mdk` is
-  written inline to dodge it). (2) deserves a minimal repro + fix. Byte-for-byte
+  (worked around in `lexer.mdk`); (2) ✅ FIXED (Phase 134): an `<IO>`-returning
+  *helper* called from a `match` arm produced no output — a cross-module
+  dict-passing name collision, not the eval driver; `lex_main.mdk` now uses the
+  helper form. Byte-for-byte
   serialization caveats mapped: OCaml `%S` escapes non-ASCII as decimal byte
   escapes (`debugStringLit` agrees on ASCII), `FLOAT` uses `%g` (vs
   `floatToString`). See `selfhost/README.md`.
 
-- **Phase 134 — eval bug: an `<IO>`-returning helper called from a `match` arm
-  isn't forced (surfaced by Phase 132).** TODO — investigate + fix.
-  **Symptom:** a function whose body produces an `<IO>` action, when invoked from
-  a `match` arm, returns the action without running it — the program exits 0 with
-  **no output**; inlining the identical body runs correctly. This silently breaks
-  the obvious "factor the IO into a helper" refactor and is a real correctness
-  bug, not just an ergonomic wart.
-  **Confirmed repro (current tree):** with `selfhost/lexer.mdk` present, the
-  `emit`-helper form of the lexer entry prints nothing while the inline form
-  prints all tokens —
-  ```
-  emit path =
-    match readFile path
-      Ok src => putStr (renderToks (tokenize src))
-      Err msg => ePutStrLn msg
-  main =
-    match args ()
-      [path] => emit path           -- ← 0 bytes out, exit 0
-      _ => ePutStrLn "usage"
-  ```
-  vs. inlining the inner `match readFile …` directly under `[path] =>` (works —
-  this is what `selfhost/lex_main.mdk` does).
-  **Bisection so far (narrowing, not yet minimal):** the small/standalone analogs
-  all *work* — helper-from-match-arm with a constant `putStr`, with a recursively
-  built string, with a `match readFile` body, and even a 2-module case where the
-  helper renders a `List` of an imported ADT. The failure only reproduces with the
-  *actual* large `lexer.mdk` (`tokenize`/`renderToks`), so the trigger correlates
-  with something the minimal cases lack (recursion depth / list size / the
-  90-arm `tokenToString` / cross-module thunk-forcing order). Producing a minimal
-  repro is the first task.
-  **Where it lands / how to chase:** almost certainly the eval driver in
-  `lib/eval.ml` — how a top-level `main` (and nested calls) force `<IO>` actions,
-  i.e. whether a function-application result that *is* an IO action gets run or
-  just returned. Smells like the deferred-thunk / install-order family behind
-  Phases 96/103/121/125 (loader vs flat eval); confirm with `dev/module_debug.exe`
-  and shrink `lexer.mdk` until it stops reproducing. **Skill: debug-pipeline.**
+- **Phase 134 — `<IO>` helper from a `match` arm produced no output: a
+  cross-module dict-passing name collision. ✅ DONE (2026-06-03).** Surfaced by
+  Phase 132. **Symptom:** factoring an `<IO>` body into a helper called from a
+  `match` arm made the program exit 0 with **no output**; the inline form ran
+  correctly. Only reproduced with the real `selfhost/lexer.mdk` — every minimal
+  analog worked, which is what made it look like a deferred-thunk / eval-driver
+  bug (Phases 96/103/121/125). It was **not** the eval driver. **Root cause:**
+  `lexer.mdk` defines a private, genuinely `Num`-constrained 8-arg `emit` (the
+  `+` on `pos`/`depth` leaves two `Num` constraints, so dict_pass gives its
+  definition two leading dict params). `Eval.eval_modules` dict-passed the marked
+  prelude **+ all modules jointly** and `Dict_pass.collect_arities` keyed
+  dict-arity by **bare name**, so the global `emit→2` was applied to
+  `lex_main.mdk`'s *unrelated, unconstrained* `emit` definition too. That
+  definition became 3-param while its call site (`EDictApp` with no resolved
+  route) applied zero dicts, so `emit path` returned an un-run **partial
+  closure** — discarded by `main`'s thunk → clean exit, no output. The minimal
+  analogs missed it because their helper-collision used `++` (no residual
+  constraint ⇒ no dict params ⇒ no conflation). **Fix (`lib/eval.ml`
+  `eval_modules_ex`):** stop dict-passing jointly. Scope each module's
+  dict-arity table to references that can actually resolve to *its* definitions —
+  the module's own decls ∪ the decls of its **transitive importers** (where the
+  external call sites of its exported constrained functions live). The prelude,
+  imported by everyone, keeps the full joint scope. Private constrained fns
+  (lexer's `emit`) are covered by the own-decls part; public ones referenced only
+  by importers (`mk : Tag a => …`) by the importer part. **Regression test:**
+  `test_loader.ml` `test_eval_dict_arity_no_cross_module_collision` (drives
+  `Eval.eval_modules`; the flat path can't express two top-level `emit`s, so it
+  masks this). `selfhost/lex_main.mdk` now uses the helper form (named `emit` on
+  purpose), so the diff harness exercises the fix over all 15 fixtures.
 
 - **Phase 133 — char literals do no escape processing (surfaced by Phase 132).**
   TODO — decide + (maybe) fix. A Medaka char literal `'…'` captures its inner

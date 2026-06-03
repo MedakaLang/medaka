@@ -42,10 +42,17 @@ the stage is done when all pass.
   rule, nested interpolation. Next validation step: diff the Medaka lexer against
   the OCaml lexer on real `.mdk` source (e.g. stdlib files) to surface these.
 
-## Known eval quirk (self-host-surfaced)
+## Self-host-surfaced compiler fix
 
-An `<IO>`-returning **helper** called from a `match` arm is not forced by the
-eval driver — the action is returned but never run (clean exit, no output) —
-whereas the same logic **inlined** runs correctly. `lex_main.mdk` is written
-inline to dodge this. Worth reducing to a minimal repro and filing as a compiler
-bug.
+**Phase 134 (fixed).** Porting the lexer surfaced a real bug: an `<IO>`-returning
+**helper** called from a `match` arm produced no output (clean exit) while the
+same logic **inlined** ran correctly. Root cause was *not* the eval driver but
+cross-module dict-passing: `lexer.mdk`'s private, `Num`-constrained 8-arg `emit`
+made `Eval.eval_modules` (which dict-passed the whole program *jointly*, keying
+dict-arity by bare name) prepend spurious dict parameters to any same-named
+function in another module. `lex_main.mdk`'s unconstrained `emit` helper then got
+under-applied, returning a partial closure that was never run. Fixed by scoping
+each module's dict-arity table to the references that can resolve to its own
+definitions (own decls + transitive importers). `lex_main.mdk` now uses the
+helper form — and shares the name `emit` with the lexer on purpose, so the diff
+harness exercises the fix continuously.
