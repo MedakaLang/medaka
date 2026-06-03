@@ -8,8 +8,13 @@
 -- Applicative and Mappable declared in stdlib/core.mdk, and dispatched
 -- through user-written impl bodies.
 
-extern print : a -> <IO> Unit
-extern println : a -> <IO> Unit
+-- Raw string output (Phase 111).  `print`/`println` are *not* externs anymore:
+-- they're Medaka functions in core.mdk that render via `Display` and call these.
+extern putStr : String -> <IO> Unit
+extern putStrLn : String -> <IO> Unit
+-- Escape hatch: dumps a value's raw internal structure (the pre-Phase-111
+-- `println`), bypassing `Display`.  For REPL/debugging only.
+extern inspect : a -> <IO> Unit
 extern Ref : a -> Ref a
 extern set_ref : Ref a -> a -> <Mut> Unit
 extern pi : Float

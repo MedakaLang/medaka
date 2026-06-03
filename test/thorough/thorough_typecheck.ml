@@ -333,17 +333,20 @@ r = both_equal Opaque Opaque
    5. Effect propagation
    ===================================================================== *)
 
-(* An explicitly annotated IO function works as before. *)
+(* An explicitly annotated IO function works as before.  Phase 111: `print` is
+   now `Display a => a -> <IO> Unit`, so the signature must carry `Display a`. *)
 let t_eff_print_io =
   assert_type
-    {|f : a -> <IO> Unit
+    {|f : Display a => a -> <IO> Unit
 f x = print x
 |}
     "f" "a -> <IO> Unit"
 
-(* Phase 51: unannotated function calling print gets IO inferred. *)
+(* Phase 51: unannotated function calling print gets IO inferred.  Phase 111:
+   `print` is now a Medaka `Display a => a -> <IO> Unit`, so its `<IO>` propagates
+   honestly to the unannotated caller (previously this rendered pure). *)
 let t_eff_infer_unannotated =
-  assert_type "f x = print x\n" "f" "a -> Unit"
+  assert_type "f x = print x\n" "f" "a -> <IO> Unit"
 
 (* Phase 51: transitive inference — unannotated A calling unannotated B calling print. *)
 let t_eff_infer_transitive =
@@ -351,7 +354,7 @@ let t_eff_infer_transitive =
     {|inner x = print x
 outer x = inner x
 |}
-    "outer" "a -> Unit"
+    "outer" "a -> <IO> Unit"
 
 (* Phase 51: annotated caller of unannotated callee must cover callee's inferred effects. *)
 let e_eff_escape_via_inferred_callee =

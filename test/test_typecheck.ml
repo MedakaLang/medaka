@@ -3343,8 +3343,8 @@ mk n = tag n
 
 main : <IO> Unit
 main =
-  println (mk 5 : String)
-  if (mk 5 : Bool) then println "T" else println "F"
+  inspect (mk 5 : String)
+  if (mk 5 : Bool) then inspect "T" else inspect "F"
 |}
 
 (* Phase 69.x-e: collect each EMethodRef's *method-level* dict routes

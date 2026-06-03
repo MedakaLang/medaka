@@ -881,12 +881,14 @@ main = print 5
 |}
     "5"
 
+(* Phase 111: `print` renders via `Display`, which prints `Bool` capitalized
+   (`True`), unlike the old `pp_value` dump (`true`).  `String` stays unquoted. *)
 let t_print_tuple =
   assert_stdout
     {|main : <IO> Unit
 main = print (1, "x", True)
 |}
-    "(1, x, true)"
+    "(1, x, True)"
 
 let t_println_list =
   assert_stdout

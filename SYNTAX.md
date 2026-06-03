@@ -330,7 +330,7 @@ export data Color = Red | Green | Blue           -- abstract export (type only)
 ```
 extern foo : Int -> String
 extern id : a -> a
-extern print : a -> <IO> Unit
+extern putStrLn : String -> <IO> Unit
 extern pi : Float
 ```
 

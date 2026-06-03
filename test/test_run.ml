@@ -357,8 +357,8 @@ main =
    carries no `f`, so arg-tag "first impl wins" would print `Bag` — distinct
    output proves head-key selection. *)
 let t_head_key_dispatch = assert_output_typed
-  {|data Box a = Box a
-data Bag a = Bag a
+  {|data Box a = Box a deriving (Display)
+data Bag a = Bag a deriving (Display)
 
 interface Wrap f where
   wrap : a -> f a
@@ -391,8 +391,8 @@ main =
    routes to it.  `Bag` impls are declared first, so without the super dict
    "first impl wins" would print `Bag`. *)
 let t_super_dict_dispatch = assert_output_typed
-  {|data Box a = Box a
-data Bag a = Bag a
+  {|data Box a = Box a deriving (Display)
+data Bag a = Bag a deriving (Display)
 
 interface Base f where
   base : a -> f a
@@ -419,6 +419,23 @@ main =
   println (mk 7 : Bag Int)
 |}
   "Box 5\nBag 7\n"
+
+(* ── Phase 111: println routes through Display; inspect dumps raw structure ── *)
+(* `println` is now a Medaka fn over `display`, so a custom `Display` impl wins
+   over the structural form — `<box 5>`, not `Box 5`.  `inspect` keeps the old
+   `pp_value` raw dump (`Box 5`), the debugging escape hatch. *)
+let t_println_display_vs_inspect = assert_output_typed
+  {|data Box = Box Int
+
+impl Display Box where
+  display (Box n) = "<box \{n}>"
+
+main : <IO> Unit
+main =
+  println (Box 5)
+  inspect (Box 5)
+|}
+  "<box 5>\nBox 5\n"
 
 (* ── Hello world ─────────────────────────────────────────────────────────── *)
 
@@ -532,19 +549,23 @@ main = println (big 5)
 (* ── String/Char kernel (Phase 75) ───────────────────────────────────────── *)
 
 (* Smoke-tests each kernel extern.  Untyped capture_run is enough — these are
-   plain primitives, no typeclass dispatch. *)
+   plain primitives.  Uses `inspect` (the raw structural dump) rather than
+   `println`: Phase 111 routed `println` through `Display`, whose dispatch the
+   untyped path can't resolve, so the dispatch-free `inspect` keeps these as pure
+   extern smoke tests.  (`inspect`'s output is byte-identical to the pre-111
+   `println`.) *)
 let t_string_kernel = assert_output
   {|main : <IO> Unit
 main =
-  println (charCode 'A')
-  println (charFromCode 66)
-  println (charFromCode 55296)
-  println (stringConcat ["ab", "cd", "ef"])
-  println (stringCompare "abc" "abd")
-  println (stringCompare "abc" "abc")
-  println (stringCompare "abd" "abc")
-  println (stringToFloat "3.5")
-  println (stringToFloat "nope")
+  inspect (charCode 'A')
+  inspect (charFromCode 66)
+  inspect (charFromCode 55296)
+  inspect (stringConcat ["ab", "cd", "ef"])
+  inspect (stringCompare "abc" "abd")
+  inspect (stringCompare "abc" "abc")
+  inspect (stringCompare "abd" "abc")
+  inspect (stringToFloat "3.5")
+  inspect (stringToFloat "nope")
 |}
   "65\nSome B\nNone\nabcdef\nLt\nEq\nGt\nSome 3.5\nNone\n"
 
@@ -554,13 +575,13 @@ main =
 let t_string_codepoint = assert_output
   {|main : <IO> Unit
 main =
-  println (stringLength "héllo→")
-  println (stringSlice 1 4 "héllo→")
-  println (stringSlice 5 6 "héllo→")
-  println (stringSlice 0 100 "héllo→")
-  println (charCode '→')
-  println (arrayLength (stringToChars "héllo→"))
-  println (stringFromChars (stringToChars "héllo→") == "héllo→")
+  inspect (stringLength "héllo→")
+  inspect (stringSlice 1 4 "héllo→")
+  inspect (stringSlice 5 6 "héllo→")
+  inspect (stringSlice 0 100 "héllo→")
+  inspect (charCode '→')
+  inspect (arrayLength (stringToChars "héllo→"))
+  inspect (stringFromChars (stringToChars "héllo→") == "héllo→")
 |}
   "6\néll\n→\nhéllo→\n8594\n6\ntrue\n"
 
@@ -570,14 +591,14 @@ main =
 let t_string_unicode = assert_output
   {|main : <IO> Unit
 main =
-  println (charIsAlpha 'é')
-  println (charIsAlpha '7')
-  println (charIsSpace ' ')
-  println (charIsPunct '!')
-  println (charToUpper 'é')
-  println (charToUpper 'ß')
-  println (stringToUpper "Straße")
-  println (stringToLower "HÉLLO→")
+  inspect (charIsAlpha 'é')
+  inspect (charIsAlpha '7')
+  inspect (charIsSpace ' ')
+  inspect (charIsPunct '!')
+  inspect (charToUpper 'é')
+  inspect (charToUpper 'ß')
+  inspect (stringToUpper "Straße")
+  inspect (stringToLower "HÉLLO→")
 |}
   "true\nfalse\ntrue\ntrue\nÉ\nß\nSTRASSE\nhéllo→\n"
 
@@ -684,6 +705,7 @@ let () = Alcotest.run "Run"
     "multi-param dispatch",     `Quick, t_multiparam_dispatch;
     "head-key dispatch",        `Quick, t_head_key_dispatch;
     "super dict dispatch",      `Quick, t_super_dict_dispatch;
+    "println Display vs inspect (Phase 111)", `Quick, t_println_display_vs_inspect;
     "dict polymorphic helper",  `Quick, t_dict_polymorphic_helper;
     "dict transitive",          `Quick, t_dict_transitive;
     "foldMap method dict (concrete)",    `Quick, t_foldmap_method_dict_concrete;

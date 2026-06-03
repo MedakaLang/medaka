@@ -135,59 +135,6 @@ above, it is flagged ⭐.
   WIP on branch `claude/suspicious-sammet-21d73e` (commit `860ba12`). Skill:
   **add-language-feature** (cross-cutting).
 
-- **Phase 111 — `print`/`println` leak language internals; route them through a
-  user-facing interface.** Surfaced 2026-06-02 in the Phase 108 `show` discussion.
-  - **Problem (verified):** `println m` for a `Map` prints the raw
-    weight-balanced tree — `Bin 2 1 10 Tip (Bin 1 2 20 Tip Tip)` — i.e. the
-    internal constructors, not a user-facing form like `fromList [(1, 10), …]`.
-    Every user ADT prints its raw `VCon` structure. `show m` is fine
-    (`fromList […]`), but plain `println` is the common path and exposes the
-    implementation.
-  - **Root cause:** `print`/`println : a -> <IO> Unit` (stdlib/runtime.mdk) are
-    **unconstrained** externs; eval's `print`/`println` (`lib/eval.ml` ~1088)
-    call native `pp_value`, which renders a runtime value structurally (`VCon`
-    name + args) with no interface dispatch — at runtime the value is just
-    `VCon "Bin" […]`, so `pp_value` *can't* reach a type's user-defined rendering.
-  - **Goal / the decision to make:** standardize human-facing output on a
-    user-facing interface. Likely **`Display`** (`display : a -> String`,
-    unquoted; already backs `\{…}` interpolation, and matches println's
-    putStr-vs-show intent per runtime.mdk's comment) rather than `Show` (quoted,
-    round-trippable). **Pick one.**
-  - **`Display` should use the literal syntax (the Show/Display split, resolved).**
-    Because `Display` does *not* need to round-trip, it is free to render a
-    container with its pretty literal form, while `Show` keeps the re-evaluable
-    function form:
-      - `show m`    → `fromList [(1, 10), (2, 20)]` (round-trips; empty → `fromList []`)
-      - `display m` → `Map { 1 => 10, 2 => 20 }` (pretty; empty → `Map {}`, which
-        Show could *not* emit because it doesn't parse — but Display needn't care)
-    So this phase adds `impl Display (Map k v)` (and per container) rendering the
-    `Map { … }` literal, and `println m` then shows that. This is exactly why the
-    Phase 108 `show` switch was declined but Display is the right home for the
-    literal rendering.
-    - **Sub-decision:** do the keys/values *inside* a Display'd container render
-      via `Display` (unquoted — `Map { ada => 1 }`) or `Show` (quoted —
-      `Map { "ada" => 1 }`)? Unquoted is Display-consistent but makes a string key
-      read like an identifier. Decide when building.
-  - **Clean implementation shape:** make `print`/`println` *Medaka* stdlib
-    functions over a raw string-only extern — `putStr/putStrLn : String -> <IO>
-    Unit` (the only externs), then `println : Display a => a -> <IO> Unit;
-    println x = putStrLn (display x)`. This sidesteps the extern-can't-receive-a-
-    dict wrinkle (externs take raw values; a constrained extern would need eval to
-    supply the dict) by moving the constraint into Medaka where dict-passing
-    already works.
-  - **Cost / fork:** constraining the signature means **`Display` must cover every
-    printable type** — built-ins (Int/Float/Bool/Char/String/Unit/tuples/List/
-    Option/Result/Array/Map/…) plus `deriving (Display)` for user types; printing
-    an un-`Display`able type becomes a *compile error*, losing today's
-    "println anything" ergonomic. Mitigation: keep the current unconstrained raw
-    dump under a debug name (`debug`/`inspect : a -> <IO> Unit`) for REPL/quick
-    prints. `pp_value` is also used by error messages, the REPL result echo, and
-    `applied non-function: …` — leave those raw (internal/debug), scope this to
-    `print`/`println`.
-  - Lands in: stdlib/runtime.mdk (externs) + stdlib/core.mdk (Display coverage +
-    `print`/`println` defs + wider `deriving (Display)`) + `lib/eval.ml` (swap the
-    externs for `putStr`/`putStrLn`). Skill: **add-language-feature**.
-
 - **Phase 112 — prefer a locally-bound / explicitly-imported name over a
   no-impl interface method.** The recurring standalone-vs-interface-method
   collision. It bit `empty` (fixed in Phase 103), and currently makes map's

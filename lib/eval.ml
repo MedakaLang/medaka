@@ -1085,8 +1085,17 @@ let unwrap_list = function
 
 let primitives : (string * value) list =
   [
-    ("print",   VPrim (fun v -> !output_hook (pp_value v); VUnit));
-    ("println", VPrim (fun v -> !output_hook (pp_value v); !output_hook "\n"; VUnit));
+    (* Phase 111: `print`/`println` moved into core.mdk (Medaka, Display-routed)
+       over these string-only externs.  The non-VString branch is defensive —
+       the Medaka type `String -> <IO> Unit` guarantees a VString in practice. *)
+    ("putStr", VPrim (fun v -> match v with
+       | VString s -> !output_hook s; VUnit
+       | _ -> raise (Eval_error ("putStr: expected String", None))));
+    ("putStrLn", VPrim (fun v -> match v with
+       | VString s -> !output_hook s; !output_hook "\n"; VUnit
+       | _ -> raise (Eval_error ("putStrLn: expected String", None))));
+    (* Escape hatch: the pre-Phase-111 raw structural dump (`pp_value`). *)
+    ("inspect", VPrim (fun v -> !output_hook (pp_value v); !output_hook "\n"; VUnit));
     (* `pure` is no longer a primitive — it's an ordinary Applicative interface
        method (stdlib/core.mdk), routed by its EMethodRef to the impl the
        typechecker chose (Phase 69.x-c retired the current_monad_type/pure_impls

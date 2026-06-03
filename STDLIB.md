@@ -42,8 +42,12 @@ These are the OCaml-backed primitives declared as `extern` in
 import. The list is authoritative — adding a new primitive means editing this
 file and the matching impl in `lib/eval.ml`.
 
-- `print : a -> <IO> Unit` — write a value to stdout, no trailing newline
-- `println : a -> <IO> Unit` — write a value to stdout followed by `\n`
+- `putStr : String -> <IO> Unit` — write a string to stdout, no trailing newline
+- `putStrLn : String -> <IO> Unit` — write a string to stdout followed by `\n`
+- `inspect : a -> <IO> Unit` — dump a value's raw internal structure (debug
+  escape hatch; bypasses `Display`)
+- (`print`/`println : Display a => a -> <IO> Unit` are Medaka prelude functions
+  over `putStr`/`putStrLn`, not externs — they render via `Display`, Phase 111)
 - `Ref : a -> Ref a` — wrap a value in a mutable cell
 - `set_ref : Ref a -> a -> <Mut> Unit` — overwrite the contents of a `Ref`
 - `pi : Float` — math constant π

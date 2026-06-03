@@ -4948,6 +4948,49 @@ ignoring boundaries.
   checker; making it a transformer ripples mangled names through the whole
   pipeline + needs de-mangling for LSP. Fights the architecture.
 
+### Phase 111: route `print`/`println` through `Display` ✅ DONE (2026-06-02)
+
+`println m` for a `Map` dumped the raw weight-balanced tree
+(`Bin 2 1 10 Tip (Bin 1 2 20 Tip Tip)`), and every user ADT printed its raw
+`VCon` structure: `print`/`println` were **unconstrained** externs calling
+native `pp_value`, which has no interface dispatch. Fixed by standardizing
+human-facing output on the **`Display`** interface (unquoted, already backs
+`\{…}` interpolation).
+- **Shape.** Replaced the `print`/`println` externs (runtime.mdk) with raw
+  string-only `putStr`/`putStrLn : String -> <IO> Unit`, and made `print`/
+  `println` *Medaka* prelude functions: `println : Display a => a -> <IO> Unit;
+  println x = putStrLn (display x)`. Moving the constraint into Medaka sidesteps
+  the extern-can't-receive-a-dict wrinkle (dict-passing already works there).
+  `lib/eval.ml`'s `primitives` swapped accordingly.
+- **Container Display impls** render the Phase-108 literal form (the *display*
+  counterpart of Show's re-evaluable `fromList […]`): `impl Display (Map k v)` →
+  `Map { 1 => 10, 2 => 20 }` (empty → `Map {}`), `impl Display (Set a)` →
+  `Set { 1, 2, 3 }` (empty → `Set {}`), `impl Display (Array a)` → `[|1, 2, 3|]`
+  (mirrors its Show). **Decision: inner keys/values render unquoted** (via
+  `display`, not `show`), consistent with the existing `Display (List/Option/
+  tuple)` impls — so a string key reads `Map { ada => 1 }`. Also added the
+  missing `impl Display Ordering` (a printable built-in) for completeness.
+- **Escape hatch.** Kept the old raw `pp_value` dump under a single new extern
+  **`inspect : a -> <IO> Unit`** (REPL/debug). `pp_value`'s other call sites
+  (error messages, REPL result echo, doctest compare, prop counterexamples) stay
+  raw — unchanged.
+- **Cost.** Constraining `println` to `Display a =>` makes printing an
+  un-`Display`able type a *compile error* (vs. today's "println anything").
+  `deriving (Display)` already existed, so user ADTs opt in cheaply.
+- **Test fallout.** Untyped eval can't dispatch `display` (its `Display Int`
+  impl's `PVar` pattern matches anything → "first-impl-wins" misfires on
+  non-Ints), and the loader/typecheck tests hand-roll pipelines that — unlike the
+  real `Run` driver — omit `Prelude.program` from `constrained_fn_names`, so a
+  call site of the now-constrained prelude `println` doesn't get the dict arg that
+  `marked_prelude`'s `println` expects (`unbound $dict_println_0`). The real
+  multi-module driver (which *does* include the prelude and uses
+  `Eval.eval_modules`) works. Tests whose `println` was incidental output were
+  switched to `inspect` (byte-identical, unconstrained); `Bool` expecteds updated
+  `true`→`True` (Display capitalizes). Lands in: stdlib/runtime.mdk, core.mdk,
+  array.mdk, map.mdk, set.mdk, lib/eval.ml. See
+  [[project_typecheck_unify_dict_coupling]], [[project_eval_no_module_isolation]],
+  [[project_display_interpolation]].
+
 ### Module 5 stdlib: `map.mdk` + `set.mdk` (weight-balanced ordered containers) ✅ DONE (2026-06-02)
 
 The single biggest Stage-0 gap (symbol tables / scopes / substitutions). User

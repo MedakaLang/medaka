@@ -653,8 +653,8 @@ let test_eval_super_dict_cross_module () =
       "import submod.{Box, Bag, Base, Sub, base, same, mk}\n\n\
        main : <IO> Unit\n\
        main =\n\
-      \  println (mk 5 : Box Int)\n\
-      \  println (mk 7 : Bag Int)\n" in
+      \  inspect (mk 5 : Box Int)\n\
+      \  inspect (mk 7 : Bag Int)\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in
@@ -701,7 +701,7 @@ let test_eval_method_dict_cross_module () =
        main : <IO> Unit\n\
        main =\n\
       \  let r = foldMap MkSum [1, 2, 3, 4]\n\
-      \  if unwrap r == 10 then println \"OK\" else println \"BAD\"\n" in
+      \  if unwrap r == 10 then inspect \"OK\" else inspect \"BAD\"\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in
@@ -750,8 +750,8 @@ let test_eval_module_isolation () =
        import arrmod.{singleton}\n\n\
        main : <IO> Unit\n\
        main =\n\
-      \  println (wrap 3 4)\n\
-      \  println (singleton 5)\n" in
+      \  inspect (wrap 3 4)\n\
+      \  inspect (singleton 5)\n" in
     let modules = Loader.load_program main_path [dir] in
     let modules = List.map (fun (mid, fp, prog) ->
       (mid, fp, Desugar.desugar_program prog)) modules in

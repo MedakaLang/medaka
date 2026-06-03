@@ -329,6 +329,16 @@ export impl Display String where
 export impl Display Char where
   display c = charToStr c
 
+{- | `Ordering` is a printable built-in (e.g. `println (compare a b)`), so it
+   needs a `Display` impl now that `println` routes through `Display` (Phase 111).
+
+   > display Lt == "Lt"
+   True -}
+export impl Display Ordering where
+  display Lt = "Lt"
+  display Eq = "Eq"
+  display Gt = "Gt"
+
 -- Comma-joined element rendering for `Display (List a)`, mirroring
 -- `showListItems`: a top-level recursive constrained helper that forwards its
 -- `Display a` dictionary on the self-call.
@@ -359,6 +369,19 @@ export impl Display (a, b, c, d) requires Display a, Display b, Display c, Displ
 
 export impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Display d, Display e where
   display (a, b, c, d, e) = "(\{a}, \{b}, \{c}, \{d}, \{e})"
+
+{- | Human-facing output (Phase 111).  `println`/`print` render via `Display`
+   (unquoted, user-facing) rather than dumping internal `VCon` structure, so a
+   `Map` prints `Map { 1 => 10 }`, not its weight-balanced tree.  The raw
+   structural dump now lives behind `inspect` (runtime.mdk).  These are ordinary
+   Medaka functions over the string-only `putStr`/`putStrLn` externs, which moves
+   the `Display` constraint into Medaka where dict-passing works (an extern can't
+   receive a dictionary). -}
+export println : Display a => a -> <IO> Unit
+println x = putStrLn (display x)
+
+export print : Display a => a -> <IO> Unit
+print x = putStr (display x)
 
 {- | Numeric arithmetic.  Backs `+`, `-`, `*`, `/` for user-defined numeric
    types; the operators are hard-wired for `Int` and `Float` and only

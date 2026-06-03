@@ -24,7 +24,7 @@
    two lines of Medaka built on `arrayMakeWith` + `arrayGetUnsafe`, which
    compile to a tight loop in the host runtime. -}
 
-import core.{Eq, Ord, Show, Foldable, Mappable, Filterable, Semigroup, Monoid, Ordering, Option}
+import core.{Eq, Ord, Show, Display, Foldable, Mappable, Filterable, Semigroup, Monoid, Ordering, Option}
 
 -- ── Construction ────────────────────────────────────────────────────────
 
@@ -378,3 +378,18 @@ showArrayItems arr i n
    True -}
 export default impl Show (Array a) requires Show a where
   show arr = "[|\{showArrayItems arr 0 (arrayLength arr)}|]"
+
+-- Display counterpart of `showArrayItems`: recurses via `display` (unquoted).
+displayArrayItems : Display a => Array a -> Int -> Int -> String
+displayArrayItems arr i n
+  | i >= n = ""
+  | i == n - 1 = display (arrayGetUnsafe i arr)
+  | otherwise = "\{display (arrayGetUnsafe i arr)}, \{displayArrayItems arr (i + 1) n}"
+
+{- | Renders `[|1, 2, 3|]`, matching `show` but with unquoted elements (the
+   Display convention).
+
+   > display (fromList [1, 2, 3]) == "[|1, 2, 3|]"
+   True -}
+export default impl Display (Array a) requires Display a where
+  display arr = "[|\{displayArrayItems arr 0 (arrayLength arr)}|]"

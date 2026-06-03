@@ -26,7 +26,7 @@
    `Ord k` constraint; the few that only walk an existing tree (`size`, `map`,
    `keys`, the folds) do not, because the tree is already in order. -}
 
-import core.{Eq, Ord, Show, Mappable, Semigroup, Monoid, Ordering, Option, FromEntries}
+import core.{Eq, Ord, Show, Display, Mappable, Semigroup, Monoid, Ordering, Option, FromEntries}
 
 {- The representation.  `Tip` is the empty tree; `Bin size key value left right`
    is an interior node whose cached `size` is `1 + size left + size right`.
@@ -462,6 +462,26 @@ export default impl Eq (Map k v) requires Eq k, Eq v where
    True -}
 export default impl Show (Map k v) requires Show k, Show v where
   show m = "fromList \{show (toList m)}"
+
+-- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
+-- `display` (unquoted), the Display convention.  `toList` gives ascending pairs.
+displayMapEntries : (Display k, Display v) => List (k, v) -> String
+displayMapEntries [] = ""
+displayMapEntries [(k, v)] = "\{k} => \{v}"
+displayMapEntries ((k, v)::rest) = "\{k} => \{v}, \{displayMapEntries rest}"
+
+{- | The *display* form — the Phase-108 literal `Map { k => v, … }` (empty →
+   `Map {}`), as opposed to Show's re-evaluable `fromList [(k, v), …]`.
+
+   > display (fromList [(1, 10), (2, 20)]) == "Map { 1 => 10, 2 => 20 }"
+   True
+   > display (empty : Map Int Int) == "Map {}"
+   True -}
+export default impl Display (Map k v) requires Display k, Display v where
+  display m =
+    match toList m
+      [] => "Map {}"
+      es => "Map { \{displayMapEntries es} }"
 
 {- | `++` on maps is left-biased union (the left map wins on shared keys).
 
