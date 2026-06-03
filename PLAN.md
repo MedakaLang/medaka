@@ -186,16 +186,14 @@ above, it is flagged ⭐.
   reference" real instead of aspirational. Skill: none specific (new `test/` +
   `dev/` driver).
 
-- **Phase 128 — freeze `stdlib/string.mdk` (review + lock the API). Stage-0
-  housekeeping.** string.mdk passes its 49 doctests but is still flagged *awaiting
-  full user review*. Settle the open decisions, then **freeze the surface** so the
-  compiler (a heavy string consumer) is ported against a stable API: (1) the
-  `length`/`isEmpty` omissions — keep relying on the global `stringLength` / `s ==
-  ""`, or introduce a `Sized`/`HasLength` interface? (2) `toUpper`/`toLower` (full
-  Unicode, String-level, owns the unqualified names) vs `charToUpper`/`charToLower`
-  (Char-level kernel externs) — confirm or rename. Decide, document the final
-  surface in STDLIB.md, mark Module 3 reviewed. Small but worth doing before the
-  port locks in. Skill: **extend-stdlib**.
+- **Phase 128 — freeze `stdlib/string.mdk` (review + lock the API). DONE 2026-06-03.**
+  49/49 doctests pass. Open decisions settled and documented in STDLIB.md (Module 3
+  marked reviewed/frozen): (1) `length`/`isEmpty` intentionally absent — would
+  clash with `Foldable`; callers use `stringLength`/`s == ""`; `Sized`/`HasLength`
+  deferred. (2) `toUpper`/`toLower` confirmed as the String-level names (full
+  Unicode, 1→N expansion); `charToUpper`/`charToLower` remain as Char-level kernel
+  externs only. No code changes needed — decisions were already encoded; Phase was
+  pure documentation/freeze.
 
 - **Phase 127 — unit testing library (`test` keyword + `stdlib/test.mdk`). DONE 2026-06-03.**
   Medaka has doctests (example-as-documentation) and `prop` tests (universal
@@ -374,11 +372,10 @@ that constraint and delegated the remaining modules (Modules 5–9). STDLIB.md i
 the per-module checklist; **all of Modules 5–9 are now complete** (`map`/`set`,
 hash containers, `io`, `mut_array`, `json`) — see PLAN-ARCHIVE.md and STDLIB.md.
 
-- ⭐ **`stdlib/string.mdk`** is drafted and passes its 49 doctests but is flagged
-  *awaiting full user review* (archive Phase 75 step 3). Remaining open decisions:
-  the `length`/`isEmpty` omissions and `toUpper` vs `charToUpper` naming. (The
-  `count` naming sub-decision is **resolved** — renamed to `countOccurrences` in
-  Phase 117, see PLAN-ARCHIVE.md.)
+- ✅ **`stdlib/string.mdk`** — API frozen 2026-06-03 (Phase 128). 49/49 doctests
+  pass. Open decisions resolved: `length`/`isEmpty` intentionally absent (clash
+  with `Foldable`; use `stringLength`/`s == ""`); `toUpper`/`toLower` own the
+  String-level names; `charToUpper`/`charToLower` remain as Char-level externs.
 
 - **Module 6 — hash containers ✅ DONE (Phase 120).**
   `stdlib/hash_map.mdk` + `stdlib/hash_set.mdk` — **mutable** hash tables

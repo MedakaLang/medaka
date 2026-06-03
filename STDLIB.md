@@ -323,7 +323,7 @@ implementations here — use the dispatch path instead:
 
 ---
 
-## Module 3 — `string` ✅ implemented (kernel Phase 75; `string.mdk` complete)
+## Module 3 — `string` ✅ implemented and reviewed (kernel Phase 75; API frozen 2026-06-03)
 
 Depends on `core`. Also provides `Char` utilities. File `stdlib/string.mdk`
 currently contains only an `import` line (the `Debug String`/`Debug Char` impls).
@@ -410,7 +410,7 @@ Already present and reused: `charToStr` (= `fromChar`), `showStringLit`,
 - ✅ `isUpper : Char -> Bool` — wraps `charIsUpper`
 - ✅ `isLower : Char -> Bool` — wraps `charIsLower`
 - ✅ `isPunct : Char -> Bool` — wraps `charIsPunct`
-- 🟡 `toUpper`/`toLower` for a single `Char` — call the kernel externs `charToUpper`/`charToLower` directly; the `String`-level `toUpper`/`toLower` (full Unicode) own those names in this module
+- ⛔ `toUpper`/`toLower` for a single `Char` — **intentionally not provided**: the `String`-level `toUpper`/`toLower` (full Unicode) own those unqualified names. For Char, call the kernel externs `charToUpper`/`charToLower` directly (they return `Char`, so they're identity on 1→N expansions like `'ß'`)
 - ✅ `digitToInt : Char -> Option Int` — `'0'..'9' → Some 0..9`, `'a'..'f' → Some 10..15`, else `None` (ASCII, via `charCode`)
 - ✅ `intToDigit : Int -> Option Char` — inverse of `digitToInt` for `0..15` (via `charFromCode`)
 - ✅ `charCode : Char -> Int` — **kernel extern**
@@ -430,7 +430,7 @@ Already present and reused: `charToStr` (= `fromChar`), `showStringLit`,
 
 ### Inspection
 
-- 🟡 `length`/`isEmpty` — intentionally not defined (would clash with the `Foldable` methods); use the global `stringLength`, or `s == ""`
+- ⛔ `length`/`isEmpty` — **intentionally not provided**: would clash with the `Foldable` methods of the same name. Use the global `stringLength`, or `s == ""`. A `Sized`/`HasLength` interface is the right lever if this is ever revisited, but is out of scope for now
 - ✅ `startsWith : String -> String -> Bool` — `startsWith prefix s` — true when `s` begins with `prefix`
 - ✅ `endsWith : String -> String -> Bool` — `endsWith suffix s` — true when `s` ends with `suffix`
 - ✅ `contains : String -> String -> Bool` — `contains needle haystack`
