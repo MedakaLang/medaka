@@ -21,7 +21,7 @@ import desugar.{mapProg, mapExpr, mapDecl}
 -- Interface method names declared across the decls (DInterface methods).
 interfaceMethodNames : List Decl -> List String
 interfaceMethodNames [] = []
-interfaceMethodNames ((DInterface { methods, ... })::rest) = map ifaceMethodName methods
+interfaceMethodNames (DInterface { methods, ... }::rest) = map ifaceMethodName methods
   ++ interfaceMethodNames rest
 interfaceMethodNames (_::rest) = interfaceMethodNames rest
 
@@ -153,8 +153,8 @@ declExternalRefs d = keepNotIn (declDefines d) (declRefs d)
 
 declDefines : Decl -> List String
 declDefines (DFunDef _ n _ _) = [n]
-declDefines (DImpl { methods, ... }) = map implMethodNameOf methods
-declDefines (DInterface { methods, ... }) = map ifaceMethodName methods
+declDefines DImpl { methods, ... } = map implMethodNameOf methods
+declDefines DInterface { methods, ... } = map ifaceMethodName methods
 declDefines _ = []
 
 implMethodNameOf : ImplMethod -> String
@@ -165,9 +165,8 @@ declRefs d = concatMapList collectVars (declBodies d)
 
 declBodies : Decl -> List Expr
 declBodies (DFunDef _ _ _ body) = [body]
-declBodies (DImpl { methods, ... }) = map implMethodBody methods
-declBodies (DInterface { methods, ... }) =
-  concatMapList ifaceMethodBodies methods
+declBodies DImpl { methods, ... } = map implMethodBody methods
+declBodies DInterface { methods, ... } = concatMapList ifaceMethodBodies methods
 declBodies (DProp _ _ _ body) = [body]
 declBodies (DTest _ _ body) = [body]
 declBodies (DBench _ _ body) = [body]

@@ -60,12 +60,19 @@ ppValue (VList vs) = "[" ++ joinComma (map ppValue vs) ++ "]"
 ppValue (VArray vs) = "[|" ++ joinComma (map ppValue (arrayToListG vs)) ++ "|]"
 ppValue (VCon name []) = name
 ppValue (VCon name vs) = name ++ " " ++ joinSp (map ppValueAtom vs)
-ppValue (VRecord name fields) = name ++ " { " ++ joinComma (map ppField fields) ++ " }"
+ppValue (VRecord name fields) = name
+  ++ " { "
+  ++ joinComma (map ppField fields)
+  ++ " }"
 ppValue (VRef cell) = "Ref(" ++ ppValue cell.value ++ ")"
 ppValue (VClosure _ _ _) = "<closure>"
 ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (lengthList vs) ++ ">"
-ppValue (VTypedImpl t _ _ _ inner) = "<impl@" ++ t ++ ":" ++ ppValue inner ++ ">"
+ppValue (VTypedImpl t _ _ _ inner) = "<impl@"
+  ++ t
+  ++ ":"
+  ++ ppValue inner
+  ++ ">"
 ppValue (VThunk _) = "<thunk>"
 ppValue VFallthrough = "<fallthrough>"
 
@@ -74,7 +81,7 @@ ppField (k, v) = k ++ " = " ++ ppValue v
 
 -- parenthesize compound atoms (VCon with args / tuples) when nested
 ppValueAtom : Value -> String
-ppValueAtom (VCon name (x :: xs)) = "(" ++ ppValue (VCon name (x :: xs)) ++ ")"
+ppValueAtom (VCon name (x::xs)) = "(" ++ ppValue (VCon name (x :: xs)) ++ ")"
 ppValueAtom (VTuple vs) = "(" ++ ppValue (VTuple vs) ++ ")"
 ppValueAtom v = ppValue v
 
@@ -87,27 +94,27 @@ joinSp xs = joinWith " " xs
 joinWith : String -> List String -> String
 joinWith _ [] = ""
 joinWith _ [x] = x
-joinWith sep (x :: rest) = x ++ sep ++ joinWith sep rest
+joinWith sep (x::rest) = x ++ sep ++ joinWith sep rest
 
 lengthList : List a -> Int
 lengthList [] = 0
-lengthList (_ :: xs) = 1 + lengthList xs
+lengthList (_::xs) = 1 + lengthList xs
 
 -- ── small helpers ─────────────────────────────────────────────────────────
 containsName : String -> List String -> Bool
 containsName _ [] = False
-containsName x (y :: ys) = x == y || containsName x ys
+containsName x (y::ys) = x == y || containsName x ys
 
 concatMapL : (a -> List b) -> List a -> List b
 concatMapL _ [] = []
-concatMapL f (x :: xs) = f x ++ concatMapL f xs
+concatMapL f (x::xs) = f x ++ concatMapL f xs
 
 reverseL : List a -> List a
 reverseL xs = reverseGo xs []
 
 reverseGo : List a -> List a -> List a
 reverseGo [] acc = acc
-reverseGo (x :: xs) acc = reverseGo xs (x :: acc)
+reverseGo (x::xs) acc = reverseGo xs (x :: acc)
 
 arrayToListG : Array a -> List a
 arrayToListG arr = arrayToListGo arr 0 (arrayLength arr)
@@ -124,7 +131,7 @@ intSeq lo end
 
 listNthV : List Value -> Int -> Value
 listNthV [] _ = panic "index out of bounds"
-listNthV (x :: xs) i
+listNthV (x::xs) i
   | i <= 0 = x
   | otherwise = listNthV xs (i - 1)
 
@@ -133,7 +140,7 @@ listSliceV xs lo hi = listSliceGo xs 0 lo hi
 
 listSliceGo : List Value -> Int -> Int -> Int -> List Value
 listSliceGo [] _ _ _ = []
-listSliceGo (x :: xs) i lo hi
+listSliceGo (x::xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: listSliceGo xs (i + 1) lo hi
   | otherwise = listSliceGo xs (i + 1) lo hi
@@ -145,15 +152,15 @@ startsWithAt s =
 
 containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
-containsInt x (y :: ys) = x == y || containsInt x ys
+containsInt x (y::ys) = x == y || containsInt x ys
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
-anyList p (x :: xs) = p x || anyList p xs
+anyList p (x::xs) = p x || anyList p xs
 
 assocLookupS : String -> List (String, String) -> Option String
 assocLookupS _ [] = None
-assocLookupS k ((k2, v) :: rest)
+assocLookupS k ((k2, v)::rest)
   | k == k2 = Some v
   | otherwise = assocLookupS k rest
 
@@ -167,7 +174,8 @@ buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = concatMapL ctorTypeEntries prog
 
 ctorTypeEntries : Decl -> List (String, String)
-ctorTypeEntries (DData _ tyname _ variants _) = map (v => (variantName v, tyname)) variants
+ctorTypeEntries (DData _ tyname _ variants _) =
+  map (v => (variantName v, tyname)) variants
 ctorTypeEntries _ = []
 
 variantName : Variant -> String
@@ -201,7 +209,7 @@ countTyvars (TyConstrained _ t) = countTyvars t
 
 sumInts : List Int -> Int
 sumInts [] = 0
-sumInts (x :: xs) = x + sumInts xs
+sumInts (x::xs) = x + sumInts xs
 
 tyvarsInArgs : List Ty -> Int
 tyvarsInArgs ts = sumInts (map countTyvars ts)
@@ -226,7 +234,7 @@ argsOfTy _ = []
 
 filterMentions : Int -> List Ty -> List String -> List Int
 filterMentions _ [] _ = []
-filterMentions i (t :: ts) params
+filterMentions i (t::ts) params
   | tyMentions t params = i :: filterMentions (i + 1) ts params
   | otherwise = filterMentions (i + 1) ts params
 
@@ -241,7 +249,7 @@ tyMentions (TyConstrained _ t) params = tyMentions t params
 
 contains : String -> List String -> Bool
 contains _ [] = False
-contains x (y :: ys) = x == y || contains x ys
+contains x (y::ys) = x == y || contains x ys
 
 -- ── environment ───────────────────────────────────────────────────────────
 lookupEnv : Env -> String -> <Mut> Value
@@ -249,7 +257,7 @@ lookupEnv (Env frames) name = lookupFrames frames name
 
 lookupFrames : List (List (String, Ref Value)) -> String -> <Mut> Value
 lookupFrames [] name = panic ("unbound variable: " ++ name)
-lookupFrames (frame :: rest) name = match lookupFrameCell frame name
+lookupFrames (frame::rest) name = match lookupFrameCell frame name
   Some cell => forceCell cell
   None => lookupFrames rest name
 
@@ -271,7 +279,7 @@ force v = v
 
 lookupFrameCell : List (String, Ref Value) -> String -> Option (Ref Value)
 lookupFrameCell [] _ = None
-lookupFrameCell ((n, cell) :: rest) name
+lookupFrameCell ((n, cell)::rest) name
   | n == name = Some cell
   | otherwise = lookupFrameCell rest name
 
@@ -286,7 +294,7 @@ pushFrame (Env frames) frame = Env (frame :: frames)
 
 findCell : List (String, Ref Value) -> String -> Ref Value
 findCell [] name = panic ("findCell: missing " ++ name)
-findCell ((n, cell) :: rest) name
+findCell ((n, cell)::rest) name
   | n == name = cell
   | otherwise = findCell rest name
 
@@ -308,12 +316,14 @@ valueEq _ _ = False
 
 valueListEq : List Value -> List Value -> Bool
 valueListEq [] [] = True
-valueListEq (x :: xs) (y :: ys) = valueEq x y && valueListEq xs ys
+valueListEq (x::xs) (y::ys) = valueEq x y && valueListEq xs ys
 valueListEq _ _ = False
 
 fieldListEq : List (String, Value) -> List (String, Value) -> Bool
 fieldListEq [] [] = True
-fieldListEq ((k1, v1) :: r1) ((k2, v2) :: r2) = k1 == k2 && valueEq v1 v2 && fieldListEq r1 r2
+fieldListEq ((k1, v1)::r1) ((k2, v2)::r2) = k1 == k2
+  && valueEq v1 v2
+  && fieldListEq r1 r2
 fieldListEq _ _ = False
 
 boolEq : Bool -> Bool -> Bool
@@ -348,7 +358,8 @@ valueCompare (VChar a) (VChar b) = stringCompare a b
 valueCompare (VBool a) (VBool b) = compare (boolToInt a) (boolToInt b)
 valueCompare VUnit VUnit = Eq
 valueCompare (VList a) (VList b) = compareValueLists a b
-valueCompare (VArray a) (VArray b) = compareValueLists (arrayToListG a) (arrayToListG b)
+valueCompare (VArray a) (VArray b) =
+  compareValueLists (arrayToListG a) (arrayToListG b)
 valueCompare (VTuple a) (VTuple b) = compareValueLists a b
 valueCompare (VCon n1 a1) (VCon n2 a2) = match compare n1 n2
   Eq => compareValueLists a1 a2
@@ -357,9 +368,9 @@ valueCompare a b = compare (valueTag a) (valueTag b)
 
 compareValueLists : List Value -> List Value -> Ordering
 compareValueLists [] [] = Eq
-compareValueLists [] (_ :: _) = Lt
-compareValueLists (_ :: _) [] = Gt
-compareValueLists (x :: xs) (y :: ys) = match valueCompare x y
+compareValueLists [] (_::_) = Lt
+compareValueLists (_::_) [] = Gt
+compareValueLists (x::xs) (y::ys) = match valueCompare x y
   Eq => compareValueLists xs ys
   o => o
 
@@ -386,7 +397,7 @@ matchPat (PCon "False" []) (VBool False) = Some []
 matchPat (PCon name pats) (VCon name2 vals)
   | name == name2 && lengthList pats == lengthList vals = matchPats pats vals
   | otherwise = None
-matchPat (PCons h t) (VList (x :: xs)) = matchCons h t x xs
+matchPat (PCons h t) (VList (x::xs)) = matchCons h t x xs
 matchPat (PCons _ _) (VList []) = None
 matchPat (PTuple pats) (VTuple vals)
   | lengthList pats == lengthList vals = matchPats pats vals
@@ -395,16 +406,26 @@ matchPat (PList pats) (VList vals)
   | lengthList pats == lengthList vals = matchPats pats vals
   | otherwise = None
 matchPat (PAs x p) v = matchAs x p v
-matchPat (PRec _ fields _) (VRecord _ recFields) = matchRecFields fields recFields
-matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v) = if inIntRange v lo hi incl then Some [] else None
-matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c) = if inCharRange c lo hi incl then Some [] else None
+matchPat (PRec _ fields _) (VRecord _ recFields) =
+  matchRecFields fields recFields
+matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v) =
+  if inIntRange v lo hi incl then
+    Some []
+  else
+    None
+matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c) =
+  if inCharRange c lo hi incl then
+    Some []
+  else
+    None
 matchPat _ _ = None
 
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 inIntRange v lo hi incl = v >= lo && v <= (if incl then hi else hi - 1)
 
 inCharRange : String -> String -> String -> Bool -> Bool
-inCharRange c lo hi incl = not (ordLt (stringCompare c lo)) && charUpper c hi incl
+inCharRange c lo hi incl = not (ordLt (stringCompare c lo))
+  && charUpper c hi incl
 
 charUpper : String -> String -> Bool -> Bool
 charUpper c hi True = not (ordGt (stringCompare c hi))
@@ -412,7 +433,7 @@ charUpper c hi False = ordLt (stringCompare c hi)
 
 matchRecFields : List RecPatField -> List (String, Value) -> Option (List (String, Value))
 matchRecFields [] _ = Some []
-matchRecFields (RecPatField fname mp :: rest) recFields = match assocLookupV fname recFields
+matchRecFields ((RecPatField fname mp)::rest) recFields = match assocLookupV fname recFields
   None => None
   Some v => matchRecField fname mp v rest recFields
 
@@ -428,7 +449,7 @@ matchRecField _ (Some q) v rest recFields = match matchPat q v
 
 assocLookupV : String -> List (String, Value) -> Option Value
 assocLookupV _ [] = None
-assocLookupV k ((k2, v) :: rest)
+assocLookupV k ((k2, v)::rest)
   | k == k2 = Some v
   | otherwise = assocLookupV k rest
 
@@ -446,7 +467,7 @@ matchAs x p v = match matchPat p v
 
 matchPats : List Pat -> List Value -> Option (List (String, Value))
 matchPats [] [] = Some []
-matchPats (p :: ps) (v :: vs) = match matchPat p v
+matchPats (p::ps) (v::vs) = match matchPat p v
   None => None
   Some b => match matchPats ps vs
     None => None
@@ -468,16 +489,17 @@ apply f x = match applyOpt f x
   Some v => v
   None => panic "no matching clause in application"
 
-applyOpt : Value -> Value -> <Mut> (Option Value)
+applyOpt : Value -> Value -> <Mut> Option Value
 applyOpt (VClosure env pats body) arg = applyClosure env pats body arg
 applyOpt (VPrim f) arg = Some (f arg)
-applyOpt (VTypedImpl t key pos seen inner) arg = applyTyped t key pos seen inner arg
+applyOpt (VTypedImpl t key pos seen inner) arg =
+  applyTyped t key pos seen inner arg
 applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg
 applyOpt other _ = panic ("applied non-function: " ++ ppValue other)
 
 -- pass the arg to the impl's inner value, preserving the dispatch tag across
 -- partial applications (so later args still route to the same impl)
-applyTyped : String -> String -> List Int -> Int -> Value -> Value -> <Mut> (Option Value)
+applyTyped : String -> String -> List Int -> Int -> Value -> Value -> <Mut> Option Value
 applyTyped t key pos seen inner arg = match applyOpt inner arg
   None => None
   Some r => Some (reTag t key pos (seen + 1) r)
@@ -514,12 +536,12 @@ matchesTag : String -> Value -> Bool
 matchesTag tag (VTypedImpl t _ _ _ _) = t == tag
 matchesTag _ _ = True
 
-applyClosure : Env -> List Pat -> Expr -> Value -> <Mut> (Option Value)
+applyClosure : Env -> List Pat -> Expr -> Value -> <Mut> Option Value
 applyClosure _ [] _ _ = panic "applied closure with no parameters"
 applyClosure env [p] body arg = match matchPat p arg
   None => None
   Some binds => fallthroughToNone (eval (extendEnv env binds) body)
-applyClosure env (p :: ps) body arg = match matchPat p arg
+applyClosure env (p::ps) body arg = match matchPat p arg
   None => None
   Some binds => Some (VClosure (extendEnv env binds) ps body)
 
@@ -528,12 +550,12 @@ fallthroughToNone : Value -> Option Value
 fallthroughToNone VFallthrough = None
 fallthroughToNone v = Some v
 
-collectPartials : List Value -> List Value -> Value -> <Mut> (Option Value)
+collectPartials : List Value -> List Value -> Value -> <Mut> Option Value
 collectPartials acc [] _ = match acc
   [] => panic "no matching impl for dispatch"
   [v] => Some v
   many => Some (VMulti (reverseL many))
-collectPartials acc (v :: rest) arg = match applyOpt v arg
+collectPartials acc (v::rest) arg = match applyOpt v arg
   None => collectPartials acc rest arg
   Some r => if isPartial r then collectPartials (r :: acc) rest arg else Some r
 
@@ -561,26 +583,35 @@ eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
 eval env (EBinOp op l r) = evalBinop env op l r
-eval env (EInfix op l r) = apply (apply (lookupEnv env op) (eval env l)) (eval env r)
+eval env (EInfix op l r) =
+  apply (apply (lookupEnv env op) (eval env l)) (eval env r)
 eval env (EUnOp op e) = evalUnop op (eval env e)
 eval env (ETuple es) = VTuple (map (eval env) es)
 eval env (EListLit es) = VList (map (eval env) es)
 eval env (EArrayLit es) = VArray (arrayFromList (map (eval env) es))
-eval env (ERecordCreate name fields) = VRecord name (map (evalFieldAssign env) fields)
-eval env (ERecordUpdate base fields) = evalRecordUpdate (eval env base) (map (evalFieldAssign env) fields)
+eval env (ERecordCreate name fields) =
+  VRecord name (map (evalFieldAssign env) fields)
+eval env (ERecordUpdate base fields) =
+  evalRecordUpdate (eval env base) (map (evalFieldAssign env) fields)
 eval env (EFieldAccess e "value") = evalValueField (eval env e)
 eval env (EFieldAccess e field) = evalField (eval env e) field
 eval env (EAnnot e _) = eval env e
 eval env (EBlock stmts) = evalBlock env stmts
 eval env (EIndex arr idx) = evalIndex (eval env arr) (eval env idx)
-eval env (ESlice arr lo hi incl) = evalSlice (eval env arr) (eval env lo) (eval env hi) incl
-eval env (ERangeList lo hi incl) = evalRange (eval env lo) (eval env hi) incl rangeListMk
-eval env (ERangeArray lo hi incl) = evalRange (eval env lo) (eval env hi) incl rangeArrayMk
+eval env (ESlice arr lo hi incl) =
+  evalSlice (eval env arr) (eval env lo) (eval env hi) incl
+eval env (ERangeList lo hi incl) =
+  evalRange (eval env lo) (eval env hi) incl rangeListMk
+eval env (ERangeArray lo hi incl) =
+  evalRange (eval env lo) (eval env hi) incl rangeArrayMk
 eval _ _ = panic "eval: unsupported node (slice 2)"
 
 evalIndex : Value -> Value -> Value
 evalIndex (VArray a) (VInt i) =
-  if i < 0 || i >= arrayLength a then panic "array index out of bounds" else arrayGetUnsafe i a
+  if i < 0 || i >= arrayLength a then
+    panic "array index out of bounds"
+  else
+    arrayGetUnsafe i a
 evalIndex (VList vs) (VInt i) = listNthV vs i
 evalIndex (VString s) (VInt i) = stringIndexCp s i
 evalIndex _ _ = panic "index: bad operands"
@@ -592,9 +623,12 @@ stringIndexCp s i
   | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
 
 evalSlice : Value -> Value -> Value -> Bool -> Value
-evalSlice (VArray a) (VInt lo) (VInt hi) incl = sliceArray a lo (if incl then hi + 1 else hi)
-evalSlice (VList vs) (VInt lo) (VInt hi) incl = VList (listSliceV vs lo (if incl then hi + 1 else hi))
-evalSlice (VString s) (VInt lo) (VInt hi) incl = VString (stringSlice lo (if incl then hi + 1 else hi) s)
+evalSlice (VArray a) (VInt lo) (VInt hi) incl =
+  sliceArray a lo (if incl then hi + 1 else hi)
+evalSlice (VList vs) (VInt lo) (VInt hi) incl =
+  VList (listSliceV vs lo (if incl then hi + 1 else hi))
+evalSlice (VString s) (VInt lo) (VInt hi) incl =
+  VString (stringSlice lo (if incl then hi + 1 else hi) s)
 evalSlice _ _ _ _ = panic "slice: bad operands"
 
 sliceArray : Array Value -> Int -> Int -> Value
@@ -603,7 +637,8 @@ sliceArray a lo hiX
   | otherwise = VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
 
 evalRange : Value -> Value -> Bool -> (List Int -> Value) -> Value
-evalRange (VInt lo) (VInt hi) incl mk = mk (intSeq lo (if incl then hi + 1 else hi))
+evalRange (VInt lo) (VInt hi) incl mk =
+  mk (intSeq lo (if incl then hi + 1 else hi))
 evalRange _ _ _ _ = panic "range bound must be Int"
 
 rangeListMk : List Int -> Value
@@ -616,7 +651,8 @@ evalFieldAssign : Env -> FieldAssign -> <Mut> (String, Value)
 evalFieldAssign env (FieldAssign k e) = (k, eval env e)
 
 evalRecordUpdate : Value -> List (String, Value) -> Value
-evalRecordUpdate (VRecord name existing) updates = VRecord name (map (mergeField updates) existing)
+evalRecordUpdate (VRecord name existing) updates =
+  VRecord name (map (mergeField updates) existing)
 evalRecordUpdate _ _ = panic "record update on non-record"
 
 mergeField : List (String, Value) -> (String, Value) -> (String, Value)
@@ -641,18 +677,19 @@ fieldOr fields field = match assocLookupV field fields
 -- bare sequential block: value of the last statement is the block's result
 evalBlock : Env -> List DoStmt -> <Mut> Value
 evalBlock _ [] = VUnit
-evalBlock env [DoExpr e] = eval env e
-evalBlock env [DoLet _ pat e] = blockLetLast env pat e
-evalBlock env (DoExpr e :: rest) =
+evalBlock env [(DoExpr e)] = eval env e
+evalBlock env [(DoLet _ pat e)] = blockLetLast env pat e
+evalBlock env ((DoExpr e)::rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env (DoLet _ pat e :: rest) = blockLet env pat e rest
-evalBlock env (DoLetElse pat e alt :: rest) = blockLetElse env pat e alt rest
-evalBlock env [DoAssign _ e] =
+evalBlock env ((DoLet _ pat e)::rest) = blockLet env pat e rest
+evalBlock env ((DoLetElse pat e alt)::rest) = blockLetElse env pat e alt rest
+evalBlock env [(DoAssign _ e)] =
   let _ = eval env e
   VUnit
-evalBlock env (DoAssign x e :: rest) = evalBlock (extendEnv env [(x, eval env e)]) rest
-evalBlock _ (_ :: _) = panic "eval: unsupported block statement"
+evalBlock env ((DoAssign x e)::rest) =
+  evalBlock (extendEnv env [(x, eval env e)]) rest
+evalBlock _ (_::_) = panic "eval: unsupported block statement"
 
 blockLetLast : Env -> Pat -> Expr -> <Mut> Value
 blockLetLast env pat e = match matchPat pat (eval env e)
@@ -694,7 +731,7 @@ letBindCell (LetBind name _) = (name, Ref VUnit)
 
 installGroup : Env -> List (String, Ref Value) -> List LetBind -> <Mut> Unit
 installGroup _ _ [] = ()
-installGroup env cells (LetBind name clauses :: rest) =
+installGroup env cells ((LetBind name clauses)::rest) =
   let _ = set_ref (findCell cells name) (groupValue env (map funClauseToClause clauses))
   installGroup env cells rest
 
@@ -702,7 +739,11 @@ funClauseToClause : FunClause -> (List Pat, Expr)
 funClauseToClause (FunClause pats body) = (pats, body)
 
 groupValue : Env -> List (List Pat, Expr) -> <Mut> Value
-groupValue env [(pats, body)] = if isNullary pats then eval env body else VClosure env pats body
+groupValue env [(pats, body)] =
+  if isNullary pats then
+    eval env body
+  else
+    VClosure env pats body
 groupValue env clauses = VMulti (map (clauseClosure env) clauses)
 
 -- top-level variant: a nullary binding becomes a deferred VThunk (forced on
@@ -722,19 +763,19 @@ isNullary _ = False
 
 evalMatch : Env -> Value -> List Arm -> <Mut> Value
 evalMatch _ _ [] = panic "no matching clause in match"
-evalMatch env sv (Arm pat guards body :: rest) = match matchPat pat sv
+evalMatch env sv ((Arm pat guards body)::rest) = match matchPat pat sv
   None => evalMatch env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
     Some env2 => eval env2 body
     None => evalMatch env sv rest
 
-runGuards : Env -> List Guard -> <Mut> (Option Env)
+runGuards : Env -> List Guard -> <Mut> Option Env
 runGuards env [] = Some env
-runGuards env (GBool g :: qs) = match eval env g
+runGuards env ((GBool g)::qs) = match eval env g
   VBool True => runGuards env qs
   VCon "True" [] => runGuards env qs
   _ => None
-runGuards env (GBind p e :: qs) = match matchPat p (eval env e)
+runGuards env ((GBind p e)::qs) = match matchPat p (eval env e)
   Some b => runGuards (extendEnv env b) qs
   None => None
 
@@ -795,8 +836,16 @@ evalArith : String -> Value -> Value -> Value
 evalArith "+" (VInt a) (VInt b) = VInt (a + b)
 evalArith "-" (VInt a) (VInt b) = VInt (a - b)
 evalArith "*" (VInt a) (VInt b) = VInt (a * b)
-evalArith "/" (VInt a) (VInt b) = if b == 0 then panic "division by zero" else VInt (a / b)
-evalArith "%" (VInt a) (VInt b) = if b == 0 then panic "modulo by zero" else VInt (a % b)
+evalArith "/" (VInt a) (VInt b) =
+  if b == 0 then
+    panic "division by zero"
+  else
+    VInt (a / b)
+evalArith "%" (VInt a) (VInt b) =
+  if b == 0 then
+    panic "modulo by zero"
+  else
+    VInt (a % b)
 evalArith "+" (VFloat a) (VFloat b) = VFloat (a + b)
 evalArith "-" (VFloat a) (VFloat b) = VFloat (a - b)
 evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)
@@ -826,18 +875,18 @@ payloadArity (ConNamed fs) = lengthList fs
 
 funDefs : List Decl -> List (String, (List Pat, Expr))
 funDefs [] = []
-funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
-funDefs (_ :: rest) = funDefs rest
+funDefs ((DFunDef _ n pats body)::rest) = (n, (pats, body)) :: funDefs rest
+funDefs (_::rest) = funDefs rest
 
 funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funGroupNames [] _ = []
-funGroupNames ((n, _) :: rest) seen
+funGroupNames ((n, _)::rest) seen
   | containsName n seen = funGroupNames rest seen
   | otherwise = n :: funGroupNames rest (n :: seen)
 
 clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Expr)
 clausesForName _ [] = []
-clausesForName name ((n, c) :: rest)
+clausesForName name ((n, c)::rest)
   | n == name = c :: clausesForName name rest
   | otherwise = clausesForName name rest
 
@@ -846,17 +895,18 @@ buildIfaceDispatch : List Decl -> List ((String, String), List Int)
 buildIfaceDispatch prog = concatMapL ifaceDispatchEntries prog
 
 ifaceDispatchEntries : Decl -> List ((String, String), List Int)
-ifaceDispatchEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) =
-  map (ifaceMethodEntry ifaceName typeParams) methods
+ifaceDispatchEntries DInterface { name = ifaceName, typarams = typeParams, methods, ... } = map (ifaceMethodEntry ifaceName typeParams) methods
 ifaceDispatchEntries _ = []
 
 ifaceMethodEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
-ifaceMethodEntry ifaceName typeParams (IfaceMethod mname mty _) =
-  ((ifaceName, mname), dispatchPositionsOf mty typeParams)
+ifaceMethodEntry ifaceName typeParams (IfaceMethod mname mty _) = (
+  (ifaceName, mname),
+  dispatchPositionsOf mty typeParams
+)
 
 lookupPositions : String -> String -> List ((String, String), List Int) -> List Int
 lookupPositions _ _ [] = [0]
-lookupPositions iface mname (((i, m), p) :: rest)
+lookupPositions iface mname (((i, m), p)::rest)
   | iface == i && mname == m = p
   | otherwise = lookupPositions iface mname rest
 
@@ -875,9 +925,8 @@ nullList _ = False
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
 declImplEntries : Env -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value))
-declImplEntries env disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) =
-  map (implMethodEntry env disp ifaceName typeArgs) methods
-declImplEntries env _ (DInterface { typarams = typeParams, methods, ... }) =
+declImplEntries env disp DImpl { iface = ifaceName, tys = typeArgs, methods, ... } = map (implMethodEntry env disp ifaceName typeArgs) methods
+declImplEntries env _ DInterface { typarams = typeParams, methods, ... } =
   concatMapL (defaultEntry env typeParams) methods
 declImplEntries _ _ _ = []
 
@@ -890,21 +939,22 @@ implMethodEntry env disp ifaceName typeArgs (ImplMethod mname pats body) =
 
 headTyconHead : List Ty -> Option String
 headTyconHead [] = None
-headTyconHead (t :: _) = headTycon t
+headTyconHead (t::_) = headTycon t
 
 -- interface defaults install untagged (a VClosure) so they act as a fallback
 defaultEntry : Env -> List String -> IfaceMethod -> List (String, (Int, Value))
 defaultEntry _ _ (IfaceMethod _ _ None) = []
-defaultEntry env typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) =
-  [(mname, (lengthList typeParams, implMethodValue env [] pats body))]
+defaultEntry env typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) = [(mname, (lengthList typeParams, implMethodValue env [] pats body))]
 
 -- coalesce all candidates for each method name into one VMulti, most-specific
 -- (fewest type vars) first
 coalesceImpls : List (String, (Int, Value)) -> List (String, Value)
-coalesceImpls scored = map (n => (n, coalesceOne n scored)) (nub (map fst scored))
+coalesceImpls scored =
+  map (n => (n, coalesceOne n scored)) (nub (map fst scored))
 
 coalesceOne : String -> List (String, (Int, Value)) -> Value
-coalesceOne name scored = oneOrMulti (map snd (sortByScore (selectByName name scored)))
+coalesceOne name scored =
+  oneOrMulti (map snd (sortByScore (selectByName name scored)))
 
 oneOrMulti : List Value -> Value
 oneOrMulti [v] = v
@@ -918,11 +968,11 @@ sortByScore xs = sortGo xs []
 
 sortGo : List (Int, Value) -> List (Int, Value) -> List (Int, Value)
 sortGo [] acc = acc
-sortGo (x :: xs) acc = sortGo xs (insertScore x acc)
+sortGo (x::xs) acc = sortGo xs (insertScore x acc)
 
 insertScore : (Int, Value) -> List (Int, Value) -> List (Int, Value)
 insertScore x [] = [x]
-insertScore x (y :: ys)
+insertScore x (y::ys)
   | fst y <= fst x = y :: insertScore x ys
   | otherwise = x :: y :: ys
 
@@ -931,7 +981,7 @@ nub xs = nubGo xs []
 
 nubGo : List String -> List String -> List String
 nubGo [] _ = []
-nubGo (x :: xs) seen
+nubGo (x::xs) seen
   | contains x seen = nubGo xs seen
   | otherwise = x :: nubGo xs (x :: seen)
 
@@ -939,8 +989,8 @@ implMethodNames : List Decl -> List String
 implMethodNames prog = nub (concatMapL implDeclNames prog)
 
 implDeclNames : Decl -> List String
-implDeclNames (DImpl { methods, ... }) = map implMethodName methods
-implDeclNames (DInterface { methods, ... }) = concatMapL defaultName methods
+implDeclNames DImpl { methods, ... } = map implMethodName methods
+implDeclNames DInterface { methods, ... } = concatMapL defaultName methods
 implDeclNames _ = []
 
 implMethodName : ImplMethod -> String
@@ -963,12 +1013,12 @@ evalProgram prog =
   let _ = installConsts cells boolSeeds
   let _ = installConsts cells externBindings
   let _ = installConsts cells ctors
-  -- impls (lazy VClosures) before groups, so a nullary binding's eager body can
-  -- already see the dispatch tables (mirrors the reference forcing zero-arg
-  -- thunks only after all impls install)
   let _ = installConsts cells (coalesceImpls (concatMapL (declImplEntries env disp) prog))
   let _ = installGroups env cells groups
   map cellResult cells
+-- impls (lazy VClosures) before groups, so a nullary binding's eager body can
+-- already see the dispatch tables (mirrors the reference forcing zero-arg
+-- thunks only after all impls install)
 
 cellResult : (String, Ref Value) -> (String, Value)
 cellResult (n, cell) = (n, cell.value)
@@ -976,7 +1026,11 @@ cellResult (n, cell) = (n, cell.value)
 -- True/False plus `otherwise` (a trivial prelude binding ubiquitous in guards;
 -- the eval_probe oracle injects the same so prelude-free fixtures can use it)
 boolSeeds : List (String, Value)
-boolSeeds = [("True", VBool True), ("False", VBool False), ("otherwise", VBool True)]
+boolSeeds = [
+  ("True", VBool True),
+  ("False", VBool False),
+  ("otherwise", VBool True)
+]
 
 -- ── extern primitives (the stdlib kernel) ─────────────────────────────────
 -- eval.mdk runs on the OCaml reference, so each primitive wraps the reference's
@@ -1030,47 +1084,47 @@ optionToValue None = VCon "None" []
 optionToValue (Some v) = VCon "Some" [v]
 
 externBindings : List (String, Value)
-externBindings =
-  [ ("intToString", prim1 pIntToString)
-  , ("intToFloat", prim1 pIntToFloat)
-  , ("floatToInt", prim1 pFloatToInt)
-  , ("floatToString", prim1 pFloatToString)
-  , ("charToStr", prim1 pCharToStr)
-  , ("charCode", prim1 pCharCode)
-  , ("charFromCode", prim1 pCharFromCode)
-  , ("charToUpper", prim1 pCharToUpper)
-  , ("charToLower", prim1 pCharToLower)
-  , ("stringLength", prim1 pStringLength)
-  , ("stringConcat", prim1 pStringConcat)
-  , ("stringToChars", prim1 pStringToChars)
-  , ("stringFromChars", prim1 pStringFromChars)
-  , ("stringToUpper", prim1 pStringToUpper)
-  , ("stringToLower", prim1 pStringToLower)
-  , ("stringCompare", prim2 pStringCompare)
-  , ("stringIndexOf", prim2 pStringIndexOf)
-  , ("stringSlice", prim3 pStringSlice)
-  , ("arrayLength", prim1 pArrayLength)
-  , ("arrayFromList", prim1 pArrayFromList)
-  , ("arrayGetUnsafe", prim2 pArrayGetUnsafe)
-  , ("arrayMake", prim2 pArrayMake)
-  , ("Ref", prim1 pRef)
-  , ("set_ref", prim2M pSetRef)
-  , ("debugStringLit", prim1 pDebugStringLit)
-  , ("debugCharLit", prim1 pDebugCharLit)
-  , ("stringToFloat", prim1 pStringToFloat)
-  , ("charIsAlpha", prim1 (charPred charIsAlpha))
-  , ("charIsSpace", prim1 (charPred charIsSpace))
-  , ("charIsUpper", prim1 (charPred charIsUpper))
-  , ("charIsLower", prim1 (charPred charIsLower))
-  , ("charIsPunct", prim1 (charPred charIsPunct))
-  , ("intMinBound", VInt intMinBound)
-  , ("intMaxBound", VInt intMaxBound)
-  , ("charMinBound", VChar (charToStr charMinBound))
-  , ("charMaxBound", VChar (charToStr charMaxBound))
-  , ("pi", VFloat pi)
-  , ("e", VFloat e)
-  , ("__fallthrough__", VPrim (_ => VFallthrough))
-  ]
+externBindings = [
+  ("intToString", prim1 pIntToString),
+  ("intToFloat", prim1 pIntToFloat),
+  ("floatToInt", prim1 pFloatToInt),
+  ("floatToString", prim1 pFloatToString),
+  ("charToStr", prim1 pCharToStr),
+  ("charCode", prim1 pCharCode),
+  ("charFromCode", prim1 pCharFromCode),
+  ("charToUpper", prim1 pCharToUpper),
+  ("charToLower", prim1 pCharToLower),
+  ("stringLength", prim1 pStringLength),
+  ("stringConcat", prim1 pStringConcat),
+  ("stringToChars", prim1 pStringToChars),
+  ("stringFromChars", prim1 pStringFromChars),
+  ("stringToUpper", prim1 pStringToUpper),
+  ("stringToLower", prim1 pStringToLower),
+  ("stringCompare", prim2 pStringCompare),
+  ("stringIndexOf", prim2 pStringIndexOf),
+  ("stringSlice", prim3 pStringSlice),
+  ("arrayLength", prim1 pArrayLength),
+  ("arrayFromList", prim1 pArrayFromList),
+  ("arrayGetUnsafe", prim2 pArrayGetUnsafe),
+  ("arrayMake", prim2 pArrayMake),
+  ("Ref", prim1 pRef),
+  ("set_ref", prim2M pSetRef),
+  ("debugStringLit", prim1 pDebugStringLit),
+  ("debugCharLit", prim1 pDebugCharLit),
+  ("stringToFloat", prim1 pStringToFloat),
+  ("charIsAlpha", prim1 (charPred charIsAlpha)),
+  ("charIsSpace", prim1 (charPred charIsSpace)),
+  ("charIsUpper", prim1 (charPred charIsUpper)),
+  ("charIsLower", prim1 (charPred charIsLower)),
+  ("charIsPunct", prim1 (charPred charIsPunct)),
+  ("intMinBound", VInt intMinBound),
+  ("intMaxBound", VInt intMaxBound),
+  ("charMinBound", VChar (charToStr charMinBound)),
+  ("charMaxBound", VChar (charToStr charMaxBound)),
+  ("pi", VFloat pi),
+  ("e", VFloat e),
+  ("__fallthrough__", VPrim (_ => VFallthrough))
+]
 
 pDebugStringLit : Value -> Value
 pDebugStringLit (VString s) = VString (debugStringLit s)
@@ -1136,11 +1190,13 @@ pStringConcat (VList vs) = VString (stringConcat (map unString vs))
 pStringConcat _ = panic "stringConcat: not a List"
 
 pStringToChars : Value -> Value
-pStringToChars (VString s) = VArray (arrayFromList (map charToVChar (arrayToListG (stringToChars s))))
+pStringToChars (VString s) =
+  VArray (arrayFromList (map charToVChar (arrayToListG (stringToChars s))))
 pStringToChars _ = panic "stringToChars: not a String"
 
 pStringFromChars : Value -> Value
-pStringFromChars (VArray vs) = VString (stringFromChars (arrayFromList (map unChar (arrayToListG vs))))
+pStringFromChars (VArray vs) =
+  VString (stringFromChars (arrayFromList (map unChar (arrayToListG vs))))
 pStringFromChars _ = panic "stringFromChars: not an Array"
 
 pStringToUpper : Value -> Value
@@ -1156,7 +1212,8 @@ pStringCompare (VString a) (VString b) = orderingToValue (stringCompare a b)
 pStringCompare _ _ = panic "stringCompare: not Strings"
 
 pStringIndexOf : Value -> Value -> Value
-pStringIndexOf (VString needle) (VString hay) = optionToValue (mapOption VInt (stringIndexOf needle hay))
+pStringIndexOf (VString needle) (VString hay) =
+  optionToValue (mapOption VInt (stringIndexOf needle hay))
 pStringIndexOf _ _ = panic "stringIndexOf: not Strings"
 
 pStringSlice : Value -> Value -> Value -> Value
@@ -1184,19 +1241,19 @@ mkGroup defs name = (name, clausesForName name defs)
 
 installConsts : List (String, Ref Value) -> List (String, Value) -> <Mut> Unit
 installConsts _ [] = ()
-installConsts cells ((n, v) :: rest) =
+installConsts cells ((n, v)::rest) =
   let _ = set_ref (findCell cells n) v
   installConsts cells rest
 
 installGroups : Env -> List (String, Ref Value) -> List (String, List (List Pat, Expr)) -> <Mut> Unit
 installGroups _ _ [] = ()
-installGroups env cells ((n, clauses) :: rest) =
+installGroups env cells ((n, clauses)::rest) =
   let _ = set_ref (findCell cells n) (topGroupValue env clauses)
   installGroups env cells rest
 
 lookupBinding : String -> List (String, Value) -> Option Value
 lookupBinding _ [] = None
-lookupBinding name ((n, v) :: rest)
+lookupBinding name ((n, v)::rest)
   | n == name = Some v
   | otherwise = lookupBinding name rest
 

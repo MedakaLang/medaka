@@ -233,7 +233,7 @@ declSexp (DBench pub name body) =
 propParamSexp : PropParam -> String
 propParamSexp (PropParam n t) = node "pp" [escStr n, tySexp t]
 
-declSexp (DInterface { pub, def, name, typarams, supers, methods }) =
+declSexp DInterface { pub, def, name, typarams, supers, methods } =
   node
     "DInterface"
     [
@@ -244,7 +244,7 @@ declSexp (DInterface { pub, def, name, typarams, supers, methods }) =
       slist (map superSexp supers),
       slist (map ifaceMethodSexp methods)
     ]
-declSexp (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+declSexp DImpl { pub, def, iface, tys, name, reqs, methods } =
   node
     "DImpl"
     [

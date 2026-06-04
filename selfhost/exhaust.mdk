@@ -16,23 +16,23 @@ import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..)
 -- ── small helpers ─────────────────────────────────────────────────────────
 contains : String -> List String -> Bool
 contains _ [] = False
-contains x (y :: ys) = x == y || contains x ys
+contains x (y::ys) = x == y || contains x ys
 
 concatMapList : (a -> List b) -> List a -> List b
 concatMapList _ [] = []
-concatMapList f (x :: xs) = f x ++ concatMapList f xs
+concatMapList f (x::xs) = f x ++ concatMapList f xs
 
 allList : (a -> Bool) -> List a -> Bool
 allList _ [] = True
-allList p (x :: xs) = p x && allList p xs
+allList p (x::xs) = p x && allList p xs
 
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
-anyList p (x :: xs) = p x || anyList p xs
+anyList p (x::xs) = p x || anyList p xs
 
 listLen : List a -> Int
 listLen [] = 0
-listLen (_ :: xs) = 1 + listLen xs
+listLen (_::xs) = 1 + listLen xs
 
 replicateWild : Int -> List Pat
 replicateWild n
@@ -41,7 +41,7 @@ replicateWild n
 
 lookupAssoc : String -> List (String, b) -> Option b
 lookupAssoc _ [] = None
-lookupAssoc k ((k2, v) :: rest)
+lookupAssoc k ((k2, v)::rest)
   | k == k2 = Some v
   | otherwise = lookupAssoc k rest
 
@@ -70,13 +70,17 @@ tupleArityCheck cs n
   | otherwise = None
 
 charsPrefixTuple : Array Char -> Bool
-charsPrefixTuple cs =
-  arrayGetUnsafe 0 cs == '_' && arrayGetUnsafe 1 cs == '_' && arrayGetUnsafe 2 cs == 't'
-    && arrayGetUnsafe 3 cs == 'u' && arrayGetUnsafe 4 cs == 'p' && arrayGetUnsafe 5 cs == 'l'
-    && arrayGetUnsafe 6 cs == 'e'
+charsPrefixTuple cs = arrayGetUnsafe 0 cs == '_'
+  && arrayGetUnsafe 1 cs == '_'
+  && arrayGetUnsafe 2 cs == 't'
+  && arrayGetUnsafe 3 cs == 'u'
+  && arrayGetUnsafe 4 cs == 'p'
+  && arrayGetUnsafe 5 cs == 'l'
+  && arrayGetUnsafe 6 cs == 'e'
 
 charsSuffixUnder : Array Char -> Int -> Bool
-charsSuffixUnder cs n = arrayGetUnsafe (n - 2) cs == '_' && arrayGetUnsafe (n - 1) cs == '_'
+charsSuffixUnder cs n = arrayGetUnsafe (n - 2) cs == '_'
+  && arrayGetUnsafe (n - 1) cs == '_'
 
 parseDigits : Array Char -> Int -> Int -> Option Int
 parseDigits cs start end = parseDigitsGo cs start end 0 False
@@ -96,25 +100,39 @@ digitVal c = charCode c - charCode '0'
 -- ── the constructor oracle ────────────────────────────────────────────────
 -- type → its constructors; ctor → arity; ctor → its type.  User data first so
 -- it overrides the builtins (mirrors Hashtbl.replace's last-wins for find).
-data Oracle = Oracle (List (String, List String)) (List (String, Int)) (List (String, String))
+data Oracle
+  = Oracle (List (String, List String)) (List (String, Int)) (List (String, String))
 
 buildOracle : List Decl -> Oracle
-buildOracle prog = Oracle
-  (concatMapList dataTypeCtors prog ++ builtinTypeCtors)
-  (concatMapList dataArity prog ++ builtinArity)
-  (concatMapList dataCtorType prog ++ builtinCtorType)
+buildOracle prog =
+  Oracle
+    (concatMapList dataTypeCtors prog ++ builtinTypeCtors)
+    (concatMapList dataArity prog ++ builtinArity)
+    (concatMapList dataCtorType prog ++ builtinCtorType)
 
 builtinTypeCtors : List (String, List String)
-builtinTypeCtors = [("Bool", ["True", "False"]), ("List", ["Cons", "Nil"]), ("Unit", ["Unit"])]
+builtinTypeCtors = [
+  ("Bool", ["True", "False"]),
+  ("List", ["Cons", "Nil"]),
+  ("Unit", ["Unit"])
+]
 
 builtinArity : List (String, Int)
 builtinArity = [("True", 0), ("False", 0), ("Cons", 2), ("Nil", 0), ("Unit", 0)]
 
 builtinCtorType : List (String, String)
-builtinCtorType = [("True", "Bool"), ("False", "Bool"), ("Cons", "List"), ("Nil", "List"), ("Unit", "Unit")]
+builtinCtorType = [
+  ("True", "Bool"),
+  ("False", "Bool"),
+  ("Cons", "List"),
+  ("Nil", "List"),
+  ("Unit", "Unit")
+]
 
 dataTypeCtors : Decl -> List (String, List String)
-dataTypeCtors (DData _ tyname _ variants _) = [(tyname, map variantName variants)]
+dataTypeCtors (DData _ tyname _ variants _) = [
+  (tyname, map variantName variants)
+]
 dataTypeCtors (DRecord _ tyname _ _ _) = [(tyname, [tyname])]
 dataTypeCtors _ = []
 
@@ -124,7 +142,8 @@ dataArity (DRecord _ tyname _ fields _) = [(tyname, listLen fields)]
 dataArity _ = []
 
 dataCtorType : Decl -> List (String, String)
-dataCtorType (DData _ tyname _ variants _) = map (variantCtorType tyname) variants
+dataCtorType (DData _ tyname _ variants _) =
+  map (variantCtorType tyname) variants
 dataCtorType (DRecord _ tyname _ _ _) = [(tyname, tyname)]
 dataCtorType _ = []
 
@@ -165,16 +184,18 @@ desugarPat (PTuple ps) = PCon (tupleCtorName (listLen ps)) (map desugarPat ps)
 desugarPat (PCon c args) = PCon c (map desugarPat args)
 desugarPat (PCons h t) = PCon "Cons" [desugarPat h, desugarPat t]
 desugarPat (PList []) = PCon "Nil" []
-desugarPat (PList (h :: rest)) = PCon "Cons" [desugarPat h, desugarPat (PList rest)]
+desugarPat (PList (h::rest)) =
+  PCon "Cons" [desugarPat h, desugarPat (PList rest)]
 desugarPat (PAs _ p) = desugarPat p
 desugarPat (PRec _ _ True) = PWild
-desugarPat (PRec name _ False) = PLit (LString ("__partial_rec_" ++ name ++ "__"))
+desugarPat (PRec name _ False) =
+  PLit (LString ("__partial_rec_" ++ name ++ "__"))
 desugarPat (PRng _ _ _) = PWild
 
 -- ── matrix operations ─────────────────────────────────────────────────────
 filterMapRows : (List Pat -> Option (List Pat)) -> List (List Pat) -> List (List Pat)
 filterMapRows _ [] = []
-filterMapRows f (row :: rest) = match f row
+filterMapRows f (row::rest) = match f row
   Some r => r :: filterMapRows f rest
   None => filterMapRows f rest
 
@@ -183,8 +204,12 @@ specializeCon c arity pmat = filterMapRows (specConRow c arity) pmat
 
 specConRow : String -> Int -> List Pat -> Option (List Pat)
 specConRow _ _ [] = None
-specConRow c _ ((PCon c2 args) :: rest) = if c2 == c then Some (args ++ rest) else None
-specConRow _ arity (PWild :: rest) = Some (replicateWild arity ++ rest)
+specConRow c _ ((PCon c2 args)::rest) =
+  if c2 == c then
+    Some (args ++ rest)
+  else
+    None
+specConRow _ arity (PWild::rest) = Some (replicateWild arity ++ rest)
 specConRow _ _ _ = None
 
 specializeLit : Lit -> List (List Pat) -> List (List Pat)
@@ -192,42 +217,42 @@ specializeLit l pmat = filterMapRows (specLitRow l) pmat
 
 specLitRow : Lit -> List Pat -> Option (List Pat)
 specLitRow _ [] = None
-specLitRow l ((PLit l2) :: rest) = if litEq l2 l then Some rest else None
-specLitRow _ (PWild :: rest) = Some rest
+specLitRow l ((PLit l2)::rest) = if litEq l2 l then Some rest else None
+specLitRow _ (PWild::rest) = Some rest
 specLitRow _ _ = None
 
 defaultMatrix : List (List Pat) -> List (List Pat)
 defaultMatrix pmat = filterMapRows defRow pmat
 
 defRow : List Pat -> Option (List Pat)
-defRow (PWild :: rest) = Some rest
+defRow (PWild::rest) = Some rest
 defRow _ = None
 
 headCtors : List (List Pat) -> List String
 headCtors [] = []
-headCtors (((PCon c _) :: _) :: rest) = c :: headCtors rest
-headCtors (_ :: rest) = headCtors rest
+headCtors (((PCon c _)::_)::rest) = c :: headCtors rest
+headCtors (_::rest) = headCtors rest
 
 inferCol0Type : Oracle -> List (List Pat) -> Option String
 inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
 
 tryEachType : Oracle -> List String -> Option String
 tryEachType _ [] = None
-tryEachType oracle (c :: cs) = match oGetCtorType oracle c
+tryEachType oracle (c::cs) = match oGetCtorType oracle c
   Some t => Some t
   None => tryEachType oracle cs
 
 -- ── usefulness (the Maranget recursion) ───────────────────────────────────
 useful : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
-useful _ _ (_ :: _) [] = False
-useful oracle col0 pmat (h :: restQ) = usefulHead oracle col0 pmat h restQ
+useful _ _ (_::_) [] = False
+useful oracle col0 pmat (h::restQ) = usefulHead oracle col0 pmat h restQ
 
 usefulHead : Oracle -> Option String -> List (List Pat) -> Pat -> List Pat -> Bool
 usefulHead oracle _ pmat (PCon c args) restQ =
   useful oracle None (specializeCon c (listLen args) pmat) (args ++ restQ)
-usefulHead oracle _ pmat (PLit l) restQ =
-  useful oracle None (specializeLit l pmat) restQ || useful oracle None (defaultMatrix pmat) restQ
+usefulHead oracle _ pmat (PLit l) restQ = useful oracle None (specializeLit l pmat) restQ
+  || useful oracle None (defaultMatrix pmat) restQ
 usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
 usefulWild : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
@@ -244,8 +269,10 @@ bindCtors _ None = None
 bindCtors oracle (Some t) = oGetCtors oracle t
 
 usefulWildCtors : Oracle -> Option (List String) -> List (List Pat) -> List Pat -> Bool
-usefulWildCtors oracle None pmat restQ = useful oracle None (defaultMatrix pmat) restQ
-usefulWildCtors oracle (Some ctors) pmat restQ = usefulCovered oracle ctors pmat restQ
+usefulWildCtors oracle None pmat restQ =
+  useful oracle None (defaultMatrix pmat) restQ
+usefulWildCtors oracle (Some ctors) pmat restQ =
+  usefulCovered oracle ctors pmat restQ
 
 usefulCovered : Oracle -> List String -> List (List Pat) -> List Pat -> Bool
 usefulCovered oracle ctors pmat restQ
@@ -297,11 +324,11 @@ guardArmTotal (GuardArm gs _) = guardsDecidablyExhaustive gs
 
 -- a clause is (params, body); decide guard totality / guarded-partiality
 clauseGuardsTotal : (List Pat, Expr) -> Bool
-clauseGuardsTotal (_, EGuards arms) = guardArmsTotal arms
+clauseGuardsTotal (_, (EGuards arms)) = guardArmsTotal arms
 clauseGuardsTotal _ = True
 
 clauseIsGuardedPartial : (List Pat, Expr) -> Bool
-clauseIsGuardedPartial (_, EGuards arms) = not (guardArmsTotal arms)
+clauseIsGuardedPartial (_, (EGuards arms)) = not (guardArmsTotal arms)
 clauseIsGuardedPartial _ = False
 
 clausePats : (List Pat, Expr) -> List Pat
@@ -321,17 +348,21 @@ checkGroupCovered oracle clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows clauses
   let query = [desugarPat (PTuple (replicateWild arity))]
-  if useful oracle (Some (tupleCtorName arity)) rows query then [guardWarning] else []
+  if useful oracle (Some (tupleCtorName arity)) rows query then [
+    guardWarning
+  ] else []
 
 groupArity : List (List Pat, Expr) -> Int
 groupArity [] = 0
-groupArity (c :: _) = listLen (clausePats c)
+groupArity (c::_) = listLen (clausePats c)
 
 -- one matrix row per non-falling-through clause (its params wrapped as a tuple)
 totalClauseRows : List (List Pat, Expr) -> List (List Pat)
 totalClauseRows [] = []
-totalClauseRows (c :: rest)
-  | clauseGuardsTotal c = [desugarPat (PTuple (clausePats c))] :: totalClauseRows rest
+totalClauseRows (c::rest)
+  | clauseGuardsTotal c = [
+    desugarPat (PTuple (clausePats c))
+  ] :: totalClauseRows rest
   | otherwise = totalClauseRows rest
 
 -- ── group same-name (name, clause) pairs, first-seen order ────────────────
@@ -340,22 +371,24 @@ groupByName items = map (clausesForName items) (firstSeenNames items [])
 
 firstSeenNames : List (String, (List Pat, Expr)) -> List String -> List String
 firstSeenNames [] seen = []
-firstSeenNames ((n, _) :: rest) seen
+firstSeenNames ((n, _)::rest) seen
   | contains n seen = firstSeenNames rest seen
   | otherwise = n :: firstSeenNames rest (n :: seen)
 
 clausesForName : List (String, (List Pat, Expr)) -> String -> List (List Pat, Expr)
 clausesForName [] _ = []
-clausesForName ((n, c) :: rest) name
+clausesForName ((n, c)::rest) name
   | n == name = c :: clausesForName rest name
   | otherwise = clausesForName rest name
 
 -- ── collect where-group (ELetGroup) clause groups from an expr tree ────────
 letGroupWarnings : Oracle -> Expr -> List String
-letGroupWarnings oracle body = concatMapList (checkLetBind oracle) (collectLetBinds body)
+letGroupWarnings oracle body =
+  concatMapList (checkLetBind oracle) (collectLetBinds body)
 
 checkLetBind : Oracle -> LetBind -> List String
-checkLetBind oracle (LetBind _ funclauses) = checkGroup oracle (map funClauseToClause funclauses)
+checkLetBind oracle (LetBind _ funclauses) =
+  checkGroup oracle (map funClauseToClause funclauses)
 
 funClauseToClause : FunClause -> (List Pat, Expr)
 funClauseToClause (FunClause pats body) = (pats, body)
@@ -363,30 +396,40 @@ funClauseToClause (FunClause pats body) = (pats, body)
 -- every LetBind from every ELetGroup anywhere in the tree (recurses into
 -- clause bodies and the result expr)
 collectLetBinds : Expr -> List LetBind
-collectLetBinds (ELetGroup binds body) = binds ++ concatMapList collectLetBindInner binds ++ collectLetBinds body
+collectLetBinds (ELetGroup binds body) = binds
+  ++ concatMapList collectLetBindInner binds
+  ++ collectLetBinds body
 collectLetBinds (EApp a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (ELam _ b) = collectLetBinds b
 collectLetBinds (ELet _ _ _ e1 e2) = collectLetBinds e1 ++ collectLetBinds e2
-collectLetBinds (EMatch e0 arms) = collectLetBinds e0 ++ concatMapList collectArmBinds arms
-collectLetBinds (EIf c t el) = collectLetBinds c ++ collectLetBinds t ++ collectLetBinds el
+collectLetBinds (EMatch e0 arms) = collectLetBinds e0
+  ++ concatMapList collectArmBinds arms
+collectLetBinds (EIf c t el) = collectLetBinds c
+  ++ collectLetBinds t
+  ++ collectLetBinds el
 collectLetBinds (EBinOp _ a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EUnOp _ a) = collectLetBinds a
 collectLetBinds (EInfix _ a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EFieldAccess e0 _) = collectLetBinds e0
 collectLetBinds (ERecordCreate _ fs) = concatMapList fieldAssignBinds fs
-collectLetBinds (ERecordUpdate e0 fs) = collectLetBinds e0 ++ concatMapList fieldAssignBinds fs
-collectLetBinds (EVariantUpdate _ e0 fs) = collectLetBinds e0 ++ concatMapList fieldAssignBinds fs
+collectLetBinds (ERecordUpdate e0 fs) = collectLetBinds e0
+  ++ concatMapList fieldAssignBinds fs
+collectLetBinds (EVariantUpdate _ e0 fs) = collectLetBinds e0
+  ++ concatMapList fieldAssignBinds fs
 collectLetBinds (EArrayLit es) = concatMapList collectLetBinds es
 collectLetBinds (EListLit es) = concatMapList collectLetBinds es
 collectLetBinds (ETuple es) = concatMapList collectLetBinds es
 collectLetBinds (EIndex e0 i) = collectLetBinds e0 ++ collectLetBinds i
 collectLetBinds (ERangeList lo hi _) = collectLetBinds lo ++ collectLetBinds hi
 collectLetBinds (ERangeArray lo hi _) = collectLetBinds lo ++ collectLetBinds hi
-collectLetBinds (ESlice e0 lo hi _) = collectLetBinds e0 ++ collectLetBinds lo ++ collectLetBinds hi
+collectLetBinds (ESlice e0 lo hi _) = collectLetBinds e0
+  ++ collectLetBinds lo
+  ++ collectLetBinds hi
 collectLetBinds (EBlock stmts) = concatMapList doStmtBinds stmts
 collectLetBinds (EDo stmts) = concatMapList doStmtBinds stmts
 collectLetBinds (EAnnot e0 _) = collectLetBinds e0
-collectLetBinds (EListComp body quals) = collectLetBinds body ++ concatMapList lcQualBinds quals
+collectLetBinds (EListComp body quals) = collectLetBinds body
+  ++ concatMapList lcQualBinds quals
 collectLetBinds (EQuestion e0) = collectLetBinds e0
 collectLetBinds (EStringInterp parts) = concatMapList interpBinds parts
 collectLetBinds (EGuards arms) = concatMapList guardArmBinds arms
@@ -396,20 +439,23 @@ collectLetBinds (ESection (SecLeft e0 _)) = collectLetBinds e0
 collectLetBinds _ = []
 
 collectLetBindInner : LetBind -> List LetBind
-collectLetBindInner (LetBind _ funclauses) = concatMapList funClauseBinds funclauses
+collectLetBindInner (LetBind _ funclauses) =
+  concatMapList funClauseBinds funclauses
 
 funClauseBinds : FunClause -> List LetBind
 funClauseBinds (FunClause _ body) = collectLetBinds body
 
 collectArmBinds : Arm -> List LetBind
-collectArmBinds (Arm _ gs body) = concatMapList guardBinds gs ++ collectLetBinds body
+collectArmBinds (Arm _ gs body) = concatMapList guardBinds gs
+  ++ collectLetBinds body
 
 guardBinds : Guard -> List LetBind
 guardBinds (GBool e) = collectLetBinds e
 guardBinds (GBind _ e) = collectLetBinds e
 
 guardArmBinds : GuardArm -> List LetBind
-guardArmBinds (GuardArm gs body) = concatMapList guardBinds gs ++ collectLetBinds body
+guardArmBinds (GuardArm gs body) = concatMapList guardBinds gs
+  ++ collectLetBinds body
 
 fieldAssignBinds : FieldAssign -> List LetBind
 fieldAssignBinds (FieldAssign _ e) = collectLetBinds e
@@ -440,15 +486,18 @@ checkGuardExhaustiveness prog =
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
-topFunDefClauses ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: topFunDefClauses rest
-topFunDefClauses (_ :: rest) = topFunDefClauses rest
+topFunDefClauses ((DFunDef _ n pats body)::rest) = (
+  n,
+  (pats, body)
+) :: topFunDefClauses rest
+topFunDefClauses (_::rest) = topFunDefClauses rest
 
 declBodyWarnings : Oracle -> Decl -> List String
 declBodyWarnings oracle (DFunDef _ _ _ body) = letGroupWarnings oracle body
-declBodyWarnings oracle (DImpl { methods, ... }) =
-  concatMapList (checkGroup oracle) (groupByName (implClauses methods))
-    ++ concatMapList (implMethodBodyWarnings oracle) methods
-declBodyWarnings oracle (DInterface { methods, ... }) = concatMapList (ifaceMethodWarnings oracle) methods
+declBodyWarnings oracle DImpl { methods, ... } = concatMapList (checkGroup oracle) (groupByName (implClauses methods))
+  ++ concatMapList (implMethodBodyWarnings oracle) methods
+declBodyWarnings oracle DInterface { methods, ... } =
+  concatMapList (ifaceMethodWarnings oracle) methods
 declBodyWarnings oracle (DProp _ _ _ body) = letGroupWarnings oracle body
 declBodyWarnings oracle (DTest _ _ body) = letGroupWarnings oracle body
 declBodyWarnings oracle (DBench _ _ body) = letGroupWarnings oracle body
@@ -456,20 +505,25 @@ declBodyWarnings _ _ = []
 
 implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implClauses [] = []
-implClauses ((ImplMethod n pats body) :: rest) = (n, (pats, body)) :: implClauses rest
+implClauses ((ImplMethod n pats body)::rest) = (
+  n,
+  (pats, body)
+) :: implClauses rest
 
 implMethodBodyWarnings : Oracle -> ImplMethod -> List String
-implMethodBodyWarnings oracle (ImplMethod _ _ body) = letGroupWarnings oracle body
+implMethodBodyWarnings oracle (ImplMethod _ _ body) =
+  letGroupWarnings oracle body
 
 ifaceMethodWarnings : Oracle -> IfaceMethod -> List String
 ifaceMethodWarnings _ (IfaceMethod _ _ None) = []
-ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body))) = letGroupWarnings oracle body
+ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body))) =
+  letGroupWarnings oracle body
 
 -- one warning per line (the harness sorts)
 joinNl : List String -> String
 joinNl [] = ""
 joinNl [x] = x
-joinNl (x :: rest) = x ++ "\n" ++ joinNl rest
+joinNl (x::rest) = x ++ "\n" ++ joinNl rest
 
 export
 exhaustToLines : List Decl -> String
