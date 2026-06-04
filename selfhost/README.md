@@ -33,6 +33,8 @@ diff with `lib/`:
 | `parse_main.mdk` | Runnable entry: `medaka run selfhost/parse_main.mdk <src.mdk>` reads the file, parses, and prints the structural S-expression. |
 | `desugar.mdk` | Port of `lib/desugar.ml`. Lowers surface sugar to core: the bottom-up `mapExpr`/`mapDecl` engine + the passes `merge_iface_defaults → expand_decl (deriving) → list-comps → questions → do-blocks → sugar`; `desugar : List Decl -> List Decl`. |
 | `desugar_main.mdk` | Runnable entry: parse + desugar a file, print the structural S-expression (diffs against `astdump --desugar`). |
+| `marker.mdk` | Port of `lib/method_marker.ml`. Marks interface-method / constrained-fn occurrences (`EVar`→`EMethodRef`/`EDictApp`); includes the Phase 78a/78b prelude-shadowing logic. `markWithPrelude : List Decl -> List Decl -> List Decl` (prelude, target). |
+| `mark_main.mdk` | Runnable entry: `medaka run selfhost/mark_main.mdk <prelude.mdk> <src.mdk>` parses + desugars both, marks the target, prints the S-expression (diffs against `astdump --mark`). |
 | `medaka.toml` | Project config (import root). |
 
 The OCaml-side validation references live in `dev/`: `lextok.exe` (token-stream
@@ -156,9 +158,9 @@ the stage is done when all pass.
 
 ## Roadmap — remaining Stage 1 stages
 
-Lexer, parser, and **desugar** are done. The rest of the reference pipeline
-(`resolve → method_marker → typecheck (runs exhaust) → eval`) is still OCaml-only.
-This section sketches how to port it.
+Lexer, parser, **desugar**, and **method_marker** are done. The rest of the
+reference pipeline (`resolve → typecheck (runs exhaust) → eval`) is still
+OCaml-only. This section sketches how to port it.
 
 **Validation infrastructure for every remaining stage is already built** (the
 "de-risk first" pass):
@@ -205,7 +207,7 @@ Stage-0 prerequisites in `../PLAN.md`).
 |---|-------|------|-----------|----------|--------------|
 | 1 | ✅ **desugar** | ~980 | low–med | `program → program` | astdump `--desugar`, **60/60 corpus** |
 | 2 | **resolve** | ~1000 | med | `program → diagnostics` (+ name env) | diagdump `--resolve` (fixtures + harness ready) |
-| 3 | **method_marker** | ~420 | low | `program → program` (marks `EMethodRef`/`EDictApp`) | astdump `--mark` (harness ready) |
+| 3 | ✅ **method_marker** | ~420 | low–med | `program → program` (marks `EMethodRef`/`EDictApp`) | astdump `--mark`, **full corpus** |
 | 4 | **exhaust** | ~465 | hard (algorithm) | `program → warnings` | diagdump `--exhaust` (fixtures + harness ready) |
 | 5 | **eval** | ~2350 | hard (plumbing) | `program → values` | diff stdout vs `=== EVAL ===` |
 | 6 | **typecheck** | ~4650 | **very hard** | `program → schemes` | diff vs `=== TYPES ===` |
@@ -248,13 +250,20 @@ Stage-0 prerequisites in `../PLAN.md`).
    the node, even if the first interpreter ignores it — see *Performance* below.
    Designing this in is nearly free; retrofitting lexical addressing onto a
    finished assoc-list interpreter is not.
-3. **Method_marker** — rewrites interface-method / constrained-fn `EVar`s to
-   `EMethodRef`/`EDictApp` (refs left unfilled for typecheck). AST→AST, dumpable
-   (`--mark` mode + `test/diff_selfhost_mark.sh` ready). First add `EMethodRef
-   String` / `EDictApp String` to `selfhost/ast.mdk` + `sexp.mdk` (the parser
-   never produces them, so a `_`-catch-all in the parser's pattern functions
-   keeps building). The prelude-shadowing name-set logic (Phase 78a/84) is the
-   bulk, and it needs the prelude prerequisite above.
+3. ✅ **Method_marker — DONE.** `selfhost/marker.mdk` + `mark_main.mdk`:
+   interface-method / constrained-fn `EVar`s → `EMethodRef`/`EDictApp` (just the
+   name; the typecheck-filled ref is irrelevant pre-typecheck), backtick `EInfix`
+   with a marked op → prefix-applied marked ref, methods take precedence. Name
+   sets union the prelude + target; the marker reuses desugar's `mapProg`. The
+   **prelude-via-path approach worked** — `mark_main` takes `stdlib/core.mdk` as
+   an arg and extracts the name sets from a parse+desugar of it. The
+   prelude-shadowing logic is fully ported: Phase 78b (`shadow_rename` —
+   `map.mdk`'s standalone `isEmpty` → `isEmpty#shadow`) and Phase 78a (drop a
+   *droppable* shadowed prelude constrained fn from the constrained set — `count`/
+   `find` dropped, `clamp` kept because a core prop references it). Matches
+   `astdump --mark` byte-for-byte on the whole corpus, incl. the marker marking
+   its own source. Simplification still standing: `shadow_rename` skips the
+   "name is also a local binder" exclusion (no corpus file triggers it).
 4. **Exhaust** — Maranget pattern-matrix for non-exhaustive `match`/guard
    warnings. The algorithm is language-agnostic; the work is a faithful port of
    the matrix operations. Independently testable, so it can slot in any time.
