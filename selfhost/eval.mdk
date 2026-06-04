@@ -391,7 +391,19 @@ matchPat (PList pats) (VList vals)
   | otherwise = None
 matchPat (PAs x p) v = matchAs x p v
 matchPat (PRec _ fields _) (VRecord _ recFields) = matchRecFields fields recFields
+matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v) = if inIntRange v lo hi incl then Some [] else None
+matchPat (PRng (LChar lo) (LChar hi) incl) (VChar c) = if inCharRange c lo hi incl then Some [] else None
 matchPat _ _ = None
+
+inIntRange : Int -> Int -> Int -> Bool -> Bool
+inIntRange v lo hi incl = v >= lo && v <= (if incl then hi else hi - 1)
+
+inCharRange : String -> String -> String -> Bool -> Bool
+inCharRange c lo hi incl = not (ordLt (stringCompare c lo)) && charUpper c hi incl
+
+charUpper : String -> String -> Bool -> Bool
+charUpper c hi True = not (ordGt (stringCompare c hi))
+charUpper c hi False = ordLt (stringCompare c hi)
 
 matchRecFields : List RecPatField -> List (String, Value) -> Option (List (String, Value))
 matchRecFields [] _ = Some []
@@ -539,6 +551,7 @@ eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
 eval env (EBinOp op l r) = evalBinop env op l r
+eval env (EInfix op l r) = apply (apply (lookupEnv env op) (eval env l)) (eval env r)
 eval env (EUnOp op e) = evalUnop op (eval env e)
 eval env (ETuple es) = VTuple (map (eval env) es)
 eval env (EListLit es) = VList (map (eval env) es)
@@ -559,11 +572,19 @@ evalIndex : Value -> Value -> Value
 evalIndex (VArray a) (VInt i) =
   if i < 0 || i >= arrayLength a then panic "array index out of bounds" else arrayGetUnsafe i a
 evalIndex (VList vs) (VInt i) = listNthV vs i
+evalIndex (VString s) (VInt i) = stringIndexCp s i
 evalIndex _ _ = panic "index: bad operands"
+
+-- codepoint-indexed Char (Phase 77), mirroring lib/eval.ml's EIndex String arm
+stringIndexCp : String -> Int -> Value
+stringIndexCp s i
+  | i < 0 || i >= stringLength s = panic "string index out of bounds"
+  | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
 
 evalSlice : Value -> Value -> Value -> Bool -> Value
 evalSlice (VArray a) (VInt lo) (VInt hi) incl = sliceArray a lo (if incl then hi + 1 else hi)
 evalSlice (VList vs) (VInt lo) (VInt hi) incl = VList (listSliceV vs lo (if incl then hi + 1 else hi))
+evalSlice (VString s) (VInt lo) (VInt hi) incl = VString (stringSlice lo (if incl then hi + 1 else hi) s)
 evalSlice _ _ _ _ = panic "slice: bad operands"
 
 sliceArray : Array Value -> Int -> Int -> Value
