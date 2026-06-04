@@ -3,7 +3,7 @@
 -- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
-import ast.{Lit(..), Ty(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), Expr(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Expr(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 
 -- shared minimal string escaping — must match dev/astdump.ml's esc_str
 escStr : String -> String
@@ -102,10 +102,19 @@ exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
 exprSexp (EDo stmts) = node "EDo" (map doStmtSexp stmts)
 exprSexp (EStringInterp parts) = node "EStringInterp" (map interpPartSexp parts)
+exprSexp (EGuards arms) = node "EGuards" (map guardArmSexp arms)
+exprSexp (ERecordCreate n fs) = node "ERecordCreate" [escStr n, slist (map fieldAssignSexp fs)]
+exprSexp (ERecordUpdate e fs) = node "ERecordUpdate" [exprSexp e, slist (map fieldAssignSexp fs)]
 
 interpPartSexp : InterpPart -> String
 interpPartSexp (InterpStr s) = node "InterpStr" [escStr s]
 interpPartSexp (InterpExpr e) = node "InterpExpr" [exprSexp e]
+
+guardArmSexp : GuardArm -> String
+guardArmSexp (GuardArm gs body) = node "garm" [slist (map guardSexp gs), exprSexp body]
+
+fieldAssignSexp : FieldAssign -> String
+fieldAssignSexp (FieldAssign n e) = node "fa" [escStr n, exprSexp e]
 
 doStmtSexp : DoStmt -> String
 doStmtSexp (DoExpr e) = node "DoExpr" [exprSexp e]

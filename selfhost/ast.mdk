@@ -53,6 +53,12 @@ public export data InterpPart
   = InterpStr String
   | InterpExpr Expr
 
+-- a function/where guard arm: `| guards = body`
+public export data GuardArm = GuardArm (List Guard) Expr
+
+-- a record field assignment: `field = expr`
+public export data FieldAssign = FieldAssign String Expr
+
 public export data Expr
   = ELit Lit
   | EVar String
@@ -73,6 +79,9 @@ public export data Expr
   | EBlock (List DoStmt)
   | EDo (List DoStmt)
   | EStringInterp (List InterpPart)
+  | EGuards (List GuardArm)
+  | ERecordCreate String (List FieldAssign)
+  | ERecordUpdate Expr (List FieldAssign)
 
 -- data/record declarations
 public export data DataVis = VisPrivate | VisAbstract | VisPublic

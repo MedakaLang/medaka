@@ -101,12 +101,16 @@ the stage is done when all pass.
 - ✅ **Slice 6**: `data`/`record` declarations — inline + block forms,
   visibility prefixes, positional and named-field payloads, `deriving (…)`.
 - ✅ **Slice 7**: string interpolation (`"…\{expr}…"` → `EStringInterp` of
-  alternating `InterpStr`/`InterpExpr` parts). **11/15 real `test/diff_fixtures/`
-  files now parse identically to the reference.**
-- ⏳ Remaining 4 real fixtures need: function guards (`guards`), unary minus
-  (`if_else`), expression type annotations + `_` lambda params (`list`), and
-  record literal/update expressions (`record`). End goal: all of
-  `test/diff_fixtures/` + the stdlib, like the lexer's 13/13. Stays prelude-only.
+  alternating `InterpStr`/`InterpExpr` parts).
+- ✅ **Slice 8**: function guards (`EGuards` of `| guard, … = body` arms, incl.
+  `<-` pattern-bind guards), unary minus (`EUnOp "-"`, tighter than `*`),
+  expression type annotations (`EAnnot`, loosest level) + `_` lambda params
+  (`PWild`), and record literal/update expressions (`ERecordCreate` /
+  `ERecordUpdate`). **15/15 real `test/diff_fixtures/` files now parse identically
+  to the reference** (byte-for-byte via `sh test/diff_selfhost_parse.sh
+  test/diff_fixtures/*.mdk`), alongside 17/17 curated `test/parse_fixtures/`.
+- ⏳ Next: parse the stdlib `.mdk` files (toward the lexer's 13/13). Stays
+  prelude-only.
 
   *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 

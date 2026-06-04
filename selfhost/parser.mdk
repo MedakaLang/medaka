@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Pat(..), Arm(..), DoStmt(..), InterpPart(..), Expr(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Expr(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 import lexer.{Token(..), tokenize}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -173,7 +173,18 @@ skipNlFor _ = pure ()
 -- ── Expressions ─────────────────────────────────────────────────────────
 -- ladder: lam → or → and → cmp → cons → append → add → mul → app → postfix → atom
 parseExpr : Parser Expr
-parseExpr = parseLam
+parseExpr =
+  do
+    e <- parseLam
+    orElse (annotTail e) (pure e)
+
+-- expression type annotation `e : ty` (loosest level)
+annotTail : Expr -> Parser Expr
+annotTail e =
+  do
+    expectTok TColon
+    t <- parseTy
+    pure (EAnnot e t)
 
 parseLam : Parser Expr
 parseLam =
@@ -196,6 +207,7 @@ exprToParamsOnto (EApp f x) acc = exprToParamsOnto f (exprToPat x :: acc)
 exprToParamsOnto e acc = exprToPat e :: acc
 
 exprToPat : Expr -> Pat
+exprToPat (EVar "_") = PWild
 exprToPat (EVar x) = PVar x
 exprToPat (ELit l) = PLit l
 exprToPat _ = PWild
@@ -239,7 +251,22 @@ parseAdd : Parser Expr
 parseAdd = chainl1 parseMul (choice [binOp TPlus "+", binOp TMinus "-"])
 
 parseMul : Parser Expr
-parseMul = chainl1 parseApp (choice [binOp TStar "*", binOp TSlash "/", binOp TMod "%"])
+parseMul = chainl1 parseUnary (choice [binOp TStar "*", binOp TSlash "/", binOp TMod "%"])
+
+-- unary minus, tighter than `*` (a leading `-` in operand position)
+parseUnary : Parser Expr
+parseUnary =
+  do
+    t <- peekP
+    unaryFor t
+
+unaryFor : Token -> Parser Expr
+unaryFor TMinus =
+  do
+    advance
+    e <- parseUnary
+    pure (EUnOp "-" e)
+unaryFor _ = parseApp
 
 parseApp : Parser Expr
 parseApp =
@@ -280,15 +307,56 @@ atomFor (TFloat f) = emit (ELit (LFloat f))
 atomFor (TString s) = emit (ELit (LString s))
 atomFor (TChar s) = emit (ELit (LChar s))
 atomFor (TIdent x) = emit (EVar x)
-atomFor (TUpper x) = emit (EVar x)
+atomFor (TUpper x) = parseUpperAtom x
+atomFor TUnderscore = emit (EVar "_")
 atomFor TLParen = parseParen
 atomFor TLBracket = parseListE
+atomFor TLBrace = parseRecordUpdate
 atomFor TIf = parseIf
 atomFor TLet = parseLet
 atomFor TMatch = parseMatch
 atomFor TDo = parseDo
 atomFor (TInterpOpen _) = parseInterp
 atomFor _ = failP "expected atom"
+
+-- a constructor (`Upper`) atom, or a record literal `Upper { field = e, … }`
+parseUpperAtom : String -> Parser Expr
+parseUpperAtom x =
+  do
+    advance
+    t <- peekP
+    upperTail x t
+
+upperTail : String -> Token -> Parser Expr
+upperTail x TLBrace = recordCreate x
+upperTail x _ = pure (EVar x)
+
+recordCreate : String -> Parser Expr
+recordCreate x =
+  do
+    expectTok TLBrace
+    fields <- sepBy1 fieldAssign (expectTok TComma)
+    expectTok TRBrace
+    pure (ERecordCreate x fields)
+
+-- record update `{ e | field = e, … }`
+parseRecordUpdate : Parser Expr
+parseRecordUpdate =
+  do
+    expectTok TLBrace
+    e <- parseExpr
+    expectTok TPipe
+    fields <- sepBy1 fieldAssign (expectTok TComma)
+    expectTok TRBrace
+    pure (ERecordUpdate e fields)
+
+fieldAssign : Parser FieldAssign
+fieldAssign =
+  do
+    name <- identNameP
+    expectTok TEqual
+    e <- parseExpr
+    pure (FieldAssign name e)
 
 -- interpolated string: INTERP_OPEN <expr> (INTERP_MID <expr>)* INTERP_END,
 -- assembled into alternating InterpStr / InterpExpr parts
@@ -636,7 +704,56 @@ declRestFor name params TEqual =
     body <- parseBody
     skipNewlines
     pure (DFunDef False name params body)
+declRestFor name params TIndent =
+  do
+    advance
+    arms <- parseGuardArms
+    expectTok TDedent
+    skipNewlines
+    pure (DFunDef False name params (EGuards arms))
 declRestFor _ _ _ = failP "expected : or ="
+
+-- function guards: an INDENT block of `| guard, … = body` arms
+parseGuardArms : Parser (List GuardArm)
+parseGuardArms =
+  do
+    skipNewlines
+    guardArmsLoop
+
+guardArmsLoop : Parser (List GuardArm)
+guardArmsLoop = orElse guardArmsCons (pure [])
+
+guardArmsCons : Parser (List GuardArm)
+guardArmsCons =
+  do
+    a <- parseGuardArm
+    skipNewlines
+    rest <- guardArmsLoop
+    pure (a :: rest)
+
+parseGuardArm : Parser GuardArm
+parseGuardArm =
+  do
+    expectTok TPipe
+    guards <- sepBy1 parseGuard (expectTok TComma)
+    expectTok TEqual
+    body <- parseExpr
+    pure (GuardArm guards body)
+
+parseGuard : Parser Guard
+parseGuard =
+  do
+    e <- parseExpr
+    t <- peekP
+    guardFor e t
+
+guardFor : Expr -> Token -> Parser Guard
+guardFor e TLArrow =
+  do
+    advance
+    rhs <- parseExpr
+    pure (GBind (exprToPat e) rhs)
+guardFor e _ = pure (GBool e)
 
 -- ── data / record declarations ──────────────────────────────────────────
 parseTypeDecl : Parser Decl

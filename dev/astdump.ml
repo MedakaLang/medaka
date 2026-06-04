@@ -86,11 +86,19 @@ let rec sexp_expr e =
   | EBlock stmts       -> node "EBlock" (List.map sexp_dostmt stmts)
   | EDo (_, stmts)     -> node "EDo" (List.map sexp_dostmt stmts)
   | EStringInterp parts -> node "EStringInterp" (List.map sexp_interp parts)
+  | EGuards arms       -> node "EGuards" (List.map sexp_garm arms)
+  | ERecordCreate (n, fs) -> node "ERecordCreate" [esc_str n; slist (List.map sexp_fassign fs)]
+  | ERecordUpdate (e, fs) -> node "ERecordUpdate" [sexp_expr e; slist (List.map sexp_fassign fs)]
   | _                  -> todo "expr"
 
 and sexp_interp = function
   | InterpStr s  -> node "InterpStr" [esc_str s]
   | InterpExpr e -> node "InterpExpr" [sexp_expr e]
+
+and sexp_garm (guards, body) =
+  node "garm" [slist (List.map sexp_guard guards); sexp_expr body]
+
+and sexp_fassign (n, e) = node "fa" [esc_str n; sexp_expr e]
 
 and sexp_dostmt = function
   | DoExpr e        -> node "DoExpr" [sexp_expr e]
