@@ -35,6 +35,8 @@ diff with `lib/`:
 | `desugar_main.mdk` | Runnable entry: parse + desugar a file, print the structural S-expression (diffs against `astdump --desugar`). |
 | `marker.mdk` | Port of `lib/method_marker.ml`. Marks interface-method / constrained-fn occurrences (`EVar`→`EMethodRef`/`EDictApp`); includes the Phase 78a/78b prelude-shadowing logic. `markWithPrelude : List Decl -> List Decl -> List Decl` (prelude, target). |
 | `mark_main.mdk` | Runnable entry: `medaka run selfhost/mark_main.mdk <prelude.mdk> <src.mdk>` parses + desugars both, marks the target, prints the S-expression (diffs against `astdump --mark`). |
+| `resolve.mdk` | Port of `lib/resolve.ml` (single-file path). Name-binding / scope / unknown-name checks over a list-based env seeded from runtime + prelude; `resolveProgram : List Decl -> List Decl -> List Decl -> List ResError`. |
+| `resolve_main.mdk` | Runnable entry: `medaka run selfhost/resolve_main.mdk <runtime.mdk> <core.mdk> <src.mdk>` prints one diagnostic per line (diffs against `diagdump --resolve`, the harness sorts). |
 | `medaka.toml` | Project config (import root). |
 
 The OCaml-side validation references live in `dev/`: `lextok.exe` (token-stream
@@ -158,9 +160,9 @@ the stage is done when all pass.
 
 ## Roadmap — remaining Stage 1 stages
 
-Lexer, parser, **desugar**, and **method_marker** are done. The rest of the
-reference pipeline (`resolve → typecheck (runs exhaust) → eval`) is still
-OCaml-only. This section sketches how to port it.
+Lexer, parser, **desugar**, **method_marker**, and **resolve** (single-file
+path) are done. The rest of the reference pipeline (`typecheck (runs exhaust) →
+eval`) is still OCaml-only. This section sketches how to port it.
 
 **Validation infrastructure for every remaining stage is already built** (the
 "de-risk first" pass):
@@ -206,7 +208,7 @@ Stage-0 prerequisites in `../PLAN.md`).
 | # | Stage | ~LOC | Difficulty | In → Out | Validate via |
 |---|-------|------|-----------|----------|--------------|
 | 1 | ✅ **desugar** | ~980 | low–med | `program → program` | astdump `--desugar`, **60/60 corpus** |
-| 2 | **resolve** | ~1000 | med | `program → diagnostics` (+ name env) | diagdump `--resolve` (fixtures + harness ready) |
+| 2 | ✅ **resolve** | ~1000 | med | `program → diagnostics` (+ name env) | diagdump `--resolve`, **full corpus + 9 fixtures** |
 | 3 | ✅ **method_marker** | ~420 | low–med | `program → program` (marks `EMethodRef`/`EDictApp`) | astdump `--mark`, **full corpus** |
 | 4 | **exhaust** | ~465 | hard (algorithm) | `program → warnings` | diagdump `--exhaust` (fixtures + harness ready) |
 | 5 | **eval** | ~2350 | hard (plumbing) | `program → values` | diff stdout vs `=== EVAL ===` |
@@ -237,19 +239,25 @@ Stage-0 prerequisites in `../PLAN.md`).
    > extracted names will match `Prelude.program`'s. The harnesses pass the path.
    > (Alternative: a build-time generated `prelude_names.mdk`, in the spirit of
    > `gen/embed.ml`. Left as a design choice.)
-2. **Resolve** — name binding, scope, and visibility checks; output is a
-   diagnostic list plus a name environment (hashtables, not directly dumpable).
-   **Infra ready:** `dev/diagdump.exe --resolve` + `test/resolve_fixtures/` (9
-   single-file error cases) + `test/diff_selfhost_resolve.sh`. Validated two ways
-   — the negative fixtures (same errors as the reference) and the valid corpus
-   (no false positives). Dense mutable-env plumbing; multi-module import/alias
-   resolution is the hard part (and the deferred multi-module error fixtures —
-   PrivateNameAccess / NoExportedConstructors / UnknownModule — need the loader
-   path). **Perf hook (do now):** while resolve is already walking every binding,
-   give each variable reference a resolved `(frame, slot)` address and carry it on
-   the node, even if the first interpreter ignores it — see *Performance* below.
-   Designing this in is nearly free; retrofitting lexical addressing onto a
-   finished assoc-list interpreter is not.
+2. ✅ **Resolve — DONE (single-file path).** `selfhost/resolve.mdk` +
+   `resolve_main.mdk`: a name environment (lists, not hashtables) seeded with
+   primitives + runtime externs (runtime.mdk) + the prelude (core.mdk, both
+   passed by path like the marker; `program_is_core` suppresses the prelude seed
+   when resolving core itself), then `checkType`/`checkPat`/`checkExpr`/
+   `checkDecl` returning **error lists** (pure — no mutable ref; locations
+   dropped since the self-host AST has none). Scope threads locally-bound names
+   through lambdas/lets/match/do/comprehensions/where-groups; `build_env` collects
+   user names + import stubs and detects DuplicateDefinition (order-sensitive,
+   seeded) and ExternWithBody. Matches `diagdump --resolve` byte-for-byte on the
+   whole corpus *and* the 9 `test/resolve_fixtures/` negative cases — validated
+   both ways (right errors on broken files, no false positives on valid ones).
+   **Deferred:** the multi-module path (the reference's `resolve_module` —
+   imports validated against real exports, privacy, aliases; the
+   PrivateNameAccess / NoExportedConstructors / UnknownModule errors) — not
+   exercised by `diagdump --resolve`, which uses the single-file path. Also not
+   yet hit by any corpus file: QuestionMisplaced / AsPatternMisplaced /
+   NonRecursiveValueLet. **Perf hook (still open):** give each variable reference
+   a resolved `(frame, slot)` address — see *Performance* below.
 3. ✅ **Method_marker — DONE.** `selfhost/marker.mdk` + `mark_main.mdk`:
    interface-method / constrained-fn `EVar`s → `EMethodRef`/`EDictApp` (just the
    name; the typecheck-filled ref is irrelevant pre-typecheck), backtick `EInfix`
