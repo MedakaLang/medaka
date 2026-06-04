@@ -685,6 +685,14 @@ let print_def_rhs body = match strip_loc body with
            drop onto its own indented line or the `else` Hardline breaks to the
            wrong column (see the EIf arm). *)
         | EMatch _ | EDo _ | EFunction _ -> text " = " ^^ print_expr_body body
+        (* A too-wide application body hangs as a whole under the `=`
+           (`=⏎  f a b c`) before falling back to the per-arg spine break
+           (`=⏎  f⏎    a⏎    b`).  Mirrors `print_if_rhs`: the caller emits a
+           bare `=` and the leading `Line` is a space when the call fits flat
+           and a newline (hang) when it doesn't.  The inner `print_app_spine`
+           group then stays flat on the hung line if it fits there, and only
+           breaks its argument spine if even the hung call overflows. *)
+        | EApp _ -> text " =" ^^ group (nest (Line ^^ print_app_spine body))
         | _ when is_block_body body ->
           text " =" ^^ indent_block (print_expr_body body)
         | _ -> text " = " ^^ print_expr_body body))

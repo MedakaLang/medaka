@@ -221,30 +221,55 @@ let id_match_inline = idempotent "foo x = match x\n  0 => \"z\"\n  _ => \"o\"\n"
 
 (* ── Phase 137: application-spine wrapping ─────────── *)
 
-(* A too-wide application in a `=` body breaks its argument spine onto
-   continuation lines (head on the `=` line, each arg indented one step), which
-   the lexer's open-application continuation rescues.  The wrapped form must
-   reparse identically — proven by the exact expected output plus idempotency. *)
-let fmt_app_wraps_when_wide () =
+(* A too-wide application in a `=` body first hangs as a *whole* on its own
+   indented line under the `=` (`=⏎  f a b c`) — preferred over breaking the
+   argument spine, since the long `name pats =` header is usually what pushes
+   the otherwise-fitting call past 80.  Both forms parse via the lexer's
+   open-application continuation; the hung form must reparse identically, proven
+   by the exact expected output plus idempotency.  (Supersedes Phase 124's
+   "stay flat" disposition, whose premise — a bare application has no interior
+   break point — Phase 137 invalidated by adding the spine continuation.) *)
+let fmt_app_hangs_when_wide () =
   let src =
     "result = combineResults firstComputation secondComputation thirdComputation fourthOne\n" in
   let out = format src in
   let expected =
-    "result = combineResults\n\
-    \  firstComputation\n\
-    \  secondComputation\n\
-    \  thirdComputation\n\
-    \  fourthOne\n" in
+    "result =\n\
+    \  combineResults firstComputation secondComputation thirdComputation fourthOne\n" in
   if out <> expected then
-    failwith (Printf.sprintf "wide application did not wrap its spine:\n%s" out)
+    failwith (Printf.sprintf "wide application did not hang as a whole:\n%s" out)
 
-let id_app_wrap_wide =
+let id_app_hang_wide =
   idempotent
-    "result = combineResults\n\
-    \  firstComputation\n\
-    \  secondComputation\n\
-    \  thirdComputation\n\
-    \  fourthOne\n"
+    "result =\n\
+    \  combineResults firstComputation secondComputation thirdComputation fourthOne\n"
+
+(* Case 3: a body too wide to fit even when hung falls back to the per-arg spine
+   break *beneath* the hung head (uniform hang: head on its own line, each arg
+   one step deeper).  Chosen over keeping the head glued to `=` so the layout is
+   consistent with the common hung case. *)
+let fmt_app_spine_breaks_when_huge () =
+  let src =
+    "result = combineResults firstLongComputation secondLongComputation thirdLongComputation fourthLongComputation\n" in
+  let out = format src in
+  let expected =
+    "result =\n\
+    \  combineResults\n\
+    \    firstLongComputation\n\
+    \    secondLongComputation\n\
+    \    thirdLongComputation\n\
+    \    fourthLongComputation\n" in
+  if out <> expected then
+    failwith (Printf.sprintf "huge application did not spine-break under the hung head:\n%s" out)
+
+let id_app_spine_huge =
+  idempotent
+    "result =\n\
+    \  combineResults\n\
+    \    firstLongComputation\n\
+    \    secondLongComputation\n\
+    \    thirdLongComputation\n\
+    \    fourthLongComputation\n"
 
 (* Wrapping is width-driven: a short application stays on one line. *)
 let fmt_app_stays_inline_when_short () =
@@ -556,8 +581,10 @@ let () =
       Alcotest.test_case "match inline idempotent" `Quick id_match_inline;
       Alcotest.test_case "match-arm block no trailing ws" `Quick fmt_match_arm_block_no_trailing_ws;
       Alcotest.test_case "guard-arm block no trailing ws" `Quick fmt_guard_block_no_trailing_ws;
-      Alcotest.test_case "wide application wraps spine" `Quick fmt_app_wraps_when_wide;
-      Alcotest.test_case "wide application idempotent" `Quick id_app_wrap_wide;
+      Alcotest.test_case "wide application hangs as whole" `Quick fmt_app_hangs_when_wide;
+      Alcotest.test_case "wide application hang idempotent" `Quick id_app_hang_wide;
+      Alcotest.test_case "huge application spine-breaks under hung head" `Quick fmt_app_spine_breaks_when_huge;
+      Alcotest.test_case "huge application spine idempotent" `Quick id_app_spine_huge;
       Alcotest.test_case "short application stays inline" `Quick fmt_app_stays_inline_when_short;
       Alcotest.test_case "guard-arm body does not wrap" `Quick fmt_app_guard_no_wrap;
       Alcotest.test_case "match-arm body does not wrap" `Quick fmt_app_match_no_wrap;

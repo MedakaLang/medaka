@@ -5567,7 +5567,9 @@ only bare RHS worth special-casing.** Findings:
   change), both outside this phase's pure-`printer.ml` scope.
 
 Disposition: keep the "bare positions stay flat" policy; `if` stays the sole
-width-aware bare RHS.
+width-aware bare RHS. **SUPERSEDED by Phase 124.2 (2026-06-04)** — Phase 137 added
+the interior break point this decline assumed didn't exist, changing the baseline
+from flat-overflow to per-arg spine break, so application RHSs now hang as a whole.
 
 ---
 
@@ -5596,6 +5598,49 @@ Accepted tradeoff: a *large* breakable RHS sitting after a >80 unbreakable prefi
 now stays on one long line — but that shape needs both a >80 guard *and* a big list
 RHS, occurs nowhere in stdlib, and is better fixed by shortening the prefix at the
 source. See [[project-formatter-doc-ir]].
+
+---
+
+### Phase 124.2: hang a too-wide application RHS as a whole ✅ DONE (2026-06-04)
+
+**Revisits — and supersedes — Phase 124's "stay flat" disposition for application
+RHSs, because Phase 137 invalidated 124's central premise.** 124 declined wrapping a
+long bare application because "a bare application has no interior break point, so the
+only move is shoving the whole thing onto the next line; it can't reflow." Phase 137
+then *added* exactly that interior break point (the open-application continuation:
+`f⏎  a⏎  b` now parses), and `print_app_spine` started using it — so the post-137
+*baseline* for a too-wide app RHS is no longer 124's flat-overflow but a per-argument
+spine break (head glued to `=`, each arg on its own indented line). That arg-per-line
+form reads poorly when the over-width is really the long `name pats =` header, not the
+call.
+
+Fix (10 lines in `print_def_rhs`, mirroring `print_if_rhs`): for an `EApp` body emit
+`text " =" ^^ group (nest (Line ^^ print_app_spine body))`. The leading `Line` is a
+space when the whole `= f a b c` fits, else a newline (hang). Three resulting tiers:
+1. fits flat → `name pats = f a b c`;
+2. hangs flat (the common, desired case) → `name pats =⏎  f a b c`;
+3. too wide even hung → uniform hang: head on its own line, args one step deeper
+   (`=⏎  f⏎    a⏎    b`).
+
+Why this clears 124's two objections:
+- **No operator-chain regression** (124's one active regression — `spliceAt`/
+  `centerPad`): those RHSs are `EBinOp` continuation chains routed through
+  `print_chain`, not `EApp`, so the new arm never touches them (verified: byte-
+  identical after the change).
+- **The churn now pays**: against the post-137 arg-per-line baseline (not 124's
+  flat baseline), the hang is a clear readability win wherever it fires, and the
+  repo got *shorter* (−88 lines over stdlib + selfhost) as 3-line spine forms
+  collapsed to 2-line hangs. `sexp.mdk` (full of `node "Tag" [...]` dumps) and
+  `desugar.mdk` (AST-constructor bodies) benefit most.
+
+Case-3 chose uniform hang over keeping the head glued to `=` — the binary group IR
+can express it for free (nested groups), and it's consistent with the common case;
+the glued-head alternative would need a 3-way choice combinator the IR lacks.
+
+Tests: `test_fmt` "wide application hangs as whole" / "huge application spine-breaks
+under hung head" (+ idempotency for each), replacing the old "wraps spine" case that
+codified the pre-hang behavior. All selfhost diff harnesses stay byte-identical (the
+reformat is semantics-preserving). See [[project-formatter-doc-ir]].
 
 ---
 
