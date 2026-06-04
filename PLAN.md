@@ -113,9 +113,12 @@ differential harness on the interpreter.
   curated fixtures *and* all 13 real `.mdk` files (every stdlib module + the lexer
   lexing itself). `sh test/diff_selfhost_lexer.sh` / `…_lex_files.sh`.
 - **Parser — in progress (Phase 135).** Recursive-descent over the lexer's
-  tokens, validated by a structural S-expr dump (`dev/astdump.ml` ↔
-  `selfhost/sexp.mdk`, `sh test/diff_selfhost_parse.sh`). Scaffold + dump format
-  validated; the recursive-descent logic is the active slice.
+  tokens (`selfhost/parser.mdk`), validated by a structural S-expr dump
+  (`dev/astdump.ml` ↔ `selfhost/sexp.mdk`, `sh test/diff_selfhost_parse.sh` over
+  `test/parse_fixtures/`). **Slice 1 done:** the arithmetic ladder, application,
+  atoms (literals/vars/ctors/parens/tuples/lists), simple param patterns, the
+  type grammar, and top-level `DFunDef`/`DTypeSig` — 5/5 parse fixtures match.
+  Next slices grow the ladder + AST/sexp coverage toward the real fixtures.
 
 ### Stage 2 — LLVM backend (after self-host)
 

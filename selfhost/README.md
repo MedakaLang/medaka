@@ -29,7 +29,8 @@ diff with `lib/`:
 | `lex_main.mdk` | Runnable entry: `medaka run selfhost/lex_main.mdk <src.mdk>` reads the file, tokenizes, prints one token per line in the canonical reference form. |
 | `ast.mdk` | The self-host AST — a Medaka mirror of `lib/ast.ml`'s surface (pre-desugar) nodes; the target the parser builds. Constructor names match `ast.ml`. |
 | `sexp.mdk` | `programToSexp` — a canonical structural S-expression dump of the AST, mirroring `dev/astdump.ml` byte-for-byte; the parser's validation format (the `tokenToString` analog). |
-| `parse_main.mdk` | Runnable entry for the parser (scaffold: dumps a hand-built control AST until the parser exists). |
+| `parser.mdk` | Port of `lib/parser.mly`. Hand-written recursive descent over `List Token`; `parse : String -> List Decl`. Precedence is the stratified ladder from the grammar, one function per level. |
+| `parse_main.mdk` | Runnable entry: `medaka run selfhost/parse_main.mdk <src.mdk>` reads the file, parses, and prints the structural S-expression. |
 | `medaka.toml` | Project config (import root). |
 
 The OCaml-side validation references live in `dev/`: `lextok.exe` (token-stream
@@ -72,16 +73,21 @@ the stage is done when all pass.
 
 ### Parser (Stage 1, in progress)
 
-- ✅ Scaffold: the `ast.mdk` core node type, the `sexp.mdk` structural dumper
-  (validated byte-for-byte against `dev/astdump.exe` via `sh
-  test/diff_selfhost_parse.sh`'s positive control), `parse_main.mdk`, and the
-  OCaml reference dumper. Validation is in place *before* any parse logic, same
-  as the lexer.
-- ⏳ Next: the recursive-descent parser itself, over `List Token` from the
-  lexer. The precedence ladder (`expr_annot → … → expr_app → expr_atom`, ~18
-  levels) maps one function per level. Coverage (AST nodes + `sexp` cases) grows
-  per slice: expressions → patterns → declarations → types. Stays prelude-only
-  (`List`/`Array`/string externs) — `Map`/stdlib isn't needed until resolve.
+- ✅ Scaffold: `ast.mdk`, the `sexp.mdk` structural dumper, the OCaml reference
+  dumper `dev/astdump.exe`, and the diff harness — validation in place *before*
+  parse logic, same as the lexer.
+- ✅ **Slice 1** (`parser.mdk`): the arithmetic ladder (`+ - * / %`), function
+  application, atoms (literals, vars/constructors, parens, tuples, list
+  literals), simple param patterns, the type grammar (con/var/app/arrow/tuple),
+  and top-level `DFunDef`/`DTypeSig` over a multi-decl program. Validated against
+  the reference on `test/parse_fixtures/` (`sh test/diff_selfhost_parse.sh`).
+- ⏳ Next slices grow the ladder + AST/`sexp` coverage: the rest of the
+  expression ladder (`cmp`/`and`/`or`/`cons`/`append`/pipe/compose, `if`/`let`/
+  `match`/lambda, sections, interpolation, comprehensions), full patterns, the
+  remaining decl forms (`data`/`record`/`interface`/`impl`/`import`/…), and
+  indented-block bodies. End goal: parse the real `test/diff_fixtures/` files and
+  the stdlib, like the lexer's 13/13. Stays prelude-only (`Map`/stdlib not needed
+  until resolve).
 
 ## Self-host-surfaced compiler fix
 
