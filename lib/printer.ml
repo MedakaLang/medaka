@@ -895,6 +895,40 @@ let rec print_decl = function
       ^^ text "\n") attrs)
     ^^ print_decl inner
 
+(* Render a `data` declaration with interior comments interleaved before the
+   variants they document.  `vcomments` is parallel to `variants`: entry [i]
+   holds the comment lexemes (in source order) that immediately precede variant
+   [i].  Any non-empty entry forces the one-variant-per-line layout (a comment
+   can't share a line), and each comment lands at the variant indent.  Used by
+   [format_program] for the case [print_decl]'s opaque render can't handle — a
+   comment anchored to a `|`-variant rather than to a whole declaration. *)
+let print_data_decl_commented vis n params variants derives
+    (vcomments : string list list) =
+  let vis_prefix = match vis with
+    | Ast.DataPublic   -> text "public export "
+    | Ast.DataAbstract -> text "export "
+    | Ast.DataPrivate  -> Nil
+  in
+  let head =
+    text "data " ^^ text n
+    ^^ concat (List.map (fun pa -> text " " ^^ text pa) params)
+  in
+  let comment_lines cs =
+    concat (List.map (fun c -> Hardline ^^ text c) cs)
+  in
+  let variant_docs = match variants, vcomments with
+    | [], _ | _, [] -> Nil
+    | v :: vs, vc :: vcs ->
+      nest (comment_lines vc ^^ Hardline ^^ text "= " ^^ print_variant v
+            ^^ concat (List.map2 (fun v vc ->
+                comment_lines vc ^^ Hardline ^^ text "| " ^^ print_variant v)
+                vs vcs))
+  in
+  let derive_doc =
+    if derives = [] then Nil else Hardline ^^ print_derives derives
+  in
+  vis_prefix ^^ head ^^ variant_docs ^^ derive_doc
+
 (* ── Public entry points ─────────────────────────── *)
 
 let program_to_string ?(width = default_width) decls =
@@ -919,6 +953,19 @@ let format_program ?(width = default_width) decls decl_locs (comments : Lexer.co
   else begin
     let buf = Buffer.create 256 in
     let cs = ref comments in
+    (* Start line of each `data` variant, in source order, consumed one slice
+       per `DData` decl (decls are processed in source order, so the head of
+       this list always lines up with the next data decl's variants). *)
+    let vlines = ref (Parser_state.take_variant_lines ()) in
+    let take_n_variant_lines k =
+      let rec go k acc =
+        if k <= 0 then List.rev acc
+        else match !vlines with
+          | x :: rest -> vlines := rest; go (k - 1) (x :: acc)
+          | [] -> List.rev acc
+      in
+      go k []
+    in
     let cursor = ref 0 in       (* last consumed source line *)
     let started = ref false in
     let blank_line_if_needed target_line =
@@ -942,6 +989,35 @@ let format_program ?(width = default_width) decls decl_locs (comments : Lexer.co
       in
       loop ()
     in
+    (* Pop (without emitting) the pending comments strictly above [line] —
+       used to bucket interior comments onto the `data` variant they precede. *)
+    let take_before line =
+      let rec loop acc =
+        match !cs with
+        | c :: rest when c.c_line < line ->
+          cs := rest; loop (c :: acc)
+        | _ -> List.rev acc
+      in
+      loop []
+    in
+    (* Render one declaration's Doc.  A `DData` is rendered comment-aware: its
+       variant source lines are consumed (always, to keep [vlines] aligned) and
+       any interior comment is interleaved before the variant it documents.
+       Every other decl renders opaquely (interior comments unsupported). *)
+    let decl_doc decl =
+      match decl with
+      | DData (vis, n, params, variants, derives) ->
+        let vls = take_n_variant_lines (List.length variants) in
+        let vcomments =
+          List.map (fun l ->
+            List.map (fun (c : Lexer.comment) -> c.c_text) (take_before l)) vls
+        in
+        if List.length vcomments = List.length variants
+           && not (List.for_all (fun cs -> cs = []) vcomments)
+        then print_data_decl_commented vis n params variants derives vcomments
+        else print_decl decl
+      | _ -> print_decl decl
+    in
     (* A comment sitting on a declaration's final source line is a *trailing*
        comment (`x = 1  -- note`): a line comment runs to EOL, so nothing else
        shares that line.  Pull such comments out of the pending stream so they
@@ -960,7 +1036,7 @@ let format_program ?(width = default_width) decls decl_locs (comments : Lexer.co
     List.iter2 (fun decl (loc : Ast.loc) ->
       flush_before loc.line;
       blank_line_if_needed loc.line;
-      Buffer.add_string buf (render width (print_decl decl));
+      Buffer.add_string buf (render width (decl_doc decl));
       List.iter (fun (c : Lexer.comment) ->
         Buffer.add_string buf "  ";
         Buffer.add_string buf c.c_text

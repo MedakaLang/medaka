@@ -89,6 +89,43 @@ let cp_block_multiline =
 let id_block_between =
   idempotent "x = 1\n\n{- between decls -}\ny = 2\n"
 
+(* A comment documenting a NON-FIRST `data` variant stays attached to that
+   variant — on its own line, at the variant's indent, immediately above the
+   `|` it documents — rather than being orphaned below the whole declaration
+   at column 0 (the pre-fix bug that kept selfhost/ast.mdk unformatted). *)
+let cp_data_variant_comment () =
+  let src =
+    "data Expr\n\
+    \  = EVar String\n\
+    \  -- documents the next two variants\n\
+    \  -- (second comment line)\n\
+    \  | EMethodRef String\n\
+    \  | EDictApp String\n" in
+  let out = format src in
+  if out <> src then
+    failwith (Printf.sprintf
+      "data-variant comment not kept in place.\nexpected:\n%s\ngot:\n%s" src out)
+
+let id_data_variant_comment =
+  idempotent
+    "data Expr\n\
+    \  = EVar String\n\
+    \  -- documents the next two variants\n\
+    \  | EMethodRef String\n\
+    \  | EDictApp String\n"
+
+(* A comment above the FIRST variant attaches to it too (before the `=`). *)
+let cp_data_first_variant_comment () =
+  let src =
+    "data T\n\
+    \  -- doc for the first variant\n\
+    \  = A\n\
+    \  | B\n" in
+  let out = format src in
+  if out <> src then
+    failwith (Printf.sprintf
+      "first-variant comment not kept in place.\nexpected:\n%s\ngot:\n%s" src out)
+
 (* ── Round-trip safety net ───────────────────────── *)
 
 (* If the formatter ever produces output whose AST differs from the
@@ -546,6 +583,9 @@ let () =
       Alcotest.test_case "trailing idempotent" `Quick id_trailing;
       Alcotest.test_case "block"         `Quick cp_block;
       Alcotest.test_case "block multiline" `Quick cp_block_multiline;
+      Alcotest.test_case "data variant comment" `Quick cp_data_variant_comment;
+      Alcotest.test_case "data variant comment idempotent" `Quick id_data_variant_comment;
+      Alcotest.test_case "data first-variant comment" `Quick cp_data_first_variant_comment;
     ];
     "round-trip safety", [
       Alcotest.test_case "stdlib-like"       `Quick rt_stdlib_like;

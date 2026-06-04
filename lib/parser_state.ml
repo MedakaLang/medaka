@@ -18,6 +18,17 @@ let pop_decl_pos () =
 
 let take_decl_positions () = List.rev !decl_positions
 
+(* Start line of each `data` constructor variant, in source order across the
+   whole file.  `medaka fmt` consumes these (one slice per `DData`, in decl
+   order) to anchor interior comments that document a particular variant — the
+   AST's [data_variant] carries no location of its own. *)
+let variant_lines : int list ref = ref []
+
+let record_variant_line (ln : int) =
+  variant_lines := ln :: !variant_lines
+
+let take_variant_lines () = List.rev !variant_lines
+
 (* Line number of the most recently consumed non-trivia content.  The
    lexer updates this in the newlines rule, capturing the line where the
    preceding content ended; this is more useful for `medaka fmt` than the
@@ -26,4 +37,5 @@ let last_content_line : int ref = ref 0
 
 let reset () =
   decl_positions := [];
+  variant_lines := [];
   last_content_line := 0

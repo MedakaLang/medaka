@@ -914,25 +914,33 @@ inner_data_decl:
   | DATA UPPER list(IDENT) EQUAL separated_nonempty_list(PIPE, data_variant_inline) option(inline_deriving) newlines
     { fun vis -> DData (vis, $2, $3, $5, Option.value ~default:[] $6) }
 
-(* First variant of the block form, introduced by `=`. *)
+(* First variant of the block form, introduced by `=`.  The `$startpos` line
+   (the `=`) is recorded so `medaka fmt` can anchor a comment documenting this
+   variant — see Parser_state.record_variant_line. *)
 data_variant_head:
   | EQUAL UPPER list(ty_atom) newlines
-    { { con_name = $2; con_payload = Ast.ConPos $3 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $2; con_payload = Ast.ConPos $3 } }
   | EQUAL UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE newlines
-    { { con_name = $2; con_payload = Ast.ConNamed $4 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $2; con_payload = Ast.ConNamed $4 } }
 
 (* Subsequent variants of the block form, introduced by `|`. *)
 data_variant_line:
   | PIPE UPPER list(ty_atom) newlines
-    { { con_name = $2; con_payload = Ast.ConPos $3 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $2; con_payload = Ast.ConPos $3 } }
   | PIPE UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE newlines
-    { { con_name = $2; con_payload = Ast.ConNamed $4 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $2; con_payload = Ast.ConNamed $4 } }
 
 data_variant_inline:
   | UPPER list(ty_atom)
-    { { con_name = $1; con_payload = Ast.ConPos $2 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $1; con_payload = Ast.ConPos $2 } }
   | UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE
-    { { con_name = $1; con_payload = Ast.ConNamed $3 } }
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      { con_name = $1; con_payload = Ast.ConNamed $3 } }
 
 inline_field_decl:
   | IDENT COLON ty  { { Ast.field_name = $1; field_type = $3 } }
