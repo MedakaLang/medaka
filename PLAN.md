@@ -117,8 +117,10 @@ differential harness on the interpreter.
   (`dev/astdump.ml` ↔ `selfhost/sexp.mdk`, `sh test/diff_selfhost_parse.sh` over
   `test/parse_fixtures/`). **Slice 1 done:** the arithmetic ladder, application,
   atoms (literals/vars/ctors/parens/tuples/lists), simple param patterns, the
-  type grammar, and top-level `DFunDef`/`DTypeSig` — 5/5 parse fixtures match.
-  Next slices grow the ladder + AST/sexp coverage toward the real fixtures.
+  type grammar, and top-level `DFunDef`/`DTypeSig`. **Slice 2 done:** full operator
+  ladder (`||`/`&&`/cmp/`::`/`++`), `=>` lambdas, single-line `if`, postfix field
+  access — 8/8 fixtures match. Combinators spiked + parked (Phase 136). Next:
+  `let`/`match`/`do`, full patterns + decl forms, indented-block bodies.
 
 ### Stage 2 — LLVM backend (after self-host)
 

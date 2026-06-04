@@ -76,18 +76,22 @@ the stage is done when all pass.
 - ✅ Scaffold: `ast.mdk`, the `sexp.mdk` structural dumper, the OCaml reference
   dumper `dev/astdump.exe`, and the diff harness — validation in place *before*
   parse logic, same as the lexer.
-- ✅ **Slice 1** (`parser.mdk`): the arithmetic ladder (`+ - * / %`), function
-  application, atoms (literals, vars/constructors, parens, tuples, list
-  literals), simple param patterns, the type grammar (con/var/app/arrow/tuple),
-  and top-level `DFunDef`/`DTypeSig` over a multi-decl program. Validated against
-  the reference on `test/parse_fixtures/` (`sh test/diff_selfhost_parse.sh`).
-- ⏳ Next slices grow the ladder + AST/`sexp` coverage: the rest of the
-  expression ladder (`cmp`/`and`/`or`/`cons`/`append`/pipe/compose, `if`/`let`/
-  `match`/lambda, sections, interpolation, comprehensions), full patterns, the
-  remaining decl forms (`data`/`record`/`interface`/`impl`/`import`/…), and
-  indented-block bodies. End goal: parse the real `test/diff_fixtures/` files and
-  the stdlib, like the lexer's 13/13. Stays prelude-only (`Map`/stdlib not needed
-  until resolve).
+- ✅ **Slice 1** (`parser.mdk`): the arithmetic ladder, application, atoms
+  (literals, vars/constructors, parens, tuples, list literals), simple param
+  patterns, the type grammar, and top-level `DFunDef`/`DTypeSig`.
+- ✅ **Slice 2**: the rest of the operator ladder (`||`, `&&`, comparisons,
+  `::` right-assoc, `++`), `=>` lambdas, single-line `if`/`then`/`else`, and
+  postfix field access (`.field`) — via a generic `chainLeft`/`chainRight` (HOF +
+  `Option`). All validated on `test/parse_fixtures/` (`sh
+  test/diff_selfhost_parse.sh`).
+- ⏳ Next slices: `let`/`match`/`do`, pipe/compose/unary/sections/interpolation/
+  comprehensions, full patterns, the remaining decl forms
+  (`data`/`record`/`interface`/`impl`/`import`/…), and **indented-block bodies**
+  (the `INDENT`/`DEDENT` layout handling — the chief remaining risk; slices 1–2
+  only do single-line bodies). End goal: parse the real `test/diff_fixtures/`
+  files + stdlib, like the lexer's 13/13. Stays prelude-only.
+
+  *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 
 ## Self-host-surfaced compiler fix
 

@@ -28,48 +28,136 @@ revOnto [] acc = acc
 revOnto (x :: xs) acc = revOnto xs (x :: acc)
 
 -- ── Expressions ─────────────────────────────────────────────────────────
--- Partial precedence ladder (grows per slice): add → mul → app → atom.
+-- Precedence ladder (loosest → tightest), one function per level:
+--   lam → or → and → cmp → cons → append → add → mul → app → postfix → atom.
+-- (pipe/compose, unary, infix-backtick, `?`, as-pat slices come later.)
 parseExpr : Array Token -> Int -> (Expr, Int)
-parseExpr toks pos = parseAdd toks pos
+parseExpr toks pos = parseLam toks pos
+
+-- left-associative binary level: `next` folded over `(op next)*`
+chainLeft : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> (Expr, Int)
+chainLeft next opOf toks pos =
+  let (left, pos1) = next toks pos
+  chainLeftLoop next opOf toks pos1 left
+
+chainLeftLoop : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> Expr -> (Expr, Int)
+chainLeftLoop next opOf toks pos left =
+  match opOf (peek toks pos)
+    Some op => chainLeftStep next opOf toks (pos + 1) left op
+    None => (left, pos)
+
+chainLeftStep : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> Expr -> String -> (Expr, Int)
+chainLeftStep next opOf toks pos left op =
+  let (right, pos1) = next toks pos
+  chainLeftLoop next opOf toks pos1 (EBinOp op left right)
+
+-- right-associative binary level (e.g. `::`)
+chainRight : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> (Expr, Int)
+chainRight next opOf toks pos =
+  let (left, pos1) = next toks pos
+  chainRightAfter next opOf toks pos1 left
+
+chainRightAfter : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> Expr -> (Expr, Int)
+chainRightAfter next opOf toks pos left =
+  match opOf (peek toks pos)
+    Some op => chainRightStep next opOf toks (pos + 1) left op
+    None => (left, pos)
+
+chainRightStep : (Array Token -> Int -> (Expr, Int)) -> (Token -> Option String) -> Array Token -> Int -> Expr -> String -> (Expr, Int)
+chainRightStep next opOf toks pos left op =
+  let (right, pos1) = chainRight next opOf toks pos
+  (EBinOp op left right, pos1)
+
+-- lambda: `pat+ => body`.  Parse the next level, and if `=>` follows, reinterpret
+-- the parsed application chain as parameter patterns.
+parseLam : Array Token -> Int -> (Expr, Int)
+parseLam toks pos =
+  let (e, pos1) = parseOr toks pos
+  lamCheck toks pos1 e
+
+lamCheck : Array Token -> Int -> Expr -> (Expr, Int)
+lamCheck toks pos e =
+  match peek toks pos
+    TFatArrow => lamBody toks (pos + 1) (exprToParams e)
+    _ => (e, pos)
+
+lamBody : Array Token -> Int -> List Pat -> (Expr, Int)
+lamBody toks pos params =
+  let (body, pos1) = parseExpr toks pos
+  (ELam params body, pos1)
+
+exprToParams : Expr -> List Pat
+exprToParams e = exprToParamsOnto e []
+
+exprToParamsOnto : Expr -> List Pat -> List Pat
+exprToParamsOnto (EApp f x) acc = exprToParamsOnto f (exprToPat x :: acc)
+exprToParamsOnto e acc = exprToPat e :: acc
+
+exprToPat : Expr -> Pat
+exprToPat (EVar x) = PVar x
+exprToPat (ELit l) = PLit l
+exprToPat _ = PWild
+
+parseOr : Array Token -> Int -> (Expr, Int)
+parseOr toks pos = chainLeft parseAnd orOf toks pos
+
+orOf : Token -> Option String
+orOf TOr = Some "||"
+orOf _ = None
+
+parseAnd : Array Token -> Int -> (Expr, Int)
+parseAnd toks pos = chainLeft parseCmp andOf toks pos
+
+andOf : Token -> Option String
+andOf TAnd = Some "&&"
+andOf _ = None
+
+parseCmp : Array Token -> Int -> (Expr, Int)
+parseCmp toks pos = chainLeft parseCons cmpOf toks pos
+
+cmpOf : Token -> Option String
+cmpOf TEqEq = Some "=="
+cmpOf TNeq = Some "!="
+cmpOf TLt = Some "<"
+cmpOf TGt = Some ">"
+cmpOf TLeq = Some "<="
+cmpOf TGeq = Some ">="
+cmpOf _ = None
+
+parseCons : Array Token -> Int -> (Expr, Int)
+parseCons toks pos = chainRight parseAppend consOf toks pos
+
+consOf : Token -> Option String
+consOf TCons = Some "::"
+consOf _ = None
+
+parseAppend : Array Token -> Int -> (Expr, Int)
+parseAppend toks pos = chainLeft parseAdd appendOf toks pos
+
+appendOf : Token -> Option String
+appendOf TPlusPlus = Some "++"
+appendOf _ = None
 
 parseAdd : Array Token -> Int -> (Expr, Int)
-parseAdd toks pos =
-  let (left, pos1) = parseMul toks pos
-  parseAddLoop toks pos1 left
+parseAdd toks pos = chainLeft parseMul addOf toks pos
 
-parseAddLoop : Array Token -> Int -> Expr -> (Expr, Int)
-parseAddLoop toks pos left =
-  match peek toks pos
-    TPlus => addOp toks (pos + 1) left "+"
-    TMinus => addOp toks (pos + 1) left "-"
-    _ => (left, pos)
-
-addOp : Array Token -> Int -> Expr -> String -> (Expr, Int)
-addOp toks pos left op =
-  let (right, pos1) = parseMul toks pos
-  parseAddLoop toks pos1 (EBinOp op left right)
+addOf : Token -> Option String
+addOf TPlus = Some "+"
+addOf TMinus = Some "-"
+addOf _ = None
 
 parseMul : Array Token -> Int -> (Expr, Int)
-parseMul toks pos =
-  let (left, pos1) = parseApp toks pos
-  parseMulLoop toks pos1 left
+parseMul toks pos = chainLeft parseApp mulOf toks pos
 
-parseMulLoop : Array Token -> Int -> Expr -> (Expr, Int)
-parseMulLoop toks pos left =
-  match peek toks pos
-    TStar => mulOp toks (pos + 1) left "*"
-    TSlash => mulOp toks (pos + 1) left "/"
-    TMod => mulOp toks (pos + 1) left "%"
-    _ => (left, pos)
-
-mulOp : Array Token -> Int -> Expr -> String -> (Expr, Int)
-mulOp toks pos left op =
-  let (right, pos1) = parseApp toks pos
-  parseMulLoop toks pos1 (EBinOp op left right)
+mulOf : Token -> Option String
+mulOf TStar = Some "*"
+mulOf TSlash = Some "/"
+mulOf TMod = Some "%"
+mulOf _ = None
 
 parseApp : Array Token -> Int -> (Expr, Int)
 parseApp toks pos =
-  let (head, pos1) = parseAtom toks pos
+  let (head, pos1) = parsePostfix toks pos
   parseAppLoop toks pos1 head
 
 parseAppLoop : Array Token -> Int -> Expr -> (Expr, Int)
@@ -79,7 +167,7 @@ parseAppLoop toks pos head
 
 appStep : Array Token -> Int -> Expr -> (Expr, Int)
 appStep toks pos head =
-  let (arg, pos1) = parseAtom toks pos
+  let (arg, pos1) = parsePostfix toks pos
   parseAppLoop toks pos1 (EApp head arg)
 
 startsAtom : Token -> Bool
@@ -93,6 +181,24 @@ startsAtom TLParen = True
 startsAtom TLBracket = True
 startsAtom _ = False
 
+-- postfix field access: `atom (.field)*`
+parsePostfix : Array Token -> Int -> (Expr, Int)
+parsePostfix toks pos =
+  let (e, pos1) = parseAtom toks pos
+  postfixLoop toks pos1 e
+
+postfixLoop : Array Token -> Int -> Expr -> (Expr, Int)
+postfixLoop toks pos e =
+  match peek toks pos
+    TDot => fieldAfter toks (pos + 1) e
+    _ => (e, pos)
+
+fieldAfter : Array Token -> Int -> Expr -> (Expr, Int)
+fieldAfter toks pos e =
+  match peek toks pos
+    TIdent f => postfixLoop toks (pos + 1) (EFieldAccess e f)
+    _ => (e, pos)
+
 parseAtom : Array Token -> Int -> (Expr, Int)
 parseAtom toks pos = atomFrom toks pos (peek toks pos)
 
@@ -105,7 +211,36 @@ atomFrom toks pos (TIdent x) = (EVar x, pos + 1)
 atomFrom toks pos (TUpper x) = (EVar x, pos + 1)
 atomFrom toks pos TLParen = parseParen toks (pos + 1)
 atomFrom toks pos TLBracket = parseList toks (pos + 1)
+atomFrom toks pos TIf = parseIf toks (pos + 1)
 atomFrom toks pos _ = (EVar "?atom", pos + 1)
+
+-- `if cond then t else e` (branches are full expressions)
+parseIf : Array Token -> Int -> (Expr, Int)
+parseIf toks pos =
+  let (cond, pos1) = parseExpr toks pos
+  ifThen toks pos1 cond
+
+ifThen : Array Token -> Int -> Expr -> (Expr, Int)
+ifThen toks pos cond =
+  match peek toks pos
+    TThen => ifThenBody toks (pos + 1) cond
+    _ => (EVar "?if-then", pos)
+
+ifThenBody : Array Token -> Int -> Expr -> (Expr, Int)
+ifThenBody toks pos cond =
+  let (thenE, pos1) = parseExpr toks pos
+  ifElse toks pos1 cond thenE
+
+ifElse : Array Token -> Int -> Expr -> Expr -> (Expr, Int)
+ifElse toks pos cond thenE =
+  match peek toks pos
+    TElse => ifElseBody toks (pos + 1) cond thenE
+    _ => (EVar "?if-else", pos)
+
+ifElseBody : Array Token -> Int -> Expr -> Expr -> (Expr, Int)
+ifElseBody toks pos cond thenE =
+  let (elseE, pos1) = parseExpr toks pos
+  (EIf cond thenE elseE, pos1)
 
 -- `( … )` — unit, a parenthesized expr, or a tuple
 parseParen : Array Token -> Int -> (Expr, Int)
