@@ -927,10 +927,34 @@ patAtomFor (TInt n) = intPatRest (LInt n)
 patAtomFor (TFloat f) = emit (PLit (LFloat f))
 patAtomFor (TString s) = emit (PLit (LString s))
 patAtomFor (TChar s) = charPatRest (LChar s)
-patAtomFor (TUpper c) = emit (PCon c [])
+patAtomFor (TUpper c) = do
+  advance
+  t <- peekP
+  upperAtomRest c t
 patAtomFor TLParen = parsePatParen
 patAtomFor TLBracket = parsePatList
 patAtomFor _ = failP "expected pattern"
+
+-- atom-level uppercase: a record pattern `C { … }` or a bare nullary ctor `C`
+-- (an *applied* ctor `C p…` needs parens at atom level, like the OCaml grammar).
+-- Mirrors lib/parser.mly's `pat_atom: UPPER | UPPER LBRACE record_pat_fields RBRACE`.
+upperAtomRest : String -> Token -> Parser Pat
+upperAtomRest c TLBrace = recordPat c
+upperAtomRest c _ = pure (PCon c [])
+
+-- A function-definition parameter: a `pat_atom`, plus the `@` as-pattern
+-- (`x@atom`).  Mirrors lib/parser.mly's `param_pat = pat_atom | IDENT AS_AT
+-- pat_atom`.  `orElse` backtracks, so a plain-ident / non-`@` param falls
+-- through to parsePatAtom.
+parseParamPat : Parser Pat
+parseParamPat = orElse parseParamAsPat parsePatAtom
+
+parseParamAsPat : Parser Pat
+parseParamAsPat = do
+  x <- identNameP
+  expectTok TAsAt
+  sub <- parsePatAtom
+  pure (PAs x sub)
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
@@ -1201,7 +1225,7 @@ afterPublicFor _ = failP "expected data or record after public export"
 parseFunOrSig : Bool -> Parser Decl
 parseFunOrSig pub = do
   name <- identNameP
-  params <- many parsePatAtom
+  params <- many parseParamPat
   t <- peekP
   declRestFor pub name params t
 
@@ -1467,7 +1491,7 @@ ifaceMembersCons = do
 ifaceMember : Parser IfaceMethod
 ifaceMember = do
   name <- identNameP
-  pats <- many parsePatAtom
+  pats <- many parseParamPat
   t <- peekP
   ifaceMemberRest name pats t
 
@@ -1588,7 +1612,7 @@ implMethodsCons = do
 implMethod : Parser ImplMethod
 implMethod = do
   name <- identNameP
-  pats <- many parsePatAtom
+  pats <- many parseParamPat
   expectTok TEqual
   body <- parseBody
   pure (ImplMethod name pats body)
@@ -1811,7 +1835,7 @@ whereBindingsCons = do
 parseWhereBinding : Parser (String, List Pat, Expr)
 parseWhereBinding = do
   name <- identNameP
-  pats <- many parsePatAtom
+  pats <- many parseParamPat
   t <- peekP
   whereBindRest name pats t
 
@@ -1912,7 +1936,7 @@ letKind _ = letPat
 letIdent : String -> Parser DoStmt
 letIdent name = do
   advance
-  pats <- many parsePatAtom
+  pats <- many parseParamPat
   expectTok TEqual
   e1 <- parseExpr
   letIdentRest name pats e1

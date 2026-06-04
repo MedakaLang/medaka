@@ -95,14 +95,13 @@ mapInterp f (InterpExpr e) = InterpExpr (mapExpr f e)
 
 export
 mapDecl : (Expr -> Expr) -> Decl -> Decl
-mapDecl f d = match d
-  DFunDef pub n ps e => DFunDef pub n ps (mapExpr f e)
-  DInterface { methods, ... } => DInterface { d | methods = map (mapIfaceMethod f) methods }
-  DImpl { methods, ... } => DImpl { d | methods = map (mapImplMethod f) methods }
-  DProp pub name params body => DProp pub name params (mapExpr f body)
-  DTest pub name body => DTest pub name (mapExpr f body)
-  DBench pub name body => DBench pub name (mapExpr f body)
-  _ => d
+mapDecl f (DFunDef pub n ps e) = DFunDef pub n ps (mapExpr f e)
+mapDecl f d@(DInterface { methods, ... }) = DInterface { d | methods = map (mapIfaceMethod f) methods }
+mapDecl f d@(DImpl { methods, ... }) = DImpl { d | methods = map (mapImplMethod f) methods }
+mapDecl f (DProp pub name params body) = DProp pub name params (mapExpr f body)
+mapDecl f (DTest pub name body) = DTest pub name (mapExpr f body)
+mapDecl f (DBench pub name body) = DBench pub name (mapExpr f body)
+mapDecl _ d = d
 
 mapIfaceMethod : (Expr -> Expr) -> IfaceMethod -> IfaceMethod
 mapIfaceMethod _ (IfaceMethod n ty None) = IfaceMethod n ty None
@@ -310,11 +309,9 @@ deriveForRecord _ _ _ _ = None
 -- rewrite a generated impl's head/constraints for the type's params:
 -- `data Box a deriving Eq` → `impl Eq (Box a) requires Eq a`
 applyDeriveParams : String -> List String -> Decl -> Decl
-applyDeriveParams name params d = match d
-  DImpl { iface, ... } => DImpl { d | tys = [
-    appliedHead name params
-  ], reqs = paramRequires iface params }
-  _ => d
+applyDeriveParams name params d@(DImpl { iface, ... }) =
+  DImpl { d | tys = [appliedHead name params], reqs = paramRequires iface params }
+applyDeriveParams _ _ d = d
 
 appliedHead : String -> List String -> Ty
 appliedHead name params = appliedHeadGo (TyCon name) params
@@ -475,9 +472,8 @@ mergeIfaceDefaults : List Decl -> List Decl
 mergeIfaceDefaults prog = map mergeIfaceDecl prog
 
 mergeIfaceDecl : Decl -> Decl
-mergeIfaceDecl d = match d
-  DInterface { methods, ... } => DInterface { d | methods = mergeIfaceMethods methods }
-  _ => d
+mergeIfaceDecl d@(DInterface { methods, ... }) = DInterface { d | methods = mergeIfaceMethods methods }
+mergeIfaceDecl d = d
 
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
 mergeIfaceMethods methods = foldlMethods [] methods
