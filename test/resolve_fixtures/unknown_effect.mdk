@@ -1,0 +1,5 @@
+-- UnknownEffect: an effect row label that isn't a known effect.
+f : <Bogus> Int
+f = 0
+
+main = println f

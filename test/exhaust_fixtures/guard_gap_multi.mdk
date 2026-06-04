@@ -1,0 +1,9 @@
+-- Two independent guard fall-throughs in one file (multiplicity + sorting).
+sign n
+  | n > 0 = 1
+  | n < 0 = 0 - 1
+
+mag n
+  | n > 0 = n
+
+main = println (sign 5 + mag 3)

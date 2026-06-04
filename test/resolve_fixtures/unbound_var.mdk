@@ -1,0 +1,2 @@
+-- UnboundVariable: a reference to a name with no binding.
+main = println missingName

@@ -1,0 +1,5 @@
+-- ExternWithBody: a name is both an extern and a function definition.
+extern len : Int
+len = 3
+
+main = println len

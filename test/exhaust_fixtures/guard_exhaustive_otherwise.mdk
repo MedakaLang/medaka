@@ -1,0 +1,6 @@
+-- NEGATIVE CONTROL: an `otherwise` arm makes the guards exhaustive → no warning.
+sign n
+  | n > 0 = 1
+  | otherwise = 0
+
+main = println (sign 5)

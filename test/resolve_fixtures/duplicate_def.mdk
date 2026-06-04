@@ -1,0 +1,5 @@
+-- DuplicateDefinition: the same type name declared twice.
+data T = A | B
+data T = C
+
+main = println 0

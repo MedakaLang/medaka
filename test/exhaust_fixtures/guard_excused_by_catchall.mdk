@@ -1,0 +1,9 @@
+-- NEGATIVE CONTROL: a partial guard chain is excused when a sibling clause's
+-- pattern already covers every input (the Maranget `useful` machinery), so the
+-- fall-through is unreachable → no warning.
+classify n
+  | n == 0 = "zero"
+
+classify n = "nonzero"
+
+main = println (classify 0)

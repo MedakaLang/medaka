@@ -1,0 +1,9 @@
+-- MethodNotInInterface: an impl defines a method the interface doesn't declare.
+interface Foo a where
+  bar : a -> a
+
+impl Foo Int where
+  bar x = x
+  baz x = x
+
+main = println 0

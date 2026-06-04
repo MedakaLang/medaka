@@ -1,0 +1,5 @@
+-- UnknownType: a type signature naming a type that isn't declared.
+f : Foo -> Int
+f x = 0
+
+main = println (f 0)

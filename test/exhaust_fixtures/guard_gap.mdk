@@ -1,0 +1,7 @@
+-- Guard fall-through: no `otherwise`/`True` arm, so the guards may not cover
+-- every input → "guards may not be exhaustive".
+sign n
+  | n > 0 = 1
+  | n < 0 = 0 - 1
+
+main = println (sign 5)

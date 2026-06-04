@@ -1,0 +1,5 @@
+-- UnknownInterface: an impl for an interface that isn't declared.
+impl Bogus Int where
+  foo x = x
+
+main = println 0

@@ -1,0 +1,2 @@
+-- Multiple diagnostics in one file (exercises the sorted, multi-error path).
+main = println (a b c)

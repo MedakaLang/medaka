@@ -1,0 +1,7 @@
+-- UnknownConstructor: a pattern naming a constructor that isn't declared.
+classify x =
+  match x
+    Nope y => y
+    _ => 0
+
+main = println (classify 0)

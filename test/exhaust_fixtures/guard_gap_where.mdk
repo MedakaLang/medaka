@@ -1,0 +1,7 @@
+-- A guard fall-through inside a `where` binding is detected too.
+firstPos xs = go xs
+  where
+    go (y :: rest)
+      | y > 0 = y
+
+main = println (firstPos [1, 2, 3])
