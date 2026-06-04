@@ -116,6 +116,11 @@ public export data Expr
   -- ref the reference carries is irrelevant pre-typecheck, so just the name).
   | EMethodRef String
   | EDictApp String
+  -- Return-position method occurrence (pure/empty/…) rewritten by the self-hosted
+  -- typecheck's pre-pass: method name + a mutable tag the typechecker resolves to
+  -- the concrete impl's head type (RKey), which eval narrows the VMulti by.  Only
+  -- appears in the typed eval pipeline, never in parser/desugar/mark output.
+  | EMethodAt String (Ref String)
 
 -- import paths: `import q.{members}`, `import q.path`, `import q.*`, `import q as A`
 public export data UseMember = UseMember String Bool

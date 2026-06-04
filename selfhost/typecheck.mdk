@@ -12,6 +12,7 @@
 -- and explicit type signatures.
 
 import ast.{Lit(..), Ty(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), FunClause(..), FieldAssign(..), LetBind(..), Expr(..), ConPayload(..), Field(..), Variant(..), IfaceMethod(..), Decl(..)}
+import desugar.{mapProg}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
 public export data Mono
@@ -56,10 +57,17 @@ public export data RecordInfo = RecordInfo (List Int) Mono (List (String, Mono))
 recordsRef : Ref (List (String, RecordInfo))
 recordsRef = Ref []
 
+-- return-position method sites discovered during inference: (the EMethodAt tag
+-- ref to fill, the method's result mono).  After the whole program is inferred,
+-- each result mono's head tycon is the concrete impl tag the site dispatches to.
+pendingSites : Ref (List (Ref String, Mono))
+pendingSites = Ref []
+
 resetState : Unit -> <Mut> Unit
 resetState _ =
   let _ = set_ref tyvarCounter 0
   let _ = set_ref recordsRef []
+  let _ = set_ref pendingSites []
   set_ref currentLevel 0
 
 -- ── small helpers ─────────────────────────────────────────────────────────
@@ -483,7 +491,61 @@ infer env (ERecordCreate name fields) = inferRecordCreate env name fields
 infer env (EFieldAccess e fname) = inferFieldAccess env e fname
 infer env (ERecordUpdate base fields) = inferRecordUpdate env base fields
 infer env (EBlock stmts) = inferBlock env stmts
+infer env (EMethodAt name tagRef) = inferMethodAt env name tagRef
+infer env (EArrayLit es) = inferArrayLit env es
+infer env (ERangeList lo hi _) = inferIntRange env lo hi (TCon "List")
+infer env (ERangeArray lo hi _) = inferIntRange env lo hi (TCon "Array")
+infer env (EIndex arr idx) = inferIndex env arr idx
+infer env (ESlice arr lo hi _) = inferSlice env arr lo hi
 infer _ _ = panic "typecheck: unsupported expression (slice 1)"
+
+inferArrayLit : TcEnv -> List Expr -> <Mut> Mono
+inferArrayLit env es =
+  let elem = freshVar ()
+  let _ = unifyAll elem (inferEach env es)
+  TApp (TCon "Array") elem
+
+-- [lo..hi] : List Int, [|lo..hi|] : Array Int
+inferIntRange : TcEnv -> Expr -> Expr -> Mono -> <Mut> Mono
+inferIntRange env lo hi container =
+  let _ = unify (infer env lo) (TCon "Int")
+  let _ = unify (infer env hi) (TCon "Int")
+  TApp container (TCon "Int")
+
+-- a.[i] : element of a List container (the only indexed container in the stdlib
+-- type-checked here; Array/String indexing would extend this)
+inferIndex : TcEnv -> Expr -> Expr -> <Mut> Mono
+inferIndex env arr idx =
+  let _ = unify (infer env idx) (TCon "Int")
+  let at = infer env arr
+  let elem = freshVar ()
+  let _ = unify at (TApp (TCon "List") elem)
+  elem
+
+-- a.[lo..hi] : same container type as a
+inferSlice : TcEnv -> Expr -> Expr -> Expr -> <Mut> Mono
+inferSlice env arr lo hi =
+  let _ = unify (infer env lo) (TCon "Int")
+  let _ = unify (infer env hi) (TCon "Int")
+  infer env arr
+
+-- a return-position method occurrence: type it like the method, but record the
+-- (tagRef, result mono) so resolveSites can later stamp the concrete impl tag
+inferMethodAt : TcEnv -> String -> Ref String -> <Mut> Mono
+inferMethodAt env name tagRef = match lookupVar env name
+  None => panic ("unbound method: " ++ name)
+  Some s => recordSite tagRef (instantiate s)
+
+recordSite : Ref String -> Mono -> <Mut> Mono
+recordSite tagRef methodType =
+  let _ = set_ref pendingSites ((tagRef, stripArrows methodType) :: pendingSites.value)
+  methodType
+
+-- the type a method ultimately returns (strip its argument arrows); the impl is
+-- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
+stripArrows : Mono -> Mono
+stripArrows (TFun _ _ b) = stripArrows b
+stripArrows t = t
 
 -- bare sequential block: value of the last statement; earlier statements typed
 -- for effect; let/assign extend the env
@@ -894,6 +956,79 @@ unifyClauses env v ((pats, body) :: rest) =
   let _ = unify v (inferLam env pats body)
   unifyClauses env v rest
 
+-- ── elaboration: resolve return-position method dispatch (RKey) ────────────
+-- Rewrite each return-position method occurrence to EMethodAt (with a fresh tag
+-- ref), type-check (recording the sites), then stamp each site's tag from its
+-- now-resolved result type.  Returns the SAME tree (refs filled) for eval.
+export
+elaborate : List Decl -> List Decl -> <Mut> List Decl
+elaborate runtimeDecls prog =
+  let prog2 = prePass (returnPosMethodNames prog) prog
+  let _ = checkProgramSeeded (externSchemes runtimeDecls) prog2
+  let _ = resolveSites pendingSites.value
+  prog2
+
+-- methods whose interface type param appears ONLY in the result (no argument
+-- mentions it) — pure/empty/minBound/maxBound/fromInt/… — are return-position
+returnPosMethodNames : List Decl -> List String
+returnPosMethodNames prog = concatMapL returnPosOfDecl prog
+
+returnPosOfDecl : Decl -> List String
+returnPosOfDecl (DInterface { typarams, methods, ... }) = concatMapL (returnPosMethod typarams) methods
+returnPosOfDecl _ = []
+
+returnPosMethod : List String -> IfaceMethod -> List String
+returnPosMethod typarams (IfaceMethod mname mty _)
+  | not (anyArgMentions typarams (methodArgs mty)) = [mname]
+  | otherwise = []
+
+-- argument types of a method (strip leading constraint/effect wrappers + arrows)
+methodArgs : Ty -> List Ty
+methodArgs (TyConstrained _ t) = methodArgs t
+methodArgs (TyEffect _ _ t) = methodArgs t
+methodArgs (TyFun a b) = a :: methodArgs b
+methodArgs _ = []
+
+anyArgMentions : List String -> List Ty -> Bool
+anyArgMentions _ [] = False
+anyArgMentions typarams (ty :: rest) = argMentions typarams ty || anyArgMentions typarams rest
+
+argMentions : List String -> Ty -> Bool
+argMentions typarams ty = anyMember (tyVarNames ty) typarams
+
+anyMember : List String -> List String -> Bool
+anyMember [] _ = False
+anyMember (x :: xs) ys = containsName x ys || anyMember xs ys
+
+prePass : List String -> List Decl -> List Decl
+prePass names prog = mapProg (rewriteRP names) prog
+
+rewriteRP : List String -> Expr -> Expr
+rewriteRP names (EVar n)
+  | containsName n names = EMethodAt n (Ref "")
+  | otherwise = EVar n
+rewriteRP _ e = e
+
+resolveSites : List (Ref String, Mono) -> <Mut> Unit
+resolveSites [] = ()
+resolveSites ((tagRef, resultMono) :: rest) =
+  let _ = resolveSite tagRef resultMono
+  resolveSites rest
+
+resolveSite : Ref String -> Mono -> <Mut> Unit
+resolveSite tagRef resultMono = match headTyconMono resultMono
+  Some tag => set_ref tagRef tag
+  None => ()
+
+-- head type constructor, normalizing at each level (the head may be a TVar
+-- linked to a concrete type after unification — normalize follows only the top
+-- link, so recurse through normalize)
+headTyconMono : Mono -> Option String
+headTyconMono t = match normalize t
+  TApp a _ => headTyconMono a
+  TCon n => Some n
+  _ => None
+
 export
 checkProgram : List Decl -> <Mut> List (String, Scheme)
 checkProgram prog = checkProgramSeeded [] prog
@@ -942,6 +1077,7 @@ sigsOf (_ :: rest) = sigsOf rest
 -- approximate (includes bound vars), filtered to top-level group names by caller
 allEVars : Expr -> List String
 allEVars (EVar x) = [x]
+allEVars (EMethodAt n _) = [n]
 allEVars (ELit _) = []
 allEVars (EApp f x) = allEVars f ++ allEVars x
 allEVars (ELam _ b) = allEVars b

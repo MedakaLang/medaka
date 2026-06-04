@@ -532,6 +532,33 @@ isDispatching : Value -> Bool
 isDispatching (VTypedImpl _ _ pos seen _) = containsInt seen pos
 isDispatching _ = False
 
+-- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
+-- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
+-- empty tag (unresolved / polymorphic — doesn't occur in the compiler) leaves the
+-- VMulti for arg-tag fallback.
+narrowMethod : Value -> String -> Value
+narrowMethod (VMulti vs) "" = VMulti vs
+narrowMethod (VMulti vs) tag = pickByTag vs tag
+narrowMethod v _ = v
+
+pickByTag : List Value -> String -> Value
+pickByTag vs tag = oneOrMultiV (filterList (hasTag tag) vs) vs
+
+oneOrMultiV : List Value -> List Value -> Value
+oneOrMultiV [v] _ = v
+oneOrMultiV [] original = VMulti original
+oneOrMultiV many _ = VMulti many
+
+hasTag : String -> Value -> Bool
+hasTag tag (VTypedImpl t _ _ _ _) = t == tag
+hasTag _ _ = False
+
+filterList : (a -> Bool) -> List a -> List a
+filterList _ [] = []
+filterList p (x :: xs)
+  | p x = x :: filterList p xs
+  | otherwise = filterList p xs
+
 matchesTag : String -> Value -> Bool
 matchesTag tag (VTypedImpl t _ _ _ _) = t == tag
 matchesTag _ _ = True
@@ -575,6 +602,7 @@ eval _ (ELit (LChar c)) = VChar c
 eval _ (ELit (LBool b)) = VBool b
 eval _ (ELit LUnit) = VUnit
 eval env (EVar x) = if startsWithAt x then VUnit else lookupEnv env x
+eval env (EMethodAt name tagRef) = narrowMethod (lookupEnv env name) tagRef.value
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
 eval env (ELet _ True (PVar f) e1 e2) = evalRecLet env f e1 e2
@@ -1310,8 +1338,13 @@ evalOutputWith : List Decl -> List Decl -> <Mut> String
 evalOutputWith preludeDecls userDecls =
   evalOutput (dropShadowed (funNamesOf userDecls) preludeDecls ++ userDecls)
 
+export
 funNamesOf : List Decl -> List String
 funNamesOf decls = map fst (funDefs decls)
+
+export
+dropShadowedExp : List String -> List Decl -> List Decl
+dropShadowedExp names decls = dropShadowed names decls
 
 dropShadowed : List String -> List Decl -> List Decl
 dropShadowed _ [] = []
