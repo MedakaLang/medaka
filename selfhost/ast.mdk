@@ -21,6 +21,7 @@ public export data Ty
   | TyApp Ty Ty
   | TyFun Ty Ty
   | TyTuple (List Ty)
+  | TyEffect (List String) (Option String) Ty
 
 public export data Pat
   = PVar String

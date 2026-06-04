@@ -108,7 +108,9 @@ and sexp_ty = function
   | TyApp (a, b)   -> node "TyApp" [sexp_ty a; sexp_ty b]
   | TyFun (a, b)   -> node "TyFun" [sexp_ty a; sexp_ty b]
   | TyTuple ts     -> node "TyTuple" (List.map sexp_ty ts)
-  | TyEffect _     -> todo "TyEffect"
+  | TyEffect (labels, tail, t) ->
+      let tl = (match tail with Some s -> node "Some" [esc_str s] | None -> "None") in
+      node "TyEffect" [slist (List.map esc_str labels); tl; sexp_ty t]
   | TyConstrained _ -> todo "TyConstrained"
 
 let sexp_decl = function

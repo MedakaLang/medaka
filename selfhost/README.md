@@ -95,12 +95,16 @@ the stage is done when all pass.
   by passing themselves as a strict argument (that forces a recursive value mid-
   definition → `CamlinternalLazy.Undefined` under strict eval).
 - ✅ **Slice 4**: multi-statement indented blocks — bare blocks (`EBlock`) and
-  `do`-blocks (`EDo`) with `DoExpr`/`DoBind`/`DoLet` statements. A single
-  expression statement unwraps to that expr; anything else is an `EBlock`.
-- ⏳ Next slices: effect types (`<IO> …`), string interpolation, guards,
-  pipe/compose/unary/sections/comprehensions, and the remaining decl forms
-  (`data`/`record`/`interface`/`impl`/`import`/…). End goal: parse the real
-  `test/diff_fixtures/` files + stdlib, like the lexer's 13/13. Stays prelude-only.
+  `do`-blocks (`EDo`) with `DoExpr`/`DoBind`/`DoLet` statements.
+- ✅ **Slice 5**: effect types (`<IO> Unit`, `<IO, Mut> a`, `<IO | e> a`, the bare
+  tail `<e> a`). **8/15 real `test/diff_fixtures/` files now parse identically to
+  the reference** (`fn_annot`, `fn_poly`, `higher_order`, `let`, `lit`,
+  `recursion`, `tuple`, `type_inference`).
+- ⏳ Remaining real fixtures need: `data`/`record` declarations
+  (`adt_custom`/`adt_maybe`/`record`), function guards (`guards`), string
+  interpolation (`string_ops`), and a couple of constructs in `if_else`/`list`.
+  End goal: parse all of `test/diff_fixtures/` + the stdlib, like the lexer's
+  13/13. Stays prelude-only.
 
   *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 

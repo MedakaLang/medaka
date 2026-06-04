@@ -69,6 +69,11 @@ tySexp (TyVar v) = node "TyVar" [escStr v]
 tySexp (TyApp a b) = node "TyApp" [tySexp a, tySexp b]
 tySexp (TyFun a b) = node "TyFun" [tySexp a, tySexp b]
 tySexp (TyTuple ts) = node "TyTuple" (map tySexp ts)
+tySexp (TyEffect labels tail t) = node "TyEffect" [slist (map escStr labels), optStrSexp tail, tySexp t]
+
+optStrSexp : Option String -> String
+optStrSexp (Some s) = node "Some" [escStr s]
+optStrSexp None = "None"
 
 guardSexp : Guard -> String
 guardSexp (GBool e) = node "GBool" [exprSexp e]

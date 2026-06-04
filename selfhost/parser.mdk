@@ -454,8 +454,71 @@ patListFor _ =
 parseTy : Parser Ty
 parseTy =
   do
+    t <- peekP
+    tyFor t
+
+tyFor : Token -> Parser Ty
+tyFor TLt = parseEffectTy
+tyFor _ =
+  do
     left <- parseTyApp
     orElse (tyArrowTail left) (pure left)
+
+-- `< labels? (| tail)? > ty` — an effect-annotated type.  A bare lowercase ident
+-- inside the angles is the tail var (no labels), e.g. `<e> a`.
+parseEffectTy : Parser Ty
+parseEffectTy =
+  do
+    expectTok TLt
+    body <- effectBody
+    expectTok TGt
+    inner <- parseTy
+    pure (mkEffect body inner)
+
+mkEffect : (List String, Option String) -> Ty -> Ty
+mkEffect (labels, tail) inner = TyEffect labels tail inner
+
+effectBody : Parser (List String, Option String)
+effectBody =
+  do
+    t <- peekP
+    effectBodyFor t
+
+effectBodyFor : Token -> Parser (List String, Option String)
+effectBodyFor (TUpper _) =
+  do
+    labels <- sepBy1 upperNameP (expectTok TComma)
+    tail <- pipeTail
+    pure (labels, tail)
+effectBodyFor (TIdent _) =
+  do
+    v <- identNameP
+    pure ([], Some v)
+effectBodyFor _ = pure ([], None)
+
+pipeTail : Parser (Option String)
+pipeTail =
+  do
+    t <- peekP
+    pipeTailFor t
+
+pipeTailFor : Token -> Parser (Option String)
+pipeTailFor TPipe =
+  do
+    advance
+    v <- identNameP
+    pure (Some v)
+pipeTailFor _ = pure None
+
+upperNameP : Parser String
+upperNameP =
+  do
+    t <- peekP
+    upperNameFor t
+
+upperNameFor : Token -> Parser String
+upperNameFor (TUpper c) = emit c
+upperNameFor _ = failP "expected effect label"
 
 tyArrowTail : Ty -> Parser Ty
 tyArrowTail left =
