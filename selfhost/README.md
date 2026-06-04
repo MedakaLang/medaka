@@ -106,11 +106,25 @@ the stage is done when all pass.
   `<-` pattern-bind guards), unary minus (`EUnOp "-"`, tighter than `*`),
   expression type annotations (`EAnnot`, loosest level) + `_` lambda params
   (`PWild`), and record literal/update expressions (`ERecordCreate` /
-  `ERecordUpdate`). **15/15 real `test/diff_fixtures/` files now parse identically
-  to the reference** (byte-for-byte via `sh test/diff_selfhost_parse.sh
-  test/diff_fixtures/*.mdk`), alongside 17/17 curated `test/parse_fixtures/`.
-- ⏳ Next: parse the stdlib `.mdk` files (toward the lexer's 13/13). Stays
-  prelude-only.
+  `ERecordUpdate`). **15/15 real `test/diff_fixtures/` files** parse identically.
+- ✅ **Slices 9–13**: everything the real stdlib needs —
+  - imports (`DUse`/`UsePath`), `extern` (`DExtern`), `export`/`public export`
+    visibility, constrained sigs (`TyConstrained`);
+  - `where` blocks (`ELetGroup` w/ clause coalescing), range literals
+    (`ERangeList`), array literals, as-patterns (`PAs`), full lambda-LHS →
+    pattern conversion;
+  - block-form `if`/`match` bodies, else-less `if`, `prop`/`test`/`bench` decls;
+  - `interface`/`impl` (`DInterface`/`DImpl`: supers, defaults, named impls,
+    `requires`, multi-clause methods), the full operator ladder (`|>` `>>` `<<`
+    `<>` `!` + backtick infix), operator sections (`ESection`), unit/literal
+    patterns.
+- ✅ **Stage 1 parser complete.** Validated byte-for-byte against the OCaml
+  reference (`dev/astdump.exe`) on **all 13/13 real stdlib `.mdk` files**, the
+  **15/15 real `test/diff_fixtures/`**, **22/22 curated `test/parse_fixtures/`**,
+  and — the milestone — **its own entire 6-file source** (`selfhost/*.mdk`,
+  including `lexer.mdk` and `parser.mdk` parsing themselves). The reference
+  dumper `dev/astdump.ml` was extended in lockstep so no decl/expr renders as a
+  `TODO` placeholder on any stdlib file.
 
   *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 

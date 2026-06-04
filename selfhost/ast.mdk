@@ -63,6 +63,12 @@ public export data GuardArm = GuardArm (List Guard) Expr
 -- a record field assignment: `field = expr`
 public export data FieldAssign = FieldAssign String Expr
 
+-- an operator section: `(op)` / `(op e)` / `(e op _)`
+public export data Section
+  = SecBare String
+  | SecRight String Expr
+  | SecLeft Expr String
+
 -- one clause of a `where`/let-group binding: parameter patterns + body
 public export data FunClause = FunClause (List Pat) Expr
 
@@ -86,6 +92,7 @@ public export data Expr
   | EArrayLit (List Expr)
   | ERangeList Expr Expr Bool
   | ELetGroup (List LetBind) Expr
+  | ESection Section
   | EIndex Expr Expr
   | EAnnot Expr Ty
   | EBlock (List DoStmt)

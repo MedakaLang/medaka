@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 import lexer.{Token(..), tokenize}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -503,13 +503,82 @@ parseParen =
     t <- peekP
     parenFor t
 
+-- inside parens: `()` unit, an operator section `(op)`/`(op e)`/`(e op _)`,
+-- a tuple, or a plain parenthesised expression
 parenFor : Token -> Parser Expr
 parenFor TRParen = emit (ELit LUnit)
-parenFor _ =
+parenFor TMinus = orElse bareMinusSection parseParenExpr
+parenFor t = parenSectionOr t
+
+parenSectionOr : Token -> Parser Expr
+parenSectionOr t =
+  match sectionOpStr t
+    Some op => parseSectionOp op
+    None => parseParenExpr
+
+-- `(-)` is a bare section; `(-e)` is a parenthesised unary minus (orElse falls
+-- through). MINUS is excluded from the SecRight form, matching the grammar.
+bareMinusSection : Parser Expr
+bareMinusSection =
+  do
+    expectTok TMinus
+    expectTok TRParen
+    pure (ESection (SecBare "-"))
+
+parseSectionOp : String -> Parser Expr
+parseSectionOp op =
+  do
+    advance
+    t <- peekP
+    sectionTail op t
+
+sectionTail : String -> Token -> Parser Expr
+sectionTail op TRParen =
+  do
+    advance
+    pure (ESection (SecBare op))
+sectionTail op _ =
+  do
+    e <- parseExpr
+    expectTok TRParen
+    pure (ESection (SecRight op e))
+
+parseParenExpr : Parser Expr
+parseParenExpr =
   do
     es <- sepBy1 parseExpr (expectTok TComma)
     expectTok TRParen
-    pure (tupleOrSingle es)
+    pure (parenResult es)
+
+parenResult : List Expr -> Expr
+parenResult [e] = leftSectionOrExpr e
+parenResult es = ETuple es
+
+-- a single `(e op _)` becomes a left section; otherwise just the inner expr
+leftSectionOrExpr : Expr -> Expr
+leftSectionOrExpr (EBinOp op lhs (EVar "_")) = ESection (SecLeft lhs op)
+leftSectionOrExpr e = e
+
+-- section_op (no MINUS): tokens that can head an operator section
+sectionOpStr : Token -> Option String
+sectionOpStr TPlus = Some "+"
+sectionOpStr TStar = Some "*"
+sectionOpStr TSlash = Some "/"
+sectionOpStr TEqEq = Some "=="
+sectionOpStr TNeq = Some "!="
+sectionOpStr TLt = Some "<"
+sectionOpStr TGt = Some ">"
+sectionOpStr TLeq = Some "<="
+sectionOpStr TGeq = Some ">="
+sectionOpStr TAnd = Some "&&"
+sectionOpStr TOr = Some "||"
+sectionOpStr TCons = Some "::"
+sectionOpStr TPlusPlus = Some "++"
+sectionOpStr TStrAppend = Some "<>"
+sectionOpStr TPipeRight = Some "|>"
+sectionOpStr TRCompose = Some ">>"
+sectionOpStr TLCompose = Some "<<"
+sectionOpStr _ = None
 
 parseListE : Parser Expr
 parseListE =
@@ -695,6 +764,9 @@ patAtomFor : Token -> Parser Pat
 patAtomFor (TIdent x) = emit (PVar x)
 patAtomFor TUnderscore = emit PWild
 patAtomFor (TInt n) = emit (PLit (LInt n))
+patAtomFor (TFloat f) = emit (PLit (LFloat f))
+patAtomFor (TString s) = emit (PLit (LString s))
+patAtomFor (TChar s) = emit (PLit (LChar s))
 patAtomFor (TUpper c) = emit (PCon c [])
 patAtomFor TLParen = parsePatParen
 patAtomFor TLBracket = parsePatList
@@ -708,6 +780,13 @@ parsePatParen : Parser Pat
 parsePatParen =
   do
     expectTok TLParen
+    t <- peekP
+    patParenFor t
+
+patParenFor : Token -> Parser Pat
+patParenFor TRParen = emit (PLit LUnit)
+patParenFor _ =
+  do
     ps <- sepBy1 parsePat (expectTok TComma)
     expectTok TRParen
     pure (tuplePatOrSingle ps)

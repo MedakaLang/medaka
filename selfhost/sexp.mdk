@@ -3,7 +3,7 @@
 -- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 
 -- shared minimal string escaping — must match dev/astdump.ml's esc_str
 escStr : String -> String
@@ -103,7 +103,13 @@ exprSexp (EListLit es) = node "EListLit" (map exprSexp es)
 exprSexp (EArrayLit es) = node "EArrayLit" (map exprSexp es)
 exprSexp (ERangeList lo hi incl) = node "ERangeList" [exprSexp lo, exprSexp hi, boolStr incl]
 exprSexp (ELetGroup binds body) = node "ELetGroup" [slist (map letBindSexp binds), exprSexp body]
+exprSexp (ESection s) = node "ESection" [sectionSexp s]
 exprSexp (EIndex a i) = node "EIndex" [exprSexp a, exprSexp i]
+
+sectionSexp : Section -> String
+sectionSexp (SecBare op) = node "SecBare" [escStr op]
+sectionSexp (SecRight op e) = node "SecRight" [escStr op, exprSexp e]
+sectionSexp (SecLeft e op) = node "SecLeft" [exprSexp e, escStr op]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
 exprSexp (EDo stmts) = node "EDo" (map doStmtSexp stmts)

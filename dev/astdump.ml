@@ -83,6 +83,9 @@ let rec sexp_expr e =
   | EArrayLit es       -> node "EArrayLit" (List.map sexp_expr es)
   | ERangeList (lo, hi, incl) -> node "ERangeList" [sexp_expr lo; sexp_expr hi; string_of_bool incl]
   | ELetGroup (binds, body) -> node "ELetGroup" [slist (List.map sexp_letbind binds); sexp_expr body]
+  | ESection (SecBare op)      -> node "ESection" [node "SecBare" [esc_str op]]
+  | ESection (SecRight (op, e))-> node "ESection" [node "SecRight" [esc_str op; sexp_expr e]]
+  | ESection (SecLeft (e, op)) -> node "ESection" [node "SecLeft" [sexp_expr e; esc_str op]]
   | EIndex (a, i)      -> node "EIndex" [sexp_expr a; sexp_expr i]
   | EAnnot (e, t)      -> node "EAnnot" [sexp_expr e; sexp_ty t]
   | EBlock stmts       -> node "EBlock" (List.map sexp_dostmt stmts)

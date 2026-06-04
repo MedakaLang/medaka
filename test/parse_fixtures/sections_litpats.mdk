@@ -1,0 +1,16 @@
+sum = fold (+) 0
+
+product = fold (*) 1
+
+addOne = map (+ 1)
+
+keywordOrIdent "let" = TLet
+keywordOrIdent "rec" = TRec
+keywordOrIdent other = TIdent other
+
+classify 'a' = Vowel
+classify c = Other
+
+unitArg () = 0
+
+negArg = randomInt (-1000) 1000
