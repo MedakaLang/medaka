@@ -60,8 +60,12 @@ let rec sexp_pat = function
   | PTuple ps     -> node "PTuple" (List.map sexp_pat ps)
   | PList ps      -> node "PList" (List.map sexp_pat ps)
   | PAs (x, p)    -> node "PAs" [esc_str x; sexp_pat p]
-  | PRec _        -> todo "PRec"
+  | PRec (name, fields, rest) ->
+      node "PRec" [esc_str name; slist (List.map sexp_recpatfield fields); string_of_bool rest]
   | PRng (lo, hi, incl) -> node "PRng" [sexp_lit lo; sexp_lit hi; string_of_bool incl]
+
+and sexp_recpatfield (f, popt) =
+  node "rf" [esc_str f; (match popt with Some p -> sexp_pat p | None -> "None")]
 
 let rec sexp_expr e =
   match e with

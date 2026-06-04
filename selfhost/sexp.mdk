@@ -3,7 +3,7 @@
 -- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 
 -- shared minimal string escaping — must match dev/astdump.ml's esc_str
 escStr : String -> String
@@ -63,6 +63,13 @@ patSexp (PTuple ps) = node "PTuple" (map patSexp ps)
 patSexp (PList ps) = node "PList" (map patSexp ps)
 patSexp (PAs x q) = node "PAs" [escStr x, patSexp q]
 patSexp (PRng lo hi incl) = node "PRng" [litSexp lo, litSexp hi, boolStr incl]
+patSexp (PRec name fields rest) = node
+  "PRec"
+  [escStr name, slist (map recPatFieldSexp fields), boolStr rest]
+
+recPatFieldSexp : RecPatField -> String
+recPatFieldSexp (RecPatField f (Some p)) = node "rf" [escStr f, patSexp p]
+recPatFieldSexp (RecPatField f None) = node "rf" [escStr f, "None"]
 
 tySexp : Ty -> String
 tySexp (TyCon c) = node "TyCon" [escStr c]

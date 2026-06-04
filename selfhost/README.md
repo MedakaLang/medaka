@@ -133,10 +133,12 @@ the stage is done when all pass.
   (`EQuestion`), array slice/index `e.[lo..hi]`/`e.[i]` (`ESlice`/`EIndex`),
   array range `[|lo..hi|]` (`ERangeArray`), `let mut` + assignment
   (`DoAssign`/`DoFieldAssign`), let-else (`DoLetElse`), do-block function-let,
-  range patterns (`PRng`, int + char), and `if` match-arm guards. Most needed a
+  range patterns (`PRng`, int + char), `if` match-arm guards, and record
+  patterns (`PRec`, `C { f = p, … }` / `C { .. }`). Most needed a
   `dev/astdump.ml` extension first (they were `TODO`). Toy coverage lives in
-  `test/parse_fixtures/rare_constructs.mdk`. The only still-uncovered surface is
-  nested interpolation / triple-quoted strings (lexer-side) and `PRec`.
+  `test/parse_fixtures/rare_constructs.mdk`. **Parser surface-grammar coverage is
+  now complete** — the only remaining unhandled surface is lexer-side (nested
+  interpolation / triple-quoted strings).
 
   *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 

@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 import lexer.{Token(..), tokenize}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -837,9 +837,65 @@ parsePatApp = do
 patAppFor : Token -> Parser Pat
 patAppFor (TUpper c) = do
   advance
+  t <- peekP
+  upperPatRest c t
+patAppFor _ = parsePatAtom
+
+-- after an uppercase ctor in pattern position: a record pattern `C { … }`,
+-- else a constructor application `C p…`
+upperPatRest : String -> Token -> Parser Pat
+upperPatRest c TLBrace = recordPat c
+upperPatRest c _ = do
   args <- many parsePatAtom
   pure (PCon c args)
-patAppFor _ = parsePatAtom
+
+-- record pattern: `C { field, field = pat, … }` with an optional `...` rest
+recordPat : String -> Parser Pat
+recordPat c = do
+  expectTok TLBrace
+  fr <- recordPatFields
+  expectTok TRBrace
+  pure (mkRec c fr)
+
+mkRec : String -> (List RecPatField, Bool) -> Pat
+mkRec c (fields, rest) = PRec c fields rest
+
+recordPatFields : Parser (List RecPatField, Bool)
+recordPatFields = do
+  t <- peekP
+  recordPatFieldsFor t
+
+recordPatFieldsFor : Token -> Parser (List RecPatField, Bool)
+recordPatFieldsFor TEllipsis = do
+  advance
+  pure ([], True)
+recordPatFieldsFor _ = do
+  f <- recordPatField
+  t <- peekP
+  recordPatFieldsRest f t
+
+recordPatFieldsRest : RecPatField -> Token -> Parser (List RecPatField, Bool)
+recordPatFieldsRest f TComma = do
+  advance
+  fr <- recordPatFields
+  pure (consField f fr)
+recordPatFieldsRest f _ = pure ([f], False)
+
+consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
+consField f (fs, rest) = (f :: fs, rest)
+
+recordPatField : Parser RecPatField
+recordPatField = do
+  name <- identNameP
+  t <- peekP
+  recordPatFieldRest name t
+
+recordPatFieldRest : String -> Token -> Parser RecPatField
+recordPatFieldRest name TEqual = do
+  advance
+  p <- parsePat
+  pure (RecPatField name (Some p))
+recordPatFieldRest name _ = pure (RecPatField name None)
 
 parsePatAtom : Parser Pat
 parsePatAtom = do

@@ -37,6 +37,10 @@ public export data Pat
   | PList (List Pat)
   | PAs String Pat
   | PRng Lit Lit Bool
+  | PRec String (List RecPatField) Bool
+
+-- one field of a record pattern: `field` (pun, None) or `field = pat`
+public export data RecPatField = RecPatField String (Option Pat)
 
 public export data Guard = GBool Expr | GBind Pat Expr
 

@@ -149,9 +149,11 @@ differential harness on the interpreter.
   bit: a match-arm guard parses at the `expr_or` level, not full `parseExpr` —
   else the arm's `=>` is swallowed as a lambda.
 
-  Still **not** covered (no self-host AST node): nested string interpolation and
-  triple-quoted strings (lexer-side, also deferred there), and the `PRec` record
-  pattern. None are used by any stdlib/`selfhost/` file.
+  Record patterns (`PRec`, `C { f = p, … }` / `C { .. }`) are now closed too —
+  the parser's surface-grammar coverage is complete. The only surface left
+  unhandled is **lexer-side**: nested string interpolation and triple-quoted
+  strings (also deferred in the lexer port). Neither is used by any
+  stdlib/`selfhost/` file.
 
 ### Stage 2 — LLVM backend (after self-host)
 
