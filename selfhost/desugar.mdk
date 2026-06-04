@@ -1,0 +1,115 @@
+-- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
+-- sugar (guards, sections, string interpolation, list comprehensions, do-blocks,
+-- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
+-- after the parser, before resolve — purely syntactic, no type info.  Validated
+-- byte-for-byte against `dev/astdump.exe --desugar` (test/diff_selfhost_desugar.sh).
+--
+-- The reference `desugar_program` runs eight passes in a fixed order; this file
+-- ports them incrementally.  `mapExpr`/`mapDecl` are the shared bottom-up
+-- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
+-- post-order (children first, then the node).
+
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+
+-- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
+-- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
+-- children are rewritten first, then `f` is applied to the rebuilt node.
+mapExpr : (Expr -> Expr) -> Expr -> Expr
+mapExpr f e = f (mapKids f e)
+
+mapKids : (Expr -> Expr) -> Expr -> Expr
+mapKids f (EApp a b) = EApp (mapExpr f a) (mapExpr f b)
+mapKids f (ELam ps b) = ELam ps (mapExpr f b)
+mapKids f (ELet m r p e1 e2) = ELet m r p (mapExpr f e1) (mapExpr f e2)
+mapKids f (ELetGroup bs e2) = ELetGroup (map (mapLetBind f) bs) (mapExpr f e2)
+mapKids f (EMatch e0 arms) = EMatch (mapExpr f e0) (map (mapArm f) arms)
+mapKids f (EIf c t el) = EIf (mapExpr f c) (mapExpr f t) (mapExpr f el)
+mapKids f (EBinOp op a b) = EBinOp op (mapExpr f a) (mapExpr f b)
+mapKids f (EUnOp op a) = EUnOp op (mapExpr f a)
+mapKids f (EInfix op a b) = EInfix op (mapExpr f a) (mapExpr f b)
+mapKids f (EFieldAccess e0 n) = EFieldAccess (mapExpr f e0) n
+mapKids f (ERecordCreate n fs) = ERecordCreate n (map (mapFieldAssign f) fs)
+mapKids f (ERecordUpdate e0 fs) = ERecordUpdate (mapExpr f e0) (map (mapFieldAssign f) fs)
+mapKids f (EArrayLit es) = EArrayLit (map (mapExpr f) es)
+mapKids f (EListLit es) = EListLit (map (mapExpr f) es)
+mapKids f (ETuple es) = ETuple (map (mapExpr f) es)
+mapKids f (EIndex e0 i) = EIndex (mapExpr f e0) (mapExpr f i)
+mapKids f (ERangeList lo hi incl) = ERangeList (mapExpr f lo) (mapExpr f hi) incl
+mapKids f (ERangeArray lo hi incl) = ERangeArray (mapExpr f lo) (mapExpr f hi) incl
+mapKids f (ESlice e0 lo hi incl) = ESlice (mapExpr f e0) (mapExpr f lo) (mapExpr f hi) incl
+mapKids f (EBlock stmts) = EBlock (map (mapDoStmt f) stmts)
+mapKids f (EDo stmts) = EDo (map (mapDoStmt f) stmts)
+mapKids f (EAnnot e0 t) = EAnnot (mapExpr f e0) t
+mapKids f (EListComp body quals) = EListComp (mapExpr f body) (map (mapLcQual f) quals)
+mapKids f (EQuestion e0) = EQuestion (mapExpr f e0)
+mapKids f (EStringInterp parts) = EStringInterp (map (mapInterp f) parts)
+mapKids f (EGuards arms) = EGuards (map (mapGuardArm f) arms)
+mapKids f (EFunction arms) = EFunction (map (mapArm f) arms)
+mapKids f (ESection (SecRight op e0)) = ESection (SecRight op (mapExpr f e0))
+mapKids f (ESection (SecLeft e0 op)) = ESection (SecLeft (mapExpr f e0) op)
+mapKids _ e = e
+
+mapArm : (Expr -> Expr) -> Arm -> Arm
+mapArm f (Arm p gs b) = Arm p (map (mapGuard f) gs) (mapExpr f b)
+
+mapGuard : (Expr -> Expr) -> Guard -> Guard
+mapGuard f (GBool g) = GBool (mapExpr f g)
+mapGuard f (GBind p g) = GBind p (mapExpr f g)
+
+mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
+mapGuardArm f (GuardArm gs b) = GuardArm (map (mapGuard f) gs) (mapExpr f b)
+
+mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
+mapLetBind f (LetBind n clauses) = LetBind n (map (mapFunClause f) clauses)
+
+mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
+mapFunClause f (FunClause ps b) = FunClause ps (mapExpr f b)
+
+mapFieldAssign : (Expr -> Expr) -> FieldAssign -> FieldAssign
+mapFieldAssign f (FieldAssign n v) = FieldAssign n (mapExpr f v)
+
+mapLcQual : (Expr -> Expr) -> LcQual -> LcQual
+mapLcQual f (LCGen p e) = LCGen p (mapExpr f e)
+mapLcQual f (LCGuard e) = LCGuard (mapExpr f e)
+mapLcQual f (LCLet m p e) = LCLet m p (mapExpr f e)
+
+mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
+mapDoStmt f (DoExpr e) = DoExpr (mapExpr f e)
+mapDoStmt f (DoBind p e) = DoBind p (mapExpr f e)
+mapDoStmt f (DoLet m p e) = DoLet m p (mapExpr f e)
+mapDoStmt f (DoAssign x e) = DoAssign x (mapExpr f e)
+mapDoStmt f (DoFieldAssign x fs e) = DoFieldAssign x fs (mapExpr f e)
+mapDoStmt f (DoLetElse p e alt) = DoLetElse p (mapExpr f e) (mapExpr f alt)
+
+mapInterp : (Expr -> Expr) -> InterpPart -> InterpPart
+mapInterp _ (InterpStr s) = InterpStr s
+mapInterp f (InterpExpr e) = InterpExpr (mapExpr f e)
+
+mapDecl : (Expr -> Expr) -> Decl -> Decl
+mapDecl f (DFunDef pub n ps e) = DFunDef pub n ps (mapExpr f e)
+mapDecl f (DInterface pub def n tps sups methods) = DInterface pub def n tps sups (map (mapIfaceMethod f) methods)
+mapDecl f (DImpl pub def iface tys name reqs methods) = DImpl pub def iface tys name reqs (map (mapImplMethod f) methods)
+mapDecl f (DProp pub name params body) = DProp pub name params (mapExpr f body)
+mapDecl f (DTest pub name body) = DTest pub name (mapExpr f body)
+mapDecl f (DBench pub name body) = DBench pub name (mapExpr f body)
+mapDecl _ d = d
+
+mapIfaceMethod : (Expr -> Expr) -> IfaceMethod -> IfaceMethod
+mapIfaceMethod _ (IfaceMethod n ty None) = IfaceMethod n ty None
+mapIfaceMethod f (IfaceMethod n ty (Some (MethodDefault ps e))) = IfaceMethod n ty (Some (MethodDefault ps (mapExpr f e)))
+
+mapImplMethod : (Expr -> Expr) -> ImplMethod -> ImplMethod
+mapImplMethod f (ImplMethod n ps e) = ImplMethod n ps (mapExpr f e)
+
+mapProg : (Expr -> Expr) -> List Decl -> List Decl
+mapProg f prog = map (mapDecl f) prog
+
+-- ── The pass pipeline ─────────────────────────────────────────────────────
+-- Ported incrementally; identity for now (exercises the traversal engine and
+-- matches the 31 corpus files desugar leaves unchanged).
+idRewrite : Expr -> Expr
+idRewrite e = e
+
+export
+desugar : List Decl -> List Decl
+desugar prog = mapProg idRewrite prog
