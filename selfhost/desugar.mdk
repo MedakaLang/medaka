@@ -149,6 +149,38 @@ concatLeft : Expr -> List Expr -> Expr
 concatLeft acc [] = acc
 concatLeft acc (e :: rest) = concatLeft (EBinOp "++" acc e) rest
 
+-- ── Pass: desugar_questions (`let p = e ? in rest` → andThen) ────────────
+-- Mirror of lib/desugar.ml's rewrite_question_expr.  A `let`-bound `?` lowers to
+-- andThen; inside a do-block (EDo) a `?` DoLet becomes a DoBind; a bare EBlock
+-- containing any `?` DoLet is promoted to EDo (so do-lowering handles it).
+rewriteQuestion : Expr -> Expr
+rewriteQuestion (ELet m isFun pat e1 e2) = questionLet m isFun pat e1 e2
+rewriteQuestion (EDo stmts) = EDo (map rewriteQStmt stmts)
+rewriteQuestion (EBlock stmts) = blockQuestion stmts
+rewriteQuestion e = e
+
+questionLet : Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+questionLet m isFun pat (EQuestion inner) e2 = EApp (EApp (EVar "andThen") inner) (ELam [pat] e2)
+questionLet m isFun pat e1 e2 = ELet m isFun pat e1 e2
+
+rewriteQStmt : DoStmt -> DoStmt
+rewriteQStmt (DoLet m pat e) = questionStmt m pat e
+rewriteQStmt s = s
+
+questionStmt : Bool -> Pat -> Expr -> DoStmt
+questionStmt m pat (EQuestion inner) = DoBind pat inner
+questionStmt m pat e = DoLet m pat e
+
+blockQuestion : List DoStmt -> Expr
+blockQuestion stmts
+  | anyQuestionStmt stmts = EDo (map rewriteQStmt stmts)
+  | otherwise = EBlock stmts
+
+anyQuestionStmt : List DoStmt -> Bool
+anyQuestionStmt [] = False
+anyQuestionStmt ((DoLet _ _ (EQuestion _)) :: _) = True
+anyQuestionStmt (_ :: rest) = anyQuestionStmt rest
+
 -- ── Pass: lower_do_blocks (do-notation → andThen/pure chains) ─────────────
 -- Mirror of lib/desugar.ml's rewrite_do/lower_do.  Only EDo is lowered; bare
 -- EBlock survives (the reference leaves it for eval).  The do_tag the reference
@@ -418,4 +450,4 @@ concatLists (xs :: rest) = xs ++ concatLists rest
 -- literals; and `?` (desugar_questions) which the real corpus never exercises.
 export
 desugar : List Decl -> List Decl
-desugar prog = mapProg rewriteSugar (mapProg rewriteDo (mapProg rewriteListComp (concatMapDecl expandDecl (mergeIfaceDefaults prog))))
+desugar prog = mapProg rewriteSugar (mapProg rewriteDo (mapProg rewriteQuestion (mapProg rewriteListComp (concatMapDecl expandDecl (mergeIfaceDefaults prog)))))
