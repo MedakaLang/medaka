@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 import lexer.{Token(..), tokenize}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -598,6 +598,7 @@ listFor _ =
 listRest : Expr -> Token -> Parser Expr
 listRest first TDotDot = rangeAfter first False
 listRest first TDotDotEq = rangeAfter first True
+listRest first TPipe = listCompAfter first
 listRest first TComma =
   do
     advance
@@ -608,7 +609,7 @@ listRest first TRBracket =
   do
     advance
     pure (EListLit [first])
-listRest _ _ = failP "expected , .. ..= or ]"
+listRest _ _ = failP "expected , .. ..= | or ]"
 
 rangeAfter : Expr -> Bool -> Parser Expr
 rangeAfter lo incl =
@@ -617,6 +618,63 @@ rangeAfter lo incl =
     hi <- parseExpr
     expectTok TRBracket
     pure (ERangeList lo hi incl)
+
+-- list comprehension `[ body | qual, … ]` after the body and `|`
+listCompAfter : Expr -> Parser Expr
+listCompAfter body =
+  do
+    advance
+    quals <- sepBy1 lcQual (expectTok TComma)
+    expectTok TRBracket
+    pure (EListComp body quals)
+
+lcQual : Parser LcQual
+lcQual =
+  do
+    t <- peekP
+    lcQualFor t
+
+lcQualFor : Token -> Parser LcQual
+lcQualFor TLet = lcLet
+lcQualFor _ = lcGenOrGuard
+
+lcLet : Parser LcQual
+lcLet =
+  do
+    expectTok TLet
+    t <- peekP
+    lcLetMut t
+
+lcLetMut : Token -> Parser LcQual
+lcLetMut TMut =
+  do
+    advance
+    p <- parsePat
+    expectTok TEqual
+    e <- parseExpr
+    pure (LCLet True p e)
+lcLetMut _ =
+  do
+    p <- parsePat
+    expectTok TEqual
+    e <- parseExpr
+    pure (LCLet False p e)
+
+-- a generator `pat <- e` (LHS parsed as an expr, reinterpreted) or a guard
+lcGenOrGuard : Parser LcQual
+lcGenOrGuard =
+  do
+    e <- parseExpr
+    t <- peekP
+    lcGenOrGuardFor e t
+
+lcGenOrGuardFor : Expr -> Token -> Parser LcQual
+lcGenOrGuardFor e TLArrow =
+  do
+    advance
+    rhs <- parseExpr
+    pure (LCGen (exprToPat e) rhs)
+lcGenOrGuardFor e _ = pure (LCGuard e)
 
 -- array literal `[| e, … |]`
 parseArray : Parser Expr

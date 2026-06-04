@@ -125,6 +125,11 @@ the stage is done when all pass.
   including `lexer.mdk` and `parser.mdk` parsing themselves). The reference
   dumper `dev/astdump.ml` was extended in lockstep so no decl/expr renders as a
   `TODO` placeholder on any stdlib file.
+- ✅ **List comprehensions** (`EListComp`, generator/guard/`let` qualifiers),
+  added after the fact so `hash_map.mdk`'s `keys`/`values` dogfood
+  `[k | (k, _) <- entries m]`. Required extending `dev/astdump.ml` first (it had
+  rendered `EListComp` as `TODO`). Remaining deferred surface gaps are tracked in
+  `../PLAN.md`.
 
   *(Parser combinators were spiked and parked — blocked on Phase 136; see PLAN.)*
 

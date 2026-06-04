@@ -133,19 +133,26 @@ differential harness on the interpreter.
   `test/parse_fixtures/`, the 15 real `test/diff_fixtures/`, and the 6-file
   self-source.
 
+  **List comprehensions (`EListComp`) — DONE.** `hash_map.mdk`'s `keys`/`values`
+  dogfood `[k | (k, _) <- entries m]`; closed end-to-end (generator / guard /
+  `let` qualifiers) — `dev/astdump.ml` extended to serialize `EListComp`/`lc_qual`
+  (it previously rendered them `TODO`, so this was *not* differentially testable
+  until the reference dumper was extended first), mirrored in
+  `selfhost/{ast,sexp,parser}.mdk`, covered in `rare_constructs.mdk`.
+
   **Known parser gaps — deferred surface constructs.** No stdlib or `selfhost/`
   file exercises these, so the port never needed them; toy coverage of the
   *supported* rares lives in `test/parse_fixtures/rare_constructs.mdk`. The
-  self-hosted parser has **no AST node / production** yet for: list
-  comprehensions (`EListComp`), the `function` keyword (`EFunction`), the `?`
-  try-operator (`EQuestion`), array slices `e.[lo..hi]` (`ESlice`), and array
-  ranges `[|lo..hi|]` (`ERangeArray`). `let mut` assignment is partial — the
-  `DoAssign` ctor exists in `selfhost/ast.mdk` but the block parser doesn't build
-  it. Two more — let-else (`DoLetElse`) and range patterns `lo..=hi` (`PRng`) —
-  also lack a `dev/astdump.ml` serialization (they render as `TODO`), so they
-  can't be differentially tested on *either* side until the reference dumper is
-  extended first. Closing these is required before the self-hosted parser can
-  claim full surface-grammar coverage.
+  self-hosted parser has **no AST node / production** yet for: the `function`
+  keyword (`EFunction`), the `?` try-operator (`EQuestion`), array slices
+  `e.[lo..hi]` (`ESlice`), and array ranges `[|lo..hi|]` (`ERangeArray`).
+  `let mut` assignment is partial — the `DoAssign` ctor exists in
+  `selfhost/ast.mdk` but the block parser doesn't build it. Two more — let-else
+  (`DoLetElse`) and range patterns `lo..=hi` (`PRng`) — also lack a
+  `dev/astdump.ml` serialization (they render as `TODO`), so they can't be
+  differentially tested on *either* side until the reference dumper is extended
+  first. Closing these is required before the self-hosted parser can claim full
+  surface-grammar coverage.
 
 ### Stage 2 — LLVM backend (after self-host)
 

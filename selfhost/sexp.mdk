@@ -3,7 +3,7 @@
 -- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
 
 -- shared minimal string escaping — must match dev/astdump.ml's esc_str
 escStr : String -> String
@@ -100,11 +100,17 @@ exprSexp (EInfix op a b) = node "EInfix" [escStr op, exprSexp a, exprSexp b]
 exprSexp (EFieldAccess e f) = node "EFieldAccess" [exprSexp e, escStr f]
 exprSexp (ETuple es) = node "ETuple" (map exprSexp es)
 exprSexp (EListLit es) = node "EListLit" (map exprSexp es)
+exprSexp (EListComp body quals) = node "EListComp" [exprSexp body, slist (map lcQualSexp quals)]
 exprSexp (EArrayLit es) = node "EArrayLit" (map exprSexp es)
 exprSexp (ERangeList lo hi incl) = node "ERangeList" [exprSexp lo, exprSexp hi, boolStr incl]
 exprSexp (ELetGroup binds body) = node "ELetGroup" [slist (map letBindSexp binds), exprSexp body]
 exprSexp (ESection s) = node "ESection" [sectionSexp s]
 exprSexp (EIndex a i) = node "EIndex" [exprSexp a, exprSexp i]
+
+lcQualSexp : LcQual -> String
+lcQualSexp (LCGen p e) = node "LCGen" [patSexp p, exprSexp e]
+lcQualSexp (LCGuard e) = node "LCGuard" [exprSexp e]
+lcQualSexp (LCLet m p e) = node "LCLet" [boolStr m, patSexp p, exprSexp e]
 
 sectionSexp : Section -> String
 sectionSexp (SecBare op) = node "SecBare" [escStr op]

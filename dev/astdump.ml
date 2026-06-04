@@ -80,6 +80,7 @@ let rec sexp_expr e =
   | EFieldAccess (e, f)-> node "EFieldAccess" [sexp_expr e; esc_str f]
   | ETuple es          -> node "ETuple" (List.map sexp_expr es)
   | EListLit es        -> node "EListLit" (List.map sexp_expr es)
+  | EListComp (body, quals) -> node "EListComp" [sexp_expr body; slist (List.map sexp_lc_qual quals)]
   | EArrayLit es       -> node "EArrayLit" (List.map sexp_expr es)
   | ERangeList (lo, hi, incl) -> node "ERangeList" [sexp_expr lo; sexp_expr hi; string_of_bool incl]
   | ELetGroup (binds, body) -> node "ELetGroup" [slist (List.map sexp_letbind binds); sexp_expr body]
@@ -102,6 +103,11 @@ and sexp_interp = function
 
 and sexp_garm (guards, body) =
   node "garm" [slist (List.map sexp_guard guards); sexp_expr body]
+
+and sexp_lc_qual = function
+  | LCGen (p, e)    -> node "LCGen" [sexp_pat p; sexp_expr e]
+  | LCGuard e       -> node "LCGuard" [sexp_expr e]
+  | LCLet (m, p, e) -> node "LCLet" [string_of_bool m; sexp_pat p; sexp_expr e]
 
 and sexp_letbind (name, clauses) = node "lgb" (esc_str name :: List.map sexp_clause clauses)
 
