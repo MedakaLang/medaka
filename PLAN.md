@@ -2,207 +2,129 @@
 
 The working handoff between sessions. Read it before starting a task; update it
 when you finish one. This document holds only **forward-looking** work — the
-completed Phases (1–115, with their detailed implementation notes) live in
+completed Phases (1–141, with their detailed implementation notes) live in
 [`PLAN-ARCHIVE.md`](./PLAN-ARCHIVE.md). When a phase here is finished, move its
 write-up to the archive and leave only what remains. For how to build/test and
-the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md).
+the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
+living record of the self-host port is [`selfhost/README.md`](./selfhost/README.md).
 
-## Current status (2026-06-02)
+## Current status (2026-06-05)
 
-The compiler pipeline is complete end-to-end —
+The OCaml compiler pipeline is complete end-to-end —
 `lexer → parser → desugar → resolve → method_marker → typecheck (runs exhaust)
-→ eval` — with phases through ~115 done (see PLAN-ARCHIVE.md). The language has
+→ eval` — with phases through ~141 done (see PLAN-ARCHIVE.md). The language has
 records, ADTs, interfaces (with superinterfaces, `deriving`, dictionary-passing
 for return-position/multi-param dispatch), effect rows, exhaustiveness checking,
 `do`-notation, guards (with fall-through + exhaustiveness lint), list
 comprehensions, string interpolation, type aliases/newtypes, container literals
-(`Map { k => v }` / `Set { x }`, Phase 108), property testing, doctests, an LSP
-server, a formatter, and a project-config/`medaka new` surface. Operators are
-wired to the real `Eq`/`Ord`/`Num` interfaces in `core.mdk` (Phase 52).
+(`Map { k => v }` / `Set { x }`), property testing, doctests, **unit tests**
+(Phase 127), an LSP server, a formatter, and a project-config/`medaka new` surface.
 
-The stdlib in Medaka covers `core`, `list`, `array`, a drafted `string`
-(STDLIB.md Modules 1–4), and the weight-balanced ordered `map` + `set`
-(Module 5, complete). As of 2026-06-02 the user lifted the hand-write-it-myself
-constraint and delegated the remaining modules.
+The stdlib in Medaka is **complete** across `core`, `list`, `array`, `string`
+(frozen, Phase 128), ordered `map`/`set`, mutable `hash_map`/`hash_set`,
+`mut_array`, `io`, and `json` (STDLIB.md Modules 1–9 all done).
 
-**Conventions.** Work is still organized by numbered **Phases**; commit messages
-and code comments reference them. Phases that were left *partial* keep their
-original number (e.g. Phase 82, 101); genuinely new work gets the next free
-number (last used: 138). At task triage, match the work against AGENTS.md's
-task-playbook table and load the matching skill before planning.
+**The self-host port (Stage 1) is essentially complete** — all eight pipeline
+stages are ported to Medaka and validated byte-for-byte against the OCaml
+reference, and the bootstrap closure ("the compiler processes its own source")
+has landed for Legs A–C. See [North star → Stage 1](#stage-1--self-host-on-the-interpreter)
+below and `selfhost/README.md` for the full slice log. Only **Leg D** (running
+the typechecker stage on the self-hosted eval) and a couple of forward-looking
+performance levers remain.
+
+**Conventions.** Work is organized by numbered **Phases**; commit messages and
+code comments reference them. Phases left *partial* keep their original number
+(e.g. Phase 83/84, 101); genuinely new work gets the next free number (last used:
+144). At task triage, match the work against AGENTS.md's task-playbook table and
+load the matching skill before planning.
 
 ---
 
 ## North star — self-hosting, then LLVM
 
 The long-term goal that orders everything below: **rewrite the Medaka compiler
-in Medaka, then compile it to native code via LLVM.** Chosen path (2026-06-02):
-**bootstrap on the existing tree-walking interpreter first** — get a self-hosted
-compiler running (slowly but correctly) on the interpreter, *then* build the
-LLVM backend so that compiler emits native code. This validates the language as
-a real engineering medium before we pay for the heavy memory-model / GC / codegen
-work.
+in Medaka, then compile it to native code via LLVM.** Chosen path: **bootstrap on
+the existing tree-walking interpreter first** — get a self-hosted compiler running
+(slowly but correctly) on the interpreter, *then* build the LLVM backend so that
+compiler emits native code.
 
-Most items in the Open roadmap are small course-corrections; this section is the
-destination they steer toward. Three stages, each a gate on the next.
+Three stages, each a gate on the next.
 
-### Stage 0 — Prerequisites before self-hosting can begin
+### Stage 0 — Prerequisites before self-hosting can begin — ✅ COMPLETE
 
-The language is already expressive enough to *describe* a compiler (ADTs,
-records, exhaustive pattern matching, interfaces, modules, effects — all done).
-What's missing is the supporting surface a real multi-thousand-line program needs:
+All Stage-0 prerequisites are met (details in PLAN-ARCHIVE.md):
 
-- **Standard library breadth.** The compiler needs the data structures it is
-  itself built on:
-  - **`Map` / `Set`** — symbol tables, scopes, type-variable substitutions, impl
-    registries. ✅ **DONE** (Module 5, ordered/weight-balanced; plus the mutable
-    `HashMap`/`HashSet` performance variant, Module 6 / Phase 120). Only
-    `mut_array` (a growable vector) remains in Module 6.
-  - **`io`** — read source files, write artifacts, stdin/stdout, process args,
-    exit codes, structured error reporting. ✅ **DONE** (Module 7, Phase 116).
-  - `string` finalized and reviewed (drafted; awaiting full review) — **now
-    importable** ✅ (Phase 117 unblocked it: renamed the colliding `count` and
-    hardened the multi-module typecheck). A self-hosted compiler can now pull
-    string utilities from another module.
-- **Language stability / completeness.** Close the sharp edges that would bite a
-  large codebase, then *freeze the surface syntax and semantics* for the duration
-  of the port:
-  - ~~`do`→`Thenable` (Phase 98)~~, ~~guard exhaustiveness + inline guards (Phase
-    91)~~, ~~plain multi-clause exhaustiveness (Phase 102)~~ — **DONE**.
-  - Multi-module / return-position dispatch residuals (Phase 83/84) shouldn't
-    force arg-tag workarounds in compiler code — mostly closed (Phase 115 closed
-    the inferred/recursive-wrapper cases; the free-`e` `Result` case #4 closed
-    2026-06-02 via head-key dict-application routing); only the nested/structured
-    -dict residual (#5) remains.
-- **Interpreter performance, "good enough" to bootstrap.** Running the compiler
-  *on* the interpreter must finish in minutes, not hours. **First measurement
-  (2026-06-03):** the bare eval loop is fine — 1,000,000 tight-loop iterations in
-  ~0.15s (~150ns/iter). The cost is in **typeclass dispatch + persistent-tree
-  allocation**: 5000 ordered-`Map` inserts + 5000 lookups take ~1.0s (~100µs/op,
-  ~600× a loop iter). So symbol-table-heavy passes (resolve, type-substitution)
-  will dominate, and the eval hot path / environment representation will likely
-  need work — but it does **not** block *starting* the port (slow-but-correct is
-  the accepted Stage-1 bargain). Re-measure on the first real Medaka-in-Medaka
-  stage.
-- **Multi-file ergonomics at scale.** The module system, qualified access, and
-  `medaka.toml` workspaces exist; per-module eval isolation landed (Phase 110).
-  **Scale-probed 2026-06-03** with a synthetic 25-module project (deep chains +
-  diamonds + cross-module impls): deep linear import chains, diamond deps,
-  qualified access, and generic dispatch over imported instances all hold up. The
-  probe surfaced one hard gap — cross-module user-defined interfaces — **now
-  closed (Phase 130 ✅)**: an interface declared in one module can be `impl`'d for
-  a type in another and its constraint discharged (directly *and* through a
-  generic constrained function) in a third, provided the `impl` is `export`ed. The
-  only residue is a verbosity papercut (per-function `export` lines; importing
-  method names for `impl` bodies) — ergonomic, not a blocker. Multi-file
-  ergonomics now hold up for the self-host port.
+- **Standard library breadth** — `Map`/`Set` (ordered) + `HashMap`/`HashSet`
+  (mutable) + `mut_array`, `io`, and a finalized importable `string` are all done.
+- **Language stability** — `do`→`Thenable`, guard exhaustiveness, plain
+  multi-clause exhaustiveness, and the multi-module / return-position dispatch
+  residuals are closed (only the nested/structured-dict residual #5 remains — see
+  Phase 83/84 below; it does not block the port).
+- **Interpreter performance** — "good enough to bootstrap" confirmed; the cost is
+  typeclass dispatch + persistent-tree allocation, addressed opportunistically in
+  the self-host perf work (`selfhost/PERF-NOTES.md`), not a blocker.
+- **Multi-file ergonomics at scale** — scale-probed; cross-module user-defined
+  interfaces (the one hard gap) closed by Phase 130.
 
-### Stage 1 — Self-host on the interpreter
+### Stage 1 — Self-host on the interpreter — ✅ stages done; bootstrap Leg D remaining
 
-Port the pipeline (`lexer → parser → desugar → resolve → typecheck (runs
-exhaust) → eval`) into Medaka, one stage at a time, checked against the OCaml
-reference at each step. **Done when** Medaka-in-Medaka compiles a real program identically to
-the OCaml compiler, and ultimately compiles *itself*. The output of this stage is
-a validated language and a compiler whose only slow part is the interpreter
-underneath it.
+Port the pipeline into Medaka, one stage at a time, checked against the OCaml
+reference. The self-host tree lives in `selfhost/`, each stage validated against
+the OCaml reference via a differential harness on the interpreter.
 
-**Started 2026-06-03.** The self-host tree lives in `selfhost/` (see
-`selfhost/README.md`), each stage validated against the OCaml reference via a
-differential harness on the interpreter.
-- **Lexer — done (Phase 132).** Matches the reference byte-for-byte on all 15
-  curated fixtures *and* all 13 real `.mdk` files (every stdlib module + the lexer
-  lexing itself). `sh test/diff_selfhost_lexer.sh` / `…_lex_files.sh`.
-- **Parser — in progress (Phase 135).** Recursive-descent over the lexer's
-  tokens (`selfhost/parser.mdk`), validated by a structural S-expr dump
-  (`dev/astdump.ml` ↔ `selfhost/sexp.mdk`, `sh test/diff_selfhost_parse.sh` over
-  `test/parse_fixtures/`). **Slice 1 done:** the arithmetic ladder, application,
-  atoms (literals/vars/ctors/parens/tuples/lists), simple param patterns, the
-  type grammar, and top-level `DFunDef`/`DTypeSig`. **Slice 2 done:** full operator
-  ladder (`||`/`&&`/cmp/`::`/`++`), `=>` lambdas, single-line `if`, postfix field
-  access. **Slice 3 done:** `let … in`, `match` with indented arms (first
-  INDENT/DEDENT handling), full pattern hierarchy, single-expr indented decl
-  bodies — 10/10 fixtures. **Now rewritten as a monadic combinator parser**
-  (Phase 136 unblocked recursive polymorphic combinators; a perf comparison
-  showed it's perf-neutral vs direct-RD on the interpreter) — dogfoods
-  `do`/`Thenable`/a custom `Parser` monad, same AST output, 10/10 corpus.
-  Gotcha for combinators under strict eval: recursive parsers must recurse via a
-  `do`-continuation, not by passing themselves as a strict arg (recursive-value
-  init cycle). **Slices 4–7 done:** multi-statement blocks, effect types, `data`/`record` decls, and string interpolation — **11/15 real `test/diff_fixtures/` files now parse identically to the reference**. Remaining 4 need function guards, unary minus, expression annotations, and record literal/update exprs.
-  **Slices 8–13 + Stage 1 done** (full slice log in `selfhost/README.md`):
-  validated byte-for-byte on all 13 stdlib files, 23/23 curated
-  `test/parse_fixtures/`, the 15 real `test/diff_fixtures/`, and the 6-file
-  self-source.
+**All eight stages are ported and validated byte-for-byte** (full per-stage slice
+logs in `selfhost/README.md`):
 
-  **Remaining surface-grammar gaps closed — DONE.** Every deferred construct is
-  now parsed and validated byte-for-byte (toy coverage in
-  `test/parse_fixtures/rare_constructs.mdk`). Closed: list comprehensions
-  (`EListComp`; `hash_map.mdk` `keys`/`values` dogfood it), the `function`
-  keyword (`EFunction`), the `?` try-operator (`EQuestion`), array slices /
-  indexing `e.[lo..hi]` / `e.[i]` (`ESlice` / `EIndex`), array ranges
-  `[|lo..hi|]` (`ERangeArray`), `let mut` + assignment (`DoLet`-mut / `DoAssign`
-  / `DoFieldAssign`), let-else (`DoLetElse`), do-block function-let, range
-  patterns `lo..hi` / `lo..=hi` (`PRng`, int + char), and `if` match-arm guards.
-  Several required extending `dev/astdump.ml` first (they rendered as `TODO`, so
-  weren't differentially testable on *either* side until the reference dumper was
-  taught to serialize them: `EListComp`/`lc_qual`, `EFunction`, `EQuestion`,
-  `ESlice`/`ERangeArray`, `DoFieldAssign`/`DoLetElse`, `PRng`). One subtlety that
-  bit: a match-arm guard parses at the `expr_or` level, not full `parseExpr` —
-  else the arm's `=>` is swallowed as a lambda.
+| Stage | Status | Validated against |
+|-------|--------|-------------------|
+| lexer (Phase 132) | ✅ | 17/17 fixtures + all 13 real `.mdk` files |
+| parser (Phase 135) | ✅ | stdlib + `parse_fixtures` + `diff_fixtures` + self-source |
+| desugar | ✅ | `astdump --desugar`, 95/95 corpus |
+| resolve (single + multi-module) | ✅ | `diagdump --resolve[-modules]`, corpus + fixtures |
+| method_marker | ✅ | `astdump --mark`, full corpus |
+| exhaust (guard coverage) | ✅ | `diagdump --exhaust`, corpus + 5 fixtures |
+| eval (untyped, typed/RKey, multi-module) | ✅ | `eval_probe` + all 16 `=== EVAL ===` goldens |
+| typecheck | ✅ | `tc_probe` + all 16 `=== TYPES ===` goldens |
 
-  Record patterns (`PRec`, `C { f = p, … }` / `C { .. }`) are now closed too —
-  the parser's surface-grammar coverage is complete. **Triple-quoted strings**
-  (`""" … """` with `stripIndent` dedent + their own interpolation, marked by a
-  negative interp depth) are now ported too (`test/diff_fixtures/triple_str.mdk`,
-  lexer harness 16/16). The lexer + parser surface is **complete**: the only
-  remaining unhandled construct is *nested* string interpolation (a `"…"` string
-  inside a `\{…}` expression), which the OCaml reference rejects too
-  ("Unterminated string literal") — so it isn't valid Medaka and there's nothing
-  to mirror.
+**Integration milestones beyond per-stage validation:**
+- **Composed front-end** (`selfhost/check.mdk`) — parse → desugar → resolve →
+  exhaust → typecheck in one program; reproduces all 16 TYPES goldens + the
+  resolve diagnostics.
+- **True execution** (`selfhost/eval_run_main.mdk`) — runs programs for stdout,
+  matching all 16 `=== EVAL ===` goldens.
+- **Typed eval path / return-position dispatch** (`selfhost/eval_typed_main.mdk`).
 
-- **Self-processing closure — done.** The decisive "the compiler processes its
-  own source" milestone (`selfhost/README.md` §"The bootstrap (#3)"), validated by
-  `sh test/diff_selfhost_selfproc.sh` in three legs over `all_modules_entry.mdk`:
-  (A) the self-hosted multi-module **front-end** typechecks all 12 selfhost
-  modules of its own source and matches the OCaml reference
-  (`dev/tc_module_probe.exe`) byte-for-byte; (B) the self-hosted **eval engine**
-  (`eval.mdk`'s untyped `evalModules`) executes a real selfhost stage module (the
-  lexer) identically to the `eval_modules` oracle; (C) the **typed** self-hosted
-  eval engine executes a `Parser`-monad stage (the parser) identically to the
-  oracle. Leg B needed one minimal additive fix: `arrayMakeWith` was missing from
-  the self-hosted eval's primitive table (`selfhost/eval.mdk`).
-- **Typed multi-module self-hosted eval — done (Leg C).** The "filed limitation"
-  below is now closed. The parser/typecheck stages use return-position
-  `Parser`-monad dispatch (`pure`/`andThen`) the **untyped** `eval_modules` path
-  can't resolve (panics `no matching clause in application`). The fix is the
-  composition of the existing single-module typed path (`eval_typed_main.mdk` →
-  `typecheck.elaborate`, which stamps `EMethodAt` route tags) and the untyped
-  multi-module path (`eval_modules_main.mdk` → `eval.evalModules`):
-  `typecheck.elaborateModules` prePasses the prelude + every loaded module
-  (rewriting return-position method occurrences to `EMethodAt`), typechecks each
-  module in dependency order (seeded like `checkModules`), and stamps each
-  module's route refs from its resolved result types; the driver
-  `eval_typed_modules_main.mdk` then runs the elaborated trees through
-  `evalModules`, which narrows `pure`/`andThen` by RKey. RKey-only (no
-  `=>`-constrained user polymorphism in the selfhost source, so no dict-passing).
-  Validated by Leg C of `test/diff_selfhost_selfproc.sh` over
-  `selfhost/selfproc_parse_probe.mdk`. **Next extension:** the typechecker stage
-  (also monadic) through the same typed path.
+**The bootstrap closure** ("the compiler processes its own source"), validated by
+`test/diff_selfhost_selfproc.sh`:
+- ✅ **Leg A** — the self-hosted multi-module front-end typechecks all 12 selfhost
+  modules of its own source and matches the OCaml reference.
+- ✅ **Leg B** — the self-hosted eval engine executes a real selfhost stage (the
+  lexer) identically to the `eval_modules` oracle.
+- ✅ **Leg C** — the *typed* self-hosted eval executes a `Parser`-monad stage (the
+  parser) identically to the oracle, via `typecheck.elaborateModules`.
+- 🚧 **Leg D — run the typechecker stage on the self-hosted eval. NEXT.** The
+  natural extension of Leg C along the typed multi-module path: execute
+  `typecheck.mdk` (also monadic → return-position dispatch) through
+  `eval_typed_modules_main.mdk`, validated the same way Leg C validates the parser.
+  See `selfhost/README.md` → "Leg D".
 
-  **Next: the remaining pipeline stages** (`desugar → resolve → method_marker →
-  typecheck/exhaust → eval`). A high-level, stage-by-stage port plan — ordering,
-  per-stage difficulty, and how each stays differentially testable against the
-  reference (astdump for AST stages; the existing `=== TYPES ===` / `=== EVAL ===`
-  golden sections for typecheck/eval) — lives in **`selfhost/README.md` →
-  Roadmap**. Suggested order is easy-first (desugar → resolve → method_marker →
-  exhaust → eval) with the type checker last. The Roadmap also has a
-  **Performance** subsection: two backend-independent wins to bake in *now*
-  because they're cheap up front and expensive to retrofit — a variable-slot
-  (lexical-addressing) hook emitted by resolve/Core IR to replace the
-  assoc-list env scan (still open — the top un-attempted lever), and a stdlib
-  string builder to kill the O(n²) `++` string-building in the lexer/formatter
-  (DONE 2026-06-05 — fixed with native `stringConcat` over cons-built lists, no
-  mutable buffer needed; see `selfhost/PERF-NOTES.md`) — plus larger levers
-  (bytecode VM, decision-tree match compilation) recorded as post-profiling work.
+**Dictionary passing** for user `=>`-constrained functions is also ported
+(`eval_dict_main.mdk` + `typecheck.elaborateDict`), including inferred/unsignatured
+constraints and self/mutual recursion — beyond the RKey-only minimum the bootstrap
+source needs (the selfhost source has no `=>`-constrained user polymorphism).
+
+**Forward-looking performance levers** (backend-independent, cheap now / expensive
+to retrofit — recorded so they aren't lost; not blocking):
+- **Lexical addressing** — resolve emits a `(frame, slot)` address per variable
+  reference to replace the assoc-list env scan. 🚧 IN PROGRESS: the EMIT half
+  landed (resolve annotates `EVarAt`; harnesses byte-identical because consumption
+  is unwired). The eval-consumption half (+ VThunk / Phase-112 shadow interaction)
+  is the supervised follow-up. This is the top un-attempted perf lever.
+- ✅ **Stdlib string builder** — killed the O(n²) `++` string-building in
+  lexer/formatter via native `stringConcat` over cons-built lists (2026-06-05; see
+  `selfhost/PERF-NOTES.md`).
+- Larger levers (bytecode VM, decision-tree match compilation) are recorded as
+  post-profiling work, and feed Stage 2.
 
 ### Stage 2 — LLVM backend (after self-host)
 
@@ -217,17 +139,15 @@ deliberately deferred to here:
 
 - **A frozen Core IR** as the codegen input: desugared, fully typed, effects
   erased, **dictionaries explicit**. The existing elaboration already inserts
-  `EMethodRef`/`EDictApp` — that is the foundation; this stage commits to it as a
-  serializable lowering target.
+  `EMethodRef`/`EDictApp` — this stage commits to it as a serializable lowering
+  target.
 - **Typeclass lowering strategy:** runtime dictionary passing (already the eval
-  model) vs. monomorphization. Decide deliberately — it shapes the whole backend.
+  model) vs. monomorphization.
 - **Memory model & value representation:** heap allocation, closure layout,
-  tagged ADTs/records, boxing/unboxing. *Decision-dense; the real cost of going
-  native.*
+  tagged ADTs/records, boxing/unboxing.
 - **Garbage collection:** conservative (Boehm) to start vs. reference counting
-  vs. a precise collector. Strict + functional + closures ⇒ this is unavoidable.
-- **Runtime library:** re-implement the `extern` catalog (today OCaml in
-  `eval.ml`, incl. Unicode via `uucp`, arrays, strings, IO) against the native
+  vs. a precise collector.
+- **Runtime library:** re-implement the `extern` catalog against the native
   runtime.
 - **LLVM lowering:** Core IR → LLVM IR, calling convention, FFI.
 - **Bootstrap closure:** self-hosted compiler + LLVM backend compiles itself to a
@@ -238,8 +158,23 @@ deliberately deferred to here:
 ## Open roadmap
 
 Each item is independently shippable; pick one per session. Grouped by area, not
-strict priority. Where an item is a **Stage 0 prerequisite** for the north star
-above, it is flagged ⭐.
+strict priority.
+
+### Self-host (Stage 1 tail)
+
+- 🚧 **Leg D — run the typechecker stage on the self-hosted eval.** See Stage 1
+  above and `selfhost/README.md`. The last bootstrap leg.
+- 🚧 **Lexical-addressing perf hook — eval-consumption half.** See Stage 1
+  performance levers. Resolve already emits `EVarAt (frame, slot)`; wire eval to
+  consume it (with the VThunk / Phase-112 shadow-bypass interaction) and measure.
+
+> **Note for OCaml-compiler tasks below:** the self-host port mirrors the OCaml
+> pipeline stage-for-stage (`selfhost/{lexer,parser,desugar,resolve,marker,
+> exhaust,typecheck,eval}.mdk`). A change to a *ported* stage in `lib/` must be
+> mirrored into the corresponding `selfhost/*.mdk` and re-validated with that
+> stage's `test/diff_selfhost_*.sh`, or the differential harness breaks. Changes
+> to *non-ported* parts (printer/`fmt`, diagnostics, the CLI driver, doctest) have
+> no self-hosted counterpart.
 
 ### Compiler / language
 
@@ -247,8 +182,9 @@ above, it is flagged ⭐.
   infix operators outside the whitelist). TODO.** Phase 137 lets an expression
   RHS wrap onto a more-indented line, and a *leading-operator* line continues for
   the whitelisted set (exactly `|>`/`>>`/`<<`/`&&`/`||`/`++`, `lib/lexer.mll`),
-  but a line led by `::` is not rescued — it parses as a new statement. Repro (hit while writing
-  `selfhost/resolve.mdk`'s `annotateStmts`; worked around with a `let`):
+  but a line led by `::` is not rescued — it parses as a new statement. Repro (hit
+  while writing `selfhost/resolve.mdk`'s `annotateStmts`; worked around with a
+  `let`):
   ```
   annotate fr (DoLetElse p e alt :: rest) =
     DoLetElse p (ann fr e) (ann fr alt)
@@ -260,14 +196,17 @@ above, it is flagged ⭐.
   statement boundary instead of continuing the RHS. **Desired:** treat `::` (at
   least) like the other leading operators so an over-long cons-chain RHS can wrap;
   re-measure `parser.conflicts` since `::` continuation may interact with list
-  patterns. Surfaced by the lexical-addressing emit session (STAGE2 §2.0).
+  patterns. **Self-host:** mirror into `selfhost/lexer.mdk` (the leading-operator
+  continuation is ported there) and re-run the lexer/parse diff harnesses.
+  Surfaced by the lexical-addressing emit session.
 
 - **Phase 143 — block-`let` is non-recursive while expression `let … in …` is
-  recursive: same surface form, opposite recursion. TODO.** The identical syntax
-  `let f x = … f …` recurses at expression position (parser emits `ELet _ True`,
-  auto-recursive) but, inside a bare block, desugars to a non-recursive `DoLet`,
-  so the self-reference is reported as **`Unbound variable: f`** — a confusing
-  error naming the very binding just written. Repro:
+  recursive: same surface form, opposite recursion. TODO (needs a design
+  decision).** The identical syntax `let f x = … f …` recurses at expression
+  position (parser emits `ELet _ True`, auto-recursive) but, inside a bare block,
+  desugars to a non-recursive `DoLet`, so the self-reference is reported as
+  **`Unbound variable: f`** — a confusing error naming the very binding just
+  written. Repro:
   ```
   countdown p =
     let go n = if n == 0 then p else go (n - 1)   -- → Unbound variable: go
@@ -281,19 +220,17 @@ above, it is flagged ⭐.
   the frame, so a block-`let` closure never captures its own name. **Decision
   needed (design):** either (a) make a block-`let` with parameters recursive to
   match expression-`let` and the top-level form, or (b) keep it non-recursive but
-  replace the bare `Unbound variable` with a targeted hint ("`f` is not in scope
-  in its own block-`let` RHS; use `let f x = … in …` or a `where`-group for a
-  recursive helper"). Surfaced by the lexical-addressing emit session (the
-  addresser correctly emitted `AGlobal` for the block-`let` self-reference,
-  matching eval).
+  replace the bare `Unbound variable` with a targeted hint. Surfaced by the
+  lexical-addressing emit session (the addresser correctly emitted `AGlobal` for
+  the block-`let` self-reference, matching eval).
 
 - **Phase 142 — `fmt` explodes a list-literal argument when a guard RHS
   overflows, instead of breaking the operator chain. TODO.** When a guarded
   clause's RHS exceeds the width limit and ends in an application whose argument
   is a short list literal, the formatter wraps the *list literal* onto its own
   lines mid-expression rather than breaking the top-level operator chain (or
-  leaving the line long). Repro (`selfhost/parser.mdk`'s `coalesceStep`, after
-  the `rev`→`reverseL` rename pushed the line 1 char over 80):
+  leaving the line long). Repro (`selfhost/parser.mdk`'s `coalesceStep`, after the
+  `rev`→`reverseL` rename pushed the line 1 char over 80):
   ```
   coalesceStep name acc n ps b rest
     | n == name = coalesceGo name (FunClause ps b :: acc) rest
@@ -301,413 +238,38 @@ above, it is flagged ⭐.
       FunClause ps b
     ] rest
   ```
-  The `[FunClause ps b]` argument gets blown across three lines in the middle of
-  a `::` chain — strictly worse than either keeping the RHS on one (slightly
-  long) line or breaking at the top-level `::` (leading-op continuation, the form
-  the formatter already prefers elsewhere). **Where it lives:** the Doc IR
+  The `[FunClause ps b]` argument gets blown across three lines in the middle of a
+  `::` chain — strictly worse than either keeping the RHS on one (slightly long)
+  line or breaking at the top-level `::`. **Where it lives:** the Doc IR
   width-splitting in `lib/printer.ml` / `lib/fmt.ml` (cf. the "chains break only
   in tail position" rule — here the splitter is descending into a bracketed
-  argument before exhausting the tail-position operator break). **Desired:**
-  prefer the operator-chain break over exploding a nested container-literal
-  argument; or don't explode a list literal whose elements fit. Surfaced by the
-  self-host style cleanup; the offending clause is left in guard form deliberately
-  so this stays reproducible.
-
-- **Phase 138 — clear error for a recursive *value* forced during its own
-  definition (replace the `CamlinternalLazy.Undefined` leak). DONE
-  (2026-06-03).** A non-function binding that references itself such that the
-  reference is *forced* while the binding is still being computed crashed the
-  interpreter with a raw OCaml `Fatal error: exception
-  CamlinternalLazy.Undefined` instead of a Medaka diagnostic. Typechecks fine;
-  it's an **eval-time** crash. **Minimal repro (now a clean error):**
-  ```
-  ident x = x
-  loop = ident loop      -- forces `loop` (a strict arg) while defining it
-  main = println loop    -- → panic: recursive value 'loop' is forced while …
-  ```
-  Surfaced by the Phase 135 combinator parser, where recursive parser *values*
-  (`skipNewlines = orElse (sepThen … skipNewlines) …`) hit exactly this — the fix
-  there was to recurse through a `do`-continuation (lazy) instead of a strict
-  self-argument. **Fix:** a `force_thunk name t` helper in `lib/eval.ml` wraps
-  `Lazy.force` and converts `CamlinternalLazy.Undefined` into a named
-  `Eval_error` ("recursive value 'NAME' is forced while it is being defined; a
-  non-function recursive binding must defer its self-reference (through a lambda
-  or continuation)"). The two thunk-force sites that know the binding name —
-  `lookup` and `lookup_method` — route through it; the deferred-force loop and
-  multi-module driver force via `lookup`, so they inherit the catch. `loc` is
-  `None` (the force site has no convenient source loc, matching the existing
-  "unbound identifier" error). Regression tests in `test_run` (raw-crash-vs-
-  Eval_error + message-content). Found via the self-host port — exactly the rough
-  edge it exists to surface.
-
-- **Phase 137 — allow an expression RHS to wrap onto a continuation line
-  (`.mdk` layout ergonomics). DONE (2026-06-03).** A long application can now
-  break an argument onto a more-indented following line:
-  ```
-  parseCmp = chainl1 parseCons
-    (choice [...])      -- now continues `chainl1 parseCons`
-  ```
-  **Lexer-only change** (`lib/lexer.mll`); `parser.mly` untouched, so
-  `parser.conflicts` is unchanged. The continuation is purely *subtractive* (it
-  removes an INDENT a one-line form never had), so every continued form parses to
-  the **identical AST** as its one-liner. Mechanism: when a would-be INDENT
-  (`col > current`, `paren_depth = 0`) is *not* a block, suppress it (leave the
-  indent stack at the statement's base column, like the leading-operator rule).
-  An INDENT opens a block iff (a) it follows a `match`/`record` header — the only
-  two openers whose INDENT is preceded by an expression atom, tracked by one-shot
-  `match_pending`/`record_pending` flags — or (b) the previous token *can't end an
-  expression* (`=`/`then`/`=>`/`where`/`do`/… introduce every other block). The
-  remaining candidates are deferred (`pending_indent`) and resolved in `token`
-  once the deeper line's first token is known: an **atom-starter** continues the
-  application; a `|`/`where`/`data`'s `=`/leading-operator *commits* the INDENT and
-  replays the token (so guards, block-`where`, and block `data` keep working
-  without their own flag). `prev_significant`/`can_end_expr`/`can_start_atom` carry
-  the gates. Tests: `test_parser` group "expression-RHS continuation (Phase 137)"
-  (10 cases — positive wraps + block-not-collapsed/guard/where/match/record/data
-  regressions). Found via the self-host parser port (Phase 135), which worked
-  around it by pulling args into one-line helpers.
-
-- **Phase 136 — typechecker: generalize mutually-recursive binding groups. DONE
-  (2026-06-03).** A single self-recursive polymorphic function generalized fine,
-  but a **mutual-recursion group monomorphized to its first use**. **Minimal
-  repro (now passes):**
-  ```
-  isEv : Int -> a -> List a        isOd : Int -> a -> List a
-  isEv 0 x = []                    isOd 0 x = []
-  isEv n x = isOd (n - 1) x        isOd n x = x :: isEv (n - 1) x
-  -- isEv 3 (5:Int) and isEv 3 "a" together  →  used to be "Int vs String"
-  ```
-  **Root cause was NOT the generalization loop the TODO guessed** (that loop is
-  correct, and the `let rec … with` / `DLetGroup` multi-member path always worked).
-  It was **group *formation*:** `order_groups_by_deps` ran Tarjan SCC only to
-  *reorder*, then **flattened a cyclic SCC back into separate singleton groups**.
-  So mutual recursion was checked as sequential singleton `process_letrec_group`
-  calls sharing a monomorphic top-level placeholder — member 1 generalized, then
-  member 2's inference *re-linked* member 1's quantified var, leaving member 1's
-  recorded `bound_ids` referencing a now-`Link`ed var → `instantiate` treated it
-  as free/monomorphic → pinned by first use.
-  **Fix (one site):** `order_groups_by_deps` now **merges** a multi-member SCC into
-  one group, so all bodies are inferred before any member generalizes (the
-  non-destructive final loop then builds every scheme against settled var ids).
-  **Dict-passing fallout (the warned Phase 73/83/84 interaction, fixed here):**
-  merging makes mutual-rec siblings share one constraint var id, which broke
-  `find_enclosing_dict` — it picks the enclosing function by id-match and returned
-  a *sibling's* `$dict_<fn>_<slot>` (unbound at eval) for pass-through constrained
-  mutual recursion (`isEvenLen`/`isOddLen`) and promoted return-pos pairs
-  (`ping`/`pong`). Fixed by threading an `enclosing`-function hint (a `current_fn`
-  ref set per member in Pass B, captured into `dict_app_usages` /
-  `recursive_promoted_usages` / `method_usages`) into `find_enclosing_dict`, which
-  now prefers the enclosing member's own dict. Unblocks idiomatic parser
-  combinators (`many`↔`some`, `chainl1`↔…) and any mutually-recursive polymorphic
-  helper. Tests: `test_typecheck` "mutual poly {signed,unsigned,2nd}", `test_run`
-  "mutual rec dict (Phase 136)" + the pre-existing `t_rec_mutual_constraint` /
-  `t_infer_return_pos_mutual` now exercise the merged path.
-
-- ⭐ **Phase 135 — self-host Stage 1: port the parser to Medaka. IN PROGRESS
-  (started 2026-06-03); scaffold done.** Second pipeline stage. The Menhir LR
-  grammar (`lib/parser.mly`, 1146 lines) becomes a **hand-written
-  recursive-descent** parser over `List Token` from the (validated) lexer — no
-  parser generator in Medaka. Tractable because precedence is a **stratified
-  ladder, not `%left/%right`** (`expr_annot → expr_lam → expr_pipe → … →
-  expr_add → expr_mul → expr_unary → expr_app → expr_atom`, ~18 levels), one
-  recursive function per level. Target AST = **pre-desugar** (the parser emits
-  surface sugar `EGuards`/`EDo`/`EStringInterp`/`EListComp`/`ESection`/`EQuestion`;
-  desugar lowers them later). Stays **prelude-only** (`List`/`Array`/string
-  externs + local AST type) — `Map`/stdlib isn't needed until *resolve*, so the
-  stdlib-access decision (multi-root loader, which already exists, vs vendoring)
-  is deferred again.
-  **Validation = structural S-expression dump** (decided): no AST dumper existed
-  (unlike the lexer's `token_to_string`), so added `dev/astdump.ml`
-  (`Ast`-`to_sexp`, location-stripped, one decl per line; tags = `ast.ml`
-  constructor names) + a Medaka mirror `selfhost/sexp.mdk`, diffed by
-  `test/diff_selfhost_parse.sh`. Chose this over porting the 912-line
-  `printer.ml` (less code, no whitespace/paren fragility). FLOAT text normalized
-  away, like the lexer.
-  **Done so far (scaffold, validation-first like Phase 132):** `selfhost/ast.mdk`
-  (core node type — grows per slice), the dual dumpers (format **validated
-  byte-for-byte** via the positive control), `parse_main.mdk` (dumps a hand-built
-  control AST until the parser exists), and the harness. **Next slices:**
-  expressions (the ladder + atoms) → patterns → declarations → types, each
-  growing `ast.mdk` + `sexp.mdk` coverage and validated on fixtures, then hardened
-  on real `.mdk` source (the lexer's 13/13 analog). **Chief risk:** layout-driven
-  blocks (the parser consumes INDENT/DEDENT/NEWLINE to structure
-  `let`/`match`/`do`/`where`/decl boundaries). See `selfhost/README.md`.
-
-- ⭐ **Phase 132 — self-host Stage 1: port the lexer to Medaka. IN PROGRESS
-  (started 2026-06-03); lexer fixture-complete.** First stage of the self-hosting
-  effort (North star → Stage 1). **Done:** the `selfhost/` scaffold + differential
-  validation loop (`selfhost/lexer.mdk`, `selfhost/lex_main.mdk`,
-  `test/diff_selfhost_lexer.sh`), and the full tokenizer — literals, idents/
-  keywords, operators/punctuation, line comments, string interpolation, and a
-  faithful port of `lib/lexer.mll`'s INDENT/DEDENT/NEWLINE layout algorithm +
-  else-continuation filter + leading-operator continuation. **All 15/15 fixtures
-  in `test/diff_fixtures/` match the OCaml reference byte-for-byte.** Pure
-  two-pass design (scan → RawTok stream with `RNewline` markers; layout pass →
-  INDENT/DEDENT/NEWLINE). Lexer uses prelude + global externs only (no stdlib
-  import), so `selfhost/` is a single-root project.
-  **Now also validated on real source** (2026-06-03): added `{- … -}` nestable
-  block comments, hex/bin/oct int literals, and the `@`/`AS_AT` adjacency rule —
-  the gaps surfaced by self-lexing. `dev/lextok.exe` dumps the OCaml reference
-  token stream for any file, and `test/diff_selfhost_lex_files.sh` diffs the
-  Medaka lexer against it over **all 13 real `.mdk` files (every stdlib module +
-  the lexer lexing itself) — 13/13 match byte-for-byte** (FLOAT text normalized:
-  OCaml `%g` vs `floatToString`, same TFloat value). **Still deferred** (no real
-  file or fixture uses them): triple-quoted strings (+ `strip_indent`) and nested
-  interpolation. **Incorporated Phase 133** (char-literal escapes): `scanChar`
-  now processes `\n \t \r \0 \\ \'` + `\u{…}` (mirroring the new `read_char`), so
-  the lexer still self-lexes 13/13 after that landed — surfaced one more
-  serialization-only nuance (a NUL char renders `\0` via `debugStringLit` vs
-  `\000` via `%S`; unused in real files). **Next:** the parser stage, which forces
-  the **stdlib-access** decision (multi-root loader or vendored
-  `Map`/`List`/`string`).
-  **Two self-host-surfaced compiler quirks to file/fix:** (1) char literals do no
-  escape processing, so newline/tab/quote/backslash must be matched by `charCode`
-  (worked around in `lexer.mdk`); (2) ✅ FIXED (Phase 134): an `<IO>`-returning
-  *helper* called from a `match` arm produced no output — a cross-module
-  dict-passing name collision, not the eval driver; `lex_main.mdk` now uses the
-  helper form. Byte-for-byte
-  serialization caveats mapped: OCaml `%S` escapes non-ASCII as decimal byte
-  escapes (`debugStringLit` agrees on ASCII), `FLOAT` uses `%g` (vs
-  `floatToString`). See `selfhost/README.md`.
-
-- **Phase 134 — `<IO>` helper from a `match` arm produced no output: a
-  cross-module dict-passing name collision. ✅ DONE (2026-06-03).** Surfaced by
-  Phase 132. **Symptom:** factoring an `<IO>` body into a helper called from a
-  `match` arm made the program exit 0 with **no output**; the inline form ran
-  correctly. Only reproduced with the real `selfhost/lexer.mdk` — every minimal
-  analog worked, which is what made it look like a deferred-thunk / eval-driver
-  bug (Phases 96/103/121/125). It was **not** the eval driver. **Root cause:**
-  `lexer.mdk` defines a private, genuinely `Num`-constrained 8-arg `emit` (the
-  `+` on `pos`/`depth` leaves two `Num` constraints, so dict_pass gives its
-  definition two leading dict params). `Eval.eval_modules` dict-passed the marked
-  prelude **+ all modules jointly** and `Dict_pass.collect_arities` keyed
-  dict-arity by **bare name**, so the global `emit→2` was applied to
-  `lex_main.mdk`'s *unrelated, unconstrained* `emit` definition too. That
-  definition became 3-param while its call site (`EDictApp` with no resolved
-  route) applied zero dicts, so `emit path` returned an un-run **partial
-  closure** — discarded by `main`'s thunk → clean exit, no output. The minimal
-  analogs missed it because their helper-collision used `++` (no residual
-  constraint ⇒ no dict params ⇒ no conflation). **Fix (`lib/eval.ml`
-  `eval_modules_ex`):** stop dict-passing jointly. Scope each module's
-  dict-arity table to references that can actually resolve to *its* definitions —
-  the module's own decls ∪ the decls of its **transitive importers** (where the
-  external call sites of its exported constrained functions live). The prelude,
-  imported by everyone, keeps the full joint scope. Private constrained fns
-  (lexer's `emit`) are covered by the own-decls part; public ones referenced only
-  by importers (`mk : Tag a => …`) by the importer part. **Regression test:**
-  `test_loader.ml` `test_eval_dict_arity_no_cross_module_collision` (drives
-  `Eval.eval_modules`; the flat path can't express two top-level `emit`s, so it
-  masks this). `selfhost/lex_main.mdk` now uses the helper form (named `emit` on
-  purpose), so the diff harness exercises the fix over all 15 fixtures.
-
-- **Phase 133 — char literal escape processing. ✅ DONE (2026-06-03).**
-  Char literals now process the same escape suite as string literals: `\n \t \r \0 \\ \'`
-  and `\u{…}`. The fix replaced the single-regex rule in `lib/lexer.mll` with a
-  `read_char` auxiliary (matching the `read_string` / `read_triple_string` pattern);
-  `lib/printer.ml` gained `escape_char_lit` so `LChar` round-trips correctly;
-  `debugCharLit` in `lib/eval.ml` likewise escapes special chars. The `selfhost/lexer.mdk`
-  workaround (comparing via `charCode` for `\t`/`\n`/`\'`/`\\`) was replaced with
-  direct char literals. 7 new parser test cases cover every new escape form.
-
-- **Phase 131 — add token-stream section to the diff harness. ✅ DONE
-  (2026-06-03).** Added `Lexer.tokenize_string : string -> string list` +
-  exhaustive `token_to_string` in `lib/lexer.mll` (no wildcard arm, so a new
-  grammar token surfaces a non-exhaustive-match warning here). Prepended a
-  `=== TOKENS ===` section (one token per line, same `rstrip_nl` normalization)
-  to both `dev/gen_golden.ml` and `test/thorough/thorough_diff.ml`, regenerated
-  all 15 goldens (purely additive), and the harness now runs 60 cases (15 ×
-  {TOKENS, AST, TYPES, EVAL}, up from 45). `split_sections` is order-independent
-  so it needed no change. The diff harness now validates lexer output for all 15
-  fixtures before the Medaka lexer is wired in (Stage 1). Token format: payload
-  tokens render kind + value (`INT 42`, `STRING "hi"`, `IDENT "foo"`), everything
-  else (keywords/operators/punctuation/`NEWLINE`/`INDENT`/`DEDENT`/`EOF`) as the
-  bare variant name.
-
-- ⭐ **Phase 130 — cross-module user-defined interfaces ✅ DONE (2026-06-03).**
-  A user `interface` declared+`export`ed in module A can now be `impl`'d for a
-  type owned by module B and its constraint discharged in a third module C. The
-  whole gap was a single resolve omission: the `DUse` import loop in `resolve.ml`
-  copied an imported interface's *name* into `env.interfaces` but not its method
-  set into `env.iface_methods`, so any `impl` of it tripped "Method 'X' is not
-  part of interface Y". Layer 2 (impl discharge) needed **no** change — `te_impls`
-  already propagates a module's `export impl`s by full `impl_key`, and the orphan
-  check only fires when both iface and type are non-local. See PLAN-ARCHIVE.md for
-  the full writeup. *Secondary ergonomic finding still open* (file separately if
-  it compounds): every cross-module function needs its own `export` line, and an
-  `impl` module must import each interface **method name** it references.
-
-- **Phase 129 — differential-testing harness (self-host validation rig). ✅ DONE
-  (2026-06-03).** 15 standalone `.mdk` fixtures in `test/diff_fixtures/`; each
-  gets a `<name>.golden` with three sections committed to git: `=== AST ===`
-  (canonical `Printer.program_to_string` round-trip), `=== TYPES ===` (full
-  alphabetic type env from `Typecheck.check_program`), `=== EVAL ===` (typed
-  pipeline stdout via `Elaborate.elaborate` + `eval_program ~prelude:false`).
-  Regeneration probe: `dev/gen_golden.exe`. Comparison runner:
-  `test/thorough/thorough_diff.ml` (45 alcotest cases), wired into `@thorough`
-  via `(setenv DIFF_FIXTURES_DIR %{workspace_root}/test/diff_fixtures ...)`.
-  Token-stream section deferred to Phase 131 (natural point: when the lexer port
-  begins). Medaka-stage comparison slots in alongside each port stage.
-
-- **Phase 128 — freeze `stdlib/string.mdk` (review + lock the API). DONE 2026-06-03.**
-  49/49 doctests pass. Open decisions settled and documented in STDLIB.md (Module 3
-  marked reviewed/frozen): (1) `length`/`isEmpty` intentionally absent — would
-  clash with `Foldable`; callers use `stringLength`/`s == ""`; `Sized`/`HasLength`
-  deferred. (2) `toUpper`/`toLower` confirmed as the String-level names (full
-  Unicode, 1→N expansion); `charToUpper`/`charToLower` remain as Char-level kernel
-  externs only. No code changes needed — decisions were already encoded; Phase was
-  pure documentation/freeze.
-
-- **Phase 127 — unit testing library (`test` keyword + `stdlib/test.mdk`). DONE 2026-06-03.**
-  Medaka has doctests (example-as-documentation) and `prop` tests (universal
-  laws) but no plain unit tests. Add a third kind for what the other two cover
-  poorly: error/negative paths, non-`show`-able or multi-step results, effectful
-  checks, and maintainer-only checks that shouldn't clutter docstrings. **Design
-  settled 2026-06-03** (brainstorm); division of labor goes in STDLIB.md so the
-  three don't compete.
-
-  **Surface syntax** — a new `test` declaration keyword, symmetric with `prop`,
-  whose body evaluates to an `Expectation`:
-  ```
-  test "reverse is an involution" =
-    expectEqual (reverse (reverse [1, 2, 3])) [1, 2, 3]
-  ```
-
-  **Architecture: dogfooded Medaka runner, host does discovery only.**
-  - *Host (discovery, no type inference):* scan `DTest` decls — exactly like
-    `DProp` — and synthesize an injected registry value, wrapping each body in a
-    thunk so nothing runs at collection time:
-    `__tests__ : List (String, Unit -> Expectation) = [ ("name", () => <body>), … ]`.
-    Then evaluate a call to the library's `runTests __tests__` and read the
-    returned `VBool` for the exit code. New **third pass** in `bin/main.ml`
-    (`if has_sub "test"`) after doctests + props, `&&`-ed into the result.
-  - *`stdlib/test.mdk` (pure Medaka — the dogfooded part):* `public export data
-    Expectation = Pass | Fail String` plus the assertion vocabulary —
-    `expectEqual`/`expectNotEqual : (Eq a, Show a) => a -> a -> Expectation`,
-    `expectTrue`/`expectFalse : Bool -> Expectation`,
-    `expectLessThan`/`expectGreaterThan : (Ord a, Show a) => …`, `pass`, `fail :
-    String -> Expectation`, `expectAll : List Expectation -> Expectation` (first
-    `Fail` wins) — and `runTests : List (String, Unit -> Expectation) -> <IO>
-    Bool`, which loops, forces each thunk, formats results (match
-    `lib/test_cmd.ml`'s style), and returns all-passed. **v1 is minimal: one
-    `Expectation` per test, `expectAll` for conjunction, NO `describe`/nesting**
-    (group via `"List/reverse/…"` names).
-
-  **The one new extern (`add-primitive`): `runExpectation`.** A pure-Medaka
-  `runTests` cannot survive a crashing test — a partial match / `head []` is an
-  OCaml-level `Eval_error`, and the language has no `try`/`catch`, so one crash
-  takes down the whole run and loses every later test (doctests/props dodge this
-  only because their loops live in OCaml). So a dogfooded runner *requires* a
-  single narrow escape hatch — NOT a general `try`/`catch` (that would contradict
-  the "errors are `Result` data, not exceptions" stance), but one purpose-built
-  primitive:
-  `runExpectation : (Unit -> <e> Expectation) -> <IO> Expectation`,
-  implemented in `eval.ml` as `try force-thunk with Eval_error | Impl_no_match ->
-  Fail <msg>`. `runTests` maps it over the registry and never sees a raw panic.
-
-  **Resolution caveat (the real risk).** `test.mdk` is NOT in the prelude (see
-  below), so test files `import test.{…}` and the host's injected `runTests
-  __tests__` references an *imported* module. Route the discovery pass through
-  the **proven multi-module loader path** Phase 92 built for import-bearing
-  doctests (`Doctest.run_file` branches on `has_use_decls` → `Loader.load_program`
-  + `Eval.eval_modules`) — reuse the same shared loader-assembly helper Phase 126
-  wants factored out, rather than a new single-file path that would hit the
-  loader-vs-flat eval landmines (Phases 96/103/121/125).
-
-  **Why not the prelude (settled, not open).** Full prelude inclusion is
-  *inadvisable*: it pollutes *every* program (incl. non-test code) with generic
-  names — `Pass`/`Fail`/`fail`/`pass`/`Expectation` — and taxes every compile
-  with test machinery + the `runExpectation` `<IO>` extern. `prop` needs no
-  import only because it uses pure prelude vocab (`eq`/`&&`); `test` needs a real
-  library, which shouldn't be global. v1 uses an explicit `import test.{…}`
-  (conventional — Elm `import Expect`, HUnit/Hspec all import).
-
-  **Followup (v2, deliberately deferred — do NOT bundle into v1):**
-  *conditional auto-import.* Since the discovery pass already detects `test`
-  decls, it can inject the test vocabulary **only into files that contain a
-  `test` decl** — frictionless like a keyword, with zero pollution of non-test
-  files. Deferred because it is a *second conditional-prelude* path, and
-  `marked_prelude` coalescing + loader-vs-flat ordering is this codebase's most
-  repeated bug source — build it on a working, tested v1, not speculatively.
-
-  **Build shape:** `add-language-feature` (the `test` keyword: lexer.mll →
-  parser.mly → ast.ml `DTest` → resolve.ml → `bin/main.ml` discovery) +
-  `add-primitive` (`runExpectation` in runtime.mdk + eval.ml) + `extend-stdlib`
-  (`stdlib/test.mdk`, STDLIB.md division-of-labor paragraph, gen/embed.ml if
-  embedded). Tests: a fixture file with `test` decls (incl. one crashing test and
-  one `expectAll`) driven through the multi-module path, plus an import-bearing
-  variant — land in `test_run`/`test_doctest`-adjacent suites.
-
-- **Phase 126 — `medaka test` prop phase now resolves sibling imports ✅ DONE
-  (2026-06-03).** The prop phase routed import-bearing files single-file and failed
-  at `Unbound variable: <name>`; it now reuses the loader exactly like doctests.
-  Factored `Doctest.assemble_marked_modules` (shared by both phases), and the prop
-  phase evals via the new `Eval.eval_modules_root_env` (the root's *full* env — the
-  plain `eval_modules` returns only root locals, so prop bodies couldn't see imports
-  or prelude operators). `--coverage` works on import-bearing files too. See
-  PLAN-ARCHIVE.md for the full writeup.
+  argument before exhausting the tail-position operator break). **Desired:** prefer
+  the operator-chain break over exploding a nested container-literal argument; or
+  don't explode a list literal whose elements fit. (No self-hosted `fmt`, so
+  nothing to mirror.) Surfaced by the self-host style cleanup.
 
 - **Phase 101 — drive property generation/shrinking through the `Arbitrary`
-  interface (101b).** 101a (registry-first `arbitrary`/`shrink`, native element
-  recursion) is **DONE** (see PLAN-ARCHIVE.md). What remains — **101b, deferred,
-  reassess later**: synthesized typed generators + parametric `core.mdk`
+  interface (101b). DEFERRED, reassess later.** 101a (registry-first
+  `arbitrary`/`shrink`, native element recursion) is DONE (PLAN-ARCHIVE.md). What
+  remains — **101b**: synthesized typed generators + parametric `core.mdk`
   `Arbitrary` impls. Phase 83/84 made single-level interface-driven generation
-  work (`impl Arbitrary (List a)` generates `List Int`/`List Tagged`/`Option
-  Int`), but **nested** parametric elements (`List (List Int)`) still fail — the
+  work, but **nested** parametric elements (`List (List Int)`) still fail — the
   flat `VDict of string` dict can't carry a recursive element dict. Since 101a
-  (native + registry recursion) already handles every case *including* nesting
-  and makes hand-written element impls win, 101b's only unique gain is honoring a
-  user's custom container-*generation* strategy — niche. Revisit only if that
-  need arises (also wants structured/recursive dicts to lift the nesting limit).
-  WIP on branch `claude/suspicious-sammet-21d73e` (commit `860ba12`). Skill:
+  already handles every case *including* nesting and makes hand-written element
+  impls win, 101b's only unique gain is honoring a user's custom
+  container-*generation* strategy — niche. Revisit only if that need arises (also
+  wants structured/recursive dicts, same as Phase 83/84 #5). WIP on branch
+  `claude/suspicious-sammet-21d73e` (commit `860ba12`). Skill:
   **add-language-feature** (cross-cutting).
 
-- ⭐ **Phase 83 / 84 (residuals, layered like 69.x→74).** The
-  instance-`requires` dict-threading into return-position impl bodies (single
-  level) is **DONE** (see PLAN-ARCHIVE.md). The tractable set was closed by
-  **Phase 115** (2026-06-02, see PLAN-ARCHIVE.md) — #1/#2 fixed, #3 decided; **#4
-  (free-`e` `Result`) closed 2026-06-02** by head-key dict-application routing
-  (see PLAN-ARCHIVE.md). Only #5 (nested/structured dicts) remains:
-  - ~~Runtime dict-threading *into* an inferred (unsignatured top-level)
-    constrained body~~ — **DONE (Phase 115 #1).** Generalized Phase 84's
-    promotion (`promotable_from`) from the hard-coded `Applicative` to *any*
-    interface with a return-position method (`iface_has_return_position_method`),
-    so `mk n = tag n` over a user `interface Tag a where tag : Int -> a` now
-    dispatches by result type. Argument-dispatched wrappers (`Eq`/`Debug`/`Ord`)
-    stay on arg tag (unchanged).
-  - ~~Self-/mutually-recursive *unsignatured* wrappers under-infer their own
-    recursive-call routing~~ — **DONE (Phase 115 #2).** Dropped the non-recursive
-    promotion guard; a promoted wrapper's own recursive `EDictApp` call (inferred
-    during Pass B before its `fun_constraints` entry exists) is deferred via
-    `env.recursive_promoted_usages` and resolved by `realize_recursive_dict_apps`
-    once `fun_constraints` is populated — recovering the discriminating var from
-    the live occurrence mono (`find_tvar_in_mono`). Covers recursive return-pos
-    wrappers, mutual recursion (single result type), and recursive poly-monad
-    builders. (Polymorphic recursion at *two different* result types remains a
-    separate pre-existing limit — fails signatured too.)
-  - `pure` in a do-block with **no `<-`** is groundable only from surrounding
-    type context — **decided (Phase 115 #3): document-and-accept.** When the
-    result type is pinned (a def-site or use-site annotation) it dispatches
-    correctly; with no context at all (`println (do { pure 5 })`) it defaults to
-    the first Applicative impl (List) by arg tag. That is an inherent ambiguity
-    (the program names no monad), analogous to Haskell type-defaulting — not a
-    mis-dispatch. A stricter "ambiguous type" *error* is possible future work but
-    out of scope.
-  - ~~`Result e` with a free `e` mis-dispatches even when signatured~~ — **DONE
-    (#4, 2026-06-02).** Was: `f m = do { x <- m; pure x }` called `f (Ok 5)`
-    routed to List's `pure` (`[5]`) for both the unsignatured and signatured
-    forms, because dict-*application* routes (`resolve_one_route`) emitted only
-    `RKey`/`RDict` — never a head-key — so the non-ground `Result e` dict
-    collapsed to `RKey ""` → arg-tag → first impl. Fix: extended the head-key
-    escape hatch the *method-occurrence* path already had (`RHeadKey` via
-    `head_key_route`, now a shared helper) to the dict-application path, plus a
-    head-bearing runtime dict value `VDictHead` that narrows by head tag
-    (`select_impl_by_head`) when the body reads it. `f (Ok 5)` → `Ok 5`;
-    List/Option dispatch and #3's no-context default (`[5]`) unchanged.
-  - True recursive/nested instance dictionaries (the `List (List Int)` case) need
-    structured dicts rather than flat impl-key strings — the real "pipeline
-    restructure"; also lifts the Phase 101b nesting limit. **Still deferred** (the
-    big remaining residual).
-  - Skill: **harden-typechecker** / **add-language-feature** (cross-cutting).
+- **Phase 83 / 84 #5 — true recursive/nested instance dictionaries. DEFERRED (the
+  big remaining residual).** The instance-`requires` dict-threading into
+  return-position impl bodies is DONE; the tractable set was closed by Phase 115,
+  and #4 (free-`e` `Result`) closed via head-key dict-application routing (all in
+  PLAN-ARCHIVE.md). Only #5 remains: the `List (List Int)` case needs **structured
+  dicts** rather than flat impl-key strings — the real "pipeline restructure"; it
+  also lifts the Phase 101b nesting limit. Skill: **harden-typechecker** /
+  **add-language-feature** (cross-cutting).
 
 ### CLI surface (Phase 82, continued)
 
@@ -727,48 +289,12 @@ non-package-manager gaps:
   resolve-error in the JSON output. Multi-file `--json` is the follow-up.
 - Skill: none specific (lands in `bin/main.ml` + `lib/lsp_server.ml`).
 
-### Stdlib enablement (Phase 19)
+### Stdlib enablement (Phase 19) — ✅ COMPLETE
 
-Originally hand-written by the user by design; as of 2026-06-02 the user lifted
-that constraint and delegated the remaining modules (Modules 5–9). STDLIB.md is
-the per-module checklist; **all of Modules 5–9 are now complete** (`map`/`set`,
-hash containers, `io`, `mut_array`, `json`) — see PLAN-ARCHIVE.md and STDLIB.md.
-
-- ✅ **`stdlib/string.mdk`** — API frozen 2026-06-03 (Phase 128). 49/49 doctests
-  pass. Open decisions resolved: `length`/`isEmpty` intentionally absent (clash
-  with `Foldable`; use `stringLength`/`s == ""`); `toUpper`/`toLower` own the
-  String-level names; `charToUpper`/`charToLower` remain as Char-level externs.
-
-- **Module 6 — hash containers ✅ DONE (Phase 120).**
-  `stdlib/hash_map.mdk` + `stdlib/hash_set.mdk` — **mutable** hash tables
-  (separate chaining in a `Ref`-held `Array`, resize past load factor 0.75),
-  the O(1)-average performance counterpart to the ordered Module 5. New `hash`
-  extern (structural, non-negative); removed `"HashMap"`/`"HashSet"` from
-  `resolve.ml` `primitive_types`. HashSet impls `Foldable` (elements = `toList`);
-  HashMap uses `entries` internally (its `toList` = pairs would clash with
-  `Foldable.toList`). 8 + 7 doctests, stress-verified (100 inserts → multiple
-  resizes, delete, dedupe). Surfaced **Phase 118** (`if`/`else` block branches),
-  **Phase 122** (else-less `if`, the remaining `<Mut>` ergonomics gap), and
-  **Phase 119** (false-positive non-exhaustiveness for 3+-arg list matches) — all
-  three now ✅ DONE (see PLAN-ARCHIVE.md).
-- **`mut_array` ✅ DONE (2026-06-03)** — `stdlib/mut_array.mdk`, a growable mutable
-  vector (amortized-O(1) `push` over a doubling `Array`). Closes out Module 6's
-  remaining piece (STDLIB.md numbers it Module 8). Mainly an interpreter/compiler
-  perf nicety; not on the self-hosting critical path.
-- **`json` ✅ DONE (2026-06-03)** — `stdlib/json.mdk` (STDLIB.md Module 9): a
-  recursive-descent `Json` ADT (`JNull`/`JBool`/`JInt`/`JFloat`/`JString`/
-  `JArray`/`JObject`, `Array`-backed) with `parse : String -> Result String Json`
-  and compact `stringify`, plus `Eq`/`Show`/`Display` instances. The first stdlib
-  module to import real siblings (`list`/`string`) — which surfaced Phase 126
-  (the prop phase's single-file import limitation, now ✅ DONE 2026-06-03). Not on
-  the self-hosting path.
-- ✅ **Module 7 `io` — DONE (Phase 116).** Comprehensive: externs (`args`,
-  `getEnv`, `fileExists`, `appendFile`, `listDir`, `ePutStr`/`ePutStrLn`,
-  `readLineOpt`, `readAll`) in runtime.mdk + eval.ml, `args` wired through
-  `bin/main.ml` (`medaka run FILE a b c` → `["a","b","c"]`), plus `stdlib/io.mdk`
-  (`eprint`/`eprintln` via Display, `readLines`, `getEnvOr`). See STDLIB.md
-  Module 7. (Surfaced Phase 117, the string-import blocker — see
-  PLAN-ARCHIVE.md.)
+All of Modules 1–9 are done (`core`/`list`/`array`/`string` + `map`/`set`, hash
+containers, `io`, `mut_array`, `json`) — see PLAN-ARCHIVE.md and STDLIB.md. The
+hand-write-it-myself constraint was lifted 2026-06-02 and the remaining modules
+delegated. `stdlib/string.mdk` API frozen 2026-06-03 (Phase 128).
 
 ### Blocked on a package manager (out of scope until one exists)
 
@@ -785,7 +311,7 @@ hash containers, `io`, `mut_array`, `json`) — see PLAN-ARCHIVE.md and STDLIB.m
   real lever, if ever needed, is a `Sized`/`HasLength` interface — which is
   stdlib design, not a compiler feature. (Phase 112 — the *narrower* lever:
   resolve to a local/imported name only when the method has no applicable impl —
-  is now **DONE** (see PLAN-ARCHIVE.md); 78c stays dropped.)
+  is **DONE** (PLAN-ARCHIVE.md); 78c stays dropped.)
 - The broader **rejected-features** list (labeled arguments, active patterns,
   computation expressions, polymorphic variants, first-class modules, row
   polymorphism, macros, lazy sequences, higher-rank polymorphism, custom

@@ -5852,6 +5852,180 @@ the parser port). Same class of constraint as not running `medaka fmt` on selfho
 files: selfhost source is bounded by what `parser.mdk` parses, not by what the
 language accepts.
 
+### Phase 127: unit testing library (`test` keyword + `stdlib/test.mdk`) ✅ DONE (2026-06-03)
+
+A third test kind alongside doctests and `prop`, for what those cover poorly:
+error/negative paths, non-`debug`-able or multi-step results, effectful checks. New
+`test` declaration, symmetric with `prop`, body evaluating to an `Expectation`:
+```
+test "reverse is an involution" =
+  expectEqual (reverse (reverse [1, 2, 3])) [1, 2, 3]
+```
+**Architecture — dogfooded Medaka runner, host does discovery only.** Host scans
+`DTest` decls (exactly like `DProp`), synthesizes a thunked registry
+`__tests__ : List (String, Unit -> Expectation)`, and evaluates `runTests __tests__`
+for the exit code — a third pass in `bin/main.ml` after doctests + props.
+`stdlib/test.mdk` (pure Medaka): `public export data Expectation = Pass | Fail
+String` + the assertion vocab (`expectEqual`/`expectNotEqual`/`expectTrue`/
+`expectFalse`/`expectLessThan`/`expectGreaterThan`/`pass`/`fail`/`expectAll`) and
+`runTests`. **One new extern** `runExpectation : (Unit -> <e> Expectation) -> <IO>
+Expectation` (eval.ml: `try force-thunk with Eval_error | Impl_no_match -> Fail`) so
+one crashing test doesn't take down the run — a single narrow escape hatch, not a
+general try/catch. Discovery routed through the multi-module loader path (Phase 92)
+since `test.mdk` is imported, not prelude. Deliberately not in the prelude (would
+pollute every program with `Pass`/`Fail`/etc.). v2 conditional auto-import deferred.
+Gotchas: `public export` for data-only, `export` for fns; zero-param thunks force
+eagerly inside `eval_modules_root_env`; a crash must be inline in the test body, not
+a helper binding.
+
+### Phase 128: freeze `stdlib/string.mdk` ✅ DONE (2026-06-03)
+
+49/49 doctests pass. Decisions settled + documented in STDLIB.md (Module 3 frozen):
+`length`/`isEmpty` intentionally absent (would clash with `Foldable`; callers use
+`stringLength`/`s == ""`; `Sized`/`HasLength` deferred); `toUpper`/`toLower` are the
+String-level names (full Unicode, 1→N expansion); `charToUpper`/`charToLower` remain
+Char-level kernel externs. Pure documentation/freeze — no code changes.
+
+### Phase 129: differential-testing harness (self-host validation rig) ✅ DONE (2026-06-03)
+
+15 standalone `.mdk` fixtures in `test/diff_fixtures/`; each has a `<name>.golden`
+with three committed sections: `=== AST ===` (canonical `Printer.program_to_string`
+round-trip), `=== TYPES ===` (full alphabetic type env from `Typecheck.check_program`),
+`=== EVAL ===` (typed-pipeline stdout via `Elaborate.elaborate` + `eval_program
+~prelude:false`). Regen probe `dev/gen_golden.exe`; comparison runner
+`test/thorough/thorough_diff.ml` (45 cases), wired into `@thorough` via
+`(setenv DIFF_FIXTURES_DIR …)`. The rig each self-host stage diffs against.
+Token-stream section deferred to Phase 131.
+
+### Phase 132: self-host Stage 1 — port the lexer to Medaka ✅ DONE (2026-06-03)
+
+First self-host stage. `selfhost/lexer.mdk` (+ `lex_main.mdk`,
+`test/diff_selfhost_lexer.sh`): the full tokenizer — literals (incl. hex/bin/oct
+ints, char + string escapes, `\u{…}`), idents/keywords, operators/punctuation, line
++ nestable `{- … -}` block comments, string interpolation, triple-quoted strings
+(+ `stripIndent`), the `@`/`AS_AT` adjacency rule, and a faithful port of
+`lib/lexer.mll`'s INDENT/DEDENT/NEWLINE layout algorithm + else-continuation filter +
+leading-operator continuation. Pure two-pass design (scan → RawTok stream with
+`RNewline` markers → layout pass). Prelude + global externs only (so `selfhost/` is a
+single-root project). Validated byte-for-byte two ways: 17/17 curated fixtures, and
+all 13 real `.mdk` files (every stdlib module + the lexer self-lexing) via
+`dev/lextok.exe` (FLOAT text normalized: `%g` vs `floatToString`; non-ASCII byte
+escaping differs in debug rendering only — token *values* match). Incorporated Phase
+133 (char-literal escapes). The one construct neither lexer handles is *nested*
+string interpolation, which the OCaml reference rejects too. Full slice log:
+`selfhost/README.md`.
+
+### Phase 134: `<IO>` helper from a `match` arm produced no output — a cross-module dict-passing name collision ✅ DONE (2026-06-03)
+
+Surfaced by Phase 132. **Symptom:** factoring an `<IO>` body into a helper called
+from a `match` arm made the program exit 0 with **no output**; the inline form ran
+correctly. Only reproduced with the real `selfhost/lexer.mdk` — every minimal analog
+worked, which made it look like a deferred-thunk / eval-driver bug (Phases
+96/103/121/125). It was **not** the eval driver. **Root cause:** `lexer.mdk` defines
+a private, genuinely `Num`-constrained 8-arg `emit` (the `+` on `pos`/`depth` leaves
+two `Num` constraints, so dict_pass gives its definition two leading dict params).
+`Eval.eval_modules` dict-passed the marked prelude **+ all modules jointly** and
+`Dict_pass.collect_arities` keyed dict-arity by **bare name**, so the global `emit→2`
+was applied to `lex_main.mdk`'s unrelated, unconstrained `emit` too — which became
+3-param while its call site (`EDictApp`, no resolved route) applied zero dicts, so
+`emit path` returned an un-run **partial closure**, discarded by `main`'s thunk →
+clean exit, no output. The minimal analogs missed it because their helper-collision
+used `++` (no residual constraint ⇒ no dict params ⇒ no conflation). **Fix
+(`lib/eval.ml` `eval_modules_ex`):** stop dict-passing jointly. Scope each module's
+dict-arity table to references that can actually resolve to *its* definitions — the
+module's own decls ∪ the decls of its **transitive importers**. The prelude, imported
+by everyone, keeps the full joint scope. **Regression test:**
+`test_loader.ml` `test_eval_dict_arity_no_cross_module_collision` (drives
+`Eval.eval_modules`; the flat path can't express two top-level `emit`s, so it masks
+this). `selfhost/lex_main.mdk` now uses the helper form on purpose.
+
+### Phase 135: self-host Stage 1 — port the parser to Medaka ✅ DONE (2026-06-03)
+
+Second self-host stage. `selfhost/parser.mdk`: the Menhir LR grammar (`lib/parser.mly`)
+reimplemented as a **monadic combinator** parser over `List Token` — a `Parser` monad
+(`Mappable`/`Applicative`/`Thenable`) with `do`-notation + `many`/`sepBy1`/`choice`/
+`chainl1`; precedence is the stratified ladder, one function per level; emits the
+**pre-desugar** surface AST (`EGuards`/`EDo`/`EStringInterp`/`EListComp`/`ESection`/
+`EQuestion`). **Validation = structural S-expression dump** — added `dev/astdump.ml`
+(`Ast→sexp`, location-stripped) + a Medaka mirror `selfhost/sexp.mdk`, diffed by
+`test/diff_selfhost_parse.sh`. **Complete:** validated byte-for-byte on all 13 stdlib
+files, 23/23 curated `test/parse_fixtures/`, the 15 `test/diff_fixtures/`, and the
+6-file self-source (incl. `lexer.mdk`/`parser.mdk` parsing themselves). All
+surface-grammar gaps closed (list comprehensions, `function`, `?`, array slice/index
++ ranges, `let mut`/assignment, let-else, do-block function-let, range patterns,
+match-arm guards, record patterns, triple strings). A hardening sweep (2026-06-04)
+swept every SYNTAX.md construct through the harness and closed 16 more constructs the
+port rejected/mis-parsed (expression-level `let` forms, as-pattern lambda params,
+`if let`, impl hints `e @Name`, import aliases, end-of-line/match-arm `where`, nested
+record update, type aliases/newtypes/`let rec … with`/attributes, `Map`/`Set`
+literals). Gotcha for combinators under strict eval: recursive parsers must recurse
+via a `do`-continuation, not by passing themselves as a strict argument
+(recursive-value init cycle → see Phase 138). Full slice log: `selfhost/README.md`.
+
+### Phase 136: typechecker — generalize mutually-recursive binding groups ✅ DONE (2026-06-03)
+
+A single self-recursive polymorphic function generalized fine, but a **mutual-recursion
+group monomorphized to its first use** (`isEv 3 (5:Int)` and `isEv 3 "a"` together →
+"Int vs String"). **Root cause was NOT the generalization loop the TODO guessed** —
+it was **group *formation*:** `order_groups_by_deps` ran Tarjan SCC only to reorder,
+then flattened a cyclic SCC back into separate singleton groups, so mutual recursion
+was checked as sequential singletons sharing a monomorphic placeholder — member 1
+generalized, member 2's inference re-linked member 1's quantified var, leaving member
+1's `bound_ids` referencing a now-`Link`ed var → `instantiate` treated it as
+free/monomorphic → pinned by first use. **Fix (one site):** `order_groups_by_deps`
+now **merges** a multi-member SCC into one group, so all bodies are inferred before
+any member generalizes. **Dict-passing fallout (the warned Phase 73/83/84
+interaction, fixed here):** merging makes siblings share one constraint var id, which
+broke `find_enclosing_dict` (it picks the enclosing fn by id-match and returned a
+sibling's `$dict_<fn>_<slot>`, unbound at eval, for pass-through constrained mutual
+recursion and promoted return-pos pairs). Fixed by threading an `enclosing`-function
+hint (a `current_fn` ref set per member in Pass B) into `find_enclosing_dict`.
+Unblocks idiomatic parser combinators (`many`↔`some`, `chainl1`↔…). Tests:
+`test_typecheck` "mutual poly {signed,unsigned,2nd}", `test_run` "mutual rec dict
+(Phase 136)".
+
+### Phase 137: allow an expression RHS to wrap onto a continuation line ✅ DONE (2026-06-03)
+
+A long application can now break an argument onto a more-indented following line:
+```
+parseCmp = chainl1 parseCons
+  (choice [...])      -- now continues `chainl1 parseCons`
+```
+**Lexer-only change** (`lib/lexer.mll`); `parser.mly` untouched, so `parser.conflicts`
+is unchanged. The continuation is purely *subtractive* (it removes an INDENT a
+one-line form never had), so every continued form parses to the **identical AST** as
+its one-liner. Mechanism: when a would-be INDENT (`col > current`, `paren_depth = 0`)
+is *not* a block, suppress it. An INDENT opens a block iff (a) it follows a
+`match`/`record` header (tracked by one-shot `match_pending`/`record_pending`) or (b)
+the previous token can't end an expression. Remaining candidates are deferred
+(`pending_indent`) and resolved in `token` once the deeper line's first token is
+known: an atom-starter continues the application; `|`/`where`/`data`'s `=`/leading-op
+*commits* the INDENT and replays the token. Tests: `test_parser` "expression-RHS
+continuation (Phase 137)" (10 cases). Found via the self-host parser port. (Note:
+Phase 144 tracks the unfinished follow-on — `::` and other infix operators aren't yet
+in the leading-operator continuation set.)
+
+### Phase 138: clear error for a recursive *value* forced during its own definition ✅ DONE (2026-06-03)
+
+A non-function binding that references itself such that the reference is *forced*
+while the binding is still being computed crashed the interpreter with a raw OCaml
+`Fatal error: exception CamlinternalLazy.Undefined` instead of a Medaka diagnostic
+(typechecks fine; it's an **eval-time** crash). Minimal repro (now a clean error):
+```
+ident x = x
+loop = ident loop      -- forces `loop` (a strict arg) while defining it
+main = println loop    -- → panic: recursive value 'loop' is forced while …
+```
+Surfaced by the Phase 135 combinator parser, where recursive parser *values* hit
+exactly this (the fix there: recurse through a `do`-continuation). **Fix:** a
+`force_thunk name t` helper in `lib/eval.ml` wraps `Lazy.force` and converts
+`CamlinternalLazy.Undefined` into a named `Eval_error` ("recursive value 'NAME' is
+forced while it is being defined; a non-function recursive binding must defer its
+self-reference (through a lambda or continuation)"). The two thunk-force sites that
+know the binding name (`lookup`, `lookup_method`) route through it; the deferred-force
+loop and multi-module driver inherit the catch via `lookup`. Regression tests in
+`test_run`.
+
 ---
 
 ## 4. Smaller cleanups (good warm-up tasks)
