@@ -11,7 +11,7 @@
 -- the prelude), effect rows, records, interfaces/impls + constraint solving,
 -- and explicit type signatures.
 
-import ast.{Lit(..), Ty(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), FunClause(..), FieldAssign(..), LetBind(..), Expr(..), ConPayload(..), Field(..), Variant(..), IfaceMethod(..), Decl(..)}
+import ast.{Lit(..), Ty(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), FunClause(..), FieldAssign(..), LetBind(..), Expr(..), ConPayload(..), Field(..), Variant(..), IfaceMethod(..), DataVis(..), Decl(..)}
 import desugar.{mapProg}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
@@ -490,6 +490,7 @@ infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
 infer env (EFieldAccess e fname) = inferFieldAccess env e fname
 infer env (ERecordUpdate base fields) = inferRecordUpdate env base fields
+infer env (EVariantUpdate cname base fields) = inferVariantUpdate env cname base fields
 infer env (EBlock stmts) = inferBlock env stmts
 infer env (EMethodAt name tagRef) = inferMethodAt env name tagRef
 infer env (EArrayLit es) = inferArrayLit env es
@@ -604,9 +605,24 @@ unifyFieldAssign env fieldTypes fn val = match lookupAssocS fn fieldTypes
   Some ft => unify (infer env val) ft
 
 inferFieldAccess : TcEnv -> Expr -> String -> <Mut> Mono
-inferFieldAccess env e fname = match lookupRecordByField fname
-  None => panic ("unknown field: " ++ fname)
-  Some ri => inferFieldAccessWith env e ri fname
+inferFieldAccess env e fname
+  | fname == "value" = inferValueField env e
+  | otherwise = match lookupRecordByField fname
+    None => panic ("unknown field: " ++ fname)
+    Some ri => inferFieldAccessWith env e ri fname
+
+-- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
+-- (forcing it, like the reference's `(Ref a).value → a` special case) and return
+-- `a` — done by unification, not a structural match, so it also works when the
+-- receiver's type is still an unsolved tyvar at this point (the self-hosted
+-- typecheck infers function params as fresh vars, not yet pinned to their sig).
+inferValueField : TcEnv -> Expr -> <Mut> Mono
+inferValueField env e =
+  let et = infer env e
+  let inner = freshVar ()
+  let _ = unify et (TApp (TCon "Ref") inner)
+  inner
+
 
 inferFieldAccessWith : TcEnv -> Expr -> RecordInfo -> String -> <Mut> Mono
 inferFieldAccessWith env e ri fname =
@@ -620,6 +636,15 @@ inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> <Mut> Mono
 inferRecordUpdate env base fields = match firstFieldName fields
   None => panic "empty record update"
   Some fn => inferRecordUpdateField env base fields fn
+
+-- `Con { base | f = v, … }` — a named-field-variant update (e.g. desugar's
+-- `DInterface { d | methods = … }`).  Resolve the variant's field layout by the
+-- CONSTRUCTOR name (registered via registerNamedFieldVariants); both `base` and
+-- the result have the variant's DATA type, only the provided fields are typed.
+inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> <Mut> Mono
+inferVariantUpdate env cname base fields = match lookupRecordByName cname
+  None => panic ("unknown record: " ++ cname)
+  Some ri => inferRecordUpdateWith env base fields ri
 
 firstFieldName : List FieldAssign -> Option String
 firstFieldName [] = None
@@ -818,12 +843,18 @@ registerData env _ = env
 
 -- ── record metadata registration & instantiation ──────────────────────────
 registerRecordInfo : String -> List String -> List Field -> <Mut> Unit
-registerRecordInfo name params fields =
+registerRecordInfo name params fields = registerRecordInfoKeyed name name params fields
+
+-- like registerRecordInfo but with a distinct registry KEY and result TYPE name:
+-- for a record they coincide, but a named-field data variant is keyed by its
+-- constructor (DInterface) while its values have the data type (Decl).
+registerRecordInfoKeyed : String -> String -> List String -> List Field -> <Mut> Unit
+registerRecordInfoKeyed key typeName params fields =
   let paramVars = freshVars (lengthL params)
   let tvs = zipL params paramVars
-  let result = applyParams (TCon name) paramVars
+  let result = applyParams (TCon typeName) paramVars
   let fieldMonos = map (recFieldMono tvs) fields
-  set_ref recordsRef ((name, RecordInfo (map monoTyvarId paramVars) result fieldMonos) :: recordsRef.value)
+  set_ref recordsRef ((key, RecordInfo (map monoTyvarId paramVars) result fieldMonos) :: recordsRef.value)
 
 recFieldMono : List (String, Mono) -> Field -> (String, Mono)
 recFieldMono tvs (Field fn ty) = (fn, fromAstType tvs ty)
@@ -862,7 +893,19 @@ registerVariants env name params variants =
   let tvs = zipL params paramVars
   let paramIds = map monoTyvarId paramVars
   let result = applyParams (TCon name) paramVars
+  let _ = registerNamedFieldVariants name params variants
   addVariants env tvs paramIds result variants
+
+-- a named-field data variant (`C { f : T, … }`, e.g. ast's DInterface) carries a
+-- record-shaped payload: register its field layout keyed by the CONSTRUCTOR name
+-- but with the DATA TYPE as result type, so `C { f, … }` patterns / `C { … }`
+-- literals resolve (the positional ctor scheme is still added by addVariants).
+registerNamedFieldVariants : String -> List String -> List Variant -> <Mut> Unit
+registerNamedFieldVariants _ _ [] = ()
+registerNamedFieldVariants tyName params (Variant cname (ConNamed fields) :: rest) =
+  let _ = registerRecordInfoKeyed cname tyName params fields
+  registerNamedFieldVariants tyName params rest
+registerNamedFieldVariants tyName params (_ :: rest) = registerNamedFieldVariants tyName params rest
 
 freshVars : Int -> <Mut> List Mono
 freshVars n
@@ -1100,6 +1143,7 @@ allEVars (EAnnot e _) = allEVars e
 allEVars (EBlock stmts) = concatMapL doStmtEVars stmts
 allEVars (ERecordCreate _ fs) = concatMapL fieldAssignEVars fs
 allEVars (ERecordUpdate e fs) = allEVars e ++ concatMapL fieldAssignEVars fs
+allEVars (EVariantUpdate _ e fs) = allEVars e ++ concatMapL fieldAssignEVars fs
 allEVars _ = []
 
 letBindEVars : LetBind -> List String
@@ -1312,6 +1356,79 @@ export
 checkToLinesWithRuntime : List Decl -> List Decl -> <Mut> String
 checkToLinesWithRuntime runtimeDecls prog =
   joinNl (schemeLines (checkProgramSeeded (externSchemes runtimeDecls) prog))
+
+-- ── multi-module typecheck (bootstrap front-end) ───────────────────────────
+-- Threads per-module exports in dependency order.  The prelude (core) is checked
+-- ONCE and ALL its schemes + ctors seed every module (it's implicitly visible);
+-- each selfhost module then contributes only its PUBLIC value schemes — private
+-- helpers stay module-local, so same-named helpers across modules never collide
+-- (the per-module-frame property, without a frame) — plus its public ctors.
+-- Returns each module's OWN value schemes, in load order.
+
+-- typecheck one program with seeded value schemes + accumulated data decls.
+-- Like checkProgramSeeded but ALSO re-registers prior modules' public data decls
+-- (`accData ++ prog`) so imported constructors AND named-field-variant record
+-- info (e.g. ast's DInterface) resolve.  Returns the module's own value schemes.
+checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> <Mut> List (String, Scheme)
+checkModuleFull seedVars accData prog =
+  let _ = resetState ()
+  let dataEnv = registerAllData initialEnv (accData ++ prog)
+  let globalS = ifaceMethodSchemes prog ++ externSchemes prog
+  let env1 = extendVars (extendVars dataEnv seedVars) globalS
+  let defs = funDefs prog
+  let sigs = sigsOf prog
+  globalS ++ processTopGroups env1 sigs defs (groupNames defs [])
+
+-- public top-level value names (the pub flag may sit on the sig, def, or extern)
+publicValNames : List Decl -> List String
+publicValNames [] = []
+publicValNames (DFunDef True n _ _ :: rest) = n :: publicValNames rest
+publicValNames (DTypeSig True n _ :: rest) = n :: publicValNames rest
+publicValNames (DExtern True n _ :: rest) = n :: publicValNames rest
+publicValNames (_ :: rest) = publicValNames rest
+
+-- `public export data` / `public export record` decls — re-registered in every
+-- importing module so their constructors + field layout are in scope.
+publicDataDecls : List Decl -> List Decl
+publicDataDecls [] = []
+publicDataDecls ((DData VisPublic n ps vs ds) :: rest) = DData VisPublic n ps vs ds :: publicDataDecls rest
+publicDataDecls ((DRecord VisPublic n ps fs ds) :: rest) = DRecord VisPublic n ps fs ds :: publicDataDecls rest
+publicDataDecls (_ :: rest) = publicDataDecls rest
+
+pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pickSchemes [] _ = []
+pickSchemes (n :: ns) table = match lookupAssocS n table
+  Some s => (n, s) :: pickSchemes ns table
+  None => pickSchemes ns table
+
+checkModulesGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> List (String, List (String, Scheme))
+checkModulesGo _ _ [] = []
+checkModulesGo accV accData ((mid, prog) :: rest) =
+  let schemes = checkModuleFull accV accData prog
+  let pubV = pickSchemes (publicValNames prog) schemes
+  (mid, schemes) :: checkModulesGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+
+-- check every module in dependency order against a shared prelude + runtime.
+-- modules = (moduleId, desugared program) in dependency-first order.
+export
+checkModules : List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, List (String, Scheme))
+checkModules runtimeDecls coreDecls modules =
+  let runtimeSeed = externSchemes runtimeDecls
+  let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
+  checkModulesGo (runtimeSeed ++ coreSchemes) (publicDataDecls coreDecls) modules
+
+-- the entry module is last in dependency-first order
+entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
+entryOwnSchemes [] = []
+entryOwnSchemes [(_, ss)] = ss
+entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
+
+-- run the multi-module front-end and render the ENTRY module's own bindings as
+-- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
+export
+checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> <Mut> String
+checkModulesEntryLines runtimeDecls coreDecls modules =
+  joinNl (schemeLines (entryOwnSchemes (checkModules runtimeDecls coreDecls modules)))
 
 schemeLines : List (String, Scheme) -> <Mut> List String
 schemeLines [] = []
