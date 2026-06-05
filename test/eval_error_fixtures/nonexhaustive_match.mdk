@@ -1,0 +1,3 @@
+-- non-exhaustive match: EMatch with no matching arm
+main = match 5
+  0 => "zero"

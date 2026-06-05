@@ -1,0 +1,3 @@
+-- non-exhaustive match: single-clause function with non-matching arg
+f 0 = "zero"
+main = f 5

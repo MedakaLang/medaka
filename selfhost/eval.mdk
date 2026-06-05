@@ -124,11 +124,11 @@ intSeq lo end
   | lo >= end = []
   | otherwise = lo :: intSeq (lo + 1) end
 
-listNthV : List Value -> Int -> Value
-listNthV [] _ = panic "index out of bounds"
-listNthV (x::xs) i
+listNthAt : List Value -> Int -> Int -> Value
+listNthAt [] orig _ = panic ("index " ++ intToString orig ++ " out of bounds")
+listNthAt (x::xs) orig i
   | i <= 0 = x
-  | otherwise = listNthV xs (i - 1)
+  | otherwise = listNthAt xs orig (i - 1)
 
 listSliceV : List Value -> Int -> Int -> List Value
 listSliceV xs lo hi = listSliceGo xs 0 lo hi
@@ -242,7 +242,7 @@ lookupEnv : EvalEnv -> String -> <Mut> Value
 lookupEnv (EvalEnv frames) name = lookupFrames frames name
 
 lookupFrames : List (List (String, Ref Value)) -> String -> <Mut> Value
-lookupFrames [] name = panic ("unbound variable: " ++ name)
+lookupFrames [] name = panic ("unbound identifier: " ++ name)
 lookupFrames (frame::rest) name = match lookupFrameCell frame name
   Some cell => forceCell cell
   None => lookupFrames rest name
@@ -509,7 +509,7 @@ export
 apply : Value -> Value -> <Mut> Value
 apply f x = match applyOpt f x
   Some v => v
-  None => panic "no matching clause in application"
+  None => panic "non-exhaustive match"
 
 applyOpt : Value -> Value -> <Mut> Option Value
 applyOpt (VClosure env pats body) arg = applyClosure env pats body arg
@@ -737,34 +737,43 @@ eval _ _ = panic "eval: unsupported node (slice 2)"
 
 export
 evalIndex : Value -> Value -> Value
-evalIndex (VArray a) (VInt i) =
+evalIndex container (VInt i) = evalIndexInt container i
+evalIndex _ _ = panic "index is not an Int"
+
+evalIndexInt : Value -> Int -> Value
+evalIndexInt (VArray a) i =
   if i < 0 || i >= arrayLength a then
-    panic "array index out of bounds"
+    panic ("index " ++ intToString i ++ " out of bounds")
   else
     arrayGetUnsafe i a
-evalIndex (VList vs) (VInt i) = listNthV vs i
-evalIndex (VString s) (VInt i) = stringIndexCp s i
-evalIndex _ _ = panic "index: bad operands"
+evalIndexInt (VList vs) i = listNthAt vs i i
+evalIndexInt (VString s) i = stringIndexCp s i
+evalIndexInt _ _ = panic "index on non-array/list/string"
 
 -- codepoint-indexed Char (Phase 77), mirroring lib/eval.ml's EIndex String arm
 stringIndexCp : String -> Int -> Value
 stringIndexCp s i
-  | i < 0 || i >= stringLength s = panic "string index out of bounds"
+  | i < 0 || i >= stringLength s = panic ("index " ++ intToString i ++ " out of bounds")
   | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
 
 export
 evalSlice : Value -> Value -> Value -> Bool -> Value
-evalSlice (VArray a) (VInt lo) (VInt hi) incl =
+evalSlice container (VInt lo) (VInt hi) incl = evalSliceInt container lo hi incl
+evalSlice _ _ _ _ = panic "slice index must be Int"
+
+evalSliceInt : Value -> Int -> Int -> Bool -> Value
+evalSliceInt (VArray a) lo hi incl =
   sliceArray a lo (if incl then hi + 1 else hi)
-evalSlice (VList vs) (VInt lo) (VInt hi) incl =
+evalSliceInt (VList vs) lo hi incl =
   VList (listSliceV vs lo (if incl then hi + 1 else hi))
-evalSlice (VString s) (VInt lo) (VInt hi) incl =
+evalSliceInt (VString s) lo hi incl =
   VString (stringSlice lo (if incl then hi + 1 else hi) s)
-evalSlice _ _ _ _ = panic "slice: bad operands"
+evalSliceInt _ _ _ _ = panic "slice on non-array/list/string"
 
 sliceArray : Array Value -> Int -> Int -> Value
 sliceArray a lo hiX
-  | lo < 0 || hiX > arrayLength a || hiX - lo < 0 = panic "slice out of bounds"
+  | lo < 0 || hiX > arrayLength a || hiX - lo < 0 =
+    panic ("slice [" ++ intToString lo ++ ".." ++ intToString (hiX - 1) ++ "] out of bounds")
   | otherwise = VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
 
 export
@@ -798,7 +807,9 @@ mergeField updates (k, v) = match lookupAssoc k updates
 export
 evalValueField : Value -> Value
 evalValueField (VRef cell) = cell.value
-evalValueField (VRecord _ fields) = fieldOr fields "value"
+evalValueField (VRecord _ fields) = match lookupAssoc "value" fields
+  Some v => v
+  None => panic "record has no field 'value'"
 evalValueField _ = panic "field access on non-record/ref"
 
 export
@@ -900,7 +911,7 @@ isNullary [] = True
 isNullary _ = False
 
 evalMatch : EvalEnv -> Value -> List Arm -> <Mut> Value
-evalMatch _ _ [] = panic "no matching clause in match"
+evalMatch _ _ [] = panic "non-exhaustive match"
 evalMatch env sv ((Arm pat guards body)::rest) = match matchPat pat sv
   None => evalMatch env sv rest
   Some binds => match runGuards (extendEnv env binds) guards
@@ -928,9 +939,12 @@ export
 evalUnop : String -> Value -> Value
 evalUnop "-" (VInt n) = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (0.0 - f)
+evalUnop "-" _ = panic "unary minus on non-number"
 evalUnop "!" (VBool b) = VBool (not b)
+evalUnop "!" _ = panic "'!' on non-Bool"
 evalUnop "not" (VBool b) = VBool (not b)
-evalUnop op _ = panic ("unknown/invalid unary op: " ++ op)
+evalUnop "not" _ = panic "'!' on non-Bool"
+evalUnop op _ = panic ("unknown unary op: " ++ op)
 
 evalBinop : EvalEnv -> String -> Expr -> Expr -> <Mut> Value
 evalBinop env "|>" l r = apply (eval env r) (eval env l)
@@ -971,7 +985,7 @@ export
 appendVal : Value -> Value -> Value
 appendVal (VList a) (VList b) = VList (a ++ b)
 appendVal (VString a) (VString b) = VString (a ++ b)
-appendVal _ _ = panic "'++' requires List or String"
+appendVal _ _ = panic "'++' requires Semigroup (List, String, or a type with append)"
 
 export
 evalArith : String -> Value -> Value -> Value
