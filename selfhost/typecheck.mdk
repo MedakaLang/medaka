@@ -365,25 +365,97 @@ fromAstType tvs (TyEffect _ _ t) = fromAstType tvs t
 fromAstType tvs (TyConstrained _ t) = fromAstType tvs t
 
 -- ── environment ───────────────────────────────────────────────────────────
-public export data TcEnv = TcEnv (List (String, Scheme)) (List (String, Scheme))   -- vars, ctors
+-- SMap: persistent String-keyed weight-balanced tree.  The type environment is
+-- looked up on EVERY variable occurrence and carries the whole prelude + every
+-- imported module's public bindings, so an assoc-list env made inference O(n^2).
+-- This is a monomorphic (String key) port of stdlib/map.mdk — O(log n) lookup,
+-- persistent (each insert shares structure, so the branching/backtracking
+-- inference env stays valid).  Insert OVERWRITES on equal keys, matching the old
+-- assoc-list "newest binding shadows older" semantics (prepend + first-match).
+data SMap a = STip | SBin Int String a (SMap a) (SMap a)
+
+smEmpty : SMap a
+smEmpty = STip
+
+smSize : SMap a -> Int
+smSize STip = 0
+smSize (SBin n _ _ _ _) = n
+
+smBin : String -> a -> SMap a -> SMap a -> SMap a
+smBin k v l r = SBin (smSize l + smSize r + 1) k v l r
+
+smBalance : String -> a -> SMap a -> SMap a -> SMap a
+smBalance k v l r
+  | smSize l + smSize r <= 1 = smBin k v l r
+  | smSize r > 3 * smSize l = smRotateL k v l r
+  | smSize l > 3 * smSize r = smRotateR k v l r
+  | otherwise = smBin k v l r
+
+smRotateL : String -> a -> SMap a -> SMap a -> SMap a
+smRotateL k v l r = match r
+  SBin _ _ _ rl rr =>
+    if smSize rl < 2 * smSize rr then smSingleL k v l r else smDoubleL k v l r
+  STip => panic "SMap.rotateL: empty right subtree"
+
+smRotateR : String -> a -> SMap a -> SMap a -> SMap a
+smRotateR k v l r = match l
+  SBin _ _ _ ll lr =>
+    if smSize lr < 2 * smSize ll then smSingleR k v l r else smDoubleR k v l r
+  STip => panic "SMap.rotateR: empty left subtree"
+
+smSingleL : String -> a -> SMap a -> SMap a -> SMap a
+smSingleL k1 v1 t1 r = match r
+  SBin _ k2 v2 t2 t3 => smBin k2 v2 (smBin k1 v1 t1 t2) t3
+  STip => panic "SMap.singleL: empty right subtree"
+
+smSingleR : String -> a -> SMap a -> SMap a -> SMap a
+smSingleR k1 v1 l t3 = match l
+  SBin _ k2 v2 t1 t2 => smBin k2 v2 t1 (smBin k1 v1 t2 t3)
+  STip => panic "SMap.singleR: empty left subtree"
+
+smDoubleL : String -> a -> SMap a -> SMap a -> SMap a
+smDoubleL k1 v1 t1 r = match r
+  SBin _ k2 v2 (SBin _ k3 v3 t2 t3) t4 => smBin k3 v3 (smBin k1 v1 t1 t2) (smBin k2 v2 t3 t4)
+  _ => panic "SMap.doubleL: malformed right subtree"
+
+smDoubleR : String -> a -> SMap a -> SMap a -> SMap a
+smDoubleR k1 v1 l t4 = match l
+  SBin _ k2 v2 t1 (SBin _ k3 v3 t2 t3) => smBin k3 v3 (smBin k2 v2 t1 t2) (smBin k1 v1 t3 t4)
+  _ => panic "SMap.doubleR: malformed left subtree"
+
+smInsert : String -> a -> SMap a -> SMap a
+smInsert k v STip = SBin 1 k v STip STip
+smInsert k v (SBin n k2 v2 l r) = match stringCompare k k2
+  Lt => smBalance k2 v2 (smInsert k v l) r
+  Gt => smBalance k2 v2 l (smInsert k v r)
+  Eq => SBin n k v l r
+
+smLookup : String -> SMap a -> Option a
+smLookup k STip = None
+smLookup k (SBin _ k2 v l r) = match stringCompare k k2
+  Lt => smLookup k l
+  Gt => smLookup k r
+  Eq => Some v
+
+public export data TcEnv = TcEnv (SMap Scheme) (SMap Scheme)   -- vars, ctors
 
 lookupVar : TcEnv -> String -> Option Scheme
-lookupVar (TcEnv vs cs) n = match lookupAssocS n vs
+lookupVar (TcEnv vs cs) n = match smLookup n vs
   Some s => Some s
-  None => lookupAssocS n cs
+  None => smLookup n cs
 
 lookupCtor : TcEnv -> String -> Option Scheme
-lookupCtor (TcEnv _ cs) n = lookupAssocS n cs
+lookupCtor (TcEnv _ cs) n = smLookup n cs
 
 extendVar : TcEnv -> String -> Scheme -> TcEnv
-extendVar (TcEnv vs cs) n s = TcEnv ((n, s) :: vs) cs
+extendVar (TcEnv vs cs) n s = TcEnv (smInsert n s vs) cs
 
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendVars env [] = env
 extendVars env ((n, s) :: rest) = extendVars (extendVar env n s) rest
 
 addCtor : TcEnv -> String -> Scheme -> TcEnv
-addCtor (TcEnv vs cs) n s = TcEnv vs ((n, s) :: cs)
+addCtor (TcEnv vs cs) n s = TcEnv vs (smInsert n s cs)
 
 monoScheme : Mono -> Scheme
 monoScheme t = Forall [] t
@@ -1324,7 +1396,7 @@ fieldAssignEVars (FieldAssign _ e) = allEVars e
 
 -- builtin constructors available without the prelude (mirrors initial_env)
 initialEnv : TcEnv
-initialEnv = TcEnv [] [("True", monoScheme (TCon "Bool")), ("False", monoScheme (TCon "Bool"))]
+initialEnv = TcEnv smEmpty (smInsert "True" (monoScheme (TCon "Bool")) (smInsert "False" (monoScheme (TCon "Bool")) smEmpty))
 
 registerAllData : TcEnv -> List Decl -> <Mut> TcEnv
 registerAllData env [] = env
@@ -1337,19 +1409,112 @@ registerAllData env (d :: rest) = registerAllData (registerData env d) rest
 -- into one letrec group (generalized together).  Mirrors the reference's
 -- order_groups_by_deps + process_letrec_group (Phase 136).
 
+-- ── Tarjan strongly-connected components (O(V+E)) ─────────────────────────
+-- Replaces the former all-pairs-reachability + mutual-reachability SCC + topo
+-- sort, which was O(n^3) in a module's top-level binding count and dominated
+-- the multi-module typecheck (check_modules).  Emits SCCs in dependency-first
+-- order (a "sink" component — no outside dependencies — finishes and is emitted
+-- first), exactly what processSCCs needs.  State is held in module-level refs,
+-- reset at the start of each run (processTopGroups runs sequentially per module).
+
+minI : Int -> Int -> Int
+minI a b = if a < b then a else b
+
+revLL : List a -> List a
+revLL xs = revLLGo xs []
+revLLGo : List a -> List a -> List a
+revLLGo [] acc = acc
+revLLGo (x :: xs) acc = revLLGo xs (x :: acc)
+
+depGraphMap : List String -> List (String, (List Pat, Expr)) -> SMap (List String)
+depGraphMap names defs = buildAdj names names defs STip
+buildAdj : List String -> List String -> List (String, (List Pat, Expr)) -> SMap (List String) -> SMap (List String)
+buildAdj [] _ _ m = m
+buildAdj (n :: rest) alln defs m = buildAdj rest alln defs (smInsert n (depsOf n alln defs) m)
+
+tjCounter : Ref Int
+tjCounter = Ref 0
+tjStack : Ref (List String)
+tjStack = Ref []
+tjIndex : Ref (SMap Int)
+tjIndex = Ref STip
+tjLow : Ref (SMap Int)
+tjLow = Ref STip
+tjOn : Ref (SMap Bool)
+tjOn = Ref STip
+tjOut : Ref (List (List String))
+tjOut = Ref []
+
+tjLowOf : String -> Int
+tjLowOf x = fromOption 0 (smLookup x tjLow.value)
+tjIndexOf : String -> Int
+tjIndexOf x = fromOption 0 (smLookup x tjIndex.value)
+tjOnStack : String -> Bool
+tjOnStack x = fromOption False (smLookup x tjOn.value)
+
+tarjanSCCs : List String -> SMap (List String) -> <Mut> List (List String)
+tarjanSCCs names adj =
+  let _ = set_ref tjCounter 0
+  let _ = set_ref tjStack []
+  let _ = set_ref tjIndex STip
+  let _ = set_ref tjLow STip
+  let _ = set_ref tjOn STip
+  let _ = set_ref tjOut []
+  let _ = tarjanAll names adj
+  revLL tjOut.value
+
+tarjanAll : List String -> SMap (List String) -> <Mut> Unit
+tarjanAll [] _ = ()
+tarjanAll (v :: rest) adj =
+  let _ = tjVisit v adj
+  tarjanAll rest adj
+
+tjVisit : String -> SMap (List String) -> <Mut> Unit
+tjVisit v adj = match smLookup v tjIndex.value
+  Some _ => ()
+  None => strongconnect v adj
+
+strongconnect : String -> SMap (List String) -> <Mut> Unit
+strongconnect v adj =
+  let idx = tjCounter.value
+  let _ = set_ref tjIndex (smInsert v idx tjIndex.value)
+  let _ = set_ref tjLow (smInsert v idx tjLow.value)
+  let _ = set_ref tjCounter (idx + 1)
+  let _ = set_ref tjStack (v :: tjStack.value)
+  let _ = set_ref tjOn (smInsert v True tjOn.value)
+  let _ = scEdges v (fromOption [] (smLookup v adj)) adj
+  if tjLowOf v == idx then tjPop v [] else ()
+
+scEdges : String -> List String -> SMap (List String) -> <Mut> Unit
+scEdges v [] adj = ()
+scEdges v (w :: ws) adj =
+  let _ = scEdge v w adj
+  scEdges v ws adj
+
+scEdge : String -> String -> SMap (List String) -> <Mut> Unit
+scEdge v w adj = match smLookup w tjIndex.value
+  None =>
+    let _ = strongconnect w adj
+    set_ref tjLow (smInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value)
+  Some iw =>
+    if tjOnStack w then set_ref tjLow (smInsert v (minI (tjLowOf v) iw) tjLow.value) else ()
+
+tjPop : String -> List String -> <Mut> Unit
+tjPop v acc = match tjStack.value
+  [] => set_ref tjOut (acc :: tjOut.value)
+  (w :: rest) =>
+    let _ = set_ref tjStack rest
+    let _ = set_ref tjOn (smInsert w False tjOn.value)
+    if w == v then set_ref tjOut ((w :: acc) :: tjOut.value) else tjPop v (w :: acc)
+
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> <Mut> List (String, Scheme)
 processTopGroups env sigs defs names =
-  let graph = depGraph names defs
-  let reachMap = map (n => (n, reachFrom graph n)) names
-  let ordered = topoSCCs (sccsOf names reachMap) graph
+  let ordered = tarjanSCCs names (depGraphMap names defs)
   processSCCs env sigs defs ordered
 
--- dependency graph: each top-level name → the other top-level names its bodies
--- reference (a conservative over-approximation via all free EVars is fine — only
--- names that are themselves groups matter)
-depGraph : List String -> List (String, (List Pat, Expr)) -> List (String, List String)
-depGraph names defs = map (n => (n, depsOf n names defs)) names
-
+-- per-name dependencies: the other top-level names a binding's bodies reference
+-- (a conservative over-approximation via all free EVars is fine — only names
+-- that are themselves groups matter).  Consumed by depGraphMap → Tarjan.
 depsOf : String -> List String -> List (String, (List Pat, Expr)) -> List String
 depsOf name names defs =
   filterNonSelf name (keepGroupNames names (dedupS (groupRefs (clausesFor name defs))))
@@ -1371,82 +1536,6 @@ filterList _ [] = []
 filterList p (x :: xs)
   | p x = x :: filterList p xs
   | otherwise = filterList p xs
-
-depsOfNode : List (String, List String) -> String -> List String
-depsOfNode graph n = fromOption [] (lookupAssocSL n graph)
-
-lookupAssocSL : String -> List (String, List String) -> Option (List String)
-lookupAssocSL _ [] = None
-lookupAssocSL k ((k2, v) :: rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocSL k rest
-
--- transitive reachability from a node
-reachFrom : List (String, List String) -> String -> List String
-reachFrom graph start = reachGo graph (depsOfNode graph start) []
-
-reachGo : List (String, List String) -> List String -> List String -> List String
-reachGo _ [] visited = visited
-reachGo graph (n :: queue) visited
-  | containsName n visited = reachGo graph queue visited
-  | otherwise = reachGo graph (depsOfNode graph n ++ queue) (n :: visited)
-
--- partition names into strongly-connected components (mutual reachability)
-sccsOf : List String -> List (String, List String) -> List (List String)
-sccsOf names reachMap = sccsGo names names reachMap []
-
-sccsGo : List String -> List String -> List (String, List String) -> List String -> List (List String)
-sccsGo [] _ _ _ = []
-sccsGo (n :: rest) allNames reachMap done
-  | containsName n done = sccsGo rest allNames reachMap done
-  | otherwise = membersOfSCC n allNames reachMap :: sccsGo rest allNames reachMap (membersOfSCC n allNames reachMap ++ done)
-
-membersOfSCC : String -> List String -> List (String, List String) -> List String
-membersOfSCC n allNames reachMap = filterList (m => sameSCC n m reachMap) allNames
-
-sameSCC : String -> String -> List (String, List String) -> Bool
-sameSCC u v reachMap
-  | u == v = True
-  | otherwise = reaches u v reachMap && reaches v u reachMap
-
-reaches : String -> String -> List (String, List String) -> Bool
-reaches u v reachMap = containsName v (fromOption [] (lookupAssocSL u reachMap))
-
--- topologically order SCCs so dependencies are processed first
-topoSCCs : List (List String) -> List (String, List String) -> List (List String)
-topoSCCs sccs graph = topoGo sccs graph []
-
-topoGo : List (List String) -> List (String, List String) -> List String -> List (List String)
-topoGo [] _ _ = []
-topoGo sccs graph emitted = match firstReady sccs graph emitted
-  None => sccs
-  Some r => r :: topoGo (removeSCC r sccs) graph (r ++ emitted)
-
-firstReady : List (List String) -> List (String, List String) -> List String -> Option (List String)
-firstReady [] _ _ = None
-firstReady (scc :: rest) graph emitted
-  | sccReady scc graph emitted = Some scc
-  | otherwise = firstReady rest graph emitted
-
-sccReady : List String -> List (String, List String) -> List String -> Bool
-sccReady scc graph emitted = allL (extDepsReady scc emitted graph) scc
-
-extDepsReady : List String -> List String -> List (String, List String) -> String -> Bool
-extDepsReady scc emitted graph member =
-  allL (d => containsName d scc || containsName d emitted) (depsOfNode graph member)
-
-allL : (a -> Bool) -> List a -> Bool
-allL _ [] = True
-allL p (x :: xs) = p x && allL p xs
-
-removeSCC : List String -> List (List String) -> List (List String)
-removeSCC _ [] = []
-removeSCC target (scc :: rest)
-  | sccEq target scc = rest
-  | otherwise = scc :: removeSCC target rest
-
-sccEq : List String -> List String -> Bool
-sccEq a b = lengthL a == lengthL b && allL (x => containsName x b) a
 
 -- process each SCC as a letrec group in topological order
 processSCCs : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List (List String) -> <Mut> List (String, Scheme)
