@@ -1,0 +1,7 @@
+import geometry.{Point(..), originX}
+
+start : Point
+start = Point 0 0
+
+startX : Int
+startX = originX start

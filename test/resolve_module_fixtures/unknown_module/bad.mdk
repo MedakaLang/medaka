@@ -1,0 +1,6 @@
+-- `nonexistent` is not in the known module set (and we are not the first
+-- module resolved), so this is an UnknownModule.
+import nonexistent.{foo}
+
+useOk : Int
+useOk = 0

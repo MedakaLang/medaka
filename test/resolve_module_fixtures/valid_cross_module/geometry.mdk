@@ -1,0 +1,4 @@
+public export data Point = Point Int Int
+
+export originX : Point -> Int
+originX (Point x _) = x

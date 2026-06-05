@@ -1,0 +1,6 @@
+-- QuestionMisplaced: a `?` outside the `let x = e ?` position survives desugar.
+f : Int -> Int
+f n = (g n ?) + 1
+
+g : Int -> Int
+g x = x

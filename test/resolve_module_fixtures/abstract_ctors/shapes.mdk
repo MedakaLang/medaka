@@ -1,0 +1,2 @@
+-- `export data` exports the TYPE abstractly (no constructors).
+export data Shape = Circle Int | Square Int

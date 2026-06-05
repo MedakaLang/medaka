@@ -1,0 +1,2 @@
+export ok : Int
+ok = 1

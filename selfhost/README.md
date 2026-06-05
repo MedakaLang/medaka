@@ -37,6 +37,7 @@ diff with `lib/`:
 | `mark_main.mdk` | Runnable entry: `medaka run selfhost/mark_main.mdk <prelude.mdk> <src.mdk>` parses + desugars both, marks the target, prints the S-expression (diffs against `astdump --mark`). |
 | `resolve.mdk` | Port of `lib/resolve.ml` (single-file path). Name-binding / scope / unknown-name checks over a list-based env seeded from runtime + prelude; `resolveProgram : List Decl -> List Decl -> List Decl -> List ResError`. |
 | `resolve_main.mdk` | Runnable entry: `medaka run selfhost/resolve_main.mdk <runtime.mdk> <core.mdk> <src.mdk>` prints one diagnostic per line (diffs against `diagdump --resolve`, the harness sorts). |
+| `resolve_modules_main.mdk` | Multi-module runnable entry: `medaka run selfhost/resolve_modules_main.mdk <runtime.mdk> <core.mdk> <mod1.mdk> [mod2.mdk …]` threads `resolveModule` over the files in order (caller supplies dependency-first order), validating imports against accumulated exports; prints all modules' diagnostics (diffs against `diagdump --resolve-modules`, the harness sorts). |
 | `exhaust.mdk` | Port of `lib/exhaust.ml`'s `check_guard_exhaustiveness` (guard coverage over the raw AST; Maranget `useful` matrix). No prelude — the ctor oracle is built from the file's own data decls + builtins. `exhaustToLines : List Decl -> String`. |
 | `exhaust_main.mdk` | Runnable entry: `medaka run selfhost/exhaust_main.mdk <src.mdk>` prints one guard warning per line (diffs against `diagdump --exhaust`, the harness sorts). Parses **without** desugaring (guards must still be `EGuards`). |
 | `eval.mdk` | Tree-walk interpreter (Stage-1 capstone, **slice 1**). `Value`/`EvalEnv` ADTs + `pp_value` (byte-for-byte with `lib/eval.ml`) + the engine: `eval`/`apply`/`match_pat`/binops over `(name, Ref value)` env frames; single-file `evalMain`/`evalOutput` and the multi-module `evalModules`/`evalModulesOutput`. |
@@ -55,8 +56,9 @@ diff with `lib/`:
 
 The OCaml-side validation references live in `dev/`: `lextok.exe` (token-stream
 dumper), `astdump.exe` (AST S-expression dumper, with `--parse`/`--desugar`/
-`--mark` stage modes), and `diagdump.exe` (`--resolve`/`--exhaust` diagnostics
-dumper).
+`--mark` stage modes), and `diagdump.exe` (`--resolve`/`--exhaust` single-file
+diagnostics dumper, plus `--resolve-modules <mod...>` for the multi-module
+`resolve_module` path over an ordered file list).
 
 ## Validation
 
@@ -309,7 +311,7 @@ Stage-0 prerequisites in `../PLAN.md`).
    > extracted names will match `Prelude.program`'s. The harnesses pass the path.
    > (Alternative: a build-time generated `prelude_names.mdk`, in the spirit of
    > `gen/embed.ml`. Left as a design choice.)
-2. ✅ **Resolve — DONE (single-file path).** `selfhost/resolve.mdk` +
+2. ✅ **Resolve — DONE (single-file + multi-module paths).** `selfhost/resolve.mdk` +
    `resolve_main.mdk`: a name environment (lists, not hashtables) seeded with
    primitives + runtime externs (runtime.mdk) + the prelude (core.mdk, both
    passed by path like the marker; `program_is_core` suppresses the prelude seed
@@ -319,15 +321,34 @@ Stage-0 prerequisites in `../PLAN.md`).
    through lambdas/lets/match/do/comprehensions/where-groups; `build_env` collects
    user names + import stubs and detects DuplicateDefinition (order-sensitive,
    seeded) and ExternWithBody. Matches `diagdump --resolve` byte-for-byte on the
-   whole corpus *and* the 9 `test/resolve_fixtures/` negative cases — validated
+   whole corpus *and* the 11 `test/resolve_fixtures/` negative cases — validated
    both ways (right errors on broken files, no false positives on valid ones).
-   **Deferred:** the multi-module path (the reference's `resolve_module` —
-   imports validated against real exports, privacy, aliases; the
-   PrivateNameAccess / NoExportedConstructors / UnknownModule errors) — not
-   exercised by `diagdump --resolve`, which uses the single-file path. Also not
-   yet hit by any corpus file: QuestionMisplaced / AsPatternMisplaced /
-   NonRecursiveValueLet. **Perf hook (still open):** give each variable reference
-   a resolved `(frame, slot)` address — see *Performance* below.
+   ✅ **Multi-module path — DONE.** The reference's `resolve_module` is ported
+   (`resolve.mdk`'s `ModuleExports` / `buildExports` / `buildEnvMM` /
+   `importedNamesMM` / `expandMember*` / `resolveModule` / `resolveModulesToLines`):
+   each module's imports are validated against the **real exports** of
+   dependency-earlier modules — privacy (PrivateNameAccess), abstract-type ctor
+   exports (NoExportedConstructors), unknown modules (UnknownModule), and
+   `export import` re-export (including the faithful quirk that a re-exported type
+   loses its ctor-export, so a downstream `T(..)` is NoExportedConstructors). The
+   runnable entry `resolve_modules_main.mdk` threads `resolveModule` over an
+   ordered module list (runtime/core seeded by NAME, undesugared, as in
+   `resolve_main`; modules desugared). `test/diff_selfhost_resolve_modules.sh`
+   validates it against the new `dev/diagdump.exe --resolve-modules` oracle (which
+   drives the real `Resolve.resolve_module`, accumulating exports over an explicit
+   ordered file list — and, by *not* going through the Loader, makes UnknownModule
+   reachable where the Loader would fail on the missing file first) on 6
+   `test/resolve_module_fixtures/` cases **plus the entire selfhost module graph**
+   (no false positives, both directions agree).
+   The two single-file misplacement errors are also ported — **QuestionMisplaced**
+   (`?` outside a `let` RHS) and **NonRecursiveValueLet** (`let x = … x …` without
+   `rec`, re-targeting the UnboundVariable), each with a `test/resolve_fixtures/`
+   case. **Still deferred: AsPatternMisplaced** — its `EAsPat` node is a
+   parser-only Phase-B node not yet threaded through `desugar.mdk`/`sexp.mdk`
+   (astdump renders it `(TODO expr)`; `sexp.mdk` has no clause), so it can't be
+   reproduced self-hosted until that follow-on work lands.
+   **Perf hook (still open):** give each variable reference a resolved
+   `(frame, slot)` address — see *Performance* below.
 3. ✅ **Method_marker — DONE.** `selfhost/marker.mdk` + `mark_main.mdk`:
    interface-method / constrained-fn `EVar`s → `EMethodRef`/`EDictApp` (just the
    name; the typecheck-filled ref is irrelevant pre-typecheck), backtick `EInfix`

@@ -1,0 +1,5 @@
+-- resolves against mid's RE-EXPORTS (Color type + shade value) — clean.
+import mid.{Color, shade}
+
+apply : Color -> Int
+apply c = shade c

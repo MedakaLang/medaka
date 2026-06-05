@@ -1,0 +1,7 @@
+-- A re-exported type is abstract downstream: `export import` does not carry the
+-- constructors' exported status, so `Color(..)` here is NoExportedConstructors
+-- (and `Red` is then unbound) — faithfully mirroring lib/resolve.ml.
+import mid.{Color(..)}
+
+pick : Color
+pick = Red

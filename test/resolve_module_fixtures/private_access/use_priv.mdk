@@ -1,0 +1,5 @@
+-- importing `hidden` is a PrivateNameAccess; `greet` resolves fine.
+import secret.{greet, hidden}
+
+msg : String
+msg = greet "world"

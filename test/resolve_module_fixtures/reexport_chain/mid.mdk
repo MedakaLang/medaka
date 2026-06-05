@@ -1,0 +1,2 @@
+-- re-export the type + value so downstream modules can import them from here.
+export import inner.{Color(..), shade}

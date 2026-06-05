@@ -1,0 +1,6 @@
+-- asking for `Shape(..)` from an abstract export is NoExportedConstructors;
+-- the type name itself resolves (used in the signature).
+import shapes.{Shape(..)}
+
+count : Shape -> Int
+count _ = 0

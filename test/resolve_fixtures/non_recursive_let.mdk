@@ -1,0 +1,5 @@
+-- NonRecursiveValueLet: a non-`rec` value `let` whose RHS refers to itself —
+-- `x` is not in scope on its own right-hand side, so resolve re-targets the
+-- UnboundVariable as a "forgot `rec`" diagnostic.
+f : Int
+f = let x = x + 1 in x
