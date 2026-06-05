@@ -430,3 +430,31 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
   dispatch is tuple-keyed; registries are prop-only — none worth converting.)
 - The desugar/mark residual is match_pat dispatch + eval_1426 + env walk — the
   interpretation floor. No further contained interpreter win found.
+
+### 2026-06-05 00:56 — DEFINITIVE final harness table (min-of-3, all green)
+Whole fast-path suite ≈ **24.6s total** across all 16 harnesses (was ~11 min
+batched pre-session / ~44 min original non-batch ⇒ ~27× this session on the fast
+path, ~107× vs the original suite).
+
+| Harness | min-of-3 |
+|---|--:|
+| mark_batch | 6.06s |
+| desugar_batch | 5.58s |
+| check_modules_batch | 5.03s |
+| check_batch | 1.03s |
+| parse | 1.09s |
+| lex_files | 1.01s |
+| eval_run_batch | 0.86s |
+| typecheck_golden_batch | 0.81s |
+| typecheck | 0.54s |
+| eval_dict_batch | 0.46s |
+| eval_list_batch | 0.46s |
+| eval_prelude_batch | 0.38s |
+| eval_typed_batch | 0.38s |
+| resolve_batch | 0.34s |
+| lexer | 0.31s |
+| exhaust | 0.22s |
+
+The 3 leaders (mark/desugar/check_modules) are interpretation-bound (the env-walk
+floor); the rest are fixed-prelude-setup-bound (<1.1s, irreducible). Next lever
+for all 3 = the slot-indexed-env rework (supervised — see interim summary).
