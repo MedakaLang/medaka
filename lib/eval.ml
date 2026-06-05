@@ -57,7 +57,16 @@ type value =
          dict-application route; read via RDict, it narrows the method VMulti by
          head tag (select_impl_by_head) rather than by full impl key. *)
 
-and env = (string * value ref) list list
+and env = frame list
+and frame =
+  (* A frame is one lexical scope.  Tiny per-call frames (function params, let
+     bindings) stay as association lists — building a Hashtbl for 1-3 entries is
+     net-negative.  The large persistent frames (the global/prelude frame, a
+     module's local+import frames) are Hashtbls so every global-name lookup is
+     O(1) instead of a linear string-compare scan — that scan was ~87% of
+     interpreter time on the self-hosted compiler (sample-profiled 2026-06-04). *)
+  | FList  of (string * value ref) list
+  | FTable of (string, value ref) Hashtbl.t
 
 exception Eval_error of string * loc option
 (* Raised instead of Eval_error when a pattern/match fails during dispatch so
@@ -94,11 +103,29 @@ let force_thunk name t =
        non-function recursive binding must defer its self-reference \
        (through a lambda or continuation)" name, None))
 
+(* Build a Hashtbl frame from an assoc list, preserving List.assoc_opt's
+   first-occurrence-wins semantics (keep the first binding seen for each key, so
+   `find_opt` matches what `List.assoc_opt` returned over the same list). *)
+let table_of_assoc (l : (string * value ref) list) : (string, value ref) Hashtbl.t =
+  let h = Hashtbl.create (max 16 (List.length l)) in
+  List.iter (fun (k, c) -> if not (Hashtbl.mem h k) then Hashtbl.add h k c) l;
+  h
+
+let frame_find name = function
+  | FList l  -> List.assoc_opt name l
+  | FTable h -> Hashtbl.find_opt h name
+
+(* Flatten a frame back to an assoc list (order within a frame is irrelevant —
+   keys are unique per frame).  Used where a whole env is concatenated. *)
+let frame_assoc = function
+  | FList l  -> l
+  | FTable h -> Hashtbl.fold (fun k c acc -> (k, c) :: acc) h []
+
 let lookup env name =
   let rec search = function
     | [] -> raise (Eval_error ("unbound identifier: " ^ name, None))
     | frame :: rest ->
-      (match List.assoc_opt name frame with
+      (match frame_find name frame with
        | Some cell ->
          (match !cell with
           | VThunk t ->
@@ -122,7 +149,7 @@ let lookup_method env name =
   let rec search = function
     | [] -> lookup env name
     | frame :: rest ->
-      (match List.assoc_opt name frame with
+      (match frame_find name frame with
        | Some cell ->
          let v = (match !cell with
            | VThunk t -> let v = force_thunk name t in cell := v; v
@@ -132,7 +159,7 @@ let lookup_method env name =
   in search env
 
 let extend env binds =
-  (List.map (fun (k, v) -> (k, ref v)) binds) :: env
+  FList (List.map (fun (k, v) -> (k, ref v)) binds) :: env
 
 (* ── Pretty-print values ─────────────────────────────────────────────────── *)
 
@@ -805,7 +832,7 @@ and eval env expr =
   | ELet (_, true, PVar f, e1, e2) ->
     (* Self-recursive: create a mutable ref cell so the closure can call itself *)
     let cell = ref VUnit in
-    let rec_env = [(f, cell)] :: env in
+    let rec_env = FList [(f, cell)] :: env in
     let v = eval rec_env e1 in
     cell := v;
     eval rec_env e2
@@ -818,7 +845,7 @@ and eval env expr =
 
   | ELetGroup (bindings, body) ->
     let cells = List.map (fun (name, _) -> (name, ref VUnit)) bindings in
-    let env' = cells :: env in
+    let env' = FList cells :: env in
     List.iter (fun (name, clauses) ->
       let closures = List.map (fun (pats, rhs) ->
         if pats = [] then eval env' rhs
@@ -1886,7 +1913,7 @@ let eval_program ?(prelude = true) program =
      share the one [add_to_frame]. *)
   prealloc_cells ~add_global:add_to_frame ~add_local:add_to_frame program;
 
-  let env : env = [!top_frame] in
+  let env : env = [FTable (table_of_assoc !top_frame)] in
 
   let fill_cell name v =
     match List.assoc_opt name !top_frame with
@@ -2033,8 +2060,12 @@ let eval_modules_ex (modules : (string * string * Ast.program) list)
      same-named top-level functions stay isolated. *)
   let impl_acc : (string, (int * value) list) Hashtbl.t = Hashtbl.create 64 in
 
-  (* Evaluate the prelude into the global frame. *)
-  let global_env : env = [!global_frame] in
+  (* Evaluate the prelude into the global frame.  The global frame's key set is
+     frozen after prealloc above (Phase B only fills existing cells, never adds
+     keys), so snapshot it into one shared Hashtbl reused by every module's
+     [m_env] below — the refs are shared, so later fills remain visible. *)
+  let global_table = table_of_assoc !global_frame in
+  let global_env : env = [FTable global_table] in
   let prelude_fundef_acc : (string, value list) Hashtbl.t = Hashtbl.create 64 in
   let prelude_deferred : string list ref = ref [] in
   List.iter
@@ -2133,7 +2164,9 @@ let eval_modules_ex (modules : (string * string * Ast.program) list)
 
     let imports = build_imports decls in
     let import_frame = List.map (fun (n, cell, _) -> (n, cell)) imports in
-    let m_env : env = [ !local_frame; import_frame; !global_frame ] in
+    let m_env : env = [ FTable (table_of_assoc !local_frame);
+                        FTable (table_of_assoc import_frame);
+                        FTable global_table ] in
     let fill_local name v =
       match List.assoc_opt name !local_frame with
       | Some cell -> cell := v
@@ -2152,7 +2185,7 @@ let eval_modules_ex (modules : (string * string * Ast.program) list)
       (collect_pub_exports decls !local_frame imports);
     last_local := List.map (fun (k, cell) -> (k, !cell)) !local_frame;
     (* local ∪ imports ∪ global, in shadowing order (local wins on List.assoc). *)
-    root_full_cells := List.concat m_env
+    root_full_cells := List.concat_map frame_assoc m_env
   ) modules';
 
   (* Phase 125: force the prelude's deferred thunks only now that *every*
@@ -2195,7 +2228,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
     | Some cell -> cell := v
     | None -> add name v
   in
-  rs.eval_env := [!(rs.top_frame)];
+  rs.eval_env := [FList !(rs.top_frame)];
   (match decl with
    | DData (_, type_name, _, variants, _) ->
      List.iter (fun v ->
@@ -2213,7 +2246,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
      ) variants
    | DFunDef (_, name, pats, body) ->
      add name VUnit;
-     rs.eval_env := [!(rs.top_frame)];
+     rs.eval_env := [FList !(rs.top_frame)];
      let v = wrap_match_errors (fun () ->
        if pats = [] then eval !(rs.eval_env) body
        else VClosure (!(rs.eval_env), pats, body)) in
@@ -2239,7 +2272,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
        | None -> add name VUnit
        | Some _ -> ()
      ) methods;
-     rs.eval_env := [!(rs.top_frame)];
+     rs.eval_env := [FList !(rs.top_frame)];
      let rec head_tycon = function
        | Ast.TyCon n      -> Some n
        | Ast.TyApp (a, _) -> head_tycon a
@@ -2296,7 +2329,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
          (match List.assoc_opt name !(rs.top_frame) with
           | None -> add name VUnit
           | Some _ -> ());
-         rs.eval_env := [!(rs.top_frame)];
+         rs.eval_env := [FList !(rs.top_frame)];
          let new_v = if pats = [] then wrap_match_errors (fun () -> eval !(rs.eval_env) body)
                      else VClosure (!(rs.eval_env), pats, body) in
          let merged =
@@ -2322,7 +2355,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
         | None   -> add name VUnit
         | Some _ -> ())
      ) bindings;
-     rs.eval_env := [!(rs.top_frame)];
+     rs.eval_env := [FList !(rs.top_frame)];
      List.iter (fun (name, clauses) ->
        let closures = List.map (fun (pats, rhs) ->
          if pats = [] then wrap_match_errors (fun () -> eval !(rs.eval_env) rhs)
@@ -2339,7 +2372,7 @@ let rec eval_repl_decl (rs : repl_state) (decl : decl) : unit =
      eval_repl_decl rs d)
 
 let eval_repl_expr (rs : repl_state) (e : expr) : value =
-  rs.eval_env := [!(rs.top_frame)];
+  rs.eval_env := [FList !(rs.top_frame)];
   wrap_match_errors (fun () -> eval !(rs.eval_env) e)
 
 let make_repl_eval_state ?(prelude = Prelude.program) () : repl_state =
@@ -2360,5 +2393,5 @@ let make_repl_eval_state ?(prelude = Prelude.program) () : repl_state =
   let add name v = top_frame := (name, ref v) :: !top_frame in
   add "True"  (VBool true);
   add "False" (VBool false);
-  let eval_env = ref [!top_frame] in
+  let eval_env = ref [FList !top_frame] in
   { top_frame; eval_env }

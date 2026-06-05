@@ -184,7 +184,7 @@ and shrink_native ty v =
 let check_prop eval_env _prop_params prop_body inputs =
   let base_frame = List.map (fun (k, v) -> (k, ref v)) eval_env in
   let input_frame = List.map (fun (x, v) -> (x, ref v)) inputs in
-  let env = [input_frame @ base_frame] in
+  let env = [Eval.FTable (Eval.table_of_assoc (input_frame @ base_frame))] in
   (try
      match Eval.eval env prop_body with
      | Eval.VBool b -> b

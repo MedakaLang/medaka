@@ -273,7 +273,7 @@ let () =
         | Some (marked_modules, None) ->
           let eval_env = Medaka_lib.Eval.eval_modules_root_env marked_modules in
           let base_frame = List.map (fun (k, v) -> (k, ref v)) eval_env in
-          let env = [base_frame] in
+          let env = [Medaka_lib.Eval.FTable (Medaka_lib.Eval.table_of_assoc base_frame)] in
           (try
             match Medaka_lib.Eval.eval env (Medaka_lib.Ast.EVar "__test_run__") with
             | Medaka_lib.Eval.VBool b -> b

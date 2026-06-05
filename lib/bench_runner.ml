@@ -5,7 +5,7 @@ let run_bench eval_env (decl : decl) =
   | DBench { bench_name; bench_body; _ } ->
     Printf.printf "bench %S ... %!" bench_name;
     let base_frame = List.map (fun (k, v) -> (k, ref v)) eval_env in
-    let env = [base_frame] in
+    let env = [Eval.FTable (Eval.table_of_assoc base_frame)] in
     (* warm-up *)
     for _ = 1 to 10 do
       ignore (Eval.eval env bench_body)
