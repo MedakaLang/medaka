@@ -252,3 +252,26 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
 - committed: a34326b
 - **check_modules journey: 1515s → 300.5s (Tarjan) → 17.07s (env-Hashtbl) →
   15.60s (compare_lengths) → 5.37s (single-pass batch). ~282× from origin.**
+
+### 2026-06-04 — mark_batch harness shell quadratic + match_pat alloc (reverted)
+- **LOCATE:** mark_batch 9.80s decomposed: self-hosted mark PROCESS 6.66s (min-3),
+  astdump oracle loop 0.32s, **shell comparison loop ~2.9s**. (Gotcha: the Bash
+  tool runs ZSH which doesn't word-split unquoted vars — manual `$list` glob runs
+  failed/`File name too long`; wrap corpus-glob timing in `sh -c '...'`.)
+- **Mark process profile:** match_pat_1042 79, search_644 68, assoc_opt 48,
+  find_opt 33, caml_alloc_small 30. Match-heavy (parser/marker dispatch).
+- **Attempt — match_pats/PRec O(k²)→O(k) bind-list build** (`b @ binds` not
+  `binds @ b`; `(f,v)::bs` not `bs @ [(f,v)]`; safe: linear patterns, unique keys):
+  byte-identical but FLAT (mark 6.69 vs 6.66; check_modules_batch 5.45 vs 5.37;
+  parser desugar 0.74 vs 0.78). Constructors are narrow (2-4 fields) so k² vs k is
+  noise; the 79 match_pat samples are DISPATCH, not allocation. **REVERTED.**
+- **Win — mark_batch harness shell loop:** `section()` awk re-scanned the whole
+  combined output per corpus file (quadratic). Split once into per-file section
+  files in a single awk pass; loop reads its small file.
+- before: 9.80s   after: **7.61s**  (~1.29×, ~2.2s of shell quadratic removed)
+- correctness: 93 matched, 0 differing.
+- committed: 41f1095
+- **Note:** other *_batch harnesses (check_batch 1.13s, resolve_batch 0.37s) use
+  the same section() pattern but are tiny — quadratic there is negligible, skip.
+  The mark PROCESS residual (6.66s) is match_pat/env-lookup interpretation = the
+  parked slot-indexed-env structural lever.
