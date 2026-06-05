@@ -338,3 +338,18 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
 - **Frame-merge lever RULED OUT:** merging per-module [local;import;global] FTables
   into one (to cut 3 hashes→1 for prelude/ctor lookups) would break Phase-112
   lookup_method's shadow-bypass (which needs the separate frames). Don't.
+
+### 2026-06-04 — small batch harnesses already amortize prelude (no rescan win)
+- Tested whether check_batch/resolve_batch/typecheck_golden_batch re-process the
+  prelude per file (the markerFor pattern). MEASURED: typecheck_golden_batch on
+  1 fixture = 0.87s, full set = 0.81s — IDENTICAL. The cost is fixed prelude
+  setup (parse runtime+core once); per-file is negligible. They already amortize
+  correctly. **No rescan win in the small harnesses.** (mark_batch was the
+  exception because markWithPrelude re-scanned the prelude in Medaka per file;
+  resolve/typecheck seed the prelude once via checkProgramSeeded.)
+- **State of the floor:** every batch harness is now either interpretation-bound
+  (mark 6.36 / desugar 5.84 / check_modules 5.23 — the big 3) or fixed-prelude-
+  setup-bound (the rest, <1.1s, irreducible). The one remaining large lever is
+  the interpreter's by-name env lookup (~28% of eval), which needs a structural
+  (slot-indexed / inline-cache) change — constrained by Phase-112 lookup_method
+  needing separate frames. Instrumenting lookup next to decide if it's worth it.
