@@ -1,8 +1,8 @@
-# Medaka — Plan Archive (Phases 1–97)
+# Medaka — Plan Archive (Phases 1–144)
 
-> **ARCHIVED 2026-06-02.** This is the historical roadmap covering Phases 1–97,
-> retired once nearly everything in it was DONE. It is kept **for reference
-> only** — the per-phase implementation notes ("What was added", "Where",
+> **ARCHIVED 2026-06-02; updated through 2026-06-05.** This is the historical
+> roadmap covering completed Phases 1–144. It is kept **for reference only** —
+> the per-phase implementation notes ("What was added", "Where",
 > file/line pointers) are useful when investigating how a feature was built.
 > **Do not add new work here.** The forward-looking roadmap lives in
 > [`PLAN.md`](./PLAN.md). Section numbers cited elsewhere in the codebase
@@ -6095,6 +6095,41 @@ policy for groups whose content fits at their indent level.
 **Tests.** `test/test_fmt.ml`: `fmt_guard_list_arg_no_explode` (asserts `[\n` absent,
 `[FunClause ps b]` present) + `id_guard_list_arg_no_explode` (idempotency). 87 fmt +
 139 roundtrip + 250 parser + 462 typecheck + 256 eval tests pass; `@thorough` clean.
+
+### Phase 145: explicit `import M.{name}` shadows a same-named prelude plain function ✅ DONE (2026-06-05)
+
+`import helper.{apply}` was typechecked against the prelude's
+`apply : (a -> <e> b) -> a -> <e> b` instead of the imported
+`apply : Int -> Int -> Int`, producing a spurious "Type mismatch: a -> b vs Int".
+A local `apply x y = …` definition shadowed the prelude correctly; the bug was
+specific to explicitly-imported names.
+
+**Root cause.** `typecheck_module`'s `prelude_for user_prog` drops prelude plain
+functions whose names appear in `user_prog`'s DFunDef/DLetGroup — this is Phase
+78a. But a DUse import (`import helper.{apply}`) is NOT a DFunDef, so
+`shadowed_prelude_fns` didn't see it and left the prelude's `apply` in `prog`.
+`process_letrec_group` then type-checked the prelude's `apply` group and pushed
+`apply:(a->b)->a->b` to the front of `env.vars`, overwriting the `use_schemes`
+entry `apply:Int->Int->Int`.
+
+**Fix.**
+
+1. `lib/method_marker.ml` — added `prelude_for_with_imports user_prog import_names`:
+   like `prelude_for` but also drops droppable prelude plain functions whose names
+   appear in `import_names`.
+
+2. `lib/typecheck.ml` — in `typecheck_module`, before the `prelude_for` call,
+   extract the names of all names imported from *known* modules (via `DUse`
+   checked against `known_modules`). Pass them to `prelude_for_with_imports`. This
+   way the prelude's `apply` is absent from `prog` before `group_fundefs`, and the
+   `use_schemes` entry for `apply:Int->Int->Int` is never overwritten.
+   Only droppable prelude fns are dropped (same guard as 78a); non-droppable fns
+   and interface methods are unaffected. Single-file path unchanged.
+
+**Tests.** `test_loader.ml`: `test_import_shadows_prelude` (Phase 145 regression,
+verifies `apply 3 4 = 7`). `test/resolve_module_fixtures/import_shadows_prelude/`
+added to the resolve-modules diff harness (valid program, empty expected errors).
+`diff_selfhost_resolve_modules.sh`: 8/8 ok. All test suites clean.
 
 ---
 
