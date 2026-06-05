@@ -107,6 +107,43 @@ Note: `_batch` harnesses are *separate* files kept alongside the originals.
 
 ## Results log (append-only)
 
+### ⭐ INTERIM SUMMARY (2026-06-04 ~23:24, updated each iteration; finalized at STOP_AT)
+**Verified wins committed this session (each its own commit, min-of-3, correctness-gated):**
+1. `f06727c` **env frames assoc-list → Hashtbl** — THE big one. Var lookup was a
+   linear string-compare scan; ~87% of interp time. Desugar 97→9.7s; **check_modules
+   300→17s**; propagated to EVERY `medaka run` harness (10–30×).
+2. `1d0d8fe` **match_pat List.compare_lengths** — check_modules 17.07→15.60s (~9%).
+3. `7ac547d` **5-entry batch check_modules** harness — 15.60→8.80s.
+4. `a34326b` **single-pass batch check_modules** (synthetic all-12 entry) — 8.80→5.37s (2.9× vs orig).
+5. `41f1095` **mark_batch harness: split output once** (was per-file re-scan) — 9.80→7.61s.
+6. `0521899` **desugar_batch** (new batch harness; #1 re-opened post-env-win) — 9.43→6.11s.
+7. `10e99eb` **Hashtbl.Make(String) env frames** — ~3% (A/B 5.43→5.25s).
+8. `6b6072c` **guard Coverage.record_hit at ELoc arm** — ~2% (A/B 5.28→5.17s).
+9. `275b4ff` **hoist prelude scan out of mark_batch loop** (marker.markerFor) — 7.61→6.36s.
+
+**check_modules journey: 1515s → 300.5 (Tarjan, prior) → 17.07 (env-Hashtbl) → 15.60
+(compare_lengths) → 5.37 (single-pass batch). ~282× from origin.** Whole fast-path
+suite now a few minutes (was ~44 min).
+
+**Measured & ruled out / reverted (negative results — also valuable):** adaptive
+FList/FTable frames (flat/worse), empty-frame skip (flat), saturated-call frame
+coalescing (regressed — per-EApp spine overhead), match_pat O(k²)→O(k) bind build
+(flat — narrow ctors), registerAllData O(M²·D) (#2b, negligible), parser O(n²)
+(LINEAR — ruled out), mark/resolve O(n²) (LINEAR), small batch harnesses (already
+amortize prelude), frame-merge (unsafe — breaks Phase-112 lookup_method),
+flambda/release build (no flambda; release==dev).
+
+**THE single most promising un-attempted lead:** a **slot-indexed / inline-cached
+env** to replace the by-name lookup. Instrumented: 19.9M lookups marking
+parser.mdk, **avg depth 2.80 frames, 74% local hits, 49.7M string-compares**. This
+~28%-of-eval floor is the by-name environment. Removing it (resolve assigns each
+EVar a (depth,index) OR a mutable inline cache on EVar) could be ~7–15%+. PARKED
+for a SUPERVISED session: threads resolve.ml + ast.ml (huge blast radius) + eval.ml,
+must preserve VThunk forcing, FTable globals, and Phase-112 lookup_method's
+deliberate shadow-bypass; a subtle index/resolution mismatch is silent corruption
+that needs interactive debugging — unsafe to land unattended.
+
+
 <!-- Template — copy per measurement:
 ### YYYY-MM-DD — <target>
 - cmd: `<exact command>`
