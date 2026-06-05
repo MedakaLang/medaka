@@ -616,8 +616,10 @@ which already type-checks the goldens). It handles a `=>`-constrained function
 whose body uses a return-position method (`empty`, …) at the constraint
 variable's type — the case arg-tag dispatch genuinely cannot resolve — including
 multi-type call sites, nested constrained calls (dict forwarding / RDict at the
-call site), and multiple constraints per function. Validated against `medaka run`
-by `test/diff_selfhost_eval_dict.sh` (4 fixtures in `test/eval_dict_fixtures/`).
+call site), multiple constraints per function, and **self/mutually-recursive
+constrained functions** (the recursive call forwards the enclosing fn's own dict).
+Validated against `medaka run` by `test/diff_selfhost_eval_dict.sh` (6 fixtures in
+`test/eval_dict_fixtures/`).
 
 Mechanism (mirrors the reference's marker → typecheck → dict_pass):
 - `ast.mdk` — a `Route` ADT (`RNone`/`RKey`/`RDict`) plus `EMethodAt`/`EDictAt`
@@ -631,7 +633,18 @@ Mechanism (mirrors the reference's marker → typecheck → dict_pass):
   applications; after inference it routes in-body methods (RDict when the
   discriminating type is the enclosing fn's constraint variable, else RKey) and
   call sites (RKey at a concrete type, RDict forwarding a nested constraint), then
-  `dict_pass` prepends one `$dict_<fn>_<slot>` parameter per constraint.
+  `dict_pass` prepends one `$dict_<fn>_<slot>` parameter per constraint. A
+  **self/mutually-recursive** call hits the callee mid-inference (its
+  `funConstraintsRef` entry doesn't exist yet), so it's deferred as a `RecDictApp`
+  (callee, enclosing fn, live occurrence mono); `realizeRecDictApps` (run after
+  inference, before `resolveDictApps`) recovers each constraint var from the mono
+  by id (`findTvarInMono`, mirroring the reference's `find_tvar_in_mono`) and
+  routes it to the **enclosing** fn's own `$dict_<encl>_<slot>` — the dict already
+  in scope. The enclosing hint matters for mutual recursion: merged-group siblings
+  share one constraint-var id, so the global `activeDictVars` map would pick an
+  arbitrary sibling's dict param; routing through the enclosing fn's own
+  constraint slots picks the one actually bound in its body (cf. reference Phase
+  136's `enclosing` disambiguation).
 - `eval.mdk` — `VDict` (carrying the impl head tag), `EDictAt` applies one dict
   per route as a leading argument, `EMethodAt` routed RDict reads the dict
   parameter to narrow its method.
@@ -642,12 +655,10 @@ each method's VMulti is already interface-specific, so reading any same-tyvar
 dict narrows correctly.
 
 **Still out of scope** (the reference's harder cases — see PLAN.md Phase
-83/84/115): dict-passing the *prelude*'s constrained functions, self/mutually-
-recursive constrained functions (the recursive call's routes need the fn's own
-constraints, registered only after its group infers), inferred (unsignatured)
-constraints and the two-pass `Elaborate` promotion, method-level-constraint dicts
-(`foldMap`'s Monoid), instance-`requires` dicts, and nested/structured (non-flat)
-dictionaries.
+83/84/115): dict-passing the *prelude*'s constrained functions, inferred
+(unsignatured) constraints and the two-pass `Elaborate` promotion,
+method-level-constraint dicts (`foldMap`'s Monoid), instance-`requires` dicts, and
+nested/structured (non-flat) dictionaries.
 
 ### Known limits carried forward (don't block the bootstrap)
 
