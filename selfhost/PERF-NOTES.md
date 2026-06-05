@@ -211,3 +211,29 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
   O(modules×data) re-registration; cross-entry re-typecheck) live in typecheck.mdk
   and don't touch the interpreter.
 - committed: no code change (all attempts reverted); log only.
+
+### 2026-06-04 — batch check_modules harness (backlog #2c, harness win)
+- cmd: `sh test/diff_selfhost_check_modules_batch.sh`  (vs original `..._check_modules.sh`)
+- **#2b registerAllData: RULED OUT by sizing + profile.** accData accumulates only
+  ~30 public data decls (ast) + a handful; ~150 registerData calls total across a
+  closure vs millions of per-node inference eval-steps. Never appeared in the
+  sample. O(M²·D) is real but negligible — not worth the threading change.
+- **#2c cross-entry re-typecheck: WIN.** Original ran 12 processes, each emitting
+  only the ENTRY module's schemes while re-typechecking shared deps up to 12×.
+  Verified the key invariant empirically: every module in `check`'s 8-module
+  closure is byte-identical to its standalone tc_module_probe oracle (schemes
+  depend only on the dependency-closure, which precedes them in topo order).
+- New `checkModulesAllLines` (typecheck.mdk) emits all closure modules with
+  `## MODULE <mid>` markers; `check_all_main.mdk` driver; batch harness runs a
+  5-entry covering set {check,eval,loader,sexp,marker} and diffs each target's
+  section vs the same oracle. (check.mdk exports nothing → can't fold into one
+  synthetic entry; a synthetic-11 + check run measured ~9s, WORSE than the 5-run
+  8.8s because the check run unavoidably re-types its 8 deps.)
+- before: 15.60s   after: **8.80s**  (**1.77×**)
+- correctness: 12 ok, 0 failing — byte-identical per-module, same as original;
+  mark+desugar 92 matched, 0 differing. Original harness kept alongside.
+- committed: 7ac547d
+- **Remaining redundancy (next lever):** the 5 runs still re-typecheck ast/lexer/
+  parser across closures. A true single-pass (one process emitting all 12) needs
+  either check.mdk to export a name (so a synthetic entry can pull it in → 1 run)
+  or a multi-root loader. Could push ~8.8s → ~5.5s.
