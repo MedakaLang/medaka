@@ -372,3 +372,13 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
   shadow). A subtle resolution regression here is exactly the kind that's hard to
   debug non-interactively; verify-or-revert protects committed state but a clean
   landing needs a supervised session. **This is THE top un-attempted lead.**
+
+### 2026-06-04 — build-optimization lever DEAD (no flambda)
+- `ocamlopt -config`: **flambda: false**. So `-O3`/aggressive cross-module
+  inlining unavailable (would need a new opam switch — out of scope).
+- A/B `--profile release` vs dev (check_modules_batch min-of-3): **5.18s vs 5.18s,
+  identical.** Without flambda, dev≈release at runtime (ocamlopt optimizes
+  natively in dev; the dev profile only adds -g). No build-flag win available.
+- `-unsafe` (drop bounds checks) is the only remaining build knob; NOT pursued —
+  build-wide safety removal on an interpreter is too risky unattended for an
+  unquantified gain. Noted for supervised consideration.
