@@ -222,6 +222,23 @@ strict priority.
   dicts** rather than flat impl-key strings — the real "pipeline restructure"; it
   also lifts the Phase 101b nesting limit. Skill: **harden-typechecker** /
   **add-language-feature** (cross-cutting).
+  - **(2026-06-05) #5 is unimplemented in the *reference* too** — `medaka run`
+    itself panics `no matching impl` on `def : List (List Int)` for
+    `impl Default (List a) requires Default a where def = [def]` (single level
+    `def : List Int` → `[0]` works). The runtime dict is flat in BOTH
+    (`lib/eval.ml` `VDict of string` + `VDictHead of string`). So there is **no
+    `medaka run` oracle** for the correct nested result — building #5 means
+    building it in the reference first (then the self-host can diff), not just
+    mirroring an existing solution.
+  - **Self-host parity work toward this (Option C, user-approved):** Layer 1 DONE
+    — user-defined SINGLE-impl return-position methods now resolve on the
+    self-host typed/dict paths (a bare-`VTypedImpl` wrapper-strip bug in
+    `selfhost/eval.mdk narrowMethod`; fixture
+    `test/eval_typed_fixtures/single_impl_return_pos.mdk`). Layer 2 — single-level
+    instance-`requires` in the self-host — DEFERRED with a ready design in
+    `selfhost/README.md` (the self-host typecheck has no impl-body inference and
+    no impl registry, so it's a ~150-250 LOC build; deferred to the LLVM stage
+    that actually forces it).
 
 ### CLI surface (Phase 82, continued)
 

@@ -563,6 +563,14 @@ export
 narrowMethod : Value -> String -> <Mut> Value
 narrowMethod (VMulti vs) "" = VMulti vs
 narrowMethod (VMulti vs) tag = stripResolved (pickByTag vs tag)
+-- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
+-- a VMulti).  A resolved route (non-empty tag) still has to strip its dispatch
+-- wrapper for a nullary return-position body — there's only one impl, so it IS the
+-- chosen one — mirroring lib/eval.ml's Phase-96 strip, which fires for any
+-- VTypedImpl after routing.  An empty tag (RNone / unresolved) leaves it for
+-- arg-tag fallback.
+narrowMethod (VTypedImpl t k p s inner) "" = VTypedImpl t k p s inner
+narrowMethod (VTypedImpl t k p s inner) _ = stripResolved (VTypedImpl t k p s inner)
 narrowMethod v _ = v
 
 pickByTag : List Value -> String -> Value
