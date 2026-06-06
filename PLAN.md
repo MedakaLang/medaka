@@ -200,12 +200,69 @@ deliberately deferred to here:
 - **Bootstrap closure:** self-hosted compiler + LLVM backend compiles itself to a
   standalone native binary — the finish line.
 
+> **Targets & the WASM soft-pivot (decided 2026-06-06).** Medaka is **one language,
+> one core, identical semantics**, parameterized by **target = (capability set) ×
+> (backend)** — NOT Roc-style platforms, NOT forked variants. "General-purpose" =
+> all capabilities + LLVM-native; "WASM-edge" = host-granted subset + WasmGC. The
+> stdlib stratifies into a **pure core** + **effect-labeled capability modules**
+> (start now; see STDLIB.md). **WasmGC is a planned second backend** (the wedge's
+> delivery vehicle, via a *direct* emitter — LLVM only does linear-memory Wasm).
+> **Soft pivot:** keep LLVM first, but make WASM's constraints design inputs to the
+> shared layers *now* — value representation to the WasmGC intersection (no
+> pointer-tagging; `i31ref`; `Int` 64-bit logically — `RUNTIME-DESIGN.md` §7.1),
+> capability surface parameterized (`RUNTIME-DESIGN.md` §6a), guaranteed TCO assumed
+> uniformly. **Verified 2026-06-06:** WASM tail calls + WasmGC (Wasm 3.0) are
+> supported on both V8/Cloudflare and Wasmtime/Fastly — `STAGE2-DESIGN.md` §2.4b.
+> Full rationale: `selfhost/STAGE2-DESIGN.md` §2.4/§2.4b, `RUNTIME-DESIGN.md`
+> §6a/§7.1.
+
 ---
 
 ## Open roadmap
 
 Each item is independently shippable; pick one per session. Grouped by area, not
 strict priority.
+
+### Capability-effects wedge — near-term sequence
+
+The immediate runway for the Phase 146 / WASM-edge wedge (full design:
+[`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md),
+[`CAPABILITY-PLATFORM.md`](./CAPABILITY-PLATFORM.md); architecture decisions: the
+"Targets & the WASM soft-pivot" callout above). Dependency-ordered; items 1–3 are
+design/research and parallelizable. Item 4 (effect soundness) is **already done**;
+item 5 (fine-grained labels) is the first *remaining* coding step.
+
+1. **Research pass (narrowed).** WASI Preview 2 / Wasm component-model capability
+   model; edge-host isolation specifics (Cloudflare Workers, Fastly Compute, Fermyon
+   Spin); object-capability & effects-as-security literature; competitor scan
+   (MoonBit especially — closest; Grain; Roc's platform model). TCO + WasmGC
+   viability is already **verified** (STAGE2-DESIGN §2.4b). Output: a findings note.
+   Skill: none (research).
+2. **Phase 146 design note (gate before coding).** Concrete effect-tracking surface
+   syntax (label declaration, inferred-vs-annotated boundary, subsumption), the
+   capability-manifest format a host reads, and 2–3 worked plugin interfaces (reuse
+   the discount-calc / auth-middleware / pipeline examples in CAPABILITY-PLATFORM.md)
+   pressure-tested on paper. Skill: **add-language-feature** (planning).
+3. **Stdlib capability audit (design-only; parallel).** Catalog which extern/stdlib
+   functions are capability-bearing vs. pure; design the pure-core/capability-module
+   split and the effect label each capability fn carries. Output: the stratification
+   plan in STDLIB.md. Skill: **extend-stdlib**.
+4. ✅ **Sound effect tracking — DONE (Phase 79/79e/146; selfhost mirror 2026-06-06).**
+   Effect propagation/inference, higher-order `<e>` composition
+   (`map : (a -> <e> b) -> List a -> <e> List b`), binding-boundary escape, and
+   laundering soundness all shipped — in the reference *and* the selfhost mirror (see
+   the Phase 146 entry above + CAPABILITY-EFFECTS.md §5a). This was the prerequisite
+   for any capability guarantee; gap-1 is closed. No remaining work here.
+5. **User-definable fine-grained effect labels (gap 2 — the first REMAINING coding
+   step).** Replace the hardcoded `built_in_effects` (`IO`/`Mut`/`Async`/`Panic`/
+   `Rand`/`Time` in `resolve.ml`) with an `effect Foo` declaration form so labels are
+   user/platform-definable (`<KV>`/`<Fetch>`/`<Log>`); subsumption over label sets.
+   Depends on item 2 (design note pins the syntax). Lands across
+   lexer/parser/resolve/typecheck (+ selfhost mirror). Skill: **add-language-feature**.
+
+Downstream (already captured, NOT near-term): **Phase 146b** parameterized effects
+(CAPABILITY-EFFECTS §6a); the **WasmGC backend** (STAGE2-DESIGN §2.4b); the
+**capability platform/runtime** (CAPABILITY-PLATFORM.md).
 
 ### Self-host (Stage 1 tail)
 
@@ -295,6 +352,13 @@ strict priority.
     can declare `<KV>` host imports once labels are user-definable.
   - **Manifest emission — TODO** (waits on the edge runtime; research pass per
     CAPABILITY-EFFECTS §9).
+  - **Phase 146b (parameterized effects) — TODO.** Pinned domains `<Fetch "x.com">`
+    / scoped storage `<KV "ns">` via type-level literal params over finite-set
+    lattices + literal-lifting — the layer the platform's pinned-domain &
+    namespaced-KV guarantees need. Designed in CAPABILITY-EFFECTS.md §6a; two
+    sub-questions deferred there (singleton-arg wrapper precision; param-aware
+    unification × typeclass/dict). Follows gap 2 (labels). The platform/runtime that
+    consumes all of this is [`CAPABILITY-PLATFORM.md`](./CAPABILITY-PLATFORM.md).
 
 - ~~**Phase 145**~~ **DONE.** See PLAN-ARCHIVE.md.
 

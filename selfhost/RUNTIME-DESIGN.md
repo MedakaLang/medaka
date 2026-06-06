@@ -263,17 +263,70 @@ reflection**.
   cannot cross the C-ABI/GC boundary; that intuition does not transfer (this is
   exactly why the sorts are `→MEDAKA`).
 
+## 6a. Targets, capability interfaces & stdlib stratification (decided 2026-06-06)
+
+Medaka ships as **one language, one core, identical semantics**, parameterized by a
+**target = (available capability set) × (backend)**. NOT full Roc-style platforms;
+NOT separate forked language variants. The ratified middle path:
+
+- **Capability-interface model.** The runtime surface is a *parameter*, expressed as
+  effect-labeled extern declarations bound per target — not a stdlib hardcoded into
+  the compiler. The same effect-labeled extern (`fetch`, `readFile`) binds to a C
+  function on native and a host import on WASM: same signature/semantics, different
+  glue. (This is the platform abstraction of [`../CAPABILITY-PLATFORM.md`](../CAPABILITY-PLATFORM.md)
+  viewed from the supply side — a platform *provides* capabilities; an effect row
+  *declares* which are consumed.)
+- **Stdlib stratification — a discipline to adopt NOW.** Split the library into:
+  - a **pure core** (data structures, algorithms — capability-free), byte-identical
+    on every target; and
+  - **capability modules** (file IO, net, KV, time, RNG, …), effect-labeled, present
+    only where the target provides the capability.
+  Capability-bearing functions must be effect-labeled and live in capability
+  modules, never the pure core. Retrofitting this is expensive — design it into the
+  first stdlib reorganization. (See `../STDLIB.md`.)
+- **Targets are configurations, not forks.** "General-purpose Medaka" = all
+  capabilities + LLVM-native. "WASM-edge Medaka" = the host-granted subset + WasmGC.
+  Same frontend, type system, Core IR, and pure core.
+- **Effects make multi-target HONEST.** A program using `<File>` simply won't
+  typecheck/link against a target that doesn't provide `<File>` — a clear *static*
+  error, never silent runtime divergence. This is the guarantee against "one language
+  that is secretly two."
+- **Capabilities are the mechanism for EVERY native-vs-WASM "what can it do"
+  difference** — threads, raw filesystem, real sockets become capabilities the native
+  target provides and the edge target doesn't, surfaced in types. No forks, no
+  `#ifdef`.
+- **Guardrail for the general-purpose ambition:** general-purpose = a *superset of
+  capabilities over identical semantics*, never different semantics. The moment
+  "native" means values *behave* differently (not just "more capabilities
+  available"), the language has split. The value-representation discipline (§7.1)
+  enforces this.
+
 ## 7. Open decisions to lock before building the runtime
 
-1. **Uniform value representation** (tagged word / NaN-box / boxed) — gates every
-   `LEAF` row and the two `(rep)` rows. (§2a) **Proposal + recommendation in §8.**
+1. **Value representation — one abstract contract, two physical encodings
+   (RECONCILED, see §8.6).** There is **no single physical rep across backends** —
+   WasmGC has no machine words to tag and no conservative GC, so a tagged word cannot
+   port to it. The resolution is layering, not a winner: a single **abstract value
+   contract** (`Int` **63-bit** as today — §8.0 fact 1; `Float` 64-bit IEEE; the value
+   kinds; equality/ordering/match; type-directed behaviour resolved at compile time;
+   **boxing invisible**) that the **Core IR, extern *signatures*, and all observable
+   semantics depend on** — plus two physical encodings that never leak upward:
+   **native** = OCaml-style uniform tagged word (§8.1, recommended, spike-proven);
+   **WasmGC** = `i31ref` (≤31-bit immediates) + typed structs over the host GC. The
+   only asymmetry is WasmGC boxing 32–63-bit ints — a perf cost, **invisible to
+   semantics**. So §8's tagged word and the WasmGC constraint are not in conflict;
+   they live at different layers. Gates every `LEAF` row and the two `(rep)` rows.
+   (§2a; full reconciliation §8.6; rationale `STAGE2-DESIGN.md` §2.4/§2.4b.)
 2. **String representation** — UTF-8 + cached codepoint count vs. other; gates
    `stringLength`/`charCode` intrinsic-vs-leaf and all string `LEAF`/`UNICODE`
    helpers. (§4)
 3. **GC**: Boehm-first is decided; confirm the `gc_alloc`/object-header contract
    and whether `set_ref` needs a barrier now or later. (§2b)
 4. **Closure ABI & calling convention** — needed for `→MEDAKA` sorts to call their
-   comparator, and for the unwind model behind `panic`. (§2b)
+   comparator, and for the unwind model behind `panic`. (§2b) **Guaranteed tail
+   calls are available on both backends** (LLVM `musttail`; WasmGC `return_call`,
+   Wasm 3.0 — verified 2026-06-06, see `STAGE2-DESIGN.md` §2.4), so design the
+   calling convention assuming uniform guaranteed TCO.
 5. **Where the ABI is first proven**: at the **bytecode VM (§2.2)**, against the
    tree-walker oracle — not at LLVM. (§2 sequencing note)
 
@@ -289,6 +342,16 @@ cheap, oracle-backed setting is where they should be settled.
 > surfaced into a recommendation. **The spike's rep is explicitly revisable** —
 > changing it touches only `llvm_emit.mdk`'s tag/box helpers + `medaka_rt.c`, by
 > design (the tagging lives in emitted IR, not the runtime).
+
+> **Layering note (reconciles §7.1's WasmGC constraint — 2026-06-06).** §8.0–8.5
+> describe the **native (LLVM + Boehm) physical encoding** — *one of two* physical
+> encodings of a single shared **abstract value contract**. The WasmGC encoding (the
+> wedge backend) is its peer, defined in **§8.6**, which also states the shared
+> contract and the layering rule that keeps the two "one language." §8's tagged word
+> and §7.1's "no tagging on WasmGC" are **not in conflict**: §8 answers *"how does the
+> native backend encode a value"* (tagged word — correct), the WasmGC constraint
+> answers *"what may the shared contract assume"* (not tagging — correct). The only
+> error would be conflating them; §8.6 keeps them at separate layers.
 
 ### 8.0 What the value set actually is (the constraints)
 
@@ -478,3 +541,68 @@ real LLVM backend — the VM forces the same value-representation and C-ABI-exte
 commitments in the cheaper, single-steppable setting. This spike is the *earliest*
 such exercise (LLVM-side, scalar-only); the VM will broaden it to the full value set
 (aggregates, closures, thunks) with the same oracle.
+
+### 8.6 The shared contract + the WasmGC encoding (reconciliation)
+
+§8.0–8.5 are the **native (LLVM + Boehm) physical encoding**. WasmGC — the wedge
+backend (`STAGE2-DESIGN.md` §2.4b) — *cannot* use them: it has **no machine word to
+tag** (references are opaque; you can't put an `Int` in a pointer's low bit) and **no
+conservative GC** (it is a precise, host-managed collector over typed references). So
+there is no single physical rep across both backends — **and there does not need to
+be.** What must be single is the **abstract value contract** both encodings implement.
+
+**The shared abstract contract** — the source of truth for the **Core IR, extern
+*signatures*, and all observable semantics:**
+- Value kinds: `Int` (**63-bit**, today's OCaml-int semantics — §8.0 fact 1), `Float`
+  (64-bit IEEE), `Char`, `Bool`, `Unit`, `String`, `Tuple`, `List`, `Array`, ADT,
+  `Record`, `Ref`, closure, thunk.
+- Semantics — equality, ordering, pattern matching, arithmetic width — identical on
+  every backend.
+- Type-directed behaviour (`hash`/`Debug`/`Eq`/`Ord`) is resolved at **compile time**
+  (§2c), so the runtime never reflects on layout — true for both encodings.
+- **Boxing is invisible** — whether a value is unboxed or heap-allocated is a
+  per-backend optimization, never observable.
+
+**The two physical encodings:**
+
+| | Native (LLVM + Boehm) — §8.1 | WasmGC (wedge backend) |
+|---|---|---|
+| value slot | 64-bit tagged word | `anyref`/`eqref` |
+| immediates | low-bit-1: **63-bit** Int / Char / Bool / Unit / nullary ctors | **`i31ref`** — but only **≤31-bit** |
+| heap aggregates | aligned pointer to `{header, fields…}` | typed `struct`/`array` refs |
+| `Int` 32–63 bits | unboxed (63-bit immediate) | **boxed** `(struct (field i64))` |
+| `Float` | boxed `{header, double}` | boxed `(struct (field f64))` |
+| GC | Boehm conservative (immediates odd → never mistaken for a pointer) | host precise GC over the declared struct types |
+| headers | one-word layout/tag id (§8.4) | the struct *type* carries layout; explicit tag field only where a sum needs it |
+
+**The one honest asymmetry.** WasmGC unboxes only `≤31-bit` ints (`i31ref`); native
+unboxes the full **63-bit** range. So 32–63-bit ints **box on WasmGC but not native**
+— a *performance* asymmetry, **invisible to semantics** (a boxed int is still a full
+63-bit `Int`). It costs the edge target some boxing on large ints (rare in typical
+edge/plugin code) and costs the language nothing semantically. (This is the WasmGC
+analogue of §8's "Float always boxes" cost.)
+
+**The layering rule (what keeps it one language).** The **Core IR, the extern
+*signatures*, and every observable behaviour depend ONLY on the abstract contract.**
+The tagged word (§8.1) is the native backend's private encoding; the i31/struct scheme
+is WasmGC's; neither leaks upward. §8.5's uniform `i64`-in/`i64`-out ABI +
+`tailcc`/`musttail` is the **native** calling convention; the WasmGC convention is its
+peer — `anyref` params/returns and **`return_call`** for guaranteed TCO (verified
+available, `STAGE2-DESIGN.md` §2.4b) — achieving the *same* guaranteed-TCO contract by
+a different instruction. Extern *bindings* differ per backend (C-ABI native;
+host-import/WIT on WasmGC — §6a); only the signatures are shared.
+
+**Single recommendation (resolves the §7.1 flag).**
+1. **Ratify §8.1 Option A as the *native* encoding** — its Boehm/tagged-word argument
+   is sound and spike-proven; nothing here changes it.
+2. **Adopt the abstract contract above as the cross-backend source of truth** — Core
+   IR, extern signatures, and observable semantics target *it*, never an encoding.
+3. **Plan the WasmGC encoding as a peer** (`i31ref` + typed structs, host GC),
+   designed to the same contract when the WasmGC backend is built.
+4. **Accept the ≤31-bit unbox asymmetry on WasmGC** — the one net-new decision; it is
+   invisible to semantics, so accept it.
+
+Two physical runtimes (Boehm+tagged-word native; host-GC+structs WasmGC) are
+*expected and fine* — "one language" is guaranteed by the shared contract + the
+layering rule, not by a shared encoding. §8 and §7.1 were never in real conflict;
+they sit at different layers.
