@@ -63,6 +63,10 @@ diff with `lib/`:
 | `core_ir_typed_main.mdk` | Typed Core IR entry (analog of `eval_typed_main`): `medaka run selfhost/core_ir_typed_main.mdk <runtime.mdk> <prelude.mdk>... <src.mdk>` desugars → `typecheck.elaborate` (stamps EMethodAt/EDictAt routes) → lowers (routes read out into `CMethod`/`CDict`) → `cevalOutput`. The ONLY corpus that drives the `CMethod` arm — return-position dispatch (RKey), e.g. a user Applicative's `pure`. Diffs stdout against the reference typed path `medaka run <file>` (`test/diff_selfhost_core_ir_typed.sh`, 2). |
 | `core_ir_run_main.mdk` | True-execution (stdout) Core IR entry (analog of `eval_run_main`): `medaka run selfhost/core_ir_run_main.mdk <prelude.mdk>... <src.mdk>` prepends the prelude (prelude-shadow-dropping the user's redefinitions, like `eval_run_main`), annotates + lowers, and evaluates the Core IR for its OUTPUT (`cevalOutput`). Diffs the captured stdout against the `=== EVAL ===` goldens (`test/diff_selfhost_core_ir_run.sh`, 18) — the SAME goldens `eval_run_main` matches. |
 | `core_ir_modules_main.mdk` | Multi-module Core IR entry (the loader-driven Core-IR path — analog of `eval_modules_main`): `medaka run selfhost/core_ir_modules_main.mdk <core.mdk> <entry.mdk> [root ...]` loads entry + imports, desugars + annotates each, LOWERS them per-module to Core IR and evaluates them in per-module frames over the shared prelude (`core_ir_eval.cevalModules`), printing the root module's `main` stdout. Diffs against `medaka run <entry>` (`test/diff_selfhost_core_ir_modules.sh`, 4) — the SAME oracle `eval_modules_main` uses. |
+| `core_ir_sexp.mdk` | **Stage 2 §2.1 Core IR serializer** — `cprogramToSexp : CProgram -> String` (and all sub-serializers: `cexprSexp`, `cbindSexp`, `carmSexp`, `ctreeSexp`, `cheadSexp`, `cimplEntrySexp`, etc.). Lossless structural S-expression dump mirroring `sexp.mdk`'s style: every node tagged by constructor name, `CVar` carries its `Addr`, `CMethod`/`CDict` carry their `Route`s. The canonical frozen-IR serialization format — the LLVM contract input and future `medaka build` artifact cache basis. |
+| `core_ir_sexp_parse.mdk` | **Stage 2 §2.1 Core IR deserializer** — `parseCProgram : String -> CProgram`. Tokenizes the S-expression (quoted strings, parens, bare atoms), builds an `SExp` tree, then pattern-matches each tag back to the typed `CProgram`/`CExpr`/... ADTs. All 18 engine-corpus fixtures round-trip faithfully. |
+| `core_ir_dump_main.mdk` | Runnable entry for the Core IR serializer: `medaka run selfhost/core_ir_dump_main.mdk <src.mdk>` parses → desugars → `annotateProgram` → lowers → `cprogramToSexp`. Snapshot goldens live in `test/core_ir_sexp_fixtures/`; `test/diff_selfhost_core_ir_sexp.sh` diffs fresh dumps against them (catches accidental lowering/serializer drift). |
+| `core_ir_roundtrip_main.mdk` | Runnable entry for the round-trip gate: `medaka run selfhost/core_ir_roundtrip_main.mdk <src.mdk>` lowers → serializes → parses back → evaluates (`cevalMain`) → prints `pp_value`. Diffs against `dev/eval_probe.exe` (`test/diff_selfhost_core_ir_roundtrip.sh`, all 18 engine fixtures). A passing result proves the serialization is semantics-faithful. |
 | `bytecode.mdk` | **Stage 2 §2.2 bytecode compiler + stack VM** (slices 1–3) — the first lowering of the Core IR *below* an ISA. `compile : CExpr -> List Instr` emits a flat, position-independent instruction stream (relative jumps); `runChunk` is a stack machine threading `(ip, value-stack, env)` over the `Instr` `Array`. REUSES `eval.mdk`'s host runtime verbatim — `Value`, env, `applyValue`/dispatch/fall-through, `matchPat`, the arithmetic + record + range + index helpers, externs, `pp_value`. Slice 1 = literals, lexically-addressed variables, application, primitive binops/unops, tuples, lists, `if`, let-sequencing blocks. Slice 2 = `IMatchArms` (ordered-arm `CMatch` dispatch) + `IMatchDecision` (decision-tree `CDecision` dispatch, mirroring `cevalDecision`'s tree walk with compiled arm body chunks) + `IBindFail` (CSLetElse pattern-bind-or-else). Slice 3 = `IMakeArray`, `IMakeRecord`, `IField`/`IFieldValue`, `IRecordUpdate`, `IRangeList`/`IRangeArray`, `IIndex`, `ISlice`, plus `CSAssign` in blocks. Closure creation, multi-clause dispatch and pattern-param binding stay delegated to the host `applyValue` (same Axis-2 reuse as `core_ir_eval.mdk`). Native closures, letrec, let-groups, and typeclass dispatch remain slices 4–5. **Zero `eval.mdk` changes** — every reused name was already exported. |
 | `eval_bytecode_main.mdk` | Runnable entry for the bytecode VM (analog of `core_ir_main.mdk`): `medaka run selfhost/eval_bytecode_main.mdk <src.mdk>` parses → desugars → `annotateProgram` → lowers to Core IR → COMPILES to bytecode → runs the stack VM → prints `pp_value` of `main`. Diffs against `dev/eval_probe.exe` — the SAME oracle `eval_main`/`core_ir_main` use (`test/diff_selfhost_eval_bytecode.sh`, 11 fixtures across slices 1–3). |
 | `timer.mdk` | Per-stage wall-clock timing helpers (`perfEnabled`, `now`, `emitPhase`, `emitTotal`, `totalDecls`) guarded by the `MEDAKA_PERF` env var. All output goes to stderr; unset ⇒ pure no-op so any driver that imports this stays byte-identical to its un-instrumented counterpart. Used by `perf_main.mdk` and `profile_main.mdk`. |
@@ -94,6 +98,8 @@ sh test/diff_selfhost_core_ir_list.sh         #   …with core.mdk + list.mdk (2
 sh test/diff_selfhost_core_ir_typed.sh        #   …typed return-position dispatch / CMethod (2)
 sh test/diff_selfhost_core_ir_run.sh          #   …true-execution stdout / === EVAL === goldens (18)
 sh test/diff_selfhost_core_ir_modules.sh      #   …loader-driven per-module frames (4)
+sh test/diff_selfhost_core_ir_sexp.sh         #   …serializer snapshot gate / cprogramToSexp goldens (18)
+sh test/diff_selfhost_core_ir_roundtrip.sh    #   …round-trip: lower→sexp→parse→eval == oracle (18, proves lossless)
 sh test/diff_selfhost_eval_bytecode.sh        # Stage 2 §2.2 bytecode VM slices 1–3 — match+records+arrays (11 ok, 7 deferred, ~1s)
 
 # Per-stage wall-clock profiling (measurement only; output goes to stderr):
@@ -616,6 +622,23 @@ to the AST tree-walker:
 - **modules** (`diff_selfhost_core_ir_modules.sh`, 4) — the loader-driven path:
   per-module Core-IR frames over a shared prelude (`cevalModules`), diffed against
   the AST `eval_modules` over the `eval_modules_fixtures` corpus.
+
+**Stage 2 §2.1 — Core IR serializer + round-trip (2026-06-05).** A canonical
+S-expression serializer (`core_ir_sexp.mdk` / `cprogramToSexp`) + deserializer
+(`core_ir_sexp_parse.mdk` / `parseCProgram`) + two new gates:
+- **snapshot** (`diff_selfhost_core_ir_sexp.sh`, 18) — dumps the Core IR for
+  each engine-corpus fixture and diffs against committed goldens in
+  `test/core_ir_sexp_fixtures/`; catches accidental lowering or serializer drift.
+  Goldens are regenerable when an intentional IR change is made.
+- **round-trip** (`diff_selfhost_core_ir_roundtrip.sh`, 18) — the real "frozen IR
+  is faithful" gate: lower → `cprogramToSexp` → `parseCProgram` → `cevalMain` →
+  `pp_value`, diffed byte-for-byte against `dev/eval_probe.exe` (the AST tree-
+  walker). A passing result proves the serialization is semantics-faithful: a
+  deserialized `CProgram` evaluates identically to the freshly-lowered one.
+  Losslessness includes `Addr` on every `CVar` and `Route` on every
+  `CMethod`/`CDict`. The format is also the LLVM contract input: a backend
+  consuming the sexp gets the complete, stable IR without depending on the
+  Medaka runtime or the self-hosted compiler's in-memory state.
 
 The slice-3 value work (build / deref / index / range) and the slice-5 impl
 machinery (`declImplEntries`/`coalesceImpls`/`narrowMethod`/`applyDicts`) are
