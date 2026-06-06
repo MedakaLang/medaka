@@ -1,0 +1,370 @@
+-- Core IR -> textual LLVM IR — Stage 2.4 DE-RISKING SPIKE (slice 1 only).
+--
+-- This is NOT the real LLVM backend (STAGE2-DESIGN.md §2.4 schedules that AFTER
+-- the bytecode VM).  It is a cheap end-to-end proof that the decided toolchain —
+-- EMIT textual LLVM IR + shell out to clang (no llc/opt, no C++ bindings) —
+-- works, and a probe to SURFACE the value-representation decision before the real
+-- backend commits to it.  It consumes the SAME Core IR (core_ir.mdk) the
+-- tree-walker-validated lowering produces, and its emitted binary's stdout is
+-- diffed byte-for-byte against the tree-walker oracle (test/diff_selfhost_llvm.sh)
+-- over a handful of prelude-free scalar fixtures — the usual equivalence-gate
+-- shape, exactly as core_ir_main.mdk gates the lowering itself.
+--
+-- SCOPE DISCIPLINE (matches runtime/medaka_rt.c): integer/float arithmetic,
+-- comparisons, unary -/!, let, if, top-level value bindings, and a type-directed
+-- print of `main`.  NO closures / functions / ADTs / records / dispatch / GC.
+-- An unsupported Core IR node panics with its tag (the spike refuses to emit
+-- wrong code rather than silently mis-lowering).
+--
+-- VALUE REPRESENTATION (PROVISIONAL — revisable; see RUNTIME-DESIGN.md "Value
+-- representation & calling convention").  A value is a uniform 64-bit word:
+--   • Int  — immediate, (n << 1) | 1   (low bit 1).  Arithmetic untags/retags,
+--            so the tagging cost is VISIBLE in the emitted IR (the point).
+--   • Bool — the immediate-int encoding 0/1 (slice 1 is statically typed, so the
+--            print routine is chosen by static type; the rep need not yet tell a
+--            Bool from an Int — a limitation this spike deliberately exposes).
+--   • Float — BOXED: word is a pointer to a 16-byte cell {i64 header, double},
+--            allocated via @mdk_alloc.  Surfaces "floats don't fit a tagged-int
+--            word", which is the core input to the rep proposal.
+
+import ast.{Lit(..), Pat(..), Addr(..)}
+import core_ir.{CExpr(..), CBind(..), CClause(..), CStmt(..), CProgram(..)}
+import util.{reverseL, joinNl}
+
+-- the static type of a slice-1 value, used to pick the print routine and the
+-- int-vs-float instruction (Core IR is type-erased; for this subset the type is
+-- recoverable structurally as we emit).
+data LTy = LTInt | LTFloat | LTBool
+
+-- emitter state: a fresh-name counter and the output lines, accumulated in
+-- REVERSE (prepend is O(1)); reverseL'd once at the end restores program order.
+data Emit = Emit (Ref Int) (Ref (List String))
+
+-- an emit-time environment: source name -> (its LLVM operand, its static type).
+-- A "register" is any LLVM operand text: a `%tN`, or an immediate like `5` for a
+-- tagged-int constant (constants are used inline, emitting no instruction).
+
+-- ── emitter plumbing ────────────────────────────────────────────────────────
+freshId : Emit -> <Mut> Int
+freshId (Emit c _) =
+  let n = c.value
+  let _ = set_ref c (n + 1)
+  n
+
+freshReg : Emit -> <Mut> String
+freshReg e = "%t" ++ intToString (freshId e)
+
+emit : Emit -> String -> <Mut> Unit
+emit (Emit _ buf) line = set_ref buf (line :: buf.value)
+
+-- ── tag / box helpers (the value-representation, made concrete) ──────────────
+-- untag an immediate int word -> raw i64 (arithmetic shift, preserves sign).
+untagInt : Emit -> String -> <Mut> String
+untagInt e v =
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = ashr i64 " ++ v ++ ", 1")
+  r
+
+-- tag a raw i64 -> immediate int word ((x << 1) | 1).
+tagInt : Emit -> String -> <Mut> String
+tagInt e v =
+  let s = freshReg e
+  let _ = emit e ("  " ++ s ++ " = shl i64 " ++ v ++ ", 1")
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = or i64 " ++ s ++ ", 1")
+  r
+
+-- box a double -> a heap cell {i64 header, double}; word = pointer-as-i64.
+boxFloat : Emit -> String -> <Mut> String
+boxFloat e d =
+  let p = freshReg e
+  let _ = emit e ("  " ++ p ++ " = call ptr @mdk_alloc(i64 16)")
+  let _ = emit e ("  store i64 2, ptr " ++ p)
+  let dp = freshReg e
+  let _ = emit e ("  " ++ dp ++ " = getelementptr i8, ptr " ++ p ++ ", i64 8")
+  let _ = emit e ("  store double " ++ d ++ ", ptr " ++ dp)
+  let w = freshReg e
+  let _ = emit e ("  " ++ w ++ " = ptrtoint ptr " ++ p ++ " to i64")
+  w
+
+-- unbox a float word -> the stored double.
+unboxFloat : Emit -> String -> <Mut> String
+unboxFloat e v =
+  let p = freshReg e
+  let _ = emit e ("  " ++ p ++ " = inttoptr i64 " ++ v ++ " to ptr")
+  let dp = freshReg e
+  let _ = emit e ("  " ++ dp ++ " = getelementptr i8, ptr " ++ p ++ ", i64 8")
+  let d = freshReg e
+  let _ = emit e ("  " ++ d ++ " = load double, ptr " ++ dp)
+  d
+
+-- ── expressions ─────────────────────────────────────────────────────────────
+emitExpr : Emit -> List (String, (String, LTy)) -> CExpr -> <Mut> (String, LTy)
+emitExpr e _ (CLit l) = emitLit e l
+emitExpr _ env (CVar x _) = lookupVar env x
+emitExpr e env (CBinPrim op l r) = emitBin e env op l r
+emitExpr e env (CUnOp op x) = emitUn e env op x
+emitExpr e env (CIf c t f) = emitIf e env c t f
+emitExpr e env (CLet recF pat e1 e2) = emitLet e env recF pat e1 e2
+emitExpr e env (CLetGroup binds body) = emitLetGroup e env binds body
+emitExpr e env (CBlock stmts) = emitBlock e env stmts
+emitExpr _ _ other = panic ("llvm spike: unsupported Core IR node " ++ ctag other ++ " (slice 1 is scalars only)")
+
+emitLit : Emit -> Lit -> <Mut> (String, LTy)
+emitLit _ (LInt n) = (intToString (n * 2 + 1), LTInt)
+emitLit _ (LBool b) = (if b then "3" else "1", LTBool)
+emitLit e (LFloat f) =
+  let w = boxFloat e (floatToString f)
+  (w, LTFloat)
+emitLit _ _ = panic "llvm spike: only Int/Float/Bool literals supported in slice 1"
+
+lookupVar : List (String, (String, LTy)) -> String -> (String, LTy)
+lookupVar [] x = panic ("llvm spike: unbound variable " ++ x)
+lookupVar ((n, vt)::rest) x = if n == x then vt else lookupVar rest x
+
+emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
+emitBin e env op l r
+  | isCmpOp op = emitCmp e env op l r
+  | otherwise = emitArith e env op l r
+
+-- arithmetic preserves operand type (well-typed: both operands share a type).
+emitArith : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
+emitArith e env op l r =
+  let (lv, lty) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  match lty
+    LTFloat =>
+      let ld = unboxFloat e lv
+      let rd = unboxFloat e rv
+      let res = freshReg e
+      let _ = emit e ("  " ++ res ++ " = " ++ floatOp op ++ " double " ++ ld ++ ", " ++ rd)
+      (boxFloat e res, LTFloat)
+    _ =>
+      let li = untagInt e lv
+      let ri = untagInt e rv
+      let res = freshReg e
+      let _ = emit e ("  " ++ res ++ " = " ++ intOp op ++ " i64 " ++ li ++ ", " ++ ri)
+      (tagInt e res, LTInt)
+
+-- comparison always yields a Bool word; dispatch the compare on operand type.
+emitCmp : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
+emitCmp e env op l r =
+  let (lv, lty) = emitExpr e env l
+  let (rv, _) = emitExpr e env r
+  match lty
+    LTFloat =>
+      let ld = unboxFloat e lv
+      let rd = unboxFloat e rv
+      let c = freshReg e
+      let _ = emit e ("  " ++ c ++ " = fcmp " ++ floatPred op ++ " double " ++ ld ++ ", " ++ rd)
+      boolFromI1 e c
+    _ =>
+      let li = untagInt e lv
+      let ri = untagInt e rv
+      let c = freshReg e
+      let _ = emit e ("  " ++ c ++ " = icmp " ++ intPred op ++ " i64 " ++ li ++ ", " ++ ri)
+      boolFromI1 e c
+
+-- an i1 (from icmp/fcmp) -> a Bool word (zext to i64, then tag as immediate int).
+boolFromI1 : Emit -> String -> <Mut> (String, LTy)
+boolFromI1 e c =
+  let z = freshReg e
+  let _ = emit e ("  " ++ z ++ " = zext i1 " ++ c ++ " to i64")
+  (tagInt e z, LTBool)
+
+emitUn : Emit -> List (String, (String, LTy)) -> String -> CExpr -> <Mut> (String, LTy)
+emitUn e env "-" x =
+  let (v, ty) = emitExpr e env x
+  match ty
+    LTFloat =>
+      let d = unboxFloat e v
+      let r = freshReg e
+      let _ = emit e ("  " ++ r ++ " = fneg double " ++ d)
+      (boxFloat e r, LTFloat)
+    _ =>
+      let i = untagInt e v
+      let r = freshReg e
+      let _ = emit e ("  " ++ r ++ " = sub i64 0, " ++ i)
+      (tagInt e r, LTInt)
+emitUn e env "!" x =
+  let (v, _) = emitExpr e env x
+  let i = untagInt e v
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = xor i64 " ++ i ++ ", 1")
+  (tagInt e r, LTBool)
+emitUn _ _ op _ = panic ("llvm spike: unsupported unary op " ++ op)
+
+-- `if`: lower via an alloca slot (memory, not phi) so a branch's own internal
+-- control flow never has to be threaded into a phi's incoming-block list — the
+-- simplest correct lowering for a spike (clang -O0 keeps the alloca; mem2reg
+-- would promote it under -O).  Both arms share a type; report the then-arm's.
+emitIf : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> CExpr -> <Mut> (String, LTy)
+emitIf e env c t f =
+  let (cv, _) = emitExpr e env c
+  let ci = untagInt e cv
+  let cb = freshReg e
+  let _ = emit e ("  " ++ cb ++ " = icmp ne i64 " ++ ci ++ ", 0")
+  let n = intToString (freshId e)
+  let thenL = "then" ++ n
+  let elseL = "else" ++ n
+  let endL = "end" ++ n
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i64")
+  let _ = emit e ("  br i1 " ++ cb ++ ", label %" ++ thenL ++ ", label %" ++ elseL)
+  let _ = emit e (thenL ++ ":")
+  let (tv, tty) = emitExpr e env t
+  let _ = emit e ("  store i64 " ++ tv ++ ", ptr " ++ slot)
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (elseL ++ ":")
+  let (fv, _) = emitExpr e env f
+  let _ = emit e ("  store i64 " ++ fv ++ ", ptr " ++ slot)
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = load i64, ptr " ++ slot)
+  (r, tty)
+
+emitLet : Emit -> List (String, (String, LTy)) -> Bool -> Pat -> CExpr -> CExpr -> <Mut> (String, LTy)
+emitLet e env False (PVar x) e1 e2 =
+  let (v, ty) = emitExpr e env e1
+  emitExpr e ((x, (v, ty)) :: env) e2
+emitLet _ _ _ _ _ _ = panic "llvm spike: only non-recursive `let <var> = e in e` supported in slice 1"
+
+emitLetGroup : Emit -> List (String, (String, LTy)) -> List CBind -> CExpr -> <Mut> (String, LTy)
+emitLetGroup e env [] body = emitExpr e env body
+emitLetGroup e env ((CBind name [CClause [] rhs])::rest) body =
+  let (v, ty) = emitExpr e env rhs
+  emitLetGroup e ((name, (v, ty)) :: env) rest body
+emitLetGroup _ _ _ _ = panic "llvm spike: only nullary non-recursive let-group bindings supported in slice 1"
+
+emitBlock : Emit -> List (String, (String, LTy)) -> List CStmt -> <Mut> (String, LTy)
+emitBlock e env [CSExpr ex] = emitExpr e env ex
+emitBlock e env ((CSExpr ex)::rest) =
+  let _ = emitExpr e env ex
+  emitBlock e env rest
+emitBlock e env ((CSLet _ (PVar x) ex)::rest) =
+  let (v, ty) = emitExpr e env ex
+  emitBlock e ((x, (v, ty)) :: env) rest
+emitBlock _ _ [] = panic "llvm spike: empty block"
+emitBlock _ _ _ = panic "llvm spike: unsupported block statement in slice 1"
+
+-- ── operator -> LLVM mnemonic tables ────────────────────────────────────────
+intOp : String -> String
+intOp "+" = "add"
+intOp "-" = "sub"
+intOp "*" = "mul"
+intOp "/" = "sdiv"   -- OCaml `/` truncates toward zero; sdiv matches
+intOp "%" = "srem"   -- OCaml `mod` sign-of-dividend; srem matches
+intOp op = panic ("llvm spike: unsupported int operator " ++ op)
+
+floatOp : String -> String
+floatOp "+" = "fadd"
+floatOp "-" = "fsub"
+floatOp "*" = "fmul"
+floatOp "/" = "fdiv"
+floatOp "%" = "frem"   -- OCaml Float.rem == C fmod == LLVM frem
+floatOp op = panic ("llvm spike: unsupported float operator " ++ op)
+
+intPred : String -> String
+intPred "==" = "eq"
+intPred "!=" = "ne"
+intPred "<" = "slt"
+intPred ">" = "sgt"
+intPred "<=" = "sle"
+intPred ">=" = "sge"
+intPred op = panic ("llvm spike: unsupported comparison " ++ op)
+
+floatPred : String -> String
+floatPred "==" = "oeq"
+floatPred "!=" = "one"
+floatPred "<" = "olt"
+floatPred ">" = "ogt"
+floatPred "<=" = "ole"
+floatPred ">=" = "oge"
+floatPred op = panic ("llvm spike: unsupported comparison " ++ op)
+
+isCmpOp : String -> Bool
+isCmpOp op = op == "==" || op == "!=" || op == "<" || op == ">" || op == "<=" || op == ">="
+
+-- ── program ─────────────────────────────────────────────────────────────────
+-- Emit a whole CProgram as a textual LLVM module: the runtime declares, then a
+-- single `@main` that computes the top-level value bindings (in source order),
+-- then `main`'s body, then a type-directed print.  Slice 1 has no functions, so
+-- every non-`main` binding must be a nullary value (`name = expr`).
+export
+emitProgram : CProgram -> <Mut> String
+emitProgram (CProgram groups _ _ _) =
+  let e = Emit (Ref 0) (Ref [])
+  let _ = emitPreamble e
+  let _ = emit e "define i32 @main() {"
+  let _ = emit e "entry:"
+  let env = emitTopBinds e [] (nonMain groups)
+  let (mv, mty) = emitExpr e env (mainBody groups)
+  let _ = emitPrint e mv mty
+  let _ = emit e "  ret i32 0"
+  let _ = emit e "}"
+  match e
+    Emit _ buf => joinNl (reverseL buf.value)
+
+emitPreamble : Emit -> <Mut> Unit
+emitPreamble e =
+  let _ = emit e "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR."
+  let _ = emit e "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md."
+  let _ = emit e "declare ptr @mdk_alloc(i64)"
+  let _ = emit e "declare void @mdk_print_int(i64)"
+  let _ = emit e "declare void @mdk_print_bool(i64)"
+  let _ = emit e "declare void @mdk_print_float(double)"
+  emit e ""
+
+emitTopBinds : Emit -> List (String, (String, LTy)) -> List CBind -> <Mut> List (String, (String, LTy))
+emitTopBinds _ env [] = env
+emitTopBinds e env ((CBind name [CClause [] body])::rest) =
+  let (v, ty) = emitExpr e env body
+  emitTopBinds e ((name, (v, ty)) :: env) rest
+emitTopBinds _ _ ((CBind name _)::_) =
+  panic ("llvm spike: top-level function '" ++ name ++ "' unsupported in slice 1 (value bindings only)")
+
+emitPrint : Emit -> String -> LTy -> <Mut> Unit
+emitPrint e v LTInt =
+  let i = untagInt e v
+  emit e ("  call void @mdk_print_int(i64 " ++ i ++ ")")
+emitPrint e v LTBool =
+  let i = untagInt e v
+  emit e ("  call void @mdk_print_bool(i64 " ++ i ++ ")")
+emitPrint e v LTFloat =
+  let d = unboxFloat e v
+  emit e ("  call void @mdk_print_float(double " ++ d ++ ")")
+
+-- the body of the `main` binding (must be a nullary clause).
+mainBody : List CBind -> CExpr
+mainBody [] = panic "llvm spike: no `main` binding"
+mainBody ((CBind "main" [CClause [] body])::_) = body
+mainBody ((CBind "main" _)::_) = panic "llvm spike: `main` must be a nullary value (main = ...)"
+mainBody (_::rest) = mainBody rest
+
+-- all top-level bindings except `main`, in source order.
+nonMain : List CBind -> List CBind
+nonMain [] = []
+nonMain ((CBind "main" _)::rest) = nonMain rest
+nonMain (b::rest) = b :: nonMain rest
+
+-- a readable tag for the unsupported-node panic (only the nodes a slice-1
+-- fixture could hit if it strayed out of scope).
+ctag : CExpr -> String
+ctag (CApp _ _) = "CApp (function application)"
+ctag (CLam _ _) = "CLam (lambda)"
+ctag (CMatch _ _) = "CMatch"
+ctag (CDecision _ _ _) = "CDecision (match)"
+ctag (CTuple _) = "CTuple"
+ctag (CList _) = "CList"
+ctag (CArray _) = "CArray"
+ctag (CRecord _ _) = "CRecord"
+ctag (CFieldAccess _ _) = "CFieldAccess"
+ctag (CRecordUpdate _ _) = "CRecordUpdate"
+ctag (CRangeList _ _ _) = "CRangeList"
+ctag (CRangeArray _ _ _) = "CRangeArray"
+ctag (CIndex _ _) = "CIndex"
+ctag (CSlice _ _ _ _) = "CSlice"
+ctag (CMethod _ _) = "CMethod (typeclass dispatch)"
+ctag (CDict _ _) = "CDict (dictionary)"
+ctag _ = "?"
