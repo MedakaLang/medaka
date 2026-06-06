@@ -142,13 +142,29 @@ deliberately deferred to here:
 - **Typeclass lowering strategy:** runtime dictionary passing (already the eval
   model) vs. monomorphization.
 - **Memory model & value representation:** heap allocation, closure layout,
-  tagged ADTs/records, boxing/unboxing.
+  tagged ADTs/records, boxing/unboxing. **Proposal + recommendation now written:**
+  [`selfhost/RUNTIME-DESIGN.md`](./selfhost/RUNTIME-DESIGN.md) §8 recommends a
+  uniform **tagged word** (OCaml-style, lossless for Medaka's 63-bit `Int`),
+  rejects NaN-boxing (breaks conservative GC), and sketches the calling convention
+  (commits to `musttail`). **Provisional, pending human ratification** — surfaced by
+  the de-risking spike below, not yet locked.
 - **Garbage collection:** conservative (Boehm) to start vs. reference counting
   vs. a precise collector.
 - **Runtime library:** re-implement the `extern` catalog against the native
   runtime. Per-extern disposition for all 71 primitives + the language/ABI strategy
   is in [`selfhost/RUNTIME-DESIGN.md`](./selfhost/RUNTIME-DESIGN.md).
 - **LLVM lowering:** Core IR → LLVM IR, calling convention, FFI.
+  - ✅ **Toolchain de-risking spike DONE (2026-06-05)** — *ahead of the strict
+    VM-first ordering by design* (front-loads the riskiest lift; runs parallel to
+    the bytecode VM, uses only the tree-walker oracle). Proves the decided toolchain
+    (EMIT textual LLVM IR + shell out to `clang`; no llc/opt, no C++/Rust bindings)
+    end-to-end on the simplest scalar subset: `selfhost/llvm_emit.mdk` (Core IR →
+    textual LLVM IR) + `selfhost/llvm_emit_main.mdk` + `runtime/medaka_rt.c` (a
+    malloc-and-leak stub; GC deferred), gated by `test/diff_selfhost_llvm.sh` (emit
+    → clang → link → run → diff vs `dev/eval_probe.exe`, **8/8 byte-identical**).
+    Scope: arithmetic / comparisons / `let` / `if` / value bindings / print only —
+    **not** the real backend (no closures/ADTs/records/dispatch/GC; out-of-scope
+    nodes panic). See [`selfhost/STAGE2-DESIGN.md`](./selfhost/STAGE2-DESIGN.md) §2.4.
 - **Bootstrap closure:** self-hosted compiler + LLVM backend compiles itself to a
   standalone native binary — the finish line.
 

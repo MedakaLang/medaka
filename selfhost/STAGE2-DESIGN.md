@@ -464,6 +464,29 @@ LLVM — is in [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md).
   cannot have.
 - **Bootstrap closure (the finish line, `PLAN.md:216`):** the self-hosted compiler
   + LLVM backend compiles itself to a standalone native binary.
+- **DE-RISKING SPIKE DONE (2026-06-05) — ahead of the strict VM-first ordering, by
+  design** (front-loads the riskiest lift; runs fully parallel to the §2.2 VM work,
+  uses only the tree-walker oracle). Proves the decided toolchain (EMIT textual LLVM
+  IR + shell out to `clang`, no llc/opt, no C++/Rust bindings) end-to-end on the
+  *simplest subset only* — the slice-1 equivalent: integer/float arithmetic,
+  comparisons, unary `-`/`!`, `let`, `if`, top-level value bindings, a type-directed
+  print. **No** closures/functions/ADTs/records/dispatch/GC (out-of-scope nodes
+  *panic* rather than mis-lower). New files: `llvm_emit.mdk` (Core IR → textual LLVM
+  IR, a sibling consumer of the same Core IR `core_ir_eval`/the bytecode VM consume
+  — Axis-1 discipline in miniature), `llvm_emit_main.mdk` (driver: parse → desugar →
+  `annotateProgram` → `lowerProgram` → emit, sharing the entire front-end + lowering
+  with `core_ir_main.mdk`), `../runtime/medaka_rt.c` (a malloc-and-leak `mdk_alloc`
+  + `mdk_print_int/bool/float`; GC deferred — `brew install bdw-gc` is the later
+  step). Gate: `test/diff_selfhost_llvm.sh` (emit → `clang <ll> medaka_rt.c` → run →
+  diff vs `dev/eval_probe.exe`) over 8 prelude-free scalar fixtures in
+  `test/llvm_fixtures/` — **8/8 byte-identical**, including OCaml's trailing-dot
+  float rendering (`14.`), `true`/`false`, negatives, and truncating `sdiv`/`srem`.
+  Value rep is a **PROVISIONAL** uniform 64-bit tagged word (low-bit-1 immediate
+  `Int`, boxed `Float`) — *deliberately* exercising the rep so it surfaces the real
+  decision; the tag/box arithmetic lives in the emitted IR (visibly), and the rep is
+  revisable in one place (`llvm_emit.mdk` + `medaka_rt.c`). The ratified-by-a-human
+  proposal (tagged word vs NaN-box vs boxed-everything, + the `musttail` calling
+  convention) it fed is [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md) §8.
 
 ---
 
