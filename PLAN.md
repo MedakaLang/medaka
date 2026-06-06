@@ -240,9 +240,18 @@ strict priority.
        mid-build. `dict_pass.ml` needed **no** change (param count is unchanged;
        depth lives in the value). Regression test:
        `test_run.ml t_nested_instance_dicts`.
-  - **Remaining: self-host mirror** (`selfhost/ast.mdk`/`typecheck.mdk`/`eval.mdk`
-    + a `diff_selfhost_eval_dict.sh` fixture), now backed by the working reference
-    oracle. Also lifts the Phase 101b nesting limit once mirrored.
+  - **Self-host mirror — DONE (2026-06-05).** `selfhost/ast.mdk`/`typecheck.mdk`/
+    `eval.mdk` + fixture `test/eval_dict_fixtures/nested_instance_dicts.mdk`.
+    `def : List (List Int)` → `[[0]]`, `def : List (List (List Int))` → `[[[0]]]`,
+    `def : Option (List (Option Int))` → `Some [Some 0]` all match `medaka run`.
+    Key selfhost-specific gotcha: `implDictRoutesFor` must thread the **full**
+    implTable (not `rest`) through the helper so sub-route lookup can re-find the
+    `"List"` impl for the inner level. Also `siteRDictName` (dict_pass usesImplDict
+    gate) must match `RDictFwd` as well as `RDict`. 17/17 eval-dict, 16/16
+    selfproc, 18/18 golden — all gates green.
+  - **Phase 101b nesting limit is now lifted**: `Arbitrary` instance-requires dicts
+    are structurally nested (e.g. `gen : List (List Int)`) on the self-host dict
+    path. Phase 101b (synthesized typed generators) can proceed.
   - **Self-host parity work toward this (Option C, user-approved):** Layer 1 DONE
     — user-defined SINGLE-impl return-position methods now resolve on the
     self-host typed/dict paths (a bare-`VTypedImpl` wrapper-strip bug in
@@ -266,8 +275,6 @@ strict priority.
     `selfhost/README.md`. Fixtures `test/eval_dict_fixtures/method_constraint_*.mdk`.
     Out of scope: multi-impl *overrides* of such a method (dict param shifts the
     container-dispatch position; no prelude impl overrides `foldMap`).
-  - #5 (two-level/nested) reference build is DONE (structured dicts, oracle
-    established above); only the self-host mirror remains.
 
 ### CLI surface (Phase 82, continued)
 

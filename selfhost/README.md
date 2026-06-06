@@ -1044,26 +1044,44 @@ non-`VMulti`, so the wrapper leaked into the program. Fixed by adding
 resolved it (mirrors `lib/eval.ml`'s strip, which fires for *any* `VTypedImpl`
 after routing). Regression: `test/eval_typed_fixtures/single_impl_return_pos.mdk`.
 
-**Self-host TODO** (the reference's harder cases — see PLAN.md Phase 83/84/115):
-nested/structured (non-flat / two-level) dictionaries. (Single-level
-instance-`requires` dicts AND method-level-constraint dicts — `foldMap`'s Monoid —
-are now DONE; see the two blocks below.) **The reference now has these working
-(2026-06-05) — structured `VDict of string * value list` + recursive
-`RKey of string * res_route list` + `res_fwd_requires` gate; `medaka run` prints
-`def : List (List Int)` → `[[0]]`** — so there is finally a `medaka run` oracle to
-diff against, and the self-host mirror is a normal port (no longer a build). Next
-step for the LLVM backend (Stage 2 §2.3): the nested/structured residual is the
-last dict-passing case the elaborated AST still leaves on arg-tag/RKey.
+**Structured/recursive instance dicts (Phase 83/84 #5) — DONE (2026-06-05).**
+The self-host now resolves `def : List (List Int)` → `[[0]]`, three-level
+`List (List (List Int))` → `[[[0]]]`, and mixed `Option (List (Option Int))` →
+`Some [Some 0]`, matching the reference oracle. Five pieces ported on top of the
+single-level base:
 
-  Reference shape to mirror (`lib/`): make `RKey` carry the selected impl's own
-  `requires` routes recursively (`impl_requires_routes_rec`, the routing twin of
-  the already-recursive `check_entry_requires`); make the runtime dict structured
-  (`VDict (key, requires)`); at a *forwarded* (RDict) **return-position** site
-  splice the dict value's own `requires` into the impl body, gated by a
-  `res_fwd_requires` flag (arg-position methods like `display`/`==` must NOT
-  forward — they dispatch by arg-tag and over-applying corrupts them). `dict_pass`
-  is unchanged (one `$dict_<method>_<slot>` param per requires, regardless of
-  depth — depth lives in the value).
+1. **`ast.mdk`** — `RKey String (List Route)` (sub-routes, mirrors the reference's
+   `RKey (string * res_route list)`) and new `RDictFwd String` (encodes
+   `res_fwd_requires = true`; see point 3).
+2. **`typecheck.mdk`** — `implDictRoutesFor` now threads the **full** impl table
+   through `implDictRoutesIn` (a helper that recurses over the table without
+   dropping the tail on a match), so sub-route lookup for `List (List Int)` can
+   re-find the "List" impl for the inner element. `implReqRoutes`/`reqRoute` pass
+   `implTable` down; new `implRequiresRoutesRec` + `findImplEntry` mirror
+   `lib/typecheck.ml`'s `impl_requires_routes_rec`. Each `RKey` now carries the
+   recursively-computed sub-routes, building a fully-structured route tree.
+3. **`ast.mdk` / `typecheck.mdk` — `RDictFwd` gate.** `resolveSite` emits
+   `RDictFwd dname` (instead of `RDict`) when the method's name is in the
+   return-position set (`rpNames`). `RDictFwd` means: dispatch by the dict value's
+   key like `RDict`, AND forward the dict's own nested `reqs` into the impl body.
+   Arg-position methods (`display`/`==` etc.) keep `RDict` and never forward — they
+   dispatch by arg-tag and over-applying with extra leading args corrupts them.
+4. **`typecheck.mdk` / `dict_pass`** — `siteRDictName` (the `usesImplDict` gate)
+   now matches both `RDict d` and `RDictFwd d`, so dict_pass correctly adds the
+   `$dict_<method>_<slot>` param to any return-position impl body regardless of
+   whether it will forward.
+5. **`eval.mdk`** — `VDict String (List Value)` carries the structured element
+   dicts. `dictOfRoute` recurses for `RKey key reqs`. New `methodAtNarrow` returns
+   `(narrowed, fwdReqs)`: `fwdReqs = []` for `RKey`/`RDict`/`RNone`, and the dict
+   value's own `reqs` for `RDictFwd`. New `applyValues` folds a list of values as
+   leading args. The `EMethodAt` eval arm: narrow → apply method dicts → apply impl
+   dicts → `applyValues v2 fwdReqs` (no-op when `fwdReqs = []`, guarded by the
+   `if awaitsArgs v2` reference pattern — the reference gate is implicit here via
+   narrowing to a VTypedImpl closure that always awaits its dict arg).
+
+Validated by `test/eval_dict_fixtures/nested_instance_dicts.mdk` (new, diffed
+against `medaka run`). All dict/typed/golden/selfproc gates green (17/17 eval-dict,
+16/16 selfproc, 18/18 golden).
 
 **Instance-`requires` dict-passing (Phase 83/84 single-level) — DONE (2026-06-05).**
 The self-host now resolves `def : List Int` → `[0]` for
@@ -1071,12 +1089,7 @@ The self-host now resolves `def : List Int` → `[0]` for
 *element* dict (`Default Int`) into the parametric impl body, exactly as the
 reference does. Two call sites at different element types (`def : List Int` →
 `[0]`, `def : List String` → `["empty"]`) confirm the threaded dict is per-site,
-not type-pinned. **The *two-level* case (`def : List (List Int)`) is now built in
-the *reference* (2026-06-05) — `medaka run` → `[[0]]`; see the "Self-host TODO"
-note above — but the self-host still carries only the single-level flat dict;
-mirroring the reference's structured dict is residual #5's remaining work.** The
-four
-implemented pieces, mirroring the reference:
+not type-pinned. The four implemented pieces:
 1. **`ast.mdk`** — `EMethodAt String (Ref Route)` gained a second
    `Ref (List Route)` for the selected impl's `requires` dicts (the reference's
    `res_impl_dicts`). Threaded through `eval.mdk`'s `EMethodAt` arm

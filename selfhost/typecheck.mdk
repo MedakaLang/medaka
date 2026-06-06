@@ -1362,7 +1362,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
   let prog2 = prePassDict (returnPosMethodNames prog ++ methodConstraintNames prog) allNames prog
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog2
-  let _ = resolveSites (buildImplTable prog2) pendingSites.value
+  let _ = resolveSites (buildImplTable prog2) (returnPosMethodNames prog2) pendingSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
   let _ = resolveDictApps pendingDictApps.value
   let _ = resolveMethodDicts pendingMethodDicts.value
@@ -1518,11 +1518,11 @@ isEmptyL : List a -> Bool
 isEmptyL [] = True
 isEmptyL _ = False
 
-resolveSites : List ImplEntry -> List (String, Ref Route, Ref (List Route), Mono) -> <Mut> Unit
-resolveSites _ [] = ()
-resolveSites implTable ((name, tagRef, implRef, resultMono) :: rest) =
-  let _ = resolveSite implTable name tagRef implRef resultMono
-  resolveSites implTable rest
+resolveSites : List ImplEntry -> List String -> List (String, Ref Route, Ref (List Route), Mono) -> <Mut> Unit
+resolveSites _ _ [] = ()
+resolveSites implTable rpNames ((name, tagRef, implRef, resultMono) :: rest) =
+  let _ = resolveSite implTable rpNames name tagRef implRef resultMono
+  resolveSites implTable rpNames rest
 
 -- a method occurrence's route: if its discriminating type is a constrained
 -- function's constraint variable, read that function's dict param (RDict);
@@ -1530,12 +1530,19 @@ resolveSites implTable ((name, tagRef, implRef, resultMono) :: rest) =
 -- stays RNone (arg-tag fallback).  When the route resolves to a concrete head
 -- that names a parametric impl WITH a `requires`, also fill the impl-dicts ref so
 -- eval threads the element dict(s) into the impl body (Phase 83/84 single-level).
-resolveSite : List ImplEntry -> String -> Ref Route -> Ref (List Route) -> Mono -> <Mut> Unit
-resolveSite implTable name tagRef implRef resultMono = match activeDictVarOf resultMono
-  Some dname => set_ref tagRef (RDict dname)
+-- Phase 83/84 #5: stamp the route for one pending method site.  At a concrete
+-- result type (ground RKey case) the element dict routes are computed recursively
+-- by implDictRoutesFor.  At a polymorphic result type (RDict case) the route is
+-- RDictFwd for return-position methods — eval will extract and forward the
+-- enclosing VDict's nested requires at runtime.  Arg-position methods (display/==)
+-- stay RDict; their VMulti dispatch is by arg-tag, not by the forwarded reqs.
+resolveSite : List ImplEntry -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> <Mut> Unit
+resolveSite implTable rpNames name tagRef implRef resultMono = match activeDictVarOf resultMono
+  Some dname =>
+    set_ref tagRef (if containsName name rpNames then RDictFwd dname else RDict dname)
   None => match headTyconMono resultMono
     Some tag =>
-      let _ = set_ref tagRef (RKey tag)
+      let _ = set_ref tagRef (RKey tag [])
       set_ref implRef (implDictRoutesFor implTable name tag resultMono)
     None => ()
 
@@ -1586,15 +1593,21 @@ headTyconTy _ = None
 
 -- the impl-dict routes for a method site that resolved to head tag [tag]: find the
 -- parametric impl defining [name] at that head, match its head pattern against the
--- concrete result mono to recover the element subst, then one RKey route per
--- requires (the element dict eval threads into the impl body).
+-- concrete result mono to recover the element subst, then one recursive RKey route
+-- per requires (the structured element dict eval threads into the impl body,
+-- Phase 83/84 #5).  The full implTable is threaded through so recursive instances
+-- (List (List Int)) can re-match the same "List" entry.
 implDictRoutesFor : List ImplEntry -> String -> String -> Mono -> <Mut> List Route
-implDictRoutesFor [] _ _ _ = []
-implDictRoutesFor (ImplEntry tag2 methodNames headTy reqs :: rest) name tag resultMono
+implDictRoutesFor implTable name tag resultMono =
+  implDictRoutesIn implTable implTable name tag resultMono
+
+implDictRoutesIn : List ImplEntry -> List ImplEntry -> String -> String -> Mono -> <Mut> List Route
+implDictRoutesIn _ [] _ _ _ = []
+implDictRoutesIn fullTable (ImplEntry tag2 methodNames headTy reqs :: rest) name tag resultMono
   | tag2 == tag && containsName name methodNames = match matchTyMono headTy resultMono
-      Some subst => implReqRoutes subst reqs
-      None => implDictRoutesFor rest name tag resultMono
-  | otherwise = implDictRoutesFor rest name tag resultMono
+      Some subst => implReqRoutes fullTable subst reqs
+      None => implDictRoutesIn fullTable rest name tag resultMono
+  | otherwise = implDictRoutesIn fullTable rest name tag resultMono
 
 -- match an impl-head type PATTERN against a concrete mono, binding the impl's
 -- type-variable names to monos (single-level: the pattern's args are bare vars).
@@ -1613,16 +1626,39 @@ combineSubst (Some xs) (Some ys) = Some (xs ++ ys)
 combineSubst _ _ = None
 
 -- one route per requires: substitute the recovered element subst into the
--- requires' dispatch arg, take its head tycon (the dict tag eval narrows by).
-implReqRoutes : List (String, Mono) -> List Require -> <Mut> List Route
-implReqRoutes _ [] = []
-implReqRoutes subst (Require _ rargs :: rest) = reqRoute subst rargs :: implReqRoutes subst rest
+-- requires' dispatch arg, take its head tycon (the dict tag eval narrows by),
+-- and recursively compute that impl's own requires routes (Phase 83/84 #5).
+implReqRoutes : List ImplEntry -> List (String, Mono) -> List Require -> <Mut> List Route
+implReqRoutes _ _ [] = []
+implReqRoutes implTable subst (Require _ rargs :: rest) =
+  reqRoute implTable subst rargs :: implReqRoutes implTable subst rest
 
-reqRoute : List (String, Mono) -> List Ty -> <Mut> Route
-reqRoute _ [] = RNone
-reqRoute subst (arg :: _) = match headTyconMono (fromAstType subst arg)
-  Some tag => RKey tag
-  None => RNone
+reqRoute : List ImplEntry -> List (String, Mono) -> List Ty -> <Mut> Route
+reqRoute _ _ [] = RNone
+reqRoute implTable subst (arg :: _) =
+  let m = fromAstType subst arg
+  match headTyconMono m
+    Some tag => RKey tag (implRequiresRoutesRec implTable tag m)
+    None => RNone
+
+-- Phase 83/84 #5: given the concrete mono [m] whose head tycon is [tag], find the
+-- matching parametric impl in [implTable] and compute its requires routes
+-- recursively — so RKey(tag, [RKey(subTag, [...])]) encodes the full element-dict
+-- nesting.  Terminates because each step structurally shrinks the requirement type.
+implRequiresRoutesRec : List ImplEntry -> String -> Mono -> <Mut> List Route
+implRequiresRoutesRec implTable tag m = match findImplEntry implTable tag m
+  Some (ImplEntry _ _ headTy reqs) => match matchTyMono headTy m
+    Some subst => implReqRoutes implTable subst reqs
+    None => []
+  None => []
+
+-- find the first ImplEntry in [implTable] whose head tycon is [tag] (there is at
+-- most one parametric impl per head tycon in well-formed programs).
+findImplEntry : List ImplEntry -> String -> Mono -> Option ImplEntry
+findImplEntry [] _ _ = None
+findImplEntry (ImplEntry tag2 ms hty reqs :: rest) tag m
+  | tag2 == tag = Some (ImplEntry tag2 ms hty reqs)
+  | otherwise = findImplEntry rest tag m
 
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
@@ -1641,7 +1677,7 @@ routeOfMono : Mono -> <Mut> Route
 routeOfMono m = match activeDictVarOf m
   Some dname => RDict dname
   None => match headTyconMono m
-    Some tag => RKey tag
+    Some tag => RKey tag []
     None => RNone
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
@@ -1682,7 +1718,7 @@ recRoute encl mono id = match findTvarInMono mono id
 
 resolveRecMono : String -> Mono -> <Mut> Route
 resolveRecMono encl m = match headTyconMono m
-  Some tag => RKey tag
+  Some tag => RKey tag []
   None => match enclSlot encl m
     Some slot => RDict (dictParamName encl slot)
     None => routeOfMono m
@@ -1792,6 +1828,7 @@ bodyRDictNames e = concatMapL siteRDictName (collectMethodSites e)
 siteRDictName : Ref Route -> List String
 siteRDictName r = match r.value
   RDict d => [d]
+  RDictFwd d => [d]
   _ => []
 
 -- every EMethodAt route ref reachable in [e] (a pure structural walk; reading a
@@ -2686,7 +2723,7 @@ markModules coreDecls modules =
 elabModuleStamp : List (String, Scheme) -> List Decl -> List Decl -> <Mut> List (String, Scheme)
 elabModuleStamp seedVars accData prog =
   let schemes = checkModuleFull seedVars accData prog
-  let _ = resolveSites [] pendingSites.value
+  let _ = resolveSites [] [] pendingSites.value
   schemes
 
 elabModulesGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> Unit
