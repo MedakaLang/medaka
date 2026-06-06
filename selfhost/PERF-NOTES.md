@@ -660,6 +660,31 @@ array frames clearly regress.** Kept as DORMANT, validated Stage-2 scaffolding
   variance). Still single-digit-seconds, within the fast-path budget.
 - committed: kept annotate.mdk + dormant eval EVarAt arm; reverted arrays + wiring.
 
+#### 2026-06-05 (follow-up) — independent re-confirmation on the true-execution path
+Re-verified the above from a clean state, on a *different* workload than the
+synthetic `eval_main` probe: wired `annotateProgram` into the single-file
+true-execution driver (`eval_run_main.mdk`, via `evalOutput (annotateProgram
+combined)`) and ran a compute-heavy `fib 25` through the self-hosted eval.
+
+- **Correctness re-validated:** all **18/18 `=== EVAL ===` goldens byte-identical**
+  with the CONSUME path active; the `EVarAt` slot/name self-assert never fired —
+  so `annotate`'s EMIT addressing is provably exact against eval's *runtime* frame
+  model on the single-file path (the prerequisite the bytecode VM / LLVM consumers
+  depend on).
+- **Perf re-measured (`fib 25`, `/usr/bin/time -p`, 2 runs each):** consume-active
+  **12.30 / 12.38s** vs by-name baseline **12.02 / 12.05s** → **~2.5% slower**.
+  A second, independent confirmation of "no tree-walker win" (list-indexed lands
+  neutral-to-slightly-negative, matching the synthetic probe). Same root cause:
+  the address resolution is itself interpreted, and `AGlobal` references still scan
+  by name. **Reverted the driver wiring; the arm stays dormant.**
+- **Standing conclusion (do not re-attempt on the tree-walker):** the lexical-
+  addressing *consume* lever is a confirmed non-win for the AST interpreter — twice
+  measured, structurally explained. The win is already captured where it belongs:
+  the §2.2 bytecode VM lowers the same `annotateProgram` output to O(1) compiled
+  slot loads, and §2.4 LLVM will too. EMIT (annotate) + the dormant CONSUME arm are
+  validated, ready scaffolding for those compiled consumers — not a tree-walker
+  optimization.
+
 ### 2026-06-05 — single-file per-stage profiler (profile_main.mdk + profile_selfhost.sh)
 
 **Added single-file per-stage timing harness** to complement `perf_main.mdk`

@@ -122,10 +122,15 @@ source needs (the selfhost source has no `=>`-constrained user polymorphism).
 **Forward-looking performance levers** (backend-independent, cheap now / expensive
 to retrofit — recorded so they aren't lost; not blocking):
 - **Lexical addressing** — resolve emits a `(frame, slot)` address per variable
-  reference to replace the assoc-list env scan. 🚧 IN PROGRESS: the EMIT half
-  landed (resolve annotates `EVarAt`; harnesses byte-identical because consumption
-  is unwired). The eval-consumption half (+ VThunk / Phase-112 shadow interaction)
-  is the supervised follow-up. This is the top un-attempted perf lever.
+  reference to replace the assoc-list env scan. ✅ EMIT done + CONSUME
+  **investigated and closed for the tree-walker**: `annotateProgram` (EMIT) is
+  validated and consumed by the bytecode VM / Core IR (where it becomes O(1)
+  compiled slot loads); the AST tree-walker CONSUME arm (`EVarAt`/`lookupAtAddr`)
+  is correct (18/18 EVAL goldens byte-identical with it active, slot/name assert
+  never fires) but **measured twice as a non-win** (list-indexed ~neutral-to-2.5%
+  slower, array frames −14%) — the address resolution is itself interpreted, so it
+  can't beat the by-name scan. Kept DORMANT by design; do not re-attempt on the
+  tree-walker. See `selfhost/PERF-NOTES.md`.
 - ✅ **Stdlib string builder** — killed the O(n²) `++` string-building in
   lexer/formatter via native `stringConcat` over cons-built lists (2026-06-05; see
   `selfhost/PERF-NOTES.md`).
@@ -196,9 +201,15 @@ strict priority.
 
 ### Self-host (Stage 1 tail)
 
-- 🚧 **Lexical-addressing perf hook — eval-consumption half.** See Stage 1
-  performance levers. Resolve already emits `EVarAt (frame, slot)`; wire eval to
-  consume it (with the VThunk / Phase-112 shadow-bypass interaction) and measure.
+- ✅ **Lexical-addressing perf hook — eval-consumption half. CLOSED (non-win on
+  the tree-walker; 2026-06-05).** Wired `annotateProgram` into the single-file eval
+  path and measured: correct (18/18 EVAL goldens byte-identical with `EVarAt`
+  consume active; the slot/name assert never fires) but **~2.5% slower** than the
+  by-name baseline (`fib 25`), independently re-confirming the earlier finding
+  (list-indexed neutral, array frames −14%). Reverted the wiring; the `EVarAt` arm
+  stays dormant. The lever's payoff is already captured by the bytecode VM (§2.2),
+  which lowers the same addresses to O(1) compiled slot loads. Do not re-attempt on
+  the tree-walker. See `selfhost/PERF-NOTES.md`.
 
 > **Note for OCaml-compiler tasks below:** the self-host port mirrors the OCaml
 > pipeline stage-for-stage (`selfhost/{lexer,parser,desugar,resolve,marker,
