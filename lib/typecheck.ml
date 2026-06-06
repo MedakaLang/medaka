@@ -1583,7 +1583,8 @@ let rec infer env = function
        unify mono (TFun (tx, eff, tr));
        perform_effect cur_effect eff;
        mref := Some { Ast.res_iface = iface_name; res_route = Ast.RLocal;
-                      res_method_dicts = []; res_impl_dicts = [] };
+                      res_method_dicts = []; res_impl_dicts = [];
+                      res_fwd_requires = false };
        tr
      | _ ->
        (* Impl exists, or receiver head not concrete → ordinary method dispatch.
@@ -3520,6 +3521,48 @@ let rec check_entry_requires env loc entry concrete_args =
         | e' :: _ -> check_entry_requires env loc e' req_concrete
     ) entry.impl_requires
 
+(* Phase 83/84 #5: build the *recursive* dict routes for an impl's `requires`,
+   selected for ground `concrete_args`.  The routing twin of check_entry_requires:
+   where that one only *verifies* the nested requirements hold, this yields the
+   routes eval needs to build the runtime dictionaries.  Each requires constraint
+   resolves to `RKey (chosen_impl_key, <that impl's own requires routes>)`,
+   recursively — so a structured runtime dict (`VDict (key, [...])`) carries the
+   nested element dicts of a recursive instance: `def : List (List Int)` →
+   `RKey (ListKey, [RKey (ListKey, [RKey (IntKey, [])])])`.  A non-ground or
+   unresolvable requirement yields the sentinel `RKey ("", [])` (eval's empty-key
+   arg-tag fallback).  Terminates for the same reason as check_entry_requires:
+   each step structurally shrinks the requirement type.  Impl selection mirrors
+   pick_dispatch_impl (unique → unique-most-specific → unique-default → none). *)
+let rec impl_requires_routes_rec env entry (concrete_args : mono list)
+    : Ast.res_route list =
+  match impl_head_subst entry.impl_type_mono concrete_args with
+  | None -> []
+  | Some subst ->
+    List.map (fun (req_iface, req_args) ->
+      let args = List.map (fun a -> normalize (subst_apply subst a)) req_args in
+      if args = [] || not (List.for_all is_concrete args) then Ast.RKey ("", [])
+      else match matching_impls env req_iface args with
+        | [] -> Ast.RKey ("", [])
+        | entries ->
+          let chosen = match entries with
+            | [e] -> Some e
+            | _ ->
+              let ms = List.filter (fun e ->
+                List.for_all (fun e' -> e == e' ||
+                  subsumes ~general:e'.impl_type_mono ~specific:e.impl_type_mono)
+                  entries) entries in
+              (match ms with
+               | [e] -> Some e
+               | _ ->
+                 (match List.filter (fun e -> e.impl_is_default) entries with
+                  | [e] -> Some e
+                  | _ -> None))
+          in
+          (match chosen with
+           | Some e -> Ast.RKey (e.impl_key, impl_requires_routes_rec env e args)
+           | None -> Ast.RKey ("", []))
+    ) entry.impl_requires
+
 (* Phase 69.x: extract the ids of all still-unbound type variables in a mono. *)
 let rec mono_unbound_ids m =
   match normalize m with
@@ -3637,45 +3680,17 @@ let check_method_usages env =
        it carries an EMethodRef) so eval routes return-position / multi-param
        dispatch to the impl the checker actually picked.  res_method_dicts is
        filled later by resolve_method_dicts (needs pick_dispatch_impl). *)
-    let set_route route =
+    let set_route ?(fwd = false) route =
       match occ_ref with
       | Some cell ->
         cell := Some { Ast.res_iface = iface_name; res_route = route;
-                       res_method_dicts = []; res_impl_dicts = [] }
+                       res_method_dicts = []; res_impl_dicts = [];
+                       res_fwd_requires = fwd }
       | None -> ()
     in
     if n = 0 || List.length param_vars <> n then ()
     else begin
       let concrete_args = List.map (fun r -> normalize (TVar r)) param_vars in
-      (* Phase 83/84: resolve a committed impl's `requires` (substituted by the
-         call's concrete head args) to dict routes, so eval applies them as
-         leading args to the selected impl method (matching the params dict_pass
-         prepends).  The site is ground here, so each requires resolves to the
-         matching impl's RKey (mirrors pick_dispatch_impl, which is defined later
-         in the file).  `resolve_one_route` is not yet in scope at this point. *)
-      let impl_requires_routes entry =
-        match impl_head_subst entry.impl_type_mono concrete_args with
-        | None -> []
-        | Some subst ->
-          List.map (fun (req_iface, req_args) ->
-            let args = List.map (fun a -> normalize (subst_apply subst a)) req_args in
-            if args <> [] && List.for_all is_concrete args then
-              match matching_impls env req_iface args with
-              | [] -> Ast.RKey ""
-              | entries ->
-                let ms = List.filter (fun e ->
-                  List.for_all (fun e' -> e == e' ||
-                    subsumes ~general:e'.impl_type_mono ~specific:e.impl_type_mono)
-                    entries) entries in
-                (match ms with
-                 | [e] -> Ast.RKey e.impl_key
-                 | _ ->
-                   (match List.filter (fun e -> e.impl_is_default) entries with
-                    | [e] -> Ast.RKey e.impl_key
-                    | _ -> Ast.RKey ""))
-            else Ast.RKey ""
-          ) entry.impl_requires
-      in
       (* Phase 65: committing to an impl also verifies its `requires` hold. *)
       (* Only stamp impl dicts for return-position methods — the same gate as
          check_impl's registration and dict_pass's param insertion, so the dicts
@@ -3690,11 +3705,11 @@ let check_method_usages env =
         | None -> false
       in
       let commit entry =
-        set_route (Ast.RKey entry.impl_key);
+        set_route (Ast.RKey (entry.impl_key, []));
         check_entry_requires env loc entry concrete_args;
         (match entry.impl_requires, occ_ref with
          | (_ :: _), Some cell when method_is_return_pos ->
-           let routes = impl_requires_routes entry in
+           let routes = impl_requires_routes_rec env entry concrete_args in
            (match !cell with
             | Some r -> cell := Some { r with Ast.res_impl_dicts = routes }
             | None -> ())
@@ -3716,7 +3731,11 @@ let check_method_usages env =
            | None ->
              let ids = List.concat_map mono_unbound_ids concrete_args in
              (match find_enclosing_dict ?enclosing env iface_name ids with
-              | Some dvar -> set_route (Ast.RDict dvar)
+              (* Phase 83/84 #5: a return-position ref forwarded onto an enclosing
+                 dict param splices that runtime dict's own `requires` into the
+                 selected impl's body (the nested element dicts); arg-position
+                 refs stay on plain key-narrow + arg-tag (fwd:false). *)
+              | Some dvar -> set_route ~fwd:method_is_return_pos (Ast.RDict dvar)
               | None -> ()))
         | None -> ()
       end
@@ -3821,8 +3840,12 @@ let resolve_one_route ?enclosing env (iface, args) =
   let args = List.map normalize args in
   if args <> [] && List.for_all is_concrete args then
     (match pick_dispatch_impl env iface args with
-     | Some e -> Ast.RKey e.impl_key
-     | None -> Ast.RKey "")
+     (* Phase 83/84 #5: carry the impl's own `requires` routes recursively, so a
+        constrained fn applied at a nested type (`f : Default a => a` used at
+        `List (List Int)`) gets a structured dict the forwarded element refs can
+        unfold — not just the flat head impl key. *)
+     | Some e -> Ast.RKey (e.impl_key, impl_requires_routes_rec env e args)
+     | None -> Ast.RKey ("", []))
   else
     let ids = List.concat_map mono_unbound_ids args in
     (match find_enclosing_dict ?enclosing env iface ids with
@@ -3834,7 +3857,7 @@ let resolve_one_route ?enclosing env (iface, args) =
           sentinel empty key (arg-tag fallback, never worse than pre-69.x). *)
        (match head_key_route env iface args with
         | Some h -> Ast.RHeadKey h
-        | None -> Ast.RKey ""))
+        | None -> Ast.RKey ("", [])))
 
 (* Phase 115 (#2): turn each deferred recursive-promoted usage into a normal
    dict_app_usages entry, now that the wrapper's fun_constraints entry has been
@@ -3874,8 +3897,9 @@ let resolve_method_dicts env =
        | None ->
          (* check_method_usages left no t-route (polymorphic/non-ground site);
             still carry the method dicts so eval can supply them. *)
-         cell := Some { Ast.res_iface = _iface; res_route = Ast.RKey "";
-                        res_method_dicts = routes; res_impl_dicts = [] })
+         cell := Some { Ast.res_iface = _iface; res_route = Ast.RKey ("", []);
+                        res_method_dicts = routes; res_impl_dicts = [];
+                        res_fwd_requires = false })
     | _ -> ()
   ) !(env.method_usages)
 

@@ -3342,7 +3342,7 @@ let resolved_keys src =
   let collect = function
     | Ast.EMethodRef (r, _) as e ->
       (match !r with
-       | Some { Ast.res_route = Ast.RKey k; _ } -> keys := k :: !keys
+       | Some { Ast.res_route = Ast.RKey (k, _); _ } -> keys := k :: !keys
        | Some { Ast.res_route = Ast.RHeadKey _; _ }
        | Some { Ast.res_route = Ast.RDict _; _ }
        | Some { Ast.res_route = Ast.RLocal; _ } | None -> ());
@@ -3473,7 +3473,7 @@ let dict_routes src =
     | Ast.EMethodRef (r, m) as e ->
       (match !r with
        | Some { Ast.res_route = Ast.RDict d; _ } -> out := Printf.sprintf "%s->RDict(%s)" m d :: !out
-       | Some { Ast.res_route = Ast.RKey k; _ }  -> out := Printf.sprintf "%s->RKey(%s)" m k :: !out
+       | Some { Ast.res_route = Ast.RKey (k, _); _ }  -> out := Printf.sprintf "%s->RKey(%s)" m k :: !out
        | Some { Ast.res_route = Ast.RHeadKey h; _ } -> out := Printf.sprintf "%s->RHeadKey(%s)" m h :: !out
        | Some { Ast.res_route = Ast.RLocal; _ } -> out := Printf.sprintf "%s->RLocal" m :: !out
        | None -> ());
@@ -3481,7 +3481,7 @@ let dict_routes src =
     | Ast.EDictApp (r, f) as e ->
       (match !r with
        | Some routes ->
-         let s = List.map (function Ast.RKey k -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h | Ast.RLocal -> "L") routes in
+         let s = List.map (function Ast.RKey (k, _) -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h | Ast.RLocal -> "L") routes in
          out := Printf.sprintf "%s[%s]" f (String.concat "," s) :: !out
        | None -> ());
       e
@@ -3532,7 +3532,7 @@ let elaborated_routes src =
     | Ast.EMethodRef (r, m) as e ->
       (match !r with
        | Some { Ast.res_route = Ast.RDict d; _ } -> out := Printf.sprintf "%s->RDict(%s)" m d :: !out
-       | Some { Ast.res_route = Ast.RKey k; _ }  -> out := Printf.sprintf "%s->RKey(%s)" m k :: !out
+       | Some { Ast.res_route = Ast.RKey (k, _); _ }  -> out := Printf.sprintf "%s->RKey(%s)" m k :: !out
        | Some { Ast.res_route = Ast.RHeadKey h; _ } -> out := Printf.sprintf "%s->RHeadKey(%s)" m h :: !out
        | Some { Ast.res_route = Ast.RLocal; _ } -> out := Printf.sprintf "%s->RLocal" m :: !out
        | None -> ());
@@ -3540,7 +3540,7 @@ let elaborated_routes src =
     | Ast.EDictApp (r, f) as e ->
       (match !r with
        | Some routes ->
-         let s = List.map (function Ast.RKey k -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h | Ast.RLocal -> "L") routes in
+         let s = List.map (function Ast.RKey (k, _) -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h | Ast.RLocal -> "L") routes in
          out := Printf.sprintf "%s[%s]" f (String.concat "," s) :: !out
        | None -> ());
       e
@@ -3592,7 +3592,7 @@ let method_dict_routes_of src =
       (match !r with
        | Some { Ast.res_method_dicts = (_ :: _ as ds); _ } ->
          let s = List.map (function
-           | Ast.RKey k -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h
+           | Ast.RKey (k, _) -> "K:" ^ k | Ast.RDict d -> "D:" ^ d | Ast.RHeadKey h -> "H:" ^ h
            | Ast.RLocal -> "L") ds in
          out := Printf.sprintf "%s{%s}" m (String.concat "," s) :: !out
        | _ -> ());

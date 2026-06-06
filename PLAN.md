@@ -193,22 +193,40 @@ strict priority.
   `claude/suspicious-sammet-21d73e` (commit `860ba12`). Skill:
   **add-language-feature** (cross-cutting).
 
-- **Phase 83 / 84 #5 — true recursive/nested instance dictionaries. DEFERRED (the
-  big remaining residual).** The instance-`requires` dict-threading into
-  return-position impl bodies is DONE; the tractable set was closed by Phase 115,
-  and #4 (free-`e` `Result`) closed via head-key dict-application routing (all in
-  PLAN-ARCHIVE.md). Only #5 remains: the `List (List Int)` case needs **structured
-  dicts** rather than flat impl-key strings — the real "pipeline restructure"; it
-  also lifts the Phase 101b nesting limit. Skill: **harden-typechecker** /
+- **Phase 83 / 84 #5 — true recursive/nested instance dictionaries. REFERENCE
+  DONE (2026-06-05); self-host mirror is the only remaining work.** The
+  instance-`requires` dict-threading into return-position impl bodies is DONE; the
+  tractable set was closed by Phase 115, and #4 (free-`e` `Result`) closed via
+  head-key dict-application routing (all in PLAN-ARCHIVE.md). #5 — the
+  `List (List Int)` case — is now **built in the reference**: structured/recursive
+  dicts replace the flat impl-key strings. Skill: **harden-typechecker** /
   **add-language-feature** (cross-cutting).
-  - **(2026-06-05) #5 is unimplemented in the *reference* too** — `medaka run`
-    itself panics `no matching impl` on `def : List (List Int)` for
-    `impl Default (List a) requires Default a where def = [def]` (single level
-    `def : List Int` → `[0]` works). The runtime dict is flat in BOTH
-    (`lib/eval.ml` `VDict of string` + `VDictHead of string`). So there is **no
-    `medaka run` oracle** for the correct nested result — building #5 means
-    building it in the reference first (then the self-host can diff), not just
-    mirroring an existing solution.
+  - **(2026-06-05) #5 reference build — DONE; oracle established.** `medaka run`
+    now prints `def : List (List Int)` → `[[0]]`, `List (List (List Int))` →
+    `[[[0]]]`, and mixed `Option (List (Option Int))` → `Some [Some 0]` (single
+    and multi-module loader paths). The runtime dict is now **structured**:
+    `VDict of string * value list` / `VDictHead of string * value list` (key plus
+    the impl's own `requires` dicts, recursively); `Ast.RKey of string * res_route
+    list` carries the requires routes. The fix has three moving parts, all
+    mirroring machinery that already existed for *checking*:
+    1. `lib/typecheck.ml` `impl_requires_routes_rec` — the routing twin of the
+       already-recursive `check_entry_requires`; resolves each `requires` to
+       `RKey (chosen_key, <its own requires routes>)` recursively. Used by both
+       the method-occurrence ground path (`commit`) and the dict-application
+       ground path (`resolve_one_route`).
+    2. `lib/eval.ml` `dict_of_route` recurses to build the nested `VDict`; the
+       `EMethodRef` arm, for a *forwarded* (RDict) return-position site, splices
+       the runtime dict's own `requires` into the selected impl's body.
+    3. The forward is **gated** by a new `res_fwd_requires : bool` on the resolved
+       record (true only for return-position RDict sites) — without it,
+       arg-position methods (`display`/`==`, which dispatch by arg-tag) get extra
+       leading dict args and corrupt: the regression that broke `println [1,2,3]`
+       mid-build. `dict_pass.ml` needed **no** change (param count is unchanged;
+       depth lives in the value). Regression test:
+       `test_run.ml t_nested_instance_dicts`.
+  - **Remaining: self-host mirror** (`selfhost/ast.mdk`/`typecheck.mdk`/`eval.mdk`
+    + a `diff_selfhost_eval_dict.sh` fixture), now backed by the working reference
+    oracle. Also lifts the Phase 101b nesting limit once mirrored.
   - **Self-host parity work toward this (Option C, user-approved):** Layer 1 DONE
     — user-defined SINGLE-impl return-position methods now resolve on the
     self-host typed/dict paths (a bare-`VTypedImpl` wrapper-strip bug in
@@ -232,8 +250,8 @@ strict priority.
     `selfhost/README.md`. Fixtures `test/eval_dict_fixtures/method_constraint_*.mdk`.
     Out of scope: multi-impl *overrides* of such a method (dict param shifts the
     container-dispatch position; no prelude impl overrides `foldMap`).
-  - Only #5 (two-level/nested) now remains, gated on the structured-dict
-    restructure above (no `medaka run` oracle yet).
+  - #5 (two-level/nested) reference build is DONE (structured dicts, oracle
+    established above); only the self-host mirror remains.
 
 ### CLI surface (Phase 82, continued)
 
