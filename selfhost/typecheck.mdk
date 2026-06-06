@@ -24,13 +24,22 @@ public export data Mono
   = TVar (Ref Tyvar)
   | TCon String
   | TApp Mono Mono
-  | TFun Mono (List String) Mono   -- arg -> <effect labels> result
+  | TFun Mono EffRow Mono   -- arg -> <effect row> result
   | TTuple (List Mono)
 
 public export data Tyvar = Unbound Int Int | Link Mono   -- Unbound id level | Link
 
--- forall <quantified tyvar ids>. mono
-public export data Scheme = Forall (List Int) Mono
+-- An effect row (Phase 79/146): a set of concrete effect labels plus an optional
+-- tail variable.
+--   tail = None    ⇒ closed row, exactly [labels].
+--   tail = Some v  ⇒ open row <labels | v>: v can absorb further effects.
+-- Inference-synthesized arrows use open rows so effect-subsumption survives
+-- equality unification; user annotations are closed unless they name a tail.
+public export data EffRow = EffRow (List String) (Option (Ref Effvar))
+public export data Effvar = EUnbound Int Int | ELink EffRow   -- EUnbound id level | link
+
+-- forall <quantified tyvar ids> <quantified effvar ids>. mono
+public export data Scheme = Forall (List Int) (List Int) Mono
 
 -- ── global inference state ────────────────────────────────────────────────
 tyvarCounter : Ref Int
@@ -47,6 +56,72 @@ newTyvarId _ =
 
 freshVar : Unit -> <Mut> Mono
 freshVar _ = TVar (Ref (Unbound (newTyvarId ()) currentLevel.value))
+
+-- ── effect variables + rows (Phase 79/146) ────────────────────────────────
+effvarCounter : Ref Int
+effvarCounter = Ref 0
+
+newEffvarId : Unit -> <Mut> Int
+newEffvarId _ =
+  let n = effvarCounter.value
+  let _ = set_ref effvarCounter (n + 1)
+  n
+
+-- the empty closed row — a pure arrow
+pureRow : EffRow
+pureRow = EffRow [] None
+
+-- a closed row over the given concrete labels
+closedRow : List String -> EffRow
+closedRow labels = EffRow (sortUniqS labels) None
+
+freshEffvar : Unit -> <Mut> (Ref Effvar)
+freshEffvar _ = Ref (EUnbound (newEffvarId ()) currentLevel.value)
+
+freshEffvarAt : Int -> <Mut> (Ref Effvar)
+freshEffvarAt lvl = Ref (EUnbound (newEffvarId ()) lvl)
+
+-- an open row with a fresh tail variable
+openRow : Unit -> <Mut> EffRow
+openRow _ = EffRow [] (Some (freshEffvar ()))
+
+-- follow ELink tails (merging labels) to a canonical row whose tail, if present,
+-- is an unbound effvar
+effrowNorm : EffRow -> EffRow
+effrowNorm (EffRow labels tail) = match tail
+  Some cell => match cell.value
+    ELink r2 =>
+      let nr = effrowNorm r2
+      match nr
+        EffRow ls2 t2 => EffRow (sortUniqS (labels ++ ls2)) t2
+    EUnbound _ _ => EffRow labels tail
+  None => EffRow labels tail
+
+-- the concrete labels currently known for a row (ignores the open tail)
+effrowLabels : EffRow -> List String
+effrowLabels r = match effrowNorm r
+  EffRow labels _ => labels
+
+effvarLevel : Ref Effvar -> Int
+effvarLevel cell = match cell.value
+  EUnbound _ l => l
+  ELink _ => 0
+
+-- sorted + deduplicated string set (canonical effect-label order, matching the
+-- OCaml `List.sort_uniq String.compare` so multi-label rows render identically)
+sortUniqS : List String -> List String
+sortUniqS xs = sortUniqSGo xs []
+
+sortUniqSGo : List String -> List String -> List String
+sortUniqSGo [] acc = acc
+sortUniqSGo (x :: xs) acc = sortUniqSGo xs (sortInsertS x acc)
+
+sortInsertS : String -> List String -> List String
+sortInsertS x [] = [x]
+sortInsertS x (y :: ys) = match stringCompare x y
+  Lt => x :: y :: ys
+  Eq => y :: ys
+  Gt => y :: sortInsertS x ys
 
 enterLevel : Unit -> <Mut> Unit
 enterLevel _ = set_ref currentLevel (currentLevel.value + 1)
@@ -324,7 +399,7 @@ typeMismatch a b =
 
 -- ── generalization & instantiation ────────────────────────────────────────
 generalize : Mono -> <Mut> Scheme
-generalize t = Forall (dedupI (freeGenVars currentLevel.value t)) t
+generalize t = Forall (dedupI (freeGenVars currentLevel.value t)) [] t
 
 freeGenVars : Int -> Mono -> List Int
 freeGenVars lvl t = match normalize t
@@ -344,7 +419,7 @@ dedupIGo (x :: xs) seen
   | otherwise = x :: dedupIGo xs (x :: seen)
 
 instantiate : Scheme -> <Mut> Mono
-instantiate (Forall ids t) = substMono (freshSubst ids) t
+instantiate (Forall ids _ t) = substMono (freshSubst ids) t
 
 freshSubst : List Int -> <Mut> List (Int, Mono)
 freshSubst [] = []
@@ -361,7 +436,7 @@ substMono subst t = match normalize t
 -- ── rendering (mirrors lib/typecheck.ml pp_mono byte-for-byte) ─────────────
 export
 ppScheme : Scheme -> <Mut> String
-ppScheme (Forall _ t) = ppMono t
+ppScheme (Forall _ _ t) = ppMono t
 
 ppMono : Mono -> <Mut> String
 ppMono t =
@@ -404,11 +479,11 @@ ppApp ctx cnt prec a b =
   let sb = ppGo ctx cnt 3 b
   wrapIf (prec > 2) (sa ++ " " ++ sb)
 
-ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> List String -> Mono -> <Mut> String
+ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> <Mut> String
 ppFun ctx cnt prec a eff b =
   let sa = ppGo ctx cnt 2 a
   let sb = ppGo ctx cnt 1 b
-  wrapIf (prec > 1) (sa ++ " -> " ++ effStr eff ++ sb)
+  wrapIf (prec > 1) (sa ++ " -> " ++ effStr (effrowLabels eff) ++ sb)
 
 effStr : List String -> String
 effStr [] = ""
@@ -477,14 +552,14 @@ sigToScheme ty = fst (sigToSchemeTvs ty)
 sigToSchemeTvs : Ty -> <Mut> (Scheme, List (String, Mono))
 sigToSchemeTvs ty =
   let tvs = freshTvMap (dedupS (tyVarNames ty))
-  (Forall (map monoTyvarId (map snd tvs)) (fromAstType tvs ty), tvs)
+  (Forall (map monoTyvarId (map snd tvs)) [] (fromAstType tvs ty), tvs)
 
 -- tvs maps a declared type-parameter name to its tyvar
 fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstType tvs (TyCon n) = TCon n
 fromAstType tvs (TyVar n) = fromOption (TCon n) (lookupAssocS n tvs)
 fromAstType tvs (TyApp a b) = TApp (fromAstType tvs a) (fromAstType tvs b)
-fromAstType tvs (TyFun a b) = TFun (fromAstType tvs a) (effLabelsOf b) (fromAstType tvs (stripEff b))
+fromAstType tvs (TyFun a b) = TFun (fromAstType tvs a) (closedRow (effLabelsOf b)) (fromAstType tvs (stripEff b))
 fromAstType tvs (TyTuple ts) = TTuple (map (fromAstType tvs) ts)
 fromAstType tvs (TyEffect _ _ t) = fromAstType tvs t
 fromAstType tvs (TyConstrained _ t) = fromAstType tvs t
@@ -583,7 +658,7 @@ addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtor (TcEnv vs cs) n s = TcEnv vs (smInsert n s cs)
 
 monoScheme : Mono -> Scheme
-monoScheme t = Forall [] t
+monoScheme t = Forall [] [] t
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
 inferPat : TcEnv -> Pat -> <Mut> (Mono, List (String, Scheme))
@@ -657,7 +732,7 @@ inferPats env (p :: ps) =
 
 foldrFun : List Mono -> Mono -> Mono
 foldrFun [] result = result
-foldrFun (a :: rest) result = TFun a [] (foldrFun rest result)
+foldrFun (a :: rest) result = TFun a pureRow (foldrFun rest result)
 
 inferPatTuple : TcEnv -> List Pat -> <Mut> (Mono, List (String, Scheme))
 inferPatTuple env pats =
@@ -814,7 +889,7 @@ hasKeySL2 k ((k2, _) :: rest)
 -- instantiate a scheme, returning both the mono and the (quantified id → fresh
 -- var) substitution, so a caller can recover specific quantified variables
 instantiateTracked : Scheme -> <Mut> (Mono, List (Int, Mono))
-instantiateTracked (Forall ids t) =
+instantiateTracked (Forall ids _ t) =
   let subst = freshSubst ids
   (substMono subst t, subst)
 
@@ -1016,7 +1091,7 @@ consOp lt rt =
 pipeOp : Mono -> Mono -> <Mut> Mono
 pipeOp lt rt =
   let res = freshVar ()
-  let _ = unify rt (TFun lt [] res)
+  let _ = unify rt (TFun lt pureRow res)
   res
 
 -- g >> h : (a->b) -> (b->c) -> (a->c)  [flipped=False]
@@ -1026,16 +1101,16 @@ composeOp gt ht False =
   let a = freshVar ()
   let b = freshVar ()
   let c = freshVar ()
-  let _ = unify gt (TFun a [] b)
-  let _ = unify ht (TFun b [] c)
-  TFun a [] c
+  let _ = unify gt (TFun a pureRow b)
+  let _ = unify ht (TFun b pureRow c)
+  TFun a pureRow c
 composeOp gt ht True =
   let a = freshVar ()
   let b = freshVar ()
   let c = freshVar ()
-  let _ = unify gt (TFun a [] b)
-  let _ = unify ht (TFun c [] a)
-  TFun c [] b
+  let _ = unify gt (TFun a pureRow b)
+  let _ = unify ht (TFun c pureRow a)
+  TFun c pureRow b
 
 inferUnop : String -> Mono -> <Mut> Mono
 inferUnop "-" t = t
@@ -1060,7 +1135,7 @@ inferVar env x = match lookupVar env x
 inferApp : Mono -> Mono -> <Mut> Mono
 inferApp ft xt =
   let r = freshVar ()
-  let _ = unify ft (TFun xt [] r)
+  let _ = unify ft (TFun xt pureRow r)
   r
 
 inferLam : TcEnv -> List Pat -> Expr -> <Mut> Mono
@@ -1258,7 +1333,7 @@ addVariants : TcEnv -> List (String, Mono) -> List Int -> Mono -> List Variant -
 addVariants env _ _ _ [] = env
 addVariants env tvs paramIds result (Variant cname payload :: rest) =
   let ctorType = foldrFun (payloadTypes tvs payload) result
-  let env2 = addCtor env cname (Forall paramIds ctorType)
+  let env2 = addCtor env cname (Forall paramIds [] ctorType)
   addVariants env2 tvs paramIds result rest
 
 payloadTypes : List (String, Mono) -> ConPayload -> List Mono
@@ -1313,7 +1388,7 @@ inferLetBinds env ((LetBind _ clauses, (_, sch)) :: rest) =
   inferLetBinds env rest
 
 schemeMono : Scheme -> Mono
-schemeMono (Forall _ t) = t
+schemeMono (Forall _ _ t) = t
 
 generalizeGroup : TcEnv -> List (LetBind, (String, Scheme)) -> <Mut> TcEnv
 generalizeGroup env [] = env
@@ -2506,7 +2581,7 @@ hasSig sigs m = match lookupAssocS m sigs
   None => False
 
 schemeIds : Scheme -> List Int
-schemeIds (Forall ids _) = ids
+schemeIds (Forall ids _ _) = ids
 
 -- the member's own quantified tyvar ids that a body method site / propagated
 -- constrained-call sits at (deduped, slot order = discovery order)
