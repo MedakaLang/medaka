@@ -877,11 +877,64 @@ for several constraints on one tyvar: all such dicts carry the same type tag, an
 each method's VMulti is already interface-specific, so reading any same-tyvar
 dict narrows correctly.
 
+**Single-impl return-position methods — FIXED 2026-06-05.** A *user-defined*
+interface with a SINGLE impl and a return-position method (`interface Default a
+where def : a` + one `impl Default Int`) used to panic on the typed/dict paths
+(`def : Int` → `intToString: not an Int`), while a *prelude* method (`empty`,
+many impls) worked. Root cause: a single impl binds to a **bare `VTypedImpl`**
+(never coalesced into a `VMulti`), and `eval.mdk`'s `narrowMethod` catch-all
+(`narrowMethod v _ = v`) skipped the Phase-96 dispatch-wrapper strip for a
+non-`VMulti`, so the wrapper leaked into the program. Fixed by adding
+`narrowMethod` arms that `stripResolved` a bare `VTypedImpl` once a route has
+resolved it (mirrors `lib/eval.ml`'s strip, which fires for *any* `VTypedImpl`
+after routing). Regression: `test/eval_typed_fixtures/single_impl_return_pos.mdk`.
+
 **Still out of scope** (the reference's harder cases — see PLAN.md Phase
 83/84/115): method-level-constraint dicts (`foldMap`'s Monoid), instance-`requires`
 dicts, and nested/structured (non-flat) dictionaries. Next step for the LLVM
 backend (Stage 2 §2.3): these three are the remaining dict-passing residuals the
 elaborated AST still leaves on arg-tag/RKey.
+
+**Instance-`requires` dict-passing (Phase 83/84 single-level) — DEFERRED, design
+ready (2026-06-05).** The reference resolves `def : List Int` → `[0]` for
+`impl Default (List a) requires Default a where def = [def]` by threading the
+*element* dict (`Default Int`) into the parametric impl body; the self-host
+deliberately omitted the impl-coherence layer, so porting it is a ~150-250 LOC
+cross-cutting build, not a small fix. **Note the reference itself fails the
+*two-level* case** (`def : List (List Int)` panics `no matching impl` in `medaka
+run`) — the flat `VDict of string`/`VDictHead` can't encode `List(Int)`
+structure, so there is no `medaka run` oracle for nested dicts (= residual #5).
+Single-level *is* diffable against `medaka run`. The port, mirroring the
+reference:
+1. **`ast.mdk`** — `EMethodAt` carries only ONE route ref; add a second
+   `Ref (List Route)` for the selected impl's `requires` dicts (the reference's
+   `res_impl_dicts`). Thread it through `eval.mdk`'s `EMethodAt` arm and any
+   constructors. (`EMethodAt` is typed-pipeline-only — not in `sexp.mdk`/
+   `astdump`, so the serializer lockstep is untouched.)
+2. **`typecheck.mdk`** — the self-host `checkProgramSeeded` infers only top-level
+   `funDefs`; it must additionally **infer each `DImpl`'s return-position method
+   bodies**, sharing ONE tyvar table between the impl head (`List a`) and its
+   `requires` (`Default a`) so the body's inner `def` unifies its discriminating
+   var to the head's `a` (cf. `lib/typecheck.ml:3108-3173 check_impl`). Register
+   those post-unification `requires` ids in `activeDictVars` keyed to the impl's
+   `$dict_<method>_<slot>` param so `resolveSite`/`activeDictVarOf` routes the
+   in-body ref `RDict` (cf. `find_enclosing_dict`'s `impl_dict_routes` branch,
+   `lib/typecheck.ml:3556-3571`). At the **call site**, after stamping `RKey
+   <head>`, compute the impl's `requires` routes by substituting the impl head
+   against the concrete result mono (`impl_head_subst` + a self-host `matching_impls`
+   over the program's `DImpl`s, `lib/typecheck.ml:3640-3685`) and fill the new
+   `res_impl_dicts` ref.
+3. **`dict_pass`** (in `typecheck.mdk`) — prepend one `$dict_<method>_<slot>`
+   param per `requires` to each return-position impl method clause (mirror
+   `lib/dict_pass.ml:99-119`, the `uses_impl_dict` gate).
+4. **`eval.mdk`** — after `narrowMethod`, fold the `res_impl_dicts` routes onto
+   the (still-awaiting-args) impl value as leading args (mirror `lib/eval.ml:
+   803-810`).
+Validate with new `test/eval_dict_fixtures/` single-level cases (`def : List Int`,
+`def : Option Int`) diffed against `medaka run`; re-run all dict/typed/selfproc
+gates. **Risk:** step 2 touches the typecheck core that the bootstrap gate
+(`selfproc`) depends on — add impl-body inference behind the elaborate path only,
+not the `=== TYPES ===` golden path.
 
 ### Known limits carried forward (don't block the bootstrap)
 
