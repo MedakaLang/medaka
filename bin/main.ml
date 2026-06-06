@@ -585,17 +585,25 @@ cd into a member or specify a file\n"; exit 1
   let source = read_file filename in
 
   (* Phase 82: `check --json` — accumulate every diagnostic (not exit-on-first)
-     and emit the LSP diagnostic shape as JSON on stdout.  Single-file analysis
-     only (Diagnostics.analyze does not invoke the multi-file loader); a file
-     with `use` decls is analysed as a single unit. *)
+     and emit the LSP diagnostic shape as JSON on stdout.  Routes through the
+     multi-file loader (`analyze_project`) so a file with `import`s resolves its
+     dependencies instead of spuriously erroring on them; output is a top-level
+     "files" array, one entry per module in the import graph (a no-import file is
+     simply a one-element array). *)
   (if mode = `Check && json_mode then begin
-    let diags = Medaka_lib.Diagnostics.analyze ~file:filename ~source in
-    print_endline (Medaka_lib.Lsp_server.diagnostics_to_json ~file:filename diags);
+    let results =
+      Medaka_lib.Diagnostics.analyze_project
+        ~root_file:filename ~project_dir ~read:(fun _ -> None) ()
+    in
+    print_endline (Medaka_lib.Lsp_server.all_diagnostics_to_json results);
     let has_err =
       List.exists
-        (fun (d : Medaka_lib.Diagnostics.diagnostic) ->
-           d.severity = Medaka_lib.Diagnostics.Error)
-        diags
+        (fun (_file, diags) ->
+           List.exists
+             (fun (d : Medaka_lib.Diagnostics.diagnostic) ->
+                d.severity = Medaka_lib.Diagnostics.Error)
+             diags)
+        results
     in
     exit (if has_err then 1 else 0)
   end);
