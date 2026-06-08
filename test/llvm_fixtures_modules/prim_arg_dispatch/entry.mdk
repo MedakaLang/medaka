@@ -1,0 +1,30 @@
+-- Cross-module ARG-POSITION dispatch on a PRIMITIVE receiver — the case E4
+-- (arg-position dict-passing ported onto `elaborateModules`) unlocks on the
+-- multi-module emit path.  `Widget` is imported from widget.mdk; the `Code`
+-- interface + impls live HERE but one impl is at the PRIMITIVE `Int`.  Each call
+-- (`code (7 : Int)`, `code Widget`) dispatches in ARGUMENT position by the
+-- argument's type.  The `code 7` site resolves to a primitive `Int` receiver,
+-- which carries no cell tag — pre-E4 the multi-module emitter fell back to
+-- arg-tag dispatch and gapped (#2); E4's per-module `resolveArgStamps` stamps a
+-- static `RKey Int`, so the call emits a direct dispatch.  The `code Widget` site
+-- crosses the imported ADT (cell tag), exercising the same arg-position path on a
+-- constructor receiver.
+--
+-- NOTE: exported interface METHODS do not yet resolve cross-module through the
+-- selfhost typed pipeline, so the interface/impls stay in the entry; only the
+-- DATA TYPE crosses (same shape as adt_dispatch).
+import widget.{Widget(..)}
+
+interface Code a where
+  code : a -> Int
+
+impl Code Int where
+  code n = n * 10
+
+impl Code Widget where
+  code Widget = 3
+
+total : Int
+total = code (7 : Int) + code Widget + code (4 : Int)
+
+main = putStrLn (intToString total)

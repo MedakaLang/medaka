@@ -3504,18 +3504,36 @@ allModuleLines ((mid, ss) :: rest) = ("## MODULE " ++ mid) :: (schemeLines ss ++
 -- and no pendingDictApps / pendingRecDictApps to resolve.
 export
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List Decl, List (String, List Decl))
+-- E4: under argStampEnabled (the LLVM emit drivers ONLY) apply D3b's ARG-position
+-- dict-passing per module, mirroring elaborateDict.  implInferEnabled ON so any
+-- impl-body sites the path reaches are inferred too; OFF (the golden module
+-- drivers) keeps every step byte-identical with the pre-E4 behaviour below.
 elaborateModules runtimeDecls coreDecls modules =
-  let _ = set_ref implInferEnabled False
-  let rpNames = returnPosMethodNames (coreDecls ++ concatMapL snd modules)
-  let core2 = prePassDict rpNames [] coreDecls
-  let modules2 = map (prePassModulePair rpNames) modules
+  let _ = set_ref implInferEnabled argStampEnabled.value
+  let allDecls = coreDecls ++ concatMapL snd modules
+  let rpNames = returnPosMethodNames allDecls
+  -- arg-position interface-method names whose route resolveArgStamps may stamp
+  -- (empty when OFF → prePassDictArg degenerates to prePassDict, goldens unchanged)
+  let _ = if argStampEnabled.value then set_ref argDispatchIdxRef (argDispatchIndices allDecls) else ()
+  let argNames = if argStampEnabled.value then map fst argDispatchIdxRef.value else []
+  let core2 = prePassDictArg rpNames [] argNames coreDecls
+  let modules2 = map (prePassModulePairArg rpNames argNames) modules
   let runtimeSeed = externSchemes runtimeDecls
-  let coreSchemes = elabModuleStamp runtimeSeed [] core2
-  let _ = elabModulesGo (runtimeSeed ++ coreSchemes) (publicDataDecls core2) modules2
+  -- impl table accumulates across modules (dependency order): a module's
+  -- arg-position dispatch can thread an EARLIER module's / core's parametric
+  -- `requires` element dict.  core2 seeds it.
+  let coreSchemes = elabModuleStamp runtimeSeed [] core2 core2
+  let _ = elabModulesGo (runtimeSeed ++ coreSchemes) (publicDataDecls core2) core2 modules2
   (core2, modules2)
 
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
+
+-- E4: prePass a module rewriting ARG-position method occurrences to EMethodAt too
+-- (argNames non-empty only under argStampEnabled).  Degenerates to prePassModulePair
+-- when argNames = [] (prePassDictArg with empty argNames == prePassDict).
+prePassModulePairArg : List String -> List String -> (String, List Decl) -> (String, List Decl)
+prePassModulePairArg rpNames argNames (mid, prog) = (mid, prePassDictArg rpNames [] argNames prog)
 
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
@@ -3533,19 +3551,28 @@ markModules coreDecls modules =
 -- pendingSites before inference, so on return pendingSites holds exactly THIS
 -- module's sites; the tyvar cells are still bound (the next module's resetState
 -- hasn't run yet), so resolveSites reads each site's resolved result type.
-elabModuleStamp : List (String, Scheme) -> List Decl -> List Decl -> <Mut> List (String, Scheme)
-elabModuleStamp seedVars accData prog =
+-- E4: under argStampEnabled, ALSO stamp this module's ARG-position sites
+-- (pendingArgStamps, likewise this-module-only after resetState) from their now-
+-- resolved discriminating-argument monos — the multi-module analogue of
+-- elaborateDict's resolveArgStamps.  [implDecls] is core + every EARLIER module +
+-- this module, so a cross-module parametric `requires` element dict resolves; a
+-- still-unresolvable case stays RNone (arg-tag fallback).  activeDictVars (the
+-- constraint-var → dict-param map registerConstraintRegs built in checkModuleFull)
+-- is also still bound, so a tyvar receiver routes RDict.
+elabModuleStamp : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> List (String, Scheme)
+elabModuleStamp seedVars accData implDecls prog =
   let schemes = checkModuleFull seedVars accData prog
   let _ = resolveSites [] [] pendingSites.value
+  let _ = if argStampEnabled.value then resolveArgStamps (buildImplTable implDecls) pendingArgStamps.value else ()
   let _ = if argMeasureEnabled.value then accumArgSites pendingArgSites.value else ()
   schemes
 
-elabModulesGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> Unit
-elabModulesGo _ _ [] = ()
-elabModulesGo accV accData ((mid, prog) :: rest) =
-  let schemes = elabModuleStamp accV accData prog
+elabModulesGo : List (String, Scheme) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> Unit
+elabModulesGo _ _ _ [] = ()
+elabModulesGo accV accData accAll ((mid, prog) :: rest) =
+  let schemes = elabModuleStamp accV accData (accAll ++ prog) prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  elabModulesGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+  elabModulesGo (accV ++ pubV) (accData ++ publicDataDecls prog) (accAll ++ prog) rest
 
 -- ── D0.5 measurement driver (probe-only, no stamping) ──────────────────────
 -- The classification analog of elaborateModules: prePass return-position methods

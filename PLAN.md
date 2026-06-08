@@ -682,8 +682,33 @@ catalog** (slices 1–14 + RNG/sorts/hash); 126/126 plain + 16/16 typed gate ✅
        23→17; B TOTAL 2025→1927.** 4 new fixtures (`pat_aspattern` →34,
        `pat_aspattern_use` →10, `pat_list_literal` →6, `pat_list_nested` →1020); all
        gates byte-identical (160/25/20/20).
-     - **E4 — dispatch-routing port** (#2/#13: carry D3b arg-position dict-passing onto
-       the `elaborateModules` emit path; 0 on the single-file path already).
+     - ✅ **E4 — dispatch-routing port** (#2/#13: carry D3b arg-position dict-passing onto
+       the `elaborateModules` emit path; 0 on the single-file path already). **PARTIAL
+       (2026-06-08).** `elaborateModules` (the multi-module typed pipeline) stamped only
+       RETURN-position routes, leaving every arg-position method occurrence `RNone`→arg-tag
+       → census-B gap #2 ("arg-tag dispatch on a primitive receiver"). E4 mirrors the
+       single-file `elaborateDict` arg-stamp path per module, **GATED behind
+       `argStampEnabled`** so the golden module/typed/eval/bytecode drivers (flag OFF) are
+       byte-identical. Under the gate `elaborateModules` sets `implInferEnabled True`,
+       `argDispatchIdxRef = argDispatchIndices` over the whole module graph, prePasses core +
+       each module with `prePassDictArg` (arg-position methods → EMethodAt, via new
+       `prePassModulePairArg`); `elabModuleStamp` gains an accumulated impl-table arg
+       (`accAll`, threaded by `elabModulesGo` in dependency order: core + earlier modules +
+       this module) and calls `resolveArgStamps` right after `resolveSites`, while this
+       module's `pendingArgStamps`/`activeDictVars`/tyvar cells are still bound. A
+       constraint-var receiver routes `RDict $dict_<fn>_<slot>` (registered by
+       `registerConstraintRegs` inside `checkModuleFull`); a concrete head routes `RKey`.
+       Flag OFF ⇒ `prePassDictArg` with empty arg-names == `prePassDict`, `implInferEnabled`
+       stays False, `resolveArgStamps` skipped → goldens unmoved (verified core_ir / eval /
+       check_modules / core_ir_modules / core_ir_typed / eval_modules / eval_typed all
+       byte-identical; `test_typecheck` green). **#2 B: 1399→344** (residual 344 = IMPL-body
+       sites `eq@List`/`eq@Option`/`eq@Result`, which the modules path's `checkModuleFull`
+       doesn't infer — no impl-body inference; a later step adds it). **B TOTAL 1942→888.**
+       New module fixture `test/llvm_fixtures_modules/prim_arg_dispatch/` (interface+impls in
+       the entry, one impl AT primitive `Int` + one at imported ADT `Widget`, dispatched in
+       argument position → 113) byte-identical native/oracle; modules gate 4/4. A few new
+       `unbound dict witness $dict_<fn>_0` (#11 family) surface — emitter-side dict threading
+       for the now-resolved constrained fns, not a routing regression.
      - ✅ **Multi-module emit+RUN gate — E4's harness / whole-compiler validation
        foundation.** DONE (2026-06-08). The multi-module analog of the single-file LLVM
        gates: until now `diff_selfhost_llvm_typed.sh` byte-validated only `core.mdk`'s
