@@ -1,0 +1,1 @@
+main = if fileExists "/tmp/mdk_s13_no_such_xyz" then 1 else 0

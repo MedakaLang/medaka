@@ -1115,7 +1115,7 @@ backend (Stage 2) — near-term sequence"):
    stashes argc/argv; `emitProgram` entry changed to `@main(i32 %argc, ptr %argv)`;
    `isEnvExtern`/`emitEnvExtern` added; `LUnit` literal added to `emitLit`; 3 new
    fixtures; 114/114 plain; GATE LIMITATION: args non-empty path unverifiable — oracle
-   program_args=[] and native ./bin both yield []; real argv→Cons plumbing is in place) — and close the spike's out-of-scope gaps (arg-tag
+   program_args=[] and native ./bin both yield []; real argv→Cons plumbing is in place), **slice 13 DONE 2026-06-07** (file IO + stdin: `readFile`/`writeFile`/`appendFile` Result, `fileExists` Bool, `listDir` Result (List String), `readLine`/`readLineOpt`/`readAll` stdin; `mdk_str_cstr` helper + seven C functions in `medaka_rt.c`; `isFileExtern`/`emitFileExtern` added to `selfhost/llvm_emit.mdk`; 8 new `declare i64` in `emitPreamble`; 6 fixtures s13_write_read/append/exists_true/exists_false/listdir_ok/listdir_err — all byte-identical; stdin readers implemented but NOT fixtured, gate does not pipe stdin; **Tier C complete — native extern catalog fully ported**) — and close the spike's out-of-scope gaps (arg-tag
    dispatch on non-ADT/Int args, nested-requires dicts). ~~emit the ratified dense
    i32 ctor-ordinal tags~~ **DONE 2026-06-07** — the spike already stamps them
    (`cellTag`; composite `typeId<<32 | ordinal`, hashName gone from every ctor tag);

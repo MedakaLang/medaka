@@ -1,0 +1,9 @@
+main = match writeFile "/tmp/mdk_s13_b.txt" "a"
+  Ok _ =>
+    match appendFile "/tmp/mdk_s13_b.txt" "bc"
+      Ok _ =>
+        match readFile "/tmp/mdk_s13_b.txt"
+          Ok s => stringLength s
+          Err _ => 0 - 1
+      Err _ => 0 - 2
+  Err _ => 0 - 3
