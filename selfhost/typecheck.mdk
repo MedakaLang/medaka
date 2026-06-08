@@ -3550,10 +3550,30 @@ elaborateModules runtimeDecls coreDecls modules =
   -- `requires` element dict.  core2 seeds it.
   let coreSchemes = elabModuleStamp runtimeSeed [] core2 core2
   let _ = elabModulesGo (runtimeSeed ++ coreSchemes) (publicDataDecls core2) core2 modules2
-  (core2, modules2)
+  -- E5: on the emit path (argStampEnabled), dict-pass each module's now-stamped
+  -- trees, mirroring elaborateDict's final `dictPass`.  A parametric `requires`
+  -- impl whose body element-dispatch E5 routed RDict needs its leading
+  -- `$dict_<m>_<slot>` PARAM (dictPassDecl's DImpl arm) so the emitter can bind the
+  -- witness the route references; the call site's impl-dict route (filled by
+  -- resolveArgStamp) supplies the matching ARGUMENT.  dictNames = [] (RKey path:
+  -- no user `=>`-constrained functions), so only DImpl/DInterface arms fire — no
+  -- function gets spurious params.  OFF (oracle eval_typed_modules + every golden
+  -- module driver), dictPass is skipped → core2/modules2 returned verbatim,
+  -- byte-identical with the pre-E5 trees.
+  dictPassModulesIfEnabled core2 modules2
+
+-- E5: gated final dict-pass of the stamped module trees (emit path only).
+dictPassModulesIfEnabled : List Decl -> List (String, List Decl) -> <Mut> (List Decl, List (String, List Decl))
+dictPassModulesIfEnabled core2 modules2
+  | argStampEnabled.value = (dictPass [] core2, map dictPassModulePair modules2)
+  | otherwise = (core2, modules2)
 
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
+
+-- E5: dict-pass one module's decls (the `(mid, prog)` pair shape modules2 holds).
+dictPassModulePair : (String, List Decl) -> (String, List Decl)
+dictPassModulePair (mid, prog) = (mid, dictPass [] prog)
 
 -- E4: prePass a module rewriting ARG-position method occurrences to EMethodAt too
 -- (argNames non-empty only under argStampEnabled).  Degenerates to prePassModulePair
