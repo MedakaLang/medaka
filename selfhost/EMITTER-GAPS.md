@@ -37,7 +37,7 @@ multi-module path (`elaborateModules`, as the dispatch probes use).
 | # | Construct (emitter gap)                                   | A: core | B: whole | Front-end residue vs Emitter gap | Closure disposition |
 |---|-----------------------------------------------------------|--------:|---------:|----------------------------------|---------------------|
 | 1 | **multi-clause top-level function**                       | 16      | 732      | Emitter                          | reuse impl-method decision-tree lowering |
-| 2 | **arg-tag dispatch on primitive receiver** (no cell tag)  | **0**   | 540      | Routing-not-wired (NOT new)      | port D3b arg-pos dict-passing to `elaborateModules` |
+| 2 | **arg-tag dispatch on primitive receiver** (no cell tag)  | **0**   | ~~540~~ ~~1399\*\*\*\*\*~~ **344** | Routing-not-wired (NOT new)      | ✅ **PARTIAL — E4 (2026-06-08)** ported D3b arg-pos dict-passing onto `elaborateModules` (gated `argStampEnabled`): **1399 → 344**.  Residual 344 are IMPL-body sites (`eq@List`/`eq@Option`/`eq@Result`), which the modules path's `checkModuleFull` does not infer (no impl-body inference); a later step closes those |
 | 3 | **`++` as `CBinPrim`** (list/string concat)               | ~~14~~ ~~4\*\*~~ ~~2\*\*\*~~ **0** | ~~179~~ **333\*\*\*\*** | Emitter (lowering keeps it)      | ✅ **core (A) FULLY CLOSED (E2a/E2c/E7)** — A's last 2 (`ap@List`/`andThen@List`, `++` on a CALL result) closed by **E7** (2026-06-08): method-call RETURN-TYPE inference. B's 333 residual are whole-compiler string-builder `++` (`scanTriple`/`splitLines`), a different category (E4/E5 tail) |
 | 4 | **non-variable parameter pattern** (fn) + **PAs/PList in `bindPattern`** | ~~4~~ **0** | ~~150~~ | Desugar/lower-fixable (fn: ✅ E1a) + Emitter (PAs/PList: ✅ **CLOSED E6**) | fn half → `emitClauseTree` (E1a); PAs/PList → two new `bindPattern` arms (2026-06-08) |
 | 5 | **non-variable lambda parameter pattern**                 | ~~1~~ **0** | ~~108~~ **0** | Desugar/lower-fixable          | ✅ **CLOSED (E2b)** — same decision-tree lowering as #4, inside the lifted-lambda frame |
@@ -50,7 +50,7 @@ multi-module path (`elaborateModules`, as the dispatch probes use).
 |12 | **unsupported switch head** (unit-pattern head)           | 5       | 5        | Emitter (low pri: `Arbitrary`)   | unit-head switch (or exclude impl) |
 |13 | **arg-tag dispatch, method under-applied** (`fold`…)      | 0       | 6        | Emitter / dispatch               | first-class/unapplied method values |
 |14 | **non-Int literal switch** (String/Char/Bool head)        | 0       | 1        | Emitter                          | literal-switch over non-Int |
-|   | **TOTAL gap events**                                      | ~~57~~ ~~32~~ ~~31~~ ~~34†~~ ~~30~~ ~~23~~ ~~17~~ ~~15~~ ~~13~~ ~~11~~ **8** | ~~2722~~ ~~2677~~ ~~2660~~ ~~2025~~ ~~1927~~ ~~1925~~ ~~1924~~ **1942‡** |                                  |                     |
+|   | **TOTAL gap events**                                      | ~~57~~ ~~32~~ ~~31~~ ~~34†~~ ~~30~~ ~~23~~ ~~17~~ ~~15~~ ~~13~~ ~~11~~ **8** | ~~2722~~ ~~2677~~ ~~2660~~ ~~2025~~ ~~1927~~ ~~1925~~ ~~1924~~ ~~1942‡~~ **888§** |                                  |                     |
 
 \* core's `__hashRaw` (×5), `debugStringLit` (×1), `debugCharLit` (×1) were
 references to runtime/core primitives the spike's extern catalog didn't carry —
@@ -100,6 +100,31 @@ excludable from bootstrap) + 1 `max` + 1 `min` arg-tag-fallback event (gap #13
 family — `maximum`/`minimum`'s unresolved RNone). core.mdk is one routing-port and
 the excludable `Arbitrary` impl away from emitting end-to-end.
 
+§ **E4 (2026-06-08): port D3b ARG-position dict-passing onto `elaborateModules`**
+(gated behind `argStampEnabled`, so the golden module drivers stay byte-identical).
+Pre-E4 `elaborateModules` stamped only RETURN-position routes; every arg-position
+method occurrence stayed `RNone` → arg-tag → census-B gap #2 on a primitive
+receiver. E4 mirrors `elaborateDict` per module: under `argStampEnabled` it sets
+`implInferEnabled True`, sets `argDispatchIdxRef = argDispatchIndices` over the
+whole module graph, prePasses each module with `prePassDictArg` (the arg-pos method
+set → EMethodAt), and `elabModuleStamp` calls `resolveArgStamps` (impl table
+accumulated in dependency order: core + earlier modules + this module) right after
+`resolveSites`, while `activeDictVars`/the tyvar cells are still this-module-bound.
+**Gap #2: 1399 → 344** (top-level constrained-fn sites — `neq`/`print`/`println`/
+`sum`/`elem`/`debugListItems`/… — now stamp `RKey <head>` or `RDict <dict>`; the
+344 residual are IMPL-body sites `eq@List`/`eq@Option`/`eq@Result`, which
+`checkModuleFull` does not infer). **B TOTAL: 1942 → 888.** A handful of new
+`unbound dict witness $dict_<fn>_0` events (#11 family) surface because the now-
+resolved constrained fns need their dict threaded at emit — emitter-side, not a
+routing regression. New module fixture `prim_arg_dispatch` (interface+impls in the
+entry, impl AT primitive `Int` + at an imported ADT `Widget`, dispatched in arg
+position → 113) byte-identical native/oracle.
+
+\*\*\*\*\* The B census #2 was **540** when first measured; subsequent emit closures
+(E6/E9) made the emitter descend into MORE bodies (the † / ‡ tick-up mechanism),
+exposing more pre-existing arg-tag residue → **1399** by the E4 baseline. E4 then
+drops it to **344**.
+
 The **(A) core total of 57** spans only **~11 gap kinds**; **(B) whole-compiler
 2248** spans 151 distinct reasons, but 88% collapse into the 7 categories above
 the fold (rows 1–7). The long tail of (B) is row #7 enumerated per-name (one
@@ -141,16 +166,27 @@ not a new shape.
   16→**0**, #4-fn 4→**0**; whole-compiler #1 732→**0**. core total 57→44 (the
   wall no longer masks the now-reachable bodies' downstream value-shape gaps).
 
-#### 2 — arg-tag dispatch on a primitive receiver (A:0, B:540) — NOT a new gap
+#### 2 — arg-tag dispatch on a primitive receiver (A:0, B:1399→344) — ✅ PARTIAL (E4, 2026-06-08)
 `emitMethodArgDispatch`'s tag chain reaches `emitTagMatch […]` on an impl type
 that owns no constructors (an `Int`/`String`/… immediate carries no cell tag).
 - **Routing, not emitter.** Section **A is 0** because the single-file path wires
   D3b's arg-position dict-passing (`preludeArgPosDictNames` → `RDict`). Section B
-  uses `elaborateModules`, which does NOT apply that wiring, so `neq`/`print`/
-  `println`/`sum`/`elem`/… fall back to `RNone`→arg-tag and hit a primitive.
-- **Disposition:** port the proven D3b arg-position dict-passing selector
-  (`llvm_emit_typed_main`/`core_ir_dict_pp_main` today) onto the multi-module
-  emit path. Zero emitter-side work — the dispatch is already designed (D3b-2).
+  used `elaborateModules`, which did NOT apply that wiring, so `neq`/`print`/
+  `println`/`sum`/`elem`/… fell back to `RNone`→arg-tag and hit a primitive.
+- **✅ PARTIAL — E4 (2026-06-08).** Ported the proven D3b arg-position selector onto
+  `elaborateModules`, GATED behind `argStampEnabled` (so the golden module/typed/
+  eval drivers stay byte-identical). Per module, under the gate: `implInferEnabled
+  True`; `argDispatchIdxRef = argDispatchIndices` over the whole module graph;
+  `prePassDictArg` rewrites arg-position method occurrences to EMethodAt; and
+  `elabModuleStamp` calls `resolveArgStamps` (impl table = core + earlier modules +
+  this module, accumulated in dependency order) right after `resolveSites`, while
+  `activeDictVars` + the tyvar cells are still this-module-bound. Zero emitter-side
+  work. **B: 1399 → 344** (top-level constrained-fn sites resolve; the 344 residual
+  are IMPL-body sites — `eq@List`/`eq@Option`/`eq@Result` — which the modules path's
+  `checkModuleFull` does not infer, no impl-body inference). New module fixture
+  `prim_arg_dispatch` exercises a primitive-`Int` + imported-ADT arg-position
+  receiver (→113, byte-identical). The residual impl-body half is a later step
+  (add impl-body inference to the multi-module path, mirroring `checkProgramSeeded`).
 
 #### 3 / 6 — `++` and `::` survive lowering as `CBinPrim` (A:16, B:269) — ✅ CLOSED (E2a, 2026-06-07)
 `core_ir.mdk` deliberately keeps `::` and `++` as `CBinPrim` (its own comment);
@@ -387,7 +423,7 @@ desugaring leaves a `__fallthrough__` sentinel name that reaches the emitter as
 | **Genuine emitter gap** (Core IR node/shape the emitter can't lower) | #1, #3, #12, #14 (#6, #7, #10, #11 now closed) | 1308 | needs emitter code |
 | **Desugar/lower-fixable** (eliminate the shape before Core IR) | #4, #5 | 258 | ✅ CLOSED — realised emitter-side via `emitClauseTree` (E1a fn + E2b lambda); Core IR unchanged |
 | **Front-end residue** (a name/sentinel that shouldn't reach emit) | #8, #9 | ~~176~~ **0** | ✅ CLOSED (E3) — `emitVar` + `emitApp` |
-| **Dispatch routing, already designed** (not new work) | #2, #13 | 546 | port D3b to multi-module |
+| **Dispatch routing, already designed** (not new work) | #2, #13 | ~~546~~ **350** | ✅ #2 PARTIAL (E4): D3b arg-pos dict-passing ported onto `elaborateModules` (gated), 1399→344; #13 (~6) remains |
 
 ---
 
@@ -467,9 +503,16 @@ source per unit of work**:
   dummy (noreturn not a terminator; dead store+br from surrounding `if` is valid IR).
   B: 88+88→0.  core total 34→30.  Fixtures `guard_otherwise`/`guard_chain` green.
 
-- **E4 — dispatch-routing port.** (#2, #13.) **546** events, **zero new design** —
-  carry D3b's arg-position dict-passing selector onto the `elaborateModules` emit
-  path (it is already 0 on the single-file path, per section A).
+- **E4 — dispatch-routing port.** (#2, #13.) **zero new design** — carry D3b's
+  arg-position dict-passing selector onto the `elaborateModules` emit path (already
+  0 on the single-file path, per section A). **✅ PARTIAL (E4, 2026-06-08).** Gated
+  behind `argStampEnabled` so golden module/typed/eval drivers stay byte-identical;
+  per module sets `implInferEnabled True`, `argDispatchIdxRef`, prePasses with
+  `prePassDictArg`, and `elabModuleStamp` calls `resolveArgStamps` (accumulated impl
+  table) after `resolveSites`. **#2: B 1399 → 344** (residual 344 are impl-body
+  sites the modules path's `checkModuleFull` doesn't infer; a later step adds
+  impl-body inference). **B TOTAL 1942 → 888.** Fixture `prim_arg_dispatch` (→113)
+  byte-identical.
 
 - **E5 — long-tail.** (~~#10 rec let-group~~ ✅ CLOSED, ~~#11 closure-dict~~
   ✅ CLOSED (E8), #11 impl-body-dict (3 remaining), #12 unit-head switch, #14

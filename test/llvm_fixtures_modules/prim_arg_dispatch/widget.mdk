@@ -1,0 +1,6 @@
+-- An imported ADT crossing the module boundary.  The entry defines an
+-- arg-position interface (`Code`) with an impl AT this imported type AND at the
+-- PRIMITIVE `Int`; the primitive-receiver call is the case E4 unlocks on the
+-- multi-module emit path (an `Int` immediate carries no cell tag, so pre-E4 it
+-- fell to arg-tag dispatch → census-B gap #2).
+public export data Widget = Widget
