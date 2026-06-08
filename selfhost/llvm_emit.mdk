@@ -619,6 +619,7 @@ emitExpr e env (CTuple es) = emitTuple e env es
 emitExpr e env (CRecord name fields) = emitRecordCreate e env name fields
 emitExpr e env (CFieldAccess ex label) = emitFieldAccess e env ex label
 emitExpr e env (CRecordUpdate base updates) = emitRecordUpdate e env base updates
+emitExpr e env (CVariantUpdate con base updates) = emitVariantUpdate e env con base updates
 emitExpr e env (CMethod name route implRoutes methRoutes) = emitMethod e env name route implRoutes methRoutes []
 emitExpr e env (CArray es) = emitArrayCreate e env es
 emitExpr e env (CRangeArray lo hi incl) = emitRangeArray e env lo hi incl
@@ -646,6 +647,7 @@ emitVar e env x =
   else if x == "charMaxBound" then ("2228223", LTChar)
   else if isCtor e x then emitCtorAlloc e x []
   else if isKnownFn e x then emitEtaClosure e x
+  else if isUnicodeExtern x then emitUnicodeEtaClosure e x
   else lookupVarG e env x
 
 -- a Mut-aware variable lookup used at the emit site (emitVar): a local (let/param)
@@ -2335,6 +2337,50 @@ emitEtaDefine e lamName fname arity =
   let _ = set_ref (lamsRef e) ((lamsRef e).value ++ reverseL lamLines)
   set_ref (bufRef e) saved
 
+-- E17: a unicode extern (slice 14) referenced as a FIRST-CLASS value (passed
+-- unapplied, e.g. `charPred charIsAlpha`).  emitApp handles these only when
+-- saturated (via emitUnicodeExtern); as a bare name they reach emitVar, so
+-- eta-wrap into a captureless static closure whose lifted body reproduces
+-- emitUnicodeExtern's call+tag.  All nine are arity 1.
+emitUnicodeEtaClosure : Emit -> String -> <Mut> (String, LTy)
+emitUnicodeEtaClosure e name =
+  let lamName = "mdk_eta_" ++ name ++ "_" ++ intToString (freshId e)
+  let _ = emitUnicodeEtaDefine e lamName name
+  emitClosureAlloc e lamName []
+
+-- the runtime symbol + whether the C result is an untagged 0/1 needing `tagInt`
+-- (predicates) — mirrors emitUnicodeExtern exactly.
+unicodeExternSym : String -> (String, Bool)
+unicodeExternSym "charIsAlpha" = ("@mdk_char_is_alpha", True)
+unicodeExternSym "charIsSpace" = ("@mdk_char_is_space", True)
+unicodeExternSym "charIsUpper" = ("@mdk_char_is_upper", True)
+unicodeExternSym "charIsLower" = ("@mdk_char_is_lower", True)
+unicodeExternSym "charIsPunct" = ("@mdk_char_is_punct", True)
+unicodeExternSym "charToUpper" = ("@mdk_char_to_upper", False)
+unicodeExternSym "charToLower" = ("@mdk_char_to_lower", False)
+unicodeExternSym "stringToUpper" = ("@mdk_string_to_upper", False)
+unicodeExternSym _ = ("@mdk_string_to_lower", False)
+
+-- emit the arity-1 eta-forwarder `@mdk_etaN(i64 %clos, i64 %arg0) { r = call
+-- @mdk_<sym>(%arg0); [tag]; ret }` into the side buffer (same swap discipline
+-- as emitEtaDefine).
+emitUnicodeEtaDefine : Emit -> String -> String -> <Mut> Unit
+emitUnicodeEtaDefine e lamName name =
+  let (sym, needsTag) = unicodeExternSym name
+  let saved = (bufRef e).value
+  let _ = set_ref (bufRef e) []
+  let _ = emit e ("define i64 @" ++ lamName ++ "(i64 %clos, i64 %arg0) {")
+  let _ = emit e "entry:"
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = call i64 " ++ sym ++ "(i64 %arg0)")
+  let res = if needsTag then tagInt e r else r
+  let _ = emit e ("  ret i64 " ++ res)
+  let _ = emit e "}"
+  let _ = emit e ""
+  let lamLines = (bufRef e).value
+  let _ = set_ref (lamsRef e) ((lamsRef e).value ++ reverseL lamLines)
+  set_ref (bufRef e) saved
+
 -- the lifted lambda's parameter list: a leading `%clos`, then the source params.
 closureParamDecls : List Pat -> String
 closureParamDecls [] = "i64 %clos"
@@ -2408,6 +2454,7 @@ freeVars b (CRangeList lo hi _) = freeVars b lo ++ freeVars b hi
 freeVars b (CRecord _ fields) = freeVarsFields b fields
 freeVars b (CFieldAccess ex _) = freeVars b ex
 freeVars b (CRecordUpdate base updates) = freeVars b base ++ freeVarsFields b updates
+freeVars b (CVariantUpdate _ base updates) = freeVars b base ++ freeVarsFields b updates
 freeVars b (CArray es) = freeVarsList b es
 freeVars b (CRangeArray lo hi _) = freeVars b lo ++ freeVars b hi
 freeVars b (CIndex a i) = freeVars b a ++ freeVars b i
@@ -3421,6 +3468,16 @@ emitRecordUpdate e env base updates =
       let words = buildUpdateWords e bw labels updatePairs 0
       emitCtorAlloc e name words
 
+emitVariantUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> List CField -> <Mut> (String, LTy)
+emitVariantUpdate e env con base updates =
+  let (bw, _) = emitExpr e env base
+  match lookupAssoc con (recFieldTable e)
+    None => gapE ("CVariantUpdate: unknown variant type for constructor '" ++ con ++ "'")
+    Some labels =>
+      let updatePairs = emitUpdatePairs e env updates
+      let words = buildUpdateWords e bw labels updatePairs 0
+      emitCtorAlloc e con words
+
 emitRefAlloc : Emit -> List (String, (String, LTy)) -> List CExpr -> <Mut> (String, LTy)
 emitRefAlloc e env args = match args
   [x] =>
@@ -3509,6 +3566,8 @@ scanExprRecords (CRecord name fields) =
   (name, cFieldLabels fields) :: scanExprsRecords (cFieldExprs fields)
 scanExprRecords (CFieldAccess ex _) = scanExprRecords ex
 scanExprRecords (CRecordUpdate base updates) =
+  scanExprRecords base ++ scanExprsRecords (cFieldExprs updates)
+scanExprRecords (CVariantUpdate _ base updates) =
   scanExprRecords base ++ scanExprsRecords (cFieldExprs updates)
 scanExprRecords (CTuple es) = scanExprsRecords es
 scanExprRecords (CApp f a) = scanExprRecords f ++ scanExprRecords a
