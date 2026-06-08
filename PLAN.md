@@ -492,10 +492,17 @@ locked (slice 8 DONE), unblocking the char/unicode slices 9 + 14.
   not gate-verifiable — oracle's `program_args=[]` and native `./bin` both yield [];
   only the empty case is byte-gated. The real argv→Cons plumbing is implemented and
   correct; the gate limitation is inherent to the test harness.
-- **Slice 13 — file IO** (dep: 10). `readFile`/`writeFile`/`appendFile` (Result),
-  `fileExists` (Bool), `listDir` (Result (List String)), `readLine`/`readLineOpt`/
-  `readAll`. Standard `fopen`/`fread`/`fwrite`; Result/Option wrapping is mechanical
-  once 10 lands. *Sonnet: good after 10.*
+- ✅ **Slice 13 — file IO** (dep: 10). **DONE 2026-06-07.** `readFile`/`writeFile`/
+  `appendFile` (Result String String/Unit), `fileExists` (Bool), `listDir`
+  (Result String (List String)), `readLine`/`readLineOpt`/`readAll` (stdin).
+  `mdk_str_cstr` helper + seven C functions in `runtime/medaka_rt.c`; `isFileExtern`/
+  `emitFileExtern` in `selfhost/llvm_emit.mdk` (wired after `isEnvExtern`); 8 new
+  `declare i64` entries in `emitPreamble`. 6 fixtures: `s13_write_read` (write+read
+  → length 5), `s13_append` (write+append+read → length 3), `s13_exists_true`,
+  `s13_exists_false`, `s13_listdir_ok`, `s13_listdir_err`. All byte-identical vs
+  oracle. `readLine`/`readLineOpt`/`readAll` implemented but NOT fixtured — the
+  gate does not pipe stdin; both sides would hang or be nondeterministic. **Tier C
+  complete. Tier A + B + C all done — native extern catalog fully ported.**
 
 **Tier D — different shape (NOT the C-extern template; scope/flag separately):**
 

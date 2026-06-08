@@ -889,6 +889,66 @@ emitEnvExtern e env "getEnv" args = match emitArgs e env args
   _ => panic "llvm spike: getEnv takes one argument (slice 12)"
 emitEnvExtern _ _ name _ = panic ("llvm spike: unsupported env extern " ++ name)
 
+-- slice 13: file IO + stdin externs.  Result/Option/List returns are LTCon;
+-- fileExists returns raw 0/1 which the emitter tags (LTBool); readLine/readAll
+-- return heap Strings (LTStr).  readLine/readLineOpt/readAll are implemented
+-- but NOT fixtured — the gate does not pipe stdin.
+isFileExtern : String -> Bool
+isFileExtern name = containsStr name
+  ["readFile", "writeFile", "appendFile", "fileExists", "listDir",
+   "readLine", "readLineOpt", "readAll"]
+
+emitFileExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
+emitFileExtern e env "readFile" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_read_file(i64 " ++ p ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: readFile takes one argument (slice 13)"
+emitFileExtern e env "writeFile" args = match emitArgs e env args
+  [p, c] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_write_file(i64 " ++ p ++ ", i64 " ++ c ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: writeFile takes two arguments (slice 13)"
+emitFileExtern e env "appendFile" args = match emitArgs e env args
+  [p, c] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_append_file(i64 " ++ p ++ ", i64 " ++ c ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: appendFile takes two arguments (slice 13)"
+emitFileExtern e env "fileExists" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_file_exists(i64 " ++ p ++ ")")
+    (tagInt e r, LTBool)
+  _ => panic "llvm spike: fileExists takes one argument (slice 13)"
+emitFileExtern e env "listDir" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_list_dir(i64 " ++ p ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: listDir takes one argument (slice 13)"
+emitFileExtern e env "readLine" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_read_line(i64 " ++ u ++ ")")
+    (r, LTStr)
+  _ => panic "llvm spike: readLine takes one (Unit) argument (slice 13)"
+emitFileExtern e env "readLineOpt" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_read_line_opt(i64 " ++ u ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: readLineOpt takes one (Unit) argument (slice 13)"
+emitFileExtern e env "readAll" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_read_all(i64 " ++ u ++ ")")
+    (r, LTStr)
+  _ => panic "llvm spike: readAll takes one (Unit) argument (slice 13)"
+emitFileExtern _ _ name _ = panic ("llvm spike: unsupported file extern " ++ name)
+
 emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
 emitBin e env op l r
   | isCmpOp op = emitCmp e env op l r
@@ -1072,6 +1132,7 @@ emitApp e env app =
       else if isUnicodeExtern fname && hasArgs args then emitUnicodeExtern e env fname args
       else if isAdtExtern fname && hasArgs args then emitAdtExtern e env fname args
       else if isEnvExtern fname && hasArgs args then emitEnvExtern e env fname args
+      else if isFileExtern fname && hasArgs args then emitFileExtern e env fname args
       else if isCtor e fname then
         let argOps = emitArgs e env args
         emitCtorAlloc e fname argOps
@@ -3040,6 +3101,14 @@ emitPreamble e =
   let _ = emit e "declare void @mdk_set_args(i32, ptr)"
   let _ = emit e "declare i64 @mdk_args(i64)"
   let _ = emit e "declare i64 @mdk_get_env(i64)"
+  let _ = emit e "declare i64 @mdk_read_file(i64)"
+  let _ = emit e "declare i64 @mdk_write_file(i64, i64)"
+  let _ = emit e "declare i64 @mdk_append_file(i64, i64)"
+  let _ = emit e "declare i64 @mdk_file_exists(i64)"
+  let _ = emit e "declare i64 @mdk_list_dir(i64)"
+  let _ = emit e "declare i64 @mdk_read_line(i64)"
+  let _ = emit e "declare i64 @mdk_read_line_opt(i64)"
+  let _ = emit e "declare i64 @mdk_read_all(i64)"
   emit e ""
 
 emitTopBinds : Emit -> List (String, (String, LTy)) -> List CBind -> <Mut> List (String, (String, LTy))

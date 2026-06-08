@@ -1,0 +1,3 @@
+main = match listDir "/tmp/mdk_s13_no_such_dir_xyz"
+  Ok _ => 1
+  Err _ => 0

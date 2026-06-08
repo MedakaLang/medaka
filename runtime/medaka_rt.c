@@ -37,11 +37,13 @@
  *   value is an 8-byte-aligned real pointer Boehm tracks natively
  *   (RUNTIME-DESIGN.md §8.0 fact 3, §8.1).  Precise GC remains future work.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdnoreturn.h>
+#include <unistd.h>
 #include <gc.h>
 
 /* Initialize Boehm once before main().  The emitted IR owns `main`, so we can't
@@ -500,4 +502,89 @@ long long mdk_get_env(long long name) {
   const char *v = getenv((const char *)name + 24);
   if (v == 0) return mdk_none();
   return mdk_some(mdk_str_lit(v, (long long)strlen(v)));
+}
+
+/* slice 13: file IO + stdin readers --------------------------------------- */
+
+/* Helper: String cell from a NUL-terminated C string. */
+static long long mdk_str_cstr(const char *s) {
+  return mdk_str_lit(s, (long long)strlen(s));
+}
+
+/* readFile : String -> Result String String — Ok content / Err msg. */
+long long mdk_read_file(long long path) {
+  const char *p = (const char *)path + 24;
+  FILE *f = fopen(p, "rb");
+  if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
+  fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+  char *buf = (char *)mdk_alloc(n + 1);
+  size_t got = fread(buf, 1, (size_t)n, f); fclose(f);
+  return mdk_ok(mdk_str_lit(buf, (long long)got));
+}
+
+static long long mdk_write_impl(long long path, long long content, const char *mode) {
+  const char *p = (const char *)path + 24;
+  const char *c = (const char *)content + 24;
+  long long cl = ((const long long *)content)[1];
+  FILE *f = fopen(p, mode);
+  if (!f) return mdk_err(mdk_str_cstr(strerror(errno)));
+  fwrite(c, 1, (size_t)cl, f); fclose(f);
+  return mdk_ok(1);  /* Ok () — Unit field, value irrelevant */
+}
+
+/* writeFile : String -> String -> Result String Unit — truncating write. */
+long long mdk_write_file(long long path, long long content)  { return mdk_write_impl(path, content, "wb"); }
+/* appendFile : String -> String -> Result String Unit — append (create if absent). */
+long long mdk_append_file(long long path, long long content) { return mdk_write_impl(path, content, "ab"); }
+
+/* fileExists : String -> Bool — raw 0/1, emitter tags via tagInt. */
+long long mdk_file_exists(long long path) {
+  return access((const char *)path + 24, F_OK) == 0 ? 1 : 0;
+}
+
+/* listDir : String -> Result String (List String).
+ * OCaml Sys.readdir excludes "." and ".." — skip them for correctness. */
+long long mdk_list_dir(long long path) {
+  const char *p = (const char *)path + 24;
+  DIR *d = opendir(p);
+  if (!d) return mdk_err(mdk_str_cstr(strerror(errno)));
+  long long acc = mdk_nil(); struct dirent *e;
+  while ((e = readdir(d))) {
+    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    acc = mdk_cons(mdk_str_cstr(e->d_name), acc);
+  }
+  closedir(d);
+  return mdk_ok(acc);
+}
+
+/* stdin readers — implemented, NOT fixtured (gate doesn't pipe stdin). */
+
+/* readLine : Unit -> String — one line, newline stripped. */
+long long mdk_read_line(long long u) {
+  (void)u;
+  char *line = 0; size_t cap = 0; ssize_t n = getline(&line, &cap, stdin);
+  if (n < 0) { free(line); return mdk_str_cstr(""); }
+  if (n > 0 && line[n-1] == '\n') n--;
+  long long r = mdk_str_lit(line, (long long)n); free(line); return r;
+}
+
+/* readLineOpt : Unit -> Option String — Some line / None at EOF. */
+long long mdk_read_line_opt(long long u) {
+  (void)u;
+  char *line = 0; size_t cap = 0; ssize_t n = getline(&line, &cap, stdin);
+  if (n < 0) { free(line); return mdk_none(); }
+  if (n > 0 && line[n-1] == '\n') n--;
+  long long r = mdk_some(mdk_str_lit(line, (long long)n)); free(line); return r;
+}
+
+/* readAll : Unit -> String — all of stdin. */
+long long mdk_read_all(long long u) {
+  (void)u;
+  size_t cap = 4096, len = 0; char *buf = (char *)malloc(cap);
+  for (;;) {
+    if (len == cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+    size_t got = fread(buf + len, 1, cap - len, stdin); len += got;
+    if (got == 0) break;
+  }
+  long long r = mdk_str_lit(buf, (long long)len); free(buf); return r;
 }
