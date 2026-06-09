@@ -3363,16 +3363,26 @@ emitTree e _ _ _ _ _ _ _ CTFail = match fallthroughLabelRef.value
   "" => emit e "  unreachable"
   lbl => emit e ("  br label %" ++ lbl)
 emitTree e env root arms _ slot endL rty (CTLeaf i) = emitLeaf e env root arms i slot endL rty
--- gap-TOLERANT (bootstrap): a guarded/range/record arm cannot be lowered.  With
--- recording OFF this `gapU` panics (the four byte gates' behaviour, unchanged).
--- With recording ON (the bootstrap emit driver) it must still TERMINATE the
--- current block so the surrounding module is structurally valid LLVM — store a
--- "0" placeholder and branch to the decision-end block.  The harness byte-diff
--- is the safety net: a guard arm the program actually REACHES would diverge.
-emitTree e _ _ _ _ slot endL _ (CTGuard _ _) =
-  let _ = gapU "guarded / range / record match arm (slice 3: constructor + int-literal patterns only)"
-  let _ = emit e ("  store i64 0, ptr " ++ slot)
-  emit e ("  br label %" ++ endL)
+-- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
+-- leaf), evaluate its guards; all pass → eval the body (emitLeaf-style); any
+-- guard fails → branch to the `fail` subtree, which resumes the ordered match at
+-- the same column context `occs` (mirrors core_ir_eval's `cevalGuardedBody`).
+-- This CLOSES the historical CTGuard emitter gap — `selfhost/` code on the native
+-- self-compile path no longer needs the guard-free convention for `CGBool`
+-- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
+-- by current source); a bad arm index likewise.
+emitTree e env root arms occs slot endL rty (CTGuard i fail) = match nthArm arms i
+  Some (CArm pat guards body) =>
+    if allGuardsEmittable guards then
+      emitGuardedArm e env root arms occs pat guards body fail slot endL rty
+    else
+      let _ = gapU "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+      let _ = emit e ("  store i64 0, ptr " ++ slot)
+      emit e ("  br label %" ++ endL)
+  None =>
+    let _ = gapU "guarded arm index out of range (CTGuard)"
+    let _ = emit e ("  store i64 0, ptr " ++ slot)
+    emit e ("  br label %" ++ endL)
 emitTree e env root arms occs slot endL rty (CTDrop sub) =
   emitTree e env root arms (tailS occs) slot endL rty sub
 emitTree e env root arms occs slot endL rty (CTSwitch branches dft) =
@@ -3391,6 +3401,53 @@ emitLeaf e env root arms i slot endL rty = match nthArm arms i
     let _ = emit e ("  store i64 " ++ bv ++ ", ptr " ++ slot)
     emit e ("  br label %" ++ endL)
   None => gapU "decision arm index out of range"
+
+-- a guarded clause: bind the arm pattern, run the guards (branching to `failL` on
+-- any failure), and on all-pass eval the body into `slot`; then emit `failL` and
+-- the `fail` subtree (resumes the match at the same column context `occs`).
+emitGuardedArm : Emit -> List (String, (String, LTy)) -> String -> List CArm -> List String -> Pat -> List CGuard -> CExpr -> CTree -> String -> String -> Ref LTy -> <Mut> Unit
+emitGuardedArm e env root arms occs pat guards body fail slot endL rty =
+  let failL = "guardfail" ++ intToString (freshId e)
+  let env2 = bindPattern e env pat root body
+  let env3 = emitGuardChain e env2 guards body failL
+  let (bv, bty) = emitExpr e env3 body
+  let _ = set_ref rty bty
+  let _ = emit e ("  store i64 " ++ bv ++ ", ptr " ++ slot)
+  let _ = emit e ("  br label %" ++ endL)
+  let _ = emit e (failL ++ ":")
+  emitTree e env root arms occs slot endL rty fail
+
+-- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
+-- 3) and branches to `failL` on failure, falling through on success; an
+-- (irrefutable) `CGBind p <- e` binds `p` and continues.  Returns the env
+-- extended by any `CGBind` bindings (visible to later guards + the body).
+emitGuardChain : Emit -> List (String, (String, LTy)) -> List CGuard -> CExpr -> String -> <Mut> List (String, (String, LTy))
+emitGuardChain _ env [] _ _ = env
+emitGuardChain e env ((CGBool g)::rest) body failL =
+  let (bw, _) = emitExpr e env g
+  let cmp = freshReg e
+  let _ = emit e ("  " ++ cmp ++ " = icmp eq i64 " ++ bw ++ ", 3")
+  let pass = "guardok" ++ intToString (freshId e)
+  let _ = emit e ("  br i1 " ++ cmp ++ ", label %" ++ pass ++ ", label %" ++ failL)
+  let _ = emit e (pass ++ ":")
+  emitGuardChain e env rest body failL
+emitGuardChain e env ((CGBind p ex)::rest) body failL =
+  let (v, _) = emitExpr e env ex
+  let env2 = bindPattern e env p v body
+  emitGuardChain e env2 rest body failL
+
+-- a clause's guards are emittable iff every `CGBind`'s pattern is irrefutable (a
+-- refutable `p <- e` needs a runtime match test — not yet lowered).  `CGBool`
+-- guards are always emittable.
+allGuardsEmittable : List CGuard -> Bool
+allGuardsEmittable [] = True
+allGuardsEmittable ((CGBool _)::rest) = allGuardsEmittable rest
+allGuardsEmittable ((CGBind p _)::rest) = irrefutablePat p && allGuardsEmittable rest
+
+irrefutablePat : Pat -> Bool
+irrefutablePat (PVar _) = True
+irrefutablePat PWild = True
+irrefutablePat _ = False
 
 -- bind a pattern's variables against a value word, emitting field loads for the
 -- constructor sub-patterns.  Mirrors the binding half of eval.mdk's matchPat, but

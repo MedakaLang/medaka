@@ -1,0 +1,11 @@
+-- CTGuard (closed) over a CONSTRUCTOR pattern: the guard reads a field bound by
+-- the arm pattern (`Box n if n > 10`), and on guard failure falls through to the
+-- unguarded `Box n` arm (re-binding the field).
+-- unbox (Box 20) = 40 ; unbox (Box 3) = 3 ; main = 43
+data Box = Box Int
+
+unbox b = match b
+  Box n if n > 10 => n * 2
+  Box n => n
+
+main = unbox (Box 20) + unbox (Box 3)
