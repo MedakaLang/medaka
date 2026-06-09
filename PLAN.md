@@ -68,11 +68,11 @@ state changes.
 |------------|----------------|--------|-----------------|
 | **Self-hosting (Stage 1)** | [`selfhost/README.md`](./selfhost/README.md) §Roadmap | ✅ complete | perf-lever tail only (all closed) |
 | **Native backend (Stage 2)** | [`selfhost/STAGE2-DESIGN.md`](./selfhost/STAGE2-DESIGN.md) + [`selfhost/BOOTSTRAP.md`](./selfhost/BOOTSTRAP.md) | ✅ **complete** | Core IR + bytecode VM (§2.1–2.2) done; LLVM backend promoted from spike to a **native self-hosting compiler** — all 7 stages native==interpreter (141 fixtures), self-compile **fixpoint reached** (C1 emitter-IR reproduction · C2 native compiles the real lexer · C3 `IR1==IR2`). Runtime dict-passing dispatch (D3a/D3b done); Boehm GC; CTGuard lowered. Residual: `max`/`min` over primitive `Ord` (dead code). |
-| **Make LLVM canonical (Stage 3)** | **this file** → [Stage 3](#stage-3--make-the-llvm-backend-canonical-retire-ocaml) | 🟡 **next** | Harden the native backend toward CANONICAL + gated OCaml retirement: `medaka build` CLI → completeness (max/min + emitter-gap sweep) → port OCaml test suites to Medaka → differential fuzzer → TRMC/worker-thread stack scalability → perf (-O2, value-rep) → housekeeping refactor (style/DRY) → self-bootstrapping build → retire `lib/` (gated). |
+| **Make LLVM canonical (Stage 3)** | **this file** → [Stage 3](#stage-3--make-the-llvm-backend-canonical-retire-ocaml) | 🟡 **in progress** | ✅ #1 `medaka build` CLI (MVP, empty-prelude subset — `39f3318`). NEXT: #2 prelude-emittability (close `max`/`min` + DCE → unblocks `println`/typeclass programs) + emitter-gap sweep → port OCaml test suites to Medaka → differential fuzzer → TRMC/worker-thread stack scalability → perf (-O2, value-rep) → housekeeping refactor (style/DRY) → self-bootstrapping build → retire `lib/` (gated). |
 | **Capability-effects wedge (Phase 146)** | [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §9 (lang) + [`CAPABILITY-PLATFORM.md`](./CAPABILITY-PLATFORM.md) §10 (product) | 🟡 in progress | gap-1 sound + gap-2 labels + wow-demo done; next = research pass, manifest format/emission, cross-module label export, Phase 146b |
 | **Compiler / language correctness** | **this file** → [Compiler / language](#compiler--language) | 🟡 open items | Phase 101b (deferred) |
 | **Standard library** | [`STDLIB.md`](./STDLIB.md) §"Remaining work" + §"Label refinement roadmap" | 🟡 modules done, extras open | `zip`/`unzip`, `Semigroup List`, JSON pretty/codecs, effect-label refinement |
-| **CLI surface (Phase 82)** | **this file** → [CLI surface](#cli-surface-phase-82-continued) | 🟡 gaps | `medaka build` (needs design), `doc` multi-module, `--json` multi-file |
+| **CLI surface (Phase 82)** | **this file** → [CLI surface](#cli-surface-phase-82-continued) | 🟡 gaps | `medaka build` ✅ MVP (empty-prelude; cache deferred), `doc` multi-module, `--json` multi-file |
 
 ---
 
@@ -130,24 +130,39 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
 
 **Near-term sequence (front-loaded order, decided 2026-06-09):**
 
-1. **`medaka build` CLI** — wire the LLVM backend into the actual CLI so
-   `medaka build foo.mdk` emits → `clang` → native binary for ARBITRARY user
-   programs (today native compilation lives only in `test/selfcompile_*.sh` /
-   `bootstrap_*.sh`). Surfaces the backend and forces it to handle programs beyond
-   the compiler's own source. Design points: output path + linking (`medaka_rt.c`
-   + libgc), the **gap policy** (a *reachable* gap must be a hard error, not a
-   silent placeholder — the gap-tolerant driver is bootstrap-only), error
-   reporting, and how it relates to `medaka run` (interpreter) — see the
-   [CLI surface](#cli-surface-phase-82-continued) `medaka build` note.
-2. **Completeness — `max`/`min` + emitter-gap sweep.** Close the last known gap
-   (`max`/`min` over primitive `Ord`: a default method whose `compare` impls are
-   primitives with no runtime tag — via dict-passing or monomorphic
-   specialization; `selfhost/EMITTER-GAPS.md`). Then AUDIT `emitTree`/`emitExpr`/
-   `emitApp` for every reachable `gapU`/`gapE`, and build a **language-construct
-   coverage matrix**: the bootstrap only exercised what the compiler's own source
-   uses — user programs use more (list comprehensions, all operator sections,
-   inclusive ranges, string interpolation, every `do`/guard form, record/variant
-   update, etc.). One native==interpreter fixture per construct in `SYNTAX.md`.
+1. ✅ **`medaka build` CLI — DONE (MVP, 2026-06-09, `39f3318`).** `medaka build
+   foo.mdk [-o out]` emits IR via the self-hosted emitter → `clang` → native
+   binary, for arbitrary user programs. `lib/build_cmd.ml` + `bin/main.ml`
+   dispatch + `test/build_cmd.sh` (build+run+diff, 6 programs). Shell-out MVP
+   (subprocess `run`s `selfhost/llvm_emit_modules_main.mdk`, captures stdout —
+   clean Ref-state isolation); repo-relative asset resolution; no artifact cache;
+   gap policy = hard error (default non-gap-tolerant path). **Key boundary
+   finding:** the build passes an **EMPTY prelude** — the full `stdlib/core.mdk`
+   is **not yet emittable** (emitter has no DCE, and `core.mdk`'s
+   `maximum`/`minimum` trip the open `max`/`min` arg-tag dispatch gap, aborting
+   even a trivial program). So the emittable surface today = runtime externs +
+   primitive arithmetic/comparison + ADTs/`match` + recursion + closures +
+   tuples/records/arrays + cross-module data; **`println` and all `core.mdk`
+   typeclass machinery are out of scope until the prelude is emittable** (clean
+   `unbound variable` hard-error at that boundary). This makes #2 the gating
+   unblocker, not just a completeness chore. Deferred: Core-IR artifact cache
+   (cache-key + on-disk layout), install-prefix asset packaging.
+2. **Prelude-emittability + completeness — `max`/`min` + DCE + emitter-gap sweep.**
+   *Sharpened by the #1 finding:* this is now the **unblocker that makes `medaka
+   build` useful for real programs** (anything using `println`/typeclasses), not a
+   tail-end polish item. Two sub-goals: **(a) make the real `stdlib/core.mdk`
+   prelude emittable** — close the `max`/`min` gap (`max`/`min` over primitive
+   `Ord`: a default method whose `compare` impls are primitives with no runtime
+   tag — via dict-passing or monomorphic specialization; `selfhost/EMITTER-GAPS.md`)
+   and/or add **dead-code elimination** so unreached prelude bindings (`maximum`/
+   `minimum`, `Arbitrary` impls, …) don't force emission of gapped code; then flip
+   `medaka build` from the empty prelude to the real one. **(b)** AUDIT
+   `emitTree`/`emitExpr`/`emitApp` for every reachable `gapU`/`gapE`, and build a
+   **language-construct coverage matrix**: the bootstrap only exercised what the
+   compiler's own source uses — user programs use more (list comprehensions, all
+   operator sections, inclusive ranges, string interpolation, every `do`/guard
+   form, record/variant update, etc.). One native==interpreter fixture per
+   construct in `SYNTAX.md`.
 3. **Port OCaml test suites to native Medaka.** Re-express `test/*.ml` (the
    alcotest suites — parser/typecheck/eval/resolve/exhaust/…) as Medaka tests
    (`medaka test`) so the suite stops depending on `lib/`. This is the bulk of
@@ -440,12 +455,18 @@ The design spec lists `new build run check test fmt lsp doc add remove update`;
 `check / run / test / repl / lsp / fmt / new` exist, plus `bench`. Remaining
 non-package-manager gaps:
 
-- **`medaka build`** — needs its own design first: a serialized Core IR now
-  exists (`selfhost/core_ir_sexp.mdk` — `cprogramToSexp`/`parseCProgram`,
-  round-trip proven; `test/diff_selfhost_core_ir_roundtrip.sh`), but a build
-  artifact cache also needs a cache-key strategy (content hash of source +
-  transitive imports) and an on-disk layout. Until that design exists it would
-  only be an alias of `check`.
+- **`medaka build`** ✅ **MVP done (2026-06-09, `39f3318`)** — `medaka build
+  foo.mdk [-o out]` compiles arbitrary user programs to native binaries:
+  self-hosted emitter (`selfhost/llvm_emit_modules_main.mdk`, run as a subprocess
+  capturing IR) → `clang` + `runtime/medaka_rt.c` + libgc → binary.
+  `lib/build_cmd.ml`, `test/build_cmd.sh` (build+run+diff vs interpreter oracle).
+  Empty-prelude subset only (full `core.mdk` blocked on the `max`/`min` gap + no
+  DCE — see [Stage 3 #2](#stage-3--make-the-llvm-backend-canonical-retire-ocaml)).
+  **Deferred:** a build-artifact CACHE — the serialized Core IR exists
+  (`selfhost/core_ir_sexp.mdk` — `cprogramToSexp`/`parseCProgram`, round-trip
+  proven; `test/diff_selfhost_core_ir_roundtrip.sh`) but a cache-key strategy
+  (content hash of source + transitive imports) + on-disk layout remain unbuilt;
+  also install-prefix asset packaging (assets resolved repo-relative today).
 - **`medaka doc`** ✅ — done: `lib/doc.ml` + `test/test_doc.ml`.  Comment→decl
   matcher (parallel `Lexer.take_comments()` stream matched by position),
   signature renderer via `Typecheck.pp_scheme` for values / AST renderers for
