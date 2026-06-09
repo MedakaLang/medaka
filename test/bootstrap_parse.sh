@@ -64,7 +64,12 @@ BIN="$WORK/parse"
 if ! "$MAIN" run "$EMIT" "$RUNTIME" "$CORE" "$ORACLE" "$SELFHOST" > "$LL" 2>"$WORK/emit.err"; then
   echo "FAIL (emit parse_main): $(cat "$WORK/emit.err")"; exit 1
 fi
-if ! "$CC" $GC_CFLAGS "$LL" "$RT" $GC_LIBS -o "$BIN" 2>"$WORK/cc.err"; then
+# `-Wl,-stack_size` grows the MAIN-THREAD stack (default ~8 MB on macOS): the
+# self-hosted combinator parser recurses deeply (the precedence ladder + the
+# `andThen`/`runP` monad chain), so a real-file-sized source can overflow the
+# default stack and SIGSEGV.  512 MB clears every realistic input (mirrors
+# bootstrap_lex.sh; the small fixtures here never need it — future-proofing).
+if ! "$CC" -Wl,-stack_size,0x20000000 $GC_CFLAGS "$LL" "$RT" $GC_LIBS -o "$BIN" 2>"$WORK/cc.err"; then
   echo "FAIL (clang parse_main): $(cat "$WORK/cc.err")"; exit 1
 fi
 
