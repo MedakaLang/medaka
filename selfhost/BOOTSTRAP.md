@@ -9,7 +9,14 @@ Unlike `test/diff_selfhost_llvm_modules.sh` (which forces an EMPTY core prelude)
 the bootstrap pushes the REAL `stdlib/core.mdk` prelude through `emitProgram` —
 the actual bootstrap gate.
 
-## B1 — native LEXER (18/19; mangling DONE, one UNRELATED emitter blocker)
+## B1 — native LEXER ✅ **DONE (19/19 byte-identical to the interpreter)**
+
+**Result: 19/19 `test/diff_fixtures/*.mdk` byte-match** — the FIRST end-to-end
+self-compile slice: a natively-compiled piece of the Medaka compiler behaving
+identically to the reference tree-walker on real source. The last holdout
+(`triple_str`) was a pre-existing emitter bug: `emitCmp` did string `==`/`!=` as
+pointer identity; now routes through `@mdk_string_eq` when EITHER operand is
+`LTStr` (mirrors the pattern-match literal path).
 
 **Goal:** natively compile `selfhost/lex_main.mdk` (reads a file, `tokenize`s,
 prints the canonical token stream) and byte-diff against

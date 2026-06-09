@@ -1407,8 +1407,12 @@ emitArith e env op l r =
 emitCmp : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
 emitCmp e env op l r =
   let (lv, lty) = emitExpr e env l
-  let (rv, _) = emitExpr e env r
-  match lty
+  let (rv, rty) = emitExpr e env r
+  -- A boxed-string operand (EITHER side — a `""` literal forces it even when the
+  -- other side's static LTy wasn't inferred to LTStr) routes `==`/`!=` through
+  -- @mdk_string_eq; pointer identity (the integer arm) is WRONG for string cells.
+  if isStrLTy lty || isStrLTy rty then emitStrCmp e op lv rv
+  else match lty
     LTFloat =>
       let ld = unboxFloat e lv
       let rd = unboxFloat e rv
@@ -1416,6 +1420,35 @@ emitCmp e env op l r =
       let _ = emit e ("  " ++ c ++ " = fcmp " ++ floatPred op ++ " double " ++ ld ++ ", " ++ rd)
       boolFromI1 e c
     _ =>
+      let li = untagInt e lv
+      let ri = untagInt e rv
+      let c = freshReg e
+      let _ = emit e ("  " ++ c ++ " = icmp " ++ intPred op ++ " i64 " ++ li ++ ", " ++ ri)
+      boolFromI1 e c
+
+isStrLTy : LTy -> Bool
+isStrLTy LTStr = True
+isStrLTy _ = False
+
+-- String `==`/`!=`: pointer identity is WRONG for boxed string cells, so route
+-- content equality through @mdk_string_eq (the same helper the pattern-match
+-- literal path uses, returning a TAGGED Bool word 3/1).  `==` returns it directly;
+-- `!=` flips 3<->1 via `xor … 2`.  Ordering ops (`<`/`>`/…) on strings are not
+-- exercised by the bootstrap; they keep the pre-existing integer compare (a
+-- `@mdk_string_compare` route can replace it when needed).
+emitStrCmp : Emit -> String -> String -> String -> <Mut> (String, LTy)
+emitStrCmp e op lv rv
+  | op == "==" =
+      let r = freshReg e
+      let _ = emit e ("  " ++ r ++ " = call i64 @mdk_string_eq(i64 " ++ lv ++ ", i64 " ++ rv ++ ")")
+      (r, LTBool)
+  | op == "!=" =
+      let r = freshReg e
+      let _ = emit e ("  " ++ r ++ " = call i64 @mdk_string_eq(i64 " ++ lv ++ ", i64 " ++ rv ++ ")")
+      let n = freshReg e
+      let _ = emit e ("  " ++ n ++ " = xor i64 " ++ r ++ ", 2")
+      (n, LTBool)
+  | otherwise =
       let li = untagInt e lv
       let ri = untagInt e rv
       let c = freshReg e
