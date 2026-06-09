@@ -1,0 +1,12 @@
+-- CTGuard (closed): a `match` with guarded ARMS (`pat if guard => body`) lowers
+-- to a decision tree carrying `CTGuard` nodes — distinct from function-level
+-- guard arms, which desugar to if-chains.  Each guard tests a Bool and falls
+-- through to the next clause on failure (here a var pattern + guard chain).
+-- sign 5 = 1 ; sign 0 = 0 ; sign (-3) = -1
+-- main = 1 + 0*10 + (-1)*100 = -99
+sign n = match n
+  m if m > 0 => 1
+  m if m == 0 => 0
+  _ => 0 - 1
+
+main = sign 5 + sign 0 * 10 + sign (0 - 3) * 100
