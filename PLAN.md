@@ -307,10 +307,18 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
 >   `selfhost/typecheck.mdk` `dictPass` (`rewriteBinopExpr`). Interpreter + selfhost
 >   eval + native `==` on a user ADT all dispatch to the impl; selfhost == OCaml oracle
 >   on user-written impls. Primitive operands stay the structural builtin EBinOp (zero
->   churn — primitive-only IR byte-identical; no recursion). **Native `<`/`lt` on an
->   ADT remains deferred behind the pre-existing slice-7 arg-tag-on-primitive emitter
->   gap** (Gap-C/D3b class) — the rewritten `lt` method-app hits it exactly as a direct
->   `lt` call does; NOT fixed here. (A pre-existing, independent selfhost-vs-oracle
+>   churn — primitive-only IR byte-identical; no recursion). **✅ Native `<`/`lt`/`>`/`<=`/`>=`
+>   on a user/derived `Ord` ADT — CLOSED 2026-06-10 (slice-7, `13af6ab`).** Emitter-only
+>   9-line fix: derived `Ord` emits only `compare`; the operators are interface DEFAULTS
+>   over `compare`, so the rewritten `lt` method-app reached `emitDefaultRKey` but
+>   `restampIface` (`llvm_emit.mdk:~2545`) had only a `CVar` arm — method-marking had
+>   turned the inner `compare` into a `CMethod _ RNone`, which fell through unrewritten →
+>   arg-tag dispatch → primitive `Ord Int` group (no cell tag) → `emitTagMatch` panic.
+>   Added a `CMethod _ RNone` arm re-stamping same-interface to `RKey tag`. All four ops
+>   native == oracle; fixpoint held byte-identical (no re-baseline). `max`/`min` over
+>   generic `Ord a` NOT closed (separate — pure default methods, no concrete tag; needs
+>   RDict→default-body synthesis; scoped 2026-06-10). Fixtures
+>   `test/llvm_fixtures_typed/disp_ord_default_{lt,gt,lte,gte}.mdk`. (A pre-existing, independent selfhost-vs-oracle
 >   divergence on *derived* `Ord` `compare`/`lt` — present on `main`, untouched by this
 >   change — was **CLOSED 2026-06-10**: `selfhost/desugar.mdk` `deriveForData` was missing
 >   the `"Ord"` arm, so derived `Ord` on `data`/record types was silently dropped → inverted
@@ -341,6 +349,40 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
 > **Method note:** every fix in its own worktree agent → verified on main → docs
 > updated. L1/L2 deferred for the run (latent + route-fragile; near E4). Skipped
 > only genuine language-design items. Heartbeat cron `d6dca841` armed until 7am.
+
+> ### 2026-06-10 session (orchestrated, user-supervised) — progress log
+>
+> Native-canonicalization push. All landed + verified on local main; self-compile
+> fixpoint (C3a/C3b) held byte-identical across every merge.
+> - **✅ Cause A — `elaborateModules` promotion+arity layer (`729879f`).** The native
+>   build path lacked the dict-promotion + `implTable` machinery the single-file typed
+>   path has, so an unannotated constrained fn (`f s = println s`) was never promoted →
+>   `RNone` → silent no-output. Ported the eligibility seed + `discoverPromoted` fixpoint
+>   + per-module importer-scoped arity (mirror `lib/eval.ml:2104-2164`). Closes Cause A +
+>   Gap C C2/C3-unannotated. (Trap: subtract the seed from the promoted set + `resetState`
+>   after discovery, else prelude listItems arities get re-captured → SIGSEGV.)
+> - **✅ Gap G native ordering operators (`13af6ab`)** — see the Phase-151 entry above
+>   (now updated). Gap G fully closed across interp / selfhost / native for `==` and
+>   `< > <= >=` on user/derived `Ord`.
+> - **✅ Differential fuzzer (MVP + native Tier-C)** — see near-term #4 (updated). 1080
+>   native programs byte-identical; found + fixed the named-field-data deriving divergence.
+> - **✅ Named-field-data deriving (`e695539`)** — `data Box = Box { v : Int } deriving (Debug)`
+>   panicked in the selfhost tree-walker. NOT a desugar bug (oracle also builds positional
+>   `PCon` for ConNamed): the fix is value-representation in `selfhost/eval.mdk` —
+>   `evalProgram` never populated `ctorFieldOrdersRef` + `ERecordCreate` always built
+>   `VRecord`; now mirrors `lib/eval.ml` (registered named-field ctor → positional `VCon`).
+>   All 5 deriver kinds fixed. (Recurring "looks like desugar, is the eval driver" trap.)
+> - **✅ Error-path BLOCKERs** — see the Error-path bullet under Supporting work (updated):
+>   audit found 6, closed 5 (B1-B4, B6), B5+R2 in flight.
+> - **Scoped 2026-06-10 (read-only, not yet built):** the two remaining native dispatch
+>   holes — **GAP 1** two-level nested dicts (silent SIGSEGV; flat i64 dict-witness
+>   `llvm_emit.mdk:2409` drops nested `reqs`; fix = box the dict / tagged-indirection,
+>   emitter-only) and **GAP 2** `max`/`min` over generic `Ord a` (clean panic; pure default
+>   methods need RDict→default-body synthesis). Both emitter-only, no design decision, share
+>   the `emitDispatchChain` seam, independent fixes. Recommend GAP 1 first (silent crash >
+>   clean panic; rep foundation). Plus the empirically-top native construct gap from the
+>   fuzzer: **tuple-as-receiver** (Gap C C1/C5b — `headTyconMono (TTuple _)` → `$tuple` head).
+>   Details in memory `project_native_dispatch_gaps`.
 
 
 1. ✅ **`medaka build` CLI — DONE (MVP, 2026-06-09, `39f3318`).** `medaka build
@@ -416,11 +458,19 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
    alcotest suites — parser/typecheck/eval/resolve/exhaust/…) as Medaka tests
    (`medaka test`) so the suite stops depending on `lib/`. This is the bulk of
    bar-item 2.
-4. **Differential fuzzer.** Generate random parse-valid / well-typed Medaka
-   programs and diff native vs the tree-walker oracle. Highest-leverage bug finder
-   — fixtures have finite coverage; the fuzzer hunts the long tail
-   (order-dependence, value-rep edges, dispatch corners, big/deeply-nested
-   inputs). Shrink failing cases to minimal repros.
+4. ✅ **Differential fuzzer — BUILT (MVP + native tier, 2026-06-10).** Type-directed
+   OCaml generator (`dev/fuzz_gen.ml`, reuses `lib/ast.ml`+`lib/printer.ml`) producing
+   well-typed-by-construction programs (Tiers 0–2: scalars/arithmetic → ADTs/records/
+   match/tuples → `deriving (Eq,Ord,Debug)` + comparison/equality operators), 0% oracle
+   rejection. Driver `test/fuzz_diff.sh`: **Tier-A** oracle + oracle-independent invariants
+   (Eq/Ord laws, operator↔method, arithmetic identities); **Tier-B** oracle vs selfhost
+   tree-walker (`eval_dict_main`, batched ~12 blocks/program); **Tier-C** oracle vs
+   `medaka build` native (`948329b`). Deterministic `--seed`, known-gap allowlist,
+   self-tested. **Results:** 680 programs clean Tier-A/B; **1080 native programs
+   byte-identical** Tier-C; found 1 divergence (named-field-data deriving, fixed
+   `e695539`). The native tier mechanically confirms Gap G / Cause A / Gap E / named-field
+   all pass native. Deferred: shrinker, corpus, multi-module, Tier-C tuple coverage
+   (suppressed via `--no-tuple` — open Gap C1/C5 tuple-as-receiver floods otherwise).
 
 **Supporting / parallel work:**
 
@@ -432,9 +482,21 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
   in the emitter for `x :: recurse` list-builders → O(1) stack — the principled
   fix for the streaming loops (OCaml `[@tail_mod_cons]` is the blueprint); the
   cons-loop optimization on top of (a). Not yet forced (512 MB sufficed through C3).
-- **Error-path / diagnostics parity.** The bootstrap diffed happy-path stdout;
-  native panics/aborts/diagnostics need parity with the interpreter (the selfhost
-  error path was noted unvalidated). Diff error output too.
+- **Error-path / diagnostics parity — AUDITED 2026-06-10 + BLOCKERs closing.** Full
+  read-only sweep (lex/parse/resolve/typecheck/eval) found **6 BLOCKERs** (selfhost
+  false-accepts an invalid program or crashes uninformatively) + 7 MAJORs + 3 MINORs;
+  all 51 pre-existing error fixtures pass. **5 of 6 BLOCKERs CLOSED:** B1/B2/B3 lexer
+  false-accepts (unterminated string/comment, bad escape — `selfhost/lexer.mdk` now
+  raises like `lexer.mll`, `9867626`); B4 missing-impl never rejected (ported
+  `NoImplFound` from `lib/typecheck.ml`, `5d78c61` — no over-rejection, self-compile
+  held); B6 `eval_run_main` silent no-main (now errors like oracle). **In flight:** B5
+  (type-aware non-exhaustive match warning dropped by `check.mdk`'s
+  `checkToLinesWithRuntime` — reads `typeErrors` only, not `matchWarnings`) + R2 (loader
+  cycle-chain truncated to root). **Remaining MAJORs (lower priority / architectural):**
+  R3 (bad import → unbound-var not unknown-module), E10/C4 (eval_run suppresses top-level
+  side-effect thunks — the Phase-125 lazy-nullary design point), E8/TC5/E9 (typecheck-error
+  → runtime-panic degradation, intrinsic to the untyped `eval_main` driver). Full inventory
+  + repros in the 2026-06-10 progress log below + memory `project_selfhost_error_path_gap`.
 - **Performance.** Emitted IR is naive (`clang -O0` in harnesses): turn on `-O2`,
   measure; consider value-rep / dispatch optimizations + an emitter-side pass if
   profiling demands. Benchmark native-compiler-compiling-itself vs the OCaml
