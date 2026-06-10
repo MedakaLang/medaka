@@ -50,7 +50,14 @@ Priority order for fixes: S1 → S2 → T1 → T2 → S3 → L1+L2 (before E4) �
 
 ## Soundness / confirmed-correctness findings
 
-### S1. `EMethodAt` applies dicts without the awaits-args gate — valid programs panic — [NEW] CONFIRMED
+### S1. `EMethodAt` applies dicts without the awaits-args gate — valid programs panic — [NEW] ✅ CLOSED (2026-06-09, `69b3400`)
+
+**FIXED:** ported the awaits-args gate into `selfhost/eval.mdk` `EMethodAt` (758-771,
+reusing the existing `awaitsArgs` helper) — route dicts (method + impl + forwarded
+reqs) apply only when the narrowed value awaits args, mirroring `lib/eval.ml:869-873`.
+Repro `test/eval_dict_fixtures/instance_terminal_default.mdk` now yields `[]` ==
+oracle (was `panic: applied non-function: []`). All eval-family + bootstrap + native
+gates green; no S1↔S2 interaction. Original finding below.
 
 - **Where:** `selfhost/eval.mdk:758-762`; oracle gate `lib/eval.ml:869-873`.
 - **What:** the oracle folds method-/impl-dicts into the narrowed value only when it

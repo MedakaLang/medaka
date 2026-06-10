@@ -139,8 +139,9 @@ arms + first-match dispatch + arg-tag chains are sound only under guarantees the
 repro + oracle-reference + fix location in the doc. Most are "port the oracle
 behavior into `selfhost/{typecheck,eval,marker}.mdk`" — re-validate each with the
 stage's `diff_selfhost_*` / `bootstrap_*` harness. Confirmed soundness items first:
-- **S1** — `EMethodAt` applies dicts without the awaits-args gate → valid programs
-  panic (`eval.mdk:758-762`; gate at `lib/eval.ml:869-873`). CONFIRMED.
+- **S1** — ✅ **CLOSED (`69b3400`).** `EMethodAt` applied dicts without the
+  awaits-args gate → valid programs panicked. Ported the gate into `eval.mdk`
+  (758-771, reuses `awaitsArgs`); repro yields `[]` == oracle; all gates green.
 - **S2** — method-level dict params dropped from explicit impl clauses (k-offset;
   `typecheck.mdk:2595-2614`; mirror `dict_pass.ml:103`). CONFIRMED; subsumes D6.
 - **T1** — value restriction entirely missing → polymorphic mutable refs typecheck
