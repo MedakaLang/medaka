@@ -2035,6 +2035,43 @@ funDefs [] = []
 funDefs ((DFunDef _ n pats body) :: rest) = (n, (pats, body)) :: funDefs rest
 funDefs (_ :: rest) = funDefs rest
 
+-- D2 fix: mirrors oracle is_syntactic_lambda (lib/typecheck.ml:2518-2521).
+-- True iff the expression is an explicit lambda at the top level.
+isSyntacticLambda : Expr -> Bool
+isSyntacticLambda (ELam _ _) = True
+isSyntacticLambda _ = False
+
+-- D2 fix: check all top-level DLetGroup declarations for non-function recursive
+-- bindings, mirroring the oracle's LetRecNonFunction guard
+-- (lib/typecheck.ml:2596-2602, process_letrec_group).  A binding is illegal
+-- when ALL its clauses have zero params AND none is a syntactic lambda.
+-- Pushes the error into typeErrors for each violating member.
+checkLetRecDecls : List Decl -> <Mut> Unit
+checkLetRecDecls [] = ()
+checkLetRecDecls ((DLetGroup _ binds) :: rest) =
+  let _ = checkLetBinds binds
+  checkLetRecDecls rest
+checkLetRecDecls (_ :: rest) = checkLetRecDecls rest
+
+checkLetBinds : List LetBind -> <Mut> Unit
+checkLetBinds [] = ()
+checkLetBinds ((LetBind name clauses) :: rest) =
+  let _ = checkLetBind name clauses
+  checkLetBinds rest
+
+checkLetBind : String -> List FunClause -> <Mut> Unit
+checkLetBind name clauses
+  | allList clauseIsNonFunction clauses = set_ref typeErrors (letRecNonFunctionMsg name :: typeErrors.value)
+  | otherwise = ()
+
+clauseIsNonFunction : FunClause -> Bool
+clauseIsNonFunction (FunClause [] rhs) = not (isSyntacticLambda rhs)
+clauseIsNonFunction (FunClause _ _) = False
+
+letRecNonFunctionMsg : String -> String
+letRecNonFunctionMsg name =
+  "'" ++ name ++ "' is bound by 'let rec' but its right-hand side is not a function. Recursive value bindings must have a lambda right-hand side; cyclic data structures are not supported."
+
 groupNames : List (String, (List Pat, Expr)) -> List String -> List String
 groupNames [] _ = []
 groupNames ((n, _) :: rest) seen
@@ -3379,6 +3416,11 @@ checkProgram prog =
 checkProgramSeeded : List (String, Scheme) -> List Decl -> <Mut> List (String, Scheme)
 checkProgramSeeded seed prog =
   let _ = resetState ()
+  -- D2: check top-level `let rec` bindings for non-function members before
+  -- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
+  -- lib/typecheck.ml:2596-2602, which fires in process_letrec_group for
+  -- is_letrec=true groups — i.e. those coming from DLetGroup).
+  let _ = checkLetRecDecls prog
   let dataEnv = registerAllData initialEnv prog
   let globalS = ifaceMethodSchemes prog ++ externSchemes prog
   let env1 = extendVars (extendVars dataEnv seed) globalS

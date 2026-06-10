@@ -523,7 +523,10 @@ default container, the other annotated container fails) — out of C9 scope.
   **Fix:** convert the record/field/ctor panics into `typeErrors` entries.
 - **D2. `LetRecNonFunction` guard absent** from `processSCC` (`typecheck.mdk:3161-3315`
   vs oracle `typecheck.ml:2591-2597`) — recursive value bindings infer or loop instead
-  of the dedicated error. [NEW]
+  of the dedicated error. [NEW] ✅ CLOSED (2026-06-10): added `checkLetRecDecls` +
+  `checkLetBind` in `typecheck.mdk`; called from `checkProgramSeeded` before body
+  inference. Guard fires on `DLetGroup` members whose all clauses have zero params and
+  non-lambda RHS. Fixture: `test/typecheck_error_fixtures/letrec_non_function.mdk`.
 - **D3. No operator/interface obligations** — `"a" - "b"` typechecks (`arithOp` merely
   unifies operand types; no Num entailment). [KNOWN — header-documented scope cut.]
   Listed because it changes the accepted set; long-term port obligation recording.
