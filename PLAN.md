@@ -537,6 +537,47 @@ backend** are the product horizon (see the Workstreams table).
 Each item is independently shippable; pick one per session. Grouped by area, not
 strict priority.
 
+### Stage 4 — full tooling port → native `medaka`, retire OCaml (decided 2026-06-10)
+
+The compiler pipeline self-hosts (`selfhost/`); the native backend compiles it. What
+remains in OCaml (`lib/`+`bin/`) is the **tooling around** the pipeline. **Decision
+(2026-06-10): port ALL of it to Medaka, targeting a natively-compiled `medaka` binary
+(LSP + REPL in scope) — the full-purity retirement endpoint.** Each tool is
+differential-tested against its OCaml twin (same oracle pattern as the pipeline).
+
+Host capabilities already present (`stdlib/runtime.mdk`): stdin (`readLine`/`readLineOpt`/
+`readAll`), file IO (`readFile`/`writeFile`/`appendFile`/`fileExists`), `args`, `getEnv`,
+`exit`, `json.mdk`. **Missing:** a subprocess/`exec` extern (for `medaka build`→`clang`),
+and a TOML reader (for `medaka.toml`).
+
+**Phase A — prerequisites (parallelizable; independent of the emitter-gap work):**
+1. **`printer.mdk`** (AST→source, mirror `lib/printer.ml` 1082 LOC) — foundation under
+   fmt/repl/new/LSP. Differential-test via AST round-trip.
+2. **Subprocess extern** (`add-primitive`: `runtime.mdk` decl + `eval.ml` + `medaka_rt.c`
+   + the `llvm_emit.mdk` extern-table entry — the last part serialized after any in-flight
+   emitter work). Gates the `build` driver.
+3. **TOML reader** (pure-Medaka stdlib or thin extern) — gates `project_config`.
+4. **Diagnostics surfacing layer** (mirror `lib/diagnostics.ml` 479) — structured errors
+   the CLI + LSP consume.
+
+**Phase B — tools (each differential-tested vs OCaml):**
+5. Formatter `medaka fmt` (`fmt.ml`+`doc.ml`, 198+221) — after printer.
+6. `medaka test` (`test_cmd.ml`+`doctest.ml`+`prop_runner.ml`, 61+494+266).
+7. `medaka new` (`new_cmd.ml`, 57).
+8. REPL (`repl.ml`, 487) — after printer.
+9. LSP (`lsp_server.ml`+`lsp_log.ml`, 912+83) — after printer+diagnostics+config+json. Largest.
+10. `build` driver (`build_cmd.ml`, 254) — after subprocess extern.
+
+**Phase C — capstone:**
+11. CLI dispatcher (replaces `bin/main.ml`, 1076), then **native-compile the whole `medaka`
+    from `.mdk` sources** — the retirement. Converges with bar-item-5 (self-bootstrapping build).
+
+**Implied sub-tracks:**
+- **Stdlib emittability sweep** — native-compiling these tools needs the FULL stdlib
+  emittable (`json`/`map`/`string`/`io`/…), not just `core.mdk`. Each big tool will hit
+  native construct gaps → a forcing function feeding the GAP-2/tuple/emitter work.
+- Coverage (`coverage.ml`, 148) + bench (`bench_runner.ml`, 44) — auxiliary, port last.
+
 ### Capability-effects wedge — near-term sequence
 
 **Owning roadmap:** [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §9 (language
