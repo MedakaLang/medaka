@@ -444,12 +444,22 @@ defaults. Closing the residual would need (i) extending `inferDefaultBodies` to 
 defaults and (ii) ungating it on the check path — both out of C8's "export-list + hook"
 scope; file as a follow-up if oracle-parity on default-body diagnostics is wanted.
 
-### C9. `inferIndex` is List-only; container default diverges
-`typecheck.mdk:1240-1248` unifies every `xs.[i]` receiver with `List elem`; oracle
+### C9. `inferIndex` is List-only; container default diverges — ✅ CLOSED (2026-06-09)
+`typecheck.mdk` `inferIndex` unified every `xs.[i]` receiver with `List elem`; oracle
 branches String→Char / Array / List and defaults *Array* for undetermined receivers
-(`typecheck.ml:2193-2205`). [KNOWN-partial — the comment admits the cut; the
-default-container divergence (List vs Array → different inferred schemes) is the
-unnoted, sharper half.] **Fix:** mirror normalize-and-branch incl. the Array default.
+(`typecheck.ml:2198-2210`). **Done:** ported the oracle's normalize-and-branch into
+`inferIndex` + helpers `inferIndexElem`/`indexElemAs` (`typecheck.mdk`): `normalize`
+the receiver, then `String → Char`, `List a → a`, everything else (Array, undetermined
+`TVar`, clean mismatch) → `Array a -> a`. Verified each branch == oracle via
+`dev/tc_probe.exe`: undetermined `f xs = xs.[0]` now `Array a -> a` (was `List a -> a`);
+`"…".[i] : Char`; `[…].[i]` / cons-forced `List` index → element. Fixture
+`test/typecheck_fixtures/index_default.mdk`. No goldens shifted (corpus had no
+undetermined-receiver index site). **Residual (NOT C9, pre-existing):** with an
+annotated param (`g : String -> Char; g s = s.[0]`) the selfhost checks the body with
+`s` still a fresh `TVar` → Array default → conflicts with the annotation; the oracle
+binds the annotated param type *before* body inference and accepts. That is the Phase 73
+signature-driven-param-typing gap (upstream of `inferIndex`), symmetric (whatever the
+default container, the other annotated container fails) — out of C9 scope.
 
 ---
 

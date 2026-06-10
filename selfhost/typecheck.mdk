@@ -1316,12 +1316,27 @@ inferIntRange env lo hi container =
 
 -- a.[i] : element of a List container (the only indexed container in the stdlib
 -- type-checked here; Array/String indexing would extend this)
+-- a.[i] : index preserves container element type, mirroring the oracle
+-- (typecheck.ml:2198-2210): String -> Char (codepoint), Array a -> a, List a -> a,
+-- and an UNDETERMINED receiver (or a clean mismatch) defaults to Array, NOT List.
 inferIndex : TcEnv -> Expr -> Expr -> <Mut> Mono
 inferIndex env arr idx =
   let _ = unify (infer env idx) (TCon "Int")
   let at = infer env arr
+  inferIndexElem at (normalize at)
+
+-- normalize-and-branch on the receiver head; `at` is the raw receiver mono, `nat`
+-- its normalized form. String -> Char; List -> element; everything else (Array,
+-- undetermined TVar, clean mismatch) defaults to Array a -> a.
+inferIndexElem : Mono -> Mono -> <Mut> Mono
+inferIndexElem at (TCon "String") = TCon "Char"
+inferIndexElem at (TApp (TCon "List") _) = indexElemAs at (TCon "List")
+inferIndexElem at _ = indexElemAs at (TCon "Array")
+
+indexElemAs : Mono -> Mono -> <Mut> Mono
+indexElemAs at con =
   let elem = freshVar ()
-  let _ = unify at (TApp (TCon "List") elem)
+  let _ = unify at (TApp con elem)
   elem
 
 -- a.[lo..hi] : same container type as a
