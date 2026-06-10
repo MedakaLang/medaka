@@ -147,40 +147,49 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
    `unbound variable` hard-error at that boundary). This makes #2 the gating
    unblocker, not just a completeness chore. Deferred: Core-IR artifact cache
    (cache-key + on-disk layout), install-prefix asset packaging.
-2. **Prelude-emittability + completeness — DCE ✅ + unit-head gap → flip + emitter-gap sweep.**
+2. **Prelude-emittability + completeness — DCE ✅ + unit-head ✅ + flip ✅ → emitter-gap sweep.**
    *Sharpened by the #1 finding:* this is the **unblocker that makes `medaka build`
    useful for real programs** (anything using `println`/typeclasses), not tail-end
-   polish. Sub-goal **(a) make the real `stdlib/core.mdk` prelude emittable:**
-   - ✅ **DCE done (2026-06-09, `08be86a`).** `selfhost/dce.mdk` (`dceFilter`)
-     filters `allDecls` in `llvm_emit_modules_main.mdk`'s `runEmit` before lowering:
-     drops plain (`DFunDef`) bindings unreachable from `main` + emitting-decl roots;
-     **retains ALL impls/interfaces whole** (sound — impls are dynamic-dispatch
-     targets, off the static call graph). Order-preserving → IR byte-stable (C3
-     fixpoint intact); always-on, all gates green. This cleared TWO of the three
-     prelude blockers (`max`/`min` in `maximum`/`minimum`, unit-head in
-     `arbitraryString` — both plain fns, now dropped).
-   - 🔜 **NEXT — close the unit-head emitter gap (blocks the prelude flip).** The
-     third blocker survives DCE because it's in *impls* (`impl arbitrary@Int/@Bool/
-     @Float/@Char/@String`, each `arbitrary () = …`), which DCE soundly retains.
-     Gap: `llvm_emit.mdk:3528 "unsupported switch head (slice 5b): …no unit heads"`.
-     `canonPat (PLit LUnit)` → `HUnit`, which `conHeadInfo`/`emitSwitch` reject. A
-     `()` pattern is irrefutable → principled fix is **emit-only**: treat `HUnit` as
-     a no-test irrefutable head in `llvm_emit.mdk`'s switch lowering (emit the single
-     branch, no discriminant). Do NOT touch `canonPat` (shared with eval + golden
-     dumps → Core-IR/oracle change). Pre-existing + orthogonal (a bare `f () = 42`
-     gaps identically). Update `selfhost/EMITTER-GAPS.md`.
-   - 🔜 **Then flip + re-census.** Once unit-head emits, flip `lib/build_cmd.ml`
-     from the empty prelude to the real `stdlib/core.mdk` (~one line) and add
-     real-prelude cases to `test/build_cmd.sh`. The DCE census was for `println
-     "hello"` specifically — re-census for the richer acceptance set (`show`/`Eq`/
-     `Ord`/`Foldable`/`deriving`); more gaps may surface.
+   polish. Sub-goal **(a) make the real `stdlib/core.mdk` prelude emittable — DONE
+   (2026-06-09):**
+   - ✅ **DCE (`08be86a`).** `selfhost/dce.mdk` (`dceFilter`) filters `allDecls` in
+     `llvm_emit_modules_main.mdk`'s `runEmit` before lowering: drops plain
+     (`DFunDef`) bindings unreachable from `main` + emitting-decl roots; **retains
+     ALL impls/interfaces whole** (sound — impls are dynamic-dispatch targets, off
+     the static call graph). Order-preserving → IR byte-stable (C3 fixpoint intact).
+     Cleared the `max`/`min`-in-`maximum`/`minimum` + `arbitraryString` blockers.
+     (Consequence: `max`/`min` over primitive `Ord` is no longer a *build* blocker —
+     DCE drops the dead default methods; it's a latent emitter gap only if a user
+     program actually *calls* `max`/`min`. The 2 residual census events in
+     `EMITTER-GAPS.md` are that latent case.)
+   - ✅ **Unit-head emitter gap (E20, `42487b3`).** `emitSwitch` now treats
+     `CTBranch HUnit` as an irrefutable no-test head (emit the branch, no
+     discriminant) — emit-only, `canonPat`/Core-IR untouched. Closes the last
+     census-A gap; `Arbitrary` impls (`arbitrary () = …`) emit. Fixture
+     `test/llvm_fixtures/unit_head.mdk`; 170/170 `diff_selfhost_llvm` byte-identical.
+   - ✅ **Prelude flip (`1bde51a`).** `lib/build_cmd.ml` now passes the real
+     `stdlib/core.mdk`. Verified native==interpreter for `debug`/`Debug`, `==`/`Eq`,
+     `compare`/`Ord`, `map`/`Foldable`, `data … deriving (Eq, Debug)`. `test/build_cmd.sh`
+     11/11 green. **(Build main's `_build` after a `.mdk`-touching merge before running
+     this gate — a stale embed shows spurious `unbound variable: debug`.)**
+   - ⚠️ **Residual gap → top of the (b) sweep: `Unit`-return auto-print.** A
+     `main : <IO> Unit` program (the most common shape) compiles + runs but appends a
+     spurious trailing `0`: native `println "hello"` → `hello\n0\n`, interpreter →
+     `hello\n`. `println`'s side effect is correct; the bug is the **auto-print of a
+     Unit-typed `main` result rendering `0` via `mdk_print_int` instead of `()`/nothing**.
+     Root: the emitter's `fnRetTy` return-type inference defaults unknown prelude-fn
+     return types to `LTInt`, so a Unit-returning call reaches `emitPrint` as `LTInt`.
+     Broad (affects ~every IO program's final line) + well-scoped (emitter/runtime
+     return-type inference, `fnRetTy`/`emitPrint` in `llvm_emit.mdk`). `println`
+     currently SKIPPED in `test/build_cmd.sh` with a comment. **Highest-value next
+     emitter fix.**
 
    Sub-goal **(b)** AUDIT `emitTree`/`emitExpr`/`emitApp` for every reachable
-   `gapU`/`gapE`, and build a **language-construct coverage matrix**: the bootstrap
-   only exercised what the compiler's own source uses — user programs use more (list
-   comprehensions, all operator sections, inclusive ranges, string interpolation,
-   every `do`/guard form, record/variant update, etc.). One native==interpreter
-   fixture per construct in `SYNTAX.md`.
+   `gapU`/`gapE`, and build a **language-construct coverage matrix** (start with the
+   Unit-return fix above): the bootstrap only exercised what the compiler's own
+   source uses — user programs use more (list comprehensions, all operator sections,
+   inclusive ranges, string interpolation, every `do`/guard form, record/variant
+   update, etc.). One native==interpreter fixture per construct in `SYNTAX.md`.
 3. **Port OCaml test suites to native Medaka.** Re-express `test/*.ml` (the
    alcotest suites — parser/typecheck/eval/resolve/exhaust/…) as Medaka tests
    (`medaka test`) so the suite stops depending on `lib/`. This is the bulk of
