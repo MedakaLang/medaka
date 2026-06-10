@@ -205,6 +205,12 @@ effectLeakMsg : List String -> List String -> String
 effectLeakMsg bound extras =
   "Effectful value used where <" ++ joinWith ", " bound ++ "> is allowed, but it performs <" ++ joinWith ", " extras ++ ">"
 
+-- T2: oracle `MutLetRequiresBlock` message (lib/typecheck.ml:788-789) — must be
+-- byte-identical so the typecheck-error gate matches.
+mutLetRequiresBlockMsg : String -> String
+mutLetRequiresBlockMsg x =
+  "'let mut " ++ x ++ "' must be inside an indented block; reassignment is only possible in sequential blocks, not inline `let ... in ...` expressions"
+
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
 -- call site of a polymorphic HOF gets its own effect variable
 substRow : List (Int, Ref Effvar) -> EffRow -> EffRow
@@ -1262,7 +1268,7 @@ infer env (EApp f x) =
   let _ = if argMeasureEnabled.value then noteApplied f else ()
   inferApp (infer env f) (infer env x)
 infer env (ELam pats body) = inferLam env pats body
-infer env (ELet _ _ pat e1 e2) = inferLet env pat e1 e2
+infer env (ELet isMut isFun pat e1 e2) = inferLet env isMut isFun pat e1 e2
 infer env (ELetGroup binds body) = inferLetGroup env binds body
 infer env (EIf c t e) = inferIf env c t e
 infer env (EMatch scrut arms) = inferMatch env (infer env scrut) arms
@@ -1660,8 +1666,40 @@ inferLam env pats body =
   let _ = set_ref curEffect saved
   arrowsWithLastEffect (fst pr) bodyEff bodyTy
 
-inferLet : TcEnv -> Pat -> Expr -> Expr -> <Mut> Mono
-inferLet env pat e1 e2 =
+inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> <Mut> Mono
+inferLet env isMut isFun pat e1 e2
+  -- T2: inline `let mut … in …` is rejected — reassignment needs a block
+  -- (oracle `lib/typecheck.ml:1664-1667`, `MutLetRequiresBlock`).
+  | isMut =
+    let nm = match pat
+      PVar x => x
+      _ => "_"
+    let _ = set_ref typeErrors (mutLetRequiresBlockMsg nm :: typeErrors.value)
+    -- record the error but still bind the pattern + type the body, so
+    -- accumulation continues without a spurious unbound-variable panic
+    inferLetSimple env pat e1 e2
+  -- T2: a recursive inline function binding (`let go n = … in …`) must
+  -- pre-bind `go` with a monomorphic placeholder so the RHS can reference
+  -- itself, then generalize (a function is a value — oracle `:1668-1681`).
+  | isFun = match pat
+    PVar x => inferRecLet env x e1 e2
+    _ => inferLetSimple env pat e1 e2
+  | otherwise = inferLetSimple env pat e1 e2
+
+-- Self-recursive inline `let` binding (mirrors blockRecLet + the oracle is_fun
+-- arm): placeholder pre-bind, infer body, unify, generalize through the body.
+inferRecLet : TcEnv -> String -> Expr -> Expr -> <Mut> Mono
+inferRecLet env x e1 e2 =
+  let _ = enterLevel ()
+  let placeholder = freshVar ()
+  let envSelf = extendVar env x (monoScheme placeholder)
+  let t1 = infer envSelf e1
+  let _ = unify placeholder t1
+  let _ = exitLevel ()
+  infer (extendVar env x (generalize t1)) e2
+
+inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> <Mut> Mono
+inferLetSimple env pat e1 e2 =
   let _ = enterLevel ()
   let t1 = infer env e1
   let _ = exitLevel ()

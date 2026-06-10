@@ -184,7 +184,7 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   `test/typecheck_error_fixtures/value_restriction.mdk` (passes both drivers of
   `diff_selfhost_typecheck_errors.sh`).  All selfhost/bootstrap/native/fixpoint
   gates green.
-### T2. Inline `let … in` drops `mut`/`is_fun` flags — recursive inline let panics — [NEW] CONFIRMED
+### T2. Inline `let … in` drops `mut`/`is_fun` flags — recursive inline let panics — [NEW] ✅ CLOSED (2026-06-09)
 
 - **Where:** `selfhost/typecheck.mdk:1204` (`infer env (ELet _ _ pat e1 e2)` — both
   flags wildcarded); oracle `lib/typecheck.ml:1664-1696` (is_fun → placeholder
@@ -198,6 +198,15 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   arm is reachable from ordinary surface code.
 - **Fix:** split the arm like the oracle: `(is_fun, PVar x)` → placeholder + unify +
   generalize; `mut` → error (or record mut-vars once T1 lands — the two interact).
+- **Done (2026-06-09):** split `inferLet` into three arms (`selfhost/typecheck.mdk`):
+  `isMut` → record `mutLetRequiresBlockMsg` (byte-identical to the oracle's
+  `MutLetRequiresBlock` message) then type the binding (accumulating path, no
+  spurious unbound-var panic); `(isFun, PVar x)` → `inferRecLet` (placeholder
+  pre-bind + unify + `generalize` — a function is a value, generalizes through the
+  T1 value restriction); else → `inferLetSimple` (the prior behaviour, routing
+  `PVar` through `genRestricted (isNonexpansive e1)`). Fixtures:
+  `test/diff_fixtures/let_in_rec.{mdk,golden}` (accept) and
+  `test/typecheck_error_fixtures/mut_let_inline.mdk` (mut-reject).
 
 ---
 
