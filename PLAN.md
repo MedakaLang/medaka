@@ -112,20 +112,28 @@ CANONICAL compiler** — the one users invoke and the one that builds the compil
 and retires the OCaml reference (`lib/*.ml`) on a **gated** schedule (no fixed
 date; deletion is unlocked only when the bar below is met).
 
-**The "native is canonical" bar (gates `lib/` retirement):**
-1. `medaka build` compiles + runs arbitrary USER programs natively (not just the
-   compiler's own stages).
-2. The ported test suite passes on the native compiler (the OCaml `test/*.ml`
-   suites re-expressed as Medaka tests).
-3. A differential fuzzer runs clean (random valid programs: native == oracle).
-4. Performance is acceptable (self-compile time + emitted-code speed within an
-   agreed factor of the OCaml compiler).
-5. The build self-bootstraps without the OCaml interpreter (a seed path that
-   produces the native compiler from the `.mdk` sources).
-6. **The selfhost typechecker is sound + coherent** — the
-   [TYPECHECK-AUDIT](./selfhost/TYPECHECK-AUDIT.md) soundness findings are closed
-   (value restriction, dict-application gate, method-dict offset, coherence
-   checking), so nothing downstream depends on a guarantee only `lib/` enforces.
+**The "native is canonical" bar (gates `lib/` retirement) — status as of 2026-06-10:**
+1. 🟡 **~90%.** `medaka build` compiles + runs arbitrary USER programs natively. Gap G / Cause A /
+   GAP 1 (nested dicts) / GAP 2 (max/min) all ✅. Remaining: **tuple-as-receiver** (add-language-feature
+   class), **2-level multi-module route flattening (#21)**, **C5 standalone-vs-method** (building, #39),
+   and a **stdlib-emittability sweep** (the tooling uses the full stdlib natively).
+2. ✅ **Effectively done.** Behavior suites ported to `medaka test` (`test_run`/`test_eval`/`test_loader`);
+   the rest is internal OCaml API, intrinsically non-portable.
+3. ✅ **Done.** Differential fuzzer (MVP + native Tier-C, 1080 native programs clean, found+fixed
+   named-field deriving).
+4. ⏳ **NOT STARTED.** Performance — emitted IR is `-O0`; nobody's turned on `-O2` or benchmarked
+   native-compiler-vs-OCaml. (Worth a scoping pass.)
+5. ⏳ **NOT STARTED.** Self-bootstrapping build (native compiler from `.mdk` without the OCaml
+   interpreter) — converges with the Phase-C CLI capstone.
+6. 🟢 **Soundness + correctness CLOSED.** TYPECHECK-AUDIT: all confirmed soundness/correctness/
+   diagnostic findings closed (S1-S3, T1/T1b/T2, C1-C9, D1/D2, OBS3/OBS4); **C4 resolved by decision**
+   (lazy nullary canonical). Tail in motion: **C5** (building #39), **C8b** (in flight), **C7-native**,
+   **L1** (latent, fires at E4), **OBS1**; **D3** = scope cut shared with the oracle. Plus the
+   "de-risk identity-keying fragilities" condition (C5 + L1).
+
+**Also gating retirement, beyond the 6-item bar:** the **Stage-4 tooling port** (lib/+bin/ host the
+tooling) — fmt/test/new/REPL/build ✅ (5/6), LSP scoped (#36, prereqs #37/#38), then the Phase-C CLI
+capstone. **Deferred (user, not near/mid-term):** GC, cross-platform (arm64-first accepted).
 
 **🔝 TOP PRIORITY (set 2026-06-09): close the TYPECHECK-AUDIT findings.** The
 2026-06-09 audit ([`selfhost/TYPECHECK-AUDIT.md`](./selfhost/TYPECHECK-AUDIT.md)) —
@@ -600,12 +608,20 @@ and a TOML reader (for `medaka.toml`).
      expression (slice 1)`; `array.mdk` needs `arrayCopy`; `hash_map`/`hash_set` need `hashInt`;
      `core.mdk` char doctest hits `charCode: not a Char`. **Most actionable cluster** — closing it widens
      doctest coverage to the full stdlib.
-8. `medaka new` (`new_cmd.ml`, 57) — IN PROGRESS.
-9. REPL (`repl.ml`, 487) — after printer.
-10. LSP (`lsp_server.ml`+`lsp_log.ml`, 912+83) — after printer+diagnostics+config+json. Largest.
-    Prereqs (task #24): diagnostic loc (needs A.5b ✅), parse-error-as-Result (parser panics today),
-    `analyze_project` multi-module bucketing.
-11. `build` driver (`build_cmd.ml`, 254) — after the runCommand native-emit follow-up (task #18).
+8. ✅ `medaka new` — DONE 2026-06-10 (`88c3b55`). `selfhost/new_cmd.mdk` + `new_main.mdk`; 4
+   scaffolded files byte-identical; added `makeDir` extern. Gate `diff_selfhost_new.sh`.
+9. ✅ REPL — DONE 2026-06-10 (`a300f73c` merge). `selfhost/repl.mdk` + `repl_main.mdk`; banner/
+   prompt/`:type`/`:browse`/`:reset`/`:quit` + error recovery; gate `diff_selfhost_repl.sh`.
+   (`:load`/`:reload` deferred → process isolation, per [[no-catchable-panics-isolation]].)
+10. LSP (`lsp_server.ml`+`lsp_log.ml`, 912+83) — **SCOPED 2026-06-10 (7-slice plan, task #36).**
+    Expr-level locations are CHEAP (transparent `ELoc` wrapper, fixpoint-safe via sexp+core_ir
+    strips). 2 hard prereqs: **#37 `readExactly` stdin extern** (JSON-RPC body) + **#38 typecheck
+    env/`ppScheme` exposure** (hover/completion/inlay). parse-error-as-Result ✅ (`1fa79c0`),
+    diagnostic-loc via `ELoc` (B.10.2). Slices: JSON-RPC skeleton → diagnostics → ELoc → located
+    diags → fmt/symbols/def/highlight → hover/completion/inlay → analyze_project.
+11. ✅ `build` driver — DONE 2026-06-10 (`1bc6005`). `selfhost/build_cmd.mdk` + `build_main.mdk`;
+    shell-out emit (Ref isolation) + `runCommand`→clang; 9/9 differential builds == OCaml `medaka
+    build`. (`runCommand`/`makeDir` native-emit done, #18 `a0c7b111`.)
 
 **Phase C — capstone:**
 12. CLI dispatcher (replaces `bin/main.ml`, 1076), then **native-compile the whole `medaka`
