@@ -579,13 +579,31 @@ and a TOML reader (for `medaka.toml`).
    surfaces line/col/text; **8/8 byte-identical** to `lib/`'s channel. Unblocks the fmt port.
 
 **Phase B — tools (each differential-tested vs OCaml):**
-6. Formatter `medaka fmt` (`fmt.ml`+`doc.ml`, 198+221) — **UNBLOCKED** (printer + comment
-   channel both done); port `format_program` (comment interleaving) over the new channel.
-7. `medaka test` (`test_cmd.ml`+`doctest.ml`+`prop_runner.ml`, 61+494+266).
-8. `medaka new` (`new_cmd.ml`, 57).
+6. ✅ Formatter `medaka fmt` — DONE 2026-06-10 (`a933af9`). `selfhost/{fmt,printer}.mdk` +
+   `fmt_main.mdk`; comment interleaving over the position+comment channels; **37/37 byte-identical**
+   to `medaka fmt` (11 comment-heavy + 26 comment-free). Gate `test/diff_selfhost_fmt.sh`.
+7. ✅ `medaka test` — DONE 2026-06-10 (`c6a4fd0`). `selfhost/{doctest,prop_runner,test_main}.mdk`;
+   **6/6 byte-identical** (both doctest paths + passing props + FAIL path); `eval.mdk` gained an RNG +
+   `evalModulesRootEnv` + eval-entry exports. Gate `test/diff_selfhost_test.sh`.
+   **Completeness follow-ups (B.7, not blocking — task #28):**
+   - **(a) Error-path doctests not mirrorable** — OCaml `eval_suppressed` traps a per-example runtime
+     panic → one `ERROR …` line; the selfhost eval oracle has NO per-binding exception recovery (a
+     panic aborts the whole run). Needs per-binding panic trapping in selfhost eval.
+   - **(b) Prop RNG parity (failing props only)** — 3 RNGs in play (reference SplitMix64 externs, OCaml
+     `Random` in `prop_runner.ml`, selfhost's new LCG); passing props are RNG-independent (match), but a
+     FAILING prop's shrunk counterexample diverges. Reference uses OCaml `Random`, NOT the SplitMix64
+     externs (see [[project_rng_splitmix64]]).
+   - **(c) Selfhost eval-oracle extern/typecheck gaps block doctests on some stdlib files** (pre-existing,
+     not doctest bugs): `map.mdk`/`set.mdk` map/set literal sugar in synth bindings → `unsupported
+     expression (slice 1)`; `array.mdk` needs `arrayCopy`; `hash_map`/`hash_set` need `hashInt`;
+     `core.mdk` char doctest hits `charCode: not a Char`. **Most actionable cluster** — closing it widens
+     doctest coverage to the full stdlib.
+8. `medaka new` (`new_cmd.ml`, 57) — IN PROGRESS.
 9. REPL (`repl.ml`, 487) — after printer.
 10. LSP (`lsp_server.ml`+`lsp_log.ml`, 912+83) — after printer+diagnostics+config+json. Largest.
-11. `build` driver (`build_cmd.ml`, 254) — after subprocess extern (incl. its native-emit entry).
+    Prereqs (task #24): diagnostic loc (needs A.5b ✅), parse-error-as-Result (parser panics today),
+    `analyze_project` multi-module bucketing.
+11. `build` driver (`build_cmd.ml`, 254) — after the runCommand native-emit follow-up (task #18).
 
 **Phase C — capstone:**
 12. CLI dispatcher (replaces `bin/main.ml`, 1076), then **native-compile the whole `medaka`
