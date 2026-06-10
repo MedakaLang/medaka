@@ -152,7 +152,16 @@ and expr =
   | ELetGroup     of (ident * (pat list * expr) list) list * expr  (* mutually-recursive where group; each name has >=1 clauses *)
   | EMatch        of expr * (pat * guard_qual list * expr) list  (* match e; pat [if g1, g2, ...] => e *)
   | EIf           of expr * expr * expr
-  | EBinOp        of string * expr * expr
+  | EBinOp        of string * expr * expr * resolved option ref
+                     (* Phase 151 / Gap G: comparison/equality operators
+                        (== != < > <= >=) carry a dispatch ref, filled by
+                        typecheck when the operand type is a *ground non-primitive*
+                        with an Eq/Ord impl.  Dict_pass then rewrites the stamped
+                        node into the corresponding method application
+                        (==→eq, !=→not(eq …), <→lt, …) so every backend dispatches
+                        to the user/derived impl.  Stays None for primitive operands
+                        and arithmetic/other operators → the structural builtin
+                        EBinOp path (unchanged, no recursion). *)
   | EUnOp         of string * expr
   | EFieldAccess  of expr * ident                       (* e.field *)
   | ERecordCreate of ident * (ident * expr) list        (* Person { name = "Alice" } *)
@@ -404,7 +413,7 @@ let rec pp_expr = function
     in
     Printf.sprintf "(match %s %s)" (pp_expr e) (String.concat " | " (List.map pp_arm arms))
   | EIf (c, t, e)       -> Printf.sprintf "(if %s then %s else %s)" (pp_expr c) (pp_expr t) (pp_expr e)
-  | EBinOp (op, l, r)   -> Printf.sprintf "(%s %s %s)" (pp_expr l) op (pp_expr r)
+  | EBinOp (op, l, r, _) -> Printf.sprintf "(%s %s %s)" (pp_expr l) op (pp_expr r)
   | EUnOp (op, e)        -> Printf.sprintf "(%s%s)" op (pp_expr e)
   | EFieldAccess (e, f)  -> Printf.sprintf "%s.%s" (pp_expr e) f
   | ERecordCreate (n, fs) ->
@@ -507,7 +516,7 @@ let rec strip_locs_expr = function
     EMatch (strip_locs_expr e,
             List.map (fun (p, gs, b) -> (p, List.map strip_qual gs, strip_locs_expr b)) arms)
   | EIf (c, t, e)         -> EIf (strip_locs_expr c, strip_locs_expr t, strip_locs_expr e)
-  | EBinOp (op, l, r)     -> EBinOp (op, strip_locs_expr l, strip_locs_expr r)
+  | EBinOp (op, l, r, dr) -> EBinOp (op, strip_locs_expr l, strip_locs_expr r, dr)
   | EUnOp (op, e)         -> EUnOp (op, strip_locs_expr e)
   | EFieldAccess (e, f)   -> EFieldAccess (strip_locs_expr e, f)
   | ERecordCreate (n, fs) -> ERecordCreate (n, List.map (fun (k, v) -> (k, strip_locs_expr v)) fs)

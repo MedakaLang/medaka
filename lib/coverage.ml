@@ -38,7 +38,9 @@ let rec collect_expr acc = function
       collect_expr a' body
     ) acc' arms
   | Ast.EIf (c, t, e) -> collect_expr (collect_expr (collect_expr acc c) t) e
-  | Ast.EBinOp (_, l, r) | Ast.EInfix (_, l, r) ->
+  | Ast.EBinOp (_, l, r, _) ->
+    collect_expr (collect_expr acc l) r
+  | Ast.EInfix (_, l, r) ->
     collect_expr (collect_expr acc l) r
   | Ast.EUnOp (_, e) | Ast.EFieldAccess (e, _) | Ast.EAnnot (e, _)
   | Ast.EHeadAnnot (e, _)

@@ -109,7 +109,14 @@ public export data Expr
   | ELet Bool Bool Pat Expr Expr
   | EMatch Expr (List Arm)
   | EIf Expr Expr Expr
-  | EBinOp String Expr Expr
+  -- Phase 151 / Gap G: the trailing route ref is filled by the typed pipeline
+  -- (resolveBinopSites) for comparison/equality operators (== != < > <= >=) whose
+  -- operand grounds to a NON-primitive Eq/Ord type; dictPass then rewrites such a
+  -- stamped node into the method application (==→eq, !=→not(eq …), <→lt, …) so eval
+  -- dispatches to the user/derived impl.  RNone for primitives / arithmetic / other
+  -- operators → the structural-builtin EBinOp eval path (unchanged, no recursion).
+  -- The parser always builds a fresh `Ref RNone`; sexp/astdump ignore the ref.
+  | EBinOp String Expr Expr (Ref Route)
   | EUnOp String Expr
   | EInfix String Expr Expr
   | EFieldAccess Expr String

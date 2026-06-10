@@ -1,5 +1,8 @@
 open Ast
 
+(* Phase 151 / Gap G: EBinOp carries a dispatch ref (None until typecheck). *)
+let mkbin op l r = EBinOp (op, l, r, ref None)
+
 let con_arity v = match v.con_payload with
   | ConPos tys   -> List.length tys
   | ConNamed fls -> List.length fls
@@ -10,13 +13,13 @@ let concat_strings parts =
   | [] -> ELit (LString "")
   | [x] -> x
   | first :: rest ->
-    List.fold_left (fun acc e -> EBinOp ("++", acc, e)) first rest
+    List.fold_left (fun acc e -> mkbin "++" acc e) first rest
 
 (* Left-fold &&: e0 && e1 && ... *)
 let and_all = function
   | [] -> EVar "True"
   | first :: rest ->
-    List.fold_left (fun acc e -> EBinOp ("&&", acc, e)) first rest
+    List.fold_left (fun acc e -> mkbin "&&" acc e) first rest
 
 (* Type applied to its params: Box a => TyApp (TyCon "Box", TyVar "a");
    Pair a b => TyApp (TyApp (TyCon "Pair", TyVar "a"), TyVar "b").
@@ -303,13 +306,13 @@ let derive_num_newtype type_name con_name =
   let bin op name =
     (name,
      [PCon (con_name, [PVar "__a"]); PCon (con_name, [PVar "__b"])],
-     wrap (EBinOp (op, EVar "__a", EVar "__b")))
+     wrap (mkbin op (EVar "__a") (EVar "__b")))
   in
   let abs_method =
     ("abs",
      [PCon (con_name, [PVar "__a"])],
      wrap (EIf (
-       EBinOp ("<", EVar "__a", ELit (LInt 0)),
+       mkbin "<" (EVar "__a") (ELit (LInt 0)),
        EUnOp ("-", EVar "__a"),
        EVar "__a")))
   in
@@ -317,10 +320,10 @@ let derive_num_newtype type_name con_name =
     ("signum",
      [PCon (con_name, [PVar "__a"])],
      wrap (EIf (
-       EBinOp ("<", EVar "__a", ELit (LInt 0)),
+       mkbin "<" (EVar "__a") (ELit (LInt 0)),
        ELit (LInt (-1)),
        EIf (
-         EBinOp (">", EVar "__a", ELit (LInt 0)),
+         mkbin ">" (EVar "__a") (ELit (LInt 0)),
          ELit (LInt 1),
          ELit (LInt 0)))))
   in
@@ -422,9 +425,9 @@ let derive_hashable_data type_name variants =
       if nfields = 0 then ELit (LInt ordinal)
       else
         List.fold_left (fun acc var ->
-          EBinOp ("+",
-            EBinOp ("*", acc, ELit (LInt 33)),
-            EApp (EVar "hash", EVar var))
+          mkbin "+"
+            (mkbin "*" acc (ELit (LInt 33)))
+            (EApp (EVar "hash", EVar var))
         ) (ELit (LInt ordinal)) vars
     in
     (pat, [], body)
@@ -446,9 +449,9 @@ let derive_hashable_record type_name fields =
     if fields = [] then ELit (LInt 0)
     else
       List.fold_left (fun acc f ->
-        EBinOp ("+",
-          EBinOp ("*", acc, ELit (LInt 33)),
-          EApp (EVar "hash", EFieldAccess (EVar "__r", f.field_name)))
+        mkbin "+"
+          (mkbin "*" acc (ELit (LInt 33)))
+          (EApp (EVar "hash", EFieldAccess (EVar "__r", f.field_name)))
       ) (ELit (LInt 0)) fields
   in
   DImpl {
@@ -633,7 +636,7 @@ let rec map_expr f e =
         EMatch (map_expr f e0,
           List.map (fun (p, gs, b) -> (p, List.map map_qual gs, map_expr f b)) arms)
     | EIf (c, t, el)          -> EIf (map_expr f c, map_expr f t, map_expr f el)
-    | EBinOp (op, e1, e2)    -> EBinOp (op, map_expr f e1, map_expr f e2)
+    | EBinOp (op, e1, e2, dr) -> EBinOp (op, map_expr f e1, map_expr f e2, dr)
     | EUnOp (op, e0)          -> EUnOp (op, map_expr f e0)
     | EFieldAccess (e0, n)    -> EFieldAccess (map_expr f e0, n)
     | ERecordCreate (n, flds) -> ERecordCreate (n, List.map (fun (k,v) -> (k, map_expr f v)) flds)
@@ -987,9 +990,9 @@ let guards_to_core arms =
     (EApp (EVar "__fallthrough__", ELit LUnit))
 
 let section_to_core = function
-  | SecBare op       -> ELam ([PVar "_a"; PVar "_b"], EBinOp (op, EVar "_a", EVar "_b"))
-  | SecRight (op, e) -> ELam ([PVar "_s"], EBinOp (op, EVar "_s", e))
-  | SecLeft (e, op)  -> ELam ([PVar "_s"], EBinOp (op, e, EVar "_s"))
+  | SecBare op       -> ELam ([PVar "_a"; PVar "_b"], mkbin op (EVar "_a") (EVar "_b"))
+  | SecRight (op, e) -> ELam ([PVar "_s"], mkbin op (EVar "_s") e)
+  | SecLeft (e, op)  -> ELam ([PVar "_s"], mkbin op e (EVar "_s"))
 
 (* `"a\{e}b"` → `"a" ++ display e ++ "b"`.  The `display` calls flow through
    the marker (→ EMethodRef) and dict-passing like any other interface-method

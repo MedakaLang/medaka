@@ -984,6 +984,59 @@ main = println (length xs)
 |}
   "0\n"
 
+(* ── Phase 151 / Gap G: comparison/equality OPERATORS dispatch to user Eq/Ord ── *)
+(* `<`/`==`/`!=` on a user ADT must route to the user impl, not the structural
+   builtin.  Operator result must equal the explicit method form AND honour the
+   user `rank` order (NOT constructor name/decl order). *)
+let t_operator_dispatch_user_impl = assert_output_typed
+  {|data Level = Apple | Zebra
+
+rank : Level -> Int
+rank Apple = 100
+rank Zebra = 1
+
+impl Eq Level where
+  eq a b = rank a == rank b
+
+impl Ord Level where
+  compare a b = compare (rank a) (rank b)
+
+main : <IO> Unit
+main =
+  println (debug (Apple < Zebra))
+  println (debug (lt Apple Zebra))
+  println (debug (Apple == Zebra))
+  println (debug (eq Apple Zebra))
+  println (debug (Apple != Zebra))
+|}
+  "False\nFalse\nFalse\nFalse\nTrue\n"
+
+(* Derived (Eq, Ord): operator == method == derived order (Red < Green < Blue). *)
+let t_operator_dispatch_derived = assert_output_typed
+  {|data Color = Red | Green | Blue deriving (Eq, Ord, Debug)
+
+main : <IO> Unit
+main =
+  println (debug (Red < Blue))
+  println (debug (lt Red Blue))
+  println (debug (Blue < Red))
+  println (debug (Green == Green))
+  println (debug (eq Green Green))
+  println (debug (Red != Blue))
+|}
+  "True\nTrue\nFalse\nTrue\nTrue\nTrue\n"
+
+(* Primitive comparisons are UNCHANGED — must not infinite-loop or misdispatch. *)
+let t_operator_primitive_unchanged = assert_output_typed
+  {|main : <IO> Unit
+main =
+  println (debug (1 < 2))
+  println (debug (3 == 3))
+  println (debug ("a" == "b"))
+  println (debug ('a' < 'b'))
+|}
+  "True\nTrue\nFalse\nTrue\n"
+
 let () = Alcotest.run "Run"
   [("run", [
     "point-free prelude toList (Phase 121)", `Quick, t_pointfree_prelude_tolist;
@@ -999,6 +1052,9 @@ let () = Alcotest.run "Run"
     "recursive poly-monad (Phase 115 #2)",          `Quick, t_poly_monad_recursive;
     "return-position dispatch", `Quick, t_return_position_dispatch;
     "multi-param dispatch",     `Quick, t_multiparam_dispatch;
+    "operator dispatch to user Eq/Ord (Phase 151)", `Quick, t_operator_dispatch_user_impl;
+    "operator dispatch to derived Eq/Ord (Phase 151)", `Quick, t_operator_dispatch_derived;
+    "primitive operators unchanged (Phase 151)", `Quick, t_operator_primitive_unchanged;
     "head-key dispatch",        `Quick, t_head_key_dispatch;
     "super dict dispatch",      `Quick, t_super_dict_dispatch;
     "println Display vs inspect (Phase 111)", `Quick, t_println_display_vs_inspect;

@@ -255,8 +255,8 @@ renameScoped rm bound (EApp f x) =
   EApp (renameScoped rm bound f) (renameScoped rm bound x)
 renameScoped rm bound (EIf c t e) =
   EIf (renameScoped rm bound c) (renameScoped rm bound t) (renameScoped rm bound e)
-renameScoped rm bound (EBinOp op l r) =
-  EBinOp op (renameScoped rm bound l) (renameScoped rm bound r)
+renameScoped rm bound (EBinOp op l r dr) =
+  EBinOp op (renameScoped rm bound l) (renameScoped rm bound r) dr
 renameScoped rm bound (EUnOp op x) = EUnOp op (renameScoped rm bound x)
 renameScoped rm bound (EInfix op l r) =
   EInfix op (renameScoped rm bound l) (renameScoped rm bound r)

@@ -390,7 +390,7 @@ collectLetBinds (EMatch e0 arms) = collectLetBinds e0
 collectLetBinds (EIf c t el) = collectLetBinds c
   ++ collectLetBinds t
   ++ collectLetBinds el
-collectLetBinds (EBinOp _ a b) = collectLetBinds a ++ collectLetBinds b
+collectLetBinds (EBinOp _ a b _) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EUnOp _ a) = collectLetBinds a
 collectLetBinds (EInfix _ a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EFieldAccess e0 _) = collectLetBinds e0

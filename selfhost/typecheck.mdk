@@ -283,6 +283,16 @@ recordsRef = Ref []
 pendingSites : Ref (List (String, Ref Route, Ref (List Route), Mono))
 pendingSites = Ref []
 
+-- Phase 151 / Gap G: comparison/equality OPERATOR sites discovered during
+-- inference: (method name, the EBinOp route ref to fill, the operand mono).
+-- After inference resolveBinopSites stamps each ref with the resolved Eq/Ord impl
+-- route (RKey) — but ONLY when the operand grounds to a NON-primitive type; the
+-- structural-builtin EBinOp eval path handles primitive / ungroundable operands
+-- (so `eq a b = a == b` on Int never recurses).  dictPass then rewrites the
+-- stamped node into the method application.
+pendingBinopSites : Ref (List (String, Ref Route, Mono))
+pendingBinopSites = Ref []
+
 -- dict-passing state (the typed pipeline's `=>`-constraint layer):
 --   activeDictVars   : constraint tyvar id → the dict parameter name a method
 --                      occurrence at that variable's type reads (RDict).
@@ -627,6 +637,7 @@ resetState _ =
   let _ = set_ref curEffect (EffRow [] None)
   let _ = set_ref recordsRef []
   let _ = set_ref pendingSites []
+  let _ = set_ref pendingBinopSites []
   let _ = set_ref pendingArgSites []
   let _ = set_ref pendingArgStamps []
   let _ = set_ref activeDictVars []
@@ -1317,7 +1328,7 @@ infer env (EMatch scrut arms) = inferMatch env (infer env scrut) arms
 infer env (ETuple es) = TTuple (inferEach env es)
 infer env (EListLit es) = inferListLit env es
 infer env (EAnnot e ty) = inferAnnot env e ty
-infer env (EBinOp op l r) = inferBinopE env op l r
+infer env (EBinOp op l r dref) = inferBinopE env op l r dref
 infer env (EUnOp op e) = inferUnop op (infer env e)
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
@@ -1756,11 +1767,31 @@ inferRecordUpdateWith env rname base fields ri =
 -- operators infer by SHAPE (the typeclass constraint they carry — Num/Eq/… — is
 -- tracked at the value level but never rendered in a scheme, so it's irrelevant
 -- to the === TYPES === output; numeric literals are Int, not polymorphic)
-inferBinopE : TcEnv -> String -> Expr -> Expr -> <Mut> Mono
-inferBinopE env op l r =
+inferBinopE : TcEnv -> String -> Expr -> Expr -> Ref Route -> <Mut> Mono
+inferBinopE env op l r dref =
   let lt = infer env l
   let rt = infer env r
+  -- Phase 151 / Gap G: record a binop site for the comparison/equality operators
+  -- so resolveBinopSites can stamp [dref] once the operand type grounds.  The
+  -- operand mono is [lt] (unified with [rt] by compareOp below).
+  let _ = recordBinopSite op dref lt
   inferBinop op lt rt
+
+-- Map a comparison/equality operator to its Eq/Ord method and stash a pending
+-- binop site; non-comparison operators record nothing.
+recordBinopSite : String -> Ref Route -> Mono -> <Mut> Unit
+recordBinopSite op dref m = match binopMethod op
+  Some method => set_ref pendingBinopSites ((method, dref, m) :: pendingBinopSites.value)
+  None => ()
+
+binopMethod : String -> Option String
+binopMethod "==" = Some "eq"
+binopMethod "!=" = Some "eq"
+binopMethod "<" = Some "lt"
+binopMethod ">" = Some "gt"
+binopMethod "<=" = Some "lte"
+binopMethod ">=" = Some "gte"
+binopMethod _ = None
 
 inferBinop : String -> Mono -> Mono -> <Mut> Mono
 inferBinop "+" lt rt = arithOp lt rt
@@ -2253,6 +2284,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let implTable = buildImplTable prog2
   let keyTable = buildKeyTable prog2
   let _ = resolveSites implTable keyTable (returnPosMethodNames prog2) pendingSites.value
+  let _ = resolveBinopSites keyTable pendingBinopSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
   let _ = resolveDictApps implTable pendingDictApps.value
   let _ = resolveMethodDicts implTable pendingMethodDicts.value
@@ -2497,8 +2529,8 @@ rewriteArgScoped rw bound (EApp f x) =
   EApp (rewriteArgScoped rw bound f) (rewriteArgScoped rw bound x)
 rewriteArgScoped rw bound (EIf c t e) =
   EIf (rewriteArgScoped rw bound c) (rewriteArgScoped rw bound t) (rewriteArgScoped rw bound e)
-rewriteArgScoped rw bound (EBinOp op l r) =
-  EBinOp op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
+rewriteArgScoped rw bound (EBinOp op l r dr) =
+  EBinOp op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r) dr
 rewriteArgScoped rw bound (EUnOp op x) = EUnOp op (rewriteArgScoped rw bound x)
 rewriteArgScoped rw bound (EInfix op l r) =
   EInfix op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
@@ -2720,6 +2752,32 @@ activeDictVarOf m = match normalize m
   TVar cell => lookupAssocI (tyvarId cell) activeDictVars.value
   TApp a _ => activeDictVarOf a
   _ => None
+
+-- Phase 151 / Gap G: stamp each comparison/equality OPERATOR site's EBinOp route
+-- ref with the resolved Eq/Ord impl key (RKey) — but ONLY when the operand type
+-- grounds to a NON-primitive head tycon.  Primitive (Int/Float/String/Bool/Char)
+-- and ungroundable operands stay RNone → the structural-builtin EBinOp eval path
+-- (so `eq a b = a == b` on Int never recurses).  Mirrors resolveSite's concrete
+-- branch (head tycon → canonical key) minus the impl-dicts: the rewritten `eq`/`lt`
+-- is arg-position, so it narrows by arg tag and needs no forwarded element dict.
+binopPrimitiveHead : String -> Bool
+binopPrimitiveHead h = containsName h ["Int", "Float", "String", "Bool", "Char"]
+
+resolveBinopSites : List KeyEntry -> List (String, Ref Route, Mono) -> <Mut> Unit
+resolveBinopSites _ [] = ()
+resolveBinopSites keyTable ((method, tagRef, operandMono) :: rest) =
+  let _ = resolveBinopSite keyTable method tagRef operandMono
+  resolveBinopSites keyTable rest
+
+resolveBinopSite : List KeyEntry -> String -> Ref Route -> Mono -> <Mut> Unit
+resolveBinopSite keyTable method tagRef operandMono = match headTyconMono operandMono
+  Some tag => stampBinopRoute keyTable method tagRef operandMono tag
+  None => ()
+
+stampBinopRoute : List KeyEntry -> String -> Ref Route -> Mono -> String -> <Mut> Unit
+stampBinopRoute keyTable method tagRef operandMono tag
+  | binopPrimitiveHead tag = ()
+  | otherwise = set_ref tagRef (RKey (fromOption tag (keyForSite keyTable method operandMono)) [])
 
 -- ── coherence check (TYPECHECK-AUDIT S3) ───────────────────────────────────
 -- Mirror lib/typecheck.ml's check_coherence (Phase 68): reject incoherent USER
@@ -3239,7 +3297,28 @@ findTvarList (t :: rest) id = match findTvarInMono t id
 -- inference), matching the dicts EDictAt applies at call sites.  Multi-clause
 -- functions are several DFunDef decls; each clause gets the same leading params.
 dictPass : List String -> List Decl -> List Decl
-dictPass names prog = map (dictPassDecl names (returnPosMethodNames prog)) prog
+dictPass names prog =
+  map (dictPassDecl names (returnPosMethodNames prog)) (mapProg rewriteBinopExpr prog)
+
+-- Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into its
+-- Eq/Ord method application via EMethodAt (the same dispatch node `eq`/`lt` calls
+-- become), so eval routes to the user/derived impl.  Only nodes resolveBinopSites
+-- stamped (ground non-primitive operand) carry a non-RNone route; primitives /
+-- arithmetic stay the literal EBinOp the eval builtin handles (no recursion).  The
+-- stamped route ref is reused as the EMethodAt route; impl-/method-dict refs are
+-- empty (eq/lt are arg-position — they narrow by arg tag, no forwarded element dict).
+--   <→lt  >→gt  <=→lte  >=→gte  ==→eq  !=→not (eq a b)
+rewriteBinopExpr : Expr -> Expr
+rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
+  RNone => EBinOp op l r routeRef
+  _ => binopMethodApp op l r routeRef
+rewriteBinopExpr e = e
+
+binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
+binopMethodApp op l r routeRef =
+  let method = fromOption "eq" (binopMethod op)
+  let call = EApp (EApp (EMethodAt method routeRef (Ref []) (Ref [])) l) r
+  if op == "!=" then EApp (EVar "not") call else call
 
 dictPassDecl : List String -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)
@@ -3360,7 +3439,7 @@ collectMethodSites (ELet _ _ _ e1 e2) = collectMethodSites e1 ++ collectMethodSi
 collectMethodSites (ELetGroup binds body) = concatMapL letBindSites binds ++ collectMethodSites body
 collectMethodSites (EMatch e arms) = collectMethodSites e ++ concatMapL armSites arms
 collectMethodSites (EIf c t e) = collectMethodSites c ++ collectMethodSites t ++ collectMethodSites e
-collectMethodSites (EBinOp _ l r) = collectMethodSites l ++ collectMethodSites r
+collectMethodSites (EBinOp _ l r _) = collectMethodSites l ++ collectMethodSites r
 collectMethodSites (EUnOp _ e) = collectMethodSites e
 collectMethodSites (EInfix _ l r) = collectMethodSites l ++ collectMethodSites r
 collectMethodSites (EFieldAccess e _) = collectMethodSites e
@@ -3418,7 +3497,7 @@ collectDictSites (ELet _ _ _ e1 e2) = collectDictSites e1 ++ collectDictSites e2
 collectDictSites (ELetGroup binds body) = concatMapL letBindDictSites binds ++ collectDictSites body
 collectDictSites (EMatch e arms) = collectDictSites e ++ concatMapL armDictSites arms
 collectDictSites (EIf c t e) = collectDictSites c ++ collectDictSites t ++ collectDictSites e
-collectDictSites (EBinOp _ l r) = collectDictSites l ++ collectDictSites r
+collectDictSites (EBinOp _ l r _) = collectDictSites l ++ collectDictSites r
 collectDictSites (EUnOp _ e) = collectDictSites e
 collectDictSites (EInfix _ l r) = collectDictSites l ++ collectDictSites r
 collectDictSites (EFieldAccess e _) = collectDictSites e
@@ -3792,7 +3871,7 @@ allEVars (ELet _ _ _ e1 e2) = allEVars e1 ++ allEVars e2
 allEVars (ELetGroup binds body) = concatMapL letBindEVars binds ++ allEVars body
 allEVars (EMatch e arms) = allEVars e ++ concatMapL armEVars arms
 allEVars (EIf c t e) = allEVars c ++ allEVars t ++ allEVars e
-allEVars (EBinOp _ l r) = allEVars l ++ allEVars r
+allEVars (EBinOp _ l r _) = allEVars l ++ allEVars r
 allEVars (EUnOp _ e) = allEVars e
 allEVars (EInfix op l r) = op :: allEVars l ++ allEVars r
 allEVars (EFieldAccess e _) = allEVars e
@@ -4713,6 +4792,10 @@ elabModuleStamp seedVars accData implDecls prog =
   let schemes = checkModuleFullImpl seedVars accData implDecls prog
   let stampImplTable = buildImplTable implDecls
   let _ = resolveSites stampImplTable (buildKeyTable implDecls) [] pendingSites.value
+  -- Phase 151 / Gap G: stamp this module's comparison-operator binop sites (emit
+  -- path only, mirroring resolveArgStamps — golden type-only path leaves them RNone
+  -- → dictPass-skipped → byte-identical).
+  let _ = if argStampEnabled.value then resolveBinopSites (buildKeyTable implDecls) pendingBinopSites.value else ()
   let _ = if argStampEnabled.value then resolveArgStamps stampImplTable pendingArgStamps.value else ()
   -- E6: fill THIS module's `=>`-constrained-fn EDictAt routes (the call sites
   -- prePassDictArg marked) so the emitter supplies the matching dict ARGUMENT —

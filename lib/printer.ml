@@ -314,7 +314,7 @@ let rec expr_prec = function
   | EUnOp _                            -> prec_unary
   | EApp _                             -> prec_app
   | EInfix _                           -> prec_infix
-  | EBinOp (op, _, _)                  -> binop_prec op
+  | EBinOp (op, _, _, _)               -> binop_prec op
   | ESection _                         -> prec_atom
   | EAsPat _                           -> prec_app
   | ELam _ | ELet _ | ELetGroup _ | EIf _
@@ -405,7 +405,7 @@ and print_expr_raw = function
       text "if " ^^ print_expr prec_top c
       ^^ text " then " ^^ print_expr prec_top t
       ^^ text " else " ^^ print_expr prec_top e
-  | EBinOp (op, l, r) ->
+  | EBinOp (op, l, r, _) ->
     let prec = binop_prec op in
     let ra = is_right_assoc op in
     print_expr (if ra then prec + 1 else prec) l
@@ -514,7 +514,7 @@ and print_expr_raw = function
 and print_expr_body ?(wrap_app = true) e = match e with
   | EMatch _ | EBlock _ | EDo _ -> print_expr_raw e
   | ELoc (_, e')     -> print_expr_body ~wrap_app e'
-  | EBinOp (op, _, _) when is_continuation_op op -> print_chain op e
+  | EBinOp (op, _, _, _) when is_continuation_op op -> print_chain op e
   (* Phase 137: a too-wide application breaks its argument spine onto
      continuation lines (`f\n  a\n  b`), which the lexer's open-application
      continuation rescues.  Only in tail position, mirroring `print_chain`: an
@@ -573,7 +573,7 @@ and print_chain op e =
   let prec = binop_prec op in
   (* peel the left-associative spine: ((a op b) op c) → head a, rights [b; c] *)
   let rec collect acc e = match strip_loc e with
-    | EBinOp (op', l, r) when op' = op -> collect ((op', r) :: acc) l
+    | EBinOp (op', l, r, _) when op' = op -> collect ((op', r) :: acc) l
     | head -> (head, acc)
   in
   let (head, rights) = collect [] e in

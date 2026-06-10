@@ -991,7 +991,7 @@ and eval env expr =
      | VBool false | VCon ("False", []) -> eval env els
      | _ -> raise (Eval_error ("if condition is not a Bool", !current_loc)))
 
-  | EBinOp (op, l, r) -> eval_binop env op l r
+  | EBinOp (op, l, r, _) -> eval_binop env op l r
 
   | EUnOp ("-", e) ->
     (match eval env e with
@@ -2119,7 +2119,11 @@ let eval_modules_ex (modules : (string * string * Ast.program) list)
      own-decls part; a public one referenced only by importers (like a `mk : Tag a
      => …`) is covered by the importer part.  The prelude is imported by every
      module, so it keeps the full joint scope. *)
-  let prelude = Method_marker.marked_prelude in
+  (* Phase 151 / Gap G: rewrite stamped comparison EBinOps into method apps on
+     every typechecked tree before dict-param insertion, mirroring Dict_pass.run
+     (the single-file path).  Primitive / unstamped operands stay literal EBinOp. *)
+  let prelude = Dict_pass.rewrite_binops Method_marker.marked_prelude in
+  let modules = List.map (fun (mid, fp, p) -> (mid, fp, Dict_pass.rewrite_binops p)) modules in
   let all_module_decls = List.concat_map (fun (_, _, p) -> p) modules in
 
   (* Module id → the module ids it imports directly (mirrors build_imports'

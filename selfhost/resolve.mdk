@@ -164,7 +164,7 @@ checkExpr env scope (EMatch e0 arms) = checkExpr env scope e0
 checkExpr env scope (EIf c t el) = checkExpr env scope c
   ++ checkExpr env scope t
   ++ checkExpr env scope el
-checkExpr env scope (EBinOp _ a b) = checkExpr env scope a
+checkExpr env scope (EBinOp _ a b _) = checkExpr env scope a
   ++ checkExpr env scope b
 checkExpr env scope (EUnOp _ a) = checkExpr env scope a
 checkExpr env scope (EInfix op a b) = checkVar env scope op

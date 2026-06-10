@@ -1018,6 +1018,75 @@ let test_eval_standalone_vs_method () =
         "Expected standalone+method coexistence output, got %S" out)
   )
 
+(* Phase 151 / Gap G: comparison/equality OPERATORS dispatch to the user Eq/Ord
+   impl, across a module boundary.  Module `level` defines a `Level` ADT whose
+   `Ord`/`Eq` order by a `rank` (NOT by constructor name), and `main` compares two
+   Levels with the OPERATORS `<` / `==` / `!=`.  Before A2 the operators routed to
+   the structural builtin (constructor-name order → `Apple < Zebra` = True);
+   typecheck now stamps each comparison EBinOp with the resolved impl and the
+   binop-rewrite (run in eval_modules, mirroring Dict_pass.run) turns it into the
+   method app, so the operator agrees with `lt`/`eq` and the user `rank` order:
+   `Apple < Zebra` = False (100 < 1), `==` = False, `!=` = True.  MUST go through
+   `Eval.eval_modules` — the cross-module case drives the loader path that the
+   single-file rewrite never touches. *)
+let test_eval_operator_dispatch_cross_module () =
+  with_tmp_dir (fun dir ->
+    let _ = write_file dir "level.mdk"
+      "public export data Level = Apple | Zebra\n\n\
+       export rank : Level -> Int\n\
+       rank Apple = 100\n\
+       rank Zebra = 1\n\n\
+       export impl Eq Level where\n\
+      \  eq a b = rank a == rank b\n\n\
+       export impl Ord Level where\n\
+      \  compare a b = compare (rank a) (rank b)\n" in
+    let main_path = write_file dir "main.mdk"
+      "import level.{Level, Apple, Zebra}\n\n\
+       main : <IO> Unit\n\
+       main =\n\
+      \  println (debug (Apple < Zebra))\n\
+      \  println (debug (Apple == Zebra))\n\
+      \  println (debug (Apple != Zebra))\n" in
+    let modules = Loader.load_program main_path [dir] in
+    let modules = List.map (fun (mid, fp, prog) ->
+      (mid, fp, Desugar.desugar_program prog)) modules in
+    let method_names = Method_marker.interface_method_names
+      (Prelude.program :: List.map (fun (_, _, p) -> p) modules) in
+    let constrained = Method_marker.constrained_fn_names
+      (Prelude.program :: List.map (fun (_, _, p) -> p) modules) in
+    (* Two-pass elaboration, mirroring bin/main.ml's multi-module run path
+       (~promoted_out so a promotable wrapper is discovered, not applied inline). *)
+    let typecheck_all ~constrained ?promoted () =
+      let marked = List.map (fun (mid, fp, prog) ->
+        (mid, fp, Method_marker.mark_program method_names constrained prog)) modules in
+      let te_acc = ref [] in
+      let promoted_out = Hashtbl.create 8 in
+      List.iter (fun (mid, _, prog) ->
+        let (te, _, _) =
+          Typecheck.typecheck_module ?promoted ~promoted_out !te_acc mid prog in
+        te_acc := te :: !te_acc) marked;
+      (marked, promoted_out)
+    in
+    let (m1, promoted) = typecheck_all ~constrained () in
+    let marked_modules =
+      if Hashtbl.length promoted = 0 then m1
+      else begin
+        let c2 = Hashtbl.copy constrained in
+        Hashtbl.iter (fun k () -> Hashtbl.replace c2 k ()) promoted;
+        fst (typecheck_all ~constrained:c2 ~promoted ())
+      end in
+    let buf = Buffer.create 32 in
+    let saved = !Eval.output_hook in
+    Eval.output_hook := Buffer.add_string buf;
+    Fun.protect ~finally:(fun () -> Eval.output_hook := saved) (fun () ->
+      ignore (Eval.eval_modules marked_modules));
+    let out = Buffer.contents buf in
+    if out <> "False\nFalse\nTrue\n" then
+      failwith (Printf.sprintf
+        "Expected operators to dispatch to the user Ord/Eq (rank order), got %S \
+         (\"True\\n...\" ⇒ Gap G regressed: operator routed to the structural builtin)" out)
+  )
+
 (* Phase 88: two-pass elaboration across modules.  A polymorphic-monad do-block
    wrapper (`h m = do { x <- m; pure x }`) defined in the main module of a
    multi-module program must dispatch its return-position `pure` by the caller's
@@ -1376,6 +1445,9 @@ let () =
     ];
     "standalone vs no-impl method (Phase 112)", [
       test_case "imported toList/isEmpty shadow Foldable per receiver" `Quick test_eval_standalone_vs_method;
+    ];
+    "operator dispatch to user Eq/Ord (Phase 151 / Gap G)", [
+      test_case "cross-module < == != route to user impl" `Quick test_eval_operator_dispatch_cross_module;
     ];
     "two-pass elaboration (Phase 88)", [
       test_case "cross-module poly-monad pure dispatch" `Quick test_eval_poly_monad_cross_module;

@@ -103,8 +103,8 @@ annotateExpr fr (EMatch e0 arms) =
   EMatch (annotateExpr fr e0) (map (annotateArm fr) arms)
 annotateExpr fr (EIf c t el) =
   EIf (annotateExpr fr c) (annotateExpr fr t) (annotateExpr fr el)
-annotateExpr fr (EBinOp op a b) =
-  EBinOp op (annotateExpr fr a) (annotateExpr fr b)
+annotateExpr fr (EBinOp op a b r) =
+  EBinOp op (annotateExpr fr a) (annotateExpr fr b) r
 annotateExpr fr (EUnOp op a) = EUnOp op (annotateExpr fr a)
 annotateExpr fr (EInfix op a b) =
   EInfix op (annotateExpr fr a) (annotateExpr fr b)

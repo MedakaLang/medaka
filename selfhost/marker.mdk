@@ -203,7 +203,7 @@ collectVars (ELet _ _ _ e1 e2) = collectVars e1 ++ collectVars e2
 collectVars (ELetGroup bs e2) = concatMapList letBindVars bs ++ collectVars e2
 collectVars (EMatch e0 arms) = collectVars e0 ++ concatMapList armVars arms
 collectVars (EIf c t el) = collectVars c ++ collectVars t ++ collectVars el
-collectVars (EBinOp _ a b) = collectVars a ++ collectVars b
+collectVars (EBinOp _ a b _) = collectVars a ++ collectVars b
 collectVars (EUnOp _ a) = collectVars a
 -- The operator name IS a reference: a backtick infix `a `divide` b` names the
 -- plain top-level function `divide` (marker leaves it EInfix when `divide` is

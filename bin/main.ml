@@ -488,7 +488,7 @@ let () =
         ) (collect_evars e) arms
       | EIf (c, t, f)              ->
         SS.union (collect_evars c) (SS.union (collect_evars t) (collect_evars f))
-      | EBinOp (_, a, b)           -> SS.union (collect_evars a) (collect_evars b)
+      | EBinOp (_, a, b, _)        -> SS.union (collect_evars a) (collect_evars b)
       | EUnOp (_, e)               -> collect_evars e
       | EAnnot (e, _)
       | EHeadAnnot (e, _)

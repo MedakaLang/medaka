@@ -582,7 +582,56 @@ route the constrained call through `RDictFwd` (not `RNone`).
 
 ---
 
-### Gap G: comparison/equality OPERATORS never dispatch to user `Eq`/`Ord` impls — ALL THREE backends wrong — RE-DIAGNOSED 2026-06-10
+### Gap G: comparison/equality OPERATORS never dispatch to user `Eq`/`Ord` impls — CLOSED (Phase 151, 2026-06-10, A2 type-directed rewrite)
+
+**STATUS: CLOSED for interpreter + selfhost eval + native `==`.** Native `<`/`lt` on a
+user ADT is deferred behind the pre-existing slice-7 arg-tag-on-primitive emitter gap
+(below). The original diagnosis (kept below) was correct about the root cause; the fix
+took the **A2** route (type-directed post-typecheck rewrite) rather than the desugar-time
+plan, because the primitive-vs-ADT gate can only be decided *after* inference grounds the
+operand type.
+
+**The fix (A2):**
+1. **AST ref.** `EBinOp` carries a dispatch ref — `lib/ast.ml:155` (`resolved option ref`)
+   and `selfhost/ast.mdk:118` (`Ref Route`). `None`/`RNone` for primitives, arithmetic, and
+   other operators; sexp/astdump ignore it (byte-identical dumps).
+2. **Typecheck stamp (the recursion-avoidance gate).** At a comparison `EBinOp`, once the
+   operand type is **ground**, if its head is a **non-primitive** (NOT
+   Int/Float/Char/String/Bool) with an Eq/Ord impl, stamp the impl key (RKey):
+   `lib/typecheck.ml` `binop_usages` + `check_binop_usages`; `selfhost/typecheck.mdk`
+   `pendingBinopSites` + `resolveBinopSites`. Primitive/ungroundable operands stay
+   `None`/`RNone` → the structural-builtin `EBinOp` path (so `impl Eq Int.eq a b = a == b`
+   never recurses).
+3. **Rewrite pass.** The stamped node becomes a method application via the existing
+   Phase-69 dispatch node: `lib/dict_pass.ml` `rewrite_binops` (wired into `Dict_pass.run`
+   AND `Eval.eval_modules` — the loader path uses `run_decl` directly, not `run`) →
+   `EMethodRef`-based app; `selfhost/typecheck.mdk` `dictPass`→`rewriteBinopExpr` →
+   `EMethodAt`-based app. `<`→`lt a b`, `>`→`gt`, `<=`→`lte`, `>=`→`gte`, `==`→`eq a b`,
+   `!=`→`not (eq a b)`. Backends need NO new comparison logic — the rewritten node is an
+   ordinary method app they already dispatch (arg-tag selects the impl).
+
+**Verified:** the `Apple < Zebra` rank repro now returns `False` (was `True`) on interpreter
++ selfhost; mod-3 `(M 1) == (M 4)` returns `True`; operator == method == oracle on
+user-written impls. Primitive-only program IR **byte-identical** pre/post. Native `==` on a
+user-impl ADT builds + runs == interpreter (`test/construct_fixtures/operator_eq_user_impl.mdk`).
+Tests: `test_run`/`test_eval` operator-dispatch + primitive-unchanged cases; `test_loader`
+cross-module operator dispatch (drives `eval_modules`).
+
+**Native `<` deferral.** `medaka build` of a user-ADT `<` panics
+`llvm_emit.mdk:…: arg-tag dispatch on impl type that owns no constructors (slice 7)` — the
+rewritten `lt` method-app hits the SAME pre-existing slice-7 arg-tag-on-primitive emitter
+gap a direct `lt` call does. This is the Gap-C/D3b class; NOT fixed here (out of scope).
+
+**Out of scope (pre-existing).** A selfhost-vs-oracle divergence on *derived* `Ord`
+`compare`/`lt` (e.g. `compare Red Blue` = `Gt` selfhost vs `Lt` oracle) exists on `main`,
+independent of operators — confirmed by running the *method* form through main's selfhost.
+The A2 rewrite makes the operator agree with the (pre-existingly-divergent) selfhost method
+form, which is the correct Gap-G behavior; the derived-Ord selfhost gap is a separate issue.
+
+---
+
+#### Original diagnosis (kept for record) — RE-DIAGNOSED 2026-06-10
+
 
 **⚠️ Earlier framing here ("Ord default-method dispatch bug; native correct") was
 WRONG.** A deeper read-only investigation overturned it. The real bug is far more

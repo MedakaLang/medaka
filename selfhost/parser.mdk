@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..), Route(..)}
 import lexer.{Token(..), tokenize}
 import util.{reverseL}
 
@@ -230,7 +230,7 @@ exprToPat (EVar x) = ctorOrVar x
 exprToPat (ELit l) = PLit l
 exprToPat (ETuple es) = PTuple (map exprToPat es)
 exprToPat (EListLit es) = PList (map exprToPat es)
-exprToPat (EBinOp "::" a b) = PCons (exprToPat a) (exprToPat b)
+exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
 -- `(x :: _)` in a binding LHS: the `_` was eaten by the left-section rewrite
 -- (parenResult/leftSectionOrExpr); recover it as a cons pattern (mirrors the
 -- reference `expr_to_pat`'s `SecLeft (a, "::")` case).
@@ -275,7 +275,7 @@ isUpperC c = c >= 'A' && c <= 'Z'
 binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
 binOp tk op = do
   expectTok tk
-  pure (l r => EBinOp op l r)
+  pure (l r => EBinOp op l r (Ref RNone))
 
 parseOr : Parser Expr
 parseOr = chainl1 parseAnd (binOp TOr "||")
@@ -308,7 +308,7 @@ consTail : Expr -> Parser Expr
 consTail x = do
   expectTok TCons
   y <- parseCons
-  pure (EBinOp "::" x y)
+  pure (EBinOp "::" x y (Ref RNone))
 
 parseAppend : Parser Expr
 parseAppend = chainl1 parseAdd (binOp TPlusPlus "++")
@@ -722,7 +722,7 @@ parenResult es = ETuple es
 
 -- a single `(e op _)` becomes a left section; otherwise just the inner expr
 leftSectionOrExpr : Expr -> Expr
-leftSectionOrExpr (EBinOp op lhs (EVar "_")) = ESection (SecLeft lhs op)
+leftSectionOrExpr (EBinOp op lhs (EVar "_") _) = ESection (SecLeft lhs op)
 leftSectionOrExpr e = e
 
 -- section_op (no MINUS): tokens that can head an operator section

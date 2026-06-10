@@ -1788,6 +1788,48 @@ let t_cont_logical_eval =
     "f a b c =\n  a\n  && b\n  || c\nresult = f True False True\n"
     "result" (VBool true)
 
+(* ── Phase 151 / Gap G: comparison operators dispatch to user Eq/Ord ── *)
+(* `<` on a user ADT routes to the user `compare` (rank order), not the structural
+   builtin; the operator result equals the explicit `lt` method form. *)
+let t_operator_lt_user_impl =
+  assert_val_typed
+    "data Level = Apple | Zebra\n\
+     rank Apple = 100\n\
+     rank Zebra = 1\n\
+     impl Eq Level where\n\
+    \  eq a b = rank a == rank b\n\
+     impl Ord Level where\n\
+    \  compare a b = compare (rank a) (rank b)\n\
+     result = Apple < Zebra\n"
+    "result" (VBool false)
+
+let t_operator_eq_user_impl =
+  assert_val_typed
+    "data M = M Int\n\
+     impl Eq M where\n\
+    \  eq (M a) (M b) = (a % 3) == (b % 3)\n\
+     result = (M 1) == (M 4)\n"
+    "result" (VBool true)
+
+let t_operator_neq_user_impl =
+  assert_val_typed
+    "data M = M Int\n\
+     impl Eq M where\n\
+    \  eq (M a) (M b) = (a % 3) == (b % 3)\n\
+     result = (M 1) != (M 4)\n"
+    "result" (VBool false)
+
+(* Derived (Eq, Ord): operator agrees with derived constructor order. *)
+let t_operator_derived =
+  assert_val_typed
+    "data Color = Red | Green | Blue deriving (Eq, Ord)\n\
+     result = Red < Blue\n"
+    "result" (VBool true)
+
+(* Primitive operands stay on the structural builtin — no recursion. *)
+let t_operator_primitive =
+  assert_val_typed "result = (1 < 2)\n" "result" (VBool true)
+
 (* ── Test registration ──────────────────────────────────────────────────── *)
 
 let () =
@@ -2139,5 +2181,12 @@ let () =
       test_case "zero-param before impl"       `Quick t_order_zero_param_before_impl;
       test_case "zero-param chain"             `Quick t_order_zero_param_chain;
       test_case "unbound gives clear error"    `Quick t_order_unbound_is_clear_error;
+    ];
+    "operator dispatch to user Eq/Ord (Phase 151 / Gap G)", [
+      test_case "< routes to user Ord (rank order)" `Quick t_operator_lt_user_impl;
+      test_case "== routes to user Eq (mod 3)"      `Quick t_operator_eq_user_impl;
+      test_case "!= routes to not (user eq)"        `Quick t_operator_neq_user_impl;
+      test_case "< on derived Eq/Ord"               `Quick t_operator_derived;
+      test_case "primitive < unchanged"             `Quick t_operator_primitive;
     ];
   ]

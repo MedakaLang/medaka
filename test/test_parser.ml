@@ -122,7 +122,7 @@ let test_fundef_simple () =
 
 let test_fundef_with_arg () =
   match parse_one "double x = x + x\n" with
-  | DFunDef (false, "double", [PVar "x"], EBinOp ("+", EVar "x", EVar "x")) -> ()
+  | DFunDef (false, "double", [PVar "x"], EBinOp ("+", EVar "x", EVar "x", _)) -> ()
   | _ -> failwith "wrong"
 
 let test_fundef_pattern_lit () =
@@ -149,12 +149,12 @@ let test_fundef_constructor_pattern () =
 
 let test_expr_lambda () =
   match parse_expr "x => x + 1\n" with
-  | ELam ([PVar "x"], EBinOp ("+", EVar "x", ELit (LInt 1))) -> ()
+  | ELam ([PVar "x"], EBinOp ("+", EVar "x", ELit (LInt 1), _)) -> ()
   | _ -> failwith "wrong"
 
 let test_expr_lambda_multi_arg () =
   match parse_expr "(x, y) => x + y\n" with
-  | ELam ([PTuple [PVar "x"; PVar "y"]], EBinOp ("+", EVar "x", EVar "y")) -> ()
+  | ELam ([PTuple [PVar "x"; PVar "y"]], EBinOp ("+", EVar "x", EVar "y", _)) -> ()
   | _ -> failwith "wrong"
 
 (* Constructor-pattern lambda parameter: `(Some x) => x` should parse as
@@ -178,7 +178,7 @@ let test_expr_lambda_ctor_pat_two () =
 (* Multi-param lambda: `x y => x + y` desugars to ELam with two PVar patterns. *)
 let test_expr_lambda_two_params () =
   match parse_expr "x y => x + y\n" with
-  | ELam ([PVar "x"; PVar "y"], EBinOp ("+", EVar "x", EVar "y")) -> ()
+  | ELam ([PVar "x"; PVar "y"], EBinOp ("+", EVar "x", EVar "y", _)) -> ()
   | other ->
     failwith (Printf.sprintf "wrong: got %s" (Ast.pp_expr other))
 
@@ -221,7 +221,7 @@ let test_expr_lambda_nonfirst_wild () =
 
 let test_expr_let () =
   match parse_expr "let x = 5 in x + 1\n" with
-  | ELet (false, false, PVar "x", ELit (LInt 5), EBinOp ("+", EVar "x", ELit (LInt 1))) -> ()
+  | ELet (false, false, PVar "x", ELit (LInt 5), EBinOp ("+", EVar "x", ELit (LInt 1), _)) -> ()
   | _ -> failwith "wrong"
 
 let test_expr_let_mut () =
@@ -233,7 +233,7 @@ let test_expr_let_fn_one_arg () =
   (* let f x = x + 1 in f 5  ⇒  ELet(false, true, PVar "f", ELam..., ...) *)
   match parse_expr "let f x = x + 1 in f 5\n" with
   | ELet (false, true, PVar "f",
-          ELam ([PVar "x"], EBinOp ("+", EVar "x", ELit (LInt 1))),
+          ELam ([PVar "x"], EBinOp ("+", EVar "x", ELit (LInt 1), _)),
           EApp (EVar "f", ELit (LInt 5))) -> ()
   | _ -> failwith "wrong"
 
@@ -242,7 +242,7 @@ let test_expr_let_fn_multi_arg () =
   match parse_expr "let g x y = x + y in g 1 2\n" with
   | ELet (false, true, PVar "g",
           ELam ([PVar "x"],
-                ELam ([PVar "y"], EBinOp ("+", EVar "x", EVar "y"))),
+                ELam ([PVar "y"], EBinOp ("+", EVar "x", EVar "y", _))),
           EApp (EApp (EVar "g", ELit (LInt 1)), ELit (LInt 2))) -> ()
   | _ -> failwith "wrong"
 
@@ -270,7 +270,7 @@ let test_decl_let_rec_top_mutual () =
 
 let test_expr_if () =
   match parse_expr "if x > 0 then x else 0\n" with
-  | EIf (EBinOp (">", EVar "x", ELit (LInt 0)), EVar "x", ELit (LInt 0)) -> ()
+  | EIf (EBinOp (">", EVar "x", ELit (LInt 0), _), EVar "x", ELit (LInt 0)) -> ()
   | _ -> failwith "wrong"
 
 (* Phase 118: inline `then` branch followed by an indented `else` block — the
@@ -278,7 +278,7 @@ let test_expr_if () =
 let test_expr_if_inline_then_block_else () =
   match parse_one "f x =\n  if x > 0 then 1\n  else\n    let b = 2\n    b\n" with
   | DFunDef (false, "f", [PVar "x"],
-      EIf (EBinOp (">", EVar "x", ELit (LInt 0)),
+      EIf (EBinOp (">", EVar "x", ELit (LInt 0), _),
            ELit (LInt 1),
            EBlock [DoLet (false, false, PVar "b", ELit (LInt 2)); DoExpr (EVar "b")]))
     -> ()
@@ -287,14 +287,14 @@ let test_expr_if_inline_then_block_else () =
 (* Phase 122: else-less `if` defaults the missing branch to `()` (ELit LUnit). *)
 let test_expr_if_elseless_inline () =
   match parse_expr "if x > 0 then f x\n" with
-  | EIf (EBinOp (">", EVar "x", ELit (LInt 0)),
+  | EIf (EBinOp (">", EVar "x", ELit (LInt 0), _),
          EApp (EVar "f", EVar "x"), ELit LUnit) -> ()
   | e -> failwith (Printf.sprintf "wrong shape: %s" (Ast.pp_expr e))
 
 let test_expr_if_elseless_block () =
   match parse_one "g x =\n  if x > 0 then\n    a x\n    b x\n" with
   | DFunDef (false, "g", [PVar "x"],
-      EIf (EBinOp (">", EVar "x", ELit (LInt 0)),
+      EIf (EBinOp (">", EVar "x", ELit (LInt 0), _),
            EBlock [DoExpr (EApp (EVar "a", EVar "x"));
                    DoExpr (EApp (EVar "b", EVar "x"))],
            ELit LUnit)) -> ()
@@ -503,7 +503,7 @@ let test_expr_list_arg () =
 
 let test_expr_modulo () =
   match parse_expr "5 % 2\n" with
-  | EBinOp ("%", ELit (LInt 5), ELit (LInt 2)) -> ()
+  | EBinOp ("%", ELit (LInt 5), ELit (LInt 2), _) -> ()
   | _ -> failwith "wrong"
 
 (* ── Collection literal tests ────────────────────────── *)
@@ -673,7 +673,7 @@ let test_interp_two_segments () =
 let test_interp_expression () =
   match parse_expr "\"result: \\{1 + 2}\"\n" with
   | EStringInterp [InterpStr "result: ";
-                   InterpExpr (EBinOp ("+", ELit (LInt 1), ELit (LInt 2)));
+                   InterpExpr (EBinOp ("+", ELit (LInt 1), ELit (LInt 2), _));
                    InterpStr ""] -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (Ast.pp_expr e))
 
@@ -716,8 +716,8 @@ sign x =
   match parse_one src with
   | DFunDef (false, "sign", [PVar "x"],
       EMatch (EVar "x", [
-        (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0)))], ELit (LInt 1));
-        (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0)))], EUnOp ("-", ELit (LInt 1)));
+        (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0), _))], ELit (LInt 1));
+        (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0), _))], EUnOp ("-", ELit (LInt 1)));
         (PWild, [], ELit (LInt 0));
       ])) -> ()
   | _ -> failwith "wrong"
@@ -781,7 +781,7 @@ f x
 |} in
   match parse_one src with
   | DFunDef (false, "f", [PVar "x"],
-      EGuards [ ([GBool (EBinOp (">", EVar "x", ELit (LInt 0)))], ELit (LInt 1))
+      EGuards [ ([GBool (EBinOp (">", EVar "x", ELit (LInt 0), _))], ELit (LInt 1))
               ; ([GBool (EVar "otherwise")], ELit (LInt 0)) ]) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
@@ -794,8 +794,8 @@ classify n
 |} in
   match parse_one src with
   | DFunDef (false, "classify", [PVar "n"],
-      EGuards [ ([GBool (EBinOp ("<", EVar "n", ELit (LInt 0)))], ELit (LString "neg"))
-              ; ([GBool (EBinOp (">", EVar "n", ELit (LInt 0)))], ELit (LString "pos"))
+      EGuards [ ([GBool (EBinOp ("<", EVar "n", ELit (LInt 0), _))], ELit (LString "neg"))
+              ; ([GBool (EBinOp (">", EVar "n", ELit (LInt 0), _))], ELit (LString "pos"))
               ; ([GBool (EVar "otherwise")], ELit (LString "zero")) ]) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
@@ -834,7 +834,7 @@ f o
   match parse_one src with
   | DFunDef (false, "f", [PVar "o"],
       EGuards [ ([ GBind (PCon ("Some", [PVar "y"]), EVar "o")
-                 ; GBool (EBinOp (">", EVar "y", ELit (LInt 0))) ], EVar "y")
+                 ; GBool (EBinOp (">", EVar "y", ELit (LInt 0), _)) ], EVar "y")
               ; ([GBool (EVar "otherwise")], ELit (LInt 0)) ]) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
@@ -851,7 +851,7 @@ describe o =
       EMatch (EVar "o",
         [ (PVar "n",
            [ GBind (PCon ("Some", [PVar "y"]), EVar "n")
-           ; GBool (EBinOp (">", EVar "y", ELit (LInt 0))) ],
+           ; GBool (EBinOp (">", EVar "y", ELit (LInt 0), _)) ],
            ELit (LInt 1))
         ; (PWild, [], ELit (LInt 0)) ])) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
@@ -861,15 +861,15 @@ describe o =
 let test_guard_inline () =
   match parse_one "f n | n <= 0 = []\n" with
   | DFunDef (false, "f", [PVar "n"],
-      EGuards [ ([GBool (EBinOp ("<=", EVar "n", ELit (LInt 0)))], EListLit []) ]) -> ()
+      EGuards [ ([GBool (EBinOp ("<=", EVar "n", ELit (LInt 0), _))], EListLit []) ]) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 (* Inline form with comma-separated qualifiers. *)
 let test_guard_inline_multi_qual () =
   match parse_one "f n | n > 0, n < 10 = n\n" with
   | DFunDef (false, "f", [PVar "n"],
-      EGuards [ ([ GBool (EBinOp (">", EVar "n", ELit (LInt 0)))
-                 ; GBool (EBinOp ("<", EVar "n", ELit (LInt 10))) ], EVar "n") ]) -> ()
+      EGuards [ ([ GBool (EBinOp (">", EVar "n", ELit (LInt 0), _))
+                 ; GBool (EBinOp ("<", EVar "n", ELit (LInt 10), _)) ], EVar "n") ]) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
 
 (* Inline guard inside a where-binding. *)
@@ -882,7 +882,7 @@ f n = g n
   match parse_one src with
   | DFunDef (false, "f", [PVar "n"],
       ELetGroup ([ ("g", [ ([PVar "x"],
-                            EGuards [ ([GBool (EBinOp (">", EVar "x", ELit (LInt 0)))],
+                            EGuards [ ([GBool (EBinOp (">", EVar "x", ELit (LInt 0), _))],
                                        EVar "x") ]) ]) ],
                  EApp (EVar "g", EVar "n"))) -> ()
   | d -> failwith (Printf.sprintf "wrong: %s" (pp_decl d))
@@ -947,7 +947,7 @@ result =
   | DFunDef (false, "result", [], EDo (_, [
       DoBind (PVar "x", EVar "foo");
       DoBind (PVar "y", EApp (EVar "bar", EVar "x"));
-      DoExpr (EApp (EVar "pure", EBinOp ("+", EVar "x", EVar "y")));
+      DoExpr (EApp (EVar "pure", EBinOp ("+", EVar "x", EVar "y", _)));
     ])) -> ()
   | _ -> failwith "wrong"
 
@@ -1014,7 +1014,7 @@ let test_block_body_cons_and_ctor () =
   (* list-led first stmt followed by a ctor-app stmt, in a two-stmt block *)
   match parse_one "j =\n  1 :: [2]\n  Some 3\n" with
   | DFunDef (false, "j", [], EBlock [
-      DoExpr (EBinOp ("::", ELit (LInt 1), EListLit [ELit (LInt 2)]));
+      DoExpr (EBinOp ("::", ELit (LInt 1), EListLit [ELit (LInt 2)], _));
       DoExpr (EApp (EVar "Some", ELit (LInt 3)));
     ]) -> ()
   | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
@@ -1238,34 +1238,34 @@ let test_export_record_abstract () =
 
 let test_pipe () =
   match parse_expr "x |> f" with
-  | EBinOp ("|>", EVar "x", EVar "f") -> ()
+  | EBinOp ("|>", EVar "x", EVar "f", _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 let test_pipe_chain () =
   (* left-associative: x |> f |> g  =  (x |> f) |> g *)
   match parse_expr "x |> f |> g" with
-  | EBinOp ("|>", EBinOp ("|>", EVar "x", EVar "f"), EVar "g") -> ()
+  | EBinOp ("|>", EBinOp ("|>", EVar "x", EVar "f", _), EVar "g", _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 let test_compose_right () =
   match parse_expr "f >> g" with
-  | EBinOp (">>", EVar "f", EVar "g") -> ()
+  | EBinOp (">>", EVar "f", EVar "g", _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 let test_compose_left () =
   match parse_expr "f << g" with
-  | EBinOp ("<<", EVar "f", EVar "g") -> ()
+  | EBinOp ("<<", EVar "f", EVar "g", _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 let test_pipe_lower_than_or () =
   (* x |> f  should not capture the `||` inside f — `||` binds tighter *)
   match parse_expr "a || b |> f" with
-  | EBinOp ("|>", EBinOp ("||", EVar "a", EVar "b"), EVar "f") -> ()
+  | EBinOp ("|>", EBinOp ("||", EVar "a", EVar "b", _), EVar "f", _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 let test_compose_lower_than_or () =
   match parse_expr "f >> a || b" with
-  | EBinOp (">>", EVar "f", EBinOp ("||", EVar "a", EVar "b")) -> ()
+  | EBinOp (">>", EVar "f", EBinOp ("||", EVar "a", EVar "b", _), _) -> ()
   | e -> failwith (Printf.sprintf "wrong: %s" (pp_expr e))
 
 (* ── Leading-operator line continuation ──────────────── *)
@@ -1666,7 +1666,7 @@ let test_iface_default_where () =
      | { method_name = "greet";
          method_default = Some ([PVar "x"],
            ELetGroup (["prefix", [([], ELit (LString "Hello, "))]],
-             EBinOp ("++", EVar "prefix", EVar "x"))); _ } -> ()
+             EBinOp ("++", EVar "prefix", EVar "x", _))); _ } -> ()
      | _ -> failwith (Printf.sprintf "wrong method shape: name=%s, default=%s"
               m.method_name
               (match m.method_default with
@@ -1775,7 +1775,7 @@ f opt =
 let test_if_let_nested () =
   match parse_expr "if let Some x = f y then x + 1 else 0\n" with
   | EMatch (EApp (EVar "f", EVar "y"), [
-      (PCon ("Some", [PVar "x"]), [], EBinOp ("+", EVar "x", ELit (LInt 1)));
+      (PCon ("Some", [PVar "x"]), [], EBinOp ("+", EVar "x", ELit (LInt 1), _));
       (PWild, [], ELit (LInt 0));
     ]) -> ()
   | e -> failwith ("wrong: " ^ Ast.pp_expr e)
@@ -1901,7 +1901,7 @@ let test_bench_basic () =
 let test_bench_expr () =
   match parse_one {|bench "add" = 1 + 2
 |} with
-  | DBench { bench_name = "add"; bench_body = EBinOp ("+", ELit (LInt 1), ELit (LInt 2)); _ } -> ()
+  | DBench { bench_name = "add"; bench_body = EBinOp ("+", ELit (LInt 1), ELit (LInt 2), _); _ } -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
 let test_bench_export () =
@@ -1940,8 +1940,8 @@ sign =
   match parse_one src with
   | DFunDef (false, "sign", [],
       EFunction [
-        (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0)))], ELit (LInt 1));
-        (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0)))], EUnOp ("-", ELit (LInt 1)));
+        (PVar "n", [GBool (EBinOp (">", EVar "n", ELit (LInt 0), _))], ELit (LInt 1));
+        (PVar "n", [GBool (EBinOp ("<", EVar "n", ELit (LInt 0), _))], EUnOp ("-", ELit (LInt 1)));
         (PWild, [], ELit (LInt 0));
       ]) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)

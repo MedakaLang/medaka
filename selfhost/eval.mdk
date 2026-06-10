@@ -816,7 +816,7 @@ eval env (ELet _ _ pat e1 e2) = evalLet env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
-eval env (EBinOp op l r) = evalBinop env op l r
+eval env (EBinOp op l r _) = evalBinop env op l r
 eval env (EInfix op l r) =
   apply (apply (lookupEnv env op) (eval env l)) (eval env r)
 eval env (EUnOp op e) = evalUnop op (eval env e)
