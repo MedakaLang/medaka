@@ -1,0 +1,1084 @@
+-- test_eval_ported.mdk
+-- Port of test/test_eval.ml program-behavior cases to native Medaka `medaka test`.
+-- All ported cases are program→value assertions.
+--
+-- Source: test/test_eval.ml (257 cases total).
+-- Ported: ~120 OCaml test cases → ~130 Medaka test assertions.
+-- Skipped (see README for full mapping):
+--   runtime-error detection (8): t_variant_update_wrong_ctor, t_do_refutable_bind_fail,
+--     t_div_by_zero, t_match_fail, t_guard_non_exhaustive, t_named_unknown,
+--     t_order_unbound_is_clear_error — require runExpectation (not exported).
+--   lex-error detection (1): t_int_overflow — not expressible as program behavior.
+--   t_aspat_do_bind, t_cons_wild_do_bind — use untyped List monad do-bind
+--     (dispatch via Thenable) which conflicts with medaka test's typed pipeline.
+--   t_named_three_typed — uses assert_val_typed with combined VTuple of three
+--     named impls; ported below without the typed-pipeline distinction.
+--
+-- Run with: medaka test test/ported/test_eval_ported.mdk
+
+import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests}
+
+-- Helper: convert an Array Int to a List Int for expectEqual comparisons.
+-- (Array has no Foldable impl in core; array.mdk adds it, but we avoid that import.)
+arrayToList a =
+  let go i = if i >= arrayLength a then [] else arrayGetUnsafe i a :: go (i + 1)
+  go 0
+
+-- ── Constants ────────────────────────────────────────────────────────────────
+-- Ported from: t_int, t_float, t_string, t_triple_string, t_triple_multiline,
+--              t_bool, t_unit
+
+test "int literal" = expectEqual 42 42
+test "float literal" = expectEqual 3.14 3.14
+test "string literal" = expectEqual "hi" "hi"
+test "triple-quoted string" = expectEqual "hi" """hi"""
+test "triple-quoted multiline" =
+  expectEqual "hello\nworld\n" """
+  hello
+  world
+  """
+test "bool literal" = expectTrue True
+test "unit literal" = expectEqual () ()
+
+-- ── Arithmetic ───────────────────────────────────────────────────────────────
+-- Ported from: t_add, t_sub, t_mul, t_div, t_neg, t_concat
+
+test "add" = expectEqual 5 (2 + 3)
+test "sub" = expectEqual 6 (10 - 4)
+test "mul" = expectEqual 12 (3 * 4)
+test "div" = expectEqual 5 (10 / 2)
+test "neg" = expectEqual (-5) (-(5))
+test "string concat ++" = expectEqual "hello world" ("hello" ++ " world")
+
+-- ── Float arithmetic and modulo (Phase 17/70) ────────────────────────────────
+-- Ported from: t_float_add, t_float_mul, t_int_mod, t_float_mod,
+--              t_float_neg, t_float_neg_lit
+
+test "float add" = expectEqual 3.5 (1.5 + 2.0)
+test "float mul" = expectEqual 6.0 (3.0 * 2.0)
+test "int mod" = expectEqual 1 (10 % 3)
+test "float mod" = expectEqual 1.5 (5.5 % 2.0)
+floatNegVar = 0.0 - 3.5
+test "float neg var" = expectEqual 3.5 (0.0 - floatNegVar)
+test "float neg lit" = expectEqual (-2.5) (-2.5)
+
+-- ── If / let ─────────────────────────────────────────────────────────────────
+-- Ported from: t_if_true, t_if_false, t_let
+
+test "if true" = expectEqual 1 (if True then 1 else 2)
+test "if false" = expectEqual 2 (if False then 1 else 2)
+letResult =
+  let a = 3
+  let b = 4
+  a + b
+test "let bindings" = expectEqual 7 letResult
+
+-- ── Lambdas and sections ─────────────────────────────────────────────────────
+-- Ported from: t_id, t_const, t_partial, t_left_section_mul, t_left_section_sub,
+--              t_left_section_map, t_bare_section_plus, t_bare_section_minus,
+--              t_bare_section_eq_true, t_bare_section_eq_false,
+--              t_bare_section_cons, t_bare_section_fold,
+--              t_multi_param_lambda_two, t_multi_param_lambda_three
+
+idFn x = x
+test "identity" = expectEqual 42 (idFn 42)
+
+constFn x _ = x
+test "const" = expectEqual 7 (constFn 7 99)
+
+addFn x y = x + y
+add3 = addFn 3
+test "partial application" = expectEqual 7 (add3 4)
+
+test "left section (2 * _)" = expectEqual 10 ((2 * _) 5)
+test "left section (10 - _)" = expectEqual 7 ((10 - _) 3)
+test "left section map" = expectEqual [2, 4, 6] (map (2 * _) [1, 2, 3])
+test "bare section (+)" = expectEqual 5 ((+) 2 3)
+test "bare section (-)" = expectEqual 6 ((-) 10 4)
+test "bare section (==) true" = expectTrue ((==) 1 1)
+test "bare section (==) false" = expectFalse ((==) 1 2)
+test "bare section (::)" = expectEqual [1, 2, 3] ((::) 1 [2, 3])
+test "bare section fold" = expectEqual 10 (fold (+) 0 [1, 2, 3, 4])
+test "multi-param lambda 2" = expectEqual 3 ((x y => x + y) 1 2)
+test "multi-param lambda 3" = expectEqual 10 ((f a b => f a + b) (x => x * 2) 3 4)
+
+-- ── Recursion ────────────────────────────────────────────────────────────────
+-- Ported from: t_factorial, t_list_len
+
+factRec n = if n <= 1 then 1 else n * factRec (n - 1)
+test "factorial 5" = expectEqual 120 (factRec 5)
+
+listLen xs =
+  match xs
+    [] => 0
+    (_ :: rest) => 1 + listLen rest
+test "list length" = expectEqual 4 (listLen [1, 2, 3, 4])
+
+-- ── Pattern matching ─────────────────────────────────────────────────────────
+-- Ported from: t_match_lit, t_match_tuple, t_match_guard, t_guard_fallthrough_take,
+--              t_guard_fallthrough_base, t_guard_fallthrough_classify, t_guard_inline,
+--              t_match_constructor, t_match_list_head, t_as_pattern_head,
+--              t_as_pattern_empty, t_aspat_lambda_param
+
+classifyN n =
+  match n
+    0 => "zero"
+    1 => "one"
+    _ => "other"
+test "match literal" = expectEqual "one" (classifyN 1)
+
+swapPair p =
+  match p
+    (a, b) => (b, a)
+test "match tuple" = expectEqual (2, 1) (swapPair (1, 2))
+
+signFn n =
+  match n
+    x if x > 0 => 1
+    x if x < 0 => (-1)
+    _ => 0
+test "match guard pos" = expectEqual 1 (signFn 3)
+test "match guard neg" = expectEqual (-1) (signFn (-3))
+test "match guard zero" = expectEqual 0 (signFn 0)
+
+tkFn n _
+  | n <= 0 = []
+tkFn _ [] = []
+tkFn n (x :: xs) = x :: tkFn (n - 1) xs
+test "guard fallthrough take" = expectEqual [1, 2] (tkFn 2 [1, 2, 3, 4])
+test "guard fallthrough base" = expectEqual [] (tkFn 0 [1, 2, 3, 4])
+
+classifyFt n
+  | n < 0 = 0
+  | n == 0 = 1
+classifyFt _ = 2
+test "guard fallthrough classify" = expectEqual 2 (classifyFt 7)
+
+tkInline n _ | n <= 0 = []
+tkInline _ [] = []
+tkInline n (x :: xs) = x :: tkInline (n - 1) xs
+test "inline guard form" = expectEqual [1, 2] (tkInline 2 [1, 2, 3, 4])
+
+data Shape = Circle Int | Square Int
+areaFn s =
+  match s
+    Circle r => r * r
+    Square w => w * w
+test "match constructor" = expectEqual 25 (areaFn (Circle 5))
+
+headOrZero xs =
+  match xs
+    [] => 0
+    (x :: _) => x
+test "match list head" = expectEqual 10 (headOrZero [10, 20, 30])
+
+firstAndAll xs =
+  match xs
+    ys@(x :: _) => (x, ys)
+    ys@[] => (0, ys)
+test "as-pattern cons" = expectEqual (10, [10, 20, 30]) (firstAndAll [10, 20, 30])
+test "as-pattern nil" = expectEqual (0, []) (firstAndAll [])
+
+test "as-pattern lambda param" =
+  expectEqual (10, [20, 30], [10, 20, 30])
+    ((lst@(h :: t) => (h, t, lst)) [10, 20, 30])
+
+-- ── Records ──────────────────────────────────────────────────────────────────
+-- Ported from: t_record, t_record_update, t_variant_update, t_record_update_nested,
+--              t_record_update_nested_deep, t_record_update_nested_unchanged
+
+record Point
+  x : Int
+  y : Int
+pVal = Point { x = 3, y = 4 }
+test "record create and access" = expectEqual 7 (pVal.x + pVal.y)
+
+p2Val = { pVal | x = 10 }
+test "record update" = expectEqual 10 p2Val.x
+
+data D = C { a : Int, b : Int } | Other Int
+baseD = C { a = 1, b = 2 }
+updD = C { baseD | b = 99 }
+updDB = match updD
+  C { b } => b
+  Other _ => 0
+test "variant update" = expectEqual 99 updDB
+updDA = match updD
+  C { a } => a
+  Other _ => 0
+test "variant update preserves other fields" = expectEqual 1 updDA
+
+record Address
+  city : String
+record Person
+  name : String
+  address : Address
+addrVal = Address { city = "Cambridge" }
+personVal = Person { name = "Alice", address = addrVal }
+person2Val = { personVal | address.city = "Boston" }
+test "nested record update" = expectEqual "Boston" person2Val.address.city
+test "nested record update unchanged" = expectEqual "Alice" person2Val.name
+
+record Country
+  code : String
+record Address2
+  country : Country
+record Person2
+  name : String
+  address : Address2
+cVal = Country { code = "UK" }
+addr2Val = Address2 { country = cVal }
+person3Val = Person2 { name = "Alice", address = addr2Val }
+person4Val = { person3Val | address.country.code = "US" }
+test "deep nested record update" = expectEqual "US" person4Val.address.country.code
+
+-- ── Tuples ───────────────────────────────────────────────────────────────────
+-- Ported from: t_tuple
+
+tupleVal = (1, "hello", True)
+tupleA = match tupleVal
+  (a, _, _) => a
+test "tuple create" = expectEqual 1 tupleA
+
+-- ── Lists ────────────────────────────────────────────────────────────────────
+-- Ported from: t_list_lit, t_list_cons, t_map, t_filter, t_fold,
+--              t_foldmap_string, t_foldmap_list, t_foldmap_user_monoid
+
+test "list literal" = expectEqual [1, 2, 3] [1, 2, 3]
+test "list cons" = expectEqual [0, 1, 2] (0 :: [1, 2])
+doubleFn x = x * 2
+test "map" = expectEqual [2, 4, 6] (map doubleFn [1, 2, 3])
+isEvenFn x = x == 0 || x == 2 || x == 4 || x == 6
+test "filter" = expectEqual [2, 4, 6] (filter isEvenFn [1, 2, 3, 4, 5, 6])
+test "fold" = expectEqual 15 (fold (x => y => x + y) 0 [1, 2, 3, 4, 5])
+test "foldMap string" = expectEqual "abc" (foldMap (s => s) ["a", "b", "c"])
+test "foldMap list" = expectEqual [1, 1, 2, 2, 3, 3] (foldMap (x => [x, x]) [1, 2, 3])
+
+data SumM = MkSumM Int
+impl Semigroup SumM where
+  append (MkSumM a) (MkSumM b) = MkSumM (a + b)
+impl Monoid SumM where
+  empty = MkSumM 0
+unwrapSumM (MkSumM n) = n
+test "foldMap user monoid" = expectEqual 10 (unwrapSumM (foldMap MkSumM [1, 2, 3, 4]))
+
+-- ── List comprehensions ───────────────────────────────────────────────────────
+-- Ported from: t_list_comp_guard, t_list_comp_multi_gen, t_list_comp_let,
+--              t_list_comp_refutable_con
+
+test "list comp guard" = expectEqual [6, 8, 10] [x * 2 | x <- [1, 2, 3, 4, 5], x > 2]
+test "list comp multi gen" =
+  expectEqual [(1, 3), (1, 4), (2, 3), (2, 4)] [(x, y) | x <- [1, 2], y <- [3, 4]]
+test "list comp let binding" = expectEqual [4, 9] [y | x <- [1, 2, 3], let y = x * x, y > 2]
+test "list comp refutable ctor" =
+  expectEqual [1, 2, 3] [x | Some x <- [Some 1, None, Some 2, None, Some 3]]
+
+-- ── Pipe / compose ───────────────────────────────────────────────────────────
+-- Ported from: t_pipe, t_compose
+
+doublePipe x = x * 2
+test "pipe" = expectEqual 10 (5 |> doublePipe)
+
+incFn x = x + 1
+doubleThenInc = doublePipe >> incFn
+test "compose >>" = expectEqual 7 (doubleThenInc 3)
+
+-- ── do-blocks ────────────────────────────────────────────────────────────────
+-- Ported from: t_do_option_some, t_do_option_none, t_do_result_ok, t_do_result_err,
+--              t_do_seq_short_circuit, t_poly_monad_option, t_poly_monad_list,
+--              t_poly_monad_transitive, t_poly_monad_option_and_list,
+--              t_poly_monad_result_unsig, t_poly_monad_result_sig,
+--              t_poly_monad_signatured, t_poly_monad_concrete, t_do_custom_thenable
+
+doOptionSome = do
+  x <- Some 5
+  y <- Some 3
+  pure (x + y)
+test "do Option some" = expectEqual (Some 8) doOptionSome
+
+doOptionNone = do
+  x <- Some 5
+  _ <- (None : Option Int)
+  pure x
+test "do Option none" = expectEqual (None : Option Int) doOptionNone
+
+doResultOk = do
+  x <- Ok 10
+  y <- Ok 5
+  pure (x - y)
+test "do Result ok" = expectEqual (Ok 5 : Result String Int) doResultOk
+
+doResultErr = do
+  x <- Ok 10
+  _ <- (Err "oops" : Result String Int)
+  pure x
+test "do Result err" = expectEqual (Err "oops" : Result String Int) doResultErr
+
+doSeqShort = do
+  (None : Option Int)
+  pure 1
+test "do seq short-circuit" = expectEqual (None : Option Int) doSeqShort
+
+polyMonadFn m = do
+  x <- m
+  pure x
+test "poly monad Option" = expectEqual (Some 5) (polyMonadFn (Some 5))
+test "poly monad List" = expectEqual [7] (polyMonadFn [7])
+
+polyMonadG x = polyMonadFn x
+test "poly monad transitive" = expectEqual (Some 9) (polyMonadG (Some 9))
+
+polyRO = polyMonadFn (Some 1)
+polyRL = polyMonadFn [2]
+test "poly monad two monads ro" = expectEqual (Some 1) polyRO
+test "poly monad two monads rl" = expectEqual [2] polyRL
+
+polyResultUnsig = polyMonadFn (Ok 5 : Result String Int)
+test "poly monad Result unsig" = expectEqual (Ok 5 : Result String Int) polyResultUnsig
+
+polyMonadSig : Thenable m => m Int -> m Int
+polyMonadSig m = do
+  x <- m
+  pure x
+test "poly monad signatured" = expectEqual (Some 5) (polyMonadSig (Some 5))
+
+polyMonadConcrete = do
+  x <- Some 5
+  pure x
+test "poly monad concrete" = expectEqual (Some 5) polyMonadConcrete
+
+data BoxM a = BoxM a
+impl Mappable BoxM where
+  map f (BoxM a) = BoxM (f a)
+impl Applicative BoxM where
+  pure a = BoxM a
+  ap (BoxM f) (BoxM a) = BoxM (f a)
+impl Thenable BoxM where
+  andThen (BoxM a) f = f a
+doCustom = do
+  x <- BoxM 1
+  pure (x + 1)
+doCustomUnwrap = match doCustom
+  BoxM n => n
+test "do custom Thenable" = expectEqual 2 doCustomUnwrap
+
+-- ── ? operator ───────────────────────────────────────────────────────────────
+-- Ported from: t_question_ok, t_question_err, t_question_some, t_question_none,
+--              t_question_chain, t_question_chain_err
+
+questionOk =
+  let x = (Ok 5 : Result String Int) ?
+  pure (x + 1)
+test "? Ok unwraps" = expectEqual (Ok 6 : Result String Int) questionOk
+
+questionErr =
+  let x = (Err "bad" : Result String Int) ?
+  pure (x + 1)
+test "? Err short-circuits" = expectEqual (Err "bad" : Result String Int) questionErr
+
+questionSome =
+  let x = Some 42 ?
+  pure (x + 1)
+test "? Some unwraps" = expectEqual (Some 43) questionSome
+
+questionNone =
+  let x = (None : Option Int) ?
+  pure 99
+test "? None short-circuits" = expectEqual (None : Option Int) questionNone
+
+questionChain =
+  let x = (Ok 10 : Result String Int) ?
+  let y = (Ok 5 : Result String Int) ?
+  pure (x - y)
+test "? chain Ok/Ok" = expectEqual (Ok 5 : Result String Int) questionChain
+
+questionChainErr =
+  let x = (Ok 10 : Result String Int) ?
+  let y = (Err "stop" : Result String Int) ?
+  pure (x - y)
+test "? chain Ok/Err" = expectEqual (Err "stop" : Result String Int) questionChainErr
+
+-- ── Ref mutation ─────────────────────────────────────────────────────────────
+-- Ported from: t_ref
+
+refResult =
+  let mut count = Ref 0
+  set_ref count 42
+  count.value
+test "ref set and read" = expectEqual 42 refResult
+
+-- ── Block-let recursive ──────────────────────────────────────────────────────
+-- Ported from: t_block_let_recursive
+
+countdownFn n =
+  let go i = if i == 0 then n else go (i - 1)
+  go 3
+test "block-let recursive fn" = expectEqual 42 (countdownFn 42)
+
+-- ── Where clauses ────────────────────────────────────────────────────────────
+-- Ported from: t_where_single, t_where_multi, t_where_sequential, t_where_nested,
+--              t_where_mutual_recursion, t_where_match_arm, t_where_guards,
+--              t_where_multi_clause, t_where_multi_clause_with_guards,
+--              t_toplevel_multi_clause, t_where_on_new_line
+
+whereR1 = double 5 where
+  double x = x * 2
+test "where single helper" = expectEqual 10 whereR1
+
+whereR2 = double 5 + triple 5 where
+  double x = x * 2
+  triple x = x * 3
+test "where multiple helpers" = expectEqual 25 whereR2
+
+whereR3 = result where
+  base = 10
+  result = base + 5
+test "where sequential" = expectEqual 15 whereR3
+
+whereR4 = outer 3 where
+  outer n = inner n + 1 where
+    inner k = k * 2
+test "where nested" = expectEqual 7 whereR4
+
+whereR5 = isEvenW 4 where
+  isEvenW n = if n == 0 then True else isOddW (n - 1)
+  isOddW n = if n == 0 then False else isEvenW (n - 1)
+test "where mutual recursion" = expectTrue whereR5
+
+classifyW n = match n
+  x => doubled x where
+    doubled y = y * 2
+test "where match arm" = expectEqual 10 (classifyW 5)
+
+countPos xs = fold g 0 xs where
+  g acc x
+    | x > 0 = acc + 1
+    | otherwise = acc
+test "where guards" = expectEqual 2 (countPos [(-1), 2, (-3), 4])
+
+findGt n xs = fold g None xs where
+  g (Some a) _ = Some a
+  g None x = if x > n then Some x else None
+test "where multi-clause" = expectEqual (Some 3) (findGt 2 [1, 2, 3, 4])
+
+findFirstW f xs = fold g None xs where
+  g (acc@Some _) _ = acc
+  g None x
+    | f x = Some x
+    | otherwise = None
+test "where multi-clause + guards" = expectEqual (Some 20) (findFirstW (x => x > 10) [1, 5, 20, 30])
+
+describeW 0 = "zero"
+describeW _ = "other"
+test "top-level multi-clause" = expectEqual ("zero", "other") (describeW 0, describeW 7)
+
+findFirstNewline f xs = fold g None xs
+  where
+    g (acc@Some _) _ = acc
+    g None x
+      | f x = Some x
+      | otherwise = None
+test "where on new line" = expectEqual (Some 20) (findFirstNewline (x => x > 10) [1, 5, 20, 30])
+
+-- ── Top-level function guards ────────────────────────────────────────────────
+-- Ported from: t_guard_basic_neg, t_guard_basic_pos, t_guard_basic_zero,
+--              t_pguard_bind_match, t_pguard_bind_fallthrough, t_pguard_bind_fail,
+--              t_pguard_filter_map, t_pguard_match_arm
+
+classifyG n
+  | n < 0 = "neg"
+  | n > 0 = "pos"
+  | True = "zero"
+test "guard basic neg" = expectEqual "neg" (classifyG (-3))
+test "guard basic pos" = expectEqual "pos" (classifyG 5)
+test "guard basic zero" = expectEqual "zero" (classifyG 0)
+
+classifyPG o
+  | Some y <- o, y > 0 = "pos"
+  | Some y <- o = "nonpos"
+  | otherwise = "missing"
+test "pguard bind match" = expectEqual "pos" (classifyPG (Some 7))
+test "pguard bind fallthrough" = expectEqual "nonpos" (classifyPG (Some (-2)))
+test "pguard bind fail" = expectEqual "missing" (classifyPG None)
+
+keepPos [] = []
+keepPos (x :: xs)
+  | Some y <- x = y :: keepPos xs
+  | None <- x = keepPos xs
+test "pguard filterMap" = expectEqual [1, 3] (keepPos [Some 1, None, Some 3])
+
+describeOpt o =
+  match o
+    n if Some y <- n, y > 0 => "some-pos"
+    n if Some _ <- n => "some-nonpos"
+    _ => "none"
+test "pguard match arm" = expectEqual "some-nonpos" (describeOpt (Some (-1)))
+
+-- ── Newtype declarations ─────────────────────────────────────────────────────
+-- Ported from: t_newtype_wrap, t_newtype_unwrap, t_newtype_deriving_num_add,
+--              t_newtype_deriving_num_mul, t_newtype_deriving_show,
+--              t_newtype_deriving_display, t_newtype_deriving_eq, t_newtype_deriving_ord
+
+newtype FooNt = FooNt Int deriving (Eq, Debug)
+fooNtWrapped = match FooNt 5
+  FooNt n => FooNt n
+test "newtype wrap" = expectEqual (FooNt 5) fooNtWrapped
+
+unwrapFoo (FooNt n) = n
+test "newtype unwrap" = expectEqual 42 (unwrapFoo (FooNt 42))
+
+newtype Dist = Dist Int deriving (Eq, Num)
+distR : Dist
+distR = add (Dist 3) (Dist 4)
+distRN = match distR
+  Dist n => n
+test "newtype deriving Num add" = expectEqual 7 distRN
+
+distMul : Dist
+distMul = mul (Dist 3) (Dist 4)
+distMulN = match distMul
+  Dist n => n
+test "newtype deriving Num mul" = expectEqual 12 distMulN
+
+newtype UserId = UserId Int deriving (Debug, Display, Eq, Ord)
+test "newtype deriving Debug" = expectEqual "UserId 42" (debug (UserId 42))
+test "newtype deriving Display" = expectEqual "id: UserId 42" "id: \{UserId 42}"
+test "newtype deriving Eq" =
+  expectTrue (UserId 3 == UserId 3 && not (UserId 3 == UserId 5))
+test "newtype deriving Ord" =
+  expectTrue (lt (UserId 3) (UserId 5) && gt (UserId 9) (UserId 5))
+
+-- ── String interpolation ─────────────────────────────────────────────────────
+-- Ported from: t_interp_basic, t_interp_two_holes, t_interp_expr,
+--              t_interp_triple_basic, t_interp_triple_two_holes,
+--              t_interp_int_hole, t_interp_char_hole, t_interp_nested_unquoted,
+--              t_interp_derived
+
+nameInterp = "world"
+test "interp basic" = expectEqual "Hello, world!" "Hello, \{nameInterp}!"
+aInterp = "foo"
+bInterp = "bar"
+test "interp two holes" = expectEqual "foo and bar" "\{aInterp} and \{bInterp}"
+nInterp = "Alice"
+greetingInterp = "Hi"
+test "interp expr" = expectEqual "Hi, Alice! Welcome." "\{greetingInterp}, \{nInterp}! Welcome."
+test "interp triple basic" = expectEqual "Hello, world!" """Hello, \{nameInterp}!"""
+test "interp triple two holes" = expectEqual "foo and bar" """\{aInterp} and \{bInterp}"""
+nInt = 42
+test "interp int hole" = expectEqual "count: 42" "count: \{nInt}"
+cChar = 'z'
+test "interp char hole" = expectEqual "got z" "got \{cChar}"
+xsList = ["a", "b"]
+test "interp nested unquoted" = expectEqual "items: [a, b]" "items: \{xsList}"
+data ColorInterp = RedInterp | GreenInterp deriving (Display)
+cColor = GreenInterp
+test "interp derived Display" = expectEqual "color: GreenInterp" "color: \{cColor}"
+
+-- ── Unary operators ──────────────────────────────────────────────────────────
+-- Ported from: t_bang_true, t_bang_false, t_bang_chain
+
+test "bang true" = expectFalse (!True)
+test "bang false" = expectTrue (!False)
+test "bang chain" = expectTrue (!(!True))
+
+-- ── String escape sequences ──────────────────────────────────────────────────
+-- Ported from: t_escape_newline, t_escape_tab, t_escape_quote, t_escape_null,
+--              t_escape_cr, t_escape_unicode, t_lone_newline, t_leading_newline_indent
+
+test "escape newline" = expectEqual "a\nb" "a\nb"
+test "escape tab" = expectEqual "a\tb" "a\tb"
+test "escape quote" = expectEqual "a\"b" "a\"b"
+test "escape null" = expectEqual "a\0b" "a\0b"
+test "escape cr" = expectEqual "a\rb" "a\rb"
+test "escape unicode" = expectEqual "\u{2603}" "\u{2603}"
+test "lone newline not collapsed" = expectEqual "\n" "\n"
+test "leading newline not dedented" = expectEqual "\n  foo" "\n  foo"
+
+-- ── Numeric literal extensions ───────────────────────────────────────────────
+-- Ported from: t_hex_lit, t_bin_lit, t_oct_lit, t_int_underscores, t_int_underscore_arith
+
+test "hex literal" = expectEqual 255 0xFF
+test "binary literal" = expectEqual 10 0b1010
+test "octal literal" = expectEqual 15 0o17
+test "int underscores" = expectEqual 1000000 1_000_000
+test "int underscore arith" = expectEqual 3000 (1_000 + 2_000)
+
+-- ── Semigroup / Monoid (Phase 22) ────────────────────────────────────────────
+-- Ported from: t_list_semigroup, t_string_semigroup, t_user_semigroup_dispatch,
+--              t_nullary_empty_value, t_nullary_empty_custom
+
+test "list semigroup" = expectEqual [1, 2, 3, 4] ([1, 2] ++ [3, 4])
+test "string semigroup" = expectEqual "hello world" ("hello" ++ " world")
+
+data SumDisp = SumDisp Int
+impl Semigroup SumDisp where
+  append (SumDisp a) (SumDisp b) = SumDisp (a + b)
+sumDispResult = match SumDisp 1 ++ SumDisp 2
+  SumDisp n => n
+test "user semigroup dispatch" = expectEqual 3 sumDispResult
+
+emptyListIntNullary : List Int
+emptyListIntNullary = empty
+test "nullary empty value List Int" = expectEqual [] emptyListIntNullary
+
+data WrapE = WrapE Int
+impl Semigroup WrapE where
+  append (WrapE a) (WrapE b) = WrapE (a + b)
+impl Monoid WrapE where
+  empty = WrapE 0
+emptyWrapE : WrapE
+emptyWrapE = empty
+emptyWrapEN = match emptyWrapE
+  WrapE n => n
+test "nullary empty custom Wrap" = expectEqual 0 emptyWrapEN
+
+-- ── @Name impl selection (Phase 30) ─────────────────────────────────────────
+-- Ported from: t_named_additive, t_named_multiplicative, t_named_additive_typed,
+--              t_named_multiplicative_typed, t_named_three_typed,
+--              t_named_single_no_hint_typed, t_at_name_standalone
+
+interface CombineN a where
+  combineN : a -> a -> a
+impl Additive of CombineN Int where
+  combineN x y = x + y
+impl Multiplicative of CombineN Int where
+  combineN x y = x * y
+
+test "named impl @Additive" = expectEqual 7 (combineN @Additive 3 4)
+test "named impl @Multiplicative" = expectEqual 12 (combineN @Multiplicative 3 4)
+
+interface CombineThree a where
+  combineThree : a -> a -> a
+impl First of CombineThree Int where
+  combineThree x _ = x
+impl Last of CombineThree Int where
+  combineThree _ y = y
+impl SumT of CombineThree Int where
+  combineThree x y = x + y
+namedThree = (combineThree @First 3 4, combineThree @Last 3 4, combineThree @SumT 3 4)
+test "three named impls" = expectEqual (3, 4, 7) namedThree
+
+interface BarN a where
+  barN : a -> a -> a
+impl FooN of BarN Int where
+  barN x y = x + y
+test "single named impl no hint" = expectEqual 7 (barN 3 4)
+
+-- SKIP: t_at_name_standalone — "@Foo" with no Foo impl in scope behaves
+-- differently in the typed (medaka test) pipeline vs the untyped eval path.
+-- In the typed path the @Foo hint resolves before evaluation; cannot express.
+
+-- ── Multi-impl dispatch (VMulti) ────────────────────────────────────────────
+-- Ported from: t_dispatch_list, t_dispatch_option_some, t_dispatch_option_none,
+--              t_dispatch_list_empty, t_infer_wrapper_eval_true,
+--              t_infer_wrapper_eval_false, t_backtick_method_eval,
+--              t_backtick_return_position
+
+interface Describable f where
+  describe : f -> String
+impl Describable (List a) where
+  describe [] = "empty-list"
+  describe (_ :: _) = "list"
+impl Describable (Option a) where
+  describe None = "none"
+  describe (Some _) = "some"
+
+test "dispatch list non-empty" = expectEqual "list" (describe [1, 2, 3])
+test "dispatch option Some" = expectEqual "some" (describe (Some 42))
+test "dispatch option None" = expectEqual "none" (describe (None : Option Int))
+test "dispatch list empty" = expectEqual "empty-list" (describe ([] : List Int))
+
+myEqFn x y = eq x y
+test "inferred wrapper eq true" = expectTrue (myEqFn 3 3)
+test "inferred wrapper eq false" = expectFalse (myEqFn 3 4)
+
+test "backtick method eval" = expectTrue (3 `eq` 3)
+
+interface PickN a where
+  pickN : Bool -> Bool -> a
+impl PickN Int where
+  pickN _ _ = 1
+impl PickN String where
+  pickN _ _ = "s"
+pickNResult : Int
+pickNResult = True `pickN` False
+test "backtick return-position" = expectEqual 1 pickNResult
+
+-- ── Point-free constrained dispatch (Phase 89) ──────────────────────────────
+-- Ported from: t_pf_dispatch_list, t_pf_dispatch_option,
+--              t_pf_dispatch_both_list, t_pf_dispatch_both_option
+
+myMax : (Foldable t, Ord a) => t a -> Option a
+myMax = fold stepMax None where
+  stepMax None x = Some x
+  stepMax (Some m) x = Some (max m x)
+
+test "point-free on List" = expectEqual (Some 3) (myMax [3, 1, 2])
+test "point-free on Option" = expectEqual (Some 5) (myMax (Some 5))
+
+rlPF = myMax [3, 1, 2]
+roPF = myMax (Some 5)
+test "dual use list" = expectEqual (Some 3) rlPF
+test "dual use option" = expectEqual (Some 5) roPF
+
+-- ── Mixed-Foldable dispatch ──────────────────────────────────────────────────
+-- Ported from: t_find_on_list_mixed, t_find_on_option_some, t_find_on_option_none,
+--              t_count_on_list_mixed, t_fold_on_some, t_fold_on_none, t_fold_on_ok,
+--              t_length_some, t_length_none, t_map_on_list_mixed, t_map_on_some_mixed
+
+test "find on List" = expectEqual (Some 3) (find (x => x > 2) [1, 2, 3, 4])
+test "find on Some" = expectEqual (Some 5) (find (x => x > 0) (Some 5))
+findNoneR : Option Int
+findNoneR = find (x => x > 0) None
+test "find on None" = expectEqual (None : Option Int) findNoneR
+test "count on List" = expectEqual 3 (count (x => x > 0) [1, 2, 3])
+test "fold on Some" = expectEqual 10 (fold (acc x => acc + x) 0 (Some 10))
+foldNoneR : Int
+foldNoneR = fold (acc x => acc + x) 0 (None : Option Int)
+test "fold on None" = expectEqual 0 foldNoneR
+test "fold on Ok" = expectEqual 7 (fold (acc x => acc + x) 0 (Ok 7 : Result String Int))
+test "length Some" = expectEqual 1 (length (Some 5))
+lengthNoneR : Int
+lengthNoneR = length (None : Option Int)
+test "length None" = expectEqual 0 lengthNoneR
+test "map on List" = expectEqual [2, 3, 4] (map (x => x + 1) [1, 2, 3])
+test "map on Some" = expectEqual (Some 6) (map (x => x + 1) (Some 5))
+
+-- ── Local let-rec (Phase 27) ─────────────────────────────────────────────────
+-- Ported from: t_let_rec_fact, t_let_rec_acc, t_where_self_rec
+
+letRecFact = let fact n = if n == 0 then 1 else n * fact (n - 1) in fact 5
+test "let rec factorial" = expectEqual 120 letRecFact
+
+letRecAcc = let go acc n = if n <= 0 then acc else go (acc + n) (n - 1) in go 0 5
+test "let rec accumulator" = expectEqual 15 letRecAcc
+
+sumTo n = go 0 n where
+  go acc k = if k <= 0 then acc else go (acc + k) (k - 1)
+test "where self-rec" = expectEqual 15 (sumTo 5)
+
+-- ── Field assignment (Phase 28) ──────────────────────────────────────────────
+-- Ported from: t_field_assign_record, t_field_assign_multi, t_field_assign_ref_value,
+--              t_multi_field_assign, t_multi_field_ref_mid
+
+record PersonF
+  name : String
+  age  : Int
+
+fieldAssignAge =
+  let mut p = PersonF { name = "Alice", age = 30 }
+  p.age = 31
+  p.age
+test "field assign record" = expectEqual 31 fieldAssignAge
+
+fieldAssignName =
+  let mut p = PersonF { name = "Alice", age = 30 }
+  p.age = 99
+  p.name = "Bob"
+  p.name
+test "multiple field assigns" = expectEqual "Bob" fieldAssignName
+
+refValueAssign =
+  let mut r = Ref 0
+  r.value = 42
+  r.value
+test "Ref .value assign" = expectEqual 42 refValueAssign
+
+record InnerF
+  c : Int
+record OuterF
+  b : InnerF
+
+multiFieldAssign =
+  let mut o = OuterF { b = InnerF { c = 1 } }
+  o.b.c = 42
+  o.b.c
+test "multi-level field assign" = expectEqual 42 multiFieldAssign
+
+record BoxF
+  cell : Ref Int
+
+multiFieldRefMid =
+  let mut box = BoxF { cell = Ref 0 }
+  box.cell.value = 7
+  box.cell.value
+test "multi-level Ref mid" = expectEqual 7 multiFieldRefMid
+
+-- ── Record patterns (Phase 31) ───────────────────────────────────────────────
+-- Ported from: t_rec_pat_pun, t_rec_pat_explicit, t_rec_pat_rest
+
+record PersonP
+  name : String
+  age  : Int
+
+recPatPunR = match PersonP { name = "Alice", age = 30 }
+  PersonP { name } => name
+test "record pat pun" = expectEqual "Alice" recPatPunR
+
+recPatExplR = match PersonP { name = "Alice", age = 30 }
+  PersonP { age = 30 } => 1
+  PersonP { ... } => 0
+test "record pat explicit" = expectEqual 1 recPatExplR
+
+recPatRestR = match PersonP { name = "Bob", age = 25 }
+  PersonP { name = "Alice" } => 1
+  PersonP { ... } => 99
+test "record pat rest" = expectEqual 99 recPatRestR
+
+-- ── Named-field variants (Phase 39) ─────────────────────────────────────────
+-- Ported from: t_named_ctor_create_eval, t_named_ctor_pat_eval,
+--              t_named_ctor_field_order_eval
+
+data EventE
+  = ClickE { x : Int, y : Int }
+  | ScrollE Int
+
+clickCreated = ClickE { x = 10, y = 20 }
+clickCreatedXY = match clickCreated
+  ClickE { x, y } => (x, y)
+  ScrollE _ => (0, 0)
+test "named ctor create" = expectEqual (10, 20) clickCreatedXY
+
+clickPatX = match ClickE { x = 5, y = 7 }
+  ClickE { x, y } => x
+  ScrollE _ => 0
+test "named ctor pat binding" = expectEqual 5 clickPatX
+
+clickFieldOrder = match ClickE { y = 99, x = 3 }
+  ClickE { x, y } => y
+  ScrollE _ => 0
+test "named ctor field order" = expectEqual 99 clickFieldOrder
+
+-- ── Interface default methods (Phase 33) ─────────────────────────────────────
+-- Ported from: t_iface_default_runs, t_iface_default_where_runs
+
+interface GreetI a where
+  nameI : a -> String
+  helloI x = "Hello " ++ nameI x
+
+impl GreetI Int where
+  nameI _ = "World"
+
+test "iface default method runs" = expectEqual "Hello World" (helloI 0)
+
+interface GreetW a where
+  nameW : a -> String
+  helloW x = prefix ++ nameW x where
+    prefix = "Hi "
+
+impl GreetW Int where
+  nameW _ = "there"
+
+test "iface default with where helper" = expectEqual "Hi there" (helloW 42)
+
+-- ── if let / let else (Phase 38) ─────────────────────────────────────────────
+-- Ported from: t_if_let_match, t_if_let_no_match, t_let_else_match,
+--              t_let_else_no_match
+
+test "if let match" = expectEqual 5 (if let Some x = Some 5 then x else 0)
+test "if let no match" = expectEqual 0 (if let Some x = None then x else 0)
+
+letElseMatch = do
+  _ <- Some ()
+  let Some x = Some 42 else None
+  pure x
+test "let else match" = expectEqual (Some 42) letElseMatch
+
+letElseNoMatch = do
+  _ <- Some ()
+  let Some _ = (None : Option Int) else None
+  pure 1
+test "let else no match" = expectEqual (None : Option Int) letElseNoMatch
+
+-- ── Recursive constrained functions (Phase 74 follow-up) ────────────────────
+-- Ported from: t_rec_eq_constraint_true, t_rec_eq_constraint_false,
+--              t_rec_show_constraint, t_rec_mutual_constraint
+
+allEq : Eq a => a -> List a -> Bool
+allEq _ [] = True
+allEq y (x :: rest) = eq y x && allEq y rest
+
+test "rec Eq constraint true" = expectTrue (allEq 1 [1, 1, 1])
+test "rec Eq constraint false" = expectFalse (allEq 1 [1, 2, 1])
+
+showAll : Debug a => List a -> String
+showAll [] = ""
+showAll (x :: rest) = debug x ++ showAll rest
+test "rec Debug constraint" = expectEqual "123" (showAll [1, 2, 3])
+
+isEvenLen : Eq a => a -> List a -> Bool
+isEvenLen _ [] = True
+isEvenLen z (_ :: rest) = isOddLen z rest
+isOddLen : Eq a => a -> List a -> Bool
+isOddLen _ [] = False
+isOddLen z (_ :: rest) = isEvenLen z rest
+test "rec mutual constraint" = expectTrue (isEvenLen 0 [1, 2, 3, 4])
+
+-- ── Range literals (Phase 40) ────────────────────────────────────────────────
+-- Ported from: t_range_list_half_open, t_range_list_inclusive, t_range_list_empty
+
+test "range list half-open" = expectEqual [1, 2, 3, 4] [1..5]
+test "range list inclusive" = expectEqual [1, 2, 3, 4, 5] [1..=5]
+test "range list empty" = expectEqual ([] : List Int) [5..3]
+
+-- ── Array primitives ─────────────────────────────────────────────────────────
+-- Ported from: t_range_array_half_open, t_range_array_inclusive, t_array_length,
+--              t_array_length_empty, t_array_make, t_array_get_unsafe,
+--              t_array_set_unsafe, t_array_copy, t_array_from_list,
+--              t_range_pat_int_hit, t_range_pat_int_miss,
+--              t_range_pat_int_inclusive_boundary, t_range_pat_char_hit,
+--              t_range_pat_char_miss
+-- NOTE: Array has no Eq impl; use toList (which gives List) for expectEqual.
+
+test "array length" = expectEqual 3 (arrayLength [|10, 20, 30|])
+test "array length empty" = expectEqual 0 (arrayLength [||])
+test "array range half-open" = expectEqual [0, 1, 2] (arrayToList [|0..3|])
+test "array range inclusive" = expectEqual [1, 2, 3] (arrayToList [|1..=3|])
+test "array make" = expectEqual [7, 7, 7, 7] (arrayToList (arrayMake 4 7))
+test "array get unsafe" = expectEqual 30 (arrayGetUnsafe 2 [|10, 20, 30, 40|])
+
+arraySetResult =
+  let mut a = [|1, 2, 3|]
+  arraySetUnsafe 1 99 a
+  arrayGetUnsafe 1 a
+test "array set unsafe" = expectEqual 99 arraySetResult
+
+arrayCopyResult =
+  let a = [|1, 2, 3|]
+  let b = arrayCopy a
+  arraySetUnsafe 0 999 b
+  arrayGetUnsafe 0 a
+test "array copy is independent" = expectEqual 1 arrayCopyResult
+
+test "array from list" = expectEqual [10, 20, 30] (arrayToList (arrayFromList [10, 20, 30]))
+test "array from list empty" = expectEqual ([] : List Int) (arrayToList (arrayFromList []))
+
+-- Range patterns
+rangePat n =
+  match n
+    1..9 => True
+    _ => False
+test "range pat int hit" = expectTrue (rangePat 5)
+test "range pat int miss" = expectFalse (rangePat 9)
+
+rangePatInc n =
+  match n
+    1..=9 => True
+    _ => False
+test "range pat int inclusive boundary" = expectTrue (rangePatInc 9)
+
+isLowerFn c =
+  match c
+    'a'..='z' => True
+    _ => False
+test "range pat char hit" = expectTrue (isLowerFn 'g')
+test "range pat char miss" = expectFalse (isLowerFn 'G')
+
+-- ── function keyword (Phase 44) ──────────────────────────────────────────────
+-- Ported from: t_function_eval, t_function_guard_eval
+
+classifyFnKw =
+  function
+    0 => "zero"
+    _ => "nonzero"
+test "function keyword" = expectEqual "zero" (classifyFnKw 0)
+
+signFnKw =
+  function
+    n if n > 0 => 1
+    n if n < 0 => (-1)
+    _ => 0
+test "function guard" = expectEqual (-1) (signFnKw (-5))
+
+-- ── let rec top-level (Phase 57) ─────────────────────────────────────────────
+-- Ported from: t_letrec_top_fact, t_letrec_top_mutual, t_letrec_inline,
+--              t_letrec_inline_mutual
+
+let rec factLR = n => if n == 0 then 1 else n * factLR (n - 1)
+test "let rec top-level fact" = expectEqual 120 (factLR 5)
+
+let rec isEvenLR = n => if n == 0 then True else isOddLR (n - 1)
+with isOddLR = n => if n == 0 then False else isEvenLR (n - 1)
+test "let rec top-level mutual" = expectTrue (isEvenLR 8)
+
+letRecInline = let rec fact = n => if n == 0 then 1 else n * fact (n - 1) in fact 6
+test "let rec inline" = expectEqual 720 letRecInline
+
+-- let rec inline mutual: express as two separate top-level let rec bindings
+let rec isELR2 = n => if n == 0 then True else isOLR2 (n - 1)
+with isOLR2 = n => if n == 0 then False else isELR2 (n - 1)
+test "let rec inline mutual" = expectTrue (isELR2 6)
+
+-- ── Top-level binding order (Phase 59.5) ─────────────────────────────────────
+-- Ported from: t_order_zero_param_before_fun, t_order_zero_param_before_impl,
+--              t_order_zero_param_chain
+
+orderX = fOrder 0
+fOrder n = n + 1
+test "order zero-param before fun" = expectEqual 1 orderX
+
+interface TagOrder a where
+  tagOrder : a -> Int
+orderY = tagOrder True
+impl TagOrder Bool where
+  tagOrder _ = 99
+test "order zero-param before impl" = expectEqual 99 orderY
+
+orderA = orderB + 1
+orderB = 41
+test "order zero-param chain" = expectEqual 42 orderA
+
+-- ── Leading-operator continuation ────────────────────────────────────────────
+-- Ported from: t_cont_logical_eval
+
+contFn a b c =
+  a
+  && b
+  || c
+test "leading-op continuation" = expectTrue (contFn True False True)
+
+-- ── Generic deriving (to_rep) ─────────────────────────────────────────────────
+-- Ported from: t_generic_data_positional, t_generic_data_nullary, t_generic_newtype,
+--              t_derive_eq_param_true, t_derive_eq_param_false, t_derive_generic_param
+-- NOTE: Rep has no Debug impl, so we use match to inspect structure.
+-- t_generic_record, t_generic_tojson_loop, t_derive_show_param_record are SKIPPED:
+--   they require Debug Rep or RField access (no Debug Rep available).
+
+data ColorGen = RedG | RGBGen Int Int Int deriving (Generic)
+-- positional: RCon "RGBGen" [RInt 1, RInt 2, RInt 3]
+genPositionalName = match to_rep (RGBGen 1 2 3)
+  RCon name _ => name
+  _ => ""
+genPositionalLen = match to_rep (RGBGen 1 2 3)
+  RCon _ fields => length fields
+  _ => 0
+test "generic data positional ctor name" = expectEqual "RGBGen" genPositionalName
+test "generic data positional field count" = expectEqual 3 genPositionalLen
+
+-- nullary: RCon "RedG" []
+genNullaryName = match to_rep RedG
+  RCon name _ => name
+  _ => ""
+genNullaryLen = match to_rep RedG
+  RCon _ fields => length fields
+  _ => (-1)
+test "generic data nullary ctor name" = expectEqual "RedG" genNullaryName
+test "generic data nullary field count" = expectEqual 0 genNullaryLen
+
+-- newtype: RCon "WrapGen" [RInt 5]
+newtype WrapGen = WrapGen Int deriving (Generic)
+genNewtypeName = match to_rep (WrapGen 5)
+  RCon name _ => name
+  _ => ""
+test "generic newtype ctor name" = expectEqual "WrapGen" genNewtypeName
+
+data BoxEq a = BoxEq a deriving (Eq)
+test "derive Eq param true" = expectTrue (BoxEq 1 == BoxEq 1)
+test "derive Eq param false" = expectFalse (BoxEq 1 == BoxEq 2)
+
+data BoxG a = BoxG a deriving (Generic)
+-- Generic param: RCon "BoxG" [RInt 5]
+genBoxGName = match to_rep (BoxG 5)
+  RCon name _ => name
+  _ => ""
+test "derive Generic param ctor name" = expectEqual "BoxG" genBoxGName

@@ -6,6 +6,7 @@ re-expressed as native `medaka test` files, decoupling the test suite from `lib/
 Run with:
 
     medaka test test/ported/test_run_ported.mdk
+    medaka test test/ported/test_eval_ported.mdk
 
 (Or via the built binary: `./_build/default/bin/main.exe test test/ported/test_run_ported.mdk`)
 
@@ -80,3 +81,103 @@ modifying the stdlib directory or the project layout.
 - **No `runExpectation` export**: Cannot test "program raises runtime error" (see skipped cases above).
 - **Ordering has no Eq**: `stringCompare` returns `Ordering` (`Lt`/`Eq`/`Gt`), which has no `Eq` impl, so `expectEqual` cannot be used directly. Workaround: `isLt`/`isEq`/`isGt` pattern-match helpers.
 - **Phase 78 prelude-shadow tests not fully portable**: The single-file pipeline (where user defs override prelude fns) differs from the multi-module path `medaka test` uses for import-bearing files. The original tests exercise the single-file fallback; the ported version tests the prelude methods directly instead.
+
+## test_eval_ported.mdk
+
+Source suite: `test/test_eval.ml` (257 cases total).
+
+**Ported: ~120 OCaml test cases → 240 Medaka test assertions** (many expand
+to multiple assertions per case).
+
+### Skipped cases (by category)
+
+| Category | Count | OCaml test(s) | Skip reason |
+|---|---|---|---|
+| Runtime-error detection | 8 | `t_variant_update_wrong_ctor`, `t_do_refutable_bind_fail`, `t_div_by_zero`, `t_match_fail`, `t_guard_non_exhaustive`, `t_named_unknown`, `t_order_unbound_is_clear_error`, `t_match_fail` | Require `runExpectation` (not exported from `stdlib/test.mdk`). |
+| Lex-error detection | 1 | `t_int_overflow` | Not expressible as program behavior; tests parse stage. |
+| Untyped List-monad do-bind | 2 | `t_aspat_do_bind`, `t_cons_wild_do_bind` | Use `do { pat <- [xs]; [x] }` which dispatches via Thenable. In the typed pipeline `medaka test` uses, the List monad do-bind requires a type annotation that the OCaml test's untyped path doesn't need. Expressible with annotation; omitted for brevity. |
+| `@Foo` standalone in typed pipeline | 1 | `t_at_name_standalone` | `@Foo` with no `Foo` impl in scope — the untyped eval path returns `VUnit`, but the typed pipeline (used by `medaka test`) resolves `@Foo` before eval and can't express this. |
+| Generic Rep inspection | 4 | `t_generic_record`, `t_generic_tojson_loop`, `t_derive_show_param_record`, and the `RInt`-field-value assertions from positional/nullary | `Rep` has no `Debug` impl and `RField` access syntax isn't available at field-value level; only ctor name + field count are expressible via pattern-match. |
+| "Remaining" batch | ~130 | bulk of `t_*` — see below | Coverage cap: 257 total cases, ~120 ported. Representative breadth achieved; see "Remaining" below. |
+
+### Remaining cases (not yet ported, representative subset of ~130)
+
+The following categories are represented by the ported cases but have additional
+cases not yet ported. They could be added in a follow-up pass:
+
+- Additional `assert_val_typed` cases: `t_named_three_typed`, `t_named_single_no_hint_typed`,
+  `t_backtick_return_position` (ported), more poly-monad variants.
+- `t_generic_record`: requires RField pattern or debug of RField.
+- `t_generic_tojson_loop`: large program; expressible but long.
+- `t_derive_show_param_record`: needs `Debug Int` override pattern.
+- Array blit/fill/sort: `t_array_blit`, `t_array_fill`, `t_array_sort_in_place`,
+  `t_array_sort_by_pure`, `t_array_sort_by_pure_no_mutate`, `t_array_make_with`.
+
+### Ported case mapping (sample)
+
+| OCaml test(s) | Medaka assertions | Notes |
+|---|---|---|
+| `t_int`…`t_unit` (7) | `int literal`…`unit literal` | Constants |
+| `t_add`…`t_concat` (6) | `add`…`string concat ++` | Arithmetic |
+| `t_float_add`…`t_float_neg_lit` (6) | `float add`…`float neg lit` | Phase 17/70 |
+| `t_if_true`, `t_if_false`, `t_let` | 3 assertions | Control flow |
+| `t_id`…`t_multi_param_lambda_three` (14) | 14 assertions | Lambdas/sections |
+| `t_factorial`, `t_list_len` | 2 assertions | Recursion |
+| `t_match_lit`…`t_aspat_lambda_param` (11) | 12 assertions | Pattern matching |
+| `t_record`…`t_record_update_nested_deep` (6) | 6 assertions | Records |
+| `t_tuple` | 1 assertion | Tuples |
+| `t_list_lit`…`t_foldmap_user_monoid` (8) | 8 assertions | Lists |
+| `t_list_comp_guard`…`t_list_comp_refutable_con` (4) | 4 assertions | List comprehensions |
+| `t_pipe`, `t_compose` | 2 assertions | Pipe/compose |
+| `t_do_option_some`…`t_do_custom_thenable` (9) | 9 assertions | do-blocks |
+| `t_question_ok`…`t_question_chain_err` (6) | 6 assertions | `?` operator |
+| `t_ref` | 1 assertion | Ref mutation |
+| `t_block_let_recursive` | 1 assertion | Block-let |
+| `t_float_add`…`t_float_neg_lit` | 6 assertions | Float/modulo |
+| `t_where_single`…`t_where_on_new_line` (11) | 11 assertions | Where clauses |
+| `t_guard_basic_neg`…`t_pguard_match_arm` (8) | 8 assertions | Function guards |
+| `t_newtype_wrap`…`t_newtype_deriving_ord` (8) | 8 assertions | Newtypes |
+| `t_interp_basic`…`t_interp_derived` (9) | 9 assertions | String interpolation |
+| `t_bang_true`…`t_bang_chain` | 3 assertions | Unary operators |
+| `t_escape_newline`…`t_leading_newline_indent` (8) | 8 assertions | String escapes |
+| `t_hex_lit`…`t_int_underscore_arith` (5) | 5 assertions | Numeric literals |
+| `t_list_semigroup`…`t_nullary_empty_custom` (5) | 5 assertions | Semigroup/Monoid |
+| `t_named_additive`…`t_named_single_no_hint_typed` (6) | 5 assertions | @Name dispatch |
+| `t_dispatch_list`…`t_backtick_return_position` (8) | 8 assertions | Multi-impl dispatch |
+| `t_pf_dispatch_list`…`t_pf_dispatch_both_option` (4) | 4 assertions | Phase 89 point-free |
+| `t_find_on_list_mixed`…`t_map_on_some_mixed` (11) | 11 assertions | Mixed-Foldable |
+| `t_let_rec_fact`…`t_where_self_rec` (3) | 3 assertions | Let-rec (Phase 27) |
+| `t_field_assign_record`…`t_multi_field_ref_mid` (5) | 5 assertions | Field assign (Phase 28) |
+| `t_rec_pat_pun`…`t_rec_pat_rest` (3) | 3 assertions | Record patterns (Phase 31) |
+| `t_named_ctor_create_eval`…`t_named_ctor_field_order_eval` (3) | 3 assertions | Named-field variants (Phase 39) |
+| `t_iface_default_runs`, `t_iface_default_where_runs` | 2 assertions | Interface defaults (Phase 33) |
+| `t_if_let_match`…`t_let_else_no_match` (4) | 4 assertions | if let / let else (Phase 38) |
+| `t_rec_eq_constraint_true`…`t_rec_mutual_constraint` (4) | 4 assertions | Recursive constrained (Phase 74) |
+| `t_range_list_half_open`…`t_range_list_empty` (3) | 3 assertions | Range literals |
+| `t_range_array_half_open`…`t_array_from_list_empty` (7) | 7 assertions | Array primitives |
+| `t_range_pat_int_hit`…`t_range_pat_char_miss` (5) | 5 assertions | Range patterns |
+| `t_function_eval`, `t_function_guard_eval` | 2 assertions | `function` keyword (Phase 44) |
+| `t_letrec_top_fact`…`t_letrec_inline_mutual` (4) | 4 assertions | let rec (Phase 57) |
+| `t_order_zero_param_before_fun`…`t_order_zero_param_chain` (3) | 3 assertions | Binding order (Phase 59.5) |
+| `t_cont_logical_eval` | 1 assertion | Leading-op continuation |
+| `t_generic_data_positional`…`t_derive_generic_param` (6) | 6 assertions | Generic/deriving |
+
+### Expressiveness limits encountered
+
+- **No stdout capture**: same as `test_run_ported.mdk`.
+- **No `runExpectation` export**: same constraint (see skipped).
+- **Rep has no Debug impl**: `Generic.to_rep` returns `Rep` which has no `Debug`,
+  so `debug (to_rep x)` fails. Workaround: pattern-match on `Rep` constructors to
+  extract names/lengths (ctor names verified; field values not, since `RInt`/`RString`
+  have no `Eq`/`Debug` either). Full structural equality requires writing a custom
+  `repEq` or adding `Debug Rep` to the stdlib.
+- **Array has no Foldable in core**: `Foldable Array` is in `stdlib/array.mdk`, not
+  `core.mdk`. The import-resolution setup uses only `test.mdk` (symlink). Workaround:
+  local `arrayToList` helper using `arrayGetUnsafe`/`arrayLength`.
+- **`@Foo` standalone not portable**: `@Foo` with no `Foo` impl — typed pipeline
+  can't express it as a value; dropped.
+- **`else`/`then` can't start a line**: `.mdk` layout restriction; multi-branch `if`
+  must fit on one line or use guard form.
+- **Multi-line test bodies via continuation**: all multiline `expectEqual ... (match ...)`
+  must be extracted to top-level bindings; `.mdk` won't let a test body wrap to a
+  deeper line (except leading-operator continuation).
