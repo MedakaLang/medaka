@@ -9,7 +9,7 @@
 -- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
 -- post-order (children first, then the node).
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Attr, Decl(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Attr, Decl(..), Route(..)}
 import util.{listLen, contains, allList, concatMapList}
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
@@ -26,7 +26,7 @@ mapKids f (ELet m r p e1 e2) = ELet m r p (mapExpr f e1) (mapExpr f e2)
 mapKids f (ELetGroup bs e2) = ELetGroup (map (mapLetBind f) bs) (mapExpr f e2)
 mapKids f (EMatch e0 arms) = EMatch (mapExpr f e0) (map (mapArm f) arms)
 mapKids f (EIf c t el) = EIf (mapExpr f c) (mapExpr f t) (mapExpr f el)
-mapKids f (EBinOp op a b) = EBinOp op (mapExpr f a) (mapExpr f b)
+mapKids f (EBinOp op a b r) = EBinOp op (mapExpr f a) (mapExpr f b) r
 mapKids f (EUnOp op a) = EUnOp op (mapExpr f a)
 mapKids f (EInfix op a b) = EInfix op (mapExpr f a) (mapExpr f b)
 mapKids f (EFieldAccess e0 n) = EFieldAccess (mapExpr f e0) n
@@ -152,9 +152,9 @@ armChain ((GBind p e)::qs) body els =
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
 sectionToCore (SecBare op) =
-  ELam [PVar "_a", PVar "_b"] (EBinOp op (EVar "_a") (EVar "_b"))
-sectionToCore (SecRight op e) = ELam [PVar "_s"] (EBinOp op (EVar "_s") e)
-sectionToCore (SecLeft e op) = ELam [PVar "_s"] (EBinOp op e (EVar "_s"))
+  ELam [PVar "_a", PVar "_b"] (EBinOp op (EVar "_a") (EVar "_b") (Ref RNone))
+sectionToCore (SecRight op e) = ELam [PVar "_s"] (EBinOp op (EVar "_s") e (Ref RNone))
+sectionToCore (SecLeft e op) = ELam [PVar "_s"] (EBinOp op e (EVar "_s") (Ref RNone))
 
 -- `"a\{e}b"` → `"a" ++ display e ++ "b"` (left-associated `++`)
 interpToCore : List InterpPart -> Expr
@@ -171,7 +171,7 @@ concatStrings (first::rest) = concatLeft first rest
 
 concatLeft : Expr -> List Expr -> Expr
 concatLeft acc [] = acc
-concatLeft acc (e::rest) = concatLeft (EBinOp "++" acc e) rest
+concatLeft acc (e::rest) = concatLeft (EBinOp "++" acc e (Ref RNone)) rest
 
 -- ── Pass: desugar_questions (`let p = e ? in rest` → andThen) ────────────
 -- Mirror of lib/desugar.ml's rewrite_question_expr.  A `let`-bound `?` lowers to
@@ -465,7 +465,7 @@ andAll (first::rest) = andLeft first rest
 
 andLeft : Expr -> List Expr -> Expr
 andLeft acc [] = acc
-andLeft acc (e::rest) = andLeft (EBinOp "&&" acc e) rest
+andLeft acc (e::rest) = andLeft (EBinOp "&&" acc e (Ref RNone)) rest
 
 -- Ord: one arm per (i, vi)×(j, vj) constructor pair.  Different constructors
 -- compare by declaration order (Lt/Gt); same constructor compares fields

@@ -128,6 +128,31 @@ let arities_of_fun_constraints (fc : (ident, (ident * int list) list) Hashtbl.t)
   Hashtbl.iter (fun n cs -> Hashtbl.replace tbl n (List.length cs)) fc;
   tbl
 
+(* Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into the
+   corresponding Eq/Ord method application, so every backend dispatches to the
+   user/derived impl via the existing Phase-69 EMethodRef machinery instead of a
+   structural builtin.  Only nodes typecheck stamped (ground non-primitive operand
+   with an impl) carry a Some ref; primitive / arithmetic / other operators keep a
+   None ref and stay the literal EBinOp the backends already handle (no recursion).
+
+     <  → lt a b        >  → gt a b
+     <= → lte a b       >= → gte a b
+     == → eq a b        != → not (eq a b)
+
+   The stamped EBinOp ref is reused in place as the rewritten EMethodRef's ref. *)
+let operator_method op =
+  let (_, _, m) = List.find (fun (o, _, _) -> o = op) Builtins.operator_iface in m
+
+let rewrite_binop e = match e with
+  | EBinOp (op, l, r, ({ contents = Some _ } as dref)) ->
+    let m = operator_method op in
+    let call = EApp (EApp (EMethodRef (dref, m), l), r) in
+    if op = "!=" then EApp (EVar "not", call) else call
+  | _ -> e
+
+let rewrite_binops (prog : program) : program =
+  List.map (Desugar.map_decl rewrite_binop) prog
+
 let run ?fun_constraints ?method_constraints (prog : program) : program =
   let arities = match fun_constraints, method_constraints with
     | None, None -> collect_arities prog
@@ -144,4 +169,4 @@ let run ?fun_constraints ?method_constraints (prog : program) : program =
        | None -> ());
       tbl
   in
-  List.map (run_decl arities) prog
+  List.map (run_decl arities) (rewrite_binops prog)

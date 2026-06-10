@@ -894,6 +894,15 @@ type env = {
        recursive call's dict to the wrapper's own `$dict_<fn>_<slot>` param. *)
   constraint_obligations : (ident * mono list * Ast.loc option) list ref;
     (* (iface_name, mono_args, call_site_loc) accumulated at call sites, verified post-HM *)
+  binop_usages : (string * ident * ident * tyvar_info ref * Ast.resolved option ref * Ast.loc option) list ref;
+    (* Phase 151 / Gap G: comparison/equality operator occurrences.
+       (op, iface, method, operand_type_var_ref, EBinOp_dispatch_ref, loc).
+       check_binop_usages (run post-HM, after grounding) stamps the EBinOp's ref
+       with the selected impl's RKey route — but ONLY when the operand type is a
+       *ground non-primitive* (not Int/Float/Char/String/Bool) with an Eq/Ord impl.
+       Primitive / ungroundable operands stay None → the structural-builtin EBinOp
+       path in eval/emit (unchanged, no recursion: `impl Eq Int.eq = a == b`). Then
+       Dict_pass rewrites the stamped node into the method application. *)
   type_ctors    : (ident, ident list) Hashtbl.t;  (* type name → ctor names in order *)
   ctor_fields   : (ident, (ident * mono) list) Hashtbl.t;  (* named-field ctor → ordered (field, mono_ty) *)
   aliases       : (ident, ident list * Ast.ty) Hashtbl.t;  (* type alias name → (params, rhs) *)
@@ -938,6 +947,7 @@ let empty_env () = {
   method_dict_routes     = Hashtbl.create 8;
   impl_dict_routes       = Hashtbl.create 8;
   constraint_obligations = ref [];
+  binop_usages           = ref [];
   dict_app_usages        = ref [];
   recursive_promoted_usages = ref [];
   type_ctors    = Hashtbl.create 8;
@@ -1724,8 +1734,8 @@ let rec infer env = function
     unify tt te;
     tt
 
-  | EBinOp (op, l, r) ->
-    binop_type env op l r
+  | EBinOp (op, l, r, dref) ->
+    binop_type env op l r dref
 
   | EUnOp ("-", e) ->
     let te = infer env e in
@@ -2262,7 +2272,7 @@ let rec infer env = function
           three valid container types instead of a corrupted-state type. *)
        unify te t_string; te)
 
-and binop_type env op l r =
+and binop_type env op l r dref =
   let tl = infer env l in
   let tr = infer env r in
   (* Record a usage of `method` (an entry from Builtins.operator_iface) at the
@@ -2275,6 +2285,13 @@ and binop_type env op l r =
     env.method_usages := (method_name, iface_name, [r], None, [], None, !current_loc, !current_fn) :: !(env.method_usages);
     a
   in
+  (* Phase 151 / Gap G: also record a binop usage so check_binop_usages can stamp
+     [dref] with the Eq/Ord impl route when the operand type grounds to a
+     non-primitive.  Reuses the same unified type-var [a] (an `infer`-time TVar). *)
+  let record_binop_usage iface_name method_name a =
+    let r = match a with TVar r -> r | _ -> fail (InternalError "binop operand type not a TVar") in
+    env.binop_usages := (op, iface_name, method_name, r, dref, !current_loc) :: !(env.binop_usages)
+  in
   let iface_and_method_of op =
     let (_, i, m) = List.find (fun (o, _, _) -> o = op) Builtins.operator_iface in
     (i, m)
@@ -2283,11 +2300,13 @@ and binop_type env op l r =
   | "+" | "-" | "*" | "/" ->
     let (i, m) = iface_and_method_of op in record_iface_usage i m tl tr
   | "==" | "!=" ->
-    let _ = record_iface_usage "Eq" "eq" tl tr in
+    let a = record_iface_usage "Eq" "eq" tl tr in
+    record_binop_usage "Eq" "eq" a;
     t_bool
   | "<" | ">" | "<=" | ">=" ->
     let (i, m) = iface_and_method_of op in
-    let _ = record_iface_usage i m tl tr in
+    let a = record_iface_usage i m tl tr in
+    record_binop_usage i m a;
     t_bool
   | "%" ->
     (* Modulo is not a distinct Num method, but it requires its operands to be a
@@ -2526,7 +2545,7 @@ let rec first_loc = function
   | ELoc (l, _)        -> Some l
   | EApp (f, _)        -> first_loc f
   | ELam (_, body)     -> first_loc body
-  | EBinOp (_, l, _)   -> first_loc l
+  | EBinOp (_, l, _, _) -> first_loc l
   | EUnOp (_, e)       -> first_loc e
   | EIf (c, _, _)      -> first_loc c
   | EFieldAccess (e, _) -> first_loc e
@@ -3889,6 +3908,42 @@ let pick_dispatch_impl env iface concrete : impl_entry option =
         | [e] -> Some e
         | _ -> None))
 
+(* Phase 151 / Gap G: stamp each comparison/equality OPERATOR occurrence's
+   EBinOp dispatch ref with the resolved Eq/Ord impl route — but ONLY when the
+   operand type is a *ground non-primitive* with a matching impl.  Primitive
+   operands (Int/Float/Char/String/Bool) and ungroundable ones stay None → the
+   structural-builtin EBinOp path (eval_binop / emitIntCmp), which is also what
+   `impl Eq Int.eq a b = a == b` relies on, so the rewrite never recurses.
+   Mirrors the ground branch of check_method_usages (impl selection + requires),
+   stamping RKey so Dict_pass can rewrite the node into the method application. *)
+let primitive_head = function
+  | "Int" | "Float" | "Char" | "String" | "Bool" -> true
+  | _ -> false
+
+let check_binop_usages env =
+  List.iter (fun (_op, iface_name, _method, var, dref, loc) ->
+    let concrete = normalize (TVar var) in
+    if not (is_concrete concrete) then ()        (* ungroundable → builtin *)
+    else match head_tycon_mono concrete with
+      | Some h when primitive_head h -> ()        (* primitive → builtin (no recursion) *)
+      | _ ->
+        (* Non-primitive ground operand: select the impl exactly as
+           check_method_usages would (most-specific / default tiebreak) and
+           verify + carry its requires routes, then stamp RKey onto the EBinOp
+           ref.  No matching impl is an error the iface-usage check already
+           reports (same usage was recorded in method_usages). *)
+        let matching = matching_impls env iface_name [concrete] in
+        (match pick_dispatch_impl env iface_name [concrete] with
+         | Some e when matching <> [] ->
+           check_entry_requires env loc e [concrete];
+           let reqs = impl_requires_routes_rec env e [concrete] in
+           dref := Some { Ast.res_iface = iface_name;
+                          res_route = Ast.RKey (e.impl_key, reqs);
+                          res_method_dicts = []; res_impl_dicts = [];
+                          res_fwd_requires = false }
+         | _ -> ())  (* ambiguous/none → leave None; method_usages check reports *)
+  ) !(env.binop_usages)
+
 (* Phase 69.x: turn each recorded constrained-function occurrence into a list of
    dictionary routes (one per constraint, in slot order) and fill its EDictApp
    ref, so eval applies the right dictionaries as leading arguments.
@@ -4214,6 +4269,7 @@ let check_program_impl ?(promoted : (ident, unit) Hashtbl.t option)
 
   (* Phase 4.6: verify method call sites have matching impls and constraints *)
   check_method_usages !env;
+  check_binop_usages !env;
   check_constraint_obligations !env;
   realize_recursive_dict_apps !env;
   resolve_dict_apps !env;
@@ -4564,6 +4620,7 @@ let typecheck_module
     | _ -> ()
   ) prog;
   check_method_usages !env;
+  check_binop_usages !env;
   check_constraint_obligations !env;
   realize_recursive_dict_apps !env;
   resolve_dict_apps !env;
@@ -4734,6 +4791,7 @@ let copy_tc_env (e : env) : env = {
   method_dict_routes     = Hashtbl.copy e.method_dict_routes;
   impl_dict_routes       = Hashtbl.copy e.impl_dict_routes;
   constraint_obligations = ref !(e.constraint_obligations);
+  binop_usages           = ref !(e.binop_usages);
   dict_app_usages        = ref !(e.dict_app_usages);
   recursive_promoted_usages = ref !(e.recursive_promoted_usages);
   type_ctors    = Hashtbl.copy e.type_ctors;
@@ -4833,6 +4891,7 @@ let check_repl_decl ?(seeded=false)
     | _ -> ()
   ) decls;
   check_method_usages !env;
+  check_binop_usages !env;
   check_constraint_obligations !env;
   realize_recursive_dict_apps !env;
   resolve_dict_apps !env;
@@ -4866,6 +4925,7 @@ let infer_repl_expr (env : env) (e : expr) : mono * string list =
      check_repl_decl; like there, usages accumulate in the persistent env and
      are re-checked idempotently (concrete usages re-fill to the same key). *)
   check_method_usages env;
+  check_binop_usages env;
   realize_recursive_dict_apps env;
   resolve_dict_apps env;
   resolve_method_dicts env;

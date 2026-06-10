@@ -596,7 +596,7 @@ let rec check_expr env scope errors e =
     check_expr env scope errors c;
     check_expr env scope errors t;
     check_expr env scope errors e
-  | EBinOp (_, l, r) ->
+  | EBinOp (_, l, r, _) ->
     check_expr env scope errors l;
     check_expr env scope errors r
   | EUnOp (_, e) ->

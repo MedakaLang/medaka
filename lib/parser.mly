@@ -1,6 +1,11 @@
 %{
 open Ast
 
+(* Phase 151 / Gap G: EBinOp carries a dispatch ref (filled by typecheck for
+   ground non-primitive comparison/equality operands).  The parser always
+   produces a fresh None. *)
+let mkbin op l r = EBinOp (op, l, r, ref None)
+
 let of_pos sp ep =
   { file     = sp.Lexing.pos_fname;
     line     = sp.Lexing.pos_lnum;
@@ -87,7 +92,7 @@ let rec expr_to_pat = function
   | ELit l       -> PLit l
   | ETuple es    -> PTuple (List.map expr_to_pat es)
   | EListLit es  -> PList  (List.map expr_to_pat es)
-  | EBinOp ("::", a, b) -> PCons (expr_to_pat a, expr_to_pat b)
+  | EBinOp ("::", a, b, _) -> PCons (expr_to_pat a, expr_to_pat b)
   | ESection (SecLeft (a, "::")) -> PCons (expr_to_pat a, PWild)  (* `(x :: _)` in a binding LHS: the `_` was eaten by the left-section rewrite — recover it *)
   | EAsPat (x, e) -> PAs (x, expr_to_pat e)  (* `x@subpat` in a binding LHS *)
   | EApp _ as e ->
@@ -656,50 +661,50 @@ expr_lam:
 
 (* Pipe: x |> f  ≡  f x   (left-associative, lower than all other operators) *)
 expr_pipe:
-  | expr_pipe PIPE_RIGHT expr_compose  { EBinOp ("|>", $1, $3) }
+  | expr_pipe PIPE_RIGHT expr_compose  { mkbin "|>" $1 $3 }
   | expr_compose                       { $1 }
 
 (* Composition: f >> g  ≡  fun x -> g (f x)
                 f << g  ≡  fun x -> f (g x)  *)
 expr_compose:
-  | expr_compose RCOMPOSE expr_or  { EBinOp (">>", $1, $3) }
-  | expr_compose LCOMPOSE expr_or  { EBinOp ("<<", $1, $3) }
+  | expr_compose RCOMPOSE expr_or  { mkbin ">>" $1 $3 }
+  | expr_compose LCOMPOSE expr_or  { mkbin "<<" $1 $3 }
   | expr_or                        { $1 }
 
 expr_or:
-  | expr_or OR expr_and   { EBinOp ("||", $1, $3) }
+  | expr_or OR expr_and   { mkbin "||" $1 $3 }
   | expr_and              { $1 }
 
 expr_and:
-  | expr_and AND expr_cmp  { EBinOp ("&&", $1, $3) }
+  | expr_and AND expr_cmp  { mkbin "&&" $1 $3 }
   | expr_cmp               { $1 }
 
 expr_cmp:
-  | expr_cmp EQ_EQ expr_cons  { EBinOp ("==", $1, $3) }
-  | expr_cmp NEQ   expr_cons  { EBinOp ("!=", $1, $3) }
-  | expr_cmp LT    expr_cons  { EBinOp ("<",  $1, $3) }
-  | expr_cmp GT    expr_cons  { EBinOp (">",  $1, $3) }
-  | expr_cmp LEQ   expr_cons  { EBinOp ("<=", $1, $3) }
-  | expr_cmp GEQ   expr_cons  { EBinOp (">=", $1, $3) }
+  | expr_cmp EQ_EQ expr_cons  { mkbin "==" $1 $3 }
+  | expr_cmp NEQ   expr_cons  { mkbin "!=" $1 $3 }
+  | expr_cmp LT    expr_cons  { mkbin "<" $1 $3 }
+  | expr_cmp GT    expr_cons  { mkbin ">" $1 $3 }
+  | expr_cmp LEQ   expr_cons  { mkbin "<=" $1 $3 }
+  | expr_cmp GEQ   expr_cons  { mkbin ">=" $1 $3 }
   | expr_cons                 { $1 }
 
 expr_cons:
-  | expr_append CONS expr_cons  { EBinOp ("::", $1, $3) }
+  | expr_append CONS expr_cons  { mkbin "::" $1 $3 }
   | expr_append                 { $1 }
 
 expr_append:
-  | expr_append PLUSPLUS   expr_add  { EBinOp ("++", $1, $3) }
+  | expr_append PLUSPLUS   expr_add  { mkbin "++" $1 $3 }
   | expr_add                         { $1 }
 
 expr_add:
-  | expr_add PLUS  expr_mul  { EBinOp ("+", $1, $3) }
-  | expr_add MINUS expr_mul  { EBinOp ("-", $1, $3) }
+  | expr_add PLUS  expr_mul  { mkbin "+" $1 $3 }
+  | expr_add MINUS expr_mul  { mkbin "-" $1 $3 }
   | expr_mul                 { $1 }
 
 expr_mul:
-  | expr_mul STAR  expr_unary  { EBinOp ("*", $1, $3) }
-  | expr_mul SLASH expr_unary  { EBinOp ("/", $1, $3) }
-  | expr_mul MOD   expr_unary  { EBinOp ("%", $1, $3) }
+  | expr_mul STAR  expr_unary  { mkbin "*" $1 $3 }
+  | expr_mul SLASH expr_unary  { mkbin "/" $1 $3 }
+  | expr_mul MOD   expr_unary  { mkbin "%" $1 $3 }
   | expr_unary                 { $1 }
 
 (* Unary minus binds tighter than `*` / `+` but looser than application.
@@ -778,7 +783,7 @@ expr_atom:
          parenthesised expression just unwraps to its inner expr. *)
       let rec strip = function ELoc (_, e) -> strip e | e -> e in
       match strip $2 with
-      | EBinOp (op, lhs, rhs) when (match strip rhs with EVar "_" -> true | _ -> false) ->
+      | EBinOp (op, lhs, rhs, _) when (match strip rhs with EVar "_" -> true | _ -> false) ->
           ELoc (of_pos $startpos $endpos, ESection (SecLeft (lhs, op)))
       | _ -> $2 }
   | LPAREN expr_no_block COMMA

@@ -75,7 +75,7 @@ let rec sexp_expr e =
       node "ELet" [string_of_bool m; sexp_pat p; sexp_expr e1; sexp_expr e2]
   | EMatch (s, arms)   -> node "EMatch" (sexp_expr s :: List.map sexp_arm arms)
   | EIf (c, t, e)      -> node "EIf" [sexp_expr c; sexp_expr t; sexp_expr e]
-  | EBinOp (op, a, b)  -> node "EBinOp" [esc_str op; sexp_expr a; sexp_expr b]
+  | EBinOp (op, a, b, _) -> node "EBinOp" [esc_str op; sexp_expr a; sexp_expr b]
   | EUnOp (op, a)      -> node "EUnOp" [esc_str op; sexp_expr a]
   | EInfix (op, a, b)  -> node "EInfix" [esc_str op; sexp_expr a; sexp_expr b]
   | EFieldAccess (e, f)-> node "EFieldAccess" [sexp_expr e; esc_str f]

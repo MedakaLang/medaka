@@ -1,0 +1,7 @@
+data M = M Int
+
+impl Eq M where
+  eq (M a) (M b) = (a % 3) == (b % 3)
+
+main : <IO> Unit
+main = println (debug ((M 1) == (M 4)) ++ " " ++ debug ((M 1) == (M 2)))
