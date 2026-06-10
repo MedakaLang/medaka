@@ -123,8 +123,15 @@ date; deletion is unlocked only when the bar below is met).
    named-field deriving).
 4. ⏳ **NOT STARTED.** Performance — emitted IR is `-O0`; nobody's turned on `-O2` or benchmarked
    native-compiler-vs-OCaml. (Worth a scoping pass.)
-5. ⏳ **NOT STARTED.** Self-bootstrapping build (native compiler from `.mdk` without the OCaml
-   interpreter) — converges with the Phase-C CLI capstone.
+5. 🟡 **SCOPED 2026-06-10 — ~90% done at the capability level; packaging queued (#41, after C5).**
+   The C3 fixpoint already produces + byte-verifies a native emitter; remaining is packaging
+   (~1-2 days, no source change). Decided: commit a ~10.6 MB **checked-in IR seed**
+   (`selfhost/seed/emitter.ll`), single-platform arm64-macOS, per-release/on-demand gating.
+   **Key insight: the seed is self-refreshing** — OCaml is needed only for the first mint; after
+   that the native emitter emitting itself (C3b) regenerates it → genuine OCaml-free steady state.
+   Real gaps to close in the build: verify the strict `medaka build` driver fixpoints (proven only
+   for the gap-tolerant bootstrap driver so far); a ~5-line `build_cmd.mdk` edit to call a native
+   emitter binary instead of `medaka run`.
 6. 🟢 **Soundness + correctness CLOSED.** TYPECHECK-AUDIT: all confirmed soundness/correctness/
    diagnostic findings closed (S1-S3, T1/T1b/T2, C1-C9, D1/D2, OBS3/OBS4); **C4 resolved by decision**
    (lazy nullary canonical). Tail in motion: **C5** (building #39), **C8b** (in flight), **C7-native**,
