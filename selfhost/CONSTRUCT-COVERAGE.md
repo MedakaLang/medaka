@@ -725,3 +725,22 @@ test/construct_fixtures/
   tuple_pat_lambda.mdk      type_alias.mdk           type_annot_expr.mdk
   unary_minus.mdk           unary_not.mdk            where_multi_defs.mdk
 ```
+
+### Dict-pass SIGSEGV cluster — ROOT-CAUSED 2026-06-10 (read-only investigation)
+
+Two distinct selfhost-only root causes (oracle is correct in both):
+- **Cause A (F1-Layer2):** `typecheck.mdk` `inferMethodAt` arg-position arm (`:1393-96`,
+  `recordArgStamp`) records nothing into `methodSiteFns`; only the return-position arm
+  (`recordSite`, `:1416-21`) does. So an inferred constraint from an arg-position method
+  call (`println s`) never reaches `inferredConstraintIds` → fn never promoted → no dict
+  param → dict word 0/`RNone`. Oracle (`lib/typecheck.ml:1504`) records ALL occurrences.
+  **Fix A:** record arg-position monos in the arg arm too. Selfhost-only, low-med risk.
+- **Cause B (H-b2 ≡ audit L2):** `routeOfMono` (`:3121-26`) returns `RKey tag []` — drops
+  nested element reqs (`Eq (List a)` inside `Eq (Box a) requires Eq a`) → `$dict_eq_0`
+  unbound in emit env → panic. Oracle recurses (`impl_requires_routes_rec`). **Fix B:**
+  thread `implTable` into `routeOfMono` + call the existing `implRequiresRoutesRec`
+  (`:3093-98`); same for arg/req route sites. Selfhost-only, medium risk (routing
+  fragility) — needs @thorough + selfcompile_fixpoint re-baseline. Unblocks set/map builds.
+- F1-L2 ≠ H-b2 (upstream promotion vs downstream nested route). D11 (driver coverage) is
+  orthogonal. Interpreter masks both via arg-tag fallback; native fails loud.
+
