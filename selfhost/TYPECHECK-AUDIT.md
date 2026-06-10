@@ -520,7 +520,37 @@ default container, the other annotated container fails) — out of C9 scope.
   ctor/record/field and unbound-variable errors are uncatchable interpreter panics
   (`typecheck.mdk:1578, 1143, 1108/1123/1421/1428`). Resolve pre-screens variables but
   NOT record/field/ctor shapes. [KNOWN-partial — resolve-first assumption documented.]
-  **Fix:** convert the record/field/ctor panics into `typeErrors` entries.
+  **Fix:** convert the record/field/ctor panics into `typeErrors` entries. ✅ CLOSED
+  (2026-06-10): converted the six user-facing panic sites to accumulated `typeErrors`
+  entries + a fresh-var placeholder (oracle accumulate-and-continue analog), with
+  byte-identical messages to `lib/typecheck.ml`:
+  - `inferVar` (unbound variable → `Unbound variable: <x>`, `UnboundVar`)
+  - `inferPatCon` (unknown constructor in a pattern → `Unknown constructor: <n>`,
+    `UnknownCtor`); error path still infers the sub-patterns so their bindings reach
+    the arm body (else spurious downstream unbound-var errors the oracle never reaches)
+  - `inferPatRec` (unknown record in a pattern → `Unknown record type: <n>`,
+    `UnknownRecord`); new `bindRecPatFieldsFresh` binds the field pattern vars against
+    fresh types on the error path (same anti-cascade reason)
+  - `inferRecPatField` (unknown field in a record pattern → `Field <f> does not belong
+    to record <r>`, `UnknownField`); threaded the record name through
+    `inferPatRecWith`/`inferRecPatFields`; error path binds the field's vars via
+    `inferRecPatFieldWith` with a fresh type
+  - `inferRecordCreate` (unknown record in construction → `Unknown record type: <n>`)
+  - `unifyFieldAssign` (unknown field in construction → `Field <f> does not belong to
+    record <r>`); threaded the record name through `inferRecordCreateWith` and the two
+    record-update callers (`inferRecordUpdatePicked` via `resolveFieldRecord`'s resolved
+    name, `inferRecordUpdateWith`/`inferVariantUpdate` via the constructor name).
+  **Left as panics (deliberate):** `inferMethodAt` "unbound method" + `inferDictAt`
+  "unbound constrained fn" (`EMethodAt`/`EDictAt` are produced by the marker pass on
+  ALREADY-resolved names — a miss is an internal invariant, not a user error the oracle
+  recovers from); `inferRecordUpdate` "empty record update" + `inferVariantUpdate`'s
+  non-named-field shapes (desugar invariants). **Path note:** these shapes are observable
+  ONLY on the no-resolve differential path (`dev/tc_probe.exe` oracle vs
+  `selfhost/typecheck_main.mdk`) — the full front-end (`selfhost/check.mdk`) catches them
+  in resolve first and stops before typecheck (by design). New gate +
+  fixtures: `test/diff_selfhost_typecheck_panic_errors.sh` reading
+  `test/typecheck_panic_fixtures/` (6 fixtures, driver-A/no-resolve only, all == oracle,
+  no panic). No regression across bootstrap/check/eval/core_ir/llvm_modules/fixpoint.
 - **D2. `LetRecNonFunction` guard absent** from `processSCC` (`typecheck.mdk:3161-3315`
   vs oracle `typecheck.ml:2591-2597`) — recursive value bindings infer or loop instead
   of the dedicated error. [NEW] ✅ CLOSED (2026-06-10): added `checkLetRecDecls` +

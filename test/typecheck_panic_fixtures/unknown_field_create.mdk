@@ -1,0 +1,4 @@
+record Pt
+  x : Int
+
+f = Pt { x = 1, y = 2 }

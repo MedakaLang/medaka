@@ -1,0 +1,2 @@
+f r = match r
+  Nope { a = x } => x

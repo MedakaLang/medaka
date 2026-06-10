@@ -1181,22 +1181,39 @@ inferPat _ _ = panic "typecheck: unsupported pattern (slice 1)"
 
 inferPatRec : TcEnv -> String -> List RecPatField -> <Mut> (Mono, List (String, Scheme))
 inferPatRec env name fields = match lookupRecordByName name
-  None => panic ("unknown record: " ++ name)
-  Some ri => inferPatRecWith env ri fields
+  None =>
+    let _ = set_ref typeErrors (unknownRecordMsg name :: typeErrors.value)
+    -- bind the field pattern vars with fresh types (no field-type info) so the
+    -- arm body still typechecks; the oracle fails fast on the unknown record, we
+    -- accumulate, so dropping the bindings would raise spurious unbound-var errors
+    (freshVar (), bindRecPatFieldsFresh env fields)
+  Some ri => inferPatRecWith env name ri fields
 
-inferPatRecWith : TcEnv -> RecordInfo -> List RecPatField -> <Mut> (Mono, List (String, Scheme))
-inferPatRecWith env ri fields =
+-- bind a record pattern's fields against fresh types, NO unknown-field check
+-- (the record itself is already-reported unknown; see inferPatRec error path)
+bindRecPatFieldsFresh : TcEnv -> List RecPatField -> <Mut> List (String, Scheme)
+bindRecPatFieldsFresh _ [] = []
+bindRecPatFieldsFresh env (RecPatField fname mp :: rest) =
+  inferRecPatFieldWith env (freshVar ()) fname mp ++ bindRecPatFieldsFresh env rest
+
+inferPatRecWith : TcEnv -> String -> RecordInfo -> List RecPatField -> <Mut> (Mono, List (String, Scheme))
+inferPatRecWith env rname ri fields =
   let ir = instantiateRecord ri
-  (fst ir, inferRecPatFields env (snd ir) fields)
+  (fst ir, inferRecPatFields env rname (snd ir) fields)
 
-inferRecPatFields : TcEnv -> List (String, Mono) -> List RecPatField -> <Mut> List (String, Scheme)
-inferRecPatFields _ _ [] = []
-inferRecPatFields env fieldTypes (RecPatField fname mp :: rest) =
-  inferRecPatField env fieldTypes fname mp ++ inferRecPatFields env fieldTypes rest
+inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> <Mut> List (String, Scheme)
+inferRecPatFields _ _ _ [] = []
+inferRecPatFields env rname fieldTypes (RecPatField fname mp :: rest) =
+  inferRecPatField env rname fieldTypes fname mp ++ inferRecPatFields env rname fieldTypes rest
 
-inferRecPatField : TcEnv -> List (String, Mono) -> String -> Option Pat -> <Mut> List (String, Scheme)
-inferRecPatField env fieldTypes fname mp = match lookupAssocS fname fieldTypes
-  None => panic ("unknown field: " ++ fname)
+inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> Option Pat -> <Mut> List (String, Scheme)
+inferRecPatField env rname fieldTypes fname mp = match lookupAssocS fname fieldTypes
+  None =>
+    let _ = set_ref typeErrors (unknownFieldMsg fname rname :: typeErrors.value)
+    -- bind the field's pattern vars against a fresh type so the arm body still
+    -- typechecks (the oracle fails fast on the unknown field; we accumulate, so
+    -- skipping the binding would raise spurious downstream unbound-variable errors)
+    inferRecPatFieldWith env (freshVar ()) fname mp
   Some ft => inferRecPatFieldWith env ft fname mp
 
 inferRecPatFieldWith : TcEnv -> Mono -> String -> Option Pat -> <Mut> List (String, Scheme)
@@ -1216,7 +1233,13 @@ litType LUnit = TCon "Unit"
 
 inferPatCon : TcEnv -> String -> List Pat -> <Mut> (Mono, List (String, Scheme))
 inferPatCon env name pats = match lookupCtor env name
-  None => panic ("unknown constructor: " ++ name)
+  None =>
+    let _ = set_ref typeErrors (unknownCtorMsg name :: typeErrors.value)
+    -- still infer the sub-patterns so their bindings reach the arm body
+    -- (else the continued path raises spurious unbound-variable errors the
+    -- oracle never reaches — it fails fast on the unknown constructor)
+    let pr = inferPats env pats
+    (freshVar (), snd pr)
   Some scheme => inferPatConWith env scheme pats
 
 inferPatConWith : TcEnv -> Scheme -> List Pat -> <Mut> (Mono, List (String, Scheme))
@@ -1496,24 +1519,24 @@ blockLet env _ pat e =
 
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> <Mut> Mono
 inferRecordCreate env name fields = match lookupRecordByName name
-  None => panic ("unknown record: " ++ name)
-  Some ri => inferRecordCreateWith env ri fields
+  None => unknownRecordFresh name
+  Some ri => inferRecordCreateWith env name ri fields
 
-inferRecordCreateWith : TcEnv -> RecordInfo -> List FieldAssign -> <Mut> Mono
-inferRecordCreateWith env ri fields =
+inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> <Mut> Mono
+inferRecordCreateWith env rname ri fields =
   let ir = instantiateRecord ri
-  let _ = unifyFieldAssigns env (snd ir) fields
+  let _ = unifyFieldAssigns env rname (snd ir) fields
   fst ir
 
-unifyFieldAssigns : TcEnv -> List (String, Mono) -> List FieldAssign -> <Mut> Unit
-unifyFieldAssigns _ _ [] = ()
-unifyFieldAssigns env fieldTypes (FieldAssign fn val :: rest) =
-  let _ = unifyFieldAssign env fieldTypes fn val
-  unifyFieldAssigns env fieldTypes rest
+unifyFieldAssigns : TcEnv -> String -> List (String, Mono) -> List FieldAssign -> <Mut> Unit
+unifyFieldAssigns _ _ _ [] = ()
+unifyFieldAssigns env rname fieldTypes (FieldAssign fn val :: rest) =
+  let _ = unifyFieldAssign env rname fieldTypes fn val
+  unifyFieldAssigns env rname fieldTypes rest
 
-unifyFieldAssign : TcEnv -> List (String, Mono) -> String -> Expr -> <Mut> Unit
-unifyFieldAssign env fieldTypes fn val = match lookupAssocS fn fieldTypes
-  None => panic ("unknown field: " ++ fn)
+unifyFieldAssign : TcEnv -> String -> List (String, Mono) -> String -> Expr -> <Mut> Unit
+unifyFieldAssign env rname fieldTypes fn val = match lookupAssocS fn fieldTypes
+  None => set_ref typeErrors (unknownFieldMsg fn rname :: typeErrors.value)
   Some ft => unify (infer env val) ft
 
 -- Phase 72 / TYPECHECK-AUDIT C2: receiver-directed field resolution.  Infer the
@@ -1630,6 +1653,31 @@ ambiguousFieldMsg fname owners =
     ++ ". I can't tell which record this value is — add a type annotation on it (e.g. '(r : "
     ++ headL owners ++ ")." ++ fname ++ "')."
 
+-- TYPECHECK-AUDIT D1: convert resolve-not-pre-screened error shapes (unknown
+-- record / constructor, unbound variable) from uncatchable interpreter panics
+-- into accumulated typeErrors + a fresh-var placeholder, so inference continues
+-- (mirrors lib/typecheck.ml, which `fail`s with these byte-identical messages).
+unknownRecordMsg : String -> String
+unknownRecordMsg name = "Unknown record type: " ++ name
+
+unknownCtorMsg : String -> String
+unknownCtorMsg name = "Unknown constructor: " ++ name
+
+unboundVarMsg : String -> String
+unboundVarMsg name = "Unbound variable: " ++ name
+
+-- push the message + return a fresh placeholder type so the continued path stays
+-- in a valid state (the oracle accumulate-and-continue analog for these shapes).
+unknownRecordFresh : String -> <Mut> Mono
+unknownRecordFresh name =
+  let _ = set_ref typeErrors (unknownRecordMsg name :: typeErrors.value)
+  freshVar ()
+
+unboundVarFresh : String -> <Mut> Mono
+unboundVarFresh name =
+  let _ = set_ref typeErrors (unboundVarMsg name :: typeErrors.value)
+  freshVar ()
+
 inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> <Mut> Mono
 inferRecordUpdate env base fields = match firstFieldName fields
   None => panic "empty record update"
@@ -1641,8 +1689,8 @@ inferRecordUpdate env base fields = match firstFieldName fields
 -- the result have the variant's DATA type, only the provided fields are typed.
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> <Mut> Mono
 inferVariantUpdate env cname base fields = match lookupRecordByName cname
-  None => panic ("unknown record: " ++ cname)
-  Some ri => inferRecordUpdateWith env base fields ri
+  None => unknownRecordFresh cname
+  Some ri => inferRecordUpdateWith env cname base fields ri
 
 firstFieldName : List FieldAssign -> Option String
 firstFieldName [] = None
@@ -1656,20 +1704,20 @@ inferRecordUpdateField env base fields fn =
   let bt = normalize (infer env base)
   match resolveFieldRecord bt fn
     None => freshVar ()
-    Some (_, ri) => inferRecordUpdatePicked bt env fields ri
+    Some (rname, ri) => inferRecordUpdatePicked rname bt env fields ri
 
-inferRecordUpdatePicked : Mono -> TcEnv -> List FieldAssign -> RecordInfo -> <Mut> Mono
-inferRecordUpdatePicked bt env fields ri =
+inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> <Mut> Mono
+inferRecordUpdatePicked rname bt env fields ri =
   let ir = instantiateRecord ri
   let _ = unify bt (fst ir)
-  let _ = unifyFieldAssigns env (snd ir) fields
+  let _ = unifyFieldAssigns env rname (snd ir) fields
   fst ir
 
-inferRecordUpdateWith : TcEnv -> Expr -> List FieldAssign -> RecordInfo -> <Mut> Mono
-inferRecordUpdateWith env base fields ri =
+inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> <Mut> Mono
+inferRecordUpdateWith env rname base fields ri =
   let ir = instantiateRecord ri
   let _ = unify (infer env base) (fst ir)
-  let _ = unifyFieldAssigns env (snd ir) fields
+  let _ = unifyFieldAssigns env rname (snd ir) fields
   fst ir
 
 -- operators infer by SHAPE (the typeclass constraint they carry — Num/Eq/… — is
@@ -1768,7 +1816,7 @@ inferInfix env op l r =
 inferVar : TcEnv -> String -> <Mut> Mono
 inferVar env x = match lookupVar env x
   Some s => if argMeasureEnabled.value then inferVarMeasured x s else instantiate s
-  None => panic ("unbound variable: " ++ x)
+  None => unboundVarFresh x
 
 inferApp : Mono -> Mono -> <Mut> Mono
 inferApp ft xt =
