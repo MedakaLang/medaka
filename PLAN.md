@@ -172,17 +172,18 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
      `compare`/`Ord`, `map`/`Foldable`, `data … deriving (Eq, Debug)`. `test/build_cmd.sh`
      11/11 green. **(Build main's `_build` after a `.mdk`-touching merge before running
      this gate — a stale embed shows spurious `unbound variable: debug`.)**
-   - ⚠️ **Residual gap → top of the (b) sweep: `Unit`-return auto-print.** A
-     `main : <IO> Unit` program (the most common shape) compiles + runs but appends a
-     spurious trailing `0`: native `println "hello"` → `hello\n0\n`, interpreter →
-     `hello\n`. `println`'s side effect is correct; the bug is the **auto-print of a
-     Unit-typed `main` result rendering `0` via `mdk_print_int` instead of `()`/nothing**.
-     Root: the emitter's `fnRetTy` return-type inference defaults unknown prelude-fn
-     return types to `LTInt`, so a Unit-returning call reaches `emitPrint` as `LTInt`.
-     Broad (affects ~every IO program's final line) + well-scoped (emitter/runtime
-     return-type inference, `fnRetTy`/`emitPrint` in `llvm_emit.mdk`). `println`
-     currently SKIPPED in `test/build_cmd.sh` with a comment. **Highest-value next
-     emitter fix.**
+   - ✅ **`Unit`-return auto-print FIXED (Stage 3 2b, `35ff12a`).** Was: a
+     `main : <IO> Unit` program appended a spurious `0` (native `println "hello"` →
+     `hello\n0\n` vs interpreter `hello\n`). Root: `callRetTy` (in the emitter's
+     pure inference pass, `selfhost/llvm_emit.mdk` ~line 4040) defaulted unknown
+     callees to `LTInt`, and IO output externs (`putStr`/`putStrLn`/`ePutStr`/
+     `ePutStrLn`) weren't in the sig table → `println` (`= putStrLn (display x)`)
+     inferred `LTInt`, propagating to `main`'s result → auto-print routed through
+     `mdk_print_int(0)`. Fix: `callRetTy` resolves IO output externs to `LTUnit`
+     up front (mirrors the real emit path's `emitIoExtern`). Tight blast radius
+     (only the 4 genuinely-Unit externs); emit-only. Now native `hello\n()\n` ==
+     interpreter+harness convention; `println` un-SKIPped in `test/build_cmd.sh`
+     (13/13); all byte-IR / fixpoint / bootstrap gates green.
 
    Sub-goal **(b)** AUDIT `emitTree`/`emitExpr`/`emitApp` for every reachable
    `gapU`/`gapE`, and build a **language-construct coverage matrix** (start with the
@@ -190,6 +191,13 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
    source uses — user programs use more (list comprehensions, all operator sections,
    inclusive ranges, string interpolation, every `do`/guard form, record/variant
    update, etc.). One native==interpreter fixture per construct in `SYNTAX.md`.
+
+   *Adjacent finding (2026-06-09, NOT a native gap — interpreter has it too):*
+   `do`-block sequencing of IO actions (`do { println a; println b }`) fails in
+   BOTH native and the tree-walker — the `do`→`andThen`/`pure` desugar wants an
+   `IO`/`Monad` instance the prelude doesn't provide (interp errors `Type mismatch:
+   a b vs Unit`). `let _ = println a` sequencing works in both. A language/prelude
+   gap (missing IO monad), tracked here so it isn't mistaken for a backend gap.
 3. **Port OCaml test suites to native Medaka.** Re-express `test/*.ml` (the
    alcotest suites — parser/typecheck/eval/resolve/exhaust/…) as Medaka tests
    (`medaka test`) so the suite stops depending on `lib/`. This is the bulk of
