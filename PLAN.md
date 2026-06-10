@@ -153,6 +153,22 @@ stage's `diff_selfhost_*` / `bootstrap_*` harness. Confirmed soundness items fir
   (5 generalize sites; port `is_nonexpansive`/`gen_restricted`/`lower_to_current`).
   CONFIRMED. *Note:* mirroring the oracle reproduces an adjacent oracle `mut`-gen
   hole — the audit says fix BOTH sides (a design point to settle when we reach T1).
+- **T1** — ✅ **CLOSED (`1c027d8`).** Value restriction was entirely missing →
+  polymorphic mutable refs typechecked. Ported `isNonexpansive`/`genRestricted`/
+  `lowerToCurrent` + the Phase 89 point-free relaxation into all generalize sites
+  (inferLet/blockLet/generalizeGroup/sccSchemes); `Ref []` now rejects == oracle.
+  Mirrors the oracle exactly (incl. its `mut` hole — see T1b). All gates green; no
+  dispatch/route-keying perturbation.
+- **T1b** (follow-up, both-sides) — the `mut`-gen hole the oracle ALSO has:
+  `lib/typecheck.ml:1968` keys `gen_restricted` on `is_nonexpansive` only (ignores
+  `mut`), and `DoAssign` re-instantiates per assignment — `let mut x = []` then
+  heterogeneous pushes checks clean + runs on BOTH sides. Fix both (restrict when
+  `mut`, or don't re-instantiate on assignment). Deferred deliberately to keep the
+  T1 selfhost port a clean oracle-mirror. Audit §T1.
+- **OBS1** (selfhost missing diagnostic, surfaced during T1) — selfhost does NOT
+  enforce the oracle's `let mut not allowed inside a do block` prohibition; an
+  invalid `do { let mut … }` is wrongly accepted by selfhost (oracle rejects).
+  Separate from value restriction; a missing-diagnostic divergence. Low priority.
 - **T2** — inline `let … in` drops `mut`/`is_fun` → recursive inline let panics
   (`typecheck.mdk:1204`; split the arm per `typecheck.ml:1664-1696`). CONFIRMED.
 - **S3** — no coherence checking (overlap/duplicate/orphan impls); port
