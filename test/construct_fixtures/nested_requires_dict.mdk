@@ -1,0 +1,18 @@
+-- Cause B (audit L2 / H-b2): routeOfMono / implDictRoutesFor dropped the nested
+-- element-dict requirement of a concrete-headed constraint mono.  The impl
+-- `Eq (Box a) requires Eq a` lifts to `mdk_impl_Box_eq($dict_eq_0, …)`; the inner
+-- `eq xs ys` on the element `List a` routes RDict $dict_eq_0.  Before the fix the
+-- module/build path passed an EMPTY implTable into the return-position route chain
+-- (resolveSites/resolveDictApps) and the arg-position chain, so the nested
+-- requires route was [] → $dict_eq_0 was never materialized at the call site nor
+-- prepended as a param → unbound dict witness → SIGSEGV.  Threading the cumulative
+-- implTable in (and recursing via implRequiresRoutesRec) materializes the element
+-- dict; scanning the EMethodAt impl-/method-route lists in collectDictSites lets
+-- usesImplDict see the nested RDict and prepend the matching param.
+data Box a = Box (List a)
+
+impl Eq (Box a) requires Eq a where
+  eq (Box xs) (Box ys) = eq xs ys
+
+main : <IO> Unit
+main = println (debug (eq (Box [1, 2]) (Box [1, 2])))

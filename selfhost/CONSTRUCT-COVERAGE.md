@@ -735,12 +735,23 @@ Two distinct selfhost-only root causes (oracle is correct in both):
   call (`println s`) never reaches `inferredConstraintIds` → fn never promoted → no dict
   param → dict word 0/`RNone`. Oracle (`lib/typecheck.ml:1504`) records ALL occurrences.
   **Fix A:** record arg-position monos in the arg arm too. Selfhost-only, low-med risk.
-- **Cause B (H-b2 ≡ audit L2):** `routeOfMono` (`:3121-26`) returns `RKey tag []` — drops
-  nested element reqs (`Eq (List a)` inside `Eq (Box a) requires Eq a`) → `$dict_eq_0`
-  unbound in emit env → panic. Oracle recurses (`impl_requires_routes_rec`). **Fix B:**
-  thread `implTable` into `routeOfMono` + call the existing `implRequiresRoutesRec`
-  (`:3093-98`); same for arg/req route sites. Selfhost-only, medium risk (routing
-  fragility) — needs @thorough + selfcompile_fixpoint re-baseline. Unblocks set/map builds.
+- **Cause B (H-b2 ≡ audit L2) — ✅ CLOSED (one-level, 2026-06-10):** `routeOfMono`
+  returned `RKey tag []` — dropped nested element reqs (`Eq a` inside
+  `Eq (Box a) requires Eq a`). The real victim was the build/module path:
+  `elabModuleStamp` passed an EMPTY implTable into `resolveSites`/`resolveDictApps`,
+  so even the recursive builder had nothing. **Fix:** threaded the cumulative
+  `implTable` through the whole route chain (`routeOfMono` → `RKey tag
+  (implRequiresRoutesRec implTable tag m)`; `routesOfMonos`/`resolveDictApps`/
+  `resolveMethodDicts`/`argImplReqRoutes`/`argReqRoute` carry it; `elabModuleStamp`
+  binds `stampImplTable` and feeds `resolveSites` + `resolveDictApps`), AND made
+  `collectDictSites` scan the `EMethodAt` impl-/method-route lists so `usesImplDict`
+  sees a nested arg-position `RDict $dict_<m>_<slot>` and `implDictPassMethods`
+  prepends the param. Additive (goldens byte-identical, fixpoint holds). Box repro +
+  `import set.{Set}` build native == oracle (`True`, no SIGSEGV). RESIDUAL: two-level+
+  nesting still SIGSEGVs (emitter `dictWordOfRoute` materializes only the head tag —
+  flat i64 dict word can't carry a nested dict); `map`/Map blocked on a SEPARATE
+  arg-tag `toList` gap. Fixtures: `test/construct_fixtures/nested_requires_dict.mdk`,
+  `test/eval_dict_fixtures/nested_requires_box.mdk`.
 - F1-L2 ≠ H-b2 (upstream promotion vs downstream nested route). D11 (driver coverage) is
   orthogonal. Interpreter masks both via arg-tag fallback; native fails loud.
 
@@ -847,12 +858,17 @@ fixpoint held byte-for-byte through every fix). Fixtures: `float_annot_nolit.mdk
 ### IMPLEMENTATION PLAN — elaborateModules dict layer (the cluster-closing fix; oversight-scale)
 *Correction:* `elaborateModules` (`typecheck.mdk:4576`) ALREADY has an E4/E5/E6 layer that
 dict-passes *signatured* constrained fns cross-module. The remaining gap is 3 specific pieces:
-1. **Cause B (LAND FIRST — small, self-contained, ~30 lines):** thread the cumulative
-   `implTable` (already built at `elabModuleStamp:4709`) into the return-position route chain
-   `resolveDictApps:3111`→`routesOfMonos:3117`→`routeOfMono:3121`, and change the concrete arm
-   `RKey tag []` → `RKey tag (implRequiresRoutesRec implTable tag m)` (recursive fn already at
-   `:3093`). Unblocks set/map nested-dict SIGSEGVs immediately; no promotion needed. Verify +
-   `@thorough`/`selfcompile_fixpoint` re-baseline BEFORE touching promotion.
+1. **Cause B (LANDED 2026-06-10 — one-level CLOSED):** threaded the cumulative
+   `implTable` (built at `elabModuleStamp`) into the return-position route chain
+   `resolveSites`/`resolveDictApps`→`routesOfMonos`→`routeOfMono` and the arg-position
+   `argImplReqRoutes`→`argReqRoute`, with `routeOfMono`'s concrete arm now
+   `RKey tag (implRequiresRoutesRec implTable tag m)`. Also extended `collectDictSites`
+   to scan the `EMethodAt` impl-/method-route lists so `implDictPassMethods`'
+   `usesImplDict` gate prepends the param for an arg-position nested `RDict`. Unblocked
+   the Box repro + `import set.{Set}` SIGSEGVs. Self-compile fixpoint (C3a/C3b) +
+   every dict/eval/llvm gate green, byte-identical. RESIDUAL: two-level+ nesting needs
+   a richer emitter dict rep (flat i64 word can't carry nested dicts); `map`/Map blocked
+   on a separate arg-tag `toList` gap.
 2. **Cause A + promotion (the bulk):** seed `dictEligibleRef` with USER-module fn names only
    (mirror `elaborateDict:2246`; gate on `argStampEnabled` so oracle drivers stay `[]`); run a
    JOINT-flattened discovery fixpoint (`discoverPromotedModules`, mirror `discoverPromoted:2273`)

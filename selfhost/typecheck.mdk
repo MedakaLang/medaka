@@ -2254,8 +2254,8 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let keyTable = buildKeyTable prog2
   let _ = resolveSites implTable keyTable (returnPosMethodNames prog2) pendingSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
-  let _ = resolveDictApps pendingDictApps.value
-  let _ = resolveMethodDicts pendingMethodDicts.value
+  let _ = resolveDictApps implTable pendingDictApps.value
+  let _ = resolveMethodDicts implTable pendingMethodDicts.value
   let _ = resolveArgStamps implTable pendingArgStamps.value
   dictPass allNames prog2
 
@@ -3108,21 +3108,21 @@ findImplEntry (ImplEntry tag2 ms hty reqs :: rest) tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List (Ref (List Route), List Mono) -> <Mut> Unit
-resolveDictApps [] = ()
-resolveDictApps ((routesRef, monos) :: rest) =
-  let _ = set_ref routesRef (routesOfMonos monos)
-  resolveDictApps rest
+resolveDictApps : List ImplEntry -> List (Ref (List Route), List Mono) -> <Mut> Unit
+resolveDictApps _ [] = ()
+resolveDictApps implTable ((routesRef, monos) :: rest) =
+  let _ = set_ref routesRef (routesOfMonos implTable monos)
+  resolveDictApps implTable rest
 
-routesOfMonos : List Mono -> <Mut> List Route
-routesOfMonos [] = []
-routesOfMonos (m :: rest) = routeOfMono m :: routesOfMonos rest
+routesOfMonos : List ImplEntry -> List Mono -> <Mut> List Route
+routesOfMonos _ [] = []
+routesOfMonos implTable (m :: rest) = routeOfMono implTable m :: routesOfMonos implTable rest
 
-routeOfMono : Mono -> <Mut> Route
-routeOfMono m = match activeDictVarOf m
+routeOfMono : List ImplEntry -> Mono -> <Mut> Route
+routeOfMono implTable m = match activeDictVarOf m
   Some dname => RDict dname
   None => match headTyconMono m
-    Some tag => RKey tag []
+    Some tag => RKey tag (implRequiresRoutesRec implTable tag m)
     None => RNone
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
@@ -3138,28 +3138,28 @@ argImplDictRoutesFor : List ImplEntry -> String -> String -> Mono -> <Mut> List 
 argImplDictRoutesFor [] _ _ _ = []
 argImplDictRoutesFor (ImplEntry tag2 methodNames headTy reqs :: rest) name tag mono
   | tag2 == tag && containsName name methodNames = match matchTyMono headTy mono
-      Some subst => argImplReqRoutes subst reqs
+      Some subst => argImplReqRoutes (ImplEntry tag2 methodNames headTy reqs :: rest) subst reqs
       None => argImplDictRoutesFor rest name tag mono
   | otherwise = argImplDictRoutesFor rest name tag mono
 
-argImplReqRoutes : List (String, Mono) -> List Require -> <Mut> List Route
-argImplReqRoutes _ [] = []
-argImplReqRoutes subst (Require _ rargs :: rest) = argReqRoute subst rargs :: argImplReqRoutes subst rest
+argImplReqRoutes : List ImplEntry -> List (String, Mono) -> List Require -> <Mut> List Route
+argImplReqRoutes _ _ [] = []
+argImplReqRoutes implTable subst (Require _ rargs :: rest) = argReqRoute implTable subst rargs :: argImplReqRoutes implTable subst rest
 
-argReqRoute : List (String, Mono) -> List Ty -> <Mut> Route
-argReqRoute _ [] = RNone
-argReqRoute subst (arg :: _) = routeOfMono (fromAstType subst arg)
+argReqRoute : List ImplEntry -> List (String, Mono) -> List Ty -> <Mut> Route
+argReqRoute _ _ [] = RNone
+argReqRoute implTable subst (arg :: _) = routeOfMono implTable (fromAstType subst arg)
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
 -- method-level constraint, from the instantiated constraint mono.  A concrete head
 -- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
 -- constraint variable still (the caller is itself constrained) → RDict forwarding
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
-resolveMethodDicts : List (Ref (List Route), List Mono) -> <Mut> Unit
-resolveMethodDicts [] = ()
-resolveMethodDicts ((methodRef, monos) :: rest) =
-  let _ = set_ref methodRef (routesOfMonos monos)
-  resolveMethodDicts rest
+resolveMethodDicts : List ImplEntry -> List (Ref (List Route), List Mono) -> <Mut> Unit
+resolveMethodDicts _ [] = ()
+resolveMethodDicts implTable ((methodRef, monos) :: rest) =
+  let _ = set_ref methodRef (routesOfMonos implTable monos)
+  resolveMethodDicts implTable rest
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
 -- A deferred recursive call records one route per the CALLEE's constraint slot
@@ -3191,7 +3191,7 @@ resolveRecMono encl m = match headTyconMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
     Some slot => RDict (dictParamName encl slot)
-    None => routeOfMono m
+    None => routeOfMono [] m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
@@ -3406,6 +3406,12 @@ fieldAssignSites (FieldAssign _ e) = collectMethodSites e
 -- route-LIST refs (`Ref (List Route)`) instead of EMethodAt's single route ref.
 collectDictSites : Expr -> List (Ref (List Route))
 collectDictSites (EDictAt _ rs) = [rs]
+-- D3b-1: an EMethodAt arg-position site carries its element-dict routes in the
+-- impl-/method-dicts route LISTS (not tagRef).  A nested `requires` impl whose
+-- body dispatches a method on its own element tyvar routes RDict $dict_<m>_<slot>
+-- here — scan both so implDictPassMethods' usesImplDict gate sees it and prepends
+-- the matching param.  [] on the golden path (resolveArgStamp never runs).
+collectDictSites (EMethodAt _ _ implR methR) = [implR, methR]
 collectDictSites (EApp f x) = collectDictSites f ++ collectDictSites x
 collectDictSites (ELam _ b) = collectDictSites b
 collectDictSites (ELet _ _ _ e1 e2) = collectDictSites e1 ++ collectDictSites e2
@@ -4705,15 +4711,16 @@ markModules coreDecls modules =
 elabModuleStamp : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> List (String, Scheme)
 elabModuleStamp seedVars accData implDecls prog =
   let schemes = checkModuleFullImpl seedVars accData implDecls prog
-  let _ = resolveSites [] (buildKeyTable implDecls) [] pendingSites.value
-  let _ = if argStampEnabled.value then resolveArgStamps (buildImplTable implDecls) pendingArgStamps.value else ()
+  let stampImplTable = buildImplTable implDecls
+  let _ = resolveSites stampImplTable (buildKeyTable implDecls) [] pendingSites.value
+  let _ = if argStampEnabled.value then resolveArgStamps stampImplTable pendingArgStamps.value else ()
   -- E6: fill THIS module's `=>`-constrained-fn EDictAt routes (the call sites
   -- prePassDictArg marked) so the emitter supplies the matching dict ARGUMENT —
   -- realizeRecDictApps for self/mutually-recursive calls, resolveDictApps for the
   -- normal ones.  Gated: no-op when OFF (pendingDictApps/pendingRecDictApps empty,
   -- golden module drivers byte-identical).
   let _ = if argStampEnabled.value then realizeRecDictApps pendingRecDictApps.value else ()
-  let _ = if argStampEnabled.value then resolveDictApps pendingDictApps.value else ()
+  let _ = if argStampEnabled.value then resolveDictApps stampImplTable pendingDictApps.value else ()
   let _ = if argMeasureEnabled.value then accumArgSites pendingArgSites.value else ()
   schemes
 

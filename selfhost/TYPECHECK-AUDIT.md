@@ -263,27 +263,39 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   OCaml fix — *as part of* the E4 work, with a loader-driven regression fixture
   (same-named constrained/unconstrained pair across modules) in the multi-module gate.
 
-### L2. `routeOfMono` emits `RKey tag []` — nested element-dict reqs dropped at `=>`-call sites — LATENT (split status)
+### L2. `routeOfMono` emits `RKey tag []` — nested element-dict reqs dropped at `=>`-call sites — ✅ CLOSED (one-level, 2026-06-10)
 
-- **Where:** `selfhost/typecheck.mdk:2472-2477` — concrete arm returns
-  `RKey tag []` (no recursion into impl requires); oracle `lib/typecheck.ml:3910`
-  builds `RKey (key, impl_requires_routes_rec …)`. The return-position chain DOES
-  recurse (`implRequiresRoutesRec`, `:2437-2450` — the Phase 83/84 mirror); only the
-  dict-app/method-dict/arg-req sites are flat. Selfhost also lacks the oracle's
-  `RHeadKey` fallback (non-ground headed monos → `RNone` → arg-tag).
-- **Empirical:** the natural repro (`/tmp/verify/dp3.mdk`, `total : Sized a => a -> Int`
-  called at `List (List Int)`) prints 3 on the selfhost interpreter — **arg-tag
-  fallback on the element masks the dropped req for arg-position methods**. The
-  unmasked victims: return-position methods at nested types reached through a
-  `=>`-constrained call (no tag to recover from), and the native path (interpreter
-  arg-tag fallback narrower there). Status: arg-position one-level limit
-  [KNOWN — DISPATCH-INVENTORY.md D3b-1]; the dict-app site flatness [NEW] — and
-  PLAN.md's "No Phase 83/84 dispatch residuals remain" overstates: this residual is
-  in the code.
-- **Fix:** thread the impl table into `routeOfMono` and call `implRequiresRoutesRec`
-  in the concrete arm; add an `RHeadKey` analogue (see D4). Until then, add a
-  typecheck-time "nested instance dict not supported" error instead of relying on
-  runtime panics (matches AR recommendation).
+- **Where:** `selfhost/typecheck.mdk` `routeOfMono` (concrete arm returned
+  `RKey tag []`, no recursion into impl requires); oracle `lib/typecheck.ml:3909-3913`
+  builds `RKey (key, impl_requires_routes_rec …)`. The return-position
+  `implDictRoutesFor`/`implReqRoutes` chain already recursed (Phase 83/84 mirror);
+  the **build/module path** (`elabModuleStamp`) was the real victim: it passed an
+  EMPTY implTable into `resolveSites` and the dict-app/arg-stamp chains, so even the
+  recursive builder had nothing to recurse over → element dict `[]` → `$dict_eq_0`
+  unbound at emit → SIGSEGV.
+- **Fix (2026-06-10, Cause B / H-b2):** threaded the cumulative `implTable` through
+  the whole return- AND arg-position route chain — `routeOfMono`'s concrete arm now
+  returns `RKey tag (implRequiresRoutesRec implTable tag m)`; `routesOfMonos`,
+  `resolveDictApps`, `resolveMethodDicts`, `argImplReqRoutes`, `argReqRoute` all carry
+  the table; both call sites supply it (`elaborateDict` already had it; `elabModuleStamp`
+  binds `stampImplTable = buildImplTable implDecls` and feeds it to `resolveSites` +
+  `resolveDictApps`). ADDITIONALLY: `collectDictSites` now scans the `EMethodAt`
+  impl-/method-route lists so `usesImplDict` sees a nested `RDict $dict_<m>_<slot>`
+  in an arg-position element site and `implDictPassMethods` prepends the matching
+  param. ADDITIVE — goldens byte-identical (resolveArgStamp never runs OFF, so the
+  route lists stay `[]`); self-compile fixpoint C3a/C3b holds byte-for-byte.
+- **Verified:** `data Box a = Box (List a); impl Eq (Box a) requires Eq a where
+  eq (Box xs) (Box ys) = eq xs ys` builds native == oracle (`True`, no SIGSEGV).
+  `import set.{Set}` programs build + run native == oracle. Fixtures:
+  `test/construct_fixtures/nested_requires_dict.mdk`,
+  `test/eval_dict_fixtures/nested_requires_box.mdk`.
+- **RESIDUAL (still open):** (1) **two-level+ nesting** (`Box (List (List Int))`):
+  the EMITTER's `dictWordOfRoute (RKey key _) = hashName key` materializes only the
+  head tag — the flat i64 dict witness word cannot carry a nested dict, so deeper
+  reqs SIGSEGV. Needs a richer runtime dict rep (the MEMORY "flat impl-key dict can't
+  carry nested dicts" note). (2) `map`/Map build still hits a SEPARATE arg-tag gap
+  (`no impl of method 'toList' for type 'Map'`), not Cause B. (3) Selfhost still lacks
+  the oracle's `RHeadKey` fallback (non-ground headed monos → `RNone` → arg-tag).
 
 ---
 
