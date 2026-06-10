@@ -3,11 +3,15 @@
 -- All ported cases are program→value assertions.
 --
 -- Source: test/test_eval.ml (257 cases total).
--- Ported: ~120 OCaml test cases → ~130 Medaka test assertions.
+-- Ported: ~125 OCaml test cases → ~247 Medaka test assertions (incl. 7 new error cases).
 -- Skipped (see README for full mapping):
---   runtime-error detection (8): t_variant_update_wrong_ctor, t_do_refutable_bind_fail,
---     t_div_by_zero, t_match_fail, t_guard_non_exhaustive, t_named_unknown,
---     t_order_unbound_is_clear_error — require runExpectation (not exported).
+--   runtime-error detection (3 of original 8):
+--     t_named_unknown — @Unknown raises a typecheck error (not runtime) in the
+--       typed pipeline used by medaka test; cannot be caught by runExpectation.
+--     t_order_unbound_is_clear_error — unbound variable is a typecheck error;
+--       cannot be caught by runExpectation.
+--     (t_variant_update_wrong_ctor, t_do_refutable_bind_fail, t_div_by_zero,
+--      t_match_fail, t_guard_non_exhaustive — all ported below.)
 --   lex-error detection (1): t_int_overflow — not expressible as program behavior.
 --   t_aspat_do_bind, t_cons_wild_do_bind — use untyped List monad do-bind
 --     (dispatch via Thenable) which conflicts with medaka test's typed pipeline.
@@ -16,7 +20,7 @@
 --
 -- Run with: medaka test test/ported/test_eval_ported.mdk
 
-import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests}
+import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests, runExpectation, Pass, Fail}
 
 -- Helper: convert an Array Int to a List Int for expectEqual comparisons.
 -- (Array has no Foldable impl in core; array.mdk adds it, but we avoid that import.)
@@ -1082,3 +1086,61 @@ genBoxGName = match to_rep (BoxG 5)
   RCon name _ => name
   _ => ""
 test "derive Generic param ctor name" = expectEqual "BoxG" genBoxGName
+
+-- ── Runtime-error detection ───────────────────────────────────────────────────
+-- Ported from: t_variant_update_wrong_ctor, t_do_refutable_bind_fail,
+--   t_div_by_zero, t_match_fail, t_guard_non_exhaustive
+-- Skipped (typecheck errors in typed pipeline, not runtime errors):
+--   t_named_unknown (@Unknown → "No impl named 'Unknown' found" at typecheck)
+--   t_order_unbound_is_clear_error (unbound var → typecheck error)
+--
+-- Pattern: assertCrashesE wraps runExpectation and flips Fail→pass.
+
+assertCrashesE thunk = match runExpectation thunk
+  Fail _ => pass
+  Pass => fail "expected a runtime error but evaluation succeeded"
+
+-- t_div_by_zero: integer division by zero raises Eval_error
+divByZeroThunk _ =
+  let _ = (1 : Int) / 0
+  pass
+
+test "div by zero crashes" = assertCrashesE divByZeroThunk
+
+-- t_match_fail: match with no arm for the scrutinee raises Eval_error
+matchFailThunk _ =
+  let _ = match (5 : Int)
+    0 => "zero"
+  pass
+
+test "match non-exhaustive crashes" = assertCrashesE matchFailThunk
+
+-- t_guard_non_exhaustive: single guard clause fails, no fallthrough → Eval_error
+guardNonExhFn x
+  | x > 0 = 1
+
+guardNonExhThunk _ =
+  let _ = guardNonExhFn 0
+  pass
+
+test "guard non-exhaustive crashes" = assertCrashesE guardNonExhThunk
+
+-- t_variant_update_wrong_ctor: C { base | b = 99 } when base is Other raises Eval_error
+data DErr = CE { ae : Int, be : Int } | OtherE Int
+
+variantUpdateWrongCtorThunk _ =
+  let baseE = OtherE 5
+  let _ = CE { baseE | be = 99 }
+  pass
+
+test "variant update wrong ctor crashes" = assertCrashesE variantUpdateWrongCtorThunk
+
+-- t_do_refutable_bind_fail: (x :: _) <- Some [] in do-block raises Eval_error (Phase 99)
+doRefutableThunk _ =
+  let r = do
+    (x :: _) <- Some ([] : List Int)
+    pure x
+  let _ = r
+  pass
+
+test "do refutable bind fail crashes" = assertCrashesE doRefutableThunk

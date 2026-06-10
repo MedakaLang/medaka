@@ -4,19 +4,20 @@
 -- computations rather than captured stdout, since `medaka test` has no
 -- stdout-capture facility).
 --
--- Ported: 40 of 46 total test_run.ml cases.
--- Skipped (6 cases):
---   runtime-error detection (5): t_runtime_err, t_recursive_value_force_err,
---     t_recursive_value_force_msg, t_guard_exhausted_err,
---     t_string_bracket_index_oob — asserting that evaluation raises
---     Eval_error requires `runExpectation` (not exported from stdlib/test.mdk).
+-- Ported: 43 of 46 total test_run.ml cases (40 value + 3 runtime-error).
+-- Skipped (3 cases):
+--   t_recursive_value_force_err, t_recursive_value_force_msg: the crash is a
+--     top-level recursive value (`loop = ident loop`) which fires at module
+--     load time, before any thunk is passed to runExpectation. Inline `let rec`
+--     requires a lambda RHS so the same forcing pattern cannot be replicated
+--     inside a thunk. Cannot be expressed via the current framework.
 --   t_io_args_empty, t_io_getenv_unset — test environment-level IO externs
 --     (args, getEnv) that return empty/None in test contexts; the assertions
 --     are trivially true and not structurally interesting as value tests.
 --
 -- Run with: medaka test test/ported/test_run_ported.mdk
 
-import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests}
+import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests, runExpectation, Pass, Fail}
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -497,3 +498,45 @@ pingP n = if n <= 0 then tagP 0 else pongP (n - 1)
 pongP n = if n <= 0 then tagP 1 else pingP (n - 1)
 
 test "inferred return-pos mutual bool" = expectTrue (pingP 5 : Bool)
+
+-- ── Runtime-error detection ───────────────────────────────────────────────────
+-- Ported from: t_runtime_err, t_guard_exhausted_err, t_string_bracket_index_oob
+-- (t_recursive_value_force_err / _msg skipped: top-level recursive value fires
+--  at load time, before any thunk reaches runExpectation; let rec requires a
+--  lambda RHS so the forcing pattern cannot be replicated inline.)
+--
+-- Pattern: assertCrashes wraps runExpectation and flips Fail→pass (crash=good).
+
+assertCrashes thunk = match runExpectation thunk
+  Fail _ => pass
+  Pass => fail "expected a runtime error but evaluation succeeded"
+
+-- t_runtime_err: non-exhaustive match raises Eval_error at runtime
+runtimeErrFn n = match n
+  1 => "one"
+  2 => "two"
+
+runtimeErrThunk _ =
+  let _ = runtimeErrFn 99
+  pass
+
+test "runtime error non-exhaustive match" = assertCrashes runtimeErrThunk
+
+-- t_guard_exhausted_err: single guard clause with no fallthrough; calling with
+-- a value that fails the guard raises Eval_error (Phase 91)
+bigFn x
+  | x > 100 = "big"
+
+guardExhaustedThunk _ =
+  let _ = bigFn 5
+  pass
+
+test "guard exhausted crashes" = assertCrashes guardExhaustedThunk
+
+-- t_string_bracket_index_oob: s.[i] on a 6-codepoint string with i=6 (past end)
+stringOobThunk _ =
+  let s = "héllo→"
+  let _ = s.[6]
+  pass
+
+test "string bracket index oob crashes" = assertCrashes stringOobThunk

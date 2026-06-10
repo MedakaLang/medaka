@@ -14,7 +14,7 @@ Run with:
 
 Source suite: `test/test_run.ml` (46 cases total).
 
-**Ported: 40 OCaml test cases → 96 Medaka test assertions** (many cases expand
+**Ported: 43 OCaml test cases → 99 Medaka test assertions** (many cases expand
 to multiple assertions — one per dispatch path or value branch).
 
 **Module resolution note:** `test/ported/test.mdk` is a symlink to
@@ -22,11 +22,11 @@ to multiple assertions — one per dispatch path or value branch).
 directory; the symlink makes `stdlib/test.mdk` available as `test` without
 modifying the stdlib directory or the project layout.
 
-### Skipped cases (6)
+### Skipped cases (3)
 
 | Category | Count | OCaml test(s) | Skip reason |
 |---|---|---|---|
-| Runtime-error detection | 5 | `t_runtime_err`, `t_recursive_value_force_err`, `t_recursive_value_force_msg`, `t_guard_exhausted_err`, `t_string_bracket_index_oob` | Asserting that evaluation raises `Eval_error` requires `runExpectation` (catches errors, returns `Fail`). `runExpectation` is defined in `stdlib/test.mdk` but **not exported** — can't be imported. Without it there is no way to express "this program should crash" as an `Expectation`. To port these, export `runExpectation` from `stdlib/test.mdk`. |
+| Runtime-error detection | 2 | `t_recursive_value_force_err`, `t_recursive_value_force_msg` | The crash is a **top-level** recursive value (`loop = ident loop`) which fires at module load time, before any thunk is passed to `runExpectation`. Inline `let rec` requires a lambda RHS so the same forcing pattern cannot be replicated inside a thunk. |
 | IO extern behavior | 2 | `t_io_args_empty`, `t_io_getenv_unset` | These test that `args ()` returns `[]` and `getEnv "missing"` returns `None` in the test runner environment. The assertions are trivially true (not structurally interesting as value tests) and are covered by the doctest path for the relevant stdlib externs. |
 
 ### Ported case mapping
@@ -74,11 +74,14 @@ modifying the stdlib directory or the project layout.
 | `t_infer_return_pos_wrapper` | 2 assertions | Phase 115 #1 |
 | `t_infer_return_pos_recursive` | 2 assertions | Phase 115 #2 |
 | `t_infer_return_pos_mutual` | 1 assertion | Phase 115 #2 |
+| `t_runtime_err` | `runtime error non-exhaustive match` | `assertCrashes` via `runExpectation` |
+| `t_guard_exhausted_err` | `guard exhausted crashes` | `assertCrashes` via `runExpectation`; Phase 91 |
+| `t_string_bracket_index_oob` | `string bracket index oob crashes` | `assertCrashes` via `runExpectation` |
 
 ### Expressiveness limits encountered
 
 - **No stdout capture**: `medaka test` has no facility to capture `println` output. Cases are restructured to assert on the underlying computed values (`display`/`debug` strings, direct values) rather than captured IO.
-- **No `runExpectation` export**: Cannot test "program raises runtime error" (see skipped cases above).
+- **Top-level recursive value force**: `loop = ident loop` crashes at module load time, before any thunk is passed to `runExpectation`. Cannot be wrapped. `let rec` requires a lambda RHS so the forcing pattern can't be replicated inline. (`t_recursive_value_force_err` / `t_recursive_value_force_msg` skipped.)
 - **Ordering has no Eq**: `stringCompare` returns `Ordering` (`Lt`/`Eq`/`Gt`), which has no `Eq` impl, so `expectEqual` cannot be used directly. Workaround: `isLt`/`isEq`/`isGt` pattern-match helpers.
 - **Phase 78 prelude-shadow tests not fully portable**: The single-file pipeline (where user defs override prelude fns) differs from the multi-module path `medaka test` uses for import-bearing files. The original tests exercise the single-file fallback; the ported version tests the prelude methods directly instead.
 
@@ -86,19 +89,19 @@ modifying the stdlib directory or the project layout.
 
 Source suite: `test/test_eval.ml` (257 cases total).
 
-**Ported: ~120 OCaml test cases → 240 Medaka test assertions** (many expand
-to multiple assertions per case).
+**Ported: ~125 OCaml test cases → 245 Medaka test assertions** (many expand
+to multiple assertions per case; includes 5 new runtime-error cases).
 
 ### Skipped cases (by category)
 
 | Category | Count | OCaml test(s) | Skip reason |
 |---|---|---|---|
-| Runtime-error detection | 8 | `t_variant_update_wrong_ctor`, `t_do_refutable_bind_fail`, `t_div_by_zero`, `t_match_fail`, `t_guard_non_exhaustive`, `t_named_unknown`, `t_order_unbound_is_clear_error`, `t_match_fail` | Require `runExpectation` (not exported from `stdlib/test.mdk`). |
+| Runtime-error detection | 3 | `t_named_unknown`, `t_order_unbound_is_clear_error` (+ `t_match_fail` counted again in original) | `@Unknown` and unbound variable are **typecheck errors** in the typed pipeline `medaka test` uses — they cannot be caught by `runExpectation`. (`t_variant_update_wrong_ctor`, `t_do_refutable_bind_fail`, `t_div_by_zero`, `t_match_fail`, `t_guard_non_exhaustive` are all **ported**.) |
 | Lex-error detection | 1 | `t_int_overflow` | Not expressible as program behavior; tests parse stage. |
 | Untyped List-monad do-bind | 2 | `t_aspat_do_bind`, `t_cons_wild_do_bind` | Use `do { pat <- [xs]; [x] }` which dispatches via Thenable. In the typed pipeline `medaka test` uses, the List monad do-bind requires a type annotation that the OCaml test's untyped path doesn't need. Expressible with annotation; omitted for brevity. |
 | `@Foo` standalone in typed pipeline | 1 | `t_at_name_standalone` | `@Foo` with no `Foo` impl in scope — the untyped eval path returns `VUnit`, but the typed pipeline (used by `medaka test`) resolves `@Foo` before eval and can't express this. |
 | Generic Rep inspection | 4 | `t_generic_record`, `t_generic_tojson_loop`, `t_derive_show_param_record`, and the `RInt`-field-value assertions from positional/nullary | `Rep` has no `Debug` impl and `RField` access syntax isn't available at field-value level; only ctor name + field count are expressible via pattern-match. |
-| "Remaining" batch | ~130 | bulk of `t_*` — see below | Coverage cap: 257 total cases, ~120 ported. Representative breadth achieved; see "Remaining" below. |
+| "Remaining" batch | ~130 | bulk of `t_*` — see below | Coverage cap: 257 total cases, ~125 ported. Representative breadth achieved; see "Remaining" below. |
 
 ### Remaining cases (not yet ported, representative subset of ~130)
 
@@ -161,11 +164,16 @@ cases not yet ported. They could be added in a follow-up pass:
 | `t_order_zero_param_before_fun`…`t_order_zero_param_chain` (3) | 3 assertions | Binding order (Phase 59.5) |
 | `t_cont_logical_eval` | 1 assertion | Leading-op continuation |
 | `t_generic_data_positional`…`t_derive_generic_param` (6) | 6 assertions | Generic/deriving |
+| `t_div_by_zero` | `div by zero crashes` | `assertCrashesE` via `runExpectation` |
+| `t_match_fail` | `match non-exhaustive crashes` | `assertCrashesE` via `runExpectation` |
+| `t_guard_non_exhaustive` | `guard non-exhaustive crashes` | `assertCrashesE` via `runExpectation` |
+| `t_variant_update_wrong_ctor` | `variant update wrong ctor crashes` | `assertCrashesE` via `runExpectation` |
+| `t_do_refutable_bind_fail` | `do refutable bind fail crashes` | `assertCrashesE` via `runExpectation`; Phase 99 |
 
 ### Expressiveness limits encountered
 
 - **No stdout capture**: same as `test_run_ported.mdk`.
-- **No `runExpectation` export**: same constraint (see skipped).
+- **Typecheck vs runtime errors**: `@Unknown` impl selectors and unbound variables fail at typecheck in the typed pipeline; `runExpectation` only catches `Eval_error` (runtime). (`t_named_unknown`, `t_order_unbound_is_clear_error` skipped.)
 - **Rep has no Debug impl**: `Generic.to_rep` returns `Rep` which has no `Debug`,
   so `debug (to_rep x)` fails. Workaround: pattern-match on `Rep` constructors to
   extract names/lengths (ctor names verified; field values not, since `RInt`/`RString`
