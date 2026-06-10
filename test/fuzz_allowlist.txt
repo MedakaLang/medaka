@@ -27,3 +27,42 @@
 # ctor_field_order), so the derived positional `PCon` impl bodies match.  This
 # was previously allowlisted as a known divergence; it is now fixed and EXPECTED
 # to agree, so the entry has been removed.
+#
+# ============================ TIER-C (NATIVE) =============================
+# Patterns below classify a `medaka build` (native LLVM backend) failure as a
+# DOCUMENTED-OPEN native gap rather than a new finding.  They are matched ONLY
+# against the captured build/run error text (the harness passes the native
+# stderr as the `extra` arg), never against ordinary program source, so they
+# cannot accidentally bury a Tier-A/Tier-B finding.
+#
+# IMPORTANT — these are DEFENCE-IN-DEPTH.  The Tier-C generator runs with
+# `--no-tuple`, which SUPPRESSES the only open native gap the type-directed
+# generator can actually reach (Gap C1/C5: `debug` on a tuple receiver).  With
+# `--no-tuple` the generator emits NO open-native-gap construct — every monomorphic
+# scalar/ADT/match program it produces is EXPECTED to build and match the oracle.
+# So in normal Tier-C operation NOTHING here should fire; an entry firing means
+# `--no-tuple` was off (or the generator grew a new construct) and the gap is the
+# already-filed one cited.  Keep MINIMAL: each line is one exact documented panic.
+#
+# Gap C — arg-tag dispatch on a constructorless receiver (tuple / primitive /
+# polymorphic).  selfhost/CONSTRUCT-COVERAGE.md §"Gap C" (C1/C5 = `debug` on a
+# tuple); selfhost/EMITTER-GAPS.md row 2.  Exact emitter panic:
+arg-tag dispatch on impl type that owns no constructors
+no impl groups
+#
+# max/min over a generic Ord receiver — selfhost/EMITTER-GAPS.md §"Open emitter
+# CAPABILITY gaps" + TOTAL-row residual (2 events).  In `medaka build` the DCE
+# pass (selfhost/dce.mdk) prunes the unreachable core.mdk `maximum`/`minimum`
+# bodies, so this should NOT fire from `medaka build`; the entry is here only so
+# a program that calls `max`/`min` itself (keeping them reachable) is classified
+# rather than mis-reported.  Emitter signature mentions the unresolved compare:
+no impl of method 'max'
+no impl of method 'min'
+#
+# Two-level nested dicts (`Box (List (List Int))`) — SIGSEGV, emitter value-rep
+# limit.  selfhost/EMITTER-GAPS.md / PLAN.md Stage 3.  The type-directed generator
+# never nests containers inside ADT fields (variant fields are scalar-only,
+# fuzz_gen.ml `field_tys`), so this is unreachable today; entry is documentation.
+# (No reliable text signature — a SIGSEGV is caught by the harness as a build/run
+# crash and reported as a NEW finding deliberately, so it is NOT pattern-matched
+# here: a segfault we did not anticipate MUST surface, not be buried.)
