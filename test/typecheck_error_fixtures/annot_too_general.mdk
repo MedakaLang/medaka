@@ -1,0 +1,11 @@
+-- C3 AnnotationTooGeneral: an annotation must not claim more polymorphism than
+-- the expression actually has.  `g : T -> T` (its match grounds the argument to
+-- the concrete type `T`), so annotating it `(g : a -> a)` over-claims — the
+-- annotation tyvar `a` is forced to `T` by unification.  Both the oracle and the
+-- self-hosted typechecker reject this with the same AnnotationTooGeneral message.
+-- (A genuinely-polymorphic value like `id x = x` annotated `(id : a -> a)` stays
+-- accepted, since `a` remains a distinct unbound variable after unification.)
+data T = MkT
+g x = match x
+  MkT => MkT
+h = (g : a -> a)

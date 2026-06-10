@@ -995,6 +995,15 @@ astTypeFresh ty =
   let etbl = freshEffMap (dedupS (effTailNames ty))
   fromAstTypeE etbl (freshTvMap (dedupS (tyVarNames ty))) ty
 
+-- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
+-- vars used in the Mono), so a caller can check post-unify whether each
+-- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
+astTypeFreshTbl : Ty -> <Mut> (Mono, List (String, Mono))
+astTypeFreshTbl ty =
+  let etbl = freshEffMap (dedupS (effTailNames ty))
+  let tvs = freshTvMap (dedupS (tyVarNames ty))
+  (fromAstTypeE etbl tvs ty, tvs)
+
 freshTvMap : List String -> <Mut> List (String, Mono)
 freshTvMap [] = []
 freshTvMap (n :: rest) = (n, freshVar ()) :: freshTvMap rest
@@ -1734,9 +1743,25 @@ inferListLit env es =
 inferAnnot : TcEnv -> Expr -> Ty -> <Mut> Mono
 inferAnnot env e ty =
   let t = infer env e
-  let annot = astTypeFresh ty
+  let pair = astTypeFreshTbl ty
+  let annot = fst pair
   let _ = unify t annot
+  let _ = checkAnnotTooGeneral ty (map snd (snd pair))
   annot
+
+-- C3 (mirrors lib/typecheck.ml:1821-1842): each type variable named in the
+-- annotation asserts polymorphism, so after unification it must still be a
+-- DISTINCT, unbound variable.  If one ground to a concrete type, or two
+-- annotation variables collapsed to the same variable, the annotation is more
+-- polymorphic than the expression — reject.  `sigTvarIds` keeps only the entries
+-- that normalize to a TVar, so a grounded var drops out (count shrinks) and a
+-- collapse shows as a duplicate id.  EHeadAnnot is exempt (no call to this).
+checkAnnotTooGeneral : Ty -> List Mono -> <Mut> Unit
+checkAnnotTooGeneral ty resolved =
+  let ids = sigTvarIds resolved
+  if (lengthL ids < lengthL resolved) || hasDupI ids then
+    set_ref typeErrors (annotTooGeneralMsg ty :: typeErrors.value)
+  else ()
 
 inferMatch : TcEnv -> Mono -> List Arm -> <Mut> Mono
 inferMatch env scrutTy arms =
@@ -3893,6 +3918,11 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 sigTooGeneralMsg : String -> Ty -> String
 sigTooGeneralMsg name ty =
   "Declared signature of '" ++ name ++ "' is more general than its body — '" ++ ppTy ty ++ "' claims type variables that are the same type after inference"
+
+-- C3: mirrors lib/typecheck.ml's AnnotationTooGeneral message byte-for-byte.
+annotTooGeneralMsg : Ty -> String
+annotTooGeneralMsg ty =
+  "Type annotation '" ++ ppTy ty ++ "' is more polymorphic than the expression — a type variable in the annotation is actually a specific type (or two annotation variables are the same type)"
 
 -- pretty-print an AST type (mirrors lib/ast.ml's pp_ty byte-for-byte)
 ppTy : Ty -> String

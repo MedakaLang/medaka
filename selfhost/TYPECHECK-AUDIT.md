@@ -304,12 +304,29 @@ receiver-directed pick + `AmbiguousField`. Two records sharing a field name → 
 types against whichever was declared first. **Fix:** port the multimap; receiver head
 known → pick that owner; else error.
 
-### C3. `AnnotationTooGeneral` check missing
+### C3. `AnnotationTooGeneral` check missing — ✅ CLOSED (2026-06-09)
 `inferAnnot` (`typecheck.mdk:1631-1636`) unifies the annotation's fresh vars with the
 inferred type — `(intId : a -> a)` silently grounds `a := Int` and accepts where the
 oracle rejects (`typecheck.ml:1821-1842`). An annotation can over-claim polymorphism.
 **Fix:** after unify, require the annotation's tyvar-table entries to remain distinct
 unbound vars; emit the error into `typeErrors`. Keep `EHeadAnnot` exempt (oracle does).
+
+- **Done (2026-06-09):** added `astTypeFreshTbl` (returns the Mono + the name→fresh-tyvar
+  map, mirroring `sigToSchemeTvs`) and reworked `inferAnnot` (`typecheck.mdk`) to call it,
+  then `checkAnnotTooGeneral ty (map snd tvs)` after the unify. The distinctness check
+  reuses the existing `sigTvarIds`/`hasDupI` helpers: `sigTvarIds` keeps only entries that
+  normalize to a `TVar` (grounded ones drop out), so the condition
+  `lengthL ids < lengthL resolved || hasDupI ids` flags BOTH grounding (`a := T`) AND
+  collapse (two annotation vars → same var), matching the oracle's `all_distinct_tvars`.
+  On failure it pushes `annotTooGeneralMsg ty` (byte-for-byte with the oracle's message)
+  into `typeErrors`. `EHeadAnnot` is exempt by construction — only `EAnnot` routes through
+  `inferAnnot` (selfhost has no `infer` arm for `EHeadAnnot`; it'd hit the slice-1 panic),
+  so head-pins are untouched. Repro `data T = MkT; g x = match x { MkT => MkT }; h = (g : a -> a)`:
+  before = selfhost printed schemes (accepted); after = `TYPE ERROR: Type annotation 'a -> a'
+  is more polymorphic …` == oracle, both `tc_main` and `check` drivers. Valid `id x = x; (id : a -> a)`
+  and concrete `(k : T -> T)` stay accepted on both. Fixture: `test/typecheck_error_fixtures/annot_too_general.mdk`.
+  Gates: bootstrap_typecheck 10/0, bootstrap_eval 20/0, diff_selfhost_check 34/0 + _batch 34/0,
+  typecheck_errors 26/0, eval_run 20/0, core_ir 20/0, llvm_modules 6/0, selfcompile_fixpoint C3a+C3b YES.
 
 ### C4. Unreferenced zero-param bindings' effects never run
 Selfhost `evalOutput` forces only `main` (`eval.mdk:1563-1569, 1597-1600`); nullary
