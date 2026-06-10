@@ -87,6 +87,9 @@ type gadt = {
 (* ── generation context ──────────────────────────────────────────────────── *)
 type ctx = {
   tier : int;
+  no_tuple : bool;                     (* suppress GTup target types (Tier-C: tuple
+                                          receivers hit the open native Gap C1/C5
+                                          `debug` on tuple — see test/fuzz_diff.sh) *)
   mutable adts : gadt list;            (* declared ADTs *)
   mutable scope : (ident * gty) list;  (* in-scope value bindings with their type *)
   mutable fresh : int;
@@ -105,7 +108,7 @@ let rec rand_gty ctx depth : gty =
   if depth <= 0 then pick base_gtys
   else if ctx.tier >= 1 && ctx.adts <> [] && chance 1 4 then
     GData (pick ctx.adts).tname
-  else if ctx.tier >= 1 && chance 1 6 then
+  else if ctx.tier >= 1 && not ctx.no_tuple && chance 1 6 then
     let k = 2 + rand_below 2 in
     GTup (List.init k (fun _ -> rand_gty ctx (depth - 1)))
   else pick base_gtys
@@ -491,15 +494,17 @@ let gen_program ctx (nblocks : int) : program =
 
 (* ── CLI ─────────────────────────────────────────────────────────────────── *)
 let () =
-  let seed_val = ref 0 and tier = ref 2 and width = ref 200 and batch = ref 1 in
+  let seed_val = ref 0 and tier = ref 2 and width = ref 200 and batch = ref 1
+  and no_tuple = ref false in
   let spec = [
     ("--seed", Arg.Set_int seed_val, "PRNG seed (int)");
     ("--tier", Arg.Set_int tier, "tier 0|1|2 (default 2)");
     ("--width", Arg.Set_int width, "printer width (default 200 — keeps lines unwrapped)");
     ("--batch", Arg.Set_int batch, "number of independent blocks in one program (default 1); blocks share a fresh-name counter so a single selfhost process amortizes the prelude parse over all of them");
+    ("--no-tuple", Arg.Set no_tuple, "never emit tuple values (GTup) — Tier-C native: `debug` on a tuple hits the open native Gap C1/C5 (arg-tag dispatch on a constructorless receiver); suppressing keeps Tier-C from flooding with that one known gap. Costs tuple coverage on the native tier only.");
   ] in
-  Arg.parse spec (fun _ -> ()) "fuzz_gen --seed N [--tier T] [--width W] [--batch K]";
+  Arg.parse spec (fun _ -> ()) "fuzz_gen --seed N [--tier T] [--width W] [--batch K] [--no-tuple]";
   seed !seed_val;
-  let ctx = { tier = !tier; adts = []; scope = []; fresh = 0 } in
+  let ctx = { tier = !tier; no_tuple = !no_tuple; adts = []; scope = []; fresh = 0 } in
   let prog = gen_program ctx (max 1 !batch) in
   print_string (Printer.program_to_string ~width:!width prog)

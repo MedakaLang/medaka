@@ -23,8 +23,25 @@
 # Findings are classified against test/fuzz_allowlist.txt (documented-open gaps).
 # Unmatched findings are dumped to test/fuzz_failures/seed_N.mdk with both outputs.
 #
-# Usage: test/fuzz_diff.sh [START_SEED] [COUNT] [TIER] [BATCH]
-#   defaults: START_SEED=1 COUNT=200 TIER=2 BATCH=12
+#   Tier-C (oracle vs NATIVE): OPT-IN (5th arg NATIVE=1).  Compile the SAME
+#     program with `medaka build` (the native LLVM backend: self-hosted emitter
+#     → LLVM IR → clang + runtime/medaka_rt.c + Boehm GC) into a native binary,
+#     run it, and diff stdout against the oracle.  Native is the artifact being
+#     made CANONICAL (PLAN.md Stage 3), so this is the highest-leverage tier — it
+#     was previously UNFUZZED.  Native build is expensive (~2.8s per batched
+#     program = emit-via-interpreter + clang), so Tier-C uses its own (smaller)
+#     COUNT (the 6th arg, default 40) and reuses the batched program as ONE binary
+#     (the batch's combined `main` builds + runs as a single executable, so the
+#     ~480ms+clang fixed cost amortizes over all BATCH blocks just like Tier-B).
+#     The native runtime auto-prints `main`'s Unit as a trailing "()" line, which
+#     `medaka run` (oracle) does NOT — the harness strips one trailing "()" line
+#     from native output before diffing.  Tier-C regenerates each seed with
+#     `--no-tuple` (the type-directed generator's `debug` on a tuple is the open
+#     native Gap C1/C5 and would otherwise flood EVERY program) and diffs against
+#     that no-tuple program's OWN oracle output.
+#
+# Usage: test/fuzz_diff.sh [START_SEED] [COUNT] [TIER] [BATCH] [NATIVE] [NATIVE_COUNT]
+#   defaults: START_SEED=1 COUNT=200 TIER=2 BATCH=12 NATIVE=0 NATIVE_COUNT=40
 #
 # Run from the repo root (or worktree root); paths are resolved relative to it.
 set -u
@@ -44,6 +61,8 @@ START="${1:-1}"
 COUNT="${2:-200}"
 TIER="${3:-2}"
 BATCH="${4:-12}"
+NATIVE="${5:-0}"
+NATIVE_COUNT="${6:-40}"
 
 for f in "$GEN" "$MAIN"; do
   [ -x "$f" ] || { echo "missing $f — run: dune build --root ."; exit 2; }
@@ -53,6 +72,9 @@ mkdir -p "$FAILDIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 SRC="$TMP/prog.mdk"; ORA="$TMP/ora.txt"; SH="$TMP/sh.txt"
+# Tier-C native scratch
+NSRC="$TMP/nprog.mdk"; NORA="$TMP/nora.txt"; NAT="$TMP/nat.txt"
+NATSTRIP="$TMP/nat_strip.txt"; NBIN="$TMP/nbin"; NERR="$TMP/nbuild.err"
 
 # allowlist match: returns 0 if the source file OR the given text matches any
 # documented-gap pattern.
@@ -85,9 +107,34 @@ dump_failure() {
   echo "  -> dumped $out"
 }
 
+# Tier-C native-divergence dump.  Records the --no-tuple SOURCE, the oracle
+# output, and the native build error OR native stdout, so a candidate new native
+# gap is a self-contained repro.
+dump_native() {
+  local seed="$1" kind="$2"
+  local out="$FAILDIR/native_seed_${seed}.mdk"
+  {
+    echo "-- NATIVE FUZZ FAILURE  seed=$seed  tier=$TIER  batch=$BATCH  kind=$kind"
+    echo "-- reproduce: $GEN --seed $seed --tier $TIER --batch $BATCH --no-tuple > p.mdk"
+    echo "--            $MAIN build p.mdk -o p && ./p   (vs  $MAIN run p.mdk)"
+    echo "-- ============================== SOURCE (--no-tuple) ================="
+  } > "$out"
+  cat "$NSRC" >> "$out"
+  {
+    echo "-- ============================== ORACLE OUT =========================="
+    sed 's/^/-- /' "$NORA"
+    echo "-- ============================== NATIVE BUILD ERR ===================="
+    if [ -s "$NERR" ]; then sed 's/^/-- /' "$NERR"; else echo "-- (build ok)"; fi
+    echo "-- ============================== NATIVE OUT (stripped) =============== "
+    if [ -f "$NATSTRIP" ]; then sed 's/^/-- /' "$NATSTRIP"; else echo "-- (did not run)"; fi
+  } >> "$out"
+  echo "  -> dumped $out"
+}
+
 tierA=0; tierB=0; known=0; ran=0
+tierC=0; nat_known=0; nat_ran=0; nat_built=0
 end=$((START + COUNT - 1))
-echo "fuzz_diff: seeds $START..$end  tier=$TIER  batch=$BATCH"
+echo "fuzz_diff: seeds $START..$end  tier=$TIER  batch=$BATCH  native=$NATIVE"
 
 for seed in $(seq "$START" "$end"); do
   ran=$((ran + 1))
@@ -124,12 +171,70 @@ for seed in $(seq "$START" "$end"); do
   fi
 done
 
+# ===================== Tier-C: oracle vs NATIVE (`medaka build`) =====================
+# Opt-in (NATIVE=1).  Runs its OWN seed range (START..START+NATIVE_COUNT-1) because
+# native build is ~2.8s/program — far heavier than Tier-A/B — so it gets a smaller
+# default count.  Each seed is regenerated with --no-tuple (suppresses the open
+# native Gap C1/C5 `debug`-on-tuple that would flood every program), built, run,
+# and its stripped stdout diffed against that no-tuple program's own oracle output.
+if [ "$NATIVE" = "1" ]; then
+  nend=$((START + NATIVE_COUNT - 1))
+  echo "------------------------------------------------------------"
+  echo "Tier-C (native): seeds $START..$nend  --no-tuple  (build ~2.8s each)"
+  for seed in $(seq "$START" "$nend"); do
+    nat_ran=$((nat_ran + 1))
+    : > "$NERR"; rm -f "$NATSTRIP"
+    "$GEN" --seed "$seed" --tier "$TIER" --batch "$BATCH" --no-tuple > "$NSRC" 2>/dev/null
+    # oracle for THIS (--no-tuple) program — skip seeds the oracle itself rejects
+    # (those are Tier-A's job on the normal program; here we only compare native
+    # against a known-good oracle baseline).
+    if ! "$MAIN" run "$NSRC" > "$NORA" 2>&1; then
+      continue
+    fi
+    if grep -q "INV False" "$NORA"; then
+      continue
+    fi
+    # native build
+    if ! "$MAIN" build "$NSRC" -o "$NBIN" > /dev/null 2>"$NERR"; then
+      if allowlisted "$NSRC" "$(cat "$NERR")"; then
+        nat_known=$((nat_known + 1))
+      else
+        echo "[Tier-C] seed $seed: NATIVE BUILD FAILED (candidate new gap):"
+        head -3 "$NERR" | sed 's/^/    /'
+        tierC=$((tierC + 1)); dump_native "$seed" "native-build-fail"
+      fi
+      continue
+    fi
+    nat_built=$((nat_built + 1))
+    # run native, strip one trailing "()" line (runtime Unit auto-print; oracle omits it)
+    if ! "$NBIN" > "$NAT" 2>&1; then
+      echo "[Tier-C] seed $seed: NATIVE RUN CRASHED (candidate new gap):"
+      tail -3 "$NAT" | sed 's/^/    /'
+      tierC=$((tierC + 1)); cp "$NAT" "$NATSTRIP"; dump_native "$seed" "native-run-crash"
+      continue
+    fi
+    sed -e '${/^()$/d;}' "$NAT" > "$NATSTRIP"
+    if ! diff -q "$NORA" "$NATSTRIP" >/dev/null 2>&1; then
+      if allowlisted "$NSRC" "$(cat "$NATSTRIP")"; then
+        nat_known=$((nat_known + 1))
+      else
+        echo "[Tier-C] seed $seed: ORACLE != NATIVE"
+        diff "$NORA" "$NATSTRIP" | head -6 | sed 's/^/    /'
+        tierC=$((tierC + 1)); dump_native "$seed" "native-divergence"
+      fi
+    fi
+  done
+fi
+
 echo "------------------------------------------------------------"
 echo "ran=$ran  TierA_findings=$tierA  TierB_findings=$tierB  known_gap=$known"
-if [ $((tierA + tierB)) -eq 0 ]; then
+if [ "$NATIVE" = "1" ]; then
+  echo "native: ran=$nat_ran  built=$nat_built  TierC_findings=$tierC  native_known_gap=$nat_known"
+fi
+if [ $((tierA + tierB + tierC)) -eq 0 ]; then
   echo "RESULT: clean (no new divergences/invariant violations)"
   exit 0
 else
-  echo "RESULT: $((tierA + tierB)) NEW finding(s) — see $FAILDIR/"
+  echo "RESULT: $((tierA + tierB + tierC)) NEW finding(s) — see $FAILDIR/"
   exit 1
 fi
