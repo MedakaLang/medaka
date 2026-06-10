@@ -68,7 +68,7 @@ state changes.
 |------------|----------------|--------|-----------------|
 | **Self-hosting (Stage 1)** | [`selfhost/README.md`](./selfhost/README.md) §Roadmap | ✅ complete | perf-lever tail only (all closed) |
 | **Native backend (Stage 2)** | [`selfhost/STAGE2-DESIGN.md`](./selfhost/STAGE2-DESIGN.md) + [`selfhost/BOOTSTRAP.md`](./selfhost/BOOTSTRAP.md) | ✅ **complete** | Core IR + bytecode VM (§2.1–2.2) done; LLVM backend promoted from spike to a **native self-hosting compiler** — all 7 stages native==interpreter (141 fixtures), self-compile **fixpoint reached** (C1 emitter-IR reproduction · C2 native compiles the real lexer · C3 `IR1==IR2`). Runtime dict-passing dispatch (D3a/D3b done); Boehm GC; CTGuard lowered. Residual: `max`/`min` over primitive `Ord` (dead code). |
-| **Make LLVM canonical (Stage 3)** | **this file** → [Stage 3](#stage-3--make-the-llvm-backend-canonical-retire-ocaml) | 🟡 **in progress** | ✅ #1 `medaka build` CLI (MVP, empty-prelude subset — `39f3318`). NEXT: #2 prelude-emittability (close `max`/`min` + DCE → unblocks `println`/typeclass programs) + emitter-gap sweep → port OCaml test suites to Medaka → differential fuzzer → TRMC/worker-thread stack scalability → perf (-O2, value-rep) → housekeeping refactor (style/DRY) → self-bootstrapping build → retire `lib/` (gated). |
+| **Make LLVM canonical (Stage 3)** | **this file** → [Stage 3](#stage-3--make-the-llvm-backend-canonical-retire-ocaml) | 🟡 **in progress** | 🔝 **TOP: close [TYPECHECK-AUDIT](./selfhost/TYPECHECK-AUDIT.md) soundness findings** (S1→S2→T1→T2→S3→L1/L2→C→D; gates `lib/` retirement). ✅ #1 `medaka build` CLI + #2a prelude (DCE/unit-head/flip) + #2b Unit-return done. Then: emitter-gap sweep → port OCaml test suites → differential fuzzer → stack scalability → perf → housekeeping refactor → self-bootstrapping build → retire `lib/` (gated). |
 | **Capability-effects wedge (Phase 146)** | [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §9 (lang) + [`CAPABILITY-PLATFORM.md`](./CAPABILITY-PLATFORM.md) §10 (product) | 🟡 in progress | gap-1 sound + gap-2 labels + wow-demo done; next = research pass, manifest format/emission, cross-module label export, Phase 146b |
 | **Compiler / language correctness** | **this file** → [Compiler / language](#compiler--language) | 🟡 open items | Phase 101b (deferred) |
 | **Standard library** | [`STDLIB.md`](./STDLIB.md) §"Remaining work" + §"Label refinement roadmap" | 🟡 modules done, extras open | `zip`/`unzip`, `Semigroup List`, JSON pretty/codecs, effect-label refinement |
@@ -122,6 +122,35 @@ date; deletion is unlocked only when the bar below is met).
    agreed factor of the OCaml compiler).
 5. The build self-bootstraps without the OCaml interpreter (a seed path that
    produces the native compiler from the `.mdk` sources).
+6. **The selfhost typechecker is sound + coherent** — the
+   [TYPECHECK-AUDIT](./selfhost/TYPECHECK-AUDIT.md) soundness findings are closed
+   (value restriction, dict-application gate, method-dict offset, coherence
+   checking), so nothing downstream depends on a guarantee only `lib/` enforces.
+
+**🔝 TOP PRIORITY (set 2026-06-09): close the TYPECHECK-AUDIT findings.** The
+2026-06-09 audit ([`selfhost/TYPECHECK-AUDIT.md`](./selfhost/TYPECHECK-AUDIT.md)) —
+4 confirmed divergences (2 soundness-class), no coherence checking, 2 latent
+Phase-134-class hazards, plus C/D correctness + diagnostic gaps — is the owning doc
+and the front of the queue, ahead of the construct-sweep / test-port / fuzzer below
+(those remain). These gate `lib/` retirement (bar item 6): the native `unreachable`
+arms + first-match dispatch + arg-tag chains are sound only under guarantees the
+*OCaml* typechecker currently enforces. **Fix order (the audit's own):**
+`S1 → S2 → T1 → T2 → S3 → L1+L2 (before E4) → C-series → D-series`, each with a
+repro + oracle-reference + fix location in the doc. Most are "port the oracle
+behavior into `selfhost/{typecheck,eval,marker}.mdk`" — re-validate each with the
+stage's `diff_selfhost_*` / `bootstrap_*` harness. Confirmed soundness items first:
+- **S1** — `EMethodAt` applies dicts without the awaits-args gate → valid programs
+  panic (`eval.mdk:758-762`; gate at `lib/eval.ml:869-873`). CONFIRMED.
+- **S2** — method-level dict params dropped from explicit impl clauses (k-offset;
+  `typecheck.mdk:2595-2614`; mirror `dict_pass.ml:103`). CONFIRMED; subsumes D6.
+- **T1** — value restriction entirely missing → polymorphic mutable refs typecheck
+  (5 generalize sites; port `is_nonexpansive`/`gen_restricted`/`lower_to_current`).
+  CONFIRMED. *Note:* mirroring the oracle reproduces an adjacent oracle `mut`-gen
+  hole — the audit says fix BOTH sides (a design point to settle when we reach T1).
+- **T2** — inline `let … in` drops `mut`/`is_fun` → recursive inline let panics
+  (`typecheck.mdk:1204`; split the arm per `typecheck.ml:1664-1696`). CONFIRMED.
+- **S3** — no coherence checking (overlap/duplicate/orphan impls); port
+  `impls_overlap` + duplicate rejection. STATIC; explicit retirement-gate item.
 
 **Oracle (hybrid).** As OCaml recedes, ground truth = the Medaka tree-walker
 (`eval.mdk`) for runtime BEHAVIOR (native diffed vs interpreted-selfhost — the
