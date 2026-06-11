@@ -292,15 +292,15 @@ Tested and **rejected** — recorded so future sessions skip them:
 
 | Workload | original (-O0, div 3) | final | speedup |
 |---|---|---|---|
-| emitter self-compile | 12.04 s / 770 MB | **2.98 s / 200 MB** | **4.04× / 3.9× less RSS** |
-| vs OCaml interpreter | 125.35 s / 1467 MB | 2.98 s / 200 MB | **42.1× / 7.3× less RSS** |
+| emitter self-compile | 12.04 s / 770 MB | **2.45 s / 199 MB** | **4.91× / 3.9× less RSS** |
+| vs OCaml interpreter | 125.35 s / 1467 MB | 2.45 s / 199 MB | **51.2× / 7.4× less RSS** |
 | fib 38 (no alloc) | 0.11 s | 0.10 s | flat (already optimal) |
 
 Banked, all universal defaults, every change gated byte-identical (fixpoint +
 differential fixtures + build gate): clang `-O2`, GC `free_space_divisor=1`,
 lifted-define buffer O(N²)→O(N), DCE reachability+graph O(N²)→O(N) via HashMap,
 typecheck dep-graph + SCC clause grouping + dedup O(N²)→O(N·log N) via SMap. The
-native compiler is **~42× faster than the OCaml interpreter** at the representative
+native compiler is **~51× faster than the OCaml interpreter** at the representative
 self-compile workload — the OCaml-retirement performance bar is met with wide
 margin.
 
@@ -531,3 +531,28 @@ All are real but each needs either an emitter-gap fix, an invasive record/bounda
 change, or source-mapping — none is a safe unattended edit. The clang/-GC/algorithmic
 typecheck+DCE wins banked this session (12.04 s → ~2.9 s, ~42× vs the interpreter)
 already meet the OCaml-retirement performance bar with wide margin.
+
+---
+
+## Entry 14 — memoize `distinctTypeNames` (emitter) (2026-06-11)
+
+**Change (`selfhost/llvm_emit.mdk`):** `ctorTypeId` (per ADT-constructor emission)
+called `distinctTypeNames e`, which recomputed `nubStr (typeNamesOf …)` — an O(n²)
+dedup — *every* call, though the ctor→type table is constant during a program's
+emission. Memoize the result (a plain `List String`) in a module-level
+`Ref (Option (List String))`, reset to `None` at each `emitProgram`/
+`emitProgramGaps` so batched emits recompute per program. `nubStr` now runs once
+per program instead of per constructor.
+
+**Gates (fixpoint FIRST, per the isKnownFn lesson):** `selfcompile_fixpoint`
+C3a/C3b YES; `diff_selfhost_build` 9/9; `diff_selfhost_llvm` 172/172;
+`llvm_modules` 8/8; `llvm_typed` 37/37. Byte-identical. Seed stale; not re-minted.
+
+**Numbers (self-compile, min-of-5, -O2 + divisor=1):** 2.84 s → **2.45 s** (~14%).
+Cumulative this session: 12.04 s → 2.45 s (**4.91×**); vs OCaml interpreter **51.2×**.
+
+**Note:** confirms a module-level `Ref (Option (List …))` memo in `llvm_emit`
+self-compiles cleanly — the reverted `isKnownFn` attempt failed specifically on the
+`HashMap`-in-`llvm_emit` shape, not the `Ref (Option …)` memo pattern. So the other
+recompute hotspots can use a plain-List memo safely; only hash *containers* inside
+`llvm_emit` are blocked pending the emitter self-compile gap.

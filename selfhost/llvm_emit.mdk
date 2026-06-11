@@ -3546,8 +3546,24 @@ ctorTypeId e name = match lookupAssoc name (ctorTypeTable e)
 -- the distinct type names of the program, in declaration order (the ctor→type
 -- table lists each type's ctors consecutively, so dedup-preserving-order gives the
 -- type declaration order).
+-- `distinctTypeNames` is constant during a program's emission (the ctor→type
+-- table is set once), but `ctorTypeId` calls it per ADT-constructor emission and
+-- it recomputes the O(n²) `nubStr` each time. Memoize the result (a plain
+-- List String — no hash container, so it self-compiles cleanly) in a module-level
+-- ref, reset to None at each emitProgram/emitProgramGaps so batched emits recompute.
+distinctTypeNamesRef : Ref (Option (List String))
+distinctTypeNamesRef = Ref None
+
+resetDistinctTypeNames : Unit -> <Mut> Unit
+resetDistinctTypeNames _ = set_ref distinctTypeNamesRef None
+
 distinctTypeNames : Emit -> <Mut> List String
-distinctTypeNames e = nubStr (typeNamesOf (ctorTypeTable e))
+distinctTypeNames e = match distinctTypeNamesRef.value
+  Some xs => xs
+  None =>
+    let xs = nubStr (typeNamesOf (ctorTypeTable e))
+    let _ = set_ref distinctTypeNamesRef (Some xs)
+    xs
 
 typeNamesOf : List (String, String) -> List String
 typeNamesOf [] = []
@@ -5250,6 +5266,7 @@ export
 emitProgram : CProgram -> <Mut> String
 emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsReg (valBinds groups)))
+  let _ = resetDistinctTypeNames ()
   let _ = resetEmittedDefaults ()
   let _ = emitPreamble e
   -- declare a module global per top-level value/`Ref` binding (slice E1b).
@@ -5437,6 +5454,7 @@ export
 emitProgramGaps : CProgram -> <Mut> List String
 emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsRegReady (valBinds groups)))
+  let _ = resetDistinctTypeNames ()
   let _ = resetGaps ()
   let _ = enableGapRecord ()
   let _ = emitPreamble e
