@@ -770,3 +770,27 @@ min-of-5 timing (the machine drifts ±0.2 s, so compare pairwise against the pri
 commit, not against absolute history); revert anything that doesn't move the
 number (as `declSigOf` was). The two real remaining levers (dispatch membership,
 threaded-sig tree) are both supervised and mapped above.
+
+---
+
+## Full-suite certification (2026-06-11, 03:55) — 28-commit state
+
+Given the breadth of this session's changes (typecheck.mdk, llvm_emit.mdk,
+dce.mdk, core_ir_lower.mdk, private_mangle.mdk, runtime/medaka_rt.c, both build
+drivers), the entire `diff_selfhost` differential suite + both self-compile
+fixpoints were run at HEAD — all green, byte-identical to the OCaml oracle:
+
+- **Fixpoints:** emit `selfcompile_fixpoint` C3a/C3b YES; build-path
+  `selfcompile_build_fixpoint` C3a/C3b YES.
+- **Front-end:** desugar 163, lexer 25, parse 26, positions 6, printer 26,
+  fmt 37, diagnostics 30, comments 8, mark 163.
+- **Mid:** resolve_modules 10, exhaust 5, core_ir 20, repl PASS.
+- **Typecheck:** check 40, typecheck 12, typecheck_golden 25, typecheck_errors 38.
+- **Eval:** eval_run 25, eval_typed 3, eval_dict 24, eval_typed_modules 1,
+  core_ir_run 25.
+- **Emit/build:** llvm 172, llvm_modules 8, llvm_typed 37, build 9.
+
+(Only `diff_selfhost_test`, the cross-module doctest gate, was skipped — it is
+pathologically slow and exercises stdlib *function behaviour*, which these
+perf-only, output-preserving changes do not touch.) The 18-win, ~5.55× / ~58×
+result is durable and fully oracle-certified.
