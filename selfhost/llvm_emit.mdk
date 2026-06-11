@@ -1103,7 +1103,7 @@ emitNumExtern _ _ name _ = gapE ("unsupported numeric extern " ++ name)
 -- putStr/putStrLn write to stdout; ePutStr/ePutStrLn write to stderr.
 -- All return Unit (LTUnit); the operand "1" is an arbitrary immediate never read.
 isIoExtern : String -> Bool
-isIoExtern name = containsStr name ["putStr", "putStrLn", "ePutStr", "ePutStrLn"]
+isIoExtern name = containsStr name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
 
 emitIoExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitIoExtern e env "putStr" args = match emitArgs e env args
@@ -1126,6 +1126,11 @@ emitIoExtern e env "ePutStrLn" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_eputstrln(i64 " ++ s ++ ")")
     ("1", LTUnit)
   _ => panic "llvm spike: ePutStrLn takes exactly one argument (slice 3)"
+emitIoExtern e env "flushStdout" args = match emitArgs e env args
+  [u] =>
+    let _ = emit e ("  call void @mdk_flushstdout(i64 " ++ u ++ ")")
+    ("1", LTUnit)
+  _ => panic "llvm spike: flushStdout takes exactly one argument (slice 3)"
 emitIoExtern _ _ name _ = gapE ("unsupported IO extern " ++ name)
 
 -- abort externs (native extern catalog slice 4).
@@ -5434,6 +5439,7 @@ emitPreamble e =
   let _ = emit e "declare void @mdk_putstrln(i64)"
   let _ = emit e "declare void @mdk_eputstr(i64)"
   let _ = emit e "declare void @mdk_eputstrln(i64)"
+  let _ = emit e "declare void @mdk_flushstdout(i64)"
   let _ = emit e "declare void @mdk_print_unit()"
   let _ = emit e "declare void @mdk_panic(i64)"
   let _ = emit e "declare void @mdk_exit(i64)"

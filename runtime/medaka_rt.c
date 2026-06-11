@@ -213,6 +213,7 @@ void mdk_putstr(long long w)    { mdk_fwrite_str(w, stdout, 0); }
 void mdk_putstrln(long long w)  { mdk_fwrite_str(w, stdout, 1); }
 void mdk_eputstr(long long w)   { mdk_fwrite_str(w, stderr, 0); }
 void mdk_eputstrln(long long w) { mdk_fwrite_str(w, stderr, 1); }
+void mdk_flushstdout(long long w) { (void)w; fflush(stdout); }
 void mdk_print_unit(void)       { printf("()\n"); }
 
 noreturn void mdk_panic(long long w) { mdk_fwrite_str(w, stderr, 1); exit(1); }
