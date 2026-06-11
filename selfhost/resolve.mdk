@@ -200,6 +200,11 @@ checkExpr env scope (EVariantUpdate con e0 fs) = checkExpr env scope e0
 checkExpr env scope (EQuestion e0) = QuestionMisplaced :: checkExpr env scope e0
 checkExpr env scope (EAsPat _ e0) = AsPatternMisplaced :: checkExpr env scope e0
 checkExpr env scope (ESection s) = checkSection env scope s
+-- ELoc is transparent: recurse into the wrapped expr.  (The error-attribution
+-- `currentLoc` capture lives in typecheck.mdk, which is already <Mut>; resolve's
+-- checkExpr stays pure to avoid threading <Mut> through the whole walk — a
+-- resolve-side currentLoc is a B.10.2b refinement if the LSP needs it.)
+checkExpr env scope (ELoc _ e) = checkExpr env scope e
 
 -- an `@Name` impl hint is not a value reference (resolve must not flag it)
 checkVar : Env -> List String -> String -> List ResError

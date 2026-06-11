@@ -20,6 +20,10 @@ mapExpr : (Expr -> Expr) -> Expr -> Expr
 mapExpr f e = f (mapKids f e)
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
+-- ELoc is transparent: recurse into the wrapped expr, preserve the loc (mirror
+-- of lib/desugar.ml's `map_expr` ELoc arm).  Without this the wildcard below
+-- would stop the rewrite at the wrapper and never reach the atom inside.
+mapKids f (ELoc l e) = ELoc l (mapExpr f e)
 mapKids f (EApp a b) = EApp (mapExpr f a) (mapExpr f b)
 mapKids f (ELam ps b) = ELam ps (mapExpr f b)
 mapKids f (ELet m r p e1 e2) = ELet m r p (mapExpr f e1) (mapExpr f e2)
@@ -765,10 +769,12 @@ rewriteRecordPun recordNames (ESetLit name items)
 rewriteRecordPun _ e = e
 
 isVarExpr : Expr -> Bool
+isVarExpr (ELoc _ e) = isVarExpr e
 isVarExpr (EVar _) = True
 isVarExpr _ = False
 
 punField : Expr -> FieldAssign
+punField (ELoc _ e) = punField e
 punField (EVar n) = FieldAssign n (EVar n)
 punField _ = FieldAssign "" (EVar "")
 

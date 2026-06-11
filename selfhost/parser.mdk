@@ -15,7 +15,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..), Route(..)}
+import ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), Loc(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..), Route(..)}
 import lexer.{Token(..), tokenize, tokenizeWithLines, tokenizeWithOffsets, offsetToLineCol}
 import util.{reverseL}
 
@@ -67,6 +67,54 @@ peekP = Parser (toks pos => POk (peekTok toks pos) pos)
 -- spans; does not affect parsing (it's a pure read of `pos`).
 getPos : Parser Int
 getPos = Parser (toks pos => POk pos pos)
+
+-- ── Source-location capture (Phase B.10.2) ──────────────────────────────────
+-- The `located` combinator wraps an expr production in a transparent `ELoc`,
+-- mirroring parser.mly's `ELoc (of_pos $startpos $endpos, …)`.  parser.mly gets
+-- line/col from Menhir's positions; here we recover them out of band from the
+-- token→char-offset array (`tokenizeWithOffsets`) + the source chars, the same
+-- machinery the structured parse-error path (`mkLocated`) already uses.  Both
+-- are stashed in module refs by the parse entry points before parsing; the
+-- Parser monad itself is untouched (its token stream stays byte-identical).
+-- When unset (a caller that didn't populate them, e.g. a bare `runP`), `located`
+-- falls back to a zero loc — still transparent, just position-less.
+locSrcRef : Ref String
+locSrcRef = Ref ""
+
+locOffsRef : Ref (Array Int)
+locOffsRef = Ref (arrayFromList [])
+
+setLocState : String -> Array Int -> <Mut> Unit
+setLocState src offs =
+  let _ = set_ref locSrcRef src
+  set_ref locOffsRef offs
+
+-- offset of token `i`'s first char (0 when out of range / unset).
+tokOffsetAt : Int -> Int
+tokOffsetAt i =
+  let offs = locOffsRef.value
+  if i >= 0 && i < arrayLength offs then arrayGetUnsafe i offs else 0
+
+-- Build a `Loc` from a [start, end) token-index span.  start → the span's first
+-- token's offset; end → the last consumed token (`endIdx - 1`)'s offset (an
+-- approximation of Menhir's `$endpos`, adequate since ELoc is transparent to
+-- every byte-identity gate and only surfaces for B.10.2b attribution).  `file`
+-- is left "" for the caller to fill.
+locOfSpan : Int -> Int -> Loc
+locOfSpan startIdx endIdx =
+  let src = locSrcRef.value
+  let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
+  match offsetToLineCol src (tokOffsetAt startIdx)
+    (sl, sc) => match offsetToLineCol src (tokOffsetAt lastIdx)
+      (el, ec) => Loc "" sl sc el ec
+
+-- Wrap an expr production in a transparent ELoc capturing its token span.
+located : Parser Expr -> Parser Expr
+located p = do
+  s <- getPos
+  e <- p
+  q <- getPos
+  pure (ELoc (locOfSpan s q) e)
 
 advance : Parser Token
 advance = Parser (toks pos => advanceR (peekTok toks pos) pos)
@@ -192,7 +240,10 @@ parseCompose =
   chainl1 parseOr (choice [binOp TRCompose ">>", binOp TLCompose "<<"])
 
 lamTail : Expr -> Parser Expr
-lamTail e = do
+lamTail e = located (lamTailRaw e)
+
+lamTailRaw : Expr -> Parser Expr
+lamTailRaw e = do
   expectTok TFatArrow
   body <- parseExpr
   pure (ELam (exprToParams e) body)
@@ -202,6 +253,7 @@ lamTail e = do
 -- lambda (one pattern per spine element); an uppercase head is a single
 -- constructor pattern; anything else is a single pattern.
 exprToParams : Expr -> List Pat
+exprToParams (ELoc _ e) = exprToParams e
 exprToParams (EApp f x) = appToParams (EApp f x)
 exprToParams e = [exprToPat e]
 
@@ -217,9 +269,12 @@ paramsForCtor c app
   | isCtorName c = [exprToPat app]
   | otherwise = map exprToPat (spineList app)
 
--- head of an EApp spine
+-- head of an EApp spine.  App nodes are un-wrapped (the app level builds bare
+-- EApp), but the leaf head is ELoc-wrapped — strip it so callers can match the
+-- raw `EVar`/etc. shape.
 spineHead : Expr -> Expr
 spineHead (EApp f _) = spineHead f
+spineHead (ELoc _ e) = spineHead e
 spineHead e = e
 
 -- flatten an EApp spine into [head, arg1, arg2, …]
@@ -227,10 +282,12 @@ spineList : Expr -> List Expr
 spineList e = spineOnto e []
 
 spineOnto : Expr -> List Expr -> List Expr
+spineOnto (ELoc _ e) acc = spineOnto e acc
 spineOnto (EApp f x) acc = spineOnto f (x :: acc)
 spineOnto e acc = e :: acc
 
 exprToPat : Expr -> Pat
+exprToPat (ELoc _ e) = exprToPat e
 exprToPat (EVar "_") = PWild
 exprToPat (EVar x) = ctorOrVar x
 exprToPat (ELit l) = PLit l
@@ -277,6 +334,14 @@ isCtorChars cs
 
 isUpperC : Char -> Bool
 isUpperC c = c >= 'A' && c <= 'Z'
+
+-- Peel transparent ELoc wrappers to expose the underlying expr shape.  Mirrors
+-- parser.mly's local `strip` (used before `expr_to_pat`/section detection): the
+-- binding-LHS→pattern conversions and section recovery match on the raw node
+-- kind, so they must see through the ELoc the atom level now puts on leaves.
+stripLoc : Expr -> Expr
+stripLoc (ELoc _ e) = stripLoc e
+stripLoc e = e
 
 binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
 binOp tk op = do
@@ -393,7 +458,10 @@ parseAspat : Parser Expr
 parseAspat = orElse parseAspatAt parsePostfix
 
 parseAspatAt : Parser Expr
-parseAspatAt = do
+parseAspatAt = located parseAspatAtRaw
+
+parseAspatAtRaw : Parser Expr
+parseAspatAtRaw = do
   x <- identNameP
   expectTok TAsAt
   sub <- parsePostfix
@@ -446,8 +514,17 @@ sliceHi e lo incl = do
   expectTok TRBracket
   postfixTail (ESlice e lo hi incl)
 
+-- Atom level (`expr_atom` + the statement-form productions in parser.mly).
+-- Wrapped in a transparent ELoc capturing the atom's token span, mirroring
+-- parser.mly where every atom and every let/if/match/function/do production is
+-- `ELoc (of_pos $startpos $endpos, …)`.  Binop/app/unary/postfix levels stay
+-- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
+-- implicit from their wrapped leaf operands.
 parseAtom : Parser Expr
-parseAtom = do
+parseAtom = located parseAtomRaw
+
+parseAtomRaw : Parser Expr
+parseAtomRaw = do
   t <- peekP
   match t
     TInt n => emit (ELit (LInt n))
@@ -583,8 +660,13 @@ anyKV (_::rest) = anyKV rest
 
 kvToField : KvItem -> FieldAssign
 kvToField (KvField n e) = FieldAssign n e
-kvToField (KvElem (EVar n)) = FieldAssign n (EVar n)
+kvToField (KvElem e) = kvElemToField (stripLoc e)
 kvToField _ = FieldAssign "_" (ELit LUnit)
+
+-- a bare element in a record-literal brace is a pun `{ x }` → `{ x = x }`.
+kvElemToField : Expr -> FieldAssign
+kvElemToField (EVar n) = FieldAssign n (EVar n)
+kvElemToField _ = FieldAssign "_" (ELit LUnit)
 
 kvPairs : List KvItem -> List (Expr, Expr)
 kvPairs [] = []
@@ -726,10 +808,20 @@ parenResult : List Expr -> Expr
 parenResult [e] = leftSectionOrExpr e
 parenResult es = ETuple es
 
--- a single `(e op _)` becomes a left section; otherwise just the inner expr
+-- a single `(e op _)` becomes a left section; otherwise just the inner expr.
+-- The `_` placeholder is a wrapped atom (`ELoc (EVar "_")`), so strip the RHS
+-- operand before matching (mirrors parser.mly's local `strip` in this rule).
+-- On no match we return the ORIGINAL expr untouched (keeping its wrappers).
 leftSectionOrExpr : Expr -> Expr
-leftSectionOrExpr (EBinOp op lhs (EVar "_") _) = ESection (SecLeft lhs op)
-leftSectionOrExpr e = e
+leftSectionOrExpr e = leftSectionGo e (stripLoc e)
+
+leftSectionGo : Expr -> Expr -> Expr
+leftSectionGo orig (EBinOp op lhs rhs _) = leftSectionRhs orig op lhs (stripLoc rhs)
+leftSectionGo orig _ = orig
+
+leftSectionRhs : Expr -> String -> Expr -> Expr -> Expr
+leftSectionRhs _ op lhs (EVar "_") = ESection (SecLeft lhs op)
+leftSectionRhs orig _ _ _ = orig
 
 -- section_op (no MINUS): tokens that can head an operator section
 sectionOpStr : Token -> Option String
@@ -2385,8 +2477,10 @@ assignFromLhs lhs rhs = match flattenFieldPath lhs
   Some (x, fs) => pure (DoFieldAssign x fs rhs)
   None => failP "invalid assignment target in do-block"
 
--- `a` → Some (a, []); `a.b.c` → Some (a, [b, c]); anything else → None
+-- `a` → Some (a, []); `a.b.c` → Some (a, [b, c]); anything else → None.
+-- Strips ELoc wrappers (the base var and any sub-access are wrapped atoms).
 flattenFieldPath : Expr -> Option (String, List String)
+flattenFieldPath (ELoc _ e) = flattenFieldPath e
 flattenFieldPath (EVar x) = Some (x, [])
 flattenFieldPath (EFieldAccess inner f) =
   fieldPathExtend (flattenFieldPath inner) f
@@ -2606,6 +2700,20 @@ parse : String -> List Decl
 parse src =
   let toks = arrayFromList (tokenize src)
   resultDecls toks (runP parseProgram toks 0)
+
+-- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
+-- (src + token offsets) so the ELoc wrappers carry REAL line/col, then parses.
+-- Separate from `parse` (which stays pure / placeholder-loc) because `set_ref`
+-- is <Mut> and `parse` is called from pure contexts across the pipeline; the
+-- token stream is byte-identical (`tokenizeWithOffsets` vs `tokenize`).
+export
+parseLocated : String -> <Mut> List Decl
+parseLocated src =
+  match tokenizeWithOffsets src
+    (tokList, offList) =>
+      let _ = setLocState src (arrayFromList offList)
+      let toks = arrayFromList tokList
+      resultDecls toks (runP parseProgram toks 0)
 
 -- ── Structured parse errors (non-panicking entry) ───────────────────────────
 -- The LSP prerequisite (Stage 4 task #24): a parser should yield errors as
