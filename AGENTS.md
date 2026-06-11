@@ -15,11 +15,19 @@ linear pipeline; each stage is one file.
 > IR → `clang`; C runtime `runtime/medaka_rt.c` + Boehm GC) compiles it. As of
 > 2026-06-08 all 7 stages are native-compiled byte-identical to the interpreter
 > and the compiler self-hosts to a **reproducing fixpoint** (`selfhost/BOOTSTRAP.md`).
-> The OCaml compiler is still the **reference + differential oracle** and the
-> bootstrap host. **Current focus = [PLAN.md Stage 3](./PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml):
+> As of 2026-06-10 the **Stage-4 tooling is ported** (fmt/test/new/repl/build/lsp, all
+> differential-tested vs OCaml) and the **Phase-C native CLI capstone is in progress**:
+> `selfhost/medaka_cli.mdk` native-compiles into a single OCaml-free `medaka` binary
+> (~1.6 MB) that does `check`/`fmt`/`new`/`build`/`run` end-to-end with no OCaml at runtime
+> (`test`/`repl`/`lsp` subcommands remain). The OCaml compiler is still the **reference +
+> differential oracle** and the bootstrap host, but is being **retired (≠ removed — kept frozen
+> as a soak-period oracle; see PLAN.md "Retirement ≠ removal")**. **Current focus =
+> [PLAN.md Stage 3](./PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml):
 > harden the native backend toward CANONICAL + gated OCaml retirement.** Native-backend
 > docs: `selfhost/BOOTSTRAP.md` (the B1–B7 + C1–C3 log), `selfhost/EMITTER-GAPS.md`
-> (closed/residual emitter gaps), `selfhost/STAGE2-DESIGN.md` + `selfhost/RUNTIME-DESIGN.md`
+> (closed/residual emitter gaps), `selfhost/DISPATCH-GAPS-SCOPE.md` (repro-verified scope of
+> the parked native dispatch gaps #54/#55/#50/#21), `selfhost/PERF-SCOPE.md` (bar-4 `-O2`/benchmark
+> scoping), `selfhost/STAGE2-DESIGN.md` + `selfhost/RUNTIME-DESIGN.md`
 > (design), `selfhost/README.md` (slice log). Harnesses: `test/bootstrap_*.sh`
 > (native stage == interpreter), `test/selfcompile_*.sh` (emitter self-compile).
 
@@ -307,5 +315,7 @@ fix lands, then load. (A `UserPromptSubmit` hook,
 | `stdlib/README.md` | Conventions for adding extern primitives |
 | `selfhost/BOOTSTRAP.md` | Native self-compile log: B1–B7 (each stage native==interpreter) + C1–C3 (emitter self-compile fixpoint), with the emitter bugs fixed per slice |
 | `selfhost/EMITTER-GAPS.md` | Native emitter gap census — closed gaps (E-series) + the open capability gaps (`max`/`min`, refutable pattern-guards) |
+| `selfhost/DISPATCH-GAPS-SCOPE.md` | Repro-verified scope of the 4 parked native dispatch gaps (#54 Map `toList` / #55 sum-product / #50 parametric-Ord / #21 nested route flattening): minimal repro + root cause + fix-location + spawn-readiness per gap. **#54 is coupled to #21** (panic-fix exposes the nested-element-dict route bug) |
+| `selfhost/PERF-SCOPE.md` | Bar-4 performance scoping: every `clang` invocation + the one-line `-O2` enable, why `-O2` is fixpoint-safe (text IR is pre-clang), benchmark-harness plan, ranked hot paths (2234 `alloca`→`mem2reg`, GC alloc density), sequenced session steps |
 | `selfhost/STAGE2-DESIGN.md` / `selfhost/RUNTIME-DESIGN.md` | Native backend design: Core IR seam, value rep, GC, per-extern disposition |
 | `selfhost/README.md` | Self-host port slice log + roadmap |

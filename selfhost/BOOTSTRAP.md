@@ -763,3 +763,32 @@ sh test/bootstrap_from_seed.sh # verify the new seed bootstraps OCaml-free (C3a)
 - `test/selfcompile_fixpoint.sh` (gap-tolerant driver) unchanged: C3a/C3b YES.
 
 
+## Native CLI capstone — OCaml-free `build` + `run` (Phase-C Slice 2, 2026-06-10)
+
+C4 made the *emitter* rebuildable without OCaml. C5 closes the loop at the **user-facing CLI**:
+the native `medaka` binary itself drives compilation and execution with no OCaml in the runtime path.
+
+- **`selfhost/medaka_cli.mdk`** is the dispatcher (replaces `bin/main.ml`). Slices 0–2 wire
+  `check`/`fmt`/`new`/`build`/`run`; it native-compiles into **one OCaml-free `medaka` binary (~1.6 MB)**.
+- **`build`** routes to `build_cmd.runBuild` — a *thin* driver: emit is a `runCommand` shell-out to the
+  emitter binary, so the emitter graph is NOT pulled into `medaka_cli`. The OCaml-free emit host is
+  `MEDAKA_EMITTER=./medaka_emitter` (the C4 seed-built native emitter). Full chain
+  `./medaka build F` → native emitter → `clang` → binary, **zero OCaml**.
+- **`run`** routes to `eval.mdk`'s load→typecheck→eval. Wiring it **pulls the ENTIRE front-end +
+  interpreter (parser/desugar/loader/typecheck/eval/ast) into `medaka_cli`'s native module graph** —
+  the largest single-binary native build to date. **It compiled CLEAN — no new emitter gap** (the
+  ultimate multi-module emittability stress test passed).
+- **Seed unchanged / fixpoint intact:** `medaka_cli.mdk` is not in the emitter self-compile graph
+  (`elaborateModules` over `llvm_emit.mdk`), so `selfhost/seed/emitter.ll` stays byte-identical;
+  `selfcompile_fixpoint.sh` C3a/C3b stay green.
+- **Known limitation (`mdk_set_args`, not retirement-blocking):** the native `args` extern returns the
+  whole process argv (set once in `@main`'s prologue, no slicing), so `./medaka run FILE a b c` hands the
+  program the CLI's full argv, and native `run` can't host the emit shell-out (the emitter would see two
+  un-strippable leading args) — hence the OCaml-free emit host must be `MEDAKA_EMITTER`. An args-slicing
+  primitive would let native `run` host the emitter and pass programs the correct argv.
+
+### Validation
+- `test/diff_native_cli.sh` → **50/0**: native `./medaka {check,fmt,new,build,run}` == OCaml oracle,
+  green with BOTH emit hosts (OCaml-free `MEDAKA_EMITTER` and OCaml `$MAIN run`).
+- Mega-build (`run` wired) native-compiles clean; combined toolchain binary ~1.59 MB.
+- Seed `selfhost/seed/emitter.ll` byte-identical; `selfcompile_fixpoint.sh` C3a/C3b YES.

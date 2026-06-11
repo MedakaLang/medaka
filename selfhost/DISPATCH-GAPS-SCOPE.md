@@ -222,6 +222,21 @@ The same panic occurs inside `map.mdk`'s own `eq`/`compare`/`debug`/`display` im
 
 **SAFE to spawn autonomously.** Well-scoped: diagnose `implExistsForHead` + fix `buildKeyTable` + add fixtures. Recommend **Sonnet**.
 
+> **⚠️ UPDATE 2026-06-10 — the "surgical one-node fix" hypothesis was WRONG; #54 is COUPLED to #21.**
+> An autonomous attempt (Sonnet) found: the `prePassModulePairArgShadow` panic-fix DOES remove the
+> `no impl of method 'toList' for type 'Map'` compile-time panic, and the build then succeeds — but
+> `debug (toList m)` emits **garbage** (`["\0\0\0", "\0\0\0\0\0"]`) instead of `[(1,"a"),(2,"b")]`.
+> Root cause traced to the element dict passed to `@mdk_impl_List_debug`: its route comes out
+> `RKey "String"` (or similar single-level) instead of the required nested
+> `RKey "__tuple2__" [RKey "Int" [], RKey "String" []]`. **That is the #21 2-level
+> route-flattening bug** (the multi-module `elabModuleStamp`/`argImplDictRoutesFor`/`routeOfMono`
+> path drops the inner nesting level). So **#54-correct-output requires #21 first** — the panic-fix
+> alone is necessary-but-not-sufficient (exactly the trap the prior revert hit). The attempt STOPPED
+> CLEAN (no merge, no commit) rather than ship panic-gone-but-output-wrong. **Revised verdict:**
+> fix #54 + #21 TOGETHER, **Opus + human oversight** (route-fragile, Phase-134 class). The
+> `prePassModulePairArgShadow` panic-fix is salvageable as the first layer when that combined work
+> is scheduled.
+
 ---
 
 ## Gap #21 — 2-level multi-module route flattening (`Box (List (List Int))`)

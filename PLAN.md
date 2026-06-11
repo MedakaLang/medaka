@@ -8,7 +8,7 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`selfhost/README.md`](./selfhost/README.md).
 
-## Current status (2026-06-09)
+## Current status (2026-06-10)
 
 **🏁 Medaka is a native self-hosting compiler.** The compiler is written in
 Medaka (`selfhost/`), and the native **LLVM backend now compiles it**: all seven
@@ -125,11 +125,18 @@ CANONICAL compiler** — the one users invoke and the one that builds the compil
    GAP 1 (nested dicts) / GAP 2 (max/min) / C5 standalone-vs-method / tuple-as-receiver all ✅.
    **Stdlib-emittability sweep DONE** (2026-06-10): 8/12 modules build CLEAN; **clause-label SSA
    collision** (#53, gated the Phase-C capstone — every multi-module build) ✅ CLOSED (`da3958f`);
-   **hashing needs NO language decision** (works via C externs). Remaining (all tracked):
+   **hashing needs NO language decision** (works via C externs). Remaining (all tracked; full
+   repro-verified scope in [`selfhost/DISPATCH-GAPS-SCOPE.md`](./selfhost/DISPATCH-GAPS-SCOPE.md)):
    **#54 Map `toList` bare-name** (H-b1 — module-local standalone shadows the Foldable method);
    **#55 sum/product two-constraint dicts** (#21 Cause-B residual); **#50 parametric-Ord `< > <= >=`**;
    **#21 2-level multi-module route flattening**. (tuple work also fixed `==` crashing on ANY parametric
-   `Eq` impl.)
+   `Eq` impl.) **⚠️ #54 is COUPLED to #21 (found 2026-06-10):** the scope doc's "surgical one-node
+   `buildKeyTable` fix" hypothesis was WRONG. The `prePassModulePairArgShadow` panic-fix removes the
+   `no impl of 'toList' for 'Map'` panic, but then `debug (toList m)` emits garbage
+   (`["\0\0\0", …]`) because the element-dict route comes out `RKey "String"` instead of
+   `RKey "__tuple2__" [Int, String]` — i.e. the **#21 nested-element-dict route-flattening bug**.
+   So #54-correct-output needs #21 first; an attempt STOPPED clean (no merge, no commit) rather than
+   ship panic-gone-but-output-wrong. These two should be fixed together, Opus + oversight (route-fragile).
 2. ✅ **Effectively done.** Behavior suites ported to `medaka test` (`test_run`/`test_eval`/`test_loader`);
    the rest is internal OCaml API, intrinsically non-portable.
 3. ✅ **Done.** Differential fuzzer (MVP + native Tier-C, 1080 native programs clean, found+fixed
@@ -154,8 +161,11 @@ CANONICAL compiler** — the one users invoke and the one that builds the compil
    (user, 2026-06-10):** any emitter-IR change makes the committed seed stale. Emitter-changing agents
    **LEAVE the seed STALE** (confirm `selfcompile_fixpoint` C3a/C3b, SKIP `bootstrap_from_seed`, do NOT
    commit a re-mint) — to avoid per-agent 10 MB churn. The **orchestrator re-mints once at release
-   checkpoints** via `test/refresh_seed.sh` + verifies `bootstrap_from_seed.sh`. (ELoc `c7b4c4b` re-minted;
-   the seed goes stale again with B.10.2b/B.10.5/tuple — re-mint pending, tracked.)
+   checkpoints** via `test/refresh_seed.sh` + verifies `bootstrap_from_seed.sh`. (Last re-mint:
+   `df13070`, LSP token-length #48. **Seed is CURRENT as of 2026-06-10** — verified: zero
+   emitter-graph source changes since `df13070`; this session's landings — Slice 0+1/Slice 2 (CLI,
+   not in emitter graph), perf/dispatch scope docs — left the emitter source untouched, so the seed
+   needs no re-mint.)
 6. 🟢 **Soundness + correctness CLOSED.** TYPECHECK-AUDIT: all confirmed soundness/correctness/
    diagnostic findings closed (S1-S3, T1/T1b/T2, C1-C9, D1/D2, OBS3/OBS4); **C4 resolved by decision**
    (lazy nullary canonical); **C5 ✅ CLOSED** (`5db8a83`, RLocal end-to-end, fixpoint byte-identical);
@@ -165,8 +175,10 @@ CANONICAL compiler** — the one users invoke and the one that builds the compil
    **L1** (C5's bare-name/install-order side closed).
 
 **Also gating retirement, beyond the 6-item bar:** the **Stage-4 tooling port** (lib/+bin/ host the
-tooling) — fmt/test/new/REPL/build ✅ (5/6), LSP scoped (#36, prereqs #37/#38), then the Phase-C CLI
-capstone. **Deferred (user, not near/mid-term):** GC, cross-platform (arm64-first accepted).
+tooling) — fmt/test/new/REPL/build/**LSP** ✅ (all 6 tools ported + differential-tested), and the
+**Phase-C CLI capstone IN PROGRESS** (Slices 0–2 ✅: native `medaka` does check/fmt/new/build/run
+OCaml-free in a 1.59 MB binary; Slices 3 `test` + 4 `repl`/`lsp` remain — see Phase C #12 below).
+**Deferred (user, not near/mid-term):** GC, cross-platform (arm64-first accepted).
 
 **🔝 TOP PRIORITY (set 2026-06-09): close the TYPECHECK-AUDIT findings.** The
 2026-06-09 audit ([`selfhost/TYPECHECK-AUDIT.md`](./selfhost/TYPECHECK-AUDIT.md)) —
@@ -658,15 +670,30 @@ and a TOML reader (for `medaka.toml`).
     shell-out emit (Ref isolation) + `runCommand`→clang; 9/9 differential builds == OCaml `medaka
     build`. (`runCommand`/`makeDir` native-emit done, #18 `a0c7b111`.)
 
-**Phase C — capstone:**
-12. CLI dispatcher (replaces `bin/main.ml`, 1076), then **native-compile the whole `medaka`
-    from `.mdk` sources** — the retirement. Converges with bar-item-5 (self-bootstrapping build).
-    **UNBLOCKED 2026-06-10:** clause-label SSA (#53) cleared the last multi-module-emit blocker;
-    the tooling's stdlib deps all build clean. The remaining dispatch gaps (#54 map / #55 sum-product /
-    #50 parametric-Ord / #21 nested dicts / C7-native) are verified **NOT on this critical path** (the
-    tooling never touches them) → PARKED as end-user stdlib-completeness, not retirement-blocking.
-    Scoping in flight (#57, a418e967) — incl. the empirical "does the whole toolchain native-compile
-    in one binary" stress test.
+**Phase C — capstone (#57, IN PROGRESS — Slices 0–2 DONE 2026-06-10):**
+12. CLI dispatcher `selfhost/medaka_cli.mdk` (replaces `bin/main.ml`, 1076 LOC), native-compiled into
+    the `medaka` binary — the retirement integration piece. Converges with bar-item-5 (self-bootstrap).
+    **UNBLOCKED 2026-06-10** by clause-label SSA (#53). **Slices landed:**
+    - **Slice 0+1 ✅ (`8a6c2f7`):** split `check.mdk` into logic (`runCheck`) + driver `check_main.mdk`
+      (mirrors `fmt_main.mdk`); `medaka_cli.mdk` dispatcher routes `check`/`fmt`/`new` + help + a
+      "not yet in native CLI" stub for deferred subcommands. `check.mdk`/`medaka_cli.mdk` are NOT in
+      the emitter graph (`elaborateModules`) → seed byte-identical. Gate `test/diff_native_cli.sh`.
+    - **Slice 2 ✅ (`dd6edbc`):** wired `run` + `build`. `build` → `build_cmd.runBuild` (thin —
+      emit is a `runCommand` shell-out, emitter NOT pulled in). `run` → `eval.mdk` load→typecheck→eval,
+      which **pulls the ENTIRE front-end + interpreter into `medaka_cli`'s native module graph** (the
+      ultimate multi-module emittability stress test). **It native-compiled CLEAN — no new emitter gap.**
+      Combined OCaml-free toolchain = one **1.59 MB** binary (check/fmt/new/build/run). **OCaml-free
+      build+run proven end-to-end** (native `./medaka build` + `MEDAKA_EMITTER=./medaka_emitter` + clang,
+      zero OCaml at runtime). `diff_native_cli.sh` 50/0; seed byte-identical; fixpoint C3a/C3b green.
+      *Adjacent gap found (#61, not retirement-blocking):* native `args` returns whole process argv (no
+      slicing primitive) → `run FILE a b c` hands the program the CLI's full argv, and native `run`
+      can't host the emit shell-out → OCaml-free emit host must be `MEDAKA_EMITTER`. A `mdk_set_args`
+      primitive would fix both.
+    - **Remaining:** Slice 3 (`test`), Slice 4 (`repl`/`lsp`).
+
+    The parked dispatch gaps (#54 map / #55 sum-product / #50 parametric-Ord / #21 nested dicts /
+    C7-native) are verified **NOT on this critical path** (the tooling never touches them) → end-user
+    stdlib-completeness, not retirement-blocking.
 
 **Implied sub-tracks:**
 - **Stdlib emittability sweep** — native-compiling these tools needs the FULL stdlib
