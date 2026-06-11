@@ -15,6 +15,15 @@ public export data Lit
   | LBool Bool
   | LUnit
 
+-- A source-location span for an expression (mirror of lib/ast.ml's `loc`):
+-- file, 1-based start line, 0-based start col, 1-based end line, 0-based end col.
+-- Carried by the transparent `ELoc` wrapper the parser puts on atom/leaf and
+-- statement-form expressions.  The `file` is filled by the caller (B.10.2b) —
+-- the parser leaves it "".  Transparent to all semantics: every stage either
+-- recurses through `ELoc` or strips it (sexp/Core-IR lowering), so emitted IR
+-- and structural dumps are byte-identical to the un-wrapped tree.
+public export data Loc = Loc String Int Int Int Int
+
 public export data Ty
   = TyCon String
   | TyVar String
@@ -200,6 +209,16 @@ public export data Expr
   -- the typechecker.  Eval applies the matching dictionaries as leading args,
   -- lining up with the dict params dict_pass prepended to f's definition.
   | EDictAt String (Ref (List Route))
+  -- Transparent source-location wrapper (mirror of lib/ast.ml:193 `ELoc of
+  -- loc * expr`).  The parser wraps atom/leaf and statement-form productions
+  -- (matching parser.mly's atoms + let/if/match/function/do/lambda/as-pat) so
+  -- typecheck/resolve can attribute errors to a precise expression span via a
+  -- `currentLoc` ref.  Semantically transparent: every stage either recurses
+  -- through it or strips it.  sexp.mdk renders it transparently and core_ir_
+  -- lower.mdk strips it before Core IR, so all parse/sexp/IR gates stay
+  -- byte-identical.  The parser never builds nested binop/app wrappers (it
+  -- wraps leaves + statement forms only, exactly like parser.mly).
+  | ELoc Loc Expr
 
 -- import paths: `import q.{members}`, `import q.path`, `import q.*`, `import q as A`
 public export data UseMember = UseMember String Bool

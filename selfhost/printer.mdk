@@ -403,9 +403,13 @@ exprPrec (EGuards _) = precTop
 exprPrec (EVarAt _ _) = precAtom
 exprPrec (EMethodAt _ _ _ _) = precAtom
 exprPrec (EDictAt _ _) = precAtom
+-- ELoc is transparent: the wrapper takes its child's precedence (mirror of
+-- lib/printer.ml:323 `ELoc(_,e) -> expr_prec e`).
+exprPrec (ELoc _ e) = exprPrec e
 
 -- A body whose printed form spans multiple lines — block vs inline `=` RHS.
 isBlockBody : Expr -> Bool
+isBlockBody (ELoc _ e) = isBlockBody e
 isBlockBody (EMatch _ _) = True
 isBlockBody (EBlock _) = True
 isBlockBody (EDo _) = True
@@ -548,6 +552,9 @@ printExprRaw (ESlice e lo hi incl) =
 printExprRaw (EVarAt n _) = text n
 printExprRaw (EMethodAt n _ _ _) = text n
 printExprRaw (EDictAt n _) = text n
+-- ELoc is transparent: print the wrapped expr (mirror of lib/printer.ml:502
+-- `ELoc(_,e) -> print_expr_raw e`).
+printExprRaw (ELoc _ e) = printExprRaw e
 
 -- `let [isMut] f args = body in e2` — coalesce the lambda spine for `let f = …`.
 printELet : Bool -> Bool -> Pat -> Expr -> Expr -> Doc
@@ -580,6 +587,7 @@ printELet isMut _ pat e1 e2 =
             (Cat (text " in ") (printExpr precTop e2))))))
 
 unwrapLams : List Pat -> Expr -> (List Pat, Expr)
+unwrapLams acc (ELoc _ e) = unwrapLams acc e
 unwrapLams acc (ELam pats body) = unwrapLams (acc ++ pats) body
 unwrapLams acc body = (acc, body)
 
@@ -642,6 +650,9 @@ printExprBody : Expr -> Doc
 printExprBody e = printExprBodyW True e
 
 printExprBodyW : Bool -> Expr -> Doc
+-- ELoc transparent (mirror of lib/printer.ml:516): peel so the body-shape
+-- dispatch below sees the raw node kind.
+printExprBodyW wrapApp (ELoc _ e) = printExprBodyW wrapApp e
 printExprBodyW _ (EMatch sc arms) = printExprRaw (EMatch sc arms)
 printExprBodyW _ (EBlock stmts) = printExprRaw (EBlock stmts)
 printExprBodyW _ (EDo stmts) = printExprRaw (EDo stmts)
@@ -657,6 +668,7 @@ printExprBodyW wrapApp (EIf c t els)
 printExprBodyW _ e = printExpr precTop e
 
 elseLessThen : Expr -> Doc
+elseLessThen (ELoc _ e) = elseLessThen e
 elseLessThen (EBlock stmts) = printExprBody (EBlock stmts)
 elseLessThen t
   | isBlockBody t = indentBlock (printExprBody t)
@@ -665,6 +677,7 @@ elseLessThen t
 -- Width-aware `if` RHS: Some doc when the `if` (and its branches) are simple;
 -- None for non-`if` or block-branch `if` (handled elsewhere).
 printIfRhs : Expr -> Option Doc
+printIfRhs (ELoc _ e) = printIfRhs e
 printIfRhs (EIf c t els) =
   let isUnit = isUnitLit els
   if (not (isBlockBody t)) && (isUnit || not (isBlockBody els)) then
@@ -745,6 +758,7 @@ matchBodyDoc body =
     None => matchBodyNoIf body
 
 matchBodyNoIf : Expr -> Doc
+matchBodyNoIf (ELoc _ e) = matchBodyNoIf e
 matchBodyNoIf (EBlock stmts) = Cat (text " =>") (printExprBodyW False (EBlock stmts))
 matchBodyNoIf body = Cat (text " => ") (printExprBodyW False body)
 
@@ -846,6 +860,10 @@ escEChars cs i
 
 -- The RHS of `<header> = <body>`: `=` spaced for the body shape.
 printDefRhs : Expr -> Doc
+-- strip ELoc so the body-shape dispatch (EGuards/EBlock/EDo/EMatch/EFunction/
+-- EApp) sees the raw node — else a wrapped `do`/`match` body mis-renders as a
+-- block on a fresh indented line instead of the inline `= do`/`= match` form.
+printDefRhs (ELoc _ e) = printDefRhs e
 printDefRhs (EGuards arms) = printGuardArms arms
 printDefRhs (ELetGroup binds inner)
   | isGuardsBody inner = printExprBody (ELetGroup binds inner)
@@ -1124,6 +1142,7 @@ letGroupDeclClause first name (FunClause pats body) =
         (Cat (text " =") (letGroupDeclClauseBody body))))
 
 letGroupDeclClauseBody : Expr -> Doc
+letGroupDeclClauseBody (ELoc _ e) = letGroupDeclClauseBody e
 letGroupDeclClauseBody (EBlock stmts) = printExprBody (EBlock stmts)
 letGroupDeclClauseBody body
   | isBlockBody body = indentBlock (printExprBody body)

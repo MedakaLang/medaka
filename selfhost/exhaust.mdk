@@ -287,6 +287,9 @@ recFieldIrrefutable (RecPatField _ None) = True
 recFieldIrrefutable (RecPatField _ (Some p)) = isIrrefutablePat p
 
 boolAlwaysTrue : Expr -> Bool
+-- strip ELoc (mirror of lib/exhaust.ml's `strip_eloc`): guard conditions arrive
+-- wrapped from the parser, so `otherwise`/`True` must be matched through it.
+boolAlwaysTrue (ELoc _ e) = boolAlwaysTrue e
 boolAlwaysTrue (EVar "otherwise") = True
 boolAlwaysTrue (EVar "True") = True
 boolAlwaysTrue (ELit (LBool True)) = True
@@ -419,6 +422,7 @@ collectLetBinds (EGuards arms) = concatMapList guardArmBinds arms
 collectLetBinds (EFunction arms) = concatMapList collectArmBinds arms
 collectLetBinds (ESection (SecRight _ e0)) = collectLetBinds e0
 collectLetBinds (ESection (SecLeft e0 _)) = collectLetBinds e0
+collectLetBinds (ELoc _ e) = collectLetBinds e
 collectLetBinds _ = []
 
 collectLetBindInner : LetBind -> List LetBind

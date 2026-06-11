@@ -139,6 +139,8 @@ annotateExpr fr (ESetLit n es) = ESetLit n (map (annotateExpr fr) es)
 annotateExpr fr (EQuestion e0) = EQuestion (annotateExpr fr e0)
 annotateExpr fr (EAsPat x e0) = EAsPat x (annotateExpr fr e0)
 annotateExpr fr (ESection s) = ESection (annotateSection fr s)
+-- ELoc is transparent: preserve the loc, annotate the wrapped expr.
+annotateExpr fr (ELoc l e) = ELoc l (annotateExpr fr e)
 
 -- let-rec `let f = …` binds f in a fresh frame over BOTH the RHS and the body
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the

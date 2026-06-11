@@ -55,6 +55,10 @@ lower (EHeadAnnot e _) = lower e
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 lower (EMethodAt name routeRef implRef methodRef) = CMethod name routeRef.value implRef.value methodRef.value
 lower (EDictAt name routesRef) = CDict name routesRef.value
+-- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
+-- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
+-- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
+lower (ELoc _ e) = lower e
 lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
 
 -- surface binops that are really sugar are lowered to primitive control flow /

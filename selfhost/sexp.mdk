@@ -80,6 +80,10 @@ armSexp (Arm p gs body) =
   node "arm" [patSexp p, slist (map guardSexp gs), exprSexp body]
 
 exprSexp : Expr -> String
+-- ELoc is TRANSPARENT in the structural dump (mirror of dev/astdump.ml:69
+-- `ELoc(_,e) -> sexp_expr e`): the parse/sexp gates stay byte-identical to the
+-- OCaml oracle, which strips locs before dumping.
+exprSexp (ELoc _ e) = exprSexp e
 exprSexp (ELit l) = node "ELit" [litSexp l]
 exprSexp (EVar x) = node "EVar" [escStr x]
 exprSexp (EApp f x) = node "EApp" [exprSexp f, exprSexp x]

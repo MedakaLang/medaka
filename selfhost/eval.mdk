@@ -911,6 +911,10 @@ eval env (ERangeList lo hi incl) =
   evalRange (eval env lo) (eval env hi) incl rangeListMk
 eval env (ERangeArray lo hi incl) =
   evalRange (eval env lo) (eval env hi) incl rangeArrayMk
+-- ELoc is transparent at eval (mirror of lib/eval.ml's ELoc arm — it sets
+-- current_loc there; the self-hosted eval surfaces errors via panic, so we just
+-- recurse into the wrapped expr).
+eval env (ELoc _ e) = eval env e
 eval _ _ = panic "eval: unsupported node (slice 2)"
 
 export
