@@ -292,15 +292,15 @@ Tested and **rejected** — recorded so future sessions skip them:
 
 | Workload | original (-O0, div 3) | final | speedup |
 |---|---|---|---|
-| emitter self-compile | 12.04 s / 770 MB | **2.20 s / 199 MB** | **5.47× / 3.9× less RSS** |
-| vs OCaml interpreter | 125.35 s / 1467 MB | 2.20 s / 199 MB | **57.0× / 7.4× less RSS** |
+| emitter self-compile | 12.04 s / 770 MB | **2.33 s / 200 MB** | **5.17× / 3.9× less RSS** |
+| vs OCaml interpreter | 125.35 s / 1467 MB | 2.33 s / 200 MB | **53.8× / 7.3× less RSS** |
 | fib 38 (no alloc) | 0.11 s | 0.10 s | flat (already optimal) |
 
 Banked, all universal defaults, every change gated byte-identical (fixpoint +
 differential fixtures + build gate): clang `-O2`, GC `free_space_divisor=1`,
 lifted-define buffer O(N²)→O(N), DCE reachability+graph O(N²)→O(N) via HashMap,
 typecheck dep-graph + SCC clause grouping + dedup O(N²)→O(N·log N) via SMap. The
-native compiler is **~57× faster than the OCaml interpreter** at the representative
+native compiler is **~54× faster than the OCaml interpreter** (certified `test/bench.sh` min-of-5) at the representative
 self-compile workload — the OCaml-retirement performance bar is met with wide
 margin.
 
