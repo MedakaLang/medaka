@@ -292,15 +292,15 @@ Tested and **rejected** — recorded so future sessions skip them:
 
 | Workload | original (-O0, div 3) | final | speedup |
 |---|---|---|---|
-| emitter self-compile | 12.04 s / 770 MB | **3.24 s / 216 MB** | **3.72× / 3.6× less RSS** |
-| vs OCaml interpreter | 125.35 s / 1467 MB | 3.24 s / 216 MB | **38.7× / 6.8× less RSS** |
+| emitter self-compile | 12.04 s / 770 MB | **2.98 s / 200 MB** | **4.04× / 3.9× less RSS** |
+| vs OCaml interpreter | 125.35 s / 1467 MB | 2.98 s / 200 MB | **42.1× / 7.3× less RSS** |
 | fib 38 (no alloc) | 0.11 s | 0.10 s | flat (already optimal) |
 
 Banked, all universal defaults, every change gated byte-identical (fixpoint +
 differential fixtures + build gate): clang `-O2`, GC `free_space_divisor=1`,
 lifted-define buffer O(N²)→O(N), DCE reachability+graph O(N²)→O(N) via HashMap,
 typecheck dep-graph + SCC clause grouping + dedup O(N²)→O(N·log N) via SMap. The
-native compiler is **~39× faster than the OCaml interpreter** at the representative
+native compiler is **~42× faster than the OCaml interpreter** at the representative
 self-compile workload — the OCaml-retirement performance bar is met with wide
 margin.
 
@@ -468,3 +468,24 @@ preserved exactly, so output is byte-identical. One-function change.
 **Numbers (self-compile, min-of-5, -O2 + divisor=1):** 3.51 s → **3.24 s** (~8%).
 `dedupSGo` was the #2 profile hotspot. Cumulative this session: 12.04 s → 3.24 s
 (**3.72×**); vs OCaml interpreter 38.7×.
+
+---
+
+## Entry 13 — typecheck member sig presence via module-level SMap (2026-06-11)
+
+**Change (`selfhost/typecheck.mdk`):** `memberPeelSource`/`memberSigIsFun` (called
+per SCC member in `inferMembers`/`sccSchemes`) did `lookupAssocS m sigs` — an
+O(sigs) linear scan of the whole top-level signature list per member →
+O(members·sigs) over the compiler. Build a sig-name presence set (`SMap Unit`)
+ONCE per module in `processTopGroups` into a module-level `sigNameSetRef` (the
+`currentFn`/`curEffect` idiom, set before the sequential `processSCCs`), and both
+helpers now test `smLookup` (O(log n)). Both only ever needed sig *presence*, so
+behaviour is identical.
+
+**Gates:** `diff_selfhost_check` 40/40; `diff_selfhost_typecheck` 12/12;
+`typecheck_golden` 25/25; `selfcompile_fixpoint` C3a/C3b YES; `diff_selfhost_build`
+9/9; `diff_selfhost_llvm` 172/172. Seed stale; not re-minted.
+
+**Numbers (self-compile, min-of-5, -O2 + divisor=1):** 3.24 s → **2.98 s** (~8%).
+**Crossed 4×:** cumulative this session 12.04 s → 2.98 s (**4.04×**); vs OCaml
+interpreter 42.1×.

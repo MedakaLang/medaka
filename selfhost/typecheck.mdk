@@ -4924,8 +4924,21 @@ tjPop v acc = match tjStack.value
     let _ = set_ref tjOn (smInsert w False tjOn.value)
     if w == v then set_ref tjOut ((w :: acc) :: tjOut.value) else tjPop v (w :: acc)
 
+-- sig-name presence set (which top-level names carry a type signature), set once
+-- per module in `processTopGroups` so `memberPeelSource`/`memberSigIsFun` do an
+-- O(log n) presence check instead of an O(sigs) `lookupAssocS` scan per SCC member
+-- (was O(members·sigs) over the whole compiler). Module-level ref, matching the
+-- `currentFn`/`curEffect` idiom; processing is sequential per module.
+sigNameSetRef : Ref (SMap Unit)
+sigNameSetRef = Ref STip
+
+sigNamesToSet : List (String, Ty) -> SMap Unit -> SMap Unit
+sigNamesToSet [] m = m
+sigNamesToSet ((n, _) :: rest) m = sigNamesToSet rest (smInsert n () m)
+
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> <Mut> List (String, Scheme)
 processTopGroups env sigs defs names =
+  let _ = set_ref sigNameSetRef (sigNamesToSet sigs STip)
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   processSCCs env sigs grouped ordered
@@ -5110,7 +5123,7 @@ inferMembers env sigs grouped ((m, v) :: rest) =
 -- the peel source for a member: Some placeholder if it has a signature (peel the
 -- declared arrow domains onto the clause params), None otherwise
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
-memberPeelSource sigs m v = match lookupAssocS m sigs
+memberPeelSource sigs m v = match smLookup m sigNameSetRef.value
   Some _ => Some v
   None => None
 
@@ -5211,7 +5224,7 @@ memberClauseIsValue (_, _) = True
 
 -- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
-memberSigIsFun sigs m v = match lookupAssocS m sigs
+memberSigIsFun sigs m v = match smLookup m sigNameSetRef.value
   None => False
   Some _ => match normalize v
     TFun _ _ _ => True
