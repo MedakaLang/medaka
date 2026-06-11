@@ -138,4 +138,43 @@ GC still costs ~40 % of self-compile wall-clock at the default — collection, n
 codegen, was the bottleneck. divisor=1 is the practical floor (218 MB stays 3.5×
 under the -O0 baseline's 770 MB), so it is the chosen default.
 
+---
+
+## Entry 3 — allocation profile + initial-heap knob (investigation, 2026-06-10)
+
+**Profile (Boehm `GC_PRINT_STATS=1`, self-compile, divisor=1):** **265 full
+collections**, each world-stop marking ~27 ms over a live set of only **~45 MB**;
+~100 MB churned and freed *per* collection → on the order of **~26 GB of
+transient garbage** allocated to emit 10 MB of IR (~2600× write amplification).
+The live set is tiny and stable; the cost is re-marking it hundreds of times.
+This is the structural GC-density issue (PERF-SCOPE §3b#2): the emitter builds
+enormous transient string garbage (`++`, `intToString`, `freshReg`, …).
+
+**Initial-heap sweep (env `GC_INITIAL_HEAP_SIZE`, divisor=1, min-of-2):**
+
+| initial heap | wall | RSS |
+|---|---|---|
+| default growth | 6.16 s | 216 MB |
+| 256 MB | 4.91 s | 341 MB |
+| 512 MB | 4.39 s | 569 MB |
+| 1 GB | 3.99 s | 1152 MB |
+| 2 GB | 3.72 s | 2255 MB |
+
+A bigger starting heap collects less often → faster, but RSS scales ~1:1 with the
+heap. **Not baked as a default:** a fixed large initial heap would regress every
+tiny program (fib's RSS would jump from 2 MB to 256 MB+ resident). Instead it is a
+**tuning knob** — for heavy compiles, `GC_INITIAL_HEAP_SIZE=512000000 medaka build …`
+trades RSS for ~30 % more emit speed. The universal default stays divisor=1 / grow
+on demand.
+
+**Conclusion / next:** the remaining self-compile cost is dominated by transient
+string allocation in the emitter, not codegen. The principled fixes are
+emitter-side (reduce string churn: build output with fewer intermediate `++`
+concatenations; reuse buffers) and are the highest-value remaining perf work,
+but they touch the emitter module graph and must preserve the byte-identical
+fixpoint — to be done as carefully-gated emitter changes. The clang `-O2` +
+GC-divisor wins are banked and universal; the heap-size knob is documented for
+heavy batch use.
+
+
 
