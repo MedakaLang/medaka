@@ -757,6 +757,25 @@ LSP (B.10.x), `parseWithPositions`/`ELoc` for the edit site, and `fmt`/printer f
 **Why parked:** nice-to-have ergonomics, not on the retirement path. Lands naturally AFTER the
 LSP code-action infrastructure exists. Cross-ref [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md).
 
+### Future idea (parked, not scheduled): stack-performance recursion lint
+
+An **opt-in** compiler lint that flags self-recursive functions whose recursion is **neither tail**
+(handled by `musttail`) **nor tail-modulo-constructor** (handled by TRMC #56) — i.e. functions that
+will grow the native stack on deep input — to nudge users toward accumulator / tail-modulo-cons shapes
+for better stack performance. **Nearly free once TRMC lands:** reuse TRMC's `trmcEligible` + the
+tail-call classifier — the "neither" bucket *is* the warning. Surface through `medaka check` + LSP.
+
+**Key design tension = NOISE.** Most non-tail recursion is perfectly safe (balanced-tree recursion is
+O(log n) stack; bounded recursion never gets deep). A blanket warning fires on tons of legitimate code
+and trains users to ignore it — which is exactly why **OCaml and GHC don't warn on non-tail recursion
+by default.** So the principled version is **off by default** (a `--warn-stack` lint level /
+annotation-suppressible), scoped to self-recursion over a **recursive data structure** in non-tail
+non-TRMC position (the `length (x::xs) = 1 + length xs` accumulator-able shape), NOT all non-tail
+recursion.
+
+**Why parked:** QoL diagnostic, off the canonicalization critical path. Needs TRMC's classifier (do
+after #56). The complement to the TRMC + big-stack stack-safety work, not a blocker.
+
 ### Capability-effects wedge — near-term sequence
 
 **Owning roadmap:** [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §9 (language
