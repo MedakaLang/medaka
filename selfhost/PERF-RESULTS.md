@@ -292,16 +292,57 @@ Tested and **rejected** — recorded so future sessions skip them:
 
 | Workload | original (-O0, div 3) | final | speedup |
 |---|---|---|---|
-| emitter self-compile | 12.04 s / 770 MB | **4.69 s / 207 MB** | **2.57× / 3.7× less RSS** |
-| vs OCaml interpreter | 125.35 s / 1467 MB | 4.69 s / 207 MB | **26.7× / 7.1× less RSS** |
+| emitter self-compile | 12.04 s / 770 MB | **4.13 s / 199 MB** | **2.92× / 3.9× less RSS** |
+| vs OCaml interpreter | 125.35 s / 1467 MB | 4.13 s / 199 MB | **30.3× / 7.4× less RSS** |
 | fib 38 (no alloc) | 0.11 s | 0.10 s | flat (already optimal) |
 
 Banked, all universal defaults, every change gated byte-identical (fixpoint +
-≥180 differential fixtures + build gate): clang `-O2`, GC `free_space_divisor=1`,
-lifted-define buffer O(N²)→O(N), DCE reachability+graph O(N²)→O(N) via HashMap.
-The native compiler is ~27× faster than the OCaml interpreter at the
-representative self-compile workload — the OCaml-retirement performance bar is met
-with wide margin.
+differential fixtures + build gate): clang `-O2`, GC `free_space_divisor=1`,
+lifted-define buffer O(N²)→O(N), DCE reachability+graph O(N²)→O(N) via HashMap,
+typecheck dep-graph membership O(N²)→O(N·log N) via SMap name-set. The native
+compiler is ~30× faster than the OCaml interpreter at the representative
+self-compile workload — the OCaml-retirement performance bar is met with wide
+margin.
+
+---
+
+## Entry 9 — typecheck dep-graph membership O(N²) → O(N·log N) (2026-06-11)
+
+**Profile** ranked `keepGroupNames` / `clausesFor` (the let-group dependency-graph
+builder, `depGraphMap`) among the top compute hotspots. `buildAdj` calls
+`depsOf name allNames defs` for every top-level name, and `keepGroupNames allNames
+refs = filterList (r => containsName r allNames) refs` did a linear `containsName`
+scan of *all* top-level names per ref → O(names²·refs) over the whole compiler.
+
+**Change (`selfhost/typecheck.mdk`):** build an `SMap Unit` name-membership set
+**once** (`namesToSet`, the in-tree balanced BST already used for the adjacency
+map) and thread it through `buildAdj`/`depsOf`; `keepGroupNames` now tests
+`smHasKey` (O(log n)) instead of `containsName` (O(names)). `filterList` is
+unchanged, so the dependency lists — and therefore the Tarjan SCC order, the
+type-inference order, and all emitted output — are **byte-identical**; only the
+membership test is faster.
+
+**Gates (byte-identical output, comprehensively):** `diff_selfhost_check` 40/40;
+`diff_selfhost_typecheck` 12/12; `diff_selfhost_typecheck_golden` 25/25;
+`selfcompile_fixpoint` C3a/C3b YES (self-compile runs selfhost typecheck over the
+*whole compiler* — the strongest invariance test); `diff_selfhost_build` 9/9;
+`diff_selfhost_llvm` 172/172. Seed stale (typecheck.mdk in emit graph); not
+re-minted.
+
+**Numbers (self-compile, min-of-4, -O2 + divisor=1):** 4.69 s → **4.13 s** (~12%).
+The single largest algorithmic win after the GC/-O2 infra changes — the dep-graph
+membership was genuinely O(N²) over ~2 800 top-level names.
+
+**Cumulative this session:** 12.04 s → 4.13 s (**2.92×**); vs OCaml interpreter
+125.35 s → 4.13 s (**30.3×**).
+
+**Note on safety:** this touches the typechecker (the most delicate module), but
+the change is membership-only and order-preserving by construction, and was held
+to the full differential-vs-oracle gate set above. `clausesFor`'s per-name rescan
+(the smaller O(names·defs) cost) remains; grouping defs by name once would remove
+it but requires order-preserving group-by (foldr or prepend+reverse) — a safe
+follow-up.
+
 
 ---
 

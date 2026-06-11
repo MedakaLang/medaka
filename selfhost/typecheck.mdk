@@ -4808,10 +4808,18 @@ revLLGo [] acc = acc
 revLLGo (x :: xs) acc = revLLGo xs (x :: acc)
 
 depGraphMap : List String -> List (String, (List Pat, Expr)) -> SMap (List String)
-depGraphMap names defs = buildAdj names names defs STip
-buildAdj : List String -> List String -> List (String, (List Pat, Expr)) -> SMap (List String) -> SMap (List String)
+depGraphMap names defs = buildAdj names (namesToSet names STip) defs STip
+
+-- name-membership set, built ONCE, so `keepGroupNames` is O(log n)/ref instead of
+-- O(names)/ref (the dep-graph build was O(names²·refs)). Output-order-preserving:
+-- `keepGroupNames`'s `filterList` is unchanged, only its membership test is faster.
+namesToSet : List String -> SMap Unit -> SMap Unit
+namesToSet [] m = m
+namesToSet (n :: rest) m = namesToSet rest (smInsert n () m)
+
+buildAdj : List String -> SMap Unit -> List (String, (List Pat, Expr)) -> SMap (List String) -> SMap (List String)
 buildAdj [] _ _ m = m
-buildAdj (n :: rest) alln defs m = buildAdj rest alln defs (smInsert n (depsOf n alln defs) m)
+buildAdj (n :: rest) nameSet defs m = buildAdj rest nameSet defs (smInsert n (depsOf n nameSet defs) m)
 
 tjCounter : Ref Int
 tjCounter = Ref 0
@@ -4896,9 +4904,9 @@ processTopGroups env sigs defs names =
 -- per-name dependencies: the other top-level names a binding's bodies reference
 -- (a conservative over-approximation via all free EVars is fine — only names
 -- that are themselves groups matter).  Consumed by depGraphMap → Tarjan.
-depsOf : String -> List String -> List (String, (List Pat, Expr)) -> List String
-depsOf name names defs =
-  filterNonSelf name (keepGroupNames names (dedupS (groupRefs (clausesFor name defs))))
+depsOf : String -> SMap Unit -> List (String, (List Pat, Expr)) -> List String
+depsOf name nameSet defs =
+  filterNonSelf name (keepGroupNames nameSet (dedupS (groupRefs (clausesFor name defs))))
 
 groupRefs : List (List Pat, Expr) -> List String
 groupRefs clauses = concatMapL clauseRefs clauses
@@ -4906,8 +4914,13 @@ groupRefs clauses = concatMapL clauseRefs clauses
 clauseRefs : (List Pat, Expr) -> List String
 clauseRefs (_, body) = allEVars body
 
-keepGroupNames : List String -> List String -> List String
-keepGroupNames names refs = filterList (r => containsName r names) refs
+keepGroupNames : SMap Unit -> List String -> List String
+keepGroupNames nameSet refs = filterList (r => smHasKey r nameSet) refs
+
+smHasKey : String -> SMap Unit -> Bool
+smHasKey r m = match smLookup r m
+  Some _ => True
+  None => False
 
 filterNonSelf : String -> List String -> List String
 filterNonSelf name xs = filterList (x => x != name) xs
