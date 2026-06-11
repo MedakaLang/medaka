@@ -114,13 +114,14 @@ date; deletion is unlocked only when the bar below is met).
 
 **The "native is canonical" bar (gates `lib/` retirement) — status as of 2026-06-10:**
 1. 🟢 **~95%.** `medaka build` compiles + runs arbitrary USER programs natively. Gap G / Cause A /
-   GAP 1 (nested dicts) / GAP 2 (max/min) / C5 standalone-vs-method / **tuple-as-receiver** (`debug`/
-   `==`/`!=`/`compare` on tuples, arity-distinguished heads) all ✅. Remaining: **parametric-Ord
-   ordering operators `< > <= >=`** (#50 — on `Ord (T a)` parametric receivers; builds but doesn't
-   dispatch — needs the GAP-2 default-method element-dict machinery extended; not a crash); **2-level
-   multi-module route flattening (#21)**; and a **stdlib-emittability sweep** (the tooling uses the
-   full stdlib natively). (tuple work also fixed a real bug: `==` was crashing on ANY parametric
-   `Eq` impl — empty element-dict routes in the Gap-G binop rewrite.)
+   GAP 1 (nested dicts) / GAP 2 (max/min) / C5 standalone-vs-method / tuple-as-receiver all ✅.
+   **Stdlib-emittability sweep DONE** (2026-06-10): 8/12 modules build CLEAN; **clause-label SSA
+   collision** (#53, gated the Phase-C capstone — every multi-module build) ✅ CLOSED (`da3958f`);
+   **hashing needs NO language decision** (works via C externs). Remaining (all tracked):
+   **#54 Map `toList` bare-name** (H-b1 — module-local standalone shadows the Foldable method);
+   **#55 sum/product two-constraint dicts** (#21 Cause-B residual); **#50 parametric-Ord `< > <= >=`**;
+   **#21 2-level multi-module route flattening**. (tuple work also fixed `==` crashing on ANY parametric
+   `Eq` impl.)
 2. ✅ **Effectively done.** Behavior suites ported to `medaka test` (`test_run`/`test_eval`/`test_loader`);
    the rest is internal OCaml API, intrinsically non-portable.
 3. ✅ **Done.** Differential fuzzer (MVP + native Tier-C, 1080 native programs clean, found+fixed
@@ -143,7 +144,8 @@ date; deletion is unlocked only when the bar below is met).
 6. 🟢 **Soundness + correctness CLOSED.** TYPECHECK-AUDIT: all confirmed soundness/correctness/
    diagnostic findings closed (S1-S3, T1/T1b/T2, C1-C9, D1/D2, OBS3/OBS4); **C4 resolved by decision**
    (lazy nullary canonical); **C5 ✅ CLOSED** (`5db8a83`, RLocal end-to-end, fixpoint byte-identical);
-   **C8b ✅ CLOSED**. Tail remaining: **C7-native**, **L1** (latent, fires at E4), **OBS1**; **D3** =
+   **C8b ✅ CLOSED**; **OBS1 ✅ CLOSED** (`do { let mut }` rejected pre-desugar). Tail remaining:
+   **C7-native**, **L1** (latent, fires at E4); **D3** =
    scope cut shared with the oracle. The "de-risk identity-keying fragilities" condition is now down to
    **L1** (C5's bare-name/install-order side closed).
 
