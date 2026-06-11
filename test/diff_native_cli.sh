@@ -10,7 +10,12 @@
 #   fmt    — native `./medaka fmt --stdout <f>`  ==  OCaml `main.exe fmt --stdout <f>`.
 #   new    — native `./medaka new <name>` scaffolds the same file tree (contents)
 #            as OCaml `main.exe new <name>`.
-#   deferred — native `./medaka build x` prints "not yet in native CLI", exit 1.
+#   build  — native `./medaka build F -o X && X`  ==  OCaml `main.exe build F -o Y && Y`
+#            over llvm_fixtures (the native CLI drives emit→clang with no OCaml in
+#            its own logic; the emit step shells out to the emitter, hosted by
+#            MEDAKA — set to the native ./medaka run path when available, else the
+#            OCaml exe).  Both native binaries' stdout must be byte-identical.
+#   run    — native `./medaka run F`  ==  OCaml `main.exe run F` over llvm_fixtures.
 #
 # The native runtime auto-prints main's Unit value as a trailing "0"; strip it
 # (strip_unit) before comparing against the OCaml driver, which does not.
@@ -84,14 +89,117 @@ else
 fi
 
 # ── deferred: build subcommand → "not yet" on stderr, exit 1 ────────────────
-defmsg="$(bound "$MEDAKA" build x 2>&1 1>/dev/null)"
-bound "$MEDAKA" build x >/dev/null 2>&1; defcode=$?
+defmsg="$(bound "$MEDAKA" test x 2>&1 1>/dev/null)"
+bound "$MEDAKA" test x >/dev/null 2>&1; defcode=$?
 case "$defmsg" in
   *"not yet in native CLI"*)
-    if [ "$defcode" = 1 ]; then pass=$((pass+1)); printf 'ok   deferred/build\n'
-    else fail=$((fail+1)); printf 'FAIL deferred/build (exit %s != 1)\n' "$defcode"; fi ;;
-  *) fail=$((fail+1)); printf 'FAIL deferred/build (msg: %s)\n' "$defmsg" ;;
+    if [ "$defcode" = 1 ]; then pass=$((pass+1)); printf 'ok   deferred/test\n'
+    else fail=$((fail+1)); printf 'FAIL deferred/test (exit %s != 1)\n' "$defcode"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL deferred/test (msg: %s)\n' "$defmsg" ;;
 esac
+
+# ── run: native ./medaka run F == OCaml main.exe run F ──────────────────────
+# A handful of representative runnable fixtures.  The native CLI's `run` routes
+# eval.mdk's load→typecheck→eval (eval_typed_modules_main path), forcing main;
+# its captured output is NOT auto-print-suffixed (evalModulesOutput returns the
+# string), so strip the trailing native-CLI Unit "0" only.
+# ── inline IO fixtures (printed output, so the oracle is meaningful) ─────────
+# Value-`main` llvm_fixtures auto-print only under the native runtime, not under
+# `medaka run`; to compare run/build honestly we use programs whose `main` is an
+# IO action emitting via putStrLn (identical surface on every path).
+SRC="$TMP/src"; mkdir -p "$SRC"
+cat > "$SRC/hello.mdk" <<'EOF'
+main : <IO> Unit
+main = putStrLn "hello, medaka"
+EOF
+cat > "$SRC/arith.mdk" <<'EOF'
+main : <IO> Unit
+main = putStrLn (intToString (2 + 3 * 4 - (10 / 3) + (17 % 5) + (0 - 7) / 2))
+EOF
+cat > "$SRC/recur.mdk" <<'EOF'
+fact : Int -> Int
+fact n = if n <= 1 then 1 else n * fact (n - 1)
+main : <IO> Unit
+main = putStrLn (intToString (fact 6))
+EOF
+cat > "$SRC/adt.mdk" <<'EOF'
+data Shape = Circle Int | Rect Int Int
+area : Shape -> Int
+area s = match s
+  Circle r => r * r * 3
+  Rect w h => w * h
+main : <IO> Unit
+main = putStrLn (intToString (area (Circle 4) + area (Rect 3 5)))
+EOF
+cat > "$SRC/listsum.mdk" <<'EOF'
+data IntList = Nil | Cons Int IntList
+sumL : IntList -> Int
+sumL xs = match xs
+  Nil => 0
+  Cons h t => h + sumL t
+main : <IO> Unit
+main = putStrLn (intToString (sumL (Cons 1 (Cons 2 (Cons 3 (Cons 4 Nil))))))
+EOF
+cat > "$SRC/strcat.mdk" <<'EOF'
+main : <IO> Unit
+main = putStrLn (stringConcat ["a", "b", stringConcat ["c", "d"]])
+EOF
+RUN_FIXTURES="hello arith recur adt listsum strcat"
+
+# Is native `run` wired yet?  (Slice-2 lands build first, then run.)  Probe once;
+# when deferred, skip run cases and host the build emit with the OCaml exe.
+run_probe="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$SRC/hello.mdk" 2>&1)"
+case "$run_probe" in
+  *"not yet in native CLI"*) RUN_WIRED=0 ;;
+  *) RUN_WIRED=1 ;;
+esac
+
+if [ "$RUN_WIRED" = 1 ]; then
+  for base in $RUN_FIXTURES; do
+    f="$SRC/$base.mdk"
+    want="$(bound "$MAIN" run "$f" 2>/dev/null)"
+    got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$f" 2>/dev/null | strip_unit)"
+    if [ "$got" = "$want" ]; then pass=$((pass+1)); printf 'ok   run/%s\n' "$base"
+    else fail=$((fail+1)); printf 'FAIL run/%s\n' "$base"
+      printf '  want: [%s]\n  got:  [%s]\n' "$want" "$got"; fi
+  done
+else
+  printf 'skip run/* (native run not yet wired)\n'
+fi
+
+# ── build: native ./medaka build F == OCaml main.exe build F (binary stdout) ─
+# The native CLI drives emit→clang with no OCaml in ITS logic.  The emit step
+# shells out to the emitter; host it with the native ./medaka run path (MEDAKA),
+# closing the OCaml-free loop once `run` is wired.  Compare both built binaries'
+# stdout (the native runtime auto-print is identical on both, so no strip needed).
+# Skip the whole build block if no clang / libgc (opt-in, like build_cmd.sh).
+build_skip=0
+command -v "${CC:-clang}" >/dev/null 2>&1 || build_skip=1
+if [ "$build_skip" = 0 ]; then
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then :
+  elif GC_PREFIX="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_PREFIX" ] && [ -f "$GC_PREFIX/include/gc.h" ]; then :
+  elif printf '#include <gc.h>\nint main(void){return 0;}\n' | "${CC:-clang}" -x c - -lgc -o /dev/null 2>/dev/null; then :
+  else build_skip=1; fi
+fi
+if [ "$build_skip" = 1 ]; then
+  printf 'skip build/* (no clang or libgc)\n'
+else
+  BUILD_FIXTURES="$RUN_FIXTURES"
+  if [ "$RUN_WIRED" = 1 ]; then EMIT_HOST="$MEDAKA"; else EMIT_HOST="$MAIN"; fi
+  for base in $BUILD_FIXTURES; do
+    f="$SRC/$base.mdk"
+    # OCaml-built binary (oracle).
+    bound "$MAIN" build "$f" -o "$TMP/oc_$base" >/dev/null 2>&1
+    want="$("$TMP/oc_$base" 2>/dev/null)"
+    # Native-CLI-built binary; emit hosted by native ./medaka run (OCaml-free).
+    MEDAKA_ROOT="$ROOT" MEDAKA="$EMIT_HOST" bound "$MEDAKA" build "$f" -o "$TMP/nat_$base" >/dev/null 2>&1
+    got="$("$TMP/nat_$base" 2>/dev/null)"
+    if [ -x "$TMP/nat_$base" ] && [ "$got" = "$want" ]; then
+      pass=$((pass+1)); printf 'ok   build/%s\n' "$base"
+    else fail=$((fail+1)); printf 'FAIL build/%s\n' "$base"
+      printf '  want: [%s]\n  got:  [%s]\n' "$want" "$got"; fi
+  done
+fi
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
