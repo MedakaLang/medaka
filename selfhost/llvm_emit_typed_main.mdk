@@ -57,7 +57,7 @@ runEmit runtimeDecls preludeDecls userDecls =
   let _ = installSelfFnParams (selfFnParamTable combined)
   let _ = installMethodIface (methodIfaceTable combined)
   let _ = installCtorFieldTypes (ctorFieldTypeNames combined)
-  let _ = installDeclSigTypes (declSigTypeNames combined)
+  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
   emitProgram (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))
 
 readAllDecls : List String -> <IO> Result String (List Decl)

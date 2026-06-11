@@ -91,5 +91,5 @@ runEmit runtimeDecls coreDecls modules =
   let _ = installSelfFnParams (selfFnParamTable allDecls)
   let _ = installMethodIface (methodIfaceTable allDecls)
   let _ = installCtorFieldTypes (ctorFieldTypeNames allDecls)
-  let _ = installDeclSigTypes (declSigTypeNames allDecls)
+  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
   putStr (emitProgram (lowerProgramEmit allDecls))
