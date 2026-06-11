@@ -130,9 +130,12 @@ date; deletion is unlocked only when the bar below is met).
    **no `medaka run` anywhere** (opt-in gate). `build_cmd.mdk` reads `MEDAKA_EMITTER` env (native emitter
    binary) with the `medaka run` fallback. Self-refresh confirmed (native emitter reproduces the seed = C3b);
    `test/refresh_seed.sh` is the only OCaml-using script, run on demand. Decisions honored (text IR, arm64,
-   opt-in gating). Doc: `BOOTSTRAP.md` §"C4 — OCaml-free seed bootstrap". **⚠️ Any future emitter-IR change
-   (ELoc, tuple-as-receiver, C7-native, …) makes the committed seed stale → run `test/refresh_seed.sh` to
-   re-mint (per-release flow).**
+   opt-in gating). Doc: `BOOTSTRAP.md` §"C4 — OCaml-free seed bootstrap". **⚠️ SEED-REFRESH POLICY
+   (user, 2026-06-10):** any emitter-IR change makes the committed seed stale. Emitter-changing agents
+   **LEAVE the seed STALE** (confirm `selfcompile_fixpoint` C3a/C3b, SKIP `bootstrap_from_seed`, do NOT
+   commit a re-mint) — to avoid per-agent 10 MB churn. The **orchestrator re-mints once at release
+   checkpoints** via `test/refresh_seed.sh` + verifies `bootstrap_from_seed.sh`. (ELoc `c7b4c4b` re-minted;
+   the seed goes stale again with B.10.2b/B.10.5/tuple — re-mint pending, tracked.)
 6. 🟢 **Soundness + correctness CLOSED.** TYPECHECK-AUDIT: all confirmed soundness/correctness/
    diagnostic findings closed (S1-S3, T1/T1b/T2, C1-C9, D1/D2, OBS3/OBS4); **C4 resolved by decision**
    (lazy nullary canonical); **C5 ✅ CLOSED** (`5db8a83`, RLocal end-to-end, fixpoint byte-identical);
