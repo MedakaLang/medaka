@@ -180,12 +180,25 @@ runBuild root medaka cc inputAbs outPath =
   let stdlibDir = joinPath root "stdlib"
   let inputDir = dirOf inputAbs
   let llPath = "/tmp/medaka_build_" ++ baseOf (chopExt inputAbs) ++ ".ll"
-  let emitArgs = ["run", emitter, runtimeP, preludeP, inputAbs, inputDir, selfhostDir, stdlibDir]
-  -- STEP 1: emit LLVM IR via a FRESH medaka subprocess (Ref-state isolation).
+  -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
+  --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
+  --             clang(seed) binary from test/bootstrap_from_seed.sh).  Args are the
+  --             emitter's positional inputs WITHOUT the "run <emitter>" prefix.
+  --   * unset → fall back to a fresh `medaka run <emitter> …` subprocess (the
+  --             original OCaml-interpreter path; nothing regresses).
+  -- Both receive identical <runtime> <prelude> <input> <inputDir> <selfhost> <stdlib>
+  -- args and produce identical IR (the native emitter is the clang-compiled seed,
+  -- byte-fixpoint with the interpreter — selfcompile_build_fixpoint.sh C3a/C3b).
+  let emitArgsBase = [runtimeP, preludeP, inputAbs, inputDir, selfhostDir, stdlibDir]
+  let emitter2 = envOr "MEDAKA_EMITTER" ""
+  let useNative = emitter2 != ""
+  let emitProg = if useNative then emitter2 else medaka
+  let emitArgs = if useNative then emitArgsBase else "run" :: emitter :: emitArgsBase
+  -- STEP 1: emit LLVM IR via a FRESH subprocess (Ref-state isolation).
   -- Roots: inputDir (user modules shadow stdlib), selfhost, stdlib — mirrors
   -- the loader's root-ordered search and build_cmd.ml's emit_argv.
-  match runCommand medaka emitArgs
-    Err e => BuildErr ("error: could not run emitter (" ++ medaka ++ "): " ++ e)
+  match runCommand emitProg emitArgs
+    Err e => BuildErr ("error: could not run emitter (" ++ emitProg ++ "): " ++ e)
     Ok (code, irRaw, emitErr) =>
       if code != 0 then
         BuildErr ("error: emitter failed compiling " ++ inputAbs ++ "\n" ++ emitErr)
