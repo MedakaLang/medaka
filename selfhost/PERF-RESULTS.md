@@ -706,3 +706,23 @@ first-occurrence order preserved → output byte-identical. Callers updated
 
 **Numbers (self-compile, min-of-5, -O2 + divisor=1):** 2.27 s → **2.20 s** (~3%).
 Cumulative this session: 12.04 s → 2.20 s (**5.47×**); vs OCaml interpreter 57.0×.
+
+---
+
+## Entry 19 — index constant ctor table via EMap (2026-06-11)
+
+**Change (`selfhost/llvm_emit.mdk`):** `isCtor`/`ctorArity` did `lookupAssoc name
+(ctorTable e)` — O(ctors) per query. The ctor-arity table (`ct` field) is set once
+at Emit construction and never mutated (constant, like `fnNames`), so index it into
+an `EMap Int` (`installCtorMap ctorArs` at emitProgram); both now do O(log n)
+`emLookup`, with a `lookupAssoc` fallback if the memo isn't installed.
+
+**Gates:** `selfcompile_fixpoint` C3a/C3b YES; `diff_selfhost_build` 9/9;
+`diff_selfhost_llvm` 172/172; `llvm_modules` 8/8. Seed stale.
+
+**Numbers (self-compile, back-to-back min-of-5 vs the prior commit, same machine
+state — absolute timings drift ±0.2 s with load, so compared pairwise):**
+2.40 s → **2.33 s** (~3%, consistent across all runs). Cumulative this session
+remains **~5.5× / ~57× vs the OCaml interpreter** (the headline figures were
+established earlier under steady conditions; sub-3% deltas now sit within the
+machine's drift band but are verified pairwise).

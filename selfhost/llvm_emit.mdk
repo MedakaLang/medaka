@@ -609,11 +609,24 @@ emFromNames : List String -> EMap Unit -> EMap Unit
 emFromNames [] m = m
 emFromNames (x :: rest) m = emFromNames rest (emInsert x () m)
 
+-- generic key-value index; insert REVERSED so the FIRST list entry wins on a
+-- duplicate key (matches lookupAssoc's first-match). For CONSTANT tables only.
+emFromPairs : List (String, a) -> EMap a -> EMap a
+emFromPairs [] m = m
+emFromPairs ((k, v) :: rest) m = emFromPairs rest (emInsert k v m)
+
 knownFnMapRef : Ref (Option (EMap Unit))
 knownFnMapRef = Ref None
 
 installKnownFnMap : List String -> <Mut> Unit
 installKnownFnMap fns = set_ref knownFnMapRef (Some (emFromNames fns ETip))
+
+-- ctor-arity table index (ct field is set once at Emit construction, constant).
+ctorMapRef : Ref (Option (EMap Int))
+ctorMapRef = Ref None
+
+installCtorMap : List (String, Int) -> <Mut> Unit
+installCtorMap t = set_ref ctorMapRef (Some (emFromPairs (reverseL t) ETip))
 
 isKnownFn : Emit -> String -> <Mut> Bool
 isKnownFn e name = match knownFnMapRef.value
@@ -636,9 +649,13 @@ ctorTable : Emit -> <Mut> List (String, Int)
 ctorTable (Emit _ _ _ _ ct _ _ _ _ _) = ct.value
 
 isCtor : Emit -> String -> <Mut> Bool
-isCtor e name = match lookupAssoc name (ctorTable e)
-  Some _ => True
-  None => False
+isCtor e name = match ctorMapRef.value
+  Some m => match emLookup name m
+    Some _ => True
+    None => False
+  None => match lookupAssoc name (ctorTable e)
+    Some _ => True
+    None => False
 
 -- ── record field-order table (slice 5a) ─────────────────────────────────────
 -- maps record-type-name -> [field-names-in-declaration-order].  Built up front
@@ -3204,9 +3221,13 @@ fnArity (Emit _ _ _ sigs _ _ _ _ _ _) fname = match lookupAssoc fname sigs.value
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> <Mut> Int
-ctorArity e name = match lookupAssoc name (ctorTable e)
-  Some n => n
-  None => 0
+ctorArity e name = match ctorMapRef.value
+  Some m => match emLookup name m
+    Some n => n
+    None => 0
+  None => match lookupAssoc name (ctorTable e)
+    Some n => n
+    None => 0
 
 -- a CONSTRUCTOR with arity>0 referenced as a FIRST-CLASS value (`map PVar vars`):
 -- emitApp only builds the cell when the ctor is SATURATED (via emitCtorAlloc), so a
@@ -5304,6 +5325,7 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsReg (valBinds groups)))
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)
+  let _ = installCtorMap ctorArs
   let _ = resetEmittedDefaults ()
   let _ = emitPreamble e
   -- declare a module global per top-level value/`Ref` binding (slice E1b).
@@ -5493,6 +5515,7 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsRegReady (valBinds groups)))
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)
+  let _ = installCtorMap ctorArs
   let _ = resetGaps ()
   let _ = enableGapRecord ()
   let _ = emitPreamble e
