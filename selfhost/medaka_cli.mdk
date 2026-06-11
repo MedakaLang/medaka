@@ -10,7 +10,7 @@
 --
 -- Stdlib paths (runtime.mdk / core.mdk) resolve from MEDAKA_ROOT, mirroring
 -- selfhost/build_cmd.mdk's envOr — selfhost has no getcwd/executable_name
--- extern.  Every other subcommand (run/build/test/repl/lsp + bench/doc/
+-- extern.  Every other subcommand (repl/lsp + bench/doc/
 -- check-policy/etc.) prints "not yet in native CLI" and exits 1; those land in
 -- later slices (run/build = Slice 2, test = Slice 3, repl/lsp = Slice 4).
 
@@ -25,6 +25,7 @@ import desugar.{desugar}
 import loader.{loadProgram}
 import typecheck.{elaborateModules}
 import eval.{evalModulesOutput}
+import test_cmd.{runTest}
 
 main : <IO, Mut, Panic> Unit
 main = match args ()
@@ -37,6 +38,7 @@ main = match args ()
   ("new" :: rest) => runNewCmd rest
   ("build" :: rest) => runBuildCmd rest
   ("run" :: rest) => runRunCmd rest
+  ("test" :: rest) => runTestCmd rest
   (sub :: _) => notYet sub
 
 -- ── usage (mirrors bin/main.ml print_usage) ───────────────────────────────
@@ -249,6 +251,26 @@ runRunCmd argv = match dropFlags argv
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
+
+-- ── test ──────────────────────────────────────────────────────────────────
+-- Mirrors bin/main.ml's `test` arm + test_main.mdk: read <MEDAKA_ROOT>/stdlib/
+-- {runtime,core}.mdk, then drive test_cmd.runTest (doctests + prop tests).
+-- runTest reads the three sources itself and prints the report in-band (it
+-- handles its own read errors, so no exit on a bad target — matches the
+-- interpreted driver, which also just ePutStrLn's a read error).  Roots mirror
+-- run: the entry's dir (user modules shadow stdlib) then MEDAKA_ROOT/stdlib.
+runTestCmd : List String -> <IO, Mut, Panic> Unit
+runTestCmd argv = match dropFlags argv
+  [] =>
+    let _ = ePutStrLn "usage: medaka test [file.mdk]"
+    exit 1
+  (target :: _) =>
+    let root = envOr "MEDAKA_ROOT" "."
+    let rtPath = root ++ "/stdlib/runtime.mdk"
+    let corePath = root ++ "/stdlib/core.mdk"
+    let stdlibDir = root ++ "/stdlib"
+    let roots = [dirOf2 target, stdlibDir]
+    runTest rtPath corePath target roots
 
 -- dirname on a POSIX path (mirrors build_cmd.dirOf, kept local to avoid an extra
 -- import of a non-exported helper).

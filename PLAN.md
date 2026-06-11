@@ -186,8 +186,8 @@ CANONICAL compiler** — the one users invoke and the one that builds the compil
 
 **Also gating retirement, beyond the 6-item bar:** the **Stage-4 tooling port** (lib/+bin/ host the
 tooling) — fmt/test/new/REPL/build/**LSP** ✅ (all 6 tools ported + differential-tested), and the
-**Phase-C CLI capstone IN PROGRESS** (Slices 0–2 ✅: native `medaka` does check/fmt/new/build/run
-OCaml-free in a 1.59 MB binary; Slices 3 `test` + 4 `repl`/`lsp` remain — see Phase C #12 below).
+**Phase-C CLI capstone IN PROGRESS** (Slices 0–3 ✅: native `medaka` does check/fmt/new/build/run/test
+OCaml-free in a ~1.6 MB binary; Slice 4 `repl`/`lsp` remains — see Phase C #12 below).
 **Deferred (user, not near/mid-term):** GC, cross-platform (arm64-first accepted).
 
 **🔝 TOP PRIORITY (set 2026-06-09): close the TYPECHECK-AUDIT findings.** The
@@ -699,7 +699,16 @@ and a TOML reader (for `medaka.toml`).
       slicing primitive) → `run FILE a b c` hands the program the CLI's full argv, and native `run`
       can't host the emit shell-out → OCaml-free emit host must be `MEDAKA_EMITTER`. A `mdk_set_args`
       primitive would fix both.
-    - **Remaining:** Slice 3 (`test`), Slice 4 (`repl`/`lsp`).
+    - **Slice 3 ✅ (`test`):** factored `test_main.mdk`'s drive logic into a logic-only `test_cmd.mdk`
+      (exports `runTest` + `rootsOrDefault`/`dirOf`); `test_main.mdk` is now a thin argv driver, and
+      `medaka_cli.mdk` gained `runTestCmd` (reads `MEDAKA_ROOT`, drives `runTest` over doctests + props)
+      + a `("test" :: rest)` arm — mirroring `runRunCmd`/`runBuildCmd`. `test` pulls `prop_runner` into the
+      native module graph for the FIRST time, which surfaced (and is gated by) the closed **emitBlock
+      arbitrary-irrefutable block-let gap** (`prop_runner.mdk:265` `let PropParam x ty = …`; see Stage-3
+      bar item 1 + `selfhost/EMITTER-GAPS.md`). `test_cmd`/`medaka_cli` are NOT in the emitter graph →
+      seed byte-identical. Gates: `diff_selfhost_test` byte-identical (10/10), `diff_native_cli` 53/0
+      (extended with `test/{doc,prop,nodoc}` — `test/prop` is the native prop_runner block-let proof).
+    - **Remaining:** Slice 4 (`repl`/`lsp`).
 
     The parked dispatch gaps (#54 map / #55 sum-product / #50 parametric-Ord / #21 nested dicts /
     C7-native) are verified **NOT on this critical path** (the tooling never touches them) → end-user

@@ -16,6 +16,13 @@
 #            MEDAKA — set to the native ./medaka run path when available, else the
 #            OCaml exe).  Both native binaries' stdout must be byte-identical.
 #   run    — native `./medaka run F`  ==  OCaml `main.exe run F` over llvm_fixtures.
+#   test   — native `./medaka test F`  ==  OCaml `main.exe test F` over main-less
+#            doctest/prop fixtures (a top-level effectful `main` is omitted: the
+#            selfhost test path is LAZY-nullary (Phase-125) so it would not run an
+#            effectful main, while OCaml `test` does — that divergence is by
+#            design, not a regression, so the fixtures carry no effectful main).
+#            Exercises prop_runner's constructor block-let through the native
+#            emitter (the Slice-3 / emitBlock proof).
 #
 # The native runtime auto-prints main's Unit value as a trailing "0"; strip it
 # (strip_unit) before comparing against the OCaml driver, which does not.
@@ -89,13 +96,13 @@ else
 fi
 
 # ── deferred: build subcommand → "not yet" on stderr, exit 1 ────────────────
-defmsg="$(bound "$MEDAKA" test x 2>&1 1>/dev/null)"
-bound "$MEDAKA" test x >/dev/null 2>&1; defcode=$?
+defmsg="$(bound "$MEDAKA" lsp 2>&1 1>/dev/null)"
+bound "$MEDAKA" lsp >/dev/null 2>&1; defcode=$?
 case "$defmsg" in
   *"not yet in native CLI"*)
-    if [ "$defcode" = 1 ]; then pass=$((pass+1)); printf 'ok   deferred/test\n'
-    else fail=$((fail+1)); printf 'FAIL deferred/test (exit %s != 1)\n' "$defcode"; fi ;;
-  *) fail=$((fail+1)); printf 'FAIL deferred/test (msg: %s)\n' "$defmsg" ;;
+    if [ "$defcode" = 1 ]; then pass=$((pass+1)); printf 'ok   deferred/lsp\n'
+    else fail=$((fail+1)); printf 'FAIL deferred/lsp (exit %s != 1)\n' "$defcode"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL deferred/lsp (msg: %s)\n' "$defmsg" ;;
 esac
 
 # ── run: native ./medaka run F == OCaml main.exe run F ──────────────────────
@@ -165,6 +172,51 @@ if [ "$RUN_WIRED" = 1 ]; then
   done
 else
   printf 'skip run/* (native run not yet wired)\n'
+fi
+
+# ── test: native ./medaka test F == OCaml main.exe test F ────────────────────
+# Main-less doctest/prop fixtures (see header): an effectful top-level main is
+# omitted so the lazy-nullary selfhost path and the eager OCaml path agree.  The
+# prop fixture drives prop_runner (its constructor block-let `let PropParam x ty
+# = …` is the emitBlock arm closed in Slice 3 — the end-to-end native proof).
+TSRC="$TMP/tsrc"; mkdir -p "$TSRC"
+cat > "$TSRC/doc.mdk" <<'EOF'
+-- > double 3
+-- 6
+double : Int -> Int
+double x = x * 2
+EOF
+cat > "$TSRC/prop.mdk" <<'EOF'
+-- > triple 2
+-- 6
+triple : Int -> Int
+triple x = x * 3
+
+prop "triple is add-thrice" (x : Int) = triple x == x + x + x
+EOF
+cat > "$TSRC/nodoc.mdk" <<'EOF'
+inc : Int -> Int
+inc x = x + 1
+EOF
+TEST_FIXTURES="doc prop nodoc"
+
+test_probe="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$TSRC/doc.mdk" 2>&1)"
+case "$test_probe" in
+  *"not yet in native CLI"*) TEST_WIRED=0 ;;
+  *) TEST_WIRED=1 ;;
+esac
+
+if [ "$TEST_WIRED" = 1 ]; then
+  for base in $TEST_FIXTURES; do
+    f="$TSRC/$base.mdk"
+    want="$(bound "$MAIN" test "$f" 2>/dev/null)"
+    got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$f" 2>/dev/null | strip_unit)"
+    if [ "$got" = "$want" ]; then pass=$((pass+1)); printf 'ok   test/%s\n' "$base"
+    else fail=$((fail+1)); printf 'FAIL test/%s\n' "$base"
+      printf '  want: [%s]\n  got:  [%s]\n' "$want" "$got"; fi
+  done
+else
+  printf 'skip test/* (native test not yet wired)\n'
 fi
 
 # ── build: native ./medaka build F == OCaml main.exe build F (binary stdout) ─
