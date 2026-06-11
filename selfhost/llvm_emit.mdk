@@ -4481,7 +4481,7 @@ emitFns e (b::rest) =
 
 emitFn : Emit -> CBind -> <Mut> Unit
 emitFn e (CBind name [CClause pats body]) =
-  let (pats2, body2) = etaSaturateMethodBody e pats body
+  let (pats2, body2) = etaSaturateMethodBody e name pats body
   if allPVar pats2 then emitFnClause e name pats2 body2
   else emitMultiClauseFn e name [(pats2, body2)]
 emitFn e (CBind name (c::rest)) = emitMultiClauseFn e name (clausePairs (c::rest))
@@ -4501,13 +4501,80 @@ emitFn _ (CBind _ []) = gapU "top-level function with no clauses"
 -- any method/constrained-fn used point-free under a `=>` constraint (the dict makes
 -- it a fn-bind, not the arity-0 value global that an UNCONSTRAINED alias becomes and
 -- which already eta-closures correctly via emitVar→emitEtaClosure).
-etaSaturateMethodBody : Emit -> List Pat -> CExpr -> <Mut> (List Pat, CExpr)
-etaSaturateMethodBody e pats body =
-  let deficit = methodBodyDeficit e body
+--
+-- Gap #12 (3rd wrapper shape — CLam/compose) — a point-free `=>`-constrained binding
+-- whose body is a CLOSURE VALUE, not a method spine.  `clamp lo hi = min hi >> max lo`
+-- dict-passes to a clause `[$dict, lo, hi]` (arity 3) whose body is the `CLam` compose
+-- (`>>`/`<<` desugar to CLam) producing `\x -> max lo (min hi x)`.  The closure is
+-- well-formed and dispatches correctly, but the define RETURNS it unapplied (arity 3)
+-- while the call site `clamp 0 10 7` passes `$dict + 3 value args` (arity 4) — the
+-- extra arg is DROPPED, garbage out (SIGSEGV at -O2).  methodBodyDeficit is 0 (the
+-- body is a CLam value, not an under-applied CMethod/CDict head), so the method-spine
+-- path can't fire.  The SIGNATURE-arity deficit catches it: a constrained binding's
+-- define MUST have arity `dictCount + sigValueArity` (what emitDictApp passes at every
+-- call site = leading dict words ++ all declared value args); when the clause binds
+-- fewer params (the closure body supplies the rest), append the shortfall as fresh
+-- eta params and APPLY them to the body.  applyEtaArgs' `CApp body etaVar` over a CLam
+-- body lowers via emitIndirect (closure-alloc → load code_ptr → call), i.e. it applies
+-- the returned closure — exactly the missing application.  General for any point-free
+-- constrained binding under-applied relative to its declared value arity, whatever the
+-- wrapper (bare CLam, or a method/closure spine the method-spine path already covers —
+-- both deficits agree there, so the method-spine path is kept as the primary signal).
+etaSaturateMethodBody : Emit -> String -> List Pat -> CExpr -> <Mut> (List Pat, CExpr)
+etaSaturateMethodBody e name pats body =
+  let mDeficit = methodBodyDeficit e body
+  -- method-spine deficit is the primary signal (#50/#11).  When it is 0 the body may
+  -- still be a CLOSURE VALUE (CLam from compose `>>`/`<<`) that the define returns
+  -- unapplied while the call site passes more value args (clamp/#12) — recover that
+  -- shortfall from the SIGNATURE arity, but ONLY when the tail is a CLam (a bare value
+  -- return is legitimate point-free currying; eta-applying it would corrupt the body).
+  let deficit = etaDeficit e name pats body mDeficit
   if deficit <= 0 then (pats, body)
   else
     let fresh = etaFreshPats deficit (listLen pats)
     (pats ++ fresh, applyEtaArgsTail body fresh)
+
+-- the eta deficit: the method-spine count when positive, else the signature-arity
+-- shortfall when the body tail is a CLam closure value (#12), else 0.
+etaDeficit : Emit -> String -> List Pat -> CExpr -> Int -> <Mut> Int
+etaDeficit e name pats body mDeficit
+  | mDeficit > 0 = mDeficit
+  | tailIsLam body = sigArityDeficit e name pats
+  | otherwise = 0
+
+-- does the body's TAIL (through where/let wrappers) reduce to a CLam closure value?
+-- Mirrors applyEtaArgsTail's CLet/CLetGroup transparency so a compose under a
+-- `where` is still recognised.
+tailIsLam : CExpr -> Bool
+tailIsLam (CLet _ _ _ b) = tailIsLam b
+tailIsLam (CLetGroup _ b) = tailIsLam b
+tailIsLam (CLam _ _) = True
+tailIsLam _ = False
+
+-- the shortfall between a constrained binding's REQUIRED define arity
+-- (`dictCount + sigValueArity` = what every call site passes through emitDictApp)
+-- and the clause's actual param count.  0 (or negative) when the clause already
+-- binds every dict + value param (the ordinary case) or when no signature is known
+-- (fnArity 0 ⇒ no eta-expansion — leave it to the method-spine path).  dictCount is
+-- the number of leading `$dict_…` params dict_pass prepended; the remaining pats are
+-- the source value params, and a point-free closure body (e.g. compose) makes that
+-- count fall short of the declared sigValueArity.
+sigArityDeficit : Emit -> String -> List Pat -> <Mut> Int
+sigArityDeficit e name pats =
+  let sigArity = fnArity e name
+  if sigArity <= 0 then 0
+  else maxInt 0 (leadingDictPats pats + sigArity - listLen pats)
+
+-- count of leading `$dict_…` parameter patterns (the dict witnesses dict_pass
+-- prepends ahead of the source value params).
+leadingDictPats : List Pat -> Int
+leadingDictPats ((PVar x)::rest) =
+  if isDictParamName x then 1 + leadingDictPats rest else 0
+leadingDictPats _ = 0
+
+-- a dict-witness parameter name (dict_pass emits `$dict_<method>_<slot>`).
+isDictParamName : String -> Bool
+isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
 
 -- the count of still-unapplied VALUE params of an under-applied method/dict body
 -- (0 = saturated / not a method-or-dict head ⇒ no eta-expansion).  A bare CMethod

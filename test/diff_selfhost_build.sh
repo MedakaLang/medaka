@@ -113,6 +113,25 @@ main =
   putStrLn (debug (maximum ["a", "z", "m"]))
 EOF
 
+# clamp/compose (#12) — a point-free `=>`-constrained binding whose body is a
+# CLOSURE VALUE: `clamp lo hi = min hi >> max lo` desugars compose `>>` to a CLam
+# `\x -> max lo (min hi x)`.  dict-passing gives the clause `[$dict, lo, hi]`
+# (arity 3) but the call site `clamp 0 10 7` passes `$dict + 3 value args`
+# (arity 4) — the closure was RETURNED unapplied and the extra arg dropped,
+# garbage out (SIGSEGV at -O2).  methodBodyDeficit is 0 (the body is a CLam value,
+# not an under-applied method spine), so the signature-arity deficit + CLam-tail
+# gate catches it (3rd wrapper shape of the eta-saturation family).
+cat > "$WORK/src/clampc.mdk" <<'EOF'
+clamp : Ord a => a -> a -> a -> a
+clamp lo hi = min hi >> max lo
+main : <IO> Unit
+main =
+  putStrLn (intToString (clamp 0 10 7))
+  putStrLn (intToString (clamp 0 10 (0 - 5)))
+  putStrLn (intToString (clamp 0 10 15))
+  putStrLn (clamp "c" "p" "z")
+EOF
+
 # multi-module
 mkdir -p "$WORK/src/mm"
 cat > "$WORK/src/mm/helper.mdk" <<'EOF'
@@ -141,7 +160,7 @@ main : <IO> Unit
 main = putStrLn (debug Red ++ " " ++ debug Blue ++ " " ++ debug (Red == Red))
 EOF
 
-PROGRAMS="arith recur adt list closure maxalias maxprim show_debug eq deriving"
+PROGRAMS="arith recur adt list closure maxalias maxprim clampc show_debug eq deriving"
 
 pass=0; fail=0
 

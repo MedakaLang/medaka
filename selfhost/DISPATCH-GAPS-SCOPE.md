@@ -67,8 +67,18 @@ The native backend pipeline: `typecheck.mdk` `elaborateModules` route-stamps →
 > **Repros:** `maximum [3,7,1]`→`Some 7`, `minimum [3,7,1]`→`Some 1`, `maximum ["a","z","m"]`→`Some z`,
 > all native==oracle. **Gates:** diff 172/9/37, build **11** (+`maxprim`), fixpoint C3a/C3b YES,
 > native CLI 54/54. The real-prelude `maximum`/`minimum` users are now unblocked. **Residual
-> (separate):** `clamp lo hi = min hi >> max lo` (point-free over compose `>>` → `CLam`, not a
-> let-group tail) still emits garbage under build — pre-existing on stale main, out of scope.
+> (separate): ✅ NOW CLOSED (#12, 2026-06-11):** `clamp lo hi = min hi >> max lo` (point-free over
+> compose `>>` → a `CLam` closure VALUE, not a let-group method tail). The 3rd wrapper shape of the
+> eta-saturation family, but a genuinely different mechanism: the body is a well-formed closure the
+> define RETURNS unapplied (clause arity 3 = `[$dict,lo,hi]`) while the call site passes `$dict + 3`
+> declared value args (arity 4) → 4th arg dropped → garbage/SIGSEGV at `-O2`. `methodBodyDeficit` is
+> 0 (closure value, not a method spine), so the fix is a SIGNATURE-arity deficit gated on the body
+> tail being a `CLam`: `sigArityDeficit = leadingDictPats + fnArity − clausePats` (= `1+3−3 = 1`),
+> appended as fresh eta params and APPLIED to the body (`CApp (CLam …) eta` → `emitIndirect` applies
+> the closure). The CLam-tail gate is load-bearing — an un-gated sig-arity deficit over-fires on
+> legitimate point-free returns (it panicked on an IO binding). **Repros:** `clamp 0 10 7`→7,
+> `clamp 0 10 (-5)`→0, `clamp 0 10 15`→10, `clamp "c" "p" "z"`→"p"; all native==oracle (all 4 garbage
+> before). **Gates:** diff 172/9/37, build **12** (+`clampc`), fixpoint C3a/C3b YES, native CLI 54/54.
 
 ### Minimal repro
 
