@@ -510,3 +510,24 @@ memoization) are real remaining O(N²)/recompute hotspots, but accelerating
 `llvm_emit.mdk` with a hash container needs the native emitter to first
 self-compile that container-in-emitter shape (or a hash-free approach). Best done
 supervised, with the fixpoint as the gate. Everything banked above is fixpoint-safe.
+
+---
+
+## Remaining hotspots after this session (profile map for supervised follow-up)
+
+`sample` of the final emitter during self-compile (2 GB heap to isolate compute),
+ranked. The big O(N²) front-end costs are GONE; the profile is now flat:
+
+| symbol | ~samples | what / safe fix |
+|---|---|---|
+| `mdk_lam86996` (a lambda) | ~250 | unidentified hot closure (emission-order id varies per build); needs source-mapping to target |
+| `isKnownFn` | ~105 | `containsStr name (fnNames e)` O(fns)/node. **Attempted HashMap → self-compile fixpoint gap** (see above). Needs the native emitter to self-compile a hash container *inside llvm_emit*, or a hash-free index. |
+| `emitProgram` | ~87 | the emit driver loop itself (fundamental) |
+| `nubStr` (llvm_emit) | ~59 | `distinctTypeNames` recomputed per `ctorTypeId` call + O(n²) nub. Memoize `distinctTypeNames` (constant during emission) — needs an Emit cache field (10-field positional record, invasive) or a guarded module-ref. |
+| `countOccPM` | ~55 | pattern-match occurrence counting |
+| `core_ir_lower.clausesFor` | ~50 | the SAME group-by O(N²) fixed in typecheck (`lowerGroups`, line ~556). `lowerGroups` is PURE and called from the eval path too, so a HashMap needs `<Mut>` propagation; cleanest is importing typecheck's `SMap` (export it) or inlining a pure BST — a module-boundary change, do supervised + fixpoint-gated. |
+
+All are real but each needs either an emitter-gap fix, an invasive record/boundary
+change, or source-mapping — none is a safe unattended edit. The clang/-GC/algorithmic
+typecheck+DCE wins banked this session (12.04 s → ~2.9 s, ~42× vs the interpreter)
+already meet the OCaml-retirement performance bar with wide margin.
