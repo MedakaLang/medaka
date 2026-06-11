@@ -748,3 +748,25 @@ left untouched.
 consistent). Cumulative this session: 12.04 s → 2.17 s (**5.55×**); vs OCaml
 interpreter **57.8×**. (The remaining ~10 % `nthParamTy` and `callRetTy` lookups
 use the threaded augmented sigs and still need the supervised float-aware refactor.)
+
+---
+
+## Verified exhaustion of safe unattended wins (2026-06-11, 03:00)
+
+After 18 fixpoint-gated wins (self-compile 12.04 s → ~2.17 s, **~5.55× / ~58× vs
+the OCaml interpreter**), the remaining profile sample-count "hotspots" were each
+checked and are **non-actionable unattended** — sample count alone is misleading:
+
+| symbol | ~samples | why not actionable |
+|---|---|---|
+| `lam870xx` (dict-promotion filter), `maybeInferConstraint`, `rewriteArgScoped`, `preunifySigsEx` | ~25 %+ | route-fragile **dict-passing / dispatch** machinery — out of scope unattended |
+| `nthParamTy`, `callRetTy` | ~12 % | use the **threaded `sigs` augmented with local Float-propagation types** (NOT the constant global field) — need the supervised float-aware threaded-tree refactor |
+| `declSigOf` (88 samples) | — | **REVERTED: flat.** Big sample count = high *call volume* on a SMALL table (declared sigs are rare); an EMap index gave no measurable change. |
+| `diffS` (45 samples) | — | effect-row set-difference on SMALL effect-label lists — call volume, not big-list O(N²); no algorithmic win available |
+| `smLookup`/`smBalance`/`string_eq` | ~5 % | the (cheap) cost of the BST indexes this session ADDED — already the optimized path |
+
+**Method note for the next session:** verify each candidate with a back-to-back
+min-of-5 timing (the machine drifts ±0.2 s, so compare pairwise against the prior
+commit, not against absolute history); revert anything that doesn't move the
+number (as `declSigOf` was). The two real remaining levers (dispatch membership,
+threaded-sig tree) are both supervised and mapped above.
