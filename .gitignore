@@ -6,3 +6,5 @@ _build/
 
 # bootstrap_from_seed.sh output (regenerable native emitter binary)
 /medaka_emitter
+# build_native_medaka.sh output (the native OCaml-free `medaka` CLI binary)
+/medaka

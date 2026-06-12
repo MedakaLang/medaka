@@ -16,15 +16,19 @@ linear pipeline; each stage is one file.
 > 2026-06-08 all 7 stages are native-compiled byte-identical to the interpreter
 > and the compiler self-hosts to a **reproducing fixpoint** (`selfhost/BOOTSTRAP.md`).
 > As of 2026-06-10 the **Stage-4 tooling is ported** (fmt/test/new/repl/build/lsp, all
-> differential-tested vs OCaml) and the **Phase-C native CLI capstone is in progress**:
+> differential-tested vs OCaml) and the **Phase-C native CLI capstone is complete**:
 > `selfhost/medaka_cli.mdk` native-compiles into a single OCaml-free `medaka` binary
-> (~1.6 MB) that does `check`/`fmt`/`new`/`build`/`run` end-to-end with no OCaml at runtime
-> (`test`/`repl`/`lsp` subcommands remain). The OCaml compiler is still the **reference +
-> differential oracle** and the bootstrap host, but is being **retired (≠ removed — kept frozen
-> as a soak-period oracle; see PLAN.md "Retirement ≠ removal")**. **Current focus =
-> [PLAN.md Stage 3](./PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml):
-> harden the native backend toward CANONICAL + gated OCaml retirement.** Native-backend
-> docs: `selfhost/BOOTSTRAP.md` (the B1–B7 + C1–C3 log), `selfhost/EMITTER-GAPS.md`
+> that does all 8 subcommands (`check`/`fmt`/`new`/`build`/`run`/`test`/`repl`/`lsp`) with no
+> OCaml at runtime. **As of 2026-06-12 the native `medaka` is CANONICAL (milestone flip):** all
+> PRE-FLIP-GAPS.md soundness/capability gaps (G1–G9) are closed, and **`make medaka` builds the
+> native compiler OCaml-free** from the checked-in IR seed (`selfhost/seed/emitter.ll` →
+> `bootstrap_from_seed.sh` → `build_native_medaka.sh`). The OCaml compiler (`lib/`+`bin/`) is now
+> the **frozen soak-period differential oracle** — **retired (≠ removed; see PLAN.md "Retirement ≠
+> removal" + [[retirement-is-not-removal]])**. **Current focus = the post-flip soak: keep native
+> canonical, then [PLAN.md Stage 3](./PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml)
+> tail — re-root the differential gates off the OCaml oracle, then the confidence-gated `lib/`
+> removal.** Native-backend docs: `selfhost/BOOTSTRAP.md` (the B1–B7 + C1–C3 log), `selfhost/PRE-FLIP-GAPS.md`
+> (the closed pre-flip punch list), `selfhost/EMITTER-GAPS.md`
 > (closed/residual emitter gaps), `selfhost/DISPATCH-GAPS-SCOPE.md` (repro-verified scope of
 > the parked native dispatch gaps #54/#55/#50/#21), `selfhost/PERF-SCOPE.md` (bar-4 `-O2`/benchmark
 > scoping) + `selfhost/PERF-RESULTS.md` (**bar-4 EXECUTED 2026-06-11: self-compile 5.68× / ~59× vs

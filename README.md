@@ -4,20 +4,22 @@ A pragmatic, modern functional programming language. Sits at the intersection of
 a cleaned-up OCaml, a practical Haskell, and a more functional, garbage-collected
 Rust. See [language-design.md](./language-design.md) for the full design.
 
-The reference compiler is written in OCaml (`lib/`). **Medaka also self-hosts and
-compiles to native code:** the compiler is rewritten in Medaka (`selfhost/`) and a
+The compiler is rewritten in Medaka (`selfhost/`) and a
 native **LLVM backend** compiles it — all seven pipeline stages are native-compiled
 and byte-identical to the interpreter, and the compiler reproduces itself
 byte-for-byte (the self-compile fixpoint). See [PLAN.md](./PLAN.md) and
-[selfhost/BOOTSTRAP.md](./selfhost/BOOTSTRAP.md). The OCaml compiler is currently
-the reference + differential oracle; the [roadmap](./PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml)
-hardens the native backend toward becoming canonical.
+[selfhost/BOOTSTRAP.md](./selfhost/BOOTSTRAP.md). **As of the 2026-06-12 milestone
+flip the native `medaka` is CANONICAL** (the one users invoke, built OCaml-free from
+a checked-in IR seed); the OCaml reference compiler (`lib/`+`bin/`) is kept **frozen**
+as the differential oracle during the soak period (retirement ≠ removal).
 
 ## Status
 
 Frontend, interpreter, and standard library complete; **self-hosting + native LLVM
-codegen done** (the native compiler self-hosts to a reproducing fixpoint —
-PLAN.md). Next: hardening the native backend toward canonical (Stage 3).
+codegen done** (the native compiler self-hosts to a reproducing fixpoint — PLAN.md).
+**Native backend is canonical** (2026-06-12): all PRE-FLIP-GAPS soundness/capability
+gaps closed; `make medaka` builds it OCaml-free. Next: soak period, then gate-rerooting
++ OCaml `lib/` removal (Stage 3 tail).
 
 - **AST** — `lib/ast.ml`
 - **Lexer** — `lib/lexer.mll` (indentation-sensitive, OCaml-style)
@@ -58,11 +60,28 @@ done (the native compiler self-hosts to a reproducing fixpoint). See
 
 ## Building
 
-Requires OCaml 5.x, dune, menhir, alcotest.
+Medaka has **two** compilers (see [AGENTS.md](./AGENTS.md)):
 
+- the **native, self-hosted `medaka`** — the **canonical** compiler (as of the
+  2026-06-12 milestone flip), built **OCaml-free** from a checked-in LLVM IR seed;
+- the **OCaml reference compiler** (`lib/`+`bin/`) — kept **frozen** as the
+  differential oracle during the soak period (retirement ≠ removal).
+
+**Build the native compiler (no OCaml — just clang + Boehm GC):**
+```sh
+make medaka          # bootstraps the emitter from selfhost/seed/emitter.ll,
+                     # then compiles selfhost/medaka_cli.mdk → ./medaka
+./medaka run yourfile.mdk
+```
+The result is a self-contained ~1.9 MB native binary doing
+check/fmt/new/build/run/test/repl/lsp with no OCaml at build *or* run time. For
+fully OCaml-free user builds, `export MEDAKA_EMITTER=$(pwd)/medaka_emitter` so
+`medaka build` uses the native emitter. (`make help` lists all targets.)
+
+**Build the OCaml reference compiler (the frozen oracle):**
 ```sh
 opam install dune menhir alcotest
-dune build
+dune build           # or: make reference
 ```
 
 ## Running tests
