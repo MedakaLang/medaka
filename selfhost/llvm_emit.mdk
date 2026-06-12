@@ -4737,50 +4737,81 @@ clauseArity [] = 0
 -- DISQUALIFIES the whole function (we cannot prove the loop preserves it) → fall
 -- back to the current stack-growing codegen.  Structural + deterministic, so
 -- interp- and native-emit produce identical IR (fixpoint holds by construction).
-trmcEligible : Emit -> String -> Int -> List (List Pat, CExpr) -> Bool
+trmcEligible : Emit -> String -> Int -> List (List Pat, CExpr) -> <Mut> Bool
 trmcEligible e self arity clauses =
-  trmcClausesOk self arity clauses && trmcAnyCons self arity clauses
+  trmcClausesOk e self arity clauses && trmcAnyCons e self arity clauses
 
 -- every clause body is TRMC-safe (no misplaced self-call).
-trmcClausesOk : String -> Int -> List (List Pat, CExpr) -> Bool
-trmcClausesOk _ _ [] = True
-trmcClausesOk self arity ((_, body)::rest) =
-  trmcBodyOk self arity body && trmcClausesOk self arity rest
+trmcClausesOk : Emit -> String -> Int -> List (List Pat, CExpr) -> <Mut> Bool
+trmcClausesOk _ _ _ [] = True
+trmcClausesOk e self arity ((_, body)::rest) =
+  trmcBodyOk e self arity body && trmcClausesOk e self arity rest
 
--- at least one clause has an eligible cons-tail leaf.
-trmcAnyCons : String -> Int -> List (List Pat, CExpr) -> Bool
-trmcAnyCons _ _ [] = False
-trmcAnyCons self arity ((_, body)::rest) =
-  trmcBodyHasCons self arity body || trmcAnyCons self arity rest
+-- at least one clause has an eligible cons/ctor-tail leaf.
+trmcAnyCons : Emit -> String -> Int -> List (List Pat, CExpr) -> <Mut> Bool
+trmcAnyCons _ _ _ [] = False
+trmcAnyCons e self arity ((_, body)::rest) =
+  trmcBodyHasCons e self arity body || trmcAnyCons e self arity rest
 
 -- a tail expr is TRMC-safe: descend through CIf/CLet/CLetGroup wrappers; at a
--- leaf, either it is an eligible cons-tail (`head :: self-call`, head self-free)
--- or it contains no self-call at all.  A self-call anywhere else fails.
-trmcBodyOk : String -> Int -> CExpr -> Bool
-trmcBodyOk self arity (CIf c t f) =
-  not (refersTo self c) && trmcBodyOk self arity t && trmcBodyOk self arity f
-trmcBodyOk self arity (CLet _ _ rhs b) =
-  not (refersTo self rhs) && trmcBodyOk self arity b
-trmcBodyOk self arity (CLetGroup binds b) =
-  not (refersToBinds self binds) && trmcBodyOk self arity b
-trmcBodyOk self arity ex =
-  if isConsTail self arity ex then True else not (refersTo self ex)
+-- leaf, either it is an eligible ctor-tail (`Ctor f… (self-call)`, the LAST field
+-- is the self-call and every other field self-free) or it contains no self-call
+-- at all.  A self-call anywhere else fails.
+trmcBodyOk : Emit -> String -> Int -> CExpr -> <Mut> Bool
+trmcBodyOk e self arity (CIf c t f) =
+  not (refersTo self c) && trmcBodyOk e self arity t && trmcBodyOk e self arity f
+trmcBodyOk e self arity (CLet _ _ rhs b) =
+  not (refersTo self rhs) && trmcBodyOk e self arity b
+trmcBodyOk e self arity (CLetGroup binds b) =
+  not (refersToBinds self binds) && trmcBodyOk e self arity b
+trmcBodyOk e self arity ex =
+  if isCtorTail e self arity ex then True else not (refersTo self ex)
 
--- does a tail expr (under the same wrappers) reach an eligible cons-tail leaf?
-trmcBodyHasCons : String -> Int -> CExpr -> Bool
-trmcBodyHasCons self arity (CIf _ t f) =
-  trmcBodyHasCons self arity t || trmcBodyHasCons self arity f
-trmcBodyHasCons self arity (CLet _ _ _ b) = trmcBodyHasCons self arity b
-trmcBodyHasCons self arity (CLetGroup _ b) = trmcBodyHasCons self arity b
-trmcBodyHasCons self arity ex = isConsTail self arity ex
+-- does a tail expr (under the same wrappers) reach an eligible ctor-tail leaf?
+trmcBodyHasCons : Emit -> String -> Int -> CExpr -> <Mut> Bool
+trmcBodyHasCons e self arity (CIf _ t f) =
+  trmcBodyHasCons e self arity t || trmcBodyHasCons e self arity f
+trmcBodyHasCons e self arity (CLet _ _ _ b) = trmcBodyHasCons e self arity b
+trmcBodyHasCons e self arity (CLetGroup _ b) = trmcBodyHasCons e self arity b
+trmcBodyHasCons e self arity ex = isCtorTail e self arity ex
 
--- the eligible cons-tail shape: `CBinPrim "::" head tail` where `head` is
--- self-free and `tail` is a SATURATED self-recursive CApp-spine (head CVar==self,
--- exactly `arity` args).
-isConsTail : String -> Int -> CExpr -> Bool
-isConsTail self arity (CBinPrim "::" head tail) =
+-- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
+-- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
+-- CApp-spine (head CVar==self, exactly `arity` args), every OTHER field self-free.
+--   • `CBinPrim "::" head tail` — the `::`/Cons special case (never flattens to a
+--     `CVar` head): field0=head (self-free), last field=tail (the self-call).
+--   • a saturated ctor app `Ctor f0 f1 … (self …)`: flattenApp head is `CVar ctor`
+--     with `isCtor`, exactly `ctorArity` fields, `ctorArity ≥ 1`, the LAST field a
+--     saturated self-call, every other field self-free.
+isCtorTail : Emit -> String -> Int -> CExpr -> <Mut> Bool
+isCtorTail _ self arity (CBinPrim "::" head tail) =
   not (refersTo self head) && isSelfSatApp self arity tail
-isConsTail _ _ _ = False
+isCtorTail e self arity ex = match flattenApp ex []
+  (CVar ctor _, fields) =>
+    if isCtor e ctor && lengthS fields == ctorArity e ctor && ctorArity e ctor >= 1 then
+      ctorTailFieldsOk self arity fields
+    else False
+  _ => False
+
+-- the field list of a saturated ctor app is TRMC-eligible: the LAST field is the
+-- saturated self-call (`isSelfSatApp`), every OTHER (leading) field is self-free.
+ctorTailFieldsOk : String -> Int -> List CExpr -> Bool
+ctorTailFieldsOk self arity fields = match splitLastF fields
+  Some (lead, last) =>
+    allSelfFreeF self lead && isSelfSatApp self arity last
+  None => False
+
+allSelfFreeF : String -> List CExpr -> Bool
+allSelfFreeF _ [] = True
+allSelfFreeF self (x::rest) = not (refersTo self x) && allSelfFreeF self rest
+
+-- split a non-empty list into (leading elements, last element).
+splitLastF : List a -> Option (List a, a)
+splitLastF [] = None
+splitLastF [x] = Some ([], x)
+splitLastF (x::rest) = match splitLastF rest
+  Some (lead, last) => Some (x :: lead, last)
+  None => None
 
 -- `tail` is a saturated application of `self` to exactly `arity` value args.
 isSelfSatApp : String -> Int -> CExpr -> Bool
@@ -4808,15 +4839,43 @@ refersToBindClauses _ [] = False
 refersToBindClauses self ((CClause _ body)::rest) =
   refersTo self body || refersToBindClauses self rest
 
--- the recursion args of an eligible cons-tail's self-call (saturated spine).
+-- the recursion args of an eligible ctor-tail's self-call (the LAST field's
+-- saturated self CApp-spine args).  Works for both the `::` form and a general
+-- ctor app: the last field is always the self-call.
 consTailArgs : CExpr -> List CExpr
 consTailArgs (CBinPrim "::" _ tail) = match flattenApp tail []
   (_, args) => args
-consTailArgs _ = []
+consTailArgs ex = match flattenApp ex []
+  (_, fields) => match splitLastF fields
+    Some (_, last) => match flattenApp last []
+      (_, args) => args
+    None => []
 
-consTailHead : CExpr -> CExpr
-consTailHead (CBinPrim "::" head _) = head
-consTailHead ex = ex
+-- the ctor NAME of an eligible ctor-tail leaf (`Cons` for the `::` form).
+ctorTailName : CExpr -> String
+ctorTailName (CBinPrim "::" _ _) = "Cons"
+ctorTailName ex = match flattenApp ex []
+  (CVar ctor _, _) => ctor
+  _ => ""
+
+-- the LEADING (non-last) field exprs of an eligible ctor-tail leaf — the fields
+-- that get stored into the cell (the last field is the destination link, not
+-- stored).  For `::` this is `[head]`.
+ctorTailLeadFields : CExpr -> List CExpr
+ctorTailLeadFields (CBinPrim "::" head _) = [head]
+ctorTailLeadFields ex = match flattenApp ex []
+  (_, fields) => match splitLastF fields
+    Some (lead, _) => lead
+    None => []
+
+-- the self-call's field INDEX within the ctor cell (0-based field index, i.e.
+-- offset `8*(idx+1)`).  Axis A: always the LAST field ⇒ `arity-1`.  Kept COMPUTED
+-- (not hardcoded "last") so Phase-2 F1(b) [self-call in any field] is a localized
+-- detection patch — the emit already offsets by this index (TRMC-DESIGN F1(b) seam).
+ctorTailSelfIdx : CExpr -> Int
+ctorTailSelfIdx (CBinPrim "::" _ _) = 1
+ctorTailSelfIdx ex = match flattenApp ex []
+  (_, fields) => lengthS fields - 1
 
 -- ── TRMC emit (destination-passing loop) ────────────────────────────────────
 -- emit a TRMC-eligible function as an O(1)-stack destination-passing loop.
@@ -4951,40 +5010,48 @@ trmcBindNullaryGroup e env ((CBind name [CClause [] rhs])::rest) =
   trmcBindNullaryGroup e ((name, (v, ty)) :: env) rest
 trmcBindNullaryGroup _ env (_::rest) = env
 
--- a TRMC tail leaf: an eligible cons-tail conses into the destination + loops; any
+-- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; any
 -- other leaf stores its value into the destination + exits.
 emitTrmcLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> <Mut> Unit
 emitTrmcLeaf e env ex = match trmcCtxRef.value
   TrmcOff => emitValueRet e env ex
   TrmcOn self arity destSlot loopL exitL pslots =>
-    if isConsTail self arity ex then
-      emitTrmcCons e env (consTailHead ex) (consTailArgs ex) destSlot loopL pslots
+    if isCtorTail e self arity ex then
+      emitTrmcCtor e env (ctorTailName ex) (ctorTailLeadFields ex) (consTailArgs ex) (ctorTailSelfIdx ex) destSlot loopL pslots
     else emitTrmcBase e env ex destSlot exitL
 
--- cons leaf: alloc a Cons cell (header + head), link it into the current
--- destination, advance the destination to the cell's tail slot (+16), recompute
+-- ctor leaf (Phase 2 Axis A): alloc a single-constructor cell (header + the
+-- non-last fields), link it into the current destination at the SELF-CALL field
+-- slot (offset `8*(selfIdx+1)`), advance the destination to that slot, recompute
 -- the recursion args into the param slots, and branch back to the loop head.  The
--- self-call is NOT emitted — only the head + arg recomputations are, which is what
--- removes the stack-growing `call`.  Store order (GC-safe, TRMC-DESIGN §"Risk"):
--- alloc → header → head → link-into-dest → advance-dest; the cell's own tail word
--- stays ZEROED (GC_malloc returns zeroed memory; an even/null word is never
--- dereferenced by Boehm) until the next iteration fills it.
-emitTrmcCons : Emit -> List (String, (String, LTy)) -> CExpr -> List CExpr -> String -> String -> List String -> <Mut> Unit
-emitTrmcCons e env head args destSlot loopL pslots =
-  let (hv, _) = emitExpr e env head
+-- self-call is NOT emitted — only the leading fields + arg recomputations are,
+-- which is what removes the stack-growing `call`.  Store order (GC-safe,
+-- TRMC-DESIGN §"Risk"): alloc → header → leading fields → link-into-dest → advance;
+-- the cell's own self-call slot stays ZEROED (GC_malloc returns zeroed memory; an
+-- even/null word is never dereferenced by Boehm) until the next iteration fills it.
+-- For `::`/Cons this is arity 2, selfIdx 1 (offset 16) — the Phase-1 cons shape.
+-- F1(b) SEAM: the dest-offset is COMPUTED from `selfIdx`, not hardcoded "last", so a
+-- future self-call-in-any-field is a detection-only patch (this emit is unchanged).
+emitTrmcCtor : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> List CExpr -> Int -> String -> String -> List String -> <Mut> Unit
+emitTrmcCtor e env ctor leadFields args selfIdx destSlot loopL pslots =
+  let arity = lengthS leadFields + 1
+  -- emit the leading (non-last) field values FIRST (left-to-right), then alloc.
+  let leadVals = emitArgs e env leadFields
   let cell = freshReg e
-  let _ = emit e ("  " ++ cell ++ " = call ptr @mdk_alloc(i64 24)")
-  let _ = emit e ("  store i64 " ++ intToString (cellTag e "Cons") ++ ", ptr " ++ cell)
-  let hp = freshReg e
-  let _ = emit e ("  " ++ hp ++ " = getelementptr i8, ptr " ++ cell ++ ", i64 8")
-  let _ = emit e ("  store i64 " ++ hv ++ ", ptr " ++ hp)
+  let _ = emit e ("  " ++ cell ++ " = call ptr @mdk_alloc(i64 " ++ intToString (8 * (arity + 1)) ++ ")")
+  let _ = emit e ("  store i64 " ++ intToString (cellTag e ctor) ++ ", ptr " ++ cell)
+  -- store the leading fields at their positional offsets (field 0 at +8, …).  The
+  -- self-call slot (offset 8*(selfIdx+1)) is left zeroed for the link below.
+  let _ = storeFields e cell leadVals 0
   let cellw = freshReg e
   let _ = emit e ("  " ++ cellw ++ " = ptrtoint ptr " ++ cell ++ " to i64")
   let d = freshReg e
   let _ = emit e ("  " ++ d ++ " = load ptr, ptr " ++ destSlot)
   let _ = emit e ("  store i64 " ++ cellw ++ ", ptr " ++ d)
+  -- advance the destination to THIS cell's self-call field slot (offset
+  -- 8*(selfIdx+1)) — COMPUTED from the field index (F1(b) seam).
   let newdest = freshReg e
-  let _ = emit e ("  " ++ newdest ++ " = getelementptr i8, ptr " ++ cell ++ ", i64 16")
+  let _ = emit e ("  " ++ newdest ++ " = getelementptr i8, ptr " ++ cell ++ ", i64 " ++ intToString (8 * (selfIdx + 1)))
   let _ = emit e ("  store ptr " ++ newdest ++ ", ptr " ++ destSlot)
   -- recompute every recursion arg into a TEMP first (an arg may read an earlier
   -- param), THEN store all temps into the slots, so an in-place store can't clobber

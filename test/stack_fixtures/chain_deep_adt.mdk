@@ -1,0 +1,17 @@
+-- TRMC Phase 2 Axis A — general single-constructor LAST-field TMC over a NON-`::`
+-- user ADT.  `build N` builds a 2,000,000-deep `Chain` via `Link n (build (n-1))`
+-- — a saturated `Link` ctor whose LAST field is the self-call, field 0 (`n`)
+-- self-free.  Without Axis A the recursive call keeps every frame live and
+-- SIGSEGV(139) at the default stack (~80k links); with Axis A it is an O(1)-stack
+-- destination-passing loop.  A musttail accumulator `depth` then consumes it.
+data Chain = Link Int Chain | End
+
+build n
+  | n <= 0 = End
+  | otherwise = Link n (build (n - 1))
+
+depth acc c = match c
+  Link _ rest => depth (acc + 1) rest
+  End => acc
+
+main = depth 0 (build 2000000)

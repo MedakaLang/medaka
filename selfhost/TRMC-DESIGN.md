@@ -243,3 +243,60 @@ a deep user-ADT `data Chain = Link Int Chain | End; build 2_000_000 |> depth` (A
 path); a multi-field non-`::` ctor builder (Axis A). Plus full `diff_selfhost_*` + `diff_native_cli`
 + `selfcompile_fixpoint` C3a/C3b YES (the emitter's own `map`/`filterMap` become loops — deterministic,
 reproduces byte-for-byte, the Phase-1 precedent).
+
+## Phase 2 Axis A — AS BUILT (2026-06-11, `selfhost/llvm_emit.mdk`, #56)
+
+General single-constructor LAST-field TMC. Generalizes the Phase-1 cons-only
+machinery; `::`/Cons is now the special case `ctor=Cons, arity 2, selfIdx 1`.
+
+**Detection** (`isConsTail` → `isCtorTail e self arity ex`, now `<Mut>`, threads
+`Emit` for `isCtor`/`ctorArity`):
+- `CBinPrim "::" head tail` — unchanged `::` arm: head self-free, tail a saturated
+  self `CApp`-spine. (`::` never flattens to a `CVar` head.)
+- otherwise `flattenApp ex []` → `(CVar ctor _, fields)` qualifies iff `isCtor e ctor`,
+  `length fields == ctorArity e ctor`, `ctorArity ≥ 1`, and `ctorTailFieldsOk`: the
+  LAST field is a saturated self-call (`isSelfSatApp`), every LEADING field self-free.
+
+`trmcEligible`/`trmcClausesOk`/`trmcAnyCons`/`trmcBodyOk`/`trmcBodyHasCons` all became
+`<Mut>` + thread `Emit` (mechanical). New pure helpers: `ctorTailFieldsOk`,
+`allSelfFreeF`, `splitLastF` (split into leading + last). Field accessors generalized:
+`consTailHead` → `ctorTailLeadFields` (the non-last fields, stored into the cell — `[head]`
+for `::`); `consTailArgs` now reads the LAST field's self-call args (both forms);
+`ctorTailName` (`"Cons"` for `::`); `ctorTailSelfIdx` (the self-call's field index =
+`arity-1`).
+
+**Emit** (`emitTrmcCons` → `emitTrmcCtor e env ctor leadFields args selfIdx …`):
+`arity = len leadFields + 1`; emit leading-field values (`emitArgs`, left-to-right);
+`mdk_alloc(8*(arity+1))`; header `cellTag e ctor`; `storeFields` the leading fields at
+their positional offsets (0-based, +8…); link cell-word into `*dest`; advance dest via
+`getelementptr +8*(selfIdx+1)`; recompute self-args into temps then param slots; `br loop`.
+The self-call slot stays ZEROED (GC_malloc) until the next iteration fills it (GC-safe per
+§"Risk", unchanged). The Cons path is byte-identical to Phase 1: `emitArgs [head]` ≡ the
+old `emitExpr head`, `cellTag "Cons"`, alloc 24, advance +16.
+
+**F1(b) SEAM (kept open):** the dest-offset is `8*(selfIdx+1)` COMPUTED from `selfIdx`
+(passed as `ctorTailSelfIdx ex`, always `arity-1` under (a)), NOT hardcoded "last". So
+Phase-2 F1(b) [self-call in any field] is a DETECTION-ONLY patch: broaden `isCtorTail`/
+`ctorTailFieldsOk` to find which field is the self-call and set `selfIdx` to it; `emitTrmcCtor`
+is unchanged — it already stores the leading-by-index fields and links at `8*(selfIdx+1)`.
+(Note: F1(b) must also store the OTHER non-self fields including those AFTER the self slot;
+the current emit stores `leadFields` 0-based contiguous, fine for (a) where the self-call is
+last. (b) will store all non-self fields at their true positional offsets — an additive
+refinement of `storeFields`, not a rewrite.)
+
+**Gates (all green):** `diff_selfhost_llvm` 172, `_modules` 9, `_typed` 37,
+`diff_selfhost_build` 15, `diff_native_cli` 54; `selfcompile_fixpoint` C3a **YES** / C3b
+**YES** (the emitter's own ctor builders that became eligible reproduce byte-for-byte —
+deterministic transform). `test/diff_native_stack.sh` now 4 fixtures: existing
+`upto_deep_single` + `mymap_deep_multi` (Cons, still pass), new `chain_deep_adt`
+(`data Chain = Link Int Chain | End; build 2_000_000 |> depth` → 2000000) + `node_deep_multifield`
+(2-leading-field `Node Int Int T3` → 2000001000000), all `== eval_probe`, exit 0,
+`-O2 -Wl,-stack_size,0x20000000`. **Before/after** (chain_deep_adt, default stack): pre-Axis-A
+`@mdk_build` carries `call i64 @mdk_build` → SIGSEGV(139); post-Axis-A the self-call is
+`br label %trmcloop` (NO `call @mdk_build`) → prints 2000000, exit 0. Small: `build 5 |> depth`
+= 5; Cons `upto 1 5 |> len` = 5.
+
+**Out of scope (confirmed fallbacks, no regression):** self-call NOT in the last field (F1(b),
+deferred — falls to current codegen); dispatch/dict-passed impl methods (B-dispatch);
+match-arm tail descent (B-match). Axis A is strictly top-level non-dict `emitFn`→`trmcTryFn`
+defines.

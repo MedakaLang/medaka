@@ -1,0 +1,16 @@
+-- TRMC Phase 2 Axis A — MULTI-FIELD non-`::` ctor.  `T3 = Node Int Int T3 | Leaf`
+-- has a 2-LEADING-field ctor (two self-free Ints) whose LAST field is the
+-- self-call.  Verifies the leading fields are stored at their positional offsets
+-- and the destination link goes to the LAST-field slot (offset 8*arity).  Builds
+-- 2,000,000 deep — SIGSEGV before Axis A, O(1)-stack loop after.
+data T3 = Node Int Int T3 | Leaf
+
+mk n
+  | n <= 0 = Leaf
+  | otherwise = Node n (n + n) (mk (n - 1))
+
+sumFst acc t = match t
+  Node a _ rest => sumFst (acc + a) rest
+  Leaf => acc
+
+main = sumFst 0 (mk 2000000)
