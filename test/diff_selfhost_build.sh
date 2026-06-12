@@ -248,7 +248,36 @@ main =
   putStrLn (debug (compare c a))
 EOF
 
-PROGRAMS="arith recur adt list closure maxalias maxprim clampc sum_twocstr numpoly show_debug eq deriving map_impl"
+# G4 regression (PRE-FLIP-GAPS §G4): a USER `data Box a` impl
+# `impl Eq (Box a) requires Eq a` whose body's inner `x == y` is over the impl's
+# abstract `requires`-constrained element.  Before the fix the operator route
+# stayed RNone (abstract operand never grounds to a head tycon) → the shallow
+# structural builtin (`mdk_value_eq` / pointer-eq) → SIGSEGV at the base/list case
+# and a silent-wrong-answer (False) when nested.  The fix routes the operator RDict
+# the impl's threaded element dict (resolveBinopSite consulting activeDictVarOf) so
+# the inner compare dispatches through it; the #21 companion fix makes
+# argImplDictRoutesFor search the FULL impl table (not the suffix from the matched
+# outer entry) so the element dict cell carries its own nested element dict instead
+# of a flat 1-word cell.  Exercises base (Box Int), list-field (Box [Int]), two-level
+# nested (Box (Box Int)) AND a heterogeneous nested user wrapper (Box (Wrap Int)) —
+# the case the suffix-table bug specifically dropped.
+cat > "$WORK/src/g4_box_eq.mdk" <<'EOF'
+data Box a = Box a
+impl Eq (Box a) requires Eq a where
+  eq (Box x) (Box y) = x == y
+data Wrap a = Wrap a
+impl Eq (Wrap a) requires Eq a where
+  eq (Wrap x) (Wrap y) = x == y
+main : <IO> Unit
+main =
+  putStrLn (debug (eq (Box 1) (Box 1)))
+  putStrLn (debug (eq (Box [1, 2, 3]) (Box [1, 2, 3])))
+  putStrLn (debug (eq (Box (Box 1)) (Box (Box 1))))
+  putStrLn (debug (eq (Box (Wrap 1)) (Box (Wrap 1))))
+  putStrLn (debug (eq (Box [1, 2, 3]) (Box [1, 2, 4])))
+EOF
+
+PROGRAMS="arith recur adt list closure maxalias maxprim clampc sum_twocstr numpoly show_debug eq deriving map_impl g4_box_eq"
 
 pass=0; fail=0
 
