@@ -492,3 +492,51 @@ leaf) → ordinary codegen, native == oracle == 10.
 
 **Phase 2 a/a/yes COMPLETE.** map / filter / filterMap + general-ctor builders all
 stack-safe; the deferred F1(b)/F2(b) seams remain (no real target needs them today).
+
+## Phase 2 (b) — SCOPED & DEFERRED (2026-06-11)
+
+A read-only scoping pass assessed what it would take to land the deferred (b) items.
+**Both DEFERRED** — neither has any real target; building them would be speculative
+emit exercised only by synthetic fixtures (fails "bounded work + clear payoff"). Kept
+as documented seams; revisit only if a real target appears.
+
+**F1(b) — self-call in ANY constructor field (not just last).** No real target: no
+stdlib/selfhost builder puts its self-call anywhere but last (synthetic only). Effort
+SMALL–MEDIUM, risk LOW.
+- *Detection:* broaden `ctorTailFieldsOk` → find the UNIQUE self-call field (others
+  self-free), return its index via `ctorTailSelfIdx`. ~10 lines.
+- *Emit — NOT detection-only (the in-code seam note is over-optimistic):* `storeFields … 0`
+  writes the non-self fields contiguously at `8*(i+1)`; for a non-last `selfIdx` the
+  field AFTER the self slot must be stored at its TRUE offset, skipping the self slot —
+  needs an index-aware `storeFieldsAt` (or before/after split) + threading the full field
+  list + `selfIdx` into `emitTrmcCtor`. ~15–25 lines.
+- *GC invariant SAFE:* only the self slot must stay zeroed (alloc→link null window);
+  other slots may be written. Store order: alloc → header → non-self fields at true
+  offsets → link cell into `*dest` → advance dest to the self slot.
+- **Design fork (needs a human call when built):** a ctor with TWO self-calls in
+  different fields (`data Tree = Br Tree Int Tree`) is genuinely MULTI-recursive — only
+  one tail position exists, so it is NOT TMC-able. Detection must require EXACTLY ONE
+  self-field and disqualify ≥2 (the second self-call is caught by the `selfFree` net).
+
+**F2(b) — dict-carrying / eta-reshaped constrained cons-tail impls.** No real target —
+exhaustively verified ABSENT: only `Eq`/`Ord`/`Debug`/`Display`/`Hashable` instances
+carry `requires`, and none BUILDS a list (their `::` is pattern-deconstruction; their
+recursion is direct-tail Bool/Ordering). The headline builders (`map`/`ap`/`filterMap`/
+`Applicative List`) carry no `requires` on the IMPL (it sits on the interface) → no dict
+params → already covered by F2(a)/B-dispatch. `ap` recurses under `++` (C extern), not
+cons-tail. Constrained list-builder typeclasses don't exist in this stdlib design.
+Effort MEDIUM–LARGE, risk MEDIUM (speculative, no oracle target).
+- *Detection:* relax `trmcNonDict` (rejects `leadingDictPats > 0`) to admit leading
+  dict/eta params + thread them as loop-invariants (`trmcEmitParamSlots`/`trmcReloadParams`
+  are already arity/slotTys-generic). The `SelfByMethod` + `mentionsSelfMethod` safety net
+  is dict-agnostic → carries over.
+- *NOT a pure "relax" (the seam note understates this):* `etaSaturateMethodBody` runs only
+  on the `emitFn` top-level path, NOT the impl path. To TRMC an eta-reshaped constrained
+  impl you'd first route eta-saturation into the impl path THEN thread the synthesized
+  `$eta` params — coupling two currently-separate concerns.
+
+**Verdict:** both seams are real + parameterized as documented; neither meets the bar
+today (no target). If ever built, gate each with a synthetic SIGSEGV-before /
+correct-after fixture (F1(b): `data T = N T Int`/field-0 + a self-in-middle ctor,
+prelude-free path; F2(b): a synthetic `instance Builder T requires C a` through the typed
+path) + full `diff_selfhost_*` + `selfcompile_fixpoint` C3a/C3b.
