@@ -21,6 +21,7 @@
 import json.{Json, JNull, JBool, JInt, JString, JArray, JObject,
              jObject, jArray, stringify, parse, lookup, asString, asInt}
 import driver.diagnostics.{Diag, Severity, SevError, SevWarning, analyzeLocated, analyzeProject}
+import driver.loader.{findProjectRoot}
 import frontend.parser.{ParseError, parseResult, parseErrorLine, parseErrorCol,
                parseErrorMessage, parseWithPositions,
                positionsDecls, DeclPos, declPosLine, declPosEndLine}
@@ -844,7 +845,10 @@ headOr _ (x :: _) = x
 publishProjectDiagnostics : String -> String -> String -> Docs -> <IO, Mut> Unit
 publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
-  let projectDir = dirOfPath rootFile
+  -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
+  -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
+  -- the file's dir when there's no medaka.toml.
+  let projectDir = findProjectRoot (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = (path => docsGet (uriOfPath path) docs)
   let results = analyzeProject projectCache read rootFile [projectDir, stdlibDir] runtimeSrc coreSrc

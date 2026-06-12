@@ -104,6 +104,35 @@ relUnderRoots (r :: rs) path =
 moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path = slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
 
+-- Walk up from `startDir` to the nearest directory containing `medaka.toml` (the
+-- project / module root), mirroring lib/project_config.ml's root discovery.  This
+-- is what lets tooling (LSP, run) resolve nested modules whose IDs are rooted at
+-- the PROJECT dir, not the edited file's immediate directory — e.g. a file
+-- `selfhost/frontend/parser.mdk` importing `frontend.ast` resolves only when the
+-- root is `selfhost/` (where `medaka.toml` lives), not `selfhost/frontend/`.
+-- Falls back to `startDir` when no `medaka.toml` is found up to the top.
+export
+findProjectRoot : String -> <IO> String
+findProjectRoot startDir = findRootGo startDir startDir
+
+findRootGo : String -> String -> <IO> String
+findRootGo cur fallback =
+  if fileExists (stringConcat [cur, "/medaka.toml"]) then cur
+  else
+    let p = parentDir cur
+    if p == cur || stringLength p == 0 then fallback
+    else findRootGo p fallback
+
+-- parent directory: strip the last `/`-component (mirrors the loader's dir logic).
+parentDir : String -> String
+parentDir path = parentGo path (stringLength path)
+
+parentGo : String -> Int -> String
+parentGo path 0 = ""
+parentGo path i =
+  if stringSlice (i - 1) i path == "/" then stringSlice 0 (i - 1) path
+  else parentGo path (i - 1)
+
 -- ── dependency extraction (mirrors loader.ml's direct_imports) ──
 
 -- "core" is the implicit prelude — its names are already in scope, so an
