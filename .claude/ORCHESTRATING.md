@@ -31,6 +31,39 @@ scope-read (bounded) → frame a precise prompt → get approval → spawn (bg, 
 
 ---
 
+## The gap docs lie — reproduce before you trust them (the #1 lesson)
+
+The project's own gap/status docs (gap censuses, audit docs, "known gaps", roadmap
+status) are **systematically stale** — they drift faster than anyone updates them.
+This session a gap doc mispredicted on **every** contact: items marked OPEN were
+already closed (sometimes incidentally, by an unrelated fix); items marked CLOSED were
+still broken; and the *documented root cause was wrong ~every time* a route-fragile fix
+was attempted. Two consequences:
+
+- **Before you scope or spawn a fix at a "known gap," reproduce it on current main.**
+  A throwaway repro (`run` = oracle, `build` + run = native, compare) takes a minute and
+  repeatedly saved an Opus agent from being aimed at an already-closed or symptom-shifted
+  gap. (Near-miss: a coupled pair was about to get a fix agent — both turned out already
+  closed by a mangling change three commits earlier.)
+- **Expect symptoms to SHIFT as upstream layers close.** A documented "panic" became a
+  "garbage output" became a "SIGSEGV one layer deeper" across successive fixes. Re-scope
+  on what the binary does *now*, not what the doc says it did.
+- **Tell agents to DIAGNOSE-FIRST and disprove the hypothesis** — bake "the filed root
+  cause is a starting point, almost certainly stale; trace it on current main; STOP and
+  report if the probe disproves it" into every route-fragile prompt. The agents that did
+  this found the real fix; the ones handed a confident-but-wrong root cause would have
+  shipped a wrong fix. A clean STOP-with-a-correct-diagnosis is a *success*, not a failure.
+- **A landing often closes adjacent gaps.** After a merge, re-verify the broader set
+  before spawning the next agent — universal mangling alone closed three separate parked
+  gaps + mooted a fourth.
+
+Run this same discipline as a **verified audit before any milestone**: fan out read-only
+agents by domain that REPRODUCE each claimed item (don't recite the doc) and report what
+they observe. It catches both directions — already-fixed-but-marked-open *and*
+marked-closed-but-actually-broken (this is how the pre-flip soundness gaps surfaced).
+
+---
+
 ## The agent-prompt skeleton
 
 Every delegated task prompt should contain, in order:
@@ -68,6 +101,14 @@ to the decisive checks:
 - Re-run the **critical** gate(s) yourself — for an emitter/codegen change, the
   fixpoint + one differential + the minimal repro. You don't need to re-run
   everything; pick what would catch a lie or a subtle break.
+- **Pick the decisive check per change type.** For a self-hosted-emitter change the
+  **fixpoint (C3a/C3b) is the single strongest test** — it recompiles the *whole compiler*
+  with the change and proves it self-reproduces byte-for-byte. For a code *transform*
+  (e.g. TRMC), an **IR-shape assertion** proves it actually fired — e.g. grep the eligible
+  function's emitted body for *no* `call @mdk_<self>`. A green output-differential proves
+  behavior is preserved (the gates compare program OUTPUT, so a pure rename/transform is
+  invisible to them but a mis-route shows as wrong output). One decisive check > re-running
+  the whole suite.
 - `ps` for **orphan processes** — agents sometimes spawn background gate runs and
   end without reaping them; kill leftovers (they burn CPU).
 - Watch for the **empty-report failure mode**: an agent that committed but left
@@ -95,7 +136,12 @@ to the decisive checks:
   never pile agents onto the single hottest file. Sequential when they share a file
   (each must verify-green + merge before the next branches, to avoid conflicts).
 - **Read-only audits parallelize freely** — zero merge risk; good use of otherwise-
-  idle time while a write agent runs.
+  idle time while a write agent runs. For a broad review (a milestone gate), **fan out by
+  domain** (typecheck / emitter / parser / error-path) — one consolidated agent is shallower.
+- **Doc-edit hygiene under concurrency:** if an agent is concurrently *appending* to a
+  shared doc (most agents append an "AS-BUILT" section at EOF), make your own edit a
+  **mid-file insert** in a stable region, not an end-append — the 3-way merge then auto-
+  resolves (different regions) instead of conflicting at EOF.
 - Mind CPU contention with long-running gates from other sessions; read-only/doc
   work doesn't contend, build-heavy work does.
 
@@ -117,14 +163,48 @@ to the decisive checks:
 
 ---
 
+## Big architectural changes — the design→staged→seams playbook
+
+For a large, route-fragile change (this session: TRMC), don't hand one agent the whole
+thing. The pattern that worked:
+
+1. **Design-pass first** — a read-only Plan agent that confirms the problem empirically,
+   recommends the mechanism, maps the touchpoints, and returns a **decision-ready design
+   with an explicit "design forks (need a human decision)" section.** Persist it as a
+   `*-DESIGN.md` doc (the implementation agents share one spec; it's also the future record).
+2. **Surface the forks to the user**, lock scope (e.g. "do (a), keep (b) a clean future
+   extension"), and write the locked scope into the design doc.
+3. **Staged implementation agents** — one per sub-part, ordered by ascending risk, each
+   **independently gated + merged** before the next branches (same file ⇒ sequential). You
+   verify each landing's decisive check (fixpoint + the transform-fired assertion).
+4. **Keep deferred-scope seams parameterized** so the deferred (b) is an *additive* later
+   patch, not a rewrite — and tell each agent to keep them generic (computed offsets, no
+   "zero leading params" assumptions). Then **scope the deferred extension explicitly** (a
+   read-only scoping agent) even if you're deferring it — it captures the seam knowledge,
+   verifies whether a real target even exists (often none → defer is the principled call),
+   and corrects over-optimistic seam notes the implementers left behind.
+
+Re-mint expensive artifacts (the seed) once at the **completed-change checkpoint**, not
+per sub-part. A *comment-only* edit to an emitter-graph file does NOT invalidate the seed
+(emitted IR is identical) — but any logic change does.
+
+---
+
 ## Failure modes seen
 
 - Agent commits then ends with an empty/"waiting" report → verify from git + gates.
+- **A returned agent with ≈0 tool uses + a boilerplate/empty result = a failed run, not a
+  completed one.** Don't act on it; re-spawn (sometimes a different agent type helps).
 - Agent leaves detached background gate processes → reap with `ps`/`pkill`.
 - A "surgical one-node" scope hypothesis turns out coupled to a deeper issue → the
   STOP guardrail catches it; re-scope rather than ship "panic-gone but output-wrong."
+- **About to spawn a fix at a parked gap that's actually already closed** (or whose symptom
+  has shifted) → reproduce-on-current-main *before* spawning. See "The gap docs lie."
 - Stale worktree: a long-lived orchestrator worktree drifts behind local main →
   `git merge main` it before relying on its state.
+- **Session start:** `git worktree list` + `ps` — check for other live sessions, orphan
+  gate processes, and accumulated stale worktrees (they pile up fast; prune the merged ones,
+  preserving your own + any running agent's + branches with unmerged commits).
 
 ---
 
