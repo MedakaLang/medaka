@@ -1,0 +1,21 @@
+-- TRMC Phase 2 B-match-descent (TRMC-DESIGN.md): exercises the F3 plain-tail
+-- self-call leaf via the DROP path.  `filterMap` keeps only even values, so the
+-- `None` arm (drop + iterate on a shorter list) fires for ~half the 2,000,000
+-- elements — the plain-tail self-call loop must produce the correct filtered list
+-- (1,000,000 kept).  Both the cons arm (`Some`) and the plain-tail arm (`None`)
+-- loop, no recursive `call @mdk_impl_List_filterMap`.  TYPED emit path.
+isNil xs = match xs
+  [] => True
+  _ => False
+
+tl xs = match xs
+  (_::ys) => ys
+  [] => []
+
+lenAcc acc xs
+  | isNil xs = acc
+  | otherwise = lenAcc (acc + 1) (tl xs)
+
+keepEven x = if x - (x / 2) * 2 == 0 then Some x else None
+
+main = lenAcc 0 (filterMap keepEven [1..=2000000])

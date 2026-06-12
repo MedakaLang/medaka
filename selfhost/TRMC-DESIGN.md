@@ -408,3 +408,87 @@ extended to drive the TYPED emitter (`llvm_emit_typed_main` + runtime + core, or
 @mdk_impl_List_map` → SIGSEGV(139); post-B-dispatch the self-call is `br label %trmcloop`
 (NO recursive call) → prints 2000000, exit 0, `== eval_probe --prelude`. Small: `map (+1)
 [1,2,3]` → `2,3,4`.
+
+## Phase 2 B-match-descent — AS BUILT (2026-06-11, `selfhost/llvm_emit.mdk`, #56)
+
+The LAST Phase-2 sub-part: TRMC now descends a TAIL-position `match` (`CDecision`),
+so `filterMap`'s in-arm cons (`Some y => y :: filterMap f xs`) AND its plain-tail
+drop (`None => filterMap f xs`, the **F3** leaf) both become O(1)-stack loop edges.
+This completes the **a/a/yes scope: Phase 2 is COMPLETE** — `map`/`filter`/`filterMap`
++ general single-ctor builders are all stack-safe.
+
+**The target.** `filterMap f (x::xs) = match f x { Some y => y :: filterMap f xs ;
+None => filterMap f xs }`. The `(x::xs)` clause body (reached via `emitClauseTree`'s
+decision-tree leaf, which calls `emitTrmcBody` under `TrmcOn`) is itself a
+**`CDecision`** whose arms are a cons-tail self (`Some`), a **plain-tail self-call**
+(`None`), and the `[]` base clause. Pre-B-match the `CDecision` was un-descended (its
+self-calls were non-tail leaves) → `filterMap` stayed ordinary (2 recursive `call
+@mdk_impl_List_filterMap`, SIGSEGV at default stack — correct, NOT miscompiled).
+
+**Detection** (`trmcBodyOk`/`trmcBodyHasCons`): a tail-position `CDecision scrut arms
+_` is descended — the **scrutinee must be self-free** (`selfFree self scrut`, evaluated
+eagerly outside the loop's destination position) and **every arm body** is recursively
+`trmcBodyOk` in tail position (`trmcArmsOk`); arm **guards must be self-free**
+(`trmcGuardsSelfFree`). The leaf classifier (`trmcBodyOk`'s base case) gained a THIRD
+class between ctor-tail and self-free base: a **plain-tail self-call**
+(`isSelfSatApp self arity ex` — a bare saturated self-call). `trmcBodyHasCons` descends
+arms via `trmcArmsHaveCons` but the plain-tail leaf is NOT a "cons" (builds no cell), so a
+function whose only self-calls are plain-tail (pure tail recursion) is left to the
+existing `musttail` path — at least one true cons/ctor-tail must exist to warrant the
+loop. Any self-call in a NON-tail position inside an arm is caught by the SelfRef-directed
+`selfFree` (B-dispatch's `mentionsSelfMethod` for dispatched impls — its safety-critical
+disqualification is REUSED unchanged, not regressed). **`CMatch` (non-treeable arms) is NOT
+a detection case** — it has no `emitExpr` arm, so it disqualifies (ordinary codegen, no
+regression).
+
+**F3 plain-tail leaf** (`emitTrmcTailCall`, routed from `emitTrmcLeaf` between the
+ctor-tail and base cases): the `None => filterMap f xs` arm — a bare saturated self-call
+in tail position. It is the cons leaf MINUS the alloc + head + dest-link/advance:
+recompute the recursion args into temps, store them into the loop's param slots,
+`br loop`. The destination is left UNCHANGED, so the next iteration fills the SAME
+destination slot — exactly the "drop this element, iterate on a shorter list" semantics
+`filter`/`filterMap` need. NO `call`.
+
+**Emit / the live-vs-save-clear boundary.** New `CDecision` arm in `emitTrmcBody` (the
+tail-descent walker): emit the scrutinee, then walk the SAME decision-tree machinery as
+`emitDecision` (`emitTree`) but keep `trmcCtxRef` **LIVE** across the tree — so each arm
+body is descended as a TRMC tail leaf via `emitLeaf`'s `TrmcOn` branch (→ `emitTrmcBody`
+→ cons-into-dest+loop / plain-tail-call+loop / base+exit), NOT computed into a value
+slot. This is the inverse of `emitDecision`'s save+clear of `trmcCtxRef`, which STAYS for
+an EXPRESSION-position match — a nested value-producing match inside an arm re-enters
+`emitDecision` and saves+clears it for its own value arms. So the boundary is: a
+**tail-position** `CDecision` (the clause-result match) keeps the ctx live;
+**expression-position** matches (anywhere else, via `emitExpr → emitDecision`) save+clear.
+`fallthroughLabelRef` is still saved+cleared (a non-exhaustive tail match's `CTFail` is a
+genuine abort). The decision's own result slot + `endL` block become a DEAD block (no
+`TrmcOn` leaf stores/branches there — every leaf branches to `loopL`/`exitL`); LLVM
+tolerates the no-predecessor block (Phase-1 precedent).
+
+**Emit shape** (`@mdk_impl_List_filterMap`, post-B-match — verified IR): 0 `call
+@mdk_impl_List_filterMap` inside the define. The cons arm (`Some y`): `call @mdk_alloc(24)`,
+store header + head, link into `*dest`, advance dest +16, recompute `f`/`xs` into slots,
+`br %trmcloop`. The plain-tail arm (`None`): NO alloc, NO dest store — just `store` the two
+recomputed args into the param slots, `br %trmcloop`. The base (`[]`): nil-immediate into
+`*dest`, `br %trmcexit`.
+
+**Deferred seams unchanged:** F1(b) [self-call not in the last ctor field] + F2(b)
+[dict/eta-carrying constrained impls] remain clean future extensions (the dest-offset is
+COMPUTED from `selfIdx`; the loop param-threading is GENERIC in `arity`/`slotTys`).
+
+**Gates (all green):** `diff_selfhost_llvm` 172, `_modules` 9, `_typed` 37,
+`diff_selfhost_build` 15, `diff_native_cli` 54; `selfcompile_fixpoint` C3a **YES** / C3b
+**YES** (the emitter's own `filterMap`/`filter`-over-`CExpr` sites became loops with
+match-arm descent — deterministic, reproduces byte-for-byte). `diff_native_stack.sh` now 7
+fixtures: new `filtermap_deep` (`filterMap (x => Some (x+1)) [1..=2_000_000] |> length` →
+2000000, all kept) + `filter_deep` (`filterMap keepEven … ` → 1000000, the F3 DROP path
+exercised on ~half the elements). **Before/after** (`filtermap_deep`, DEFAULT stack):
+pre-B-match `@mdk_impl_List_filterMap` carries 2 `call @mdk_impl_List_filterMap` →
+SIGSEGV(139); post-B-match both arms are `br label %trmcloop` (NO recursive call) → prints
+2000000, exit 0, `== eval_probe --prelude`. Small correctness (native == oracle):
+`filterMap keepEven [1..6]` → `[2,4,6]`; `filter (x => x > 0) [-1,2,-3,4]` → `[2,4]`. No
+regression: `map (+1)` still fully TRMC'd (0 recursive calls); a non-tail self in a match
+arm (`sumList xs = match xs { … (y::ys) => y + sumList ys }`) stays ineligible (no cons
+leaf) → ordinary codegen, native == oracle == 10.
+
+**Phase 2 a/a/yes COMPLETE.** map / filter / filterMap + general-ctor builders all
+stack-safe; the deferred F1(b)/F2(b) seams remain (no real target needs them today).

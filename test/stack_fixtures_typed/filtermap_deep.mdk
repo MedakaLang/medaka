@@ -1,0 +1,24 @@
+-- TRMC Phase 2 B-match-descent (TRMC-DESIGN.md): the stdlib `filterMap` instance
+-- method (Filterable List) recurses via a dispatched `CMethod filterMap (RKey
+-- List)` whose `(x::xs)` clause body is a `match f x { Some y => y :: filterMap f
+-- xs ; None => filterMap f xs }` — a tail-position CDecision with a cons-tail arm
+-- (`Some y`) AND a plain-tail self-call arm (`None`, the F3 leaf that drops the
+-- element + iterates on a shorter list).  Pre-B-match-descent the in-arm self-calls
+-- were seen as non-tail leaves → filterMap stayed un-TRMC'd → SIGSEGV(139) at the
+-- default stack (~80k cells).  After: BOTH arms loop (no recursive `call
+-- @mdk_impl_List_filterMap`), building a 2,000,000-element list (kept all, since
+-- `Some` always) in O(1) stack, then a musttail accumulator length consumes it.
+-- Runs through the TYPED emit path (`filterMap`/`[..=]` are stdlib).
+isNil xs = match xs
+  [] => True
+  _ => False
+
+tl xs = match xs
+  (_::ys) => ys
+  [] => []
+
+lenAcc acc xs
+  | isNil xs = acc
+  | otherwise = lenAcc (acc + 1) (tl xs)
+
+main = lenAcc 0 (filterMap (x => Some (x + 1)) [1..=2000000])

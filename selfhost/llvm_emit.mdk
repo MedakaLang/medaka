@@ -4814,16 +4814,54 @@ trmcBodyOk e self arity (CLet _ _ rhs b) =
   selfFree self rhs && trmcBodyOk e self arity b
 trmcBodyOk e self arity (CLetGroup binds b) =
   not (selfRefersToBinds self binds) && trmcBodyOk e self arity b
+-- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a tail-position decision
+-- tree (CDecision — `lowerMatch` lowers a constructor/list/tuple/literal match to
+-- this; a non-treeable CMatch has NO emit arm and is left to disqualify) is
+-- descended — the SCRUTINEE must be self-free (it is evaluated eagerly, not in the
+-- loop's destination-passing position), and every arm body must itself be TRMC-safe
+-- in tail position.  An arm body may be a cons/ctor-tail leaf, a self-free base, OR
+-- the new F3 plain-tail self-call leaf (`None => self …` — iterate on a shorter
+-- list, build no cell).  Any self-call in a NON-tail position inside an arm is
+-- caught by `trmcBodyOk`'s leaf check (`selfFree` is SelfRef-directed, so a
+-- dispatched self-recursion is not blind).
+trmcBodyOk e self arity (CDecision scrut arms _) =
+  selfFree self scrut && trmcArmsOk e self arity arms
 trmcBodyOk e self arity ex =
-  if isCtorTail e self arity ex then True else selfFree self ex
+  if isCtorTail e self arity ex then True
+  else if isSelfSatApp self arity ex then True
+  else selfFree self ex
+
+-- every match-arm body is TRMC-safe in tail position (guards must be self-free —
+-- a self-call inside a guard would run outside the loop's tail position).
+trmcArmsOk : Emit -> SelfRef -> Int -> List CArm -> <Mut> Bool
+trmcArmsOk _ _ _ [] = True
+trmcArmsOk e self arity ((CArm _ guards body)::rest) =
+  trmcGuardsSelfFree self guards && trmcBodyOk e self arity body && trmcArmsOk e self arity rest
+
+-- every guard expr is self-free (guards run before the arm body, not in tail
+-- position — a self-call there can't be a tail leaf).
+trmcGuardsSelfFree : SelfRef -> List CGuard -> Bool
+trmcGuardsSelfFree _ [] = True
+trmcGuardsSelfFree self ((CGBool c)::rest) = selfFree self c && trmcGuardsSelfFree self rest
+trmcGuardsSelfFree self ((CGBind _ c)::rest) = selfFree self c && trmcGuardsSelfFree self rest
 
 -- does a tail expr (under the same wrappers) reach an eligible ctor-tail leaf?
+-- (The plain-tail self-call leaf is NOT a "cons" — it builds no cell — so it does
+-- not satisfy trmcAnyCons; a function whose ONLY self-calls are plain-tail (pure
+-- tail recursion) is left to the musttail path, not TRMC.  At least one cons/ctor
+-- tail must exist to warrant the destination-passing loop.)
 trmcBodyHasCons : Emit -> SelfRef -> Int -> CExpr -> <Mut> Bool
 trmcBodyHasCons e self arity (CIf _ t f) =
   trmcBodyHasCons e self arity t || trmcBodyHasCons e self arity f
 trmcBodyHasCons e self arity (CLet _ _ _ b) = trmcBodyHasCons e self arity b
 trmcBodyHasCons e self arity (CLetGroup _ b) = trmcBodyHasCons e self arity b
+trmcBodyHasCons e self arity (CDecision _ arms _) = trmcArmsHaveCons e self arity arms
 trmcBodyHasCons e self arity ex = isCtorTail e self arity ex
+
+trmcArmsHaveCons : Emit -> SelfRef -> Int -> List CArm -> <Mut> Bool
+trmcArmsHaveCons _ _ _ [] = False
+trmcArmsHaveCons e self arity ((CArm _ _ body)::rest) =
+  trmcBodyHasCons e self arity body || trmcArmsHaveCons e self arity rest
 
 -- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
 -- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
@@ -5176,6 +5214,37 @@ emitTrmcBody e env (CLetGroup binds b) =
     let env2 = trmcBindNullaryGroup e env binds
     emitTrmcBody e env2 b
   else emitTrmcLeaf e env (CLetGroup binds b)
+-- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a TAIL-position decision
+-- tree.  Emit the scrutinee, then walk the SAME decision-tree machinery as
+-- emitDecision (emitTree) but keep trmcCtxRef LIVE — so each arm body is descended
+-- as a TRMC tail leaf (cons-into-dest+loop / plain-tail-call+loop / base+exit) via
+-- emitLeaf's TrmcOn branch, NOT computed into a value slot.  This is the inverse of
+-- emitDecision's save+clear, which stays for an EXPRESSION-position match inside an
+-- arm (a value-producing match whose arms must store into its own slot).  The
+-- result slot + end label passed to emitTree are a DEAD block (no leaf stores into
+-- them under TrmcOn — every leaf branches to loopL/exitL); LLVM tolerates the
+-- unreachable load/branch (Phase-1 precedent: the nested decision result slot is a
+-- dead block).  fallthroughLabelRef is saved+cleared (a non-exhaustive tail match's
+-- CTFail is a genuine abort, not the enclosing clause chain's fallthrough).
+emitTrmcBody e env (CDecision scrut arms tree) =
+  let (sv, _) = emitExpr e env scrut
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i64")
+  let endL = "trmcdecend" ++ intToString (freshId e)
+  let rty = Ref LTInt
+  let savedFT = fallthroughLabelRef.value
+  let _ = set_ref fallthroughLabelRef ""
+  -- trmcCtxRef is INTENTIONALLY left LIVE across the tree (the tail arms cons/loop
+  -- into the active destination); a nested EXPRESSION-position match within an arm
+  -- body re-enters emitDecision, which saves+clears it for its own value arms.
+  let _ = emitTree e env sv arms [sv] slot endL rty tree
+  let _ = set_ref fallthroughLabelRef savedFT
+  -- the dead end block: no TrmcOn leaf branches here, but emit it well-formed so a
+  -- (non-treeable / fallthrough) path that did would still verify.
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = load i64, ptr " ++ slot)
+  emit e "  unreachable"
 emitTrmcBody e env ex = emitTrmcLeaf e env ex
 
 -- every binding is a nullary value binding (the descendable let-group shape).
@@ -5193,15 +5262,36 @@ trmcBindNullaryGroup e env ((CBind name [CClause [] rhs])::rest) =
   trmcBindNullaryGroup e ((name, (v, ty)) :: env) rest
 trmcBindNullaryGroup _ env (_::rest) = env
 
--- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; any
--- other leaf stores its value into the destination + exits.
+-- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; a
+-- bare plain-tail self-call (F3 — `None => self …`, no enclosing cons/ctor)
+-- recomputes its args + loops with NO cell alloc + NO dest store (iterate on a
+-- shorter list); any other leaf stores its value into the destination + exits.
 emitTrmcLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> <Mut> Unit
 emitTrmcLeaf e env ex = match trmcCtxRef.value
   TrmcOff => emitValueRet e env ex
   TrmcOn self arity destSlot loopL exitL pslots =>
     if isCtorTail e self arity ex then
       emitTrmcCtor e env (ctorTailName ex) (ctorTailLeadFields ex) (consTailArgs ex) (ctorTailSelfIdx ex) destSlot loopL pslots
+    else if isSelfSatApp self arity ex then
+      emitTrmcTailCall e env ex loopL pslots
     else emitTrmcBase e env ex destSlot exitL
+
+-- F3 plain-tail self-call leaf (TRMC-DESIGN §"Phase 2 sub-part 3"): a bare
+-- saturated self-call in tail position (`None => filterMap f xs`).  It is the
+-- cons-leaf MINUS the cell alloc + head store + dest link/advance — an
+-- iterate-on-a-shorter-list step: recompute the recursion args into TEMPS (an arg
+-- may read an earlier param), store them into the loop's param slots, and branch
+-- back to the loop head.  The destination is left UNCHANGED (this arm produces no
+-- list cell), so the next iteration fills the same destination slot — exactly the
+-- "drop this element" semantics of `filter`/`filterMap`.  The self-call is NOT
+-- emitted as a `call` (that is what removes the stack-growing recursion).
+emitTrmcTailCall : Emit -> List (String, (String, LTy)) -> CExpr -> String -> List String -> <Mut> Unit
+emitTrmcTailCall e env ex loopL pslots =
+  let args = match flattenApp ex []
+    (_, as_) => as_
+  let argOps = emitArgs e env args
+  let _ = trmcStoreParamSlots e pslots argOps
+  emit e ("  br label %" ++ loopL)
 
 -- ctor leaf (Phase 2 Axis A): alloc a single-constructor cell (header + the
 -- non-last fields), link it into the current destination at the SELF-CALL field
