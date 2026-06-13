@@ -30,25 +30,50 @@
 #
 # Usage:  sh test/diff_selfhost_selfproc.sh
 # Exit:   0 iff every module's front-end output matches AND the eval leg matches.
+# OCaml-free (REROOT-PLAN.md Phase 3 / §2c):
+#   * HOST: the self-hosted entries run as pre-compiled native binaries under
+#     test/bin/ (check_all_main, eval_modules_main, eval_typed_modules_main),
+#     built by test/build_oracles.sh — replacing the OCaml interpreter host.
+#   * ORACLE (legs B/C/D): the reference probe output is the committed golden
+#     test/selfproc_goldens/{lex,parse,tc}_probe.golden, captured from the OCaml
+#     reference eval by test/capture_goldens.sh while
+#     OCaml was trusted.  The gate strips the native runtime's trailing "()" from
+#     the self-hosted eval output before comparing.
+#   * LEG A iterates flat module names (ast lexer ...) which no longer exist under
+#     the folder layout (frontend/ast.mdk, ...), so it checks nothing today — it
+#     is preserved verbatim (sans OCaml) as a no-op; its reference would be a
+#     per-module golden under test/selfproc_goldens/legA/.
+#
+# Usage:  sh test/diff_selfhost_selfproc.sh
+# Exit:   0 iff every module's front-end output matches AND the eval leg matches.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MAIN="$ROOT/_build/default/bin/main.exe"
-PROBE="$ROOT/_build/default/dev/tc_module_probe.exe"
-CHECK_ALL="$ROOT/selfhost/entries/check_all_main.mdk"
-EVAL_MODS="$ROOT/selfhost/entries/eval_modules_main.mdk"
-EVAL_TYPED_MODS="$ROOT/selfhost/entries/eval_typed_modules_main.mdk"
+CHECK_ALL="$ROOT/test/bin/check_all_main"
+EVAL_MODS="$ROOT/test/bin/eval_modules_main"
+EVAL_TYPED_MODS="$ROOT/test/bin/eval_typed_modules_main"
 ENTRY="$ROOT/selfhost/entries/all_modules_entry.mdk"
 LEXPROBE="$ROOT/selfhost/entries/selfproc_lex_probe.mdk"
 PARSEPROBE="$ROOT/selfhost/entries/selfproc_parse_probe.mdk"
 TCPROBE="$ROOT/selfhost/entries/selfproc_tc_probe.mdk"
+GOLDDIR="$ROOT/test/selfproc_goldens"
+LEGA_GOLD="$GOLDDIR/legA"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 SHDIR="$ROOT/selfhost"
-[ -x "$MAIN" ]  || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
-[ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }
-for f in "$CHECK_ALL" "$EVAL_MODS" "$EVAL_TYPED_MODS" "$ENTRY" "$LEXPROBE" "$PARSEPROBE" "$TCPROBE"; do
+[ -x "$CHECK_ALL" ]  || { echo "build oracles first: sh test/build_oracles.sh (missing $CHECK_ALL)"; exit 2; }
+[ -x "$EVAL_MODS" ]  || { echo "build oracles first: sh test/build_oracles.sh (missing $EVAL_MODS)"; exit 2; }
+[ -x "$EVAL_TYPED_MODS" ] || { echo "build oracles first: sh test/build_oracles.sh (missing $EVAL_TYPED_MODS)"; exit 2; }
+for f in "$ENTRY" "$LEXPROBE" "$PARSEPROBE" "$TCPROBE"; do
   [ -f "$f" ] || { echo "missing $f"; exit 2; }
 done
+for g in "$GOLDDIR/lex_probe.golden" "$GOLDDIR/parse_probe.golden" "$GOLDDIR/tc_probe.golden"; do
+  [ -f "$g" ] || { echo "missing golden $g — run: sh test/capture_goldens.sh selfproc"; exit 2; }
+done
+
+# The native runtime auto-prints main's Unit return as a trailing "()" appended to
+# the last (no-trailing-newline) line of probe output; the OCaml-captured golden
+# has none.  strip_unit drops a single trailing "()" token from a $()-captured string.
+strip_unit() { s="$1"; printf '%s' "${s%()}"; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -61,7 +86,7 @@ MODULES="ast lexer parser sexp desugar marker annotate resolve exhaust loader ty
 # One full-closure run emits every module's schemes (sections marked
 # `## MODULE <mid>`).  all_modules_entry imports one name from each module so the
 # loader pulls them all into a single union closure.
-"$MAIN" run "$CHECK_ALL" "$RUNTIME" "$CORE" "$ENTRY" "$SHDIR" 2>/dev/null > "$TMP/all.txt"
+"$CHECK_ALL" "$RUNTIME" "$CORE" "$ENTRY" "$SHDIR" 2>/dev/null > "$TMP/all.txt"
 
 # Extract module <mid>'s section (lines between its marker and the next).
 section() {  # section <dumpfile> <mid>
@@ -73,8 +98,12 @@ for m in $MODULES; do
   if ! grep -q "^## MODULE $m\$" "$TMP/all.txt"; then
     fail=$((fail+1)); printf 'FAIL %-10s (not covered by aggregate entry closure)\n' "$m"; continue
   fi
+  golden="$LEGA_GOLD/$m.golden"
+  if [ ! -f "$golden" ]; then
+    fail=$((fail+1)); printf 'FAIL %-10s (no golden — run: sh test/capture_goldens.sh selfproc)\n' "$m"; continue
+  fi
   self="$(section "$TMP/all.txt" "$m" | LC_ALL=C sort)"
-  ref="$("$PROBE" "$SHDIR/$m.mdk" "$SHDIR" 2>/dev/null | LC_ALL=C sort)"
+  ref="$(LC_ALL=C sort "$golden")"
   if [ "$ref" = "$self" ]; then pass=$((pass+1)); printf 'ok   %-10s (schemes match reference)\n' "$m"
   else fail=$((fail+1)); printf 'FAIL %-10s (schemes differ from reference)\n' "$m"; fi
 done
@@ -82,10 +111,10 @@ done
 # ── LEG B: eval engine self-execution (eval_modules over a real stage) ─────
 echo
 echo "== LEG B: self-hosted eval executes a real selfhost stage (lexer) =="
-ref_b="$("$MAIN" run "$LEXPROBE" 2>/dev/null)"
-self_b="$("$MAIN" run "$EVAL_MODS" "$CORE" "$LEXPROBE" "$SHDIR" 2>/dev/null)"
+ref_b="$(cat "$GOLDDIR/lex_probe.golden")"
+self_b="$(strip_unit "$("$EVAL_MODS" "$CORE" "$LEXPROBE" "$SHDIR" 2>/dev/null)")"
 if [ "$ref_b" = "$self_b" ] && [ -n "$ref_b" ]; then
-  pass=$((pass+1)); printf 'ok   %-10s (self-hosted eval == eval_modules oracle)\n' "lex_probe"
+  pass=$((pass+1)); printf 'ok   %-10s (self-hosted eval == golden reference)\n' "lex_probe"
 else
   fail=$((fail+1)); printf 'FAIL %-10s (eval output differs / empty)\n' "lex_probe"
   printf '  ref:  %s\n' "$(printf '%s' "$ref_b"  | tr '\n' ' ')"
@@ -104,10 +133,10 @@ fi
 # Parser-monad stage of the compiler's own source.
 echo
 echo "== LEG C: TYPED self-hosted eval executes a Parser-monad stage (parser) =="
-ref_c="$("$MAIN" run "$PARSEPROBE" 2>/dev/null)"
-self_c="$("$MAIN" run "$EVAL_TYPED_MODS" "$RUNTIME" "$CORE" "$PARSEPROBE" "$SHDIR" 2>/dev/null)"
+ref_c="$(cat "$GOLDDIR/parse_probe.golden")"
+self_c="$(strip_unit "$("$EVAL_TYPED_MODS" "$RUNTIME" "$CORE" "$PARSEPROBE" "$SHDIR" 2>/dev/null)")"
 if [ "$ref_c" = "$self_c" ] && [ -n "$ref_c" ]; then
-  pass=$((pass+1)); printf 'ok   %-10s (typed self-hosted eval == eval_modules oracle)\n' "parse_probe"
+  pass=$((pass+1)); printf 'ok   %-10s (typed self-hosted eval == golden reference)\n' "parse_probe"
 else
   fail=$((fail+1)); printf 'FAIL %-10s (typed eval output differs / empty)\n' "parse_probe"
   printf '  ref:  %s\n' "$(printf '%s' "$ref_c"  | tr '\n' ' ')"
@@ -128,10 +157,10 @@ fi
 # the self-hosted eval.
 echo
 echo "== LEG D: TYPED self-hosted eval executes the TYPECHECKER stage (typecheck) =="
-ref_d="$("$MAIN" run "$TCPROBE" 2>/dev/null)"
-self_d="$("$MAIN" run "$EVAL_TYPED_MODS" "$RUNTIME" "$CORE" "$TCPROBE" "$SHDIR" 2>/dev/null)"
+ref_d="$(cat "$GOLDDIR/tc_probe.golden")"
+self_d="$(strip_unit "$("$EVAL_TYPED_MODS" "$RUNTIME" "$CORE" "$TCPROBE" "$SHDIR" 2>/dev/null)")"
 if [ "$ref_d" = "$self_d" ] && [ -n "$ref_d" ]; then
-  pass=$((pass+1)); printf 'ok   %-10s (typed self-hosted eval == eval_modules oracle)\n' "tc_probe"
+  pass=$((pass+1)); printf 'ok   %-10s (typed self-hosted eval == golden reference)\n' "tc_probe"
 else
   fail=$((fail+1)); printf 'FAIL %-10s (typed eval output differs / empty)\n' "tc_probe"
   printf '  ref:  %s\n' "$(printf '%s' "$ref_d"  | tr '\n' ' ')"

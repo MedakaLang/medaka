@@ -1,31 +1,26 @@
 #!/bin/sh
-# Native stack-safety gate for TRMC (tail-recursion-modulo-cons) Phase 1
-# (TRMC-DESIGN.md, PLAN #56).
+# diff_native_stack.sh — deep-recursion / large-stack native-backend gate.
 #
-# A user-written cons-tail list builder (`upto m n = m :: upto (m+1) n`) used to
-# SIGSEGV (139) at ~70-80k cons cells on the native LLVM backend, because the
-# recursive call sat in the LAST arg of a `::` and every frame stayed live to the
-# base case.  TRMC rewrites such a builder into an O(1)-stack destination-passing
-# loop (no recursive `call`), so a deep list (2,000,000 elements) now builds and
-# is consumed without overflow.
+# Fixtures in test/stack_fixtures{,_typed}/ build a single deep-recursion `main`
+# value (e.g. a 2_000_000-element fold).  Each fixture is native-compiled via the
+# self-hosted LLVM emitter, clang'd with a 512 MiB stack, run, and its stdout
+# compared against a frozen GOLDEN.
 #
-# For each fixture in test/stack_fixtures/:
-#   ref  = dev/eval_probe.exe <fixture>            (the tree-walker oracle)
-#   emit = medaka run llvm_emit_main.mdk <fixture> (Core IR -> textual LLVM IR)
-#   clang <emit>.ll runtime/medaka_rt.c -o bin     (LARGE stack for the consumer)
-#   self = ./bin
-# diff ref vs self byte-for-byte AND require exit 0 (no SIGSEGV).
+# OCaml-free (REROOT-PLAN.md Phase 3 / §2d):
+#   * emitter HOST: the pre-compiled native emitter test/bin/llvm_emit_main
+#     (plain) / test/bin/llvm_emit_typed_main (typed), built by
+#     test/build_oracles.sh — replaces the OCaml-hosted llvm_emit*_main run.
+#   * value ORACLE: the committed <fixture>.eval.golden (the pp_value of `main`)
+#     captured by test/capture_goldens.sh from the OCaml value probe while OCaml
+#     was trusted — replaces the live OCaml value oracle.  Fixed fixtures => golden.
 #
 # Usage:  sh test/diff_native_stack.sh
-# Exit:   0 if every fixture's native stdout matches the oracle and exits 0; 2 if
-#         the build is missing or no C compiler / libgc is available (opt-in).
+# Exit:   0 all match; 2 opt-in skip (no clang/libgc, or oracles not built).
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROBE="$ROOT/_build/default/dev/eval_probe.exe"
-MAIN="$ROOT/_build/default/bin/main.exe"
-EMIT="$ROOT/selfhost/entries/llvm_emit_main.mdk"
-EMIT_TYPED="$ROOT/selfhost/entries/llvm_emit_typed_main.mdk"
+EMITBIN="$ROOT/test/bin/llvm_emit_main"
+EMITBIN_TYPED="$ROOT/test/bin/llvm_emit_typed_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
@@ -33,7 +28,8 @@ FIXDIR="$ROOT/test/stack_fixtures"
 FIXDIR_TYPED="$ROOT/test/stack_fixtures_typed"
 CC="${CC:-clang}"
 
-[ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }
+[ -x "$EMITBIN" ] || { echo "build oracles first: sh test/build_oracles.sh (missing $EMITBIN)"; exit 2; }
+[ -x "$EMITBIN_TYPED" ] || { echo "build oracles first: sh test/build_oracles.sh (missing $EMITBIN_TYPED)"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping"; exit 2; }
 
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
@@ -49,24 +45,34 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The native emitter binaries auto-print main's Unit return as a trailing "()\n"
+# appended to the emitted IR text; clang rejects it as a stray top-level entity.
+# Strip a sole trailing "()\n" (bytes 28 29 0a) from the .ll before compiling.
+trim_unit_ll() {
+  f="$1"
+  if [ "$(tail -c 3 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "28290a" ]; then
+    head -c $(( $(wc -c < "$f") - 3 )) "$f" > "$f.trim" && mv "$f.trim" "$f"
+  fi
+}
+
 pass=0; fail=0
 
-# compile a .ll to a native binary (large stack + -O2; darwin -stack_size, else
-# a plain -O2 link), run it, and diff stdout against the oracle `ref`.  Sets the
-# global pass/fail counters.  Link with the production build's large stack + -O2
-# (build_cmd.mdk).  TRMC makes the BUILDER an O(1)-stack loop (pre-TRMC it SIGSEGV'd
-# at ~80k cells regardless of stack size — frames grew unboundedly).  The large
-# stack additionally gives Boehm GC's RECURSIVE mark room for very deep (>~1M)
-# linked lists — a separate, pre-existing native-runtime limitation, NOT TRMC.
+# compile_run_check NAME LLFILE GOLDENFILE
 compile_run_check() {
-  cr_name="$1"; cr_ll="$2"; cr_ref="$3"
+  cr_name="$1"; cr_ll="$2"; cr_golden="$3"
   cr_bin="$WORK/$cr_name.bin"
+  if [ ! -f "$cr_golden" ]; then
+    fail=$((fail+1)); printf 'FAIL %s (no golden — run sh test/capture_goldens.sh stack)\n' "$cr_name"; return
+  fi
+  cr_ref="$(cat "$cr_golden")"
   if ! "$CC" -O2 -Wl,-stack_size,0x20000000 $GC_CFLAGS "$cr_ll" "$RT" $GC_LIBS -o "$cr_bin" 2>"$WORK/cc.err"; then
     if ! "$CC" -O2 $GC_CFLAGS "$cr_ll" "$RT" $GC_LIBS -o "$cr_bin" 2>"$WORK/cc.err"; then
       fail=$((fail+1)); printf 'FAIL %s (clang)\n%s\n' "$cr_name" "$(cat "$WORK/cc.err")"; return
     fi
   fi
-  cr_self="$("$cr_bin" 2>/dev/null)"; cr_code=$?
+  # The native runtime auto-prints main's Unit return as a trailing "()" line; the
+  # value golden has none — drop a sole trailing "()".
+  cr_self="$("$cr_bin" 2>/dev/null | sed '${/^()$/d;}')"; cr_code=$?
   if [ "$cr_code" -ne 0 ]; then
     fail=$((fail+1)); printf 'FAIL %s (exit %d — SIGSEGV/overflow?)\n  ref : %s\n' "$cr_name" "$cr_code" "$cr_ref"; return
   fi
@@ -74,40 +80,37 @@ compile_run_check() {
   else fail=$((fail+1)); printf 'FAIL %s\n  ref : %s\n  self: %s\n' "$cr_name" "$cr_ref" "$cr_self"; fi
 }
 
-# Pass 1 — prelude-free fixtures (top-level builders: Axis A / Phase 1).  Oracle =
-# bare eval_probe; emit = llvm_emit_main (no marking, no dispatch).
+# Prelude-free fixtures: native emitter test/bin/llvm_emit_main <file>.
 n_pf=0
 for f in "$FIXDIR"/*.mdk; do
   [ -f "$f" ] || continue
   n_pf=$((n_pf+1))
   name="$(basename "$f")"
-  ref="$("$PROBE" "$f" 2>/dev/null)"
+  golden="${f%.mdk}.eval.golden"
   ll="$WORK/$name.ll"
-  if ! "$MAIN" run "$EMIT" "$f" > "$ll" 2>"$WORK/emit.err"; then
+  if ! "$EMITBIN" "$f" > "$ll" 2>"$WORK/emit.err"; then
     fail=$((fail+1)); printf 'FAIL %s (emit)\n%s\n' "$name" "$(cat "$WORK/emit.err")"; continue
   fi
-  compile_run_check "$name" "$ll" "$ref"
+  trim_unit_ll "$ll"
+  compile_run_check "$name" "$ll" "$golden"
 done
 
-# Pass 2 — TYPED / stdlib-method fixtures (dispatched impls: Phase 2 B-dispatch).
-# A stdlib method (`map`/`filterMap`) needs the prelude, so the oracle is
-# `eval_probe --prelude` and the emit path is the TYPED driver (runtime + core →
-# llvm_emit.emitProgram, the only driver that produces CMethod dispatch nodes).
+# Typed fixtures: native typed emitter test/bin/llvm_emit_typed_main <runtime> <core> <file>.
 n_ty=0
 if [ -d "$FIXDIR_TYPED" ]; then
   for f in "$FIXDIR_TYPED"/*.mdk; do
     [ -f "$f" ] || continue
     n_ty=$((n_ty+1))
     name="$(basename "$f")"
-    ref="$("$PROBE" --prelude "$f" 2>/dev/null)"
+    golden="${f%.mdk}.eval.golden"
     ll="$WORK/$name.ll"
-    if ! "$MAIN" run "$EMIT_TYPED" "$RUNTIME" "$CORE" "$f" > "$ll" 2>"$WORK/emit.err"; then
+    if ! "$EMITBIN_TYPED" "$RUNTIME" "$CORE" "$f" > "$ll" 2>"$WORK/emit.err"; then
       fail=$((fail+1)); printf 'FAIL %s (emit)\n%s\n' "$name" "$(cat "$WORK/emit.err")"; continue
     fi
-    compile_run_check "$name" "$ll" "$ref"
+    trim_unit_ll "$ll"
+    compile_run_check "$name" "$ll" "$golden"
   done
 fi
 
 printf '\n%d prelude-free + %d typed = %d fixtures: %d ok, %d failing\n' "$n_pf" "$n_ty" "$((n_pf+n_ty))" "$pass" "$fail"
 [ "$fail" -eq 0 ]
-

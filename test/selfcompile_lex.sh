@@ -49,12 +49,14 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MAIN="$ROOT/_build/default/bin/main.exe"
+BOOTEMIT="$ROOT/test/bin/llvm_bootstrap_lex_main"
 DRIVER="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
+LEXORACLE="$ROOT/test/bin/lex_main"
 ORACLE="$ROOT/selfhost/entries/lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
+STDLIB="$ROOT/stdlib"
 SELFHOST="$ROOT/selfhost"
 FIXDIR="$ROOT/test/diff_fixtures"
 CC="${CC:-clang}"
@@ -65,7 +67,8 @@ CC="${CC:-clang}"
 # worker thread needed).
 STACK_SIZE="${STACK_SIZE:-0x20000000}"   # 512 MiB — the arm64 -stack_size ceiling
 
-[ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
+[ -x "$BOOTEMIT" ]  || { echo "build oracles first: sh test/build_oracles.sh (missing $BOOTEMIT)"; exit 2; }
+[ -x "$LEXORACLE" ] || { echo "build oracles first: sh test/build_oracles.sh (missing $LEXORACLE)"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping spike"; exit 2; }
 
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
@@ -81,13 +84,24 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The native emitter auto-prints main's Unit as a trailing "()\n" appended to the
+# IR text; clang rejects it as a stray top-level entity.  Strip a sole trailing
+# "()\n" (bytes 28 29 0a) from an emitted .ll.
+trim_unit_ll() {
+  f="$1"
+  if [ "$(tail -c 3 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "28290a" ]; then
+    head -c $(( $(wc -c < "$f") - 3 )) "$f" > "$f.trim" && mv "$f.trim" "$f"
+  fi
+}
+
 # ---- STEP 1: build the native gap-tolerant emitter -------------------------
 EMITLL="$WORK/bootstrap-emit.ll"
 EMITBIN="$WORK/bootstrap-emit"
-echo "step 1: emitting the gap-tolerant emitter's OWN graph (interpreted) ..."
-if ! "$MAIN" run "$DRIVER" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" > "$EMITLL" 2>"$WORK/emit-emit.err"; then
+echo "step 1: emitting the gap-tolerant emitter's OWN graph (native) ..."
+if ! "$BOOTEMIT" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB" > "$EMITLL" 2>"$WORK/emit-emit.err"; then
   echo "FAIL (emit bootstrap-emit): $(cat "$WORK/emit-emit.err")"; exit 1
 fi
+trim_unit_ll "$EMITLL"
 echo "step 1: clang bootstrap-emit (stack $STACK_SIZE) ..."
 if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$EMITLL" "$RT" $GC_LIBS -o "$EMITBIN" 2>"$WORK/emit-cc.err"; then
   echo "FAIL (clang bootstrap-emit): $(cat "$WORK/emit-cc.err")"; exit 1
@@ -109,18 +123,19 @@ if [ "$(tail -c 3 "$NATLL" | od -An -tx1 | tr -d ' \n')" = "28290a" ]; then
 fi
 
 # ---- STEP 2b: interpreted-emitter IR for the STRONGER byte-diff ------------
-INTLL="$WORK/lex.interp.ll"
-echo "step 2b: interpreted-emit lex_main (for IR byte-diff) ..."
-if ! "$MAIN" run "$DRIVER" "$RUNTIME" "$CORE" "$ORACLE" "$SELFHOST" > "$INTLL" 2>"$WORK/lex-iemit.err"; then
-  echo "FAIL (interp-emit lex_main): $(cat "$WORK/lex-iemit.err")"; exit 1
+INTLL="$WORK/lex.ref.ll"
+echo "step 2b: reference native-emit lex_main via the prebuilt emitter (for IR byte-diff) ..."
+if ! "$BOOTEMIT" "$RUNTIME" "$CORE" "$ORACLE" "$SELFHOST" "$STDLIB" > "$INTLL" 2>"$WORK/lex-iemit.err"; then
+  echo "FAIL (reference-emit lex_main): $(cat "$WORK/lex-iemit.err")"; exit 1
 fi
+trim_unit_ll "$INTLL"
 
 ir_match=0
 if cmp -s "$INTLL" "$NATLL"; then
   ir_match=1
-  echo "IR-MATCH: native-emitted lex.ll == interpreted-emitter lex.ll byte-for-byte"
+  echo "IR-MATCH: self-clanged-emitter lex.ll == prebuilt-emitter lex.ll byte-for-byte"
 else
-  echo "IR-DIVERGE: native lex.ll differs from interpreter lex.ll"
+  echo "IR-DIVERGE: self-clanged lex.ll differs from prebuilt-emitter lex.ll"
   diff "$INTLL" "$NATLL" | head -30
 fi
 
@@ -135,7 +150,9 @@ pass=0; fail=0
 for fix in "$FIXDIR"/*.mdk; do
   [ -f "$fix" ] || continue
   name="$(basename "$fix")"
-  ref="$("$MAIN" run "$ORACLE" "$fix" 2>/dev/null)()"
+  # ORACLE: the prebuilt native lexer (test/bin/lex_main) — it auto-prints the
+  # trailing "()"; so does $LEXBIN, so compare directly.
+  ref="$("$LEXORACLE" "$fix" 2>/dev/null)"
   self="$("$LEXBIN" "$fix" 2>/dev/null)"
   if [ "$ref" = "$self" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$name"
   else

@@ -24,12 +24,12 @@
 #
 # VALIDATE.  For each test/llvm_fixtures_modules/<dir> (the SAME corpus + invocation
 # as diff_selfhost_llvm_modules.sh, EMPTY core prelude, dir as the root):
-#   ir_interp = MAIN run llvm_emit_modules_main.mdk <runtime> <empty_core> <entry> <dir>
-#   ir_native = ./emit                              <runtime> <empty_core> <entry> <dir>
-#   diff ir_native vs ir_interp BYTE-FOR-BYTE.
+#   ir_oracle = test/bin/llvm_emit_modules_main <runtime> <empty_core> <entry> <dir>
+#   ir_native = ./emit (self-clanged here)      <runtime> <empty_core> <entry> <dir>
+#   diff ir_native vs ir_oracle BYTE-FOR-BYTE.
 # No need to clang/run the IR — diff_selfhost_llvm_modules.sh already proves the
-# interpreted-emitter IR compiles + runs correctly; native IR == interpreted IR
-# byte-for-byte ⇒ it runs correctly too.
+# emitter IR compiles + runs correctly; the self-clanged native IR == the
+# build_oracles native IR byte-for-byte ⇒ it runs correctly too.
 #
 # UNIT AUTO-PRINT.  llvm_emit_modules_main's `main : <IO, Mut> Unit` `putStr`s the IR
 # text (no trailing newline of its own — emitProgram's last line ends in "}\n"), and
@@ -46,17 +46,19 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
+BOOTEMIT="$ROOT/test/bin/llvm_bootstrap_lex_main"
+EMITORACLE="$ROOT/test/bin/llvm_emit_modules_main"
 EMIT="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
+STDLIB="$ROOT/stdlib"
 SELFHOST="$ROOT/selfhost"
 FIXDIR="$ROOT/test/llvm_fixtures_modules"
 CC="${CC:-clang}"
 
-[ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
+[ -x "$BOOTEMIT" ]   || { echo "build oracles first: sh test/build_oracles.sh (missing $BOOTEMIT)"; exit 2; }
+[ -x "$EMITORACLE" ] || { echo "build oracles first: sh test/build_oracles.sh (missing $EMITORACLE)"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping spike"; exit 2; }
 
 # libgc (bdw-gc) detection — VERBATIM from the diff_selfhost_llvm*.sh gates.
@@ -79,34 +81,46 @@ trap 'rm -rf "$WORK"' EXIT
 EMPTY_CORE="$WORK/empty_core.mdk"
 : > "$EMPTY_CORE"
 
-# 1. Build the native `emit` binary: gap-tolerant driver emits the WHOLE
-#    llvm_emit_modules_main module graph (real stdlib/core.mdk prelude at BUILD
-#    time so its dead-code gaps become placeholders), clang + medaka_rt.c + libgc +
-#    a 512 MB stack.
+# 1. Build the native `emit` binary: gap-tolerant driver (native test/bin/
+#    llvm_bootstrap_lex_main) emits the WHOLE llvm_emit_modules_main module graph
+#    (real stdlib/core.mdk prelude at BUILD time so its dead-code gaps become
+#    placeholders; roots = selfhost stdlib so hash_map resolves), clang +
+#    medaka_rt.c + libgc + a 512 MB stack.  The native emitter auto-prints main's
+#    Unit as a trailing "()\n" appended to the IR text; clang rejects it as a stray
+#    top-level entity, so strip a sole trailing "()\n" (bytes 28 29 0a).
+trim_unit_ll() {
+  f="$1"
+  if [ "$(tail -c 3 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "28290a" ]; then
+    head -c $(( $(wc -c < "$f") - 3 )) "$f" > "$f.trim" && mv "$f.trim" "$f"
+  fi
+}
 LL="$WORK/emit.ll"
 BIN="$WORK/emit"
 echo "building native emitter (this is the largest emit target — ~10 MB IR) ..."
-if ! "$MAIN" run "$DRIVER" "$RUNTIME" "$CORE" "$EMIT" "$SELFHOST" > "$LL" 2>"$WORK/emit.err"; then
+if ! "$BOOTEMIT" "$RUNTIME" "$CORE" "$EMIT" "$SELFHOST" "$STDLIB" > "$LL" 2>"$WORK/emit.err"; then
   echo "FAIL (emit llvm_emit_modules_main): $(cat "$WORK/emit.err")"; exit 1
 fi
+trim_unit_ll "$LL"
 if ! "$CC" -Wl,-stack_size,0x20000000 $GC_CFLAGS "$LL" "$RT" $GC_LIBS -o "$BIN" 2>"$WORK/cc.err"; then
   echo "FAIL (clang native emitter): $(cat "$WORK/cc.err")"; exit 1
 fi
 
-# 2. For each fixture: diff native IR vs interpreted IR byte-for-byte.
+# 2. For each fixture: diff the self-clanged native emitter IR vs the
+#    build_oracles-built native emitter IR byte-for-byte.  Both native emitters
+#    auto-print main's Unit as a trailing "()\n", so both IR streams carry the same
+#    suffix — no extra normalization is needed.
 pass=0; fail=0
 for dir in "$FIXDIR"/*/; do
   [ -d "$dir" ] || continue
   entry="$dir/entry.mdk"
   [ -f "$entry" ] || { echo "skip $(basename "$dir") (no entry.mdk)"; continue; }
   name="$(basename "$dir")"
-  # interpreted IR ++ the invariant native Unit auto-print suffix "()\n".
-  "$MAIN" run "$EMIT" "$RUNTIME" "$EMPTY_CORE" "$entry" "${dir%/}" > "$WORK/$name.interp" 2>"$WORK/$name.ierr"
+  # ORACLE: the prebuilt native emitter (test/bin/llvm_emit_modules_main).
+  "$EMITORACLE" "$RUNTIME" "$EMPTY_CORE" "$entry" "${dir%/}" > "$WORK/$name.interp" 2>"$WORK/$name.ierr"
   if [ -s "$WORK/$name.ierr" ] && ! [ -s "$WORK/$name.interp" ]; then
-    fail=$((fail+1)); printf 'FAIL %s (interp emit)\n%s\n' "$name" "$(cat "$WORK/$name.ierr")"; continue
+    fail=$((fail+1)); printf 'FAIL %s (oracle emit)\n%s\n' "$name" "$(cat "$WORK/$name.ierr")"; continue
   fi
-  printf '()\n' >> "$WORK/$name.interp"
-  # native IR.
+  # UNIT-UNDER-TEST: the freshly self-clanged native emitter.
   if ! "$BIN" "$RUNTIME" "$EMPTY_CORE" "$entry" "${dir%/}" > "$WORK/$name.native" 2>"$WORK/$name.nerr"; then
     fail=$((fail+1)); printf 'FAIL %s (native emit crashed)\n%s\n' "$name" "$(cat "$WORK/$name.nerr")"; continue
   fi
@@ -119,5 +133,5 @@ for dir in "$FIXDIR"/*/; do
   fi
 done
 
-printf '\n%d/%d fixtures reproduce the interpreter IR byte-for-byte\n' "$pass" "$((pass+fail))"
+printf '\n%d/%d fixtures reproduce the native emitter IR byte-for-byte\n' "$pass" "$((pass+fail))"
 [ "$fail" -eq 0 ]

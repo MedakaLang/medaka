@@ -93,6 +93,7 @@ eval_dict_main eval_dict_batch eval_typed_main eval_typed_batch \
 eval_typed_modules_main eval_modules_main \
 core_ir_main core_ir_prelude_main core_ir_typed_main core_ir_roundtrip_main core_ir_modules_main \
 llvm_emit_main llvm_emit_typed_main llvm_emit_modules_main \
+llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
 desugar_main desugar_batch mark_main mark_batch \
 resolve_main resolve_batch resolve_modules_main \

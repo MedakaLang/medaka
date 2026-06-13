@@ -1,0 +1,9 @@
+mkP : Int -> Int -> Pt
+moveX : Pt -> Int -> Pt
+fromOpt : a -> Opt a -> a
+dist : Pt -> Int
+swap : (a, b) -> (b, a)
+poly : a -> a
+twice : (a -> a) -> a -> a
+big : a -> a -> a -> a
+main : Int

@@ -1,0 +1,6 @@
+(DData Private "Color" () ((variant "Red" (ConPos)) (variant "Green" (ConPos)) (variant "Blue" (ConPos))) ())
+(DTypeSig false "label" (TyFun (TyCon "Color") (TyCon "String")))
+(DFunDef false "label" ((PVar "c")) (EMatch (EVar "c") (arm (PCon "Red") () (ELit (LString "red"))) (arm (PCon "Green") () (ELit (LString "green"))) (arm (PCon "Blue") () (ELit (LString "blue")))))
+(DTypeSig false "bump" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "bump" ((PVar "n")) (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "+" (EVar "n") (ELit (LInt 1))) (ELit (LInt 0))))
+(DFunDef false "main" () (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EVar "bump") (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))

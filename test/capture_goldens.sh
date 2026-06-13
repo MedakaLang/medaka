@@ -233,6 +233,39 @@ if want llvm_modules; then
   done
 fi
 
+# stack : eval-value goldens for diff_native_stack.sh (REROOT-PLAN Phase 3).  The
+# stack_fixtures programs aggregate a single `main` value (a deep-recursion sum);
+# the golden is its pp_value, captured from eval_probe while OCaml is trusted.
+# plain fixtures -> eval_probe ; typed fixtures -> eval_probe --prelude.
+if want stack; then
+  total=$((total+1))
+  for f in "$ROOT"/test/stack_fixtures/*.mdk; do
+    [ -f "$f" ] || continue
+    emit_golden "${f%.mdk}.eval.golden" oracle_eval "$f"
+  done
+  for f in "$ROOT"/test/stack_fixtures_typed/*.mdk; do
+    [ -f "$f" ] || continue
+    emit_golden "${f%.mdk}.eval.golden" oracle_eval_prelude "$f"
+  done
+fi
+
+# selfproc : reference goldens for diff_selfhost_selfproc.sh legs B/C/D
+# (REROOT-PLAN Phase 3 / 2c).  Each leg runs a selfproc_*_probe program directly
+# through the OCaml reference eval (`main.exe run <probe>`) to get the reference
+# token / AST / scheme stream; the gate diffs that against the self-hosted eval
+# path (native eval_modules_main / eval_typed_modules_main).  We freeze the
+# reference leg as a golden captured here while OCaml is trusted; the gate strips
+# the native runtime's trailing "()" before comparing.  (LEG A iterates flat
+# module names that no longer exist under the folder layout, so it currently
+# checks nothing — no golden needed there.)
+if want selfproc; then
+  total=$((total+1))
+  mkdir -p "$ROOT/test/selfproc_goldens"
+  emit_golden "$ROOT/test/selfproc_goldens/lex_probe.golden"   "$MAIN" run "$ROOT/selfhost/entries/selfproc_lex_probe.mdk"
+  emit_golden "$ROOT/test/selfproc_goldens/parse_probe.golden" "$MAIN" run "$ROOT/selfhost/entries/selfproc_parse_probe.mdk"
+  emit_golden "$ROOT/test/selfproc_goldens/tc_probe.golden"    "$MAIN" run "$ROOT/selfhost/entries/selfproc_tc_probe.mdk"
+fi
+
 # ── §2b multi-glob corpus gates (parse / desugar / mark / lex_files) ──────────
 # These read a multi-directory corpus that the line-split ROWS loop can't express
 # (one row = one glob token), so capture them here with explicit globs.  The gate

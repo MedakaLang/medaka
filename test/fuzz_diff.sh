@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 # fuzz_diff.sh — differential fuzzer driver for the Medaka compiler (Stage-0/1 MVP).
 #
-# Generates well-typed Medaka programs with dev/fuzz_gen.exe and checks them two
-# ways:
-#   Tier-A (oracle + invariants): run each program through the OCaml oracle
-#     (`main.exe run <file>`).  The generator emits oracle-independent invariants
+# Generates well-typed Medaka programs with dev/fuzz_gen.exe (the random input
+# source — an OCaml dev tool; not an oracle) and checks them two ways:
+#   Tier-A (oracle + invariants): run each program through the native-interp ORACLE
+#     (test/bin/eval_dict_main, the self-hosted dict-passing tree-walker compiled to
+#     a standalone native binary by test/build_oracles.sh — REROOT-PLAN Phase 3).
+#     The generator emits oracle-independent invariants
 #     inline as `println ("INV " ++ debug <bool>)` lines that MUST be `INV True`
 #     (Eq reflexive/symmetric, (a==b)==(eq a b), (a<b)==(lt a b), Ord
 #     totality/antisymmetry/transitivity, arithmetic identities a+0/a*1/(a+b)-b).
 #     Any `INV False`, or a nonzero oracle exit (a generator well-typedness hole),
-#     is a finding.
-#   Tier-B (oracle vs selfhost tree-walker): run the SAME program through the
-#     selfhost dict-passing tree-walker
-#       main.exe run selfhost/entries/eval_dict_main.mdk runtime.mdk core.mdk <file>
-#     and diff stdout against the oracle.  Any difference is a finding.
+#     is a finding.  (The former Tier-B — oracle vs selfhost-on-the-OCaml-host — is
+#     retired: post-reroot the oracle IS the native selfhost tree-walker, so the
+#     genuine cross-implementation check is Tier-C below, native-compiled vs
+#     native-interp.)
 #
-# BATCHING: the selfhost path pays a ~480ms runtime+core parse tax PER PROCESS.
+# BATCHING: the native-interp path pays a ~480ms runtime+core parse tax PER PROCESS.
 # We amortize it by generating each seed as a --batch of K independent blocks
 # (sharing a fresh-name counter so names never collide) in ONE file, so one
-# selfhost process covers K programs' worth of checks.
+# native-interp process covers K programs' worth of checks.
 #
 # Findings are classified against test/fuzz_allowlist.txt (documented-open gaps).
 # Unmatched findings are dumped to test/fuzz_failures/seed_N.mdk with both outputs.
@@ -51,10 +52,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 
 GEN="$ROOT/_build/default/dev/fuzz_gen.exe"
-MAIN="$ROOT/_build/default/bin/main.exe"
+# Native-interp ORACLE (REROOT-PLAN.md Phase 3 / §2g): the self-hosted dict-passing
+# tree-walker compiled to a standalone native binary (test/bin/eval_dict_main, built
+# by test/build_oracles.sh) replaces the OCaml interpreter oracle.  Random inputs
+# cannot be goldened, so the live native interpreter is the reference.
+ORACLE="$ROOT/test/bin/eval_dict_main"
+MEDAKA="$ROOT/medaka"
+EMITTER="$ROOT/medaka_emitter"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
-SELFHOST="$ROOT/selfhost/entries/eval_dict_main.mdk"
 ALLOWLIST="$ROOT/test/fuzz_allowlist.txt"
 FAILDIR="$ROOT/test/fuzz_failures"
 
@@ -65,14 +71,16 @@ BATCH="${4:-12}"
 NATIVE="${5:-0}"
 NATIVE_COUNT="${6:-40}"
 
-for f in "$GEN" "$MAIN"; do
-  [ -x "$f" ] || { echo "missing $f — run: dune build --root ."; exit 2; }
-done
+[ -x "$GEN" ] || { echo "missing $GEN — the fuzz generator (an OCaml dev tool) must be built"; exit 2; }
+[ -x "$ORACLE" ] || { echo "missing $ORACLE — run: sh test/build_oracles.sh"; exit 2; }
+if [ "$NATIVE" = "1" ]; then
+  [ -x "$MEDAKA" ] && [ -x "$EMITTER" ] || { echo "missing $MEDAKA / $EMITTER — run: make medaka"; exit 2; }
+fi
 mkdir -p "$FAILDIR"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-SRC="$TMP/prog.mdk"; ORA="$TMP/ora.txt"; SH="$TMP/sh.txt"
+SRC="$TMP/prog.mdk"; ORA="$TMP/ora.txt"
 # Tier-C native scratch
 NSRC="$TMP/nprog.mdk"; NORA="$TMP/nora.txt"; NAT="$TMP/nat.txt"
 NATSTRIP="$TMP/nat_strip.txt"; NBIN="$TMP/nbin"; NERR="$TMP/nbuild.err"
@@ -102,8 +110,6 @@ dump_failure() {
   {
     echo "-- ============================== ORACLE OUT =========================="
     sed 's/^/-- /' "$ORA"
-    echo "-- ============================== SELFHOST OUT ========================"
-    if [ -s "$SH" ]; then sed 's/^/-- /' "$SH"; else echo "-- (not run — failed at Tier-A)"; fi
   } >> "$out"
   echo "  -> dumped $out"
 }
@@ -117,7 +123,7 @@ dump_native() {
   {
     echo "-- NATIVE FUZZ FAILURE  seed=$seed  tier=$TIER  batch=$BATCH  kind=$kind"
     echo "-- reproduce: $GEN --seed $seed --tier $TIER --batch $BATCH > p.mdk"
-    echo "--            $MAIN build p.mdk -o p && ./p   (vs  $MAIN run p.mdk)"
+    echo "--            ./medaka build p.mdk -o p && ./p   (vs  test/bin/eval_dict_main runtime core p.mdk)"
     echo "-- ============================== SOURCE ================="
   } > "$out"
   cat "$NSRC" >> "$out"
@@ -132,18 +138,17 @@ dump_native() {
   echo "  -> dumped $out"
 }
 
-tierA=0; tierB=0; known=0; ran=0
+tierA=0; known=0; ran=0
 tierC=0; nat_known=0; nat_ran=0; nat_built=0
 end=$((START + COUNT - 1))
 echo "fuzz_diff: seeds $START..$end  tier=$TIER  batch=$BATCH  native=$NATIVE"
 
 for seed in $(seq "$START" "$end"); do
   ran=$((ran + 1))
-  : > "$SH"   # reset selfhost output so a stale prior run can't leak into a dump
   "$GEN" --seed "$seed" --tier "$TIER" --batch "$BATCH" > "$SRC" 2>/dev/null
 
-  # ----- Tier-A: oracle run + invariant check -----
-  if ! "$MAIN" run "$SRC" > "$ORA" 2>&1; then
+  # ----- Tier-A: native-interp oracle run + invariant check -----
+  if ! "$ORACLE" "$RUNTIME" "$CORE" "$SRC" > "$ORA" 2>&1; then
     # nonzero oracle exit = generator emitted an ill-typed/erroring program
     if allowlisted "$SRC" "$(cat "$ORA")"; then
       known=$((known + 1))
@@ -157,18 +162,6 @@ for seed in $(seq "$START" "$end"); do
     echo "[Tier-A] seed $seed: INVARIANT VIOLATION (INV False)"
     tierA=$((tierA + 1)); dump_failure "$seed" "invariant-violation"
     continue
-  fi
-
-  # ----- Tier-B: oracle vs selfhost tree-walker -----
-  "$MAIN" run "$SELFHOST" "$RUNTIME" "$CORE" "$SRC" > "$SH" 2>&1
-  if ! diff -q "$ORA" "$SH" >/dev/null 2>&1; then
-    if allowlisted "$SRC" "$(cat "$SH")"; then
-      known=$((known + 1))
-    else
-      echo "[Tier-B] seed $seed: ORACLE != SELFHOST"
-      diff "$ORA" "$SH" | head -6 | sed 's/^/    /'
-      tierB=$((tierB + 1)); dump_failure "$seed" "tierB-divergence"
-    fi
   fi
 done
 
@@ -188,15 +181,17 @@ if [ "$NATIVE" = "1" ]; then
     "$GEN" --seed "$seed" --tier "$TIER" --batch "$BATCH" > "$NSRC" 2>/dev/null
     # oracle for THIS program — skip seeds the oracle itself rejects
     # (those are Tier-A's job on the normal program; here we only compare native
-    # against a known-good oracle baseline).
-    if ! "$MAIN" run "$NSRC" > "$NORA" 2>&1; then
+    # against a known-good oracle baseline).  The native-interp oracle auto-prints
+    # a trailing "()" line, same as the native build below — strip it from both.
+    if ! "$ORACLE" "$RUNTIME" "$CORE" "$NSRC" > "$NORA.raw" 2>&1; then
       continue
     fi
+    sed -e '${/^()$/d;}' "$NORA.raw" > "$NORA"
     if grep -q "INV False" "$NORA"; then
       continue
     fi
-    # native build
-    if ! "$MAIN" build "$NSRC" -o "$NBIN" > /dev/null 2>"$NERR"; then
+    # native build (OCaml-free: ./medaka build via the native emitter)
+    if ! MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" "$MEDAKA" build "$NSRC" -o "$NBIN" > /dev/null 2>"$NERR"; then
       if allowlisted "$NSRC" "$(cat "$NERR")"; then
         nat_known=$((nat_known + 1))
       else
@@ -228,14 +223,14 @@ if [ "$NATIVE" = "1" ]; then
 fi
 
 echo "------------------------------------------------------------"
-echo "ran=$ran  TierA_findings=$tierA  TierB_findings=$tierB  known_gap=$known"
+echo "ran=$ran  TierA_findings=$tierA  known_gap=$known"
 if [ "$NATIVE" = "1" ]; then
   echo "native: ran=$nat_ran  built=$nat_built  TierC_findings=$tierC  native_known_gap=$nat_known"
 fi
-if [ $((tierA + tierB + tierC)) -eq 0 ]; then
+if [ $((tierA + tierC)) -eq 0 ]; then
   echo "RESULT: clean (no new divergences/invariant violations)"
   exit 0
 else
-  echo "RESULT: $((tierA + tierB + tierC)) NEW finding(s) — see $FAILDIR/"
+  echo "RESULT: $((tierA + tierC)) NEW finding(s) — see $FAILDIR/"
   exit 1
 fi
