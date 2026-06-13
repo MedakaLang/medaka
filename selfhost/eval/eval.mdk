@@ -2039,3 +2039,31 @@ evalModulesOutput preludeDecls modules =
   let binds = evalModules preludeDecls modules
   let _ = runMainForEffect binds
   outputRef.value
+
+-- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
+-- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
+-- 1-element module map [(rootId, prog)] through the multi-module eval path,
+-- mirroring evalProgram / evalOutput / evalModulesRootEnv respectively.  The
+-- multi-module driver installs the prelude GLOBALLY and the one module's funDefs as
+-- LOCALS over a per-module frame; for a single module with zero imports the root
+-- frame is locals ∪ globals, the same surface evalProgram exposes by-name.  The
+-- key behavioural difference Phase 0 must characterize: evalProgram merges prelude
+-- + user into ONE by-name frame and forces nullary thunks after every impl
+-- installs, whereas evalModules uses separate prelude/module install order — the
+-- binding/install/thunk-force hazard class (phases 96/103/121/125/134).
+export
+evalOne : List Decl -> (String, List Decl) -> <Mut> List (String, Value)
+evalOne preludeDecls (rootId, prog) = evalModules preludeDecls [(rootId, prog)]
+
+-- run a single program for OUTPUT (mirror evalOutput): the 1-module evalModules
+-- already forces the root module's `main` for effects and returns captured stdout.
+export
+evalOneOutput : List Decl -> (String, List Decl) -> <Mut> String
+evalOneOutput preludeDecls (rootId, prog) = evalModulesOutput preludeDecls [(rootId, prog)]
+
+-- the root module's FULL frame (locals ∪ imports ∪ globals), mirror
+-- evalModulesRootEnv — the prop runner needs prelude methods (eq/compare) visible.
+export
+evalOneRootEnv : List Decl -> (String, List Decl) -> <Mut> List (String, Value)
+evalOneRootEnv preludeDecls (rootId, prog) = evalModulesRootEnv preludeDecls [(rootId, prog)]
+

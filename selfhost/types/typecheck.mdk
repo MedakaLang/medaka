@@ -2828,6 +2828,34 @@ export
 elaborate : List Decl -> List Decl -> <Mut> List Decl
 elaborate runtimeDecls prog = elaborateDict runtimeDecls [] [] prog
 
+-- ── Phase 0 (DRIVER-COLLAPSE): 1-module wrapper over the multi-module path ──
+-- elaborateOne runs the SINGLE flat program [prog] (the user's decls, the live
+-- prelude ALREADY shadow-dropped by the caller — same `combined` the flat
+-- elaborateDict callers build, minus the joint core) through elaborateModules as
+-- the degenerate 1-module list [(rootId, prog)], returning the FLAT shape the flat
+-- callers consume: core2 (dict-passed core) ++ the dict-passed module's decls.
+--
+-- The 1-module case automatically satisfies the flat path's invariants — one
+-- resetState (one module ⇒ one checkModuleFullImpl), zero imports ⇒ the full
+-- constraint set, and (for the EVAL path, argStampEnabled OFF) elaborateModules
+-- already turns on evalDictLayerActive when moduleDictNames is non-empty, so the
+-- return-position constrained-fn dict layer matches the flat elaborateDict.
+--
+-- NOTE (Phase 0 is DISCOVERY): the dict-name set differs by construction —
+-- elaborateModules computes its own via `moduleDictNames` (return-position subset:
+-- `preludeReturnPosDictNames coreDecls allDecls ++ returnPosConstrainedSigNames …`)
+-- whereas the flat callers pass an externally-built `dictNames`
+-- (`preludeReturnPosDictNames livePrelude combined ++ constrainedSigNames userDecls`,
+-- the FULL constrained-sig set).  This wrapper takes `coreDecls` SEPARATE (not
+-- pre-flattened into prog), exactly as elaborateModules expects, and lets the
+-- module path own the dict-set.  diff_flat_vs_onemodule.sh exists to CHARACTERIZE
+-- where that difference (and the eval install order) actually changes OUTPUT.
+export
+elaborateOne : List Decl -> List Decl -> (String, List Decl) -> <Mut> List Decl
+elaborateOne runtimeDecls coreDecls (rootId, prog) =
+  let (coreD, modules) = elaborateModules runtimeDecls coreDecls [(rootId, prog)]
+  coreD ++ concatMapL snd modules
+
 -- Dict-passing elaboration (the `=>`-constraint layer).  [dictNames] are the
 -- *signatured* constrained functions to dict-pass (the user program's — the
 -- prelude keeps arg-tag / RKey dispatch, which already type-checks the goldens).
