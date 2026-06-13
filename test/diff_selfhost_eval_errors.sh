@@ -23,7 +23,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-EVALM="$ROOT/selfhost/eval_main.mdk"
+EVALM="$ROOT/selfhost/entries/eval_main.mdk"
 FIXDIR="$ROOT/test/eval_error_fixtures"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

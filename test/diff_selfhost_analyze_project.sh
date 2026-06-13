@@ -5,7 +5,7 @@
 # Mirrors lib/diagnostics.ml's analyze_project: load a root file's transitive
 # import graph, run resolve/typecheck per module, and BUCKET diagnostics BY FILE
 # (clean files publish []).  The self-hosted analyzeProject (selfhost/
-# diagnostics.mdk, driven by selfhost/diagnostics_project_main.mdk) is diffed
+# diagnostics.mdk, driven by selfhost/entries/diagnostics_project_main.mdk) is diffed
 # against the OCaml oracle `medaka check --json <entry>`, which routes through the
 # real analyze_project and emits a per-file "files" array.
 #
@@ -34,7 +34,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELF="$ROOT/selfhost/diagnostics_project_main.mdk"
+SELF="$ROOT/selfhost/entries/diagnostics_project_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/analyze_project_fixtures"

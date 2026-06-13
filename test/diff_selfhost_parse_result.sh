@@ -1,7 +1,7 @@
 #!/bin/sh
 # Differential validation for the self-hosted parser's NON-panicking, structured
 # parse-error path (selfhost/frontend/parser.mdk `parseResult`), driven by
-# selfhost/parse_result_main.mdk.
+# selfhost/entries/parse_result_main.mdk.
 #
 # This is the LSP prerequisite (Stage 4 task #24): a parser should yield parse
 # errors as DATA (a structured, located `Result ParseError (List Decl)`), not
@@ -12,7 +12,7 @@
 # Per parser-error fixture, the gate asserts:
 #   A. Oracle agreement — astdump.exe (the OCaml reference) reports a parse error
 #      with an `L:C` location, confirming the fixture is a genuine parse error.
-#   B. NO PANIC — `medaka run selfhost/parse_result_main.mdk <fix>` exits 0.
+#   B. NO PANIC — `medaka run selfhost/entries/parse_result_main.mdk <fix>` exits 0.
 #      (Contrast diff_selfhost_parse_errors.sh, which requires the panicking
 #       parse_main to exit NON-zero on the same inputs.)
 #   C. Structured + located — the driver prints `parse error L:C` with L a real
@@ -39,7 +39,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REF="$ROOT/_build/default/dev/astdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/parse_result_main.mdk"
+DRIVER="$ROOT/selfhost/entries/parse_result_main.mdk"
 FIXDIR="$ROOT/test/parse_error_fixtures"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

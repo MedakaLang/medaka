@@ -633,7 +633,7 @@ All bootstrap/check/eval/core_ir/llvm_modules/selfcompile_fixpoint gates green.
   recovers from); `inferRecordUpdate` "empty record update" + `inferVariantUpdate`'s
   non-named-field shapes (desugar invariants). **Path note:** these shapes are observable
   ONLY on the no-resolve differential path (`dev/tc_probe.exe` oracle vs
-  `selfhost/typecheck_main.mdk`) — the full front-end (`selfhost/check.mdk`) catches them
+  `selfhost/entries/typecheck_main.mdk`) — the full front-end (`selfhost/check.mdk`) catches them
   in resolve first and stops before typecheck (by design). New gate +
   fixtures: `test/diff_selfhost_typecheck_panic_errors.sh` reading
   `test/typecheck_panic_fixtures/` (6 fixtures, driver-A/no-resolve only, all == oracle,

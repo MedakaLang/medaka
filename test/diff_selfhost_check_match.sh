@@ -13,7 +13,7 @@
 # committed <name>.expected golden — the non-exhaustive fixtures hold one
 # warning, the exhaustive controls hold an empty golden):
 #   A. reference stability — diagdump output must equal the committed golden.
-#   B. if selfhost/check_match_main.mdk exists — the self-hosted check's output
+#   B. if selfhost/entries/check_match_main.mdk exists — the self-hosted check's output
 #      (sorted) must equal the same golden.
 #
 # Usage:  sh test/diff_selfhost_check_match.sh
@@ -23,7 +23,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/check_match_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/check_match_main.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/check_match_fixtures"
 
@@ -31,7 +31,7 @@ FIXDIR="$ROOT/test/check_match_fixtures"
 
 have_self=0
 [ -f "$SELFMAIN" ] && have_self=1
-[ "$have_self" -eq 0 ] && echo "note: selfhost/check_match_main.mdk not yet ported — checking reference vs goldens only."
+[ "$have_self" -eq 0 ] && echo "note: selfhost/entries/check_match_main.mdk not yet ported — checking reference vs goldens only."
 
 pass=0; fail=0
 for f in "$FIXDIR"/*.mdk; do

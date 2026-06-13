@@ -4,7 +4,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-BATCH="$ROOT/selfhost/eval_list_batch.mdk"
+BATCH="$ROOT/selfhost/entries/eval_list_batch.mdk"
 CORE="$ROOT/stdlib/core.mdk"; LIST="$ROOT/stdlib/list.mdk"
 FIXDIR="$ROOT/test/eval_list_fixtures"
 [ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }

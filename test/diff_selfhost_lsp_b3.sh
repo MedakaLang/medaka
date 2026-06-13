@@ -32,7 +32,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-LSP_MAIN="$ROOT/selfhost/lsp_main.mdk"
+LSP_MAIN="$ROOT/selfhost/entries/lsp_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }

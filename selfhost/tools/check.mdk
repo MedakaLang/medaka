@@ -3,7 +3,7 @@
 --
 --   parse → desugar → resolve → exhaust → typecheck
 --
--- Run via the thin driver: medaka run selfhost/check_main.mdk <rt> <core> <src>
+-- Run via the thin driver: medaka run selfhost/entries/check_main.mdk <rt> <core> <src>
 --
 -- Output (location-free, so it diffs against the location-stripped oracles):
 --   • if resolve reports errors, print them (sorted by the harness) and stop —
@@ -17,7 +17,7 @@
 -- extern signatures; core.mdk is the prelude prepended for resolve + typecheck.
 
 -- LOGIC-ONLY module (Phase C Slice 0): the `main` + `withFiles`/`withCore`/
--- `withTarget` driver moved to selfhost/check_main.mdk so two private `main`s
+-- `withTarget` driver moved to selfhost/entries/check_main.mdk so two private `main`s
 -- (this driver's + the native CLI dispatcher's) don't collide under
 -- private_mangle.  This module now exposes only `runCheck` + its helpers, so it
 -- composes cleanly into selfhost/medaka_cli.mdk and the batch/modules harnesses.
@@ -32,7 +32,7 @@ import types.typecheck.{checkToLinesWithRuntime, setCoherenceUserDecls, collectD
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),
--- and so selfhost/check_main.mdk + selfhost/medaka_cli.mdk can drive it.
+-- and so selfhost/entries/check_main.mdk + selfhost/medaka_cli.mdk can drive it.
 export
 runCheck : String -> String -> String -> <Mut> String
 runCheck rsrc csrc tsrc =

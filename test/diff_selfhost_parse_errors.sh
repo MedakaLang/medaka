@@ -7,7 +7,7 @@
 # Per fixture, three checks:
 #   A. Oracle stability — astdump.exe must agree with the committed golden
 #      (ensures the golden is correct and stays in sync with the reference).
-#   B. Self-hosted rejection — medaka run selfhost/parse_main.mdk must exit
+#   B. Self-hosted rejection — medaka run selfhost/entries/parse_main.mdk must exit
 #      non-zero on the bad input.
 #   C. Self-hosted message — the self-hosted panic message must equal the golden.
 #
@@ -26,7 +26,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REF="$ROOT/_build/default/dev/astdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-PARSEMAIN="$ROOT/selfhost/parse_main.mdk"
+PARSEMAIN="$ROOT/selfhost/entries/parse_main.mdk"
 FIXDIR="$ROOT/test/parse_error_fixtures"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

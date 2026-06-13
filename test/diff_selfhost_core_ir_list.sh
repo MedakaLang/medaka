@@ -4,7 +4,7 @@
 # Like diff_selfhost_core_ir_prelude.sh but adds stdlib/list.mdk to the prelude,
 # so list combinators + comprehensions (desugared over List) run through the
 # Core IR.  Equivalence oracle: dev/eval_probe.exe --prepend core.mdk list.mdk
-# <fixture> (the SAME oracle selfhost/eval_prelude_main.mdk uses for this set).
+# <fixture> (the SAME oracle selfhost/entries/eval_prelude_main.mdk uses for this set).
 #
 # Usage:  sh test/diff_selfhost_core_ir_list.sh
 # Exit:   0 if every fixture matches.
@@ -13,7 +13,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/core_ir_prelude_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/core_ir_prelude_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 LIST="$ROOT/stdlib/list.mdk"
 FIXDIR="$ROOT/test/eval_list_fixtures"

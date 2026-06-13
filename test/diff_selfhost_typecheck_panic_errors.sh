@@ -5,7 +5,7 @@
 # These programs reference an unknown constructor / record / field, or an
 # unbound variable.  In the FULL front-end (selfhost/tools/check.mdk) resolve catches
 # them first, so the typecheck stage never sees them.  But on the no-resolve
-# differential path (dev/tc_probe.exe oracle vs selfhost/typecheck_main.mdk) the
+# differential path (dev/tc_probe.exe oracle vs selfhost/entries/typecheck_main.mdk) the
 # typecheck stage IS the one that reaches the error.  Before D1 the self-hosted
 # typechecker PANICKED (uncatchable interpreter abort) on these; the oracle
 # accumulates a `TYPE ERROR: …`.  D1 converts those panics into accumulated
@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/tc_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELF="$ROOT/selfhost/typecheck_main.mdk"
+SELF="$ROOT/selfhost/entries/typecheck_main.mdk"
 FIXDIR="$ROOT/test/typecheck_panic_fixtures"
 [ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }
 [ -x "$MAIN" ]  || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

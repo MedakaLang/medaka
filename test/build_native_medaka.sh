@@ -3,7 +3,7 @@
 #
 #   WARM (./medaka_emitter present — the day-to-day loop): a 2-stage rebuild from
 #   CURRENT source with NO seed, NO OCaml, NO C3a gate.
-#     stage A: the existing emitter compiles selfhost/llvm_emit_modules_main.mdk
+#     stage A: the existing emitter compiles selfhost/entries/llvm_emit_modules_main.mdk
 #              -> a FRESH ./medaka_emitter (re-emits its own graph; clang).
 #     stage B: the fresh emitter compiles selfhost/driver/medaka_cli.mdk -> ./medaka.
 #   Always-2-stage is correct; the rebuilt emitter's self-consistency is guaranteed
@@ -36,7 +36,7 @@ EMITTER="$ROOT/medaka_emitter"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
-DRIVER="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 CLI="$ROOT/selfhost/driver/medaka_cli.mdk"
 SELFHOST="$ROOT/selfhost"
 STDLIB="$ROOT/stdlib"

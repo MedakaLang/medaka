@@ -4,7 +4,7 @@
 # C1 (test/selfcompile_emit.sh) proved a NATIVE-compiled emitter reproduces the
 # INTERPRETED emitter's LLVM IR byte-for-byte on small module fixtures.  C2 takes
 # the next step: use a NATIVE-compiled, gap-TOLERANT emitter to compile the
-# self-hosted LEXER DRIVER (selfhost/lex_main.mdk) end-to-end — the first time the
+# self-hosted LEXER DRIVER (selfhost/entries/lex_main.mdk) end-to-end — the first time the
 # native compiler compiles a REAL, prelude-bearing program.
 #
 # This is the same end state as B1 (test/bootstrap_lex.sh, 19/19) EXCEPT the emit
@@ -50,8 +50,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
-ORACLE="$ROOT/selfhost/lex_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

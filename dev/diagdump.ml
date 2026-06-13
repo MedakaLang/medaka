@@ -157,7 +157,7 @@ let () =
     print_string (String.concat "\n" (List.sort compare lines))
   end else if mode = Analyze_m then begin
     (* --analyze: call Diagnostics.analyze for each file, emit location-stripped
-       "severity: message" lines (sorted).  Mirrors selfhost/diagnostics_main.mdk.
+       "severity: message" lines (sorted).  Mirrors selfhost/entries/diagnostics_main.mdk.
        Multiple files: each file's diagnostics are emitted in order; the harness
        sorts the union so file order doesn't matter. *)
     let lines = List.concat_map (fun path ->

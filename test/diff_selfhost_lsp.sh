@@ -2,7 +2,7 @@
 # test/diff_selfhost_lsp.sh — differential gate for the self-hosted LSP
 # (Stage 4 Phase B.10, slices B.10.0 + B.10.1).
 #
-# Drives selfhost/lsp_main.mdk with hand-framed Content-Length JSON-RPC requests
+# Drives selfhost/entries/lsp_main.mdk with hand-framed Content-Length JSON-RPC requests
 # on stdin and checks the framed JSON responses against the OCaml reference:
 #
 #   • initialize          — the response is a well-formed JSON-RPC result whose
@@ -36,7 +36,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-LSP_MAIN="$ROOT/selfhost/lsp_main.mdk"
+LSP_MAIN="$ROOT/selfhost/entries/lsp_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }

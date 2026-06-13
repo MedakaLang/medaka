@@ -2,7 +2,7 @@
 # RE-MINT the checked-in IR seed (selfhost/seed/emitter.ll.gz) — OCaml-FREE.
 #
 # The seed is the textual LLVM IR of the BUILD driver
-# (selfhost/llvm_emit_modules_main.mdk) emitting its OWN module graph.  It is the
+# (selfhost/entries/llvm_emit_modules_main.mdk) emitting its OWN module graph.  It is the
 # COLD-START bootstrap entry point: test/bootstrap_from_seed.sh rebuilds a native
 # emitter from it WITHOUT OCaml.  Because the native emitter reproduces this IR
 # byte-for-byte (the C3b fixpoint property), the seed can be minted by the NATIVE
@@ -26,7 +26,7 @@
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EMITTER="$ROOT/medaka_emitter"
-DRIVER="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 SELFHOST="$ROOT/selfhost"

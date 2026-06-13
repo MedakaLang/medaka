@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted parser's POSITION side channel
-# (selfhost/positions_main.mdk: parse → parseWithPositions) against the OCaml
+# (selfhost/entries/positions_main.mdk: parse → parseWithPositions) against the OCaml
 # reference dev/positions_dump.exe (lib/parser_state.ml's decl_positions /
 # variant_lines / last_content_line, filled via lib/fmt.ml's tracking_token).
 #
@@ -25,7 +25,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/positions_dump.exe"
-POSMAIN="$ROOT/selfhost/positions_main.mdk"
+POSMAIN="$ROOT/selfhost/entries/positions_main.mdk"
 FIXDIR="$ROOT/test/positions_fixtures"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

@@ -4,11 +4,11 @@
 # interpreter over real fixtures.  This is the milestone the whole emitter effort
 # has driven toward: a REAL compiler subcommand (the lexer) compiled natively,
 # end-to-end (emit textual LLVM IR -> clang -> link libgc + runtime -> run), and
-# validated byte-for-byte against `medaka run selfhost/lex_main.mdk`.
+# validated byte-for-byte against `medaka run selfhost/entries/lex_main.mdk`.
 #
 # Unlike diff_selfhost_llvm_modules.sh (which forces an EMPTY core prelude), this
 # pushes the REAL stdlib/core.mdk through emitProgram — the actual bootstrap gate.
-# The driver (selfhost/llvm_bootstrap_lex_main.mdk) enables gap-recording before
+# The driver (selfhost/entries/llvm_bootstrap_lex_main.mdk) enables gap-recording before
 # emitProgram so the 8 UNREACHABLE dead-code gaps in core.mdk (max/min in
 # maximum/minimum, the Arbitrary impls) become harmless "0" placeholders instead
 # of aborting.  The byte-diff is the safety net: a gap the lexer ACTUALLY reaches
@@ -16,7 +16,7 @@
 # was dead code.
 #
 # For each fixture in test/diff_fixtures/*.mdk:
-#   oracle = medaka run selfhost/lex_main.mdk <fixture>           (the interpreter)
+#   oracle = medaka run selfhost/entries/lex_main.mdk <fixture>           (the interpreter)
 #   native = ./lex <fixture>   (emit lex_main's graph once -> clang -> run)
 # Diff oracle vs native.  The native runtime AUTO-PRINTS main's value
 # (lex_main's `main : <IO> Unit` -> a trailing "()\n" via mdk_print_unit) which the
@@ -33,8 +33,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/lex_main.mdk"
-EMIT="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/lex_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

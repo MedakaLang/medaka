@@ -1392,7 +1392,7 @@ inventory): core.mdk = 57 events / ~11 kinds, whole = 2248. Staged E1–E5 by le
   This gate fills that hole, the multi-module analog of the single-file LLVM gates,
   so the upcoming E4 arg-position routing port (and the rest of the whole-compiler
   work) is byte-verified, not just census-measured. **Driver:**
-  `selfhost/llvm_emit_modules_main.mdk` — same arg handling as
+  `selfhost/entries/llvm_emit_modules_main.mdk` — same arg handling as
   `eval_typed_modules_main.mdk` (`<runtime> <core> <entry> [root...]`: `loadProgram`
   → desugar core + modules → `elaborateModules`), then the `censusWhole` flatten
   (`coreD ++ concatMapList snd modules`) but with the REAL emitter

@@ -11,7 +11,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELF="$ROOT/selfhost/typecheck_main.mdk"
+SELF="$ROOT/selfhost/entries/typecheck_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/diff_fixtures"

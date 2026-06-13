@@ -1,13 +1,13 @@
 #!/bin/sh
 # diff_selfhost_build.sh — differential gate for the SELF-HOSTED `medaka build`
 # (Stage 4 Phase B.11).  Mirrors test/build_cmd.sh, but the binary under test is
-# produced by the self-hosted build driver (selfhost/build_main.mdk, which shells
+# produced by the self-hosted build driver (selfhost/entries/build_main.mdk, which shells
 # out to the Medaka-hosted LLVM emitter + clang) rather than the OCaml
 # lib/build_cmd.ml CLI.
 #
 # For each program (reusing build_cmd.sh's program set) it:
 #   1. builds the native binary via the SELFHOST driver:
-#        MEDAKA=<exe> MEDAKA_ROOT=<root> medaka run selfhost/build_main.mdk <prog> -o <bin>
+#        MEDAKA=<exe> MEDAKA_ROOT=<root> medaka run selfhost/entries/build_main.mdk <prog> -o <bin>
 #   2. builds the native binary via the OCaml CLI:  medaka build <prog> -o <bin2>
 #   3. runs both binaries and the interpreter oracle (medaka run <prog>)
 #   4. asserts  selfhost-binary stdout == OCaml-binary stdout == oracle + "()".
@@ -379,7 +379,7 @@ check() { # $1=label  $2=mdk-path
   sbin="$WORK/$label.sb.bin"; obin="$WORK/$label.oc.bin"
   # 1. selfhost build
   if ! MEDAKA="$MAIN" MEDAKA_ROOT="$ROOT" CC="$CC" \
-       "$MAIN" run "$ROOT/selfhost/build_main.mdk" "$src" -o "$sbin" \
+       "$MAIN" run "$ROOT/selfhost/entries/build_main.mdk" "$src" -o "$sbin" \
        >"$WORK/$label.sb.out" 2>"$WORK/$label.sb.err"; then
     fail=$((fail+1)); printf 'FAIL %s (selfhost build)\n' "$label"
     sed 's/^/    /' "$WORK/$label.sb.err" | head -6

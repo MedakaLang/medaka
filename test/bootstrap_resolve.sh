@@ -12,13 +12,13 @@
 #
 # Like bootstrap_{lex,parse,desugar}.sh, this pushes the REAL stdlib/core.mdk
 # through emitProgram at EMIT time (the actual bootstrap gate).  The driver
-# (selfhost/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = resolve_main as an
+# (selfhost/entries/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = resolve_main as an
 # argument, gap-recording on, real emitProgram, private_mangle.mangleUnits.  Note
 # resolve_main READING runtime/core at RUNTIME is separate from the emit-time
 # prelude.
 #
 # For each fixture in test/resolve_fixtures/*.mdk:
-#   oracle = medaka run selfhost/resolve_main.mdk <runtime> <core> <fixture>
+#   oracle = medaka run selfhost/entries/resolve_main.mdk <runtime> <core> <fixture>
 #   native = ./resolve <runtime> <core> <fixture>
 # Both sides emit SELFHOST diagnostics (native selfhost vs interpreted selfhost)
 # running the SAME deterministic resolve code, so a raw byte-diff is correct —
@@ -39,8 +39,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/resolve_main.mdk"
-EMIT="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/resolve_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

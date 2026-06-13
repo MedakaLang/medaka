@@ -37,7 +37,7 @@ sh test/diff_selfhost_check_modules.sh
 sh test/diff_selfhost_mark_batch.sh
 
 # a single check_modules entry (module as entry + its transitive imports):
-./_build/default/bin/main.exe run selfhost/check_modules_main.mdk \
+./_build/default/bin/main.exe run selfhost/entries/check_modules_main.mdk \
     stdlib/runtime.mdk stdlib/core.mdk selfhost/<mod>.mdk selfhost
 # its OCaml oracle (compare sorted):
 ./_build/default/dev/tc_module_probe.exe selfhost/<mod>.mdk selfhost
@@ -165,7 +165,7 @@ that needs interactive debugging — unsafe to land unattended.
 -->
 
 ### 2026-06-04 — env frames: assoc-list → Hashtbl (target #1 desugar + target #3 interpreter)
-- cmd (full): `sh test/diff_selfhost_desugar.sh` ; (single): `main.exe run selfhost/desugar_main.mdk selfhost/parser.mdk`
+- cmd (full): `sh test/diff_selfhost_desugar.sh` ; (single): `main.exe run selfhost/entries/desugar_main.mdk selfhost/parser.mdk`
 - **Target #1 finding (desugar batchability):** fixed per-process overhead is only
   ~0.10s (smallest 2-line fixture, min-of-3); the largest file (parser.mdk, 2419
   lines) was 13.43s. So desugar's ~97s is NOT process startup — a `desugar_batch`
@@ -332,7 +332,7 @@ assoc_opt FList scans + Hashtbl find_opt/key_index/hash on globals) ≈ ~28% +
   cheap and the ~92× per-process module-load overhead dominates → batching DOES
   help now. (Lesson: a measured finding can expire when an upstream win changes
   the calculus — re-test backlog items after big wins.)
-- selfhost/desugar_batch.mdk (load parser/desugar/sexp once, loop files,
+- selfhost/entries/desugar_batch.mdk (load parser/desugar/sexp once, loop files,
   `===SELFHOST-DESUGAR===` sections) + batch harness with single-pass awk split.
 - before: 9.43s   after: **6.11s**  (1.54×)
 - decomposed: batch desugar process 5.20s (real interpretation), astdump oracle
@@ -535,7 +535,7 @@ ad-hoc env-lookup counters or sample-profiling to localise cost.
 - `selfhost/timer.mdk`: helpers (`perfEnabled`, `now`, `emitPhase`, `emitTotal`,
   `totalDecls`) guarded by `MEDAKA_PERF` env var. All output goes to stderr; with
   the flag unset the module is a pure no-op.
-- `selfhost/perf_main.mdk`: instrumented eval driver (mirrors
+- `selfhost/entries/perf_main.mdk`: instrumented eval driver (mirrors
   `eval_typed_modules_main.mdk`) that brackets each pipeline stage with `now()`.
   Stages timed: **parse** (runtime+core lex+parse+desugar), **load**
   (`loadProgram`: read+lex+parse all transitive imports), **desugar** (all
@@ -551,8 +551,8 @@ selfproc 14 ok; desugar_batch 101 matched; eval_run_batch 17 ok.
 ## How to read the output
 
 ```
-MEDAKA_PERF=1 medaka run selfhost/perf_main.mdk \
-    stdlib/runtime.mdk stdlib/core.mdk selfhost/all_modules_entry.mdk selfhost
+MEDAKA_PERF=1 medaka run selfhost/entries/perf_main.mdk \
+    stdlib/runtime.mdk stdlib/core.mdk selfhost/entries/all_modules_entry.mdk selfhost
 ```
 
 Each line on stderr:
@@ -574,7 +574,7 @@ the larger pre-desugar source rather than the post-desugar AST.
 
 ## Baseline (min-of-3, full selfhost closure via all_modules_entry.mdk)
 
-Entry: `selfhost/all_modules_entry.mdk`, 14 modules, 4609 decls post-desugar.
+Entry: `selfhost/entries/all_modules_entry.mdk`, 14 modules, 4609 decls post-desugar.
 
 | Stage      | min-of-3 | ops             |
 |---|--:|--|
@@ -691,7 +691,7 @@ combined)`) and ran a compute-heavy `fib 25` through the self-hosted eval.
 (which times the full multi-module loader path, bundling mark+typecheck into
 a single `elaborate` phase).  The new harness breaks the single-file pipeline
 into individually-timed stages so the cost of each is visible:
-- `selfhost/profile_main.mdk`: times parse-prelude (runtime+core setup),
+- `selfhost/entries/profile_main.mdk`: times parse-prelude (runtime+core setup),
   **parse** (lex+parse), **desugar**, **resolve**, **mark**, **typecheck**
   separately for a single target file.  `MEDAKA_PERF` guard: unset → silent exit.
 - `test/profile_selfhost.sh [N]`: runs the driver N times (default 3) over
@@ -709,7 +709,7 @@ latent (the corpus has no bare-block `DoLet` in an `elaborate` path that reaches
 **How to run:**
 ```
 sh test/profile_selfhost.sh 3           # min-of-3 over lexer.mdk + parser.mdk
-MEDAKA_PERF=1 medaka run selfhost/profile_main.mdk \
+MEDAKA_PERF=1 medaka run selfhost/entries/profile_main.mdk \
     stdlib/runtime.mdk stdlib/core.mdk selfhost/lexer.mdk
 ```
 
@@ -784,12 +784,12 @@ mark_batch / desugar_batch unchanged.
 - `selfhost/typecheck.mdk`: `markModules` exported — the mark sub-phase of
   `elaborateModules` (compute rpNames + prePassDict over the full module graph);
   allows profiling drivers to bracket mark vs typecheck separately.
-- `selfhost/profile_modules_main.mdk` (NEW) — multi-module per-stage profiler:
+- `selfhost/entries/profile_modules_main.mdk` (NEW) — multi-module per-stage profiler:
   times parse, load, desugar, mark, typecheck (no eval) over `all_modules_entry.mdk`.
   Breaks out the `elaborate` lump that `perf_main.mdk` reports as one phase.
 - `test/profile_selfhost.sh` updated: adds `profile_modules` section, handles
   4-field output format (stage / time / allocMB / ops).
-- `selfhost/profile_main.mdk` updated: uses `emitPhaseA`/`emitTotalA` — alloc
+- `selfhost/entries/profile_main.mdk` updated: uses `emitPhaseA`/`emitTotalA` — alloc
   column now appears in the single-file table too.
 
 **Correctness:** check_modules_batch 13 ok; selfproc 16 ok; eval_dict 16 ok;
@@ -826,7 +826,7 @@ stages and tracking regressions.
 | mark          | 0.063s   | 403.1MB   | 883 decls    |
 | typecheck     | *(panic — unresolved imports)* | | |
 
-### selfhost/all_modules_entry.mdk — 15 modules, 5017 post-desugar decls (multi-module, no eval)
+### selfhost/entries/all_modules_entry.mdk — 15 modules, 5017 post-desugar decls (multi-module, no eval)
 
 | Stage      | min-of-3 | alloc      | ops          |
 |---|--:|--:|--|
@@ -1006,5 +1006,5 @@ output); the performance improvement awaits the LLVM backend (§2.4).
 **Command to reproduce:**
 ```sh
 MEDAKA_PERF=1 medaka run selfhost/vm_perf_modules_main.mdk \
-    stdlib/core.mdk selfhost/selfproc_lex_probe.mdk selfhost
+    stdlib/core.mdk selfhost/entries/selfproc_lex_probe.mdk selfhost
 ```

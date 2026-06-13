@@ -5982,7 +5982,7 @@ module's own decls ∪ the decls of its **transitive importers**. The prelude, i
 by everyone, keeps the full joint scope. **Regression test:**
 `test_loader.ml` `test_eval_dict_arity_no_cross_module_collision` (drives
 `Eval.eval_modules`; the flat path can't express two top-level `emit`s, so it masks
-this). `selfhost/lex_main.mdk` now uses the helper form on purpose.
+this). `selfhost/entries/lex_main.mdk` now uses the helper form on purpose.
 
 ### Phase 135: self-host Stage 1 — port the parser to Medaka ✅ DONE (2026-06-03)
 
@@ -6998,7 +6998,7 @@ catalog** (slices 1–14 + RNG/sorts/hash); 126/126 plain + 16/16 typed gate ✅
        gates: until now `diff_selfhost_llvm_typed.sh` byte-validated only `core.mdk`'s
        single-file subset and `llvm_emit_gaps_main.mdk` only MEASURED the multi-module
        path — nothing emitted a multi-module program, linked, ran, and diffed the oracle.
-       New driver `selfhost/llvm_emit_modules_main.mdk` (arg handling +
+       New driver `selfhost/entries/llvm_emit_modules_main.mdk` (arg handling +
        `loadProgram`/`elaborateModules` modeled on `eval_typed_modules_main.mdk`, then
        `censusWhole`'s flatten `coreD ++ concatMapList snd modules` but through the REAL
        `emitProgram`; `enableArgStamp` + prelude dict-name wiring mirror
@@ -7208,9 +7208,9 @@ logs in `selfhost/README.md`):
 - **Composed front-end** (`selfhost/check.mdk`) — parse → desugar → resolve →
   exhaust → typecheck in one program; reproduces all 16 TYPES goldens + the
   resolve diagnostics.
-- **True execution** (`selfhost/eval_run_main.mdk`) — runs programs for stdout,
+- **True execution** (`selfhost/entries/eval_run_main.mdk`) — runs programs for stdout,
   matching all 16 `=== EVAL ===` goldens.
-- **Typed eval path / return-position dispatch** (`selfhost/eval_typed_main.mdk`).
+- **Typed eval path / return-position dispatch** (`selfhost/entries/eval_typed_main.mdk`).
 
 **The bootstrap closure** ("the compiler processes its own source"), validated by
 `test/diff_selfhost_selfproc.sh`:

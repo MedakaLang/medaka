@@ -3,7 +3,7 @@
 #
 # Proves the decided native toolchain end-to-end — EMIT textual LLVM IR + shell
 # out to clang (no llc/opt, no C++ bindings) — against the tree-walker oracle, the
-# same equivalence-gate shape selfhost/eval_main.mdk and core_ir_main.mdk use.
+# same equivalence-gate shape selfhost/entries/eval_main.mdk and core_ir_main.mdk use.
 #
 # For each prelude-free fixture in test/llvm_fixtures/:
 #   1. ref  = dev/eval_probe.exe <fixture>            (the AST tree-walker oracle)
@@ -30,7 +30,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-EMIT="$ROOT/selfhost/llvm_emit_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_emit_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 FIXDIR="$ROOT/test/llvm_fixtures"
 CC="${CC:-clang}"

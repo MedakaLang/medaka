@@ -473,7 +473,7 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
    foo.mdk [-o out]` emits IR via the self-hosted emitter → `clang` → native
    binary, for arbitrary user programs. `lib/build_cmd.ml` + `bin/main.ml`
    dispatch + `test/build_cmd.sh` (build+run+diff, 6 programs). Shell-out MVP
-   (subprocess `run`s `selfhost/llvm_emit_modules_main.mdk`, captures stdout —
+   (subprocess `run`s `selfhost/entries/llvm_emit_modules_main.mdk`, captures stdout —
    clean Ref-state isolation); repo-relative asset resolution; no artifact cache;
    gap policy = hard error (default non-gap-tolerant path). **Key boundary
    finding:** the build passes an **EMPTY prelude** — the full `stdlib/core.mdk`
@@ -1078,7 +1078,7 @@ non-package-manager gaps:
 
 - **`medaka build`** ✅ **MVP done (2026-06-09, `39f3318`)** — `medaka build
   foo.mdk [-o out]` compiles arbitrary user programs to native binaries:
-  self-hosted emitter (`selfhost/llvm_emit_modules_main.mdk`, run as a subprocess
+  self-hosted emitter (`selfhost/entries/llvm_emit_modules_main.mdk`, run as a subprocess
   capturing IR) → `clang` + `runtime/medaka_rt.c` + libgc → binary.
   `lib/build_cmd.ml`, `test/build_cmd.sh` (build+run+diff vs interpreter oracle).
   Empty-prelude subset only (full `core.mdk` blocked on the `max`/`min` gap + no

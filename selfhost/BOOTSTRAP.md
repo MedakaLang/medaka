@@ -18,13 +18,13 @@ identically to the reference tree-walker on real source. The last holdout
 pointer identity; now routes through `@mdk_string_eq` when EITHER operand is
 `LTStr` (mirrors the pattern-match literal path).
 
-**Goal:** natively compile `selfhost/lex_main.mdk` (reads a file, `tokenize`s,
+**Goal:** natively compile `selfhost/entries/lex_main.mdk` (reads a file, `tokenize`s,
 prints the canonical token stream) and byte-diff against
-`medaka run selfhost/lex_main.mdk <fixture>`.
+`medaka run selfhost/entries/lex_main.mdk <fixture>`.
 
 **Harness:** `test/bootstrap_lex.sh` (models `diff_selfhost_llvm_modules.sh`;
 real `core.mdk`; diffs over every `test/diff_fixtures/*.mdk`).
-**Emit driver:** `selfhost/llvm_bootstrap_lex_main.mdk` — clone of
+**Emit driver:** `selfhost/entries/llvm_bootstrap_lex_main.mdk` — clone of
 `llvm_emit_modules_main.mdk` that runs the REAL `emitProgram` but calls
 `enableGapRecord ()` first, so the 8 UNREACHABLE dead-code gaps in `core.mdk`
 (`max`/`min` in `maximum`/`minimum`, the `Arbitrary` impls) become harmless `"0"`
@@ -116,7 +116,7 @@ add an `LTStr` arm to `emitCmp` that calls `@mdk_string_eq` (returns tagged Bool
 **Result: 26/26 `test/parse_fixtures/*.mdk` byte-match** the interpreter. The
 self-hosted PARSER (a monadic combinator parser over the lexer's token stream)
 natively compiled, end-to-end, producing the SAME canonical AST S-expression
-(`programToSexp`) as `medaka run selfhost/parse_main.mdk <fixture>`.
+(`programToSexp`) as `medaka run selfhost/entries/parse_main.mdk <fixture>`.
 
 The parser exercises far more of the compiler than the lexer — the `Parser`
 monad's `Mappable`/`Applicative`/`Thenable` impls, the precedence ladder, deep
@@ -129,7 +129,7 @@ surfaced **four real emitter bugs**, all clean fixes in `selfhost/llvm_emit.mdk`
 convention; FIXDIR = `test/parse_fixtures`). Both sides emit selfhost
 S-expressions, so a RAW byte-diff is correct (no float normalization — unlike
 `diff_selfhost_parse.sh` which diffs selfhost-vs-OCaml).
-**Emit driver:** reuses the GENERIC `selfhost/llvm_bootstrap_lex_main.mdk`
+**Emit driver:** reuses the GENERIC `selfhost/entries/llvm_bootstrap_lex_main.mdk`
 (takes the entry as an argument — not lexer-specific despite the name).
 
 ### Four emitter bugs fixed (all in `selfhost/llvm_emit.mdk`)
@@ -187,7 +187,7 @@ S-expressions, so a RAW byte-diff is correct (no float normalization — unlike
 **Result: 26/26 `test/parse_fixtures/*.mdk` byte-match** the interpreter. The
 self-hosted DESUGAR stage (parse + desugar) natively compiled, end-to-end,
 producing the SAME canonical desugared-AST S-expression (`programToSexp`) as
-`medaka run selfhost/desugar_main.mdk <fixture>`.
+`medaka run selfhost/entries/desugar_main.mdk <fixture>`.
 
 Desugar adds passes (`deriving`, record puns, container literals, list
 comprehensions, do-blocks, operator sections, string interp, `?`-questions) on
@@ -196,7 +196,7 @@ emitter surface than B2. It surfaced **two real emitter bugs**, both clean fixes
 in `selfhost/llvm_emit.mdk`.
 
 **Harness:** `test/bootstrap_desugar.sh` (clone of `bootstrap_parse.sh`:
-ORACLE/entry = `selfhost/desugar_main.mdk`, FIXDIR = `test/parse_fixtures`, same
+ORACLE/entry = `selfhost/entries/desugar_main.mdk`, FIXDIR = `test/parse_fixtures`, same
 generic driver, real `core.mdk`, libgc/clang block, `-Wl,-stack_size` flag, `()`
 Unit-auto-print convention). Both sides emit selfhost S-expressions → raw
 byte-diff.
@@ -248,7 +248,7 @@ byte-diff.
 **Result: 14/14 `test/resolve_fixtures/*.mdk` byte-match** the interpreter. The
 self-hosted RESOLVE stage (name binding / scope resolution) natively compiled,
 end-to-end, emitting the SAME diagnostic S-expressions (`resolveToLines`) as
-`medaka run selfhost/resolve_main.mdk <runtime> <core> <fixture>`. The fixtures
+`medaka run selfhost/entries/resolve_main.mdk <runtime> <core> <fixture>`. The fixtures
 are mostly ERROR-path cases (`UnboundVariable`, `DuplicateDefinition`,
 `ExternWithBody`, `MethodNotInInterface`, `UnknownType`/`Ctor`/`Interface`/
 `Effect`, `NonRecursiveValueLet`, `AsPatternMisplaced`, `QuestionMisplaced`,
@@ -262,7 +262,7 @@ the target and resolves it. (The emit-time prelude is still the real
 of that.)
 
 **Harness:** `test/bootstrap_resolve.sh` (clone of `bootstrap_desugar.sh`:
-ORACLE/entry = `selfhost/resolve_main.mdk`, FIXDIR = `test/resolve_fixtures`,
+ORACLE/entry = `selfhost/entries/resolve_main.mdk`, FIXDIR = `test/resolve_fixtures`,
 same generic driver, real `core.mdk`, libgc/clang block, `-Wl,-stack_size` flag,
 `()` Unit-auto-print convention). BOTH the oracle and native invocations pass the
 3 args (`$RUNTIME $CORE $fix`); native `args ()` returns argv[1..] so all three
@@ -315,7 +315,7 @@ inference gaps:
 self-hosted MARK stage (`marker.mdk`, ~290 lines — rewrites interface-method /
 constrained-fn `EVar` occurrences to `EMethodRef` / `EDictApp`) natively
 compiled, end-to-end, emitting the SAME canonical marked-AST S-expression
-(`programToSexp (markWithPrelude …)`) as `medaka run selfhost/mark_main.mdk
+(`programToSexp (markWithPrelude …)`) as `medaka run selfhost/entries/mark_main.mdk
 <core> <fixture>`.
 
 Like B4 but `mark_main` takes **TWO file-path args** — `<prelude.mdk>
@@ -326,7 +326,7 @@ interface methods + constrained fns. (The emit-time prelude is still the real
 No `runtime.mdk` arg — mark doesn't seed an extern environment.
 
 **Harness:** `test/bootstrap_mark.sh` (clone of `bootstrap_resolve.sh`:
-ORACLE/entry = `selfhost/mark_main.mdk`, FIXDIR = `test/parse_fixtures` — the
+ORACLE/entry = `selfhost/entries/mark_main.mdk`, FIXDIR = `test/parse_fixtures` — the
 same 26-fixture corpus as B3 desugar, which all parse+desugar+mark cleanly;
 **2-arg invocations** `<core> <fixture>` instead of B4's 3 args; generic emit
 driver, real `core.mdk` prelude, libgc/clang block, `-Wl,-stack_size,0x20000000`,
@@ -354,7 +354,7 @@ most stateful module: Hindley-Milner inference via mutable tyvar cells, level
 brackets, effect rows, the heaviest typeclass dispatch in the compiler, ~378
 `Ref`/`set_ref`/`.value` sites) natively compiled, end-to-end, emitting the SAME
 inferred top-level schemes (`name : scheme`, one per binding) as `medaka run
-selfhost/typecheck_main.mdk <fixture>`. This is the real completeness test of the
+selfhost/entries/typecheck_main.mdk <fixture>`. This is the real completeness test of the
 native backend, and it surfaced **two genuine emitter/driver bugs**.
 
 `typecheck_main` takes **ONE file-path arg** (`<target.mdk>`); the fixtures are
@@ -364,7 +364,7 @@ prelude is NOT typechecked at runtime). No segfault from stack depth — the
 big-stack / TRMC work was NOT needed for this slice.
 
 **Harness:** `test/bootstrap_typecheck.sh` (clone of `bootstrap_resolve.sh`:
-ORACLE/entry = `selfhost/typecheck_main.mdk`, FIXDIR = `test/typecheck_fixtures`;
+ORACLE/entry = `selfhost/entries/typecheck_main.mdk`, FIXDIR = `test/typecheck_fixtures`;
 **1-arg** invocation `<fixture>`; generic emit driver, real `core.mdk` prelude,
 libgc/clang block, `-Wl,-stack_size,0x20000000`, `()` Unit-auto-print
 convention). Like `diff_selfhost_typecheck.sh`, **BOTH sides are SORTED** before
@@ -424,7 +424,7 @@ self-hosted EVAL stage (`selfhost/eval.mdk`, ~1765 lines — the tree-walking
 interpreter itself: closures/env/match, `VMulti` UNTYPED typeclass dispatch,
 `externBindings` primitive table, `pp_value` rendering) compiled natively
 (emit → `clang` → link `runtime/medaka_rt.c` + libgc) renders the SAME
-`pp_value` of the `main` binding as `medaka run selfhost/eval_main.mdk
+`pp_value` of the `main` binding as `medaka run selfhost/entries/eval_main.mdk
 <fixture>`.
 
 **With B7, ALL SEVEN pipeline stages — lex → parse → desugar → resolve → mark
@@ -439,8 +439,8 @@ slice-1 untyped path (no marker/typecheck — arg-tag "first impl wins"
 stages.
 
 **Harness:** `test/bootstrap_eval.sh` (models `bootstrap_typecheck.sh`:
-ORACLE/entry = `selfhost/eval_main.mdk`, FIXDIR = `test/eval_fixtures`,
-generic emit driver `selfhost/llvm_bootstrap_lex_main.mdk` with gap-recording +
+ORACLE/entry = `selfhost/entries/eval_main.mdk`, FIXDIR = `test/eval_fixtures`,
+generic emit driver `selfhost/entries/llvm_bootstrap_lex_main.mdk` with gap-recording +
 `private_mangle.mangleUnits`). Output is a SINGLE deterministic value line —
 **NO sort, NO float normalization** (both sides run the SAME eval). eval_main
 uses **`putStrLn`** (not `putStr`), so its stdout is `<value>\n`; the native
@@ -501,7 +501,7 @@ content is compared byte-for-byte.
 The seven `B*` slices natively compiled each PIPELINE STAGE and proved each
 byte-matches the tree-walker. C1 is the first step of self-hosting the COMPILER
 BACK-END: natively compile the EMITTER ITSELF —
-`selfhost/llvm_emit_modules_main.mdk`'s whole module graph (`llvm_emit.mdk` +
+`selfhost/entries/llvm_emit_modules_main.mdk`'s whole module graph (`llvm_emit.mdk` +
 `core_ir_lower.mdk` + the front end + prelude) — and prove the resulting native
 `emit` binary turns each fixture into the SAME LLVM IR the interpreted emitter
 does. This is the largest, most string-heavy emit target yet (the `.ll` is
@@ -563,7 +563,7 @@ guards — not a semantics change: the interpreted emitter produces identical IR
 
 C1 proved a native-compiled emitter reproduces the interpreted emitter's IR on
 small module fixtures. C2 takes the next step: use a NATIVE-compiled, gap-tolerant
-emitter to compile the self-hosted LEXER DRIVER (`selfhost/lex_main.mdk`)
+emitter to compile the self-hosted LEXER DRIVER (`selfhost/entries/lex_main.mdk`)
 end-to-end — the first time the native compiler compiles a REAL, prelude-bearing
 program. Same end state as B1 (`bootstrap_lex.sh`, 19/19) EXCEPT the emit step is
 done by a NATIVE binary instead of the OCaml-hosted interpreter.
@@ -639,7 +639,7 @@ The milestone that makes Medaka a native self-hosting compiler: the native emitt
 compiles the EMITTER ITSELF and reproduces its own output byte-for-byte. C1 proved a
 native emitter reproduces the interpreter's IR on small fixtures; C2 did it for the
 real lexer driver. C3 uses the gap-tolerant emitter driver
-(`selfhost/llvm_bootstrap_lex_main.mdk`) — whose module graph IS the whole emitter +
+(`selfhost/entries/llvm_bootstrap_lex_main.mdk`) — whose module graph IS the whole emitter +
 front-end + prelude, the LARGEST program in the tree — as BOTH the compiler AND the
 program being compiled.
 
@@ -693,7 +693,7 @@ not force a ~10 MB seed refresh every commit).
 ### The build driver fixpoints too
 C3 was proven only for the gap-tolerant bootstrap driver
 (`llvm_bootstrap_lex_main.mdk`). `medaka build` shells out to the **strict** driver
-`selfhost/llvm_emit_modules_main.mdk` (no `enableGapRecord`; instead `dceFilter`
+`selfhost/entries/llvm_emit_modules_main.mdk` (no `enableGapRecord`; instead `dceFilter`
 drops the unreachable `max`/`min`/`clamp` gaps). `test/selfcompile_build_fixpoint.sh`
 runs the C3 flow against *that* driver — using it as both the compiler and the program
 compiled — and confirms **C3a YES** (native IR1 == interpreted emission) and **C3b YES**

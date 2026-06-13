@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
-DIAG_MAIN="$ROOT/selfhost/diagnostics_main.mdk"
+DIAG_MAIN="$ROOT/selfhost/entries/diagnostics_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }
 pass=0; fail=0

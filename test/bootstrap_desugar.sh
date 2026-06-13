@@ -9,14 +9,14 @@
 # Like bootstrap_parse.sh / bootstrap_lex.sh (and unlike
 # diff_selfhost_llvm_modules.sh, which forces an EMPTY core prelude), this pushes
 # the REAL stdlib/core.mdk through emitProgram — the actual bootstrap gate.  The
-# driver (selfhost/llvm_bootstrap_lex_main.mdk) is GENERIC: it takes the entry as
+# driver (selfhost/entries/llvm_bootstrap_lex_main.mdk) is GENERIC: it takes the entry as
 # an argument, enables gap-recording so the UNREACHABLE dead-code gaps in
 # core.mdk become harmless "0" placeholders, runs the REAL emitProgram, and
 # applies private_mangle.mangleUnits.  The byte-diff is the safety net: a gap the
 # desugarer ACTUALLY reaches would make a fixture diverge and FAIL.
 #
 # For each fixture in test/parse_fixtures/*.mdk:
-#   oracle = medaka run selfhost/desugar_main.mdk <fixture>        (the interpreter)
+#   oracle = medaka run selfhost/entries/desugar_main.mdk <fixture>        (the interpreter)
 #   native = ./desugar <fixture>  (emit desugar_main's graph once -> clang -> run)
 # Both sides emit SELFHOST S-expressions (native selfhost vs interpreted
 # selfhost), so a raw byte-diff is correct here.
@@ -34,8 +34,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/desugar_main.mdk"
-EMIT="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/desugar_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

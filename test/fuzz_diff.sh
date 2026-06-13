@@ -12,7 +12,7 @@
 #     is a finding.
 #   Tier-B (oracle vs selfhost tree-walker): run the SAME program through the
 #     selfhost dict-passing tree-walker
-#       main.exe run selfhost/eval_dict_main.mdk runtime.mdk core.mdk <file>
+#       main.exe run selfhost/entries/eval_dict_main.mdk runtime.mdk core.mdk <file>
 #     and diff stdout against the oracle.  Any difference is a finding.
 #
 # BATCHING: the selfhost path pays a ~480ms runtime+core parse tax PER PROCESS.
@@ -54,7 +54,7 @@ GEN="$ROOT/_build/default/dev/fuzz_gen.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
-SELFHOST="$ROOT/selfhost/eval_dict_main.mdk"
+SELFHOST="$ROOT/selfhost/entries/eval_dict_main.mdk"
 ALLOWLIST="$ROOT/test/fuzz_allowlist.txt"
 FAILDIR="$ROOT/test/fuzz_failures"
 

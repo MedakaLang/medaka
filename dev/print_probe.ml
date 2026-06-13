@@ -2,7 +2,7 @@
    selfhost/printer.mdk port.  Parses a file and emits
    [Printer.program_to_string] (the AST→source core, WITHOUT the
    comment-interleaving [format_program] path), so it can be diffed
-   byte-for-byte against `medaka run selfhost/printer_main.mdk <file>`.
+   byte-for-byte against `medaka run selfhost/entries/printer_main.mdk <file>`.
    Usage: print_probe <file.mdk> *)
 
 open Medaka_lib

@@ -33,7 +33,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SEED_GZ="$ROOT/selfhost/seed/emitter.ll.gz"
-DRIVER="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

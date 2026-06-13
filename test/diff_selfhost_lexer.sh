@@ -16,7 +16,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 FIXDIR="$ROOT/test/diff_fixtures"
-LEXMAIN="$ROOT/selfhost/lex_main.mdk"
+LEXMAIN="$ROOT/selfhost/entries/lex_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 

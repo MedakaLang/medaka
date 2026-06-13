@@ -1,7 +1,7 @@
 -- selfhost/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
 -- (Stage 4 Phase B.11).  The self-host analog of lib/build_cmd.ml: compile a
 -- user .mdk program to a native binary via the Medaka-hosted LLVM emitter
--- (selfhost/llvm_emit_modules_main.mdk) + clang + the C runtime + Boehm GC.
+-- (selfhost/entries/llvm_emit_modules_main.mdk) + clang + the C runtime + Boehm GC.
 --
 -- EMIT STEP = SHELL-OUT (option b), mirroring lib/build_cmd.ml verbatim.  The
 -- emitter is a heavy Medaka program carrying global Ref state (arg-stamp tables,
@@ -173,7 +173,7 @@ detectGCBare cc =
 export
 runBuild : String -> String -> String -> String -> String -> <IO> BuildResult
 runBuild root medaka cc inputAbs outPath =
-  let emitter = joinPath root "selfhost/llvm_emit_modules_main.mdk"
+  let emitter = joinPath root "selfhost/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
   let rtC = joinPath root "runtime/medaka_rt.c"

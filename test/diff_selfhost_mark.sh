@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted MARK stage:
-#   selfhost/mark_main.mdk  (lex → parse → desugar → selfhost/ir/sexp.mdk dump)
+#   selfhost/entries/mark_main.mdk  (lex → parse → desugar → selfhost/ir/sexp.mdk dump)
 # vs the OCaml reference
 #   dev/astdump.exe --mark  (parse → Desugar.desugar_program → strip_locs → S-expr)
 #
@@ -18,13 +18,13 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/astdump.exe"
-MARKMAIN="$ROOT/selfhost/mark_main.mdk"
+MARKMAIN="$ROOT/selfhost/entries/mark_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/astdump.exe"; exit 2; }
 
 if [ ! -f "$MARKMAIN" ]; then
-  echo "pending: selfhost/mark_main.mdk not yet ported — reference side ready."
+  echo "pending: selfhost/entries/mark_main.mdk not yet ported — reference side ready."
   echo "         (run: $REF --mark <file>  to see the target dump)"
   exit 0
 fi

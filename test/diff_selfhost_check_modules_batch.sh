@@ -13,7 +13,7 @@
 # target module's section — taken from the first run that produced it — against
 # its per-module OCaml oracle (dev/tc_module_probe.exe).
 #
-# Covering set: a single synthetic entry (selfhost/all_modules_entry.mdk) imports
+# Covering set: a single synthetic entry (selfhost/entries/all_modules_entry.mdk) imports
 # one name from every selfhost module, so loadProgram pulls them ALL into one
 # union closure — ONE process emits all 12 modules' schemes (check.mdk exports
 # `runCheck` so it can be pulled in too).  1 process instead of 12; every shared
@@ -25,7 +25,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 PROBE="$ROOT/_build/default/dev/tc_module_probe.exe"
-SELF="$ROOT/selfhost/check_all_main.mdk"
+SELF="$ROOT/selfhost/entries/check_all_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 SHDIR="$ROOT/selfhost"

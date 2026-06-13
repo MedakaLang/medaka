@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-RT="$ROOT/selfhost/core_ir_roundtrip_main.mdk"
+RT="$ROOT/selfhost/entries/core_ir_roundtrip_main.mdk"
 FIXDIR="$ROOT/test/eval_fixtures"
 
 [ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }

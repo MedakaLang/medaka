@@ -6,7 +6,7 @@
 # prelude/dispatch layer: fixtures in test/eval_fixtures/ are self-contained /
 # prelude-free and aggregate their results into a single `main` value.
 #
-# For each fixture:  the self-hosted eval (selfhost/eval_main.mdk) must render
+# For each fixture:  the self-hosted eval (selfhost/entries/eval_main.mdk) must render
 # the SAME pp_value as the oracle.  (`otherwise = True` is injected on both sides
 # so guards read naturally; everything else the fixture must define itself.)
 #
@@ -17,7 +17,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/eval_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/eval_main.mdk"
 FIXDIR="$ROOT/test/eval_fixtures"
 
 [ -x "$PROBE" ] || { echo "build first: dune build --root . (missing $PROBE)"; exit 2; }

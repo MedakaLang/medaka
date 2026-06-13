@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted lexer's COMMENT side channel
-# (selfhost/lex_comments_main.mdk: lex → collectComments) against the OCaml
+# (selfhost/entries/lex_comments_main.mdk: lex → collectComments) against the OCaml
 # reference dev/comment_dump.exe (Lexer.tokenize_string → take_comments).
 #
 # Both dump one comment per line as "<line>:<col>:<text>" (1-based line, 0-based
@@ -20,7 +20,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/comment_dump.exe"
-CMTMAIN="$ROOT/selfhost/lex_comments_main.mdk"
+CMTMAIN="$ROOT/selfhost/entries/lex_comments_main.mdk"
 FIXDIR="$ROOT/test/comment_fixtures"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }

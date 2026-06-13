@@ -14,7 +14,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/eval_prelude_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/eval_prelude_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 LIST="$ROOT/stdlib/list.mdk"
 FIXDIR="$ROOT/test/eval_list_fixtures"

@@ -8,14 +8,14 @@
 # narrowing them in ceval reproduces the reference exactly.
 #
 # Oracle: the reference TYPED path — `medaka run <file>` stdout (the SAME oracle
-# selfhost/eval_typed_main.mdk uses).
+# selfhost/entries/eval_typed_main.mdk uses).
 #
 # Usage:  sh test/diff_selfhost_core_ir_typed.sh
 # Exit:   0 if every fixture matches.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-TYPED="$ROOT/selfhost/core_ir_typed_main.mdk"
+TYPED="$ROOT/selfhost/entries/core_ir_typed_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/eval_typed_fixtures"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Differential gate: selfhost/new_main.mdk vs OCaml `medaka new`.
+# Differential gate: selfhost/entries/new_main.mdk vs OCaml `medaka new`.
 # Runs both in temp dirs, diffs the produced project trees (file list + byte
 # content).  Cleans up on success; leaves dirs on failure for inspection.
 set -e
@@ -7,7 +7,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/new_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/new_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }
 
@@ -24,7 +24,7 @@ trap cleanup EXIT
 
 # Run selfhost
 (cd "$TMPSELF" && "$MAIN" run "$SELFMAIN" "$NAME" > /dev/null 2>&1) \
-  || { echo "FAIL: selfhost/new_main.mdk exited non-zero"; fail=$((fail+1)); }
+  || { echo "FAIL: selfhost/entries/new_main.mdk exited non-zero"; fail=$((fail+1)); }
 
 # Run reference
 (cd "$TMPREF" && "$MAIN" new "$NAME" > /dev/null 2>&1) \

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted DESUGAR stage:
-#   selfhost/desugar_main.mdk  (lex → parse → desugar → selfhost/ir/sexp.mdk dump)
+#   selfhost/entries/desugar_main.mdk  (lex → parse → desugar → selfhost/ir/sexp.mdk dump)
 # vs the OCaml reference
 #   dev/astdump.exe --desugar  (parse → Desugar.desugar_program → strip_locs → S-expr)
 #
@@ -17,13 +17,13 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/astdump.exe"
-DESUGARMAIN="$ROOT/selfhost/desugar_main.mdk"
+DESUGARMAIN="$ROOT/selfhost/entries/desugar_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/astdump.exe"; exit 2; }
 
 if [ ! -f "$DESUGARMAIN" ]; then
-  echo "pending: selfhost/desugar_main.mdk not yet ported — reference side ready."
+  echo "pending: selfhost/entries/desugar_main.mdk not yet ported — reference side ready."
   echo "         (run: $REF --desugar <file>  to see the target dump)"
   exit 0
 fi

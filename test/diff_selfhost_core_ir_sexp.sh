@@ -13,7 +13,7 @@
 # To regenerate all goldens (after an intentional IR/serializer change):
 #   for f in test/eval_fixtures/*.mdk; do
 #     name=$(basename "$f" .mdk)
-#     ./_build/default/bin/main.exe run selfhost/core_ir_dump_main.mdk "$f" \
+#     ./_build/default/bin/main.exe run selfhost/entries/core_ir_dump_main.mdk "$f" \
 #       > test/core_ir_sexp_fixtures/"$name".sexp
 #   done
 #
@@ -23,7 +23,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DUMP="$ROOT/selfhost/core_ir_dump_main.mdk"
+DUMP="$ROOT/selfhost/entries/core_ir_dump_main.mdk"
 FIXDIR="$ROOT/test/eval_fixtures"
 GOLDDIR="$ROOT/test/core_ir_sexp_fixtures"
 

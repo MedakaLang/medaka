@@ -22,11 +22,11 @@
 # Like bootstrap_{lex,parse,desugar,resolve,mark,typecheck}.sh, this pushes the
 # REAL stdlib/core.mdk + parser.mdk + desugar.mdk + the ~1765-line eval.mdk
 # through emitProgram at EMIT time (the actual bootstrap gate).  The driver
-# (selfhost/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = eval_main as an
+# (selfhost/entries/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = eval_main as an
 # argument, gap-recording on, real emitProgram, private_mangle.mangleUnits.
 #
 # For each fixture in test/eval_fixtures/*.mdk:
-#   oracle = medaka run selfhost/eval_main.mdk <fixture>   (interpreter)
+#   oracle = medaka run selfhost/entries/eval_main.mdk <fixture>   (interpreter)
 #   native = ./eval <fixture>                              (native-compiled)
 # Both sides render the SAME `main` value via pp_value.
 #
@@ -45,8 +45,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/eval_main.mdk"
-EMIT="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/eval_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

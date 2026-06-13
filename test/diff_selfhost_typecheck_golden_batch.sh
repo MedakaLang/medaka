@@ -4,7 +4,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-BATCH="$ROOT/selfhost/typecheck_golden_batch.mdk"
+BATCH="$ROOT/selfhost/entries/typecheck_golden_batch.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/diff_fixtures"

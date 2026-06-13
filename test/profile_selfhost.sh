@@ -14,7 +14,7 @@
 #   selfhost/frontend/parser.mdk    — large file with imports; parse+desugar accurate
 #
 # Multi-module target:
-#   selfhost/all_modules_entry.mdk — full 15-module selfhost closure;
+#   selfhost/entries/all_modules_entry.mdk — full 15-module selfhost closure;
 #       reports parse, load, desugar, mark, typecheck per-stage (no eval)
 #
 # Output columns: stage, min elapsed, alloc-delta (MB, Gc.allocated_bytes proxy),
@@ -31,8 +31,8 @@ set -u
 N=${1:-3}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SINGLE_DRIVER="$ROOT/selfhost/profile_main.mdk"
-MODULES_DRIVER="$ROOT/selfhost/profile_modules_main.mdk"
+SINGLE_DRIVER="$ROOT/selfhost/entries/profile_main.mdk"
+MODULES_DRIVER="$ROOT/selfhost/entries/profile_modules_main.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 
@@ -117,4 +117,4 @@ profile_modules() {
 
 profile_single "$ROOT/selfhost/frontend/lexer.mdk"
 profile_single "$ROOT/selfhost/frontend/parser.mdk"
-profile_modules "$ROOT/selfhost/all_modules_entry.mdk" "$ROOT/selfhost"
+profile_modules "$ROOT/selfhost/entries/all_modules_entry.mdk" "$ROOT/selfhost"

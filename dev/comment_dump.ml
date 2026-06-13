@@ -1,6 +1,6 @@
 (* dev/comment_dump.ml — dump the OCaml lexer's comment side channel for a
    file, the reference the self-hosted lexer's comment channel is validated
-   against (selfhost/lex_comments_main.mdk via test/diff_selfhost_comments.sh).
+   against (selfhost/entries/lex_comments_main.mdk via test/diff_selfhost_comments.sh).
    Usage: comment_dump <file.mdk>
 
    Format: one comment per line, "<line>:<col>:<text>" where <line> is 1-based,

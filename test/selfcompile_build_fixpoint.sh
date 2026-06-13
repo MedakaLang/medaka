@@ -1,6 +1,6 @@
 #!/bin/sh
 # SELF-COMPILE C3 for the BUILD DRIVER — verify the STRICT multi-module emit driver
-# (selfhost/llvm_emit_modules_main.mdk, the one `medaka build` actually shells out to)
+# (selfhost/entries/llvm_emit_modules_main.mdk, the one `medaka build` actually shells out to)
 # fixpoints, not just the gap-tolerant bootstrap driver.
 #
 # Same shape as test/selfcompile_fixpoint.sh, but DRIVER = llvm_emit_modules_main.mdk:
@@ -19,7 +19,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

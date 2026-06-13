@@ -11,7 +11,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DICT="$ROOT/selfhost/eval_dict_main.mdk"
+DICT="$ROOT/selfhost/entries/eval_dict_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/eval_dict_fixtures"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }

@@ -32,8 +32,8 @@ several — see notes), fixed, and verified native==interp with the full differe
 ## How to verify any item
 - Oracle (reference): `./_build/default/bin/main.exe run <f>` and `… check <f>`.
 - Native build path: `./_build/default/bin/main.exe build <f> -o <o> && <o>`.
-- Selfhost typecheck path: `… run selfhost/check_main.mdk stdlib/runtime.mdk stdlib/core.mdk <f>`.
-- Stdlib-method / typed cases: the typed emit path (`selfhost/llvm_emit_typed_main.mdk` + runtime + core).
+- Selfhost typecheck path: `… run selfhost/entries/check_main.mdk stdlib/runtime.mdk stdlib/core.mdk <f>`.
+- Stdlib-method / typed cases: the typed emit path (`selfhost/entries/llvm_emit_typed_main.mdk` + runtime + core).
 - Native CLI: `selfhost/medaka_cli.mdk` (the canonical target) uses the **self-hosted**
   parser/typecheck/emit for every subcommand — its behavior is what users hit post-flip.
 

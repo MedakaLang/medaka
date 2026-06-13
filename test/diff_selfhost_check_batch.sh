@@ -1,13 +1,13 @@
 #!/bin/sh
 # Batched variant of diff_selfhost_check.sh — PROTOTYPE for prelude caching.
-# Runs selfhost/check_batch.mdk ONCE over all diff_fixtures + resolve_fixtures
+# Runs selfhost/entries/check_batch.mdk ONCE over all diff_fixtures + resolve_fixtures
 # in a single process (prelude parsed once), then splits the delimited output
 # per fixture and compares each against the same oracle the per-file harness uses.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
-BATCH="$ROOT/selfhost/check_batch.mdk"
+BATCH="$ROOT/selfhost/entries/check_batch.mdk"
 RT="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }
 pass=0; fail=0

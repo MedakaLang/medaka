@@ -6,7 +6,7 @@
 # INTERPRETED emitter's IR on small fixtures.  C2 (test/selfcompile_lex.sh) had the
 # native emitter compile the REAL self-hosted lexer driver, native-emitted IR
 # byte-identical to the interpreter's.  C3 closes the loop: use the gap-tolerant
-# emitter driver (selfhost/llvm_bootstrap_lex_main.mdk) — whose module graph IS the
+# emitter driver (selfhost/entries/llvm_bootstrap_lex_main.mdk) — whose module graph IS the
 # whole emitter + front-end + prelude, the LARGEST program in the tree — as BOTH the
 # compiler AND the program being compiled.  "The compiler compiles itself and
 # reproduces itself."
@@ -49,7 +49,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

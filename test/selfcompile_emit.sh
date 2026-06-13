@@ -5,7 +5,7 @@
 # The bootstrap_*.sh slices natively compiled each of the SEVEN pipeline stages
 # (lex/parse/desugar/resolve/mark/typecheck/eval) and proved each byte-matches the
 # tree-walker.  This is the first step of self-hosting the COMPILER BACK-END:
-# natively compile the EMITTER ITSELF — selfhost/llvm_emit_modules_main.mdk's whole
+# natively compile the EMITTER ITSELF — selfhost/entries/llvm_emit_modules_main.mdk's whole
 # module graph (llvm_emit.mdk + core_ir_lower.mdk + the front end + prelude) — and
 # prove the resulting native `emit` binary turns each fixture into the SAME LLVM IR
 # the interpreted emitter does.
@@ -16,7 +16,7 @@
 # state, fresh-id counters, decision-tree lowering of impl bodies).
 #
 # BUILD.  The native emitter is built by the gap-tolerant bootstrap driver
-# (selfhost/llvm_bootstrap_lex_main.mdk: generic, entry-as-arg, gap-recording on,
+# (selfhost/entries/llvm_bootstrap_lex_main.mdk: generic, entry-as-arg, gap-recording on,
 # private_mangle).  Gap-recording turns the prelude's dead-code gaps into
 # placeholders during THIS build; the resulting native binary's own runtime
 # emitProgram has gap-recording OFF — identical to the interpreted
@@ -47,8 +47,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-DRIVER="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
-EMIT="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+DRIVER="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

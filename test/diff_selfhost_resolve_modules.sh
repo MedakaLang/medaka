@@ -27,7 +27,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/resolve_modules_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/resolve_modules_main.mdk"
 FIXDIR="$ROOT/test/resolve_module_fixtures"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
@@ -38,7 +38,7 @@ SHDIR="$ROOT/selfhost"
 
 have_self=0
 [ -f "$SELFMAIN" ] && have_self=1
-[ "$have_self" -eq 0 ] && echo "note: selfhost/resolve_modules_main.mdk not present — checking reference vs goldens only."
+[ "$have_self" -eq 0 ] && echo "note: selfhost/entries/resolve_modules_main.mdk not present — checking reference vs goldens only."
 
 pass=0; fail=0
 

@@ -8,7 +8,7 @@
 # .mdk with a committed <name>.expected golden):
 #   A. reference stability — diagdump output must equal the committed golden
 #      (so the harness is green and self-documenting now, before any port).
-#   B. if selfhost/resolve_main.mdk exists — the self-hosted resolve's output
+#   B. if selfhost/entries/resolve_main.mdk exists — the self-hosted resolve's output
 #      (sorted) must equal the same golden.
 #
 # Usage:  sh test/diff_selfhost_resolve.sh
@@ -18,14 +18,14 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/resolve_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/resolve_main.mdk"
 FIXDIR="$ROOT/test/resolve_fixtures"
 
 [ -x "$DIAG" ] || { echo "build first: dune build --root . (missing $DIAG)"; exit 2; }
 
 have_self=0
 [ -f "$SELFMAIN" ] && have_self=1
-[ "$have_self" -eq 0 ] && echo "note: selfhost/resolve_main.mdk not yet ported — checking reference vs goldens only."
+[ "$have_self" -eq 0 ] && echo "note: selfhost/entries/resolve_main.mdk not yet ported — checking reference vs goldens only."
 
 pass=0; fail=0
 for f in "$FIXDIR"/*.mdk; do

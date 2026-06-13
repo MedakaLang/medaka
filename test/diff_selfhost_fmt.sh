@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted comment-preserving formatter:
-# selfhost/fmt_main.mdk (parseWithPositions + collectComments → fmt.formatProgram,
+# selfhost/entries/fmt_main.mdk (parseWithPositions + collectComments → fmt.formatProgram,
 # a port of lib/printer.ml's `format_program`) vs the OCaml `medaka fmt --stdout`
 # oracle (the same `format_program`, driven by lib/fmt.ml).
 #
@@ -20,7 +20,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-FMTMAIN="$ROOT/selfhost/fmt_main.mdk"
+FMTMAIN="$ROOT/selfhost/entries/fmt_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 

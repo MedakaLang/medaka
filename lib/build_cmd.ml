@@ -1,13 +1,13 @@
 (* medaka build — Stage 3 sequence item 1.
 
    Compile a user `.mdk` program to a native binary via the existing
-   Medaka-hosted LLVM emitter (`selfhost/llvm_emit_modules_main.mdk`) + clang.
+   Medaka-hosted LLVM emitter (`selfhost/entries/llvm_emit_modules_main.mdk`) + clang.
 
    This is the *wiring* only — the backend is unchanged.  The pipeline mirrors
    the proven self-host harnesses (test/diff_selfhost_llvm_modules.sh,
    test/selfcompile_lex.sh):
 
-     1. emit  = medaka run selfhost/llvm_emit_modules_main.mdk \
+     1. emit  = medaka run selfhost/entries/llvm_emit_modules_main.mdk \
                   <runtime.mdk> <stdlib/core.mdk> <entry.mdk> <entry-dir> <selfhost> > out.ll
      2. trim a trailing "()\n" the native runtime auto-print convention would add
         (the emitter's `main : <IO,Mut> Unit` produces it through the interpreter)
@@ -165,12 +165,12 @@ let run (args : string array) : int =
         | Some r -> r
         | None ->
           prerr_endline
-            "error: could not locate the Medaka repo root (selfhost/llvm_emit_modules_main.mdk).\n\
+            "error: could not locate the Medaka repo root (selfhost/entries/llvm_emit_modules_main.mdk).\n\
              medaka build currently resolves backend assets relative to the source checkout.";
           exit 1
       in
       let self = Sys.executable_name in
-      let emitter   = Filename.concat repo_root "selfhost/llvm_emit_modules_main.mdk" in
+      let emitter   = Filename.concat repo_root "selfhost/entries/llvm_emit_modules_main.mdk" in
       let runtime   = Filename.concat repo_root "stdlib/runtime.mdk" in
       let prelude   = Filename.concat repo_root "stdlib/core.mdk" in
       let rt_c      = Filename.concat repo_root "runtime/medaka_rt.c" in

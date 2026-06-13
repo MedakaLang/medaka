@@ -1,12 +1,12 @@
 #!/bin/sh
 # Batched variant of diff_selfhost_mark.sh — PROTOTYPE for prelude caching.
-# Runs selfhost/mark_batch.mdk ONCE over the whole corpus (prelude parsed once),
+# Runs selfhost/entries/mark_batch.mdk ONCE over the whole corpus (prelude parsed once),
 # splits the delimited output per file, and compares each against astdump --mark.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/astdump.exe"
-BATCH="$ROOT/selfhost/mark_batch.mdk"
+BATCH="$ROOT/selfhost/entries/mark_batch.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root ."; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/astdump.exe"; exit 2; }

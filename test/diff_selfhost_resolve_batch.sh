@@ -4,7 +4,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIAG="$ROOT/_build/default/dev/diagdump.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-BATCH="$ROOT/selfhost/resolve_batch.mdk"
+BATCH="$ROOT/selfhost/entries/resolve_batch.mdk"
 RT="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/resolve_fixtures"
 [ -x "$DIAG" ] || { echo "build first: dune build --root . (missing $DIAG)"; exit 2; }

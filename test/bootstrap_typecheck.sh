@@ -15,11 +15,11 @@
 # Like bootstrap_{lex,parse,desugar,resolve,mark}.sh, this pushes the REAL
 # stdlib/core.mdk + the ~4000-line typecheck.mdk through emitProgram at EMIT time
 # (the actual bootstrap gate).  The driver
-# (selfhost/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = typecheck_main as an
+# (selfhost/entries/llvm_bootstrap_lex_main.mdk) is GENERIC: entry = typecheck_main as an
 # argument, gap-recording on, real emitProgram, private_mangle.mangleUnits.
 #
 # For each fixture in test/typecheck_fixtures/*.mdk:
-#   oracle = medaka run selfhost/typecheck_main.mdk <fixture>
+#   oracle = medaka run selfhost/entries/typecheck_main.mdk <fixture>
 #   native = ./typecheck <fixture>
 # Both sides emit `name : scheme` lines running the SAME deterministic HM
 # inference.  Like diff_selfhost_typecheck.sh, BOTH sides are SORTED before the
@@ -41,8 +41,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/typecheck_main.mdk"
-EMIT="$ROOT/selfhost/llvm_bootstrap_lex_main.mdk"
+ORACLE="$ROOT/selfhost/entries/typecheck_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_bootstrap_lex_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"

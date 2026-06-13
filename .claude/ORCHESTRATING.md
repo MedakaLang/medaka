@@ -243,5 +243,5 @@ per sub-part. A *comment-only* edit to an emitter-graph file does NOT invalidate
   no catchable panics.
 - **A new gap in a tool's native compile** (a tool pulled into the native graph for
   the first time) is the recurring shape: census it gap-tolerantly
-  (`selfhost/llvm_emit_gaps_main.mdk` over the tool's entry), then close each gap
+  (`selfhost/entries/llvm_emit_gaps_main.mdk` over the tool's entry), then close each gap
   principled. EMITTER-GAPS.md is the gap ledger.

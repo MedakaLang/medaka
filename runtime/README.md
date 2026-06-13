@@ -66,7 +66,7 @@ sh test/diff_selfhost_llvm.sh   # emit each fixture's .ll, clang it with medaka_
 Manual one-off:
 
 ```sh
-medaka run selfhost/llvm_emit_main.mdk test/llvm_fixtures/int_arith.mdk > /tmp/x.ll
+medaka run selfhost/entries/llvm_emit_main.mdk test/llvm_fixtures/int_arith.mdk > /tmp/x.ll
 clang /tmp/x.ll runtime/medaka_rt.c -o /tmp/x && /tmp/x
 ```
 

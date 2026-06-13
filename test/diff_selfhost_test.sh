@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted `medaka test` machinery
-# (selfhost/test_main.mdk: doctest extraction + running + property tests)
+# (selfhost/entries/test_main.mdk: doctest extraction + running + property tests)
 # against the OCaml reference `medaka test <file>` (Test_cmd + Doctest +
 # Prop_runner).
 #
@@ -54,7 +54,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-TESTMAIN="$ROOT/selfhost/test_main.mdk"
+TESTMAIN="$ROOT/selfhost/entries/test_main.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 

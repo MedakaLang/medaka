@@ -1,6 +1,6 @@
 #!/bin/sh
 # Differential validation for the self-hosted pretty printer:
-# selfhost/printer_main.mdk (lex → parse → printer.programToString) vs the OCaml
+# selfhost/entries/printer_main.mdk (lex → parse → printer.programToString) vs the OCaml
 # reference dev/print_probe.exe (parse → Printer.program_to_string).
 #
 # Both sides go parse → AST→source.  This isolates the printer: it diffs the
@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/print_probe.exe"
-PRINTMAIN="$ROOT/selfhost/printer_main.mdk"
+PRINTMAIN="$ROOT/selfhost/entries/printer_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/print_probe.exe"; exit 2; }

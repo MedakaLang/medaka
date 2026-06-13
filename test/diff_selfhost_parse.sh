@@ -1,5 +1,5 @@
 #!/bin/sh
-# Differential validation for the self-hosted parser: selfhost/parse_main.mdk
+# Differential validation for the self-hosted parser: selfhost/entries/parse_main.mdk
 # (lex → parse → selfhost/ir/sexp.mdk structural dump) vs the OCaml reference
 # dev/astdump.exe (parse → strip_locs → canonical S-expression).
 #
@@ -21,7 +21,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/astdump.exe"
-PARSEMAIN="$ROOT/selfhost/parse_main.mdk"
+PARSEMAIN="$ROOT/selfhost/entries/parse_main.mdk"
 
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/astdump.exe"; exit 2; }

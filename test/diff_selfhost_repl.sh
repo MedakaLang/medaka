@@ -22,7 +22,7 @@ WDIR=$(cd "$(dirname "$0")/.." && pwd)
 MAIN="$WDIR/_build/default/bin/main.exe"
 RUNTIME="$WDIR/stdlib/runtime.mdk"
 CORE="$WDIR/stdlib/core.mdk"
-SELFHOST_REPL="$WDIR/selfhost/repl_main.mdk"
+SELFHOST_REPL="$WDIR/selfhost/entries/repl_main.mdk"
 
 # Fixed input script — each line is one REPL input.
 # Error case: `badname` is unbound, error goes to stderr (suppressed), session

@@ -36,7 +36,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 MEDAKA="$ROOT/medaka"
-CHECK_MAIN="$ROOT/selfhost/check_main.mdk"
+CHECK_MAIN="$ROOT/selfhost/entries/check_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 
@@ -132,7 +132,7 @@ fi
 # ── lsp: native ./medaka lsp == interpreted selfhost lsp_main.mdk ────────────
 # Mirror diff_selfhost_lsp.sh: feed a canned JSON-RPC exchange (initialize +
 # didOpen clean + exit) to BOTH the native `medaka lsp` and the interpreted
-# `medaka run selfhost/lsp_main.mdk`, decode the framed responses, and compare
+# `medaka run selfhost/entries/lsp_main.mdk`, decode the framed responses, and compare
 # the initialize capabilities and publishDiagnostics semantically (field order
 # may differ; Content-Type header absent in native output).
 #
@@ -147,7 +147,7 @@ case "$lsp_probe" in
   *) LSP_WIRED=1 ;;
 esac
 
-LSP_MAIN="$ROOT/selfhost/lsp_main.mdk"
+LSP_MAIN="$ROOT/selfhost/entries/lsp_main.mdk"
 RT="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 

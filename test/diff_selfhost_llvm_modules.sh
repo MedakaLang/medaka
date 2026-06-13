@@ -47,8 +47,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-ORACLE="$ROOT/selfhost/eval_typed_modules_main.mdk"
-EMIT="$ROOT/selfhost/llvm_emit_modules_main.mdk"
+ORACLE="$ROOT/selfhost/entries/eval_typed_modules_main.mdk"
+EMIT="$ROOT/selfhost/entries/llvm_emit_modules_main.mdk"
 RT="$ROOT/runtime/medaka_rt.c"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/llvm_fixtures_modules"

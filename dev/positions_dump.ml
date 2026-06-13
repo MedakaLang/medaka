@@ -1,6 +1,6 @@
 (* dev/positions_dump.ml — dump the OCaml parser/lexer POSITION side channels
    (lib/parser_state.ml) for a file: the reference the self-hosted parser's
-   position channel is validated against (selfhost/positions_main.mdk via
+   position channel is validated against (selfhost/entries/positions_main.mdk via
    test/diff_selfhost_positions.sh).
    Usage: positions_dump <file.mdk>
 

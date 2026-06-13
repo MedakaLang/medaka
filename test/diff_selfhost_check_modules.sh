@@ -14,7 +14,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 PROBE="$ROOT/_build/default/dev/tc_module_probe.exe"
-SELF="$ROOT/selfhost/check_modules_main.mdk"
+SELF="$ROOT/selfhost/entries/check_modules_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 SHDIR="$ROOT/selfhost"

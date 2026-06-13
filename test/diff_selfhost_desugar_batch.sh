@@ -5,7 +5,7 @@
 # parser/desugar/sexp modules; that fixed per-process cost dominated once the
 # interpreter env-lookup win made per-file desugaring cheap.
 #
-# This runs selfhost/desugar_batch.mdk ONCE over the whole corpus (modules loaded
+# This runs selfhost/entries/desugar_batch.mdk ONCE over the whole corpus (modules loaded
 # once), splits the delimited output per file in a single awk pass, and compares
 # each section against dev/astdump.exe --desugar.  FLOAT literal text is
 # normalized away (OCaml %g vs floatToString), like the original.
@@ -15,7 +15,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 REF="$ROOT/_build/default/dev/astdump.exe"
-BATCH="$ROOT/selfhost/desugar_batch.mdk"
+BATCH="$ROOT/selfhost/entries/desugar_batch.mdk"
 [ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
 [ -x "$REF" ]  || { echo "build first: dune build --root . dev/astdump.exe"; exit 2; }
 [ -f "$BATCH" ] || { echo "missing $BATCH"; exit 2; }

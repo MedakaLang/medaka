@@ -8,7 +8,7 @@
 #  LEG A — front-end "checks itself" (typecheck closure).
 #    Feeds the WHOLE selfhost source through the self-hosted multi-module
 #    front-end (loader -> desugar -> checkModules) in ONE process, using
-#    selfhost/all_modules_entry.mdk as the aggregate entry (its imports force
+#    selfhost/entries/all_modules_entry.mdk as the aggregate entry (its imports force
 #    loadProgram to pull every module into a single union closure).
 #    check_all_main.mdk emits every module's inferred schemes, each section
 #    preceded by `## MODULE <mid>`; we diff each module's section against the
@@ -34,13 +34,13 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
 PROBE="$ROOT/_build/default/dev/tc_module_probe.exe"
-CHECK_ALL="$ROOT/selfhost/check_all_main.mdk"
-EVAL_MODS="$ROOT/selfhost/eval_modules_main.mdk"
-EVAL_TYPED_MODS="$ROOT/selfhost/eval_typed_modules_main.mdk"
-ENTRY="$ROOT/selfhost/all_modules_entry.mdk"
-LEXPROBE="$ROOT/selfhost/selfproc_lex_probe.mdk"
-PARSEPROBE="$ROOT/selfhost/selfproc_parse_probe.mdk"
-TCPROBE="$ROOT/selfhost/selfproc_tc_probe.mdk"
+CHECK_ALL="$ROOT/selfhost/entries/check_all_main.mdk"
+EVAL_MODS="$ROOT/selfhost/entries/eval_modules_main.mdk"
+EVAL_TYPED_MODS="$ROOT/selfhost/entries/eval_typed_modules_main.mdk"
+ENTRY="$ROOT/selfhost/entries/all_modules_entry.mdk"
+LEXPROBE="$ROOT/selfhost/entries/selfproc_lex_probe.mdk"
+PARSEPROBE="$ROOT/selfhost/entries/selfproc_parse_probe.mdk"
+TCPROBE="$ROOT/selfhost/entries/selfproc_tc_probe.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 SHDIR="$ROOT/selfhost"

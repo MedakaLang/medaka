@@ -103,7 +103,7 @@ of `.mdk` source) is the heaviest real-world workload. This directly measures
 # oracle: OCaml interpreter path (medaka run)
 /usr/bin/time -l ./medaka_emitter \
     stdlib/runtime.mdk stdlib/core.mdk \
-    selfhost/llvm_emit_modules_main.mdk \
+    selfhost/entries/llvm_emit_modules_main.mdk \
     selfhost stdlib > /tmp/emitter_native.ll
 
 # native emitter: same args, native binary
@@ -139,7 +139,7 @@ expose the per-call overhead. Compare:
 **Tier 3 — `medaka check` of the whole selfhost tree (end-to-end latency)**
 
 ```sh
-/usr/bin/time -l ./_build/default/bin/main.exe check selfhost/llvm_emit_modules_main.mdk \
+/usr/bin/time -l ./_build/default/bin/main.exe check selfhost/entries/llvm_emit_modules_main.mdk \
     selfhost stdlib
 ```
 
@@ -292,7 +292,7 @@ The `medaka_emitter` binary (already at -O0) emitting itself:
 for i in 1 2 3; do
   /usr/bin/time -l ./medaka_emitter \
     stdlib/runtime.mdk stdlib/core.mdk \
-    selfhost/llvm_emit_modules_main.mdk \
+    selfhost/entries/llvm_emit_modules_main.mdk \
     selfhost stdlib > /tmp/sc_out.ll 2>/tmp/sc_time.txt
   grep -E "real|maximum" /tmp/sc_time.txt
 done
@@ -302,9 +302,9 @@ done
 ```sh
 for i in 1 2 3; do
   /usr/bin/time -l ./_build/default/bin/main.exe run \
-    selfhost/llvm_emit_modules_main.mdk \
+    selfhost/entries/llvm_emit_modules_main.mdk \
     stdlib/runtime.mdk stdlib/core.mdk \
-    selfhost/llvm_emit_modules_main.mdk \
+    selfhost/entries/llvm_emit_modules_main.mdk \
     selfhost stdlib > /dev/null 2>/tmp/interp_time.txt
   grep -E "real|maximum" /tmp/interp_time.txt
 done
@@ -373,7 +373,7 @@ for i in 1 2 3; do /usr/bin/time -l /tmp/fib_o2 2>&1 | grep -E "real|maximum"; d
 for i in 1 2 3; do
   /usr/bin/time -l ./medaka_emitter_o2 \
     stdlib/runtime.mdk stdlib/core.mdk \
-    selfhost/llvm_emit_modules_main.mdk \
+    selfhost/entries/llvm_emit_modules_main.mdk \
     selfhost stdlib > /tmp/sc_out_o2.ll 2>/tmp/sc_time_o2.txt
   grep -E "real|maximum" /tmp/sc_time_o2.txt
 done

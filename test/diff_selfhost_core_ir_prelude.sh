@@ -8,7 +8,7 @@
 # AST tree-walker over genuine stdlib code.
 #
 # Oracle: dev/eval_probe.exe --prelude  (the embedded core.mdk → pp_value of
-# `main`) — the SAME oracle selfhost/eval_prelude_main.mdk diffs against.
+# `main`) — the SAME oracle selfhost/entries/eval_prelude_main.mdk diffs against.
 # Self-host: core_ir_prelude_main.mdk prepends the *parsed* stdlib/core.mdk,
 # annotates + lowers to Core IR, evaluates it; pp_value of `main` must match
 # byte-for-byte.
@@ -20,7 +20,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROBE="$ROOT/_build/default/dev/eval_probe.exe"
 MAIN="$ROOT/_build/default/bin/main.exe"
-SELFMAIN="$ROOT/selfhost/core_ir_prelude_main.mdk"
+SELFMAIN="$ROOT/selfhost/entries/core_ir_prelude_main.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/eval_prelude_fixtures"
 

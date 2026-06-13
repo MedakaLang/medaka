@@ -28,7 +28,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAIN="$ROOT/_build/default/bin/main.exe"
-EMIT_DRIVER="selfhost/llvm_emit_modules_main.mdk"
+EMIT_DRIVER="selfhost/entries/llvm_emit_modules_main.mdk"
 RUNTIME="stdlib/runtime.mdk"
 CORE="stdlib/core.mdk"
 
