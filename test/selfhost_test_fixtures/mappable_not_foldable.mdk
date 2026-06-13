@@ -1,0 +1,42 @@
+import core.{Mappable}
+
+-- Regression for the native typecheck FALSE-POSITIVE "No impl of Foldable for <T>"
+-- that hit stdlib/map.mdk: a type with a `Mappable` impl but NO `Foldable` impl,
+-- that ALSO defines top-level standalone `isEmpty`/`toList` SHADOWING the same-named
+-- Foldable methods.
+--
+-- Root cause: on the flat single-file check path (checkProgramSeeded → inferDefault-
+-- Bodies) the prelude's Foldable DEFAULT bodies (`length t = fold … t`,
+-- `isEmpty t = match toList t …`) were typed via `lookupVar env mname`, which on
+-- this flat path returns the user's `Box`-typed standalone shadow scheme — NOT the
+-- interface method.  Inferring `isEmpty t = match toList t` against `Box a -> Bool`
+-- grounded `toList`/`fold`'s container var to `Box`, producing a spurious
+-- `No impl of Foldable for Box` obligation (native `check` exit 1; `medaka test`
+-- SIGBUS'd on its own false error).  Fix: `inferDefaultMethod` types each default
+-- body against the INTERFACE's own (shadow-free) method scheme (mirrors
+-- lib/typecheck.ml:3116-3126).
+--
+-- This mirrors map.mdk's shape: the standalone shadows are referenced only from impl
+-- bodies, never from a top-level funDef call (which both the OCaml oracle and native
+-- correctly resolve to the METHOD, requiring its impl).  The OCaml oracle accepts
+-- this file (check OK; test 1/1).
+
+-- > unBox (mapBox (n => n + 1) (Box 41))
+-- 42
+data Box a = Box a
+
+export default impl Mappable Box where
+  map f (Box x) = Box (f x)
+
+unBox : Box a -> a
+unBox (Box x) = x
+
+mapBox : (a -> b) -> Box a -> Box b
+mapBox f b = map f b
+
+-- standalone shadows of Foldable methods (the trigger).
+isEmpty : Box a -> Bool
+isEmpty _ = False
+
+toList : Box a -> List a
+toList (Box x) = [x]

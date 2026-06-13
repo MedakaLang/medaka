@@ -66,7 +66,9 @@ else
          $ROOT/stdlib/list.mdk \
          $ROOT/stdlib/set.mdk \
          $ROOT/test/selfhost_test_fixtures/mixed.mdk \
-         $ROOT/test/selfhost_test_fixtures/sum_dict.mdk"
+         $ROOT/test/selfhost_test_fixtures/sum_dict.mdk \
+         $ROOT/test/selfhost_test_fixtures/mappable_not_foldable.mdk \
+         $ROOT/test/selfhost_test_fixtures/shadow_impl_tolist.mdk"
 fi
 
 pass=0

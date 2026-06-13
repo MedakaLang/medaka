@@ -1,0 +1,42 @@
+import core.{Eq, Debug}
+
+-- Regression for the MULTI-MODULE eval-path recursion that SIGBUS'd
+-- `medaka test stdlib/map.mdk` even after the flat-path Foldable false-positive
+-- (mappable_not_foldable.mdk) was fixed.
+--
+-- Shape: a container `Bag` with NO `Foldable` impl that defines a standalone
+-- `toList` SHADOWING Foldable's method, AND whose `Eq`/`Debug` impl bodies CALL
+-- that standalone `toList` on a `Bag` receiver.  This file imports `core`, so
+-- `medaka test` takes the MULTI-MODULE path (elaborateModules → evalModules), NOT
+-- the flat single-file path that `medaka check` uses.
+--
+-- Root cause: impl-body inference was gated OFF on the eval path
+-- (`implInferEnabled = argStampEnabled.value`, OFF for eval).  So the impl-body
+-- `toList b` standalone-shadow site was never recorded for RLocal stamping — its
+-- route stayed at the default RNone.  At eval, RNone `toList` on a `Bag` arg-tag-
+-- dispatched through the no-matching-tag `keepOrAll` fallback to Foldable List's
+-- `toList = identity`, returning the `Bag` unchanged → `debug`/`==` recursed
+-- forever (SIGBUS).  Fix: enable impl-body inference on the eval path too
+-- (`implInferEnabled = True` in `elaborateModules`) so resolveRLocalSites stamps
+-- the impl-body `toList` RLocal; eval then resolves it to the standalone.
+--
+-- The OCaml oracle accepts this file (test passes); native must match.
+
+-- > debug (Bag [1, 2, 3]) == "[1, 2, 3]"
+-- True
+-- > eq (Bag [1, 2]) (Bag [1, 2])
+-- True
+-- > eq (Bag [1, 2]) (Bag [3, 4])
+-- False
+data Bag a = Bag (List a)
+
+-- standalone shadow of Foldable's `toList` (Bag has NO Foldable impl).
+toList : Bag a -> List a
+toList (Bag xs) = xs
+
+-- impl bodies that CALL the standalone `toList` on a Bag receiver — the trigger.
+export default impl Eq (Bag a) requires Eq a where
+  eq a b = eq (toList a) (toList b)
+
+export default impl Debug (Bag a) requires Debug a where
+  debug b = debug (toList b)

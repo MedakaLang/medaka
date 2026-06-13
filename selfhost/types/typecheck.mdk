@@ -4468,14 +4468,26 @@ inferDefaultBodies env (d :: rest) =
 
 inferOneIfaceDefaults : TcEnv -> Decl -> <Mut> Unit
 inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
-inferOneIfaceDefaults env (DInterface { methods, ... }) = inferDefaultMethods env methods
+-- Mirror lib/typecheck.ml:3116-3126: type each default body against the
+-- interface's OWN method scheme (built from [typarams]+[methods]), NOT
+-- `lookupVar env mname`.  On the flat single-file check path a user top-level
+-- funDef can SHADOW a method name (e.g. map.mdk's `isEmpty : Map k v -> Bool`
+-- shadowing Foldable's `isEmpty`); looking the name up in env would instantiate
+-- that Map-typed shadow and infer the default `isEmpty t = match toList t`
+-- against it, grounding `toList`'s container var to `Map` → a spurious
+-- `No impl of Foldable for Map` obligation.  The interface scheme is shadow-free.
+-- Also extend env with these schemes so PEER-method refs in a default body
+-- resolve to the interface methods (oracle's env_with_methods), not user shadows.
+inferOneIfaceDefaults env (DInterface { methods, ... }) =
+  let ifaceSchemes = methodSchemesPure methods
+  inferDefaultMethods (extendVars env ifaceSchemes) ifaceSchemes methods
 inferOneIfaceDefaults _ _ = ()
 
-inferDefaultMethods : TcEnv -> List IfaceMethod -> <Mut> Unit
-inferDefaultMethods _ [] = ()
-inferDefaultMethods env (m :: rest) =
-  let _ = inferDefaultMethod env m
-  inferDefaultMethods env rest
+inferDefaultMethods : TcEnv -> List (String, Scheme) -> List IfaceMethod -> <Mut> Unit
+inferDefaultMethods _ _ [] = ()
+inferDefaultMethods env ifaceSchemes (m :: rest) =
+  let _ = inferDefaultMethod env ifaceSchemes m
+  inferDefaultMethods env ifaceSchemes rest
 
 -- C8b: type-check ALL interface default bodies, unconditionally.
 --
@@ -4496,8 +4508,8 @@ inferDefaultMethods env (m :: rest) =
 -- skip the outer unify if new errors were added (matches oracle single-error).
 --
 -- Methods without a default body (third pattern arm) are skipped by both oracle and selfhost.
-inferDefaultMethod : TcEnv -> IfaceMethod -> <Mut> Unit
-inferDefaultMethod env (IfaceMethod mname _ (Some (MethodDefault pats body))) = match lookupVar env mname
+inferDefaultMethod : TcEnv -> List (String, Scheme) -> IfaceMethod -> <Mut> Unit
+inferDefaultMethod env ifaceSchemes (IfaceMethod mname _ (Some (MethodDefault pats body))) = match lookupAssocS mname ifaceSchemes
   None => ()
   Some scheme => match lookupAssocSL2 mname methodConstraintsRef.value
     Some ids =>
@@ -4509,7 +4521,7 @@ inferDefaultMethod env (IfaceMethod mname _ (Some (MethodDefault pats body))) = 
       let _ = set_ref currentFn ""
       let inst = instantiateTracked scheme
       inferDefaultMethodBody env (fst inst) pats body
-inferDefaultMethod _ _ = ()
+inferDefaultMethod _ _ _ = ()
 
 -- Infer a default method body against [expectedTy], suppressing the outer
 -- unify if the body itself already pushed a type error (prevents duplicates
@@ -4862,6 +4874,15 @@ methodSchemes typarams (IfaceMethod mname mty _ :: rest) =
   let st = sigToSchemeTvs mty
   let _ = registerMethodConstraints typarams mname mty (snd st)
   (mname, fst st) :: methodSchemes typarams rest
+
+-- like methodSchemes but WITHOUT the registerMethodConstraints side effect — for
+-- callers (inferOneIfaceDefaults) that only need the schemes to look up a method's
+-- own type and must not double-register methodConstraintsRef entries (those are
+-- registered once during ifaceMethodSchemes at env setup).
+methodSchemesPure : List IfaceMethod -> <Mut> List (String, Scheme)
+methodSchemesPure [] = []
+methodSchemesPure (IfaceMethod mname mty _ :: rest) =
+  (mname, sigToScheme mty) :: methodSchemesPure rest
 
 -- the method-level-constraint slot ids of [mname]: one id per `=>` constraint over
 -- a non-interface-param tyvar, looked up in the scheme's tvs map.  Registered only
@@ -5662,7 +5683,26 @@ checkModuleFullImpl seedVars accData implDecls prog =
   -- C5: compute this module's standalone-shadow set BEFORE inference, so the
   -- inferMethodAt arg-position record can gate on it (resetState cleared it via
   -- pendingRLocalSites, but standaloneValuesRef is set fresh here per module).
-  let _ = set_ref standaloneValuesRef (buildStandaloneShadows implDecls prog)
+  --
+  -- Two flavours of standalone-shadow, BOTH needing RLocal recording so a method
+  -- call on a no-impl receiver routes to the standalone instead of mis-dispatching:
+  --   • IMPORTER shadow (`importerShadows`): a name imported from a sibling that is
+  --     also an interface method (box importing map's `toList`).  Its scheme must be
+  --     REBOUND to the interface-method scheme (`shadowMethodSchemes`) so the call
+  --     site types polymorphically; RLocal then redirects the no-impl receiver back.
+  --   • DEFINER shadow (`definerShadows`): a name THIS module defines as a top-level
+  --     funDef that ALSO names an interface method (map-as-root's own `toList` /
+  --     `isEmpty`).  The MARK pass (`buildStandaloneShadowsGraph`) rewrites these to
+  --     `EMethodAt`, so without a matching RLocal record the route falls back to the
+  --     result-type `RKey` (e.g. `toList`'s `List` result), dispatching the method on
+  --     the WRONG impl (List's `toList = identity`) → `debug`/`display` recurse on the
+  --     unchanged receiver forever (Map Debug/Eq/Ord impl bodies call standalone
+  --     `toList`).  These must be RECORDED for RLocal but must NOT be rebound to the
+  --     method scheme — their local standalone scheme (`Map k v -> …`) is what the
+  --     impl body types against.
+  let importerShadows = buildStandaloneShadows implDecls prog
+  let definerShadows = buildDefinerShadows implDecls prog
+  let _ = set_ref standaloneValuesRef (dedupS (importerShadows ++ definerShadows))
   let _ = set_ref methodDispatchIdxRef (argDispatchIndices implDecls)
   -- E6: re-install the cross-module constraint accumulator that resetState just
   -- wiped, so this module's `=>`-constrained call sites into EARLIER modules resolve
@@ -5682,7 +5722,11 @@ checkModuleFullImpl seedVars accData implDecls prog =
   -- behaviour); RLocal then redirects only the no-impl receiver back to the standalone
   -- at eval.  Mirrors lib/typecheck.ml: the EApp method-head arm types against the
   -- method scheme even when standalone_values holds the name.
-  let shadowMethodSchemes = pickSchemes standaloneValuesRef.value (ifaceMethodSchemes implDecls)
+  -- DEFINER shadows are EXCLUDED here: the module's OWN funDef (map-root's `toList`)
+  -- must type against its local standalone scheme (`Map k v -> List (k, v)`), not the
+  -- imported method scheme — the impl bodies call it ON a Map.  Only IMPORTER shadows
+  -- (imported-from-sibling method names) get the method-scheme rebind.
+  let shadowMethodSchemes = pickSchemes importerShadows (ifaceMethodSchemes implDecls)
   let env1 = extendVars (extendVars (extendVars dataEnv seedVars) globalS) shadowMethodSchemes
   let defs = funDefs prog
   let sigs = sigsOf prog
@@ -5746,6 +5790,21 @@ buildStandaloneShadows implDecls prog =
   let localNames = map fst (funDefs prog)
   let importedFns = map fst (funDefs implDecls)
   filter (n => containsName n methodNames && containsName n importedFns && not (containsName n localNames)) (dedupS importedFns)
+
+-- C5 (DEFINER shadow): the names THIS module declares as a top-level funDef that
+-- ALSO name an interface method visible in [implDecls] (the imported prelude/core).
+-- E.g. map-as-root defines `toList`/`isEmpty`, which shadow Foldable's methods.  The
+-- MARK pass (`buildStandaloneShadowsGraph`) rewrites occurrences of these to
+-- `EMethodAt`, so they MUST be in `standaloneValuesRef` for `recordRLocalSite` to
+-- record an RLocal candidate — otherwise the route falls back to the method's
+-- RESULT-type RKey (`toList`'s `List`) and the method dispatches on the WRONG impl.
+-- Unlike importer shadows these keep their LOCAL standalone scheme (NOT rebound to the
+-- method scheme), since the impl bodies apply them to the concrete receiver.
+buildDefinerShadows : List Decl -> List Decl -> List String
+buildDefinerShadows implDecls prog =
+  let methodNames = allIfaceMethodNames implDecls
+  let localNames = dedupS (map fst (funDefs prog))
+  filter (n => containsName n methodNames) localNames
 
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in
@@ -5949,11 +6008,21 @@ allModuleLines ((mid, ss) :: rest) = ("## MODULE " ++ mid) :: (schemeLines ss ++
 export
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List Decl, List (String, List Decl))
 -- E4: under argStampEnabled (the LLVM emit drivers ONLY) apply D3b's ARG-position
--- dict-passing per module, mirroring elaborateDict.  implInferEnabled ON so any
--- impl-body sites the path reaches are inferred too; OFF (the golden module
--- drivers) keeps every step byte-identical with the pre-E4 behaviour below.
+-- dict-passing per module, mirroring elaborateDict.
+--
+-- implInferEnabled is now ON unconditionally (was `argStampEnabled.value`): the EVAL
+-- path needs impl-body inference too, so a standalone-shadow method call INSIDE an
+-- impl body (map's `Debug`/`Eq`/`Ord`/`Display (Map k v)` bodies all call standalone
+-- `toList m`) RECORDS its RLocal site (recordRLocalSite → pendingRLocalSites) for
+-- resolveRLocalSites to stamp.  Without it the impl-body `toList` route stayed at its
+-- default RNone → eval arg-tag-dispatched a Map through the no-matching-tag `keepOrAll`
+-- fallback to Foldable List's `toList = identity` → returned the Map unchanged →
+-- `debug`/`display` recursed forever (SIGBUS on `medaka test stdlib/map.mdk`).  The
+-- TYPECHECK golden probes use checkModulesEntryLines/checkModulesDiags (NOT
+-- elaborateModules), so their goldens are unaffected; the emit-path diff gates run
+-- with argStampEnabled True, where impl inference was already ON — also unchanged.
 elaborateModules runtimeDecls coreDecls modules =
-  let _ = set_ref implInferEnabled argStampEnabled.value
+  let _ = set_ref implInferEnabled True
   let _ = set_ref crossModuleFunConstraintsRef []
   let allDecls = coreDecls ++ concatMapL snd modules
   let rpNames = returnPosMethodNames allDecls

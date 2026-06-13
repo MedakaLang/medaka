@@ -416,7 +416,9 @@ if want test; then
   for f in "$ROOT"/stdlib/core.mdk "$ROOT"/stdlib/json.mdk "$ROOT"/stdlib/toml.mdk \
            "$ROOT"/stdlib/list.mdk "$ROOT"/stdlib/set.mdk \
            "$ROOT"/test/selfhost_test_fixtures/mixed.mdk \
-           "$ROOT"/test/selfhost_test_fixtures/sum_dict.mdk; do
+           "$ROOT"/test/selfhost_test_fixtures/sum_dict.mdk \
+           "$ROOT"/test/selfhost_test_fixtures/mappable_not_foldable.mdk \
+           "$ROOT"/test/selfhost_test_fixtures/shadow_impl_tolist.mdk; do
     [ -f "$f" ] || continue
     emit_golden "${f%.mdk}.test.golden" "$MAIN" test "$f"
   done
