@@ -76,7 +76,7 @@ for f in $files; do
   fi
   root="$(dirname "$f")"
   expected="$(cat "$golden")"
-  actual="$("$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | strip_unit)"
+  actual="$("$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit)"
   if [ "$expected" = "$actual" ]; then
     pass=$((pass + 1))
     printf 'ok   %s\n' "$name"

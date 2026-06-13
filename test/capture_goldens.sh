@@ -120,7 +120,10 @@ emit_golden() {
   golden="$1"; shift
   fixtures=$((fixtures+1))
   out="$TMP/out"
-  "$@" > "$out" 2>/dev/null || true
+  # Strip the repo-root prefix: no golden should bake the absolute build path
+  # (some subcommands, e.g. `test`, echo the fixture path) — keep goldens
+  # worktree-relative and stable. Gates that echo paths strip the same.
+  "$@" 2>/dev/null | sed "s#$ROOT/##g" > "$out" || true
   if [ "$CHECK" -eq 1 ]; then
     if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
     else
