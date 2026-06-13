@@ -156,7 +156,14 @@ insert x (Bin s y l r) = match compare x y
 {- | Remove an element. A no-op when absent.
 
    > member 2 (delete 2 (fromList [1, 2, 3]))
-   False -}
+   False
+
+   Deleting an absent element leaves the set unchanged:
+
+   > toList (delete 9 (fromList [1, 2, 3]))
+   [1, 2, 3]
+   > size (delete 9 (fromList [1, 2, 3]))
+   3 -}
 export
 delete : Ord a => a -> Set a -> Set a
 delete x Tip = Tip
@@ -187,7 +194,10 @@ glueMin l r = match minView r
 
 -- ── Min / max ───────────────────────────────────────────────────────────
 
-{- | Split off the smallest element: `Some (elem, rest)`, or `None` when empty. -}
+{- | Split off the smallest element: `Some (elem, rest)`, or `None` when empty.
+
+   > minView (Set { } : Set Int)
+   None -}
 export
 minView : Set a -> Option (a, Set a)
 minView Tip = None
@@ -195,7 +205,10 @@ minView (Bin _ x l r) = match minView l
   None => Some (x, r)
   Some (xm, l') => Some (xm, balance x l' r)
 
-{- | Split off the largest element: `Some (elem, rest)`, or `None`. -}
+{- | Split off the largest element: `Some (elem, rest)`, or `None`.
+
+   > maxView (Set { } : Set Int)
+   None -}
 export
 maxView : Set a -> Option (a, Set a)
 maxView Tip = None
@@ -258,6 +271,13 @@ foldlSet f z (Bin _ x l r) = foldlSet f (f (foldlSet f z l) x) r
 {- | Union — every element in either set.
 
    > toList (union (fromList [1, 2]) (fromList [2, 3]))
+   [1, 2, 3]
+
+   Disjoint operands keep every element of both; a subset operand adds nothing:
+
+   > toList (union (fromList [1, 2]) (fromList [3, 4]))
+   [1, 2, 3, 4]
+   > toList (union (fromList [1, 2, 3]) (fromList [2]))
    [1, 2, 3] -}
 export
 union : Ord a => Set a -> Set a -> Set a
@@ -266,7 +286,14 @@ union a b = foldrSet (x acc => insert x acc) b a
 {- | Intersection — elements in both sets.
 
    > toList (intersection (fromList [1, 2, 3]) (fromList [2, 3, 4]))
-   [2, 3] -}
+   [2, 3]
+
+   Disjoint operands intersect to empty; a subset operand is its own intersection:
+
+   > toList (intersection (fromList [1, 2]) (fromList [3, 4]))
+   []
+   > toList (intersection (fromList [1, 2, 3]) (fromList [2]))
+   [2] -}
 export
 intersection : Ord a => Set a -> Set a -> Set a
 intersection a b = foldrSet (intersectStep b) Tip a
@@ -277,7 +304,14 @@ intersectStep b x acc = if member x b then insert x acc else acc
 {- | Difference — elements in the first set but not the second.
 
    > toList (difference (fromList [1, 2, 3]) (fromList [2]))
-   [1, 3] -}
+   [1, 3]
+
+   Subtracting a disjoint set changes nothing; subtracting a superset empties it:
+
+   > toList (difference (fromList [1, 2]) (fromList [3, 4]))
+   [1, 2]
+   > toList (difference (fromList [1, 2, 3]) (fromList [1, 2, 3]))
+   [] -}
 export
 difference : Ord a => Set a -> Set a -> Set a
 difference a b = foldrSet (x acc => delete x acc) a b
@@ -376,7 +410,12 @@ export default impl Monoid (Set a) requires Ord a where
 
 {- | Check the structural invariants at every node: search-tree order
    (left < node < right), the cached `size`, and the weight-balance bound.
-   A correct sequence of operations always leaves a set `wellFormed`. -}
+   A correct sequence of operations always leaves a set `wellFormed`.
+
+   > wellFormed (fromList [5, 3, 8, 1, 4, 7, 9, 2, 6])
+   True
+   > wellFormed (Set { } : Set Int)
+   True -}
 export
 wellFormed : Ord a => Set a -> Bool
 wellFormed Tip = True
@@ -426,6 +465,9 @@ prop "intersection elements are in both sets" (xs : List Int) (ys : List Int) =
   let b = fromList ys
   foldrSet (e acc => acc && member e a && member e b) True (intersection a b)
 
+prop "intersection preserves well-formedness" (xs : List Int) (ys : List Int) =
+  wellFormed (intersection (fromList xs) (fromList ys))
+
 prop "difference elements are in the first but not the second" (xs : List Int) (ys : List Int) =
   let a = fromList xs
   let b = fromList ys
@@ -433,3 +475,24 @@ prop "difference elements are in the first but not the second" (xs : List Int) (
     (e acc => acc && member e a && not (member e b))
     True
     (difference a b)
+
+prop "difference preserves well-formedness" (xs : List Int) (ys : List Int) =
+  wellFormed (difference (fromList xs) (fromList ys))
+
+prop "union is commutative on the sorted element list" (xs : List Int) (ys : List Int) =
+  let a = fromList xs
+  let b = fromList ys
+  eq (toList (union a b)) (toList (union b a))
+
+prop "size of a union is at most the sum of sizes" (xs : List Int) (ys : List Int) =
+  let a = fromList xs
+  let b = fromList ys
+  size (union a b) <= size a + size b
+
+prop "difference elements stay in the first set" (xs : List Int) (ys : List Int) =
+  let a = fromList xs
+  let b = fromList ys
+  foldrSet (e acc => acc && member e a) True (difference a b)
+
+prop "deleting a member removes it" (x : Int) (xs : List Int) =
+  not (member x (delete x (insert x (fromList xs))))
