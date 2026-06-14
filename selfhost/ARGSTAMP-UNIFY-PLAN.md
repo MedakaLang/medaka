@@ -1,6 +1,10 @@
 # ARGSTAMP-UNIFY-PLAN.md — retire the `argStampEnabled` eval-vs-emit dispatch fork
 
-Status: APPROVED 2026-06-14 (user — **full unification**). Sequel to
+Status: **COMPLETE 2026-06-14.** All phases (0/1/2+3/4/5) DONE. Eval and emit now run
+ONE elaboration mode (full static dict-threading); arg-tag (`filterByTag`) survives only
+for the irreducible primitive `Eq Int`/`Ord Int` + genuinely-`RNone` residual — parity
+with the native backend. `evalDictLayerActive` retired (zero readers). Approved
+2026-06-14 (user — **full unification**). Sequel to
 `selfhost/DRIVER-COLLAPSE-PLAN.md` (unified single-file vs multi-module drivers;
 left this finer eval-vs-emit split). Implements `TYPECHECK-AUDIT.md §6`'s "third
 semantic axis." Selfhost-only; OCaml `lib/` stays the frozen byte-diff oracle.
@@ -88,7 +92,66 @@ observably — a clean partial landing if Phase 3 balloons.**
 
   Gates (all green): `diff_selfhost_test` **9/0**, `diff_selfhost_eval_dict` **22/3** (== baseline; the residual 3 = `method_constraint_foldmap_{list,string}` + `method_constraint_user_iface`, a PRE-EXISTING method-level-constraint `foldMap`/`Monoid m` gap, NOT this work — failing identically on baseline), `_batch` 7/18 (== baseline #55 residual). Emit byte-identical: `diff_selfhost_llvm` 180/0, `_modules` 13/0, `_typed` 37/0, `diff_selfhost_build` 21/0, `diff_native_cli` 54/0. `eval_run`(+batch) 25/0, `eval_modules` 4/0, `eval_typed_modules` 2/0, `bootstrap_eval` 20/0. Canary `core.mdk` 9/0 (no `neq`-hang). parity probe 25/0. `selfcompile_fixpoint` **C3a YES / C3b YES**. NOTE: `medaka build` (emit) of `monoid_mutual_recursive`/`Set {…}` literals still fails (separate pre-existing EMIT-PATH dict-mangling gaps — `$dict_<module>__<fn>_<slot>` not threaded); the INTERPRETER (`medaka run`, eval_dict gate) is now correct for both. Phase 2+3 done; F4 already unconditional (folded in); Phases 4 (retire `evalDictLayerActive` dead flag) + 5 (scope `filterByTag`) remain.
 - **Phase 4 — F4 unconditional + retire `evalDictLayerActive` (medium).** Drop the `:3569` gate (forward reqs always); delete `evalDictLayerActive`, simplify `|| evalDictLayerActive` guards to plain `argStampEnabled`. Gates: full matrix + native_cli + fixpoint.
+- **Phase 4 — ✅ DONE 2026-06-14.** `evalDictLayerActive` was written EXACTLY ONCE
+  (`set_ref evalDictLayerActive (not argStampEnabled.value)`) and read only in guards of
+  the form `argStampEnabled.value || evalDictLayerActive.value` — an **always-True
+  tautology** (`p || not p`) post-Phase-2+3, since the eval path now threads dicts fully.
+  Confirmed-first: each guard's body is byte-identical whether True-by-`argStampEnabled`
+  (emit) or True-by-`evalDictLayerActive` (eval), so retiring the flag and making each
+  guard **unconditional** is behavior-preserving on every gate. Simplifications (all in
+  `selfhost/types/typecheck.mdk`): F7 `checkModuleFullImpl` reseed (the two
+  `set_ref funConstraintsRef` / `set_ref crossModuleFunConstraintsRef` guards, now plain
+  `let _ = …`); F12 `realizeRecDictApps` + `resolveDictApps` + `resolveMethodDicts`
+  (three guards → plain calls); `dictPassModulesIfEnabled` collapsed from a
+  guarded-clause (`| argStampEnabled || evalDictLayerActive = …` + `| otherwise =
+  (core2, modules2)`) to one unconditional `= …` body (the `otherwise` arm was dead). F4
+  (`resolveBinopSite` element-dict reqs) was already folded unconditional during Phase
+  2+3 (commit 20a5c45) — no `:3569` gate remained to drop. Flag DEFINITION + comment +
+  the single `set_ref` setter DELETED. `grep -rn evalDictLayerActive selfhost/` → **0
+  live code readers** (only explanatory comments + these plan-doc history lines remain).
+  Gates all green (see Verification below). `make medaka` + `selfcompile_fixpoint`
+  **C3a YES / C3b YES**.
 - **Phase 5 — scope surviving `filterByTag` (small).** Assert/probe arg-tag fires ONLY for primitive `Eq`/`Ord` + `RNone` residual; no groundable ADT arg-position site reaches it on eval. Gate: parity probe + fixpoint.
+- **Phase 5 — ✅ DONE 2026-06-14 (analysis + retained probe).** Arg-tag dispatch
+  (`filterByTag`/`keepCand`/`keepOrAll`, `selfhost/eval/eval.mdk:710-724`) fires **only**
+  from the single site `applyOpt (VMulti vs) arg` (`:692`) — i.e. when a method occurrence
+  reaches eval as a bare un-routed `VMulti` dispatcher applied to an argument. Post-Phase
+  2+3, every **groundable ADT arg-position** site is stamped with a route (`EMethodAt`
+  carrying `RKey`/`RDict`) at elaboration and dispatches through
+  `evalMethodAt`/`applyDicts`/threaded `$dict_` params — it NEVER reaches
+  `applyOpt (VMulti …)`. So `filterByTag` is confined to the **irreducible residual**, the
+  SAME residual the native backend leaves structural (AUDIT §route-taxonomy 1a):
+  1. **Primitive `Eq Int`/`Ord Int`** (`==`/`<`/`<=`…) via `valueEq`/`valueCompare`/
+     `evalArith` — these are structural and never construct a `VMulti` at all;
+     `binopPrimitiveHead` keeps primitive operands `RNone`, so no primitive head ever gets
+     a non-`RNone` arg-stamp (P3/P4 risk-register mitigation holds).
+  2. **Genuinely-`RNone` sites** — a method occurrence with no groundable receiver tag
+     (standalone-shadow no-impl receiver; the `keepOrAll original [] = original`
+     keep-the-original-set fallback path).
+  No groundable ADT arg-position site reaches `filterByTag` on eval = **parity with emit**.
+  Evidence: `diff_selfhost_eval_dict` 22/3 == OCaml golden (the eval path produces the
+  same OUTPUT as the dict-threading emit path); the 3 residual fails are the pre-existing
+  method-level-constraint `foldMap`/`Monoid m` gap, NOT arg-tag. **Probe DECISION: KEPT**
+  `test/argstamp_parity_probe.sh` + `selfhost/entries/argstamp_parity_probe.mdk` as a
+  permanent regression gate (re-asserts eval==emit OUTPUT-convergence across the
+  eval-dict corpus under both flag settings). **NOT load-bearing alone** — it is blind to
+  regressions that hit ON and OFF equally (documented Phase 2+3 methodology correction);
+  `diff_selfhost_eval_dict` (vs OCaml golden) remains THE load-bearing gate. Stale-binary
+  footgun: the probe binary `test/bin/argstamp_parity_probe` does NOT auto-rebuild —
+  rebuild via `./medaka build selfhost/entries/argstamp_parity_probe.mdk -o
+  test/bin/argstamp_parity_probe` before trusting it.
+
+### Unification COMPLETE — summary
+The `argStampEnabled` eval-vs-emit dispatch fork is closed. ONE elaboration mode threads
+dicts on both paths; `evalDictLayerActive` (the #55-era reconciliation patch) is retired
+with zero readers; arg-tag (`filterByTag`) is scoped to its irreducible primitive +
+`RNone` residual, parity with the native backend. **Vestigiality noted for follow-up (do
+NOT act on here):** `argStampEnabled` itself still legitimately distinguishes
+emit-specific concerns (arg-position stamping, `discoverPromotedModules` snapshot,
+per-module impl-body inference via `implInferEnabled`, `argMeasureEnabled`). Whether
+those emit-only passes can be unified or whether `argStampEnabled` can retire entirely is
+a SEPARATE, larger question — several `argStampEnabled.value` / `implInferEnabled.value`
+guards remain that are NOT tautologies (they genuinely gate emit-only work). Left intact.
 
 Riskiest = Phase 3 (eval value-shape change). Phase 1 (`neq`-hang) second. FULLY sequential (shared mutable `typecheck.mdk`/`eval.mdk` + fixpoint canary).
 
