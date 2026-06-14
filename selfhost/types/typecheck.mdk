@@ -6353,16 +6353,20 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
   checkModulesEntryFullGo (runtimeSeed ++ coreSchemes) (publicDataDecls coreDecls) modules
 
--- thread the public accumulators exactly as checkModulesDiagsGo, but keep only the
--- LAST (entry) module's full triple — earlier modules' diagnostics belong to their
--- own `check`, not the entry's report.
+-- thread the public accumulators exactly as checkModulesDiagsGo.  The returned
+-- triple keeps the ENTRY (last) module's SCHEMES and WARNINGS (those belong to the
+-- entry's report), but ACCUMULATES type errors from EVERY module: a type error in
+-- an IMPORTED module is still a hard error of `check`ing the entry graph and must
+-- surface (otherwise it silently reaches codegen — the G1-class soundness hole).
+-- Earlier-module errors are prepended (dependency-first) to the entry's own.
 checkModulesEntryFullGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
 checkModulesEntryFullGo _ _ [] = ([], [], [])
 checkModulesEntryFullGo accV accData [(_, prog)] = checkModuleFullDiags accV accData prog
 checkModulesEntryFullGo accV accData ((_, prog) :: rest) =
-  let (schemes, _, _) = checkModuleFullDiags accV accData prog
+  let (schemes, errs, _) = checkModuleFullDiags accV accData prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  checkModulesEntryFullGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+  let (eSchemes, eErrs, eWarns) = checkModulesEntryFullGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+  (eSchemes, errs ++ eErrs, eWarns)
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
 -- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
@@ -6376,8 +6380,8 @@ checkModulesEntryReport runtimeDecls coreDecls modules =
     [] => joinNl (schemeLines schemes ++ warns)
     _ => joinNl (typeErrorLines (map fst errs))
 
--- exit-code predicate analog of checkHasErrors: any type error in the ENTRY
--- module's own check.
+-- exit-code predicate analog of checkHasErrors: any type error in ANY module of
+-- the resolved graph (entry or imported — see checkModulesEntryFullGo).
 export
 checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> <Mut> Bool
 checkModulesEntryHasErrors runtimeDecls coreDecls modules =
