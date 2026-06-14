@@ -238,3 +238,30 @@ the typecheck-body unification half-done.
 **Do NOT** attempt the HM-core/dispatch file split. The wins are consolidation (5) +
 mirror-unification (4), not decomposition. Hazard #1 (`typeErrorsSticky`) is inherent and
 unfixable by refactor — the best mitigation is (4): one place to reason about it.
+
+---
+
+## Implementation corrections (from executing the pipeline) — 2026-06-14
+
+**Step 1 (dead-probe prune) — DONE** (main `710f707`): removed 4 dead Refs + ArgSite +
+~189 LOC arg-measurement/loc-probe machinery from typecheck.mdk + 6 dead entries (932
+LOC); kept the live look-alikes (`recordArgSiteFn`, `pendingArgStamps`). Gates
+byte-identical + fixpoint YES.
+
+**Step 2 (Tarjan + printer extractions) — BLOCKED, both deferred/dropped.** Pass-2
+under-estimated the coupling:
+- **Tarjan SCC is NOT pure over `(String, List String)`** — it takes an `SMap` adjacency
+  directly and its state is `SMap`-backed (`tjIndex`/`tjLow`/`tjOn : Ref (SMap …)`).
+  `SMap` (inline `typecheck.mdk:1422–1484`, backs `TcEnv`, perf-load-bearing — the Tarjan
+  rewrite cut typecheck ~5×) can't be referenced from `support/` (layering). **SCC
+  extraction is GATED ON the ordered-map consolidation** (move `SMap`→`support/` first),
+  not independent. Cluster for the later move: `tarjanSCCs`/`tarjanAll`/`tjVisit`/
+  `strongconnect`/… + 6 `tj*` Refs (`typecheck.mdk:5272–5345`, ~73 LOC).
+- **Printer extraction → circular import** (depends on `normalize` (50 uses)/`effrowLabels`/
+  `lookupAssocI` which stay in typecheck). Cosmetic; **DROPPED**.
+
+**Resequenced pipeline:** the extractions are cosmetic AND entangled; the ordered-map
+consolidation is their prerequisite. Revised priority: (1) dead-probe ✓ → (2)
+`argStampEnabled` retirement [real value, no extraction needed] → (3) `DispatchState`
+bundle → (ordered-map consolidation + the now-unblocked Tarjan extraction as an optional
+later tidy-up). The pretty-printer extraction is dropped.
