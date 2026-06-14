@@ -651,6 +651,27 @@ positionChar params = match lookup "position" params
 requestUri : Json -> Option String
 requestUri params = fieldStr "uri" (fieldOr "textDocument" params)
 
+-- ── logging (crash diagnosis) ───────────────────────────────────────────────
+--
+-- Append-only session log so an unrecoverable panic leaves the CRASHING message
+-- as the last line: each incoming body is logged BEFORE dispatch, and a
+-- "handled" marker is logged AFTER dispatch returns.  A `recv` with no following
+-- `handled` ⇒ the panic was in that message's dispatch.  Path: $MEDAKA_LSP_LOG,
+-- else /tmp/medaka-lsp.log.  appendFile opens/appends/closes each call, so every
+-- line is durable before the next step (no buffering to strand a pre-crash
+-- entry).  Always on during the soak/dev phase; gate behind an env flag if noisy.
+-- (No timestamp: `wallTimeSec` is interpreter-only, not yet a native extern —
+-- append order gives message sequence, which is what crash diagnosis needs.)
+logFilePath : Unit -> <IO> String
+logFilePath _ = match getEnv "MEDAKA_LSP_LOG"
+  Some v => if v == "" then "/tmp/medaka-lsp.log" else v
+  None => "/tmp/medaka-lsp.log"
+
+logLine : String -> <IO> Unit
+logLine s =
+  let _ = appendFile (logFilePath ()) (stringConcat [s, "\n"])
+  ()
+
 -- ── JSON-RPC framing ────────────────────────────────────────────────────────
 
 -- Write a JSON value as a Content-Length-framed JSON-RPC packet to stdout,
@@ -664,12 +685,31 @@ writeMessage j =
   let _ = putStr body
   flushStdout ()
 
--- Content-Length counts BYTES.  Our JSON bodies are ASCII (messages, file
--- paths, and stdlib diagnostics are ASCII), so the byte length equals the
--- character length; stringLength suffices.  (A UTF-8 byte counter is a later
--- refinement if non-ASCII identifiers appear in diagnostics.)
+-- Content-Length counts BYTES on the wire, but `stringLength` counts Unicode
+-- CODEPOINTS.  Medaka source routinely carries multibyte UTF-8 (em-dashes,
+-- arrows, box-drawing in comments), and any response embedding that text (a
+-- diagnostic, a documentSymbol body) would otherwise under-declare its length —
+-- the client then reads too few bytes and the frame boundary slips ("Header must
+-- provide a Content-Length property", server shutdown).  So sum each codepoint's
+-- UTF-8 byte width (`putStr` emits the body as UTF-8, so this matches the wire).
 utf8Len : String -> Int
-utf8Len = stringLength
+utf8Len s =
+  let arr = stringToChars s
+  utf8LenGo arr (arrayLength arr) 0 0
+
+utf8LenGo : Array Char -> Int -> Int -> Int -> Int
+utf8LenGo arr len i acc
+  | i >= len = acc
+  | otherwise = utf8LenGo arr len (i + 1) (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
+
+-- UTF-8 encoded width of a Unicode codepoint: 1 byte < U+0080, 2 < U+0800,
+-- 3 < U+10000, else 4 (matches the standard UTF-8 length table).
+utf8CharWidth : Int -> Int
+utf8CharWidth cp
+  | cp < 128 = 1
+  | cp < 2048 = 2
+  | cp < 65536 = 3
+  | otherwise = 4
 
 -- A JSON-RPC response envelope: { jsonrpc, id, result }.
 responseMsg : Json -> Json -> Json
@@ -1038,6 +1078,7 @@ dispatch runtimeSrc coreSrc msg docs = match methodOf msg
       let _ = writeMessage (responseMsg (requestId msg) JNull)
       Step docs True
     else if meth == "exit" then
+      let _ = logLine "exit (clean shutdown)"
       Step docs False                   -- stop the loop
     else
       Step docs True                    -- unrecognized method — ignore
@@ -1053,9 +1094,15 @@ serveOnce runtimeSrc coreSrc docs = match readHeaders 0
     match readExactly len
       None => Step docs False           -- short read / EOF mid-body
       Some body =>
+        let _ = logLine (stringConcat ["recv ", body])
         match parse body
-          Err _ => Step docs True       -- malformed JSON body — skip, keep going
-          Ok msg => dispatch runtimeSrc coreSrc msg docs
+          Err _ =>
+            let _ = logLine "  parse-error: malformed JSON body (skipped)"
+            Step docs True              -- malformed JSON body — skip, keep going
+          Ok msg =>
+            let step = dispatch runtimeSrc coreSrc msg docs
+            let _ = logLine "  handled"
+            step
 
 -- The session loop: serve messages until `exit` or EOF.
 serve : String -> String -> Docs -> <IO, Mut> Unit
@@ -1067,7 +1114,9 @@ serve runtimeSrc coreSrc docs =
 -- Public entry point for the driver.
 export
 runServer : String -> String -> <IO, Mut> Unit
-runServer runtimeSrc coreSrc = serve runtimeSrc coreSrc emptyDocs
+runServer runtimeSrc coreSrc =
+  let _ = logLine "=== medaka-lsp session start ==="
+  serve runtimeSrc coreSrc emptyDocs
 
 unit : Unit
 unit = ()
