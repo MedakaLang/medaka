@@ -4,5 +4,8 @@
 (DData Public "Tree" ("a") ((variant "Leaf" (ConPos)) (variant "Node" (ConPos (TyApp (TyCon "Tree") (TyVar "a")) (TyVar "a") (TyApp (TyCon "Tree") (TyVar "a"))))) ())
 (DData Abstract "Color" () ((variant "Red" (ConPos)) (variant "Green" (ConPos)) (variant "Blue" (ConPos))) ())
 (DData Private "Shape2" () ((variant "Sphere" (ConPos (TyCon "Int"))) (variant "Box" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "Shape3" () ((variant "Disc" (ConPos (TyCon "Int"))) (variant "Tri" (ConPos (TyCon "Int") (TyCon "Int")))) ("Eq" "Debug"))
+(DData Private "Shape4" () ((variant "Dot" (ConPos (TyCon "Int"))) (variant "Seg" (ConPos (TyCon "Int") (TyCon "Int")))) ("Eq" "Debug"))
 (DRecord Private "Point" () ((field "x" (TyCon "Int")) (field "y" (TyCon "Int"))) ())
+(DRecord Private "Tagged" () ((field "label" (TyCon "Int"))) ("Eq" "Debug"))
 (DData Private "Event" () ((variant "Click" (ConNamed (field "x" (TyCon "Int")) (field "y" (TyCon "Int")))) (variant "Scroll" (ConPos (TyCon "Int")))) ())

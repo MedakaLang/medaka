@@ -928,6 +928,21 @@ deriving_clause:
 inline_deriving:
   | DERIVING LPAREN separated_nonempty_list(COMMA, UPPER) RPAREN  { $3 }
 
+(* `deriving` clause appearing INSIDE a block-form INDENT span (the lexer keeps
+   it within the INDENT/DEDENT because it's indented past the decl head, so the
+   DEDENT fires after the deriving).  Two placements, handled differently:
+     - on its own indented line: the preceding variant already consumed its
+       NEWLINE, so this bare `deriving (...) NEWLINE` is matched here;
+     - trailing the final constructor (`| Square Int deriving (...)`): that
+       constructor could not consume a trailing NEWLINE, so the deriving is
+       folded into the variant-line production (see data_variant_line) rather
+       than here — keeping this rule free of a leading PIPE avoids an LR conflict
+       with data_variant_line.
+   block_deriving owns the trailing newline before DEDENT. *)
+block_deriving:
+  | DERIVING LPAREN separated_nonempty_list(COMMA, UPPER) RPAREN newlines
+    { $3 }
+
 (* ── Data declarations ───────────────────────────────── *)
 
 inner_data_decl:
@@ -940,6 +955,23 @@ inner_data_decl:
      optional deriving. *)
   | DATA UPPER list(IDENT) INDENT data_variant_head list(data_variant_line) DEDENT newlines option(deriving_clause)
     { fun vis -> DData (vis, $2, $3, $5 :: $6, Option.value ~default:[] $9) }
+  (* Block form with `deriving` INSIDE the indented block (before DEDENT), in
+     either placement: on its own indented line, or trailing the final
+     constructor.  Both arise because the lexer keeps the deriving line within
+     the INDENT/DEDENT span, so the DEDENT fires after the deriving — see
+     block_deriving. *)
+  | DATA UPPER list(IDENT) INDENT data_variant_head list(data_variant_line) block_deriving DEDENT newlines
+    { fun vis -> DData (vis, $2, $3, $5 :: $6, $7) }
+  (* Block form where `deriving` trails the FINAL constructor on the same line
+     (`| Square Int deriving (Eq, Debug)`).  The constructor could not consume a
+     trailing NEWLINE, so a deriving-carrying variant line terminates the tail
+     (see data_variant_block_tail).  Kept separate from the own-line case above
+     so the deriving branch sits inside the variant-line production — avoiding an
+     LR conflict between a PIPE-led block_deriving and data_variant_line. *)
+  | DATA UPPER list(IDENT) INDENT data_variant_head data_variant_block_tail DEDENT newlines
+    { fun vis ->
+        let (lines, derivs) = $6 in
+        DData (vis, $2, $3, $5 :: lines, derivs) }
   (* Inline form: optional deriving before the terminating newlines *)
   | DATA UPPER list(IDENT) EQUAL separated_nonempty_list(PIPE, data_variant_inline) option(inline_deriving) newlines
     { fun vis -> DData (vis, $2, $3, $5, Option.value ~default:[] $6) }
@@ -964,6 +996,23 @@ data_variant_line:
     { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
       { con_name = $2; con_payload = Ast.ConNamed $4 } }
 
+(* Tail of a block-form variant list whose FINAL constructor line carries a
+   trailing `deriving (...)`.  Right-recursive: zero or more ordinary lines, then
+   one deriving-bearing line.  Returns (variant lines, derived-interface names).
+   The `PIPE UPPER list(ty_atom)` / `PIPE UPPER { ... }` prefixes are shared with
+   data_variant_line, so the choice between a normal line and a
+   deriving-terminated line is decided at the NEWLINE-vs-DERIVING lookahead, not
+   at PIPE — no LR conflict. *)
+data_variant_block_tail:
+  | PIPE UPPER list(ty_atom) inline_deriving newlines
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      ([ { con_name = $2; con_payload = Ast.ConPos $3 } ], $4) }
+  | PIPE UPPER LBRACE separated_nonempty_list(COMMA, inline_field_decl) RBRACE inline_deriving newlines
+    { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
+      ([ { con_name = $2; con_payload = Ast.ConNamed $4 } ], $6) }
+  | data_variant_line data_variant_block_tail
+    { let (lines, derivs) = $2 in ($1 :: lines, derivs) }
+
 data_variant_inline:
   | UPPER list(ty_atom)
     { Parser_state.record_variant_line $startpos.Lexing.pos_lnum;
@@ -981,6 +1030,11 @@ inner_record_decl:
   (* Block form: same structure as block data — newlines consumed before optional deriving *)
   | RECORD UPPER list(IDENT) INDENT nonempty_list(record_field_decl) DEDENT newlines option(deriving_clause)
     { fun vis -> DRecord (vis, $2, $3, $5, Option.value ~default:[] $8) }
+  (* Block form with `deriving` on its own indented line INSIDE the block (the
+     lexer keeps it within the INDENT/DEDENT span, so the DEDENT fires after).
+     Each field already consumed its NEWLINE, so the clause is bare here. *)
+  | RECORD UPPER list(IDENT) INDENT nonempty_list(record_field_decl) deriving_clause DEDENT newlines
+    { fun vis -> DRecord (vis, $2, $3, $5, $6) }
 
 record_field_decl:
   | IDENT COLON ty newlines  { { field_name = $1; field_type = $3 } }

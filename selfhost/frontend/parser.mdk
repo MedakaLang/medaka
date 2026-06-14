@@ -2283,28 +2283,48 @@ parseData vis = do
   expectTok TData
   name <- upperNameP
   params <- many lowerNameP
-  variants <- dataBody
-  derives <- derivingClause
+  bodyAndDerives <- dataBody
+  -- block form may carry `deriving (…)` INSIDE the INDENT span (own line or
+  -- trailing the last constructor); that is captured by dataBody.  The inline
+  -- form leaves derives empty here and the trailing derivingClause picks it up.
+  let variants = fst bodyAndDerives
+  let blockDerives = snd bodyAndDerives
+  outerDerives <- derivingClause
   skipNewlines
-  pure (DData vis name params variants derives)
+  pure (DData vis name params variants (combineDerives blockDerives outerDerives))
 
--- inline (`= …`) or block (`INDENT = … DEDENT`) variant list
-dataBody : Parser (List Variant)
+-- block-form deriving (inside the INDENT) and inline-form deriving (after the
+-- DEDENT) are mutually exclusive in practice; prefer whichever is non-empty.
+combineDerives : List String -> List String -> List String
+combineDerives [] outer = outer
+combineDerives block _ = block
+
+-- inline (`= …`) or block (`INDENT = … DEDENT`) variant list.  Returns the
+-- variants paired with any deriving names found INSIDE a block body (empty for
+-- the inline form).
+dataBody : Parser (List Variant, List String)
 dataBody = do
   t <- peekP
   dataBodyFor t
 
-dataBodyFor : Token -> Parser (List Variant)
+dataBodyFor : Token -> Parser (List Variant, List String)
 dataBodyFor TEqual = do
   advance
-  dataVariants
+  vs <- dataVariants
+  pure (vs, [])
 dataBodyFor TIndent = do
   advance
   expectTok TEqual
   vs <- dataVariants
+  -- `deriving (…)` may sit INSIDE the block (the lexer keeps the indented
+  -- deriving line within the INDENT/DEDENT), so consume it before the DEDENT.
+  -- derivingClause stops at the RPAREN; skip its trailing NEWLINE so the DEDENT
+  -- is the next token.
+  derives <- derivingClause
+  skipNewlines
   expectTok TDedent
-  pure vs
-dataBodyFor _ = pure []
+  pure (vs, derives)
+dataBodyFor _ = pure ([], [])
 
 dataVariants : Parser (List Variant)
 dataVariants = do
@@ -2381,10 +2401,16 @@ parseRecord vis = do
   params <- many lowerNameP
   expectTok TIndent
   fields <- recordFields
-  expectTok TDedent
-  derives <- derivingClause
+  -- `deriving (…)` may sit INSIDE the block (indented line kept within the
+  -- INDENT/DEDENT span), so consume it before the DEDENT; otherwise the inline
+  -- form after the DEDENT is picked up below.  derivingClause stops at the
+  -- RPAREN; skip its trailing NEWLINE so the DEDENT is next.
+  blockDerives <- derivingClause
   skipNewlines
-  pure (DRecord vis name params fields derives)
+  expectTok TDedent
+  outerDerives <- derivingClause
+  skipNewlines
+  pure (DRecord vis name params fields (combineDerives blockDerives outerDerives))
 
 recordFields : Parser (List Field)
 recordFields = do
