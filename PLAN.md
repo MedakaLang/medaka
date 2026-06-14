@@ -116,7 +116,7 @@ Three stages, each a gate on the next.
 
 Stages 0 (prerequisites), 1 (self-host on the interpreter), and 2 (LLVM backend)
 are done — Medaka self-hosts and the native backend compiles it to a reproducing
-fixpoint (see [Current status](#current-status-2026-06-09)). Full per-stage detail
+fixpoint (see [Current status](#current-status-2026-06-14)). Full per-stage detail
 archived in [`PLAN-ARCHIVE.md` → Archived north star stages 0 to 2](./PLAN-ARCHIVE.md#archived-north-star-stages-0-to-2);
 owning docs: `selfhost/README.md` (Stage 1), `selfhost/STAGE2-DESIGN.md` +
 `selfhost/BOOTSTRAP.md` (Stage 2). Forward work is
