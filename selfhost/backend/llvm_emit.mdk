@@ -603,7 +603,7 @@ data LTy = LTInt | LTFloat | LTBool | LTCon | LTClosure | LTStr | LTUnit | LTCha
 -- so any function body may reference any global.  MULTI-MODULE init (each module's
 -- globals initialised in cross-module dependency order) is a D4 concern — NOT built
 -- here; this is the single-program (`@main` + prologue) milestone.
-data Emit = Emit (Ref Int) (Ref (List String)) (Ref (List String)) (Ref (List (String, FnSig))) (Ref (List (String, Int))) (Ref (List String)) (Ref (List (String, List String))) (Ref (List CImplEntry)) (Ref (List (String, String))) (Ref (List (String, (Bool, LTy))))
+data Emit = Emit { counter : Ref Int, buf : Ref (List String), fnNames : Ref (List String), sigs : Ref (List (String, FnSig)), ctors : Ref (List (String, Int)), lams : Ref (List String), recFields : Ref (List (String, List String)), implEntries : Ref (List CImplEntry), ctorTypes : Ref (List (String, String)), globalsReg : Ref (List (String, (Bool, LTy))) }
 
 -- a function's inferred signature: its parameter types (in order) and its return
 -- type.  At the LLVM ABI every value is a uniform i64 word regardless (Int
@@ -618,7 +618,8 @@ data FnSig = FnSig (List LTy) LTy
 
 -- ── emitter plumbing ────────────────────────────────────────────────────────
 freshId : Emit -> <Mut> Int
-freshId (Emit c _ _ _ _ _ _ _ _ _) =
+freshId e =
+  let c = e.counter
   let n = c.value
   let _ = set_ref c (n + 1)
   n
@@ -627,24 +628,24 @@ freshReg : Emit -> <Mut> String
 freshReg e = "%t" ++ intToString (freshId e)
 
 emit : Emit -> String -> <Mut> Unit
-emit (Emit _ buf _ _ _ _ _ _ _ _) line = set_ref buf (line :: buf.value)
+emit e line = let buf = e.buf in set_ref buf (line :: buf.value)
 
 -- the main output buffer ref (slice 4: needed for the save/restore swap that
 -- redirects emission of a lifted lambda's `define` into the side buffer).
 bufRef : Emit -> Ref (List String)
-bufRef (Emit _ buf _ _ _ _ _ _ _ _) = buf
+bufRef e = e.buf
 
 -- the side buffer holding lifted-lambda `define`s, in REVERSE order (newest
 -- first): each append prepends its chunk (O(chunk), amortized O(total)) instead
 -- of the old O(N²) `acc ++ forward`; the consumer `reverseL`s it once at module
 -- end (slice 4).
 lamsRef : Emit -> Ref (List String)
-lamsRef (Emit _ _ _ _ _ lams _ _ _ _) = lams
+lamsRef e = e.lams
 
 -- the known-function table (set once in emitProgram); membership decides whether
 -- a `CApp` head names a callable top-level function.
 fnNames : Emit -> <Mut> List String
-fnNames (Emit _ _ fns _ _ _ _ _ _ _) = fns.value
+fnNames e = e.fnNames.value
 
 -- ── known-function index (perf) ─────────────────────────────────────────────
 -- `fnNames` is set ONCE at Emit construction and never mutated (unlike `sigs`,
@@ -703,7 +704,7 @@ fnRetTy e name = match sigMapRef.value
 -- the constructor arity table (set once in emitProgram); membership decides
 -- whether a `CVar`/`CApp` head names an ADT constructor (→ heap allocation).
 ctorTable : Emit -> <Mut> List (String, Int)
-ctorTable (Emit _ _ _ _ ct _ _ _ _ _) = ct.value
+ctorTable e = e.ctors.value
 
 isCtor : Emit -> String -> <Mut> Bool
 isCtor e name = match ctorMapRef.value
@@ -720,7 +721,7 @@ isCtor e name = match ctorMapRef.value
 -- CFieldAccess uses it to convert a label name to a positional index so the
 -- field can be reached by loadField without carrying type information.
 recFieldTable : Emit -> <Mut> List (String, List String)
-recFieldTable (Emit _ _ _ _ _ _ rt _ _ _) = rt.value
+recFieldTable e = e.recFields.value
 
 -- ── impl table (slice 6) ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
@@ -728,7 +729,7 @@ recFieldTable (Emit _ _ _ _ _ _ rt _ _ _) = rt.value
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
 -- tagged impl of a method (the runtime RDict/RDictFwd dispatch-switch arms).
 implEntriesOf : Emit -> <Mut> List CImplEntry
-implEntriesOf (Emit _ _ _ _ _ _ _ ie _ _) = ie.value
+implEntriesOf e = e.implEntries.value
 
 -- the impls of a method, in program order — only the CImplTagged ones (an
 -- untagged CImplDefault is the arg-tag fallback, never a static-dispatch target).
@@ -819,7 +820,7 @@ implEntryMethod (CImplEntry n _ _) = n
 -- test "is the loaded ctor tag one of type T's constructors?" by OR-ing the
 -- hashName of each.
 ctorTypeTable : Emit -> <Mut> List (String, String)
-ctorTypeTable (Emit _ _ _ _ _ _ _ _ ctt _) = ctt.value
+ctorTypeTable e = e.ctorTypes.value
 
 -- ── globals registry (slice E1b) ────────────────────────────────────────────
 -- the top-level value/`Ref` globals registry ref: `name -> (initialised?, LTy)`.
@@ -827,7 +828,7 @@ ctorTypeTable (Emit _ _ _ _ _ _ _ _ ctt _) = ctt.value
 -- `load i64, ptr @mdk_g_<name>`; the `@main` init prologue computes each rhs in
 -- source order and flips its flag, so a forward/mutual init dependency is caught.
 globalsRegRef : Emit -> Ref (List (String, (Bool, LTy)))
-globalsRegRef (Emit _ _ _ _ _ _ _ _ _ gr) = gr
+globalsRegRef e = e.globalsReg
 
 -- mark a global initialised, recording the static type its rhs computed to.  Drops
 -- any prior (uninitialised) entry for the name and prepends the resolved one.
@@ -5705,7 +5706,7 @@ allPVar ((PVar _)::rest) = allPVar rest
 allPVar _ = False
 
 sigTable : Emit -> <Mut> List (String, FnSig)
-sigTable (Emit _ _ _ sigs _ _ _ _ _ _) = sigs.value
+sigTable e = e.sigs.value
 
 -- default param types when no signature was inferred (every param Int).
 allInt : List Pat -> List LTy
@@ -6968,7 +6969,7 @@ emitRangeList e env lo hi incl =
 export
 emitProgram : CProgram -> <Mut> String
 emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
-  let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsReg (valBinds groups)))
+  let e = Emit { counter = Ref 0, buf = Ref [], fnNames = Ref (collectFns groups), sigs = Ref (inferSigs (fnBinds groups)), ctors = Ref ctorArs, lams = Ref [], recFields = Ref (collectRecords groups), implEntries = Ref implEntries, ctorTypes = Ref ctorTypes, globalsReg = Ref (initGlobalsReg (valBinds groups)) }
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)
   let _ = installCtorMap ctorArs
@@ -6996,8 +6997,7 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   -- the module body (preamble, @main, fn/impl defines) in forward order, then the
   -- side buffer (string-literal + value-binding globals, lifted-lambda defines).
   -- LLVM module-item order is irrelevant, so appending the side buffer is sound.
-  match e
-    Emit _ buf _ _ _ lams _ _ _ _ => joinNl (reverseL buf.value ++ reverseL lams.value)
+  joinNl (reverseL e.buf.value ++ reverseL e.lams.value)
 
 emitPreamble : Emit -> <Mut> Unit
 emitPreamble e =
@@ -7173,7 +7173,7 @@ ctag _ = "?"
 export
 emitProgramGaps : CProgram -> <Mut> List String
 emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
-  let e = Emit (Ref 0) (Ref []) (Ref (collectFns groups)) (Ref (inferSigs (fnBinds groups))) (Ref ctorArs) (Ref []) (Ref (collectRecords groups)) (Ref implEntries) (Ref ctorTypes) (Ref (initGlobalsRegReady (valBinds groups)))
+  let e = Emit { counter = Ref 0, buf = Ref [], fnNames = Ref (collectFns groups), sigs = Ref (inferSigs (fnBinds groups)), ctors = Ref ctorArs, lams = Ref [], recFields = Ref (collectRecords groups), implEntries = Ref implEntries, ctorTypes = Ref ctorTypes, globalsReg = Ref (initGlobalsRegReady (valBinds groups)) }
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)
   let _ = installCtorMap ctorArs
