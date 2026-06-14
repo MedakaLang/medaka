@@ -1,0 +1,53 @@
+addN : Int -> Int -> Int
+addN x y = x + y
+
+arith : Int -> Int -> Int
+arith a b = a +
+  b *
+  2
+
+sub : Int -> Int -> Int
+sub a b = a -
+  b
+
+divmod : Int -> Int -> Int
+divmod a b = a /
+  b %
+  3
+
+cmp : Int -> Int -> Bool
+cmp a b = a ==
+  b
+
+cmp2 : Int -> Int -> Bool
+cmp2 a b = a <
+  b
+
+logic : Bool -> Bool -> Bool
+logic p q = p &&
+  q ||
+  False
+
+listcat : List Int -> List Int -> List Int
+listcat xs ys = xs ++
+  ys
+
+cons : Int -> List Int -> List Int
+cons h t = h ::
+  t
+
+pipeline : Int -> Int
+pipeline x = x |>
+  addN 1
+
+composeR : Int -> Int
+composeR x = (addN 1 >> addN 2) x
+
+composeL : Int -> Int
+composeL x = (addN 1 << addN 2) x
+
+btick : Int -> Int -> Int
+btick a b = a `addN`
+  b
+
+main = println (arith 3 4)

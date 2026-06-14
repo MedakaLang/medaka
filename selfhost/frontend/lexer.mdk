@@ -919,6 +919,37 @@ prevCanEnd : Option Token -> Bool
 prevCanEnd (Some t) = canEndExpr t
 prevCanEnd None = False
 
+-- an expression binary operator that, ending a logical line, continues the
+-- expression onto the next (deeper-indented) line: the line terminator is
+-- suppressed so `a ++\n  b` lexes identically to `a ++ b`.  Mirrors
+-- `lib/lexer.mll` `is_trailing_continuation_op`.  Arrows (-> => <-) are
+-- excluded deliberately; trailing `-` is always binary here.
+isTrailingContinuationOp : Token -> Bool
+isTrailingContinuationOp TPlus = True
+isTrailingContinuationOp TMinus = True
+isTrailingContinuationOp TStar = True
+isTrailingContinuationOp TSlash = True
+isTrailingContinuationOp TMod = True
+isTrailingContinuationOp TPlusPlus = True
+isTrailingContinuationOp TCons = True
+isTrailingContinuationOp TEqEq = True
+isTrailingContinuationOp TNeq = True
+isTrailingContinuationOp TLt = True
+isTrailingContinuationOp TGt = True
+isTrailingContinuationOp TLeq = True
+isTrailingContinuationOp TGeq = True
+isTrailingContinuationOp TAnd = True
+isTrailingContinuationOp TOr = True
+isTrailingContinuationOp TPipeRight = True
+isTrailingContinuationOp TRCompose = True
+isTrailingContinuationOp TLCompose = True
+isTrailingContinuationOp (TBacktickIdent _) = True
+isTrailingContinuationOp _ = False
+
+prevIsTrailingOp : Option Token -> Bool
+prevIsTrailingOp (Some t) = isTrailingContinuationOp t
+prevIsTrailingOp None = False
+
 -- a token that can START an application-argument atom
 canStartAtom : Token -> Bool
 canStartAtom (TInt _) = True
@@ -952,6 +983,7 @@ applyNlTop col off top stack rest prev opener
 -- continuation, decided by the deeper line's first token (Phase 137)
 wouldIndent : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int)
 wouldIndent col off stack rest prev opener
+  | prevIsTrailingOp prev = layout rest stack prev opener
   | opener || not (prevCanEnd prev) = (TIndent, off) :: layout rest (col :: stack) None False
   | otherwise = resolveCont col off stack rest prev opener
 

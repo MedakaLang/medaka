@@ -602,6 +602,28 @@ and print_app_spine e =
     in
     group (Nest (2, print_expr prec_app head ^^ tail))
 
+(* Render `l op r` with the operator TRAILING when it must break: flat `l op r`,
+   broken `l op⏎  r` (the operator stays on the left line, the right operand
+   drops one further indent step).  Own `group` so this step 2 of the `=`-RHS
+   width cascade fires only when the hung RHS still overflows; it relies on the
+   lexer's trailing-operator line continuation to re-parse.  Mirrors
+   `selfhost/tools/printer.mdk` `printBinOpTrailing`. *)
+and print_binop_trailing op l r =
+  let prec = binop_prec op in
+  let ra = is_right_assoc op in
+  let lp = if ra then prec + 1 else prec in
+  let rp = if ra then prec else prec + 1 in
+  group (Nest (2, print_operand lp l ^^ text " " ^^ text op ^^ Line ^^ print_operand rp r))
+
+(* An operand of a trailing-break binop: an application breaks its own argument
+   spine (cascade step 3) when over-width; anything else renders at the given
+   precedence.  Mirrors `selfhost/tools/printer.mdk` `printOperand`. *)
+and print_operand prec e = match strip_loc e with
+  | EApp _ as a ->
+    if expr_prec a < prec then text "(" ^^ print_app_spine a ^^ text ")"
+    else print_app_spine a
+  | _ -> print_expr prec e
+
 (* Shared by EMatch and the `function` keyword: an indented block of
    `pat [if guards] => body` arms. *)
 and print_match_arms arms =
@@ -722,6 +744,12 @@ let print_def_rhs body = match strip_loc body with
            group then stays flat on the hung line if it fits there, and only
            breaks its argument spine if even the hung call overflows. *)
         | EApp _ -> text " =" ^^ group (nest (Line ^^ print_app_spine body))
+        (* A too-wide binop body follows the same hang-then-break cascade: hang
+           the RHS under `=`, then (cascade step 2) break the OUTERMOST operator
+           TRAILING.  Continuation operators (`|>`/`++`/… leading-op chains) keep
+           their existing `print_chain` leading-op layout via `print_expr_body`. *)
+        | EBinOp (op, l, r, _) when not (is_continuation_op op) ->
+          text " =" ^^ group (nest (Line ^^ print_binop_trailing op l r))
         | _ when is_block_body body ->
           text " =" ^^ indent_block (print_expr_body body)
         | _ -> text " = " ^^ print_expr_body body))

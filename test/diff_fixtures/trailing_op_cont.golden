@@ -1,0 +1,364 @@
+=== TOKENS ===
+IDENT "addN"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "addN"
+IDENT "x"
+IDENT "y"
+EQUAL
+IDENT "x"
+PLUS
+IDENT "y"
+NEWLINE
+IDENT "arith"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "arith"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+PLUS
+IDENT "b"
+STAR
+INT 2
+NEWLINE
+IDENT "sub"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "sub"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+MINUS
+IDENT "b"
+NEWLINE
+IDENT "divmod"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "divmod"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+SLASH
+IDENT "b"
+MOD
+INT 3
+NEWLINE
+IDENT "cmp"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "cmp"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+EQ_EQ
+IDENT "b"
+NEWLINE
+IDENT "cmp2"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "cmp2"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+LT
+IDENT "b"
+NEWLINE
+IDENT "logic"
+COLON
+UPPER "Bool"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "logic"
+IDENT "p"
+IDENT "q"
+EQUAL
+IDENT "p"
+AND
+IDENT "q"
+OR
+UPPER "False"
+NEWLINE
+IDENT "listcat"
+COLON
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Int"
+NEWLINE
+IDENT "listcat"
+IDENT "xs"
+IDENT "ys"
+EQUAL
+IDENT "xs"
+PLUSPLUS
+IDENT "ys"
+NEWLINE
+IDENT "cons"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Int"
+NEWLINE
+IDENT "cons"
+IDENT "h"
+IDENT "t"
+EQUAL
+IDENT "h"
+CONS
+IDENT "t"
+NEWLINE
+IDENT "pipeline"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "pipeline"
+IDENT "x"
+EQUAL
+IDENT "x"
+PIPE_RIGHT
+IDENT "addN"
+INT 1
+NEWLINE
+IDENT "composeR"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "composeR"
+IDENT "x"
+EQUAL
+LPAREN
+IDENT "addN"
+INT 1
+RCOMPOSE
+IDENT "addN"
+INT 2
+RPAREN
+IDENT "x"
+NEWLINE
+IDENT "composeL"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "composeL"
+IDENT "x"
+EQUAL
+LPAREN
+IDENT "addN"
+INT 1
+LCOMPOSE
+IDENT "addN"
+INT 2
+RPAREN
+IDENT "x"
+NEWLINE
+IDENT "btick"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "btick"
+IDENT "a"
+IDENT "b"
+EQUAL
+IDENT "a"
+BACKTICK_IDENT "addN"
+IDENT "b"
+NEWLINE
+IDENT "main"
+EQUAL
+IDENT "println"
+LPAREN
+IDENT "arith"
+INT 3
+INT 4
+RPAREN
+NEWLINE
+NEWLINE
+EOF
+=== AST ===
+addN : Int -> Int -> Int
+addN x y = x + y
+arith : Int -> Int -> Int
+arith a b = a + b * 2
+sub : Int -> Int -> Int
+sub a b = a - b
+divmod : Int -> Int -> Int
+divmod a b = (a / b) % 3
+cmp : Int -> Int -> Bool
+cmp a b = a == b
+cmp2 : Int -> Int -> Bool
+cmp2 a b = a < b
+logic : Bool -> Bool -> Bool
+logic p q = p && q || False
+listcat : List Int -> List Int -> List Int
+listcat xs ys = xs ++ ys
+cons : Int -> List Int -> List Int
+cons h t = h :: t
+pipeline : Int -> Int
+pipeline x = x |> addN 1
+composeR : Int -> Int
+composeR x = (addN 1 >> addN 2) x
+composeL : Int -> Int
+composeL x = (addN 1 << addN 2) x
+btick : Int -> Int -> Int
+btick a b = a `addN` b
+main = println (arith 3 4)
+=== TYPES ===
+abs : a -> a
+add : a -> a -> a
+addN : Int -> Int -> Int
+all : (a -> Bool) -> b a -> Bool
+and : Bool -> Bool -> Bool
+andThen : a b -> (b -> a c) -> a c
+any : (a -> Bool) -> b a -> Bool
+ap : a (b -> c) -> a b -> a c
+append : a -> a -> a
+apply : (a -> b) -> a -> b
+arbitrary : Unit -> <Rand> a
+arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
+arbitraryString : Unit -> <Rand> String
+arith : Int -> Int -> Int
+btick : Int -> Int -> Int
+clamp : a -> a -> a -> a
+cmp : Int -> Int -> Bool
+cmp2 : Int -> Int -> Bool
+compare : a -> a -> Ordering
+compose : (a -> b) -> (c -> a) -> c -> b
+composeL : Int -> Int
+composeR : Int -> Int
+cons : Int -> List Int -> List Int
+const : a -> b -> a
+count : (a -> Bool) -> b a -> Int
+debug : a -> String
+debugListItems : List a -> String
+display : a -> String
+displayListItems : List a -> String
+div : a -> a -> a
+divmod : Int -> Int -> Int
+elem : a -> b a -> Bool
+empty : a
+eq : a -> a -> Bool
+filter : (a -> Bool) -> b a -> b a
+filterMap : (a -> Option b) -> c a -> c b
+find : (a -> Bool) -> b a -> Option a
+flat : a (a b) -> a b
+flatMap : (a -> b c) -> b a -> b c
+flip : (a -> b -> c) -> b -> a -> c
+fold : (a -> b -> a) -> a -> c b -> a
+foldMap : (a -> b) -> c a -> b
+foldRight : (a -> b -> b) -> b -> c a -> b
+fromEntries : List a -> b
+fromInt : Int -> a
+fromOption : a -> Option a -> a
+fromResult : Result a b -> Option b
+fromResultOr : a -> Result b a -> a
+from_rep : Rep -> a
+fst : (a, b) -> a
+gt : a -> a -> Bool
+gte : a -> a -> Bool
+hash : a -> Int
+hashListItems : Int -> List a -> Int
+identity : a -> a
+isEmpty : a b -> Bool
+isErr : Result a b -> Bool
+isNone : Option a -> Bool
+isOk : Result a b -> Bool
+isSome : Option a -> Bool
+length : a b -> Int
+listcat : List Int -> List Int -> List Int
+logic : Bool -> Bool -> Bool
+lt : a -> a -> Bool
+lte : a -> a -> Bool
+main : Unit
+map : (a -> b) -> c a -> c b
+mapErr : (a -> b) -> Result a c -> Result b c
+max : a -> a -> a
+maxBound : a
+maximum : a b -> Option b
+min : a -> a -> a
+minBound : a
+minimum : a b -> Option b
+mul : a -> a -> a
+negate : a -> a
+neq : a -> a -> Bool
+not : Bool -> Bool
+notElem : a -> b a -> Bool
+or : Bool -> Bool -> Bool
+otherwise : Bool
+pipe : (a -> b) -> (b -> c) -> a -> c
+pipeline : Int -> Int
+print : a -> <IO> Unit
+println : a -> <IO> Unit
+product : a b -> b
+pure : a -> b a
+shrink : a -> List a
+signum : a -> a
+snd : (a, b) -> b
+sub : Int -> Int -> Int
+sub : a -> a -> a
+sum : a b -> b
+thenCmp : Ordering -> Ordering -> Ordering
+toList : a b -> List b
+toResult : a -> Option b -> Result a b
+to_rep : a -> Rep
+unless : Bool -> a Unit -> a Unit
+when : Bool -> a Unit -> a Unit
+xor : Bool -> Bool -> Bool
+=== EVAL ===
+11

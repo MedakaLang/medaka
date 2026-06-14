@@ -60,6 +60,22 @@ let can_end_expr = function
   | QUESTION -> true
   | _ -> false
 
+(* Whether [t] is an expression binary operator that, ending a logical line,
+   continues the expression onto the next (deeper-indented) line: the line
+   terminator is suppressed so `a ++\n  b` lexes identically to `a ++ b`
+   (the trailing-operator dual of the leading-operator continuation rule).
+   Arrows (-> => <-) are excluded deliberately; trailing `-` is always binary
+   in this position (safe).  Mirrors `selfhost/frontend/lexer.mdk`
+   `isTrailingContinuationOp`. *)
+let is_trailing_continuation_op = function
+  | PLUS | MINUS | STAR | SLASH | MOD
+  | PLUSPLUS | CONS
+  | EQ_EQ | NEQ | LT | GT | LEQ | GEQ
+  | AND | OR
+  | PIPE_RIGHT | RCOMPOSE | LCOMPOSE
+  | BACKTICK_IDENT _ -> true
+  | _ -> false
+
 (* Whether [t] can *start* an application-argument atom (the first token of
    `expr_aspat` in parser.mly).  A deeper line beginning with one of these
    continues the previous application; anything else (`|` guards, `where`,
@@ -123,6 +139,19 @@ let handle_indent col =
     record_pending := false;
     let current = List.hd !indent_stack in
     if col > current then begin
+      (* Trailing-operator line continuation: the previous logical line ended in
+         an expression binary operator and this line is deeper-indented, so the
+         break is not a statement boundary — suppress all layout (no
+         NEWLINE/INDENT, indent_stack untouched), exactly as the leading-operator
+         rule does.  The operator stays infix and the deeper line supplies its
+         right operand.  Symmetric dual of the leading-op rule above; requires
+         deeper indent (a non-deeper next line falls through to the normal
+         incomplete-expression error path). *)
+      if (match !prev_significant with
+          | Some t -> is_trailing_continuation_op t
+          | None -> false)
+      then ()
+      else
       let opens_block =
         was_block_opener
         || not (match !prev_significant with
