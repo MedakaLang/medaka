@@ -161,6 +161,16 @@ Dev probes (build to `_build/default/dev/`):
 
 ## Gotchas
 
+- **The compiler (`selfhost/*.mdk`) must NEVER import `stdlib/`.** The native
+  `medaka` binary bootstraps from its own source only — pulling in `stdlib/`
+  (list/string/map/…) would bloat the binary and the cold-bootstrap seed. So
+  `selfhost/` carries its own small helpers: `support/util.mdk`,
+  `support/ordmap.mdk`, or inline duplications (this is *why* SMap/EMap were
+  hand-rolled rather than reusing `stdlib/map.mdk`). When you need a stdlib-shaped
+  function (`intercalate`, `intersperse`, etc.) in compiler code, add it to
+  `support/` or inline it — do **not** `import list`/`import string`. Enforced by
+  convention, not the build; check `grep -rn 'import ' selfhost/ | grep -v support`
+  stays clean of stdlib module names.
 - **Environment is pre-set.** opam env vars (switch `5.4.1`, PATH) are already
   exported via `.claude/settings.local.json`. **Never** prefix commands with
   `eval $(opam env)` — it's redundant. *Exception:* a sandboxed shell sometimes
@@ -239,7 +249,10 @@ Dev probes (build to `_build/default/dev/`):
 - Development is organized by numbered **Phases**. Open/forward work is in
   `PLAN.md`; the completed Phases 1–97 (with implementation notes) are in
   `PLAN-ARCHIVE.md`. Commit messages and code comments reference phase numbers.
-- **Match-arm guards (`match … pat if guard => body`) now lower natively (`CTGuard` CLOSED, 2026-06-08); refutable pattern-guards (`p <- e`) do NOT yet.** Historically the native emitter could not lower a guard — `emitTree`'s `CTGuard` arm gapped, silently blanking the body to `0` under the gap-tolerant self-compile build (this bit `llvm_emit.mdk`'s own source at self-compile step C1). `emitTree` now emits a real guard test + branch (`emitGuardedArm`/`emitGuardChain`), so `CGBool` guards and irrefutable `CGBind` (`x <- e`) work; a **refutable** `CGBind` (`Just x <- e`) is still a contained gap. So: `match pat if cond => …` is fine on the self-compile path; avoid `Pat <- e` pattern-guards with a *refutable* `Pat`. (Function-clause guards `f p | g = …` always worked — they desugar to if-chains, not `CTGuard`.) Fixtures: `test/llvm_fixtures/guard_match_{chain,ctor}.mdk`.
+- **Match-arm guards (`match … pat if guard => body`) lower natively (`CTGuard` CLOSED, 2026-06-08); refutable pattern-guards (`Pat <- e`) lower too — with one resolve caveat (verified 2026-06-14).** Historically the native emitter could not lower a guard — `emitTree`'s `CTGuard` arm gapped, silently blanking the body to `0` under the gap-tolerant self-compile build (this bit `llvm_emit.mdk`'s own source at self-compile step C1). `emitTree` now emits a real guard test + branch (`emitGuardedArm`/`emitGuardChain`). Empirically (re-verified on the native binary, both interp and compiled byte-match):
+  - **Function-clause refutable guards** (`f n | Some v <- e = v`) work **fully** — guard gating *and* the bound var scoping into the body. (They desugar to if-chains, not `CTGuard`.)
+  - **Match-arm refutable guards** (`x if Some v <- e => body`) **gate** correctly natively, and the bind scopes rightward into *later qualifiers* (`Some v <- e, v > 0`), BUT the bound var does **NOT** scope into the arm **body** — `UnboundVariable` in **both** interp and native (a `resolve.ml`/selfhost-resolve scoping bug, *not* a native-lowering gap). So a match-arm pattern-bind whose binding is used only in the guard chain is fine; one whose binding the body needs fails everywhere — use the function-clause form (or an explicit inner `match`) instead.
+  Fixtures: `test/llvm_fixtures/guard_match_{chain,ctor}.mdk`.
 
 ## Dogfooding the language
 
