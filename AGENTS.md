@@ -34,11 +34,14 @@ linear pipeline; each stage is one file.
 > (sum/product, both build AND eval paths), #21 (binop over-application on parametric user
 > impls), and the map `Foldable (Map a)` typecheck false-positive + `medaka test` SIGBUS;
 > expanded native stdlib test coverage (json/toml/list/set); fuzzer ported to native
-> (`fuzz_diff.sh` OCaml-free). IN PROGRESS: fixing a native-emitter mixed-nullary/payload-ADT
-> `match` field mis-extraction (surfaced by the now-native fuzzer), then the `argStampEnabled`
-> eval-vs-emit dispatch unification (`selfhost/ARGSTAMP-UNIFY-PLAN.md` — retires the finer
-> dispatch fork the driver collapse left; root of #55/#21). Both de-risk the final
-> confidence-gated `lib/` removal.** Native-backend docs: `selfhost/BOOTSTRAP.md` (the B1–B7 + C1–C3 log), `selfhost/PRE-FLIP-GAPS.md`
+> (`fuzz_diff.sh` OCaml-free); the native-emitter cross-module **constructor-name collision**
+> (the fuzzer's find — mis-filed as "mixed-ADT match", really bare-name ctor-table collapse)
+> fixed via universal ctor mangling; the **`argStampEnabled` eval-vs-emit dispatch unification
+> COMPLETE** (`selfhost/ARGSTAMP-UNIFY-PLAN.md` — eval now threads dicts; the GENUINE #21
+> nested-element-dict flattening solved, not contained; `evalDictLayerActive` retired); and
+> the **emit-path Set-literal / mutual-rec-Monoid dict gaps** (#44) fixed. **REMAINING = the
+> soak itself:** a clean bug-free stretch of native-only dev, then the confidence-gated `lib/`
+> removal.** Native-backend docs: `selfhost/BOOTSTRAP.md` (the B1–B7 + C1–C3 log), `selfhost/PRE-FLIP-GAPS.md`
 > (the closed pre-flip punch list), `selfhost/EMITTER-GAPS.md`
 > (closed/residual emitter gaps), `selfhost/DISPATCH-GAPS-SCOPE.md` (repro-verified scope of
 > the now-CLOSED native dispatch gaps #54/#55/#50/#21 — all four resolved as of 2026-06-14), `selfhost/PERF-SCOPE.md` (bar-4 `-O2`/benchmark

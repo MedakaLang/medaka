@@ -22,12 +22,14 @@ landed: **#55** (sum/product two-constraint, on both the build AND eval paths),
 `suppressBinopStamp` workaround), and the map **`Foldable (Map a)`** typecheck
 false-positive + `medaka test` SIGBUS. Native stdlib test coverage expanded
 (json/toml/list/set doctests+props), and the **fuzzer is ported to native**
-(`fuzz_diff.sh` OCaml-free). **In progress:** fixing a native-emitter
-mixed-nullary/payload-ADT `match` field mis-extraction (surfaced by the now-native
-fuzzer), then the **`argStampEnabled` eval-vs-emit dispatch unification**
-(`selfhost/ARGSTAMP-UNIFY-PLAN.md` — retires the finer dispatch fork the driver
-collapse left behind, the shared root of #55/#21). Both precede the
-confidence-gated `lib/` removal.
+(`fuzz_diff.sh` OCaml-free). The native-emitter **cross-module constructor-name
+collision** (the fuzzer's find — really a bare-name ctor-table collapse, not the
+"mixed-ADT match" first suspected) is fixed via universal ctor mangling; the
+**`argStampEnabled` eval-vs-emit dispatch unification is COMPLETE** (eval now threads
+dicts — the GENUINE #21 nested-element-dict flattening solved, not contained;
+`evalDictLayerActive` retired; `selfhost/ARGSTAMP-UNIFY-PLAN.md`); and the **emit-path
+Set-literal / mutual-rec-Monoid dict gaps** are fixed. **Remaining = the soak itself:**
+a clean bug-free stretch of native-only dev, then the confidence-gated `lib/` removal.
 
 **🏁 Medaka is a native self-hosting compiler.** The compiler is written in
 Medaka (`selfhost/`), and the native **LLVM backend now compiles it**: all seven
