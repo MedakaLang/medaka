@@ -1,0 +1,6 @@
+-- unparseable.mdk — syntactically broken on purpose.  documentSymbol/definition
+-- use the parser's position side-channel, which used to `panic "parse error"` on
+-- a parse failure and crash the WHOLE LSP server.  Files look like this constantly
+-- mid-edit; the server must survive (respond, with no symbols) instead of dying.
+foo =
+bar x = = y

@@ -21,6 +21,7 @@ import tools.lsp_harness.{
   allByteValid,
   diagCountFor,
   diagPublishedFor,
+  responseById,
   check,
   summary,
 }
@@ -90,6 +91,33 @@ fixtureTypeError medaka fixDir =
         Ok out => match parseFrames out
           (frames, _) => check "type-error surfaces (>=1 diagnostic)" (diagCountFor uri frames >= 1)
 
+-- Fixture 4: documentSymbol on an UNPARSEABLE file must not crash the server.
+-- parseWithPositions used to panic on a parse failure (files are unparseable
+-- constantly mid-edit); the handler now uses the non-panicking variant.  Assert
+-- the documentSymbol request (id 2) still gets a response (server survived).
+fixtureUnparseableNoCrash : String -> String -> <IO, Mut> Unit
+fixtureUnparseableNoCrash medaka fixDir =
+  let path = stringConcat [fixDir, "/unparseable.mdk"]
+  match readFile path
+    Err _ => check "unparseable file: server survives documentSymbol" False
+    Ok src =>
+      let uri = fileUri path
+      let msgs = [
+        initializeMsg 1,
+        initializedMsg,
+        didOpenMsg uri src,
+        requestMsg 2 "textDocument/documentSymbol" (docParams uri),
+        exitMsg,
+      ]
+      match runSession medaka msgs
+        Err _ => check "unparseable file: server survives documentSymbol" False
+        Ok out => match parseFrames out
+          (frames, _) =>
+            let responded = match responseById 2 frames
+              Some _ => True
+              None => False
+            check "unparseable file: server survives documentSymbol" responded
+
 main =
   let medaka = envOr "MEDAKA" "./medaka"
   let root = envOr "MEDAKA_ROOT" "."
@@ -97,4 +125,5 @@ main =
   let _ = fixtureFrameIntegrity medaka fixDir
   let _ = fixtureMultiModuleClean medaka fixDir
   let _ = fixtureTypeError medaka fixDir
-  summary 3
+  let _ = fixtureUnparseableNoCrash medaka fixDir
+  summary 4

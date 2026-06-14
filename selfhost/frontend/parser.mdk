@@ -2831,19 +2831,35 @@ resultSpans toks (POk ds pos)
   | peekTok toks pos == TEof = ds
   | otherwise = panic "parse error"
 
--- Parse `src` and return the position side-channel alongside the decls.
+-- Parse `src` and return the position side-channel alongside the decls.  The
+-- non-panicking `parseWithPositionsOpt` does the work; this wrapper preserves the
+-- panic-on-unparseable behaviour the compiler + `medaka fmt` rely on.
 export
 parseWithPositions : String -> (List Decl, Positions)
-parseWithPositions src = match tokenizeWithLines src
+parseWithPositions src = match parseWithPositionsOpt src
+  Some r => r
+  None => panic "parse error"
+
+-- Non-panicking positions parse for the LSP.  Returns `None` when the source
+-- doesn't parse (instead of `panic "parse error"`), so documentSymbol / definition
+-- / inlayHint degrade to empty results rather than crashing the whole server —
+-- files are unparseable constantly mid-edit.
+export
+parseWithPositionsOpt : String -> Option (List Decl, Positions)
+parseWithPositionsOpt src = match tokenizeWithLines src
   (tokList, lineList) =>
     let toks = arrayFromList tokList
     let lines = arrayFromList lineList
-    let spans = resultSpans toks (runP programWithSpans toks 0)
-    let decls = map ((d, _s, _e) => d) spans
-    let dps = map (declPosOf toks lines) spans
-    let vls = allVariantLines toks lines spans
-    let lcl = lastContentLineOf toks lines spans
-    (decls, Positions dps vls lcl)
+    match runP programWithSpans toks 0
+      PErr _ _ => None
+      POk spans pos =>
+        if peekTok toks pos == TEof then
+          let decls = map ((d, _s, _e) => d) spans
+          let dps = map (declPosOf toks lines) spans
+          let vls = allVariantLines toks lines spans
+          let lcl = lastContentLineOf toks lines spans
+          Some (decls, Positions dps vls lcl)
+        else None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 -- Mirrors lib/loader.ml: raises Failure "Parse error" on Parser.Error or Failure.

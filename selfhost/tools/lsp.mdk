@@ -50,6 +50,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
   parseWithPositions,
+  parseWithPositionsOpt,
   positionsDecls,
   DeclPos,
   declPosLine,
@@ -424,8 +425,9 @@ implLabel (Some n) iface = stringConcat [n, " of impl ", iface]
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) and
 -- collect the symbols.
 documentSymbols : String -> List Json
-documentSymbols src = match parseWithPositions src
-  (decls, positions) => symbolsZip decls (positionsDecls positions)
+documentSymbols src = match parseWithPositionsOpt src
+  None => []
+  Some (decls, positions) => symbolsZip decls (positionsDecls positions)
 
 symbolsZip : List Decl -> List DeclPos -> List Json
 symbolsZip (d::ds) (p::ps) = match symbolOfDecl d p
@@ -463,8 +465,9 @@ anyName (x::xs) name = x == name || anyName xs name
 
 -- The DeclPos of the first decl defining `name`, or None.
 definitionRange : String -> String -> Option Json
-definitionRange src name = match parseWithPositions src
-  (decls, positions) => defZip decls (positionsDecls positions) name
+definitionRange src name = match parseWithPositionsOpt src
+  None => None
+  Some (decls, positions) => defZip decls (positionsDecls positions) name
 
 defZip : List Decl -> List DeclPos -> String -> Option Json
 defZip (d::ds) (p::ps) name
@@ -674,8 +677,9 @@ identRunLen arr len i acc
 inlayHints : String -> String -> <Mut> List Json
 inlayHints coreSrc src = match docSchemes coreSrc src
   None => []
-  Some env => match parseWithPositions src
-    (decls, positions) => inlayZip src decls decls (positionsDecls positions) env
+  Some env => match parseWithPositionsOpt src
+    None => []
+    Some (decls, positions) => inlayZip src decls decls (positionsDecls positions) env
 
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
 inlayZip : String -> List Decl -> List Decl -> List DeclPos -> List (String, Scheme) -> <Mut> List Json
