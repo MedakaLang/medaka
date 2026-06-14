@@ -34,7 +34,7 @@ import frontend.ast.{Decl, DData, DInterface}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
-import types.typecheck.{elaborateOne, elaborateModules, suppressBinopStamp}
+import types.typecheck.{elaborateOne, elaborateModules}
 import frontend.lexer.{collectComments}
 import eval.eval.{Value, evalOne, evalModules, evalModulesRootEnv, funNamesOf, dropShadowedExp}
 import tools.doctest.{Example, ExResult(..), RunResult, extractExamples, buildSynthDecls,
@@ -109,18 +109,14 @@ runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls
 -- preludeReturnPosDictNames ++ the file's constrained sigs, arg-position helpers
 -- excluded so the `neq`-hang stays closed).  livePrelude is the shadow-dropped core,
 -- passed SEPARATE (elaborateOne folds it in); for `medaka test stdlib/core.mdk`
--- (programIsCore) livePrelude is [] so the prelude is not double-prepended.  Set
--- suppressBinopStamp the SAME way runMulti does (keep `==`/`<` PRIMITIVE in
--- doctest bodies → no over-applied recursive Eq element dicts, #21).  evalOne's
+-- (programIsCore) livePrelude is [] so the prelude is not double-prepended.  evalOne's
 -- rootLocals carry the synthesized __dt_i__ bindings (same as runMulti).
 runSingle : List Decl -> List Decl -> List Decl -> List Example -> List Decl -> <Mut> RunResult
 runSingle runtimeDecls coreDecls userDecls examples synthDecls =
   let allUser = userDecls ++ synthDecls
   let userNames = funNamesOf allUser
   let livePrelude = if programIsCore userDecls then [] else dropShadowedExp userNames coreDecls
-  let _ = set_ref suppressBinopStamp True
   let elaborated = elaborateOne runtimeDecls livePrelude ("__user__", allUser)
-  let _ = set_ref suppressBinopStamp False
   let env = evalOne [] ("__main__", elaborated)
   buildDetails (Ok env) examples
 
@@ -155,12 +151,7 @@ runMulti runtimeDecls coreDecls target _userDecls roots examples synthDecls =
     Err e => buildDetails (Err e) examples
     Ok mods =>
       let injected = injectIntoRoot target synthDecls (map desugarPair mods)
-      -- Test eval path: keep `==`/`<` in doctest+module bodies PRIMITIVE (builtin
-      -- structural compare), as clean-main did — avoids over-applying a recursive
-      -- user Eq impl's nested element dicts (#21).
-      let _ = set_ref suppressBinopStamp True
       let elaborated = elaborateModules runtimeDecls coreDecls injected
-      let _ = set_ref suppressBinopStamp False
       let env = evalModules (fst elaborated) (snd elaborated)
       buildDetails (Ok env) examples
 
@@ -246,7 +237,7 @@ runProps runtimeDecls coreDecls target userDecls roots
 -- Single-file (no-import) prop path, DRIVER-COLLAPSE Phase 1+3: same multi-module
 -- path as runPropsMulti, with the degenerate 1-module list [("__user__", userDecls)].
 -- livePrelude passed SEPARATE (programIsCore ⇒ []); elaborateModules owns the
--- dict-set; suppressBinopStamp set as runPropsMulti does (builtin `==`, #21).
+-- dict-set.
 -- evalModulesRootEnv exposes prelude globals (eq/compare) the prop bodies need, and
 -- the prop bodies themselves are pulled from the ELABORATED root module (dict-passed
 -- call sites) — keyed by the "__user__" id — so the file's own `=>`-constrained fns
@@ -256,9 +247,7 @@ runPropsSingle : List Decl -> List Decl -> List Decl -> <IO, Mut> Bool
 runPropsSingle runtimeDecls coreDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then [] else dropShadowedExp userNames coreDecls
-  let _ = set_ref suppressBinopStamp True
   let elaborated = elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
-  let _ = set_ref suppressBinopStamp False
   let env = evalModulesRootEnv (fst elaborated) (snd elaborated)
   let rootProps = match lookupModuleDecls "__user__" (snd elaborated)
         Some decls => decls
@@ -272,9 +261,7 @@ runPropsMulti runtimeDecls coreDecls target userDecls roots =
       let _ = ePutStrLn e
       False
     Ok mods =>
-      let _ = set_ref suppressBinopStamp True
       let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
-      let _ = set_ref suppressBinopStamp False
       let env = evalModulesRootEnv (fst elaborated) (snd elaborated)
       -- DRIVER-COLLAPSE Phase 2: the eval-dict layer now promotes the file's own
       -- `=>`-constrained fns (set's `wellFormed`/`fromList`, etc.), so the bindings in

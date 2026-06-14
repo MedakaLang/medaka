@@ -1,0 +1,5 @@
+public export data Box a = Box (List (List a))
+
+export
+impl Eq (Box a) requires Eq a where
+  eq (Box x) (Box y) = x == y

@@ -1,0 +1,11 @@
+import box.{Box(..)}
+
+b1 : Box Int
+b1 = Box [[1, 2], [3]]
+
+b2 : Box Int
+b2 = Box [[1, 2], [3]]
+
+main =
+  println (b1 == b2)
+  println (b1 == Box [[1, 2], [4]])

@@ -779,21 +779,6 @@ enableArgStamp _ = set_ref argStampEnabled True
 evalDictLayerActive : Ref Bool
 evalDictLayerActive = Ref False
 
--- DRIVER-COLLAPSE Phase 2 follow-up: the doctest/prop TEST eval path (test_cmd's
--- runMulti/runPropsMulti) evaluates bodies that are NOT part of the dict-passed
--- emit tree, so operator (`==`/`<`) sites in them must stay PRIMITIVE EBinOps the
--- eval builtin compares structurally — exactly as clean-main did (its test path
--- left resolveBinopSites gated OFF on eval).  Phase 2 globally ungated binop
--- stamping for flat≡1-module parity, which over-applies the nested element dicts of
--- a RECURSIVE user Eq impl (json's `impl Eq Json` over `Result`/`Array Json` → the
--- parked #21 route-flatten gap → `applied non-function`).  This flag, set ONLY by
--- the test driver (NOT by elaborateOne, so flat_vs_onemodule keeps stamping and
--- stays byte-identical to elaborateDict), suppresses binop stamping on the test
--- eval path, restoring clean-main's correct builtin-`==` doctest/prop behaviour.
-export
-suppressBinopStamp : Ref Bool
-suppressBinopStamp = Ref False
-
 -- the route refs awaiting an arg-position stamp + their discriminating-argument
 -- mono (captured during inference, resolved by resolveArgStamps while the tyvar
 -- cells are still bound).  Reset per pass by resetState, like pendingArgSites.
@@ -3571,7 +3556,18 @@ stampBinopRoute implTable keyTable method tagRef operandMono tag
   | otherwise =
       let key = fromOption tag (keyForSite keyTable method operandMono)
       let dictMethod = if implDefinesMethodAt implTable method tag then method else innerDefaultMethod method
-      set_ref tagRef (RKey key (argImplDictRoutesFor implTable dictMethod tag operandMono))
+      -- Gate element reqs on argStampEnabled (Gap #21).  On the EMIT path
+      -- (argStampEnabled ON) the impl method `eq`/`compare` carries leading
+      -- `$dict_*` params (resolveArgStamps ran), so forward the full element-dict
+      -- reqs — emitter applies them and threads them in.  On the EVAL path
+      -- (argStampEnabled OFF) resolveArgStamps is gated off, so the method has NO
+      -- dict param; forwarding reqs would `applyDicts` a VDict onto a closure with
+      -- no dict slot → consume a value slot → arity/pattern crash.  Stamp `RKey key
+      -- []` instead: it still narrows the method VMulti to the right impl, applies
+      -- ZERO dicts, and lets the rewritten body dispatch inner operands by runtime
+      -- arg-tag (the working direct-method path).  Emit stays byte-identical.
+      let reqs = if argStampEnabled.value then argImplDictRoutesFor implTable dictMethod tag operandMono else []
+      set_ref tagRef (RKey key reqs)
 
 -- The inner same-interface method an interface DEFAULT reduces to, supplying the
 -- element `requires` dicts.  Ord's `lt`/`gt`/`lte`/`gte`/`min`/`max` defaults all
@@ -6541,16 +6537,16 @@ elabModuleStamp seedVars accData implDecls prog =
   -- whole-program `prog2`.
   let _ = resolveSites stampImplTable (buildKeyTable implDecls) (returnPosMethodNames implDecls) pendingSites.value
   -- Phase 151 / Gap G: stamp this module's comparison-operator binop sites.
-  -- DRIVER-COLLAPSE Phase 2 (global): now UNGATED (mirrors flat elaborateDict, which
-  -- calls resolveBinopSites unconditionally) so the EVAL path also dispatches `==`/
-  -- `<`/… to user/derived Eq/Ord impls (adt_deriving_ord / record_deriving_ord).
-  -- No-op when pendingBinopSites is empty (no comparison-operator site) → golden
-  -- type-only path leaves them RNone → dictPass-skipped → byte-identical.
-  -- suppressBinopStamp (set ONLY by the doctest/prop test driver) leaves them RNone
-  -- so the eval builtin compares structurally — avoids over-applying a recursive user
-  -- Eq impl's nested element dicts (#21).  elaborateOne (flat_vs_onemodule) never sets
-  -- it, so that gate stays byte-identical to flat elaborateDict.
-  let _ = if suppressBinopStamp.value then () else resolveBinopSites stampImplTable (buildKeyTable implDecls) pendingBinopSites.value
+  -- UNGATED (mirrors flat elaborateDict, which calls resolveBinopSites
+  -- unconditionally) so the EVAL path also dispatches `==`/`<`/… to user/derived
+  -- Eq/Ord impls (adt_deriving_ord / record_deriving_ord).  No-op when
+  -- pendingBinopSites is empty (no comparison-operator site) → golden type-only
+  -- path leaves them RNone → dictPass-skipped → byte-identical.  Gap #21: on the
+  -- EVAL path stampBinopRoute now stamps `RKey key []` (element reqs gated on
+  -- argStampEnabled), which only narrows the method VMulti and applies ZERO dicts,
+  -- so even a RECURSIVE user Eq impl (json's `impl Eq Json`) dispatches inner
+  -- operands by arg-tag without over-applying — no suppression needed.
+  let _ = resolveBinopSites stampImplTable (buildKeyTable implDecls) pendingBinopSites.value
   let _ = if argStampEnabled.value then resolveArgStamps stampImplTable pendingArgStamps.value else ()
   -- C5: LAST among the route-stampers (after resolveSites AND resolveArgStamps) so the
   -- receiver-grounded RLocal/RNone overrides whatever those stamped on the SAME ref —
