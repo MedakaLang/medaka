@@ -16,7 +16,22 @@
 -- utf8CharWidth).  A Content-Length that doesn't match the real body byte length
 -- (the bug that crashed Cursor) shows up as a non-byteValid frame or a desync.
 
-import json.{Json, JNull, JBool, JInt, JString, JArray, JObject, jObject, jArray, stringify, parse, lookup, asString, asInt}
+import json.{
+  Json,
+  JNull,
+  JBool,
+  JInt,
+  JString,
+  JArray,
+  JObject,
+  jObject,
+  jArray,
+  stringify,
+  parse,
+  lookup,
+  asString,
+  asInt,
+}
 
 -- ── JSON-RPC message builders ───────────────────────────────────────────────
 
@@ -28,7 +43,7 @@ initializeMsg idn =
       ("jsonrpc", JString "2.0"),
       ("id", JInt idn),
       ("method", JString "initialize"),
-      ("params", jObject [("capabilities", jObject [])])
+      ("params", jObject [("capabilities", jObject [])]),
     ]
 
 export
@@ -38,7 +53,7 @@ initializedMsg =
     [
       ("jsonrpc", JString "2.0"),
       ("method", JString "initialized"),
-      ("params", jObject [])
+      ("params", jObject []),
     ]
 
 export
@@ -57,11 +72,11 @@ didOpenMsg uri text =
               ("uri", JString uri),
               ("languageId", JString "medaka"),
               ("version", JInt 1),
-              ("text", JString text)
-            ]
+              ("text", JString text),
+            ],
           )
-        ]
-      )
+        ],
+      ),
     ]
 
 export
@@ -72,7 +87,7 @@ requestMsg idn method params =
       ("jsonrpc", JString "2.0"),
       ("id", JInt idn),
       ("method", JString method),
-      ("params", params)
+      ("params", params),
     ]
 
 -- params for a text-document request carrying a cursor position (hover etc.).
@@ -82,7 +97,7 @@ docPosParams uri line ch =
   jObject
     [
       ("textDocument", jObject [("uri", JString uri)]),
-      ("position", jObject [("line", JInt line), ("character", JInt ch)])
+      ("position", jObject [("line", JInt line), ("character", JInt ch)]),
     ]
 
 -- params for a whole-document request (documentSymbol etc.).
@@ -97,7 +112,7 @@ shutdownMsg idn =
     [
       ("jsonrpc", JString "2.0"),
       ("id", JInt idn),
-      ("method", JString "shutdown")
+      ("method", JString "shutdown"),
     ]
 
 export
@@ -344,5 +359,5 @@ summary total =
       intToString (total - failed),
       " passed, ",
       intToString failed,
-      " failed"
+      " failed",
     ])

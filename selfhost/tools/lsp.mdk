@@ -18,14 +18,76 @@
 -- (lsp_main.mdk reads them once at startup) so `analyze` can run the full
 -- resolve+typecheck pipeline per document.
 
-import json.{Json, JNull, JBool, JInt, JString, JArray, JObject, jObject, jArray, stringify, parse, lookup, asString, asInt}
-import driver.diagnostics.{Diag, Severity, SevError, SevWarning, analyzeLocated, analyzeProject}
+import json.{
+  Json,
+  JNull,
+  JBool,
+  JInt,
+  JString,
+  JArray,
+  JObject,
+  jObject,
+  jArray,
+  stringify,
+  parse,
+  lookup,
+  asString,
+  asInt,
+}
+import driver.diagnostics.{
+  Diag,
+  Severity,
+  SevError,
+  SevWarning,
+  analyzeLocated,
+  analyzeProject,
+}
 import driver.loader.{findProjectRoot}
-import frontend.parser.{ParseError, parseResult, parseErrorLine, parseErrorCol, parseErrorMessage, parseWithPositions, positionsDecls, DeclPos, declPosLine, declPosEndLine}
+import frontend.parser.{
+  ParseError,
+  parseResult,
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
+  parseWithPositions,
+  positionsDecls,
+  DeclPos,
+  declPosLine,
+  declPosEndLine,
+}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkProgramSchemes, ppScheme, Scheme(..)}
 import tools.fmt.{formatSource}
-import frontend.ast.{Decl, DTypeSig, DExtern, DFunDef, DData, DRecord, DUse, DEffect, DProp, DTest, DBench, DInterface, DImpl, DTypeAlias, DNewtype, DLetGroup, DAttrib, Loc(..), Variant, Field, IfaceMethod, ImplMethod, LetBind, UsePath, UseName, UseGroup, UseWild, UseAlias}
+import frontend.ast.{
+  Decl,
+  DTypeSig,
+  DExtern,
+  DFunDef,
+  DData,
+  DRecord,
+  DUse,
+  DEffect,
+  DProp,
+  DTest,
+  DBench,
+  DInterface,
+  DImpl,
+  DTypeAlias,
+  DNewtype,
+  DLetGroup,
+  DAttrib,
+  Loc(..),
+  Variant,
+  Field,
+  IfaceMethod,
+  ImplMethod,
+  LetBind,
+  UsePath,
+  UseName,
+  UseGroup,
+  UseWild,
+  UseAlias,
+}
 
 -- ── open-document store ─────────────────────────────────────────────────────
 -- uri → source text.  A plain association list; LSP sessions open a handful of
@@ -64,7 +126,7 @@ jDiagnostic sev range msg =
       ("range", range),
       ("severity", JInt sev),
       ("source", JString "medaka"),
-      ("message", JString msg)
+      ("message", JString msg),
     ]
 
 severityCode : Severity -> Int
@@ -280,7 +342,7 @@ jSymbol name kind range children =
       ("kind", JInt kind),
       ("range", range),
       ("selectionRange", range),
-      ("children", jArray children)
+      ("children", jArray children),
     ]
 
 jChild : String -> Int -> Json -> Json
@@ -467,7 +529,7 @@ jHover name ty =
     [
       (
         "contents",
-        jObject [("kind", JString "markdown"), ("value", JString value)]
+        jObject [("kind", JString "markdown"), ("value", JString value)],
       )
     ]
 
@@ -635,7 +697,7 @@ jInlayHint line col label =
     [
       ("position", jPosition line col),
       ("label", JString label),
-      ("paddingLeft", JBool True)
+      ("paddingLeft", JBool True),
     ]
 
 handleInlayHint : String -> Json -> Json -> Docs -> <IO, Mut> Unit
@@ -814,13 +876,13 @@ initializeResult =
           ("documentHighlightProvider", JBool True),
           ("hoverProvider", JBool True),
           ("completionProvider", jObject []),
-          ("inlayHintProvider", JBool True)
-        ]
+          ("inlayHintProvider", JBool True),
+        ],
       ),
       (
         "serverInfo",
-        jObject [("name", JString "medaka-lsp"), ("version", JString "0.1.0")]
-      )
+        jObject [("name", JString "medaka-lsp"), ("version", JString "0.1.0")],
+      ),
     ]
 
 -- Build + send a publishDiagnostics notification for one uri.

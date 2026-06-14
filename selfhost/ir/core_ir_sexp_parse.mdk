@@ -8,7 +8,21 @@
 -- CTFail, HCons, HNil, HUnit, RNone, true, false, LUnit, PWild.
 
 import frontend.ast.{Lit(..), Pat(..), RecPatField(..), Addr(..), Route(..)}
-import ir.core_ir.{CExpr(..), CArm(..), CGuard(..), CStmt(..), CField(..), CBind(..), CClause(..), CImplEntry(..), CImplBody(..), CProgram(..), CTree(..), CTBranch(..), CHead(..)}
+import ir.core_ir.{
+  CExpr(..),
+  CArm(..),
+  CGuard(..),
+  CStmt(..),
+  CField(..),
+  CBind(..),
+  CClause(..),
+  CImplEntry(..),
+  CImplBody(..),
+  CProgram(..),
+  CTree(..),
+  CTBranch(..),
+  CHead(..),
+}
 
 -- ── tokenizer ─────────────────────────────────────────────────────────────────
 

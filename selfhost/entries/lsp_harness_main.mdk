@@ -7,7 +7,23 @@
 -- Prints PASS/FAIL per fixture + a `HARNESS: N passed, M failed` summary.
 -- (The gate test/lsp_harness.sh wires this up.)
 
-import tools.lsp_harness.{initializeMsg, initializedMsg, didOpenMsg, requestMsg, docParams, docPosParams, shutdownMsg, exitMsg, runSession, parseFrames, allByteValid, diagCountFor, diagPublishedFor, check, summary}
+import tools.lsp_harness.{
+  initializeMsg,
+  initializedMsg,
+  didOpenMsg,
+  requestMsg,
+  docParams,
+  docPosParams,
+  shutdownMsg,
+  exitMsg,
+  runSession,
+  parseFrames,
+  allByteValid,
+  diagCountFor,
+  diagPublishedFor,
+  check,
+  summary,
+}
 
 envOr : String -> String -> <IO> String
 envOr name dflt = match getEnv name
@@ -36,7 +52,7 @@ fixtureFrameIntegrity medaka fixDir =
         requestMsg 2 "textDocument/documentSymbol" (docParams uri),
         requestMsg 3 "textDocument/hover" (docPosParams uri 7 0),
         shutdownMsg 4,
-        exitMsg
+        exitMsg,
       ]
       match runSession medaka msgs
         Err _ => check "frame-integrity (multibyte)" False

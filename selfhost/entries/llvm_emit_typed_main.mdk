@@ -14,10 +14,32 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{elaborateDict, constrainedSigNames, preludeReturnPosDictNames, preludeArgPosDictNames, enableArgStamp}
+import types.typecheck.{
+  elaborateDict,
+  constrainedSigNames,
+  preludeReturnPosDictNames,
+  preludeArgPosDictNames,
+  enableArgStamp,
+}
 import eval.eval.{funNamesOf, dropShadowedExp}
-import ir.core_ir_lower.{lowerProgramEmit, returnsSelfTable, selfFnParamTable, methodIfaceTable, methodConstraintIfaces, ctorFieldTypeNames, declSigTypeNames}
-import backend.llvm_emit.{emitProgram, installReturnsSelf, installSelfFnParams, installMethodIface, installMethodConstraintIfaces, installCtorFieldTypes, installDeclSigTypes}
+import ir.core_ir_lower.{
+  lowerProgramEmit,
+  returnsSelfTable,
+  selfFnParamTable,
+  methodIfaceTable,
+  methodConstraintIfaces,
+  ctorFieldTypeNames,
+  declSigTypeNames,
+}
+import backend.llvm_emit.{
+  emitProgram,
+  installReturnsSelf,
+  installSelfFnParams,
+  installMethodIface,
+  installMethodConstraintIfaces,
+  installCtorFieldTypes,
+  installDeclSigTypes,
+}
 
 main = match args ()
   runtimePath::rest => withRuntime runtimePath rest

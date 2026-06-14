@@ -9,7 +9,39 @@
 -- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
 -- post-order (children first, then the node).
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Attr, Decl(..), Route(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Attr,
+  Decl(..),
+  Route(..),
+}
 import support.util.{listLen, contains, allList, concatMapList}
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
@@ -355,7 +387,7 @@ deriveEqRecord name fields = DImpl {
   tys = [TyCon name],
   name = None,
   reqs = [],
-  methods = [ImplMethod "eq" [PVar "__a", PVar "__b"] (andAll (map eqFieldCall fields))]
+  methods = [ImplMethod "eq" [PVar "__a", PVar "__b"] (andAll (map eqFieldCall fields))],
 }
 
 eqFieldCall : Field -> Expr
@@ -376,7 +408,7 @@ deriveOrdRecord name fields = DImpl {
   reqs = [],
   methods = [
     ImplMethod "compare" [PVar "__a", PVar "__b"] (lexCompareExprs (map ordFieldPair fields))
-  ]
+  ],
 }
 
 ordFieldPair : Field -> (Expr, Expr)
@@ -396,7 +428,7 @@ deriveShowRecord iface callName name fields = DImpl {
   reqs = [],
   methods = [
     ImplMethod callName [PVar "__r"] (concatStrings (showRecordParts callName name fields))
-  ]
+  ],
 }
 
 showRecordParts : String -> String -> List Field -> List Expr
@@ -412,7 +444,7 @@ showRecordField callName i f =
   let n = fieldName f
   [
     ELit (LString (recordFieldPrefix i ++ n ++ " = ")),
-    EApp (EVar callName) (EFieldAccess (EVar "__r") n)
+    EApp (EVar callName) (EFieldAccess (EVar "__r") n),
   ]
 
 recordFieldPrefix : Int -> String
@@ -430,7 +462,7 @@ deriveGenericRecord name fields = DImpl {
   reqs = [],
   methods = [
     ImplMethod "to_rep" [PVar "__r"] (EApp (EApp (EVar "RRecord") (ELit (LString name))) (EListLit (map genericRField fields)))
-  ]
+  ],
 }
 
 genericRField : Field -> Expr
@@ -440,7 +472,7 @@ genericRField f =
     "RField"
     [
       FieldAssign "fld_name" (ELit (LString n)),
-      FieldAssign "fld_rep" (EApp (EVar "to_rep") (EFieldAccess (EVar "__r") n))
+      FieldAssign "fld_rep" (EApp (EVar "to_rep") (EFieldAccess (EVar "__r") n)),
     ]
 
 -- A newtype is structurally a single-constructor, single-field data type, so the
@@ -504,7 +536,7 @@ deriveShowData iface callName name variants = DImpl {
   reqs = [],
   methods = [
     ImplMethod callName [PVar "__x"] (EMatch (EVar "__x") (map (showArm callName) variants))
-  ]
+  ],
 }
 
 showArm : String -> Variant -> Arm
@@ -539,7 +571,7 @@ deriveEqData name variants = DImpl {
   reqs = [],
   methods = [
     ImplMethod "eq" [PVar "__x", PVar "__y"] (EMatch (ETuple [EVar "__x", EVar "__y"]) (eqArms variants))
-  ]
+  ],
 }
 
 eqArms : List Variant -> List Arm
@@ -586,7 +618,7 @@ deriveOrdData name variants = DImpl {
   reqs = [],
   methods = [
     ImplMethod "compare" [PVar "__x", PVar "__y"] (EMatch (ETuple [EVar "__x", EVar "__y"]) (ordArms variants))
-  ]
+  ],
 }
 
 ordArms : List Variant -> List Arm
@@ -634,7 +666,7 @@ lexCompareExprs ((ea, eb)::rest) =
     (EApp (EApp (EVar "compare") ea) eb)
     [
       Arm (PCon "Eq" []) [] (lexCompareExprs rest),
-      Arm (PVar "__c") [] (EVar "__c")
+      Arm (PVar "__c") [] (EVar "__c"),
     ]
 
 -- Generic: one arm per constructor → RCon name [to_rep a0, …]
@@ -648,7 +680,7 @@ deriveGenericData name variants = DImpl {
   reqs = [],
   methods = [
     ImplMethod "to_rep" [PVar "__x"] (EMatch (EVar "__x") (map genericArm variants))
-  ]
+  ],
 }
 
 genericArm : Variant -> Arm

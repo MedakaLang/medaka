@@ -12,8 +12,28 @@
 -- prop's shrunk counterexample is RNG-dependent and diverges across all three
 -- runners — see the report in test/diff_selfhost_test.sh.
 
-import frontend.ast.{Decl, Expr, DProp, DData, DRecord, DNewtype, PropParam, Ty(..), Variant(..), Field(..), ConPayload(..)}
-import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue, rngStateRef}
+import frontend.ast.{
+  Decl,
+  Expr,
+  DProp,
+  DData,
+  DRecord,
+  DNewtype,
+  PropParam,
+  Ty(..),
+  Variant(..),
+  Field(..),
+  ConPayload(..),
+}
+import eval.eval.{
+  Value(..),
+  EvalEnv(..),
+  eval,
+  extendEnv,
+  force,
+  ppValue,
+  rngStateRef,
+}
 import support.util.{listLen, lookupAssoc, reverseL}
 
 -- ── RNG wrappers (call the eval externs through tiny Medaka shims) ───────────

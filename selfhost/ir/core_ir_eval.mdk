@@ -26,10 +26,73 @@
 -- on the typed lowering path.
 
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl}
-import ir.core_ir.{CExpr(..), CArm(..), CGuard(..), CStmt(..), CField(..), CBind(..), CClause(..), CImplEntry(..), CImplBody(..), CProgram(..), CTree(..), CTBranch(..), CHead(..)}
+import ir.core_ir.{
+  CExpr(..),
+  CArm(..),
+  CGuard(..),
+  CStmt(..),
+  CField(..),
+  CBind(..),
+  CClause(..),
+  CImplEntry(..),
+  CImplBody(..),
+  CProgram(..),
+  CTree(..),
+  CTBranch(..),
+  CHead(..),
+}
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith}
 import support.util.{concatMapList}
-import eval.eval.{Value(..), EvalEnv(..), lookupEnv, extendEnv, pushFrame, findCell, applyValue, matchPat, force, startsWithAt, evalArith, evalUnop, consVal, appendVal, makeCtor, boolSeeds, externBindings, ctorToTypeRef, installConsts, cellResult, lookupBinding, isNullary, ppValue, outputRef, evalIndex, evalSlice, evalRange, rangeListMk, rangeArrayMk, evalRecordUpdate, evalValueField, evalField, narrowMethod, routeTag, applyDicts, coalesceImpls, nub, buildCtorToType, collectCtors, buildIfaceDispatch, implMethodNames, importFrameOf, pubReexports, evalVariantUpdate, buildCtorFieldOrders, ctorFieldOrdersRef, methodAtNarrow, applyValues}
+import eval.eval.{
+  Value(..),
+  EvalEnv(..),
+  lookupEnv,
+  extendEnv,
+  pushFrame,
+  findCell,
+  applyValue,
+  matchPat,
+  force,
+  startsWithAt,
+  evalArith,
+  evalUnop,
+  consVal,
+  appendVal,
+  makeCtor,
+  boolSeeds,
+  externBindings,
+  ctorToTypeRef,
+  installConsts,
+  cellResult,
+  lookupBinding,
+  isNullary,
+  ppValue,
+  outputRef,
+  evalIndex,
+  evalSlice,
+  evalRange,
+  rangeListMk,
+  rangeArrayMk,
+  evalRecordUpdate,
+  evalValueField,
+  evalField,
+  narrowMethod,
+  routeTag,
+  applyDicts,
+  coalesceImpls,
+  nub,
+  buildCtorToType,
+  collectCtors,
+  buildIfaceDispatch,
+  implMethodNames,
+  importFrameOf,
+  pubReexports,
+  evalVariantUpdate,
+  buildCtorFieldOrders,
+  ctorFieldOrdersRef,
+  methodAtNarrow,
+  applyValues,
+}
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
 export

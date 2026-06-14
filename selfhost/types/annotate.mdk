@@ -30,7 +30,38 @@
 -- self-hosted eval that reduces to: AGlobal stays a by-name scan (`lookupEnv`),
 -- which already reaches a global method's VMulti past any local frame.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Addr(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Addr(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+}
 import support.util.{concatMapList, reverseL}
 
 -- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
@@ -267,7 +298,7 @@ annotateDecl DImpl { pub, def, iface, tys, name, reqs, methods } = DImpl {
   tys = tys,
   name = name,
   reqs = reqs,
-  methods = map annotateImplMethod methods
+  methods = map annotateImplMethod methods,
 }
 annotateDecl (DAttrib attrs inner) = DAttrib attrs (annotateDecl inner)
 annotateDecl d = d

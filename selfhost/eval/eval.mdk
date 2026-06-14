@@ -11,8 +11,38 @@
 -- Validated by rendering pp_value of a program's `main` binding and diffing
 -- against dev/eval_probe.exe (Eval.eval_program ~prelude:false → Eval.pp_value).
 
-import frontend.ast.{Lit(..), Ty(..), Addr(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), FieldAssign(..), FunClause(..), LetBind(..), Expr(..), Route(..), ConPayload(..), Field(..), Variant(..), IfaceMethod(..), MethodDefault(..), ImplMethod(..), UsePath(..), UseMember(..), Decl(..)}
-import support.util.{contains, concatMapList, listLen, reverseL, anyList, lookupAssoc}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Addr(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  FieldAssign(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  Route(..),
+  ConPayload(..),
+  Field(..),
+  Variant(..),
+  IfaceMethod(..),
+  MethodDefault(..),
+  ImplMethod(..),
+  UsePath(..),
+  UseMember(..),
+  Decl(..),
+}
+import support.util.{
+  contains,
+  concatMapList,
+  listLen,
+  reverseL,
+  anyList,
+  lookupAssoc,
+}
 
 -- ── values & environment (mutually recursive) ─────────────────────────────
 public export data Value
@@ -1731,7 +1761,7 @@ externBindings = [
   ("charMaxBound", VChar (charToStr charMaxBound)),
   ("pi", VFloat pi),
   ("e", VFloat e),
-  ("__fallthrough__", VPrim (_ => VFallthrough))
+  ("__fallthrough__", VPrim (_ => VFallthrough)),
 ]
 
 pDebugStringLit : Value -> Value

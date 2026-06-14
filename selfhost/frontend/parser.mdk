@@ -15,8 +15,48 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), Loc(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..), Route(..)}
-import frontend.lexer.{Token(..), tokenize, tokenizeWithLines, tokenizeWithOffsets, tokenizeWithOffsetPairs, offsetToLineCol}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  Loc(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+  Attr(..),
+  Route(..),
+}
+import frontend.lexer.{
+  Token(..),
+  tokenize,
+  tokenizeWithLines,
+  tokenizeWithOffsets,
+  tokenizeWithOffsetPairs,
+  offsetToLineCol,
+}
 import support.util.{reverseL}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
@@ -398,7 +438,7 @@ cmpOp =
       binOp TLt "<",
       binOp TGt ">",
       binOp TLeq "<=",
-      binOp TGeq ">="
+      binOp TGeq ">=",
     ]
 
 -- `::` is right-associative
@@ -1978,7 +2018,7 @@ parseInterface pub isDefault = do
       name = name,
       typarams = typarams,
       supers = supers,
-      methods = methods
+      methods = methods,
     }
 
 -- optional `requires Iface a, …` superclass list
@@ -2100,7 +2140,7 @@ implRest pub isDefault iface name = do
       tys = tyargs,
       name = name,
       reqs = reqs,
-      methods = methods
+      methods = methods,
     }
 
 -- optional `requires Iface tyargs…, …`

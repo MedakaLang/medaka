@@ -10,7 +10,21 @@
 -- them for cross-checking (parse-back → re-dump → assert identical output).
 
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
-import ir.core_ir.{CExpr(..), CArm(..), CGuard(..), CStmt(..), CField(..), CBind(..), CClause(..), CImplEntry(..), CImplBody(..), CProgram(..), CTree(..), CTBranch(..), CHead(..)}
+import ir.core_ir.{
+  CExpr(..),
+  CArm(..),
+  CGuard(..),
+  CStmt(..),
+  CField(..),
+  CBind(..),
+  CClause(..),
+  CImplEntry(..),
+  CImplBody(..),
+  CProgram(..),
+  CTree(..),
+  CTBranch(..),
+  CHead(..),
+}
 import ir.sexp.{boolStr, node, slist, litSexp, patSexp}
 import support.util.{escStr, joinNl}
 
@@ -76,7 +90,7 @@ cexprSexp (CMethod name route implRoutes methRoutes) =
       escStr name,
       routeSexp route,
       slist (map routeSexp implRoutes),
-      slist (map routeSexp methRoutes)
+      slist (map routeSexp methRoutes),
     ]
 cexprSexp (CDict name routes) =
   node "CDict" [escStr name, slist (map routeSexp routes)]
@@ -159,7 +173,7 @@ cimplBodySexp (CImplTagged tag iface positions pats body) =
       escStr iface,
       slist (map intToString positions),
       slist (map patSexp pats),
-      cexprSexp body
+      cexprSexp body,
     ]
 cimplBodySexp (CImplDefault pats body) =
   node "CImplDefault" [slist (map patSexp pats), cexprSexp body]
@@ -186,5 +200,5 @@ cprogramToSexp (CProgram binds ctorArities ctorToType impls) =
       slist (map cbindSexp binds),
       slist (map ctorArityPairSexp ctorArities),
       slist (map ctorTypePairSexp ctorToType),
-      slist (map cimplEntrySexp impls)
+      slist (map cimplEntrySexp impls),
     ]

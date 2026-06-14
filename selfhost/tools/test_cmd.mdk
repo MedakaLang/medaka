@@ -36,8 +36,30 @@ import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateOne, elaborateModules}
 import frontend.lexer.{collectComments}
-import eval.eval.{Value, evalOne, evalModules, evalModulesRootEnv, funNamesOf, dropShadowedExp}
-import tools.doctest.{Example, ExResult(..), RunResult, extractExamples, buildSynthDecls, buildDetails, hasUseDecls, runDetails, runPassed, runFailed, runErrors, exampleInput, exampleLine, synthName}
+import eval.eval.{
+  Value,
+  evalOne,
+  evalModules,
+  evalModulesRootEnv,
+  funNamesOf,
+  dropShadowedExp,
+}
+import tools.doctest.{
+  Example,
+  ExResult(..),
+  RunResult,
+  extractExamples,
+  buildSynthDecls,
+  buildDetails,
+  hasUseDecls,
+  runDetails,
+  runPassed,
+  runFailed,
+  runErrors,
+  exampleInput,
+  exampleLine,
+  synthName,
+}
 import tools.prop_runner.{runAllProps, hasProps}
 import support.util.{listLen}
 

@@ -11,8 +11,46 @@
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
-import support.util.{contains, concatMapList, allList, anyList, listLen, lookupAssoc, joinNl}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+}
+import support.util.{
+  contains,
+  concatMapList,
+  allList,
+  anyList,
+  listLen,
+  lookupAssoc,
+  joinNl,
+}
 
 -- ── small helpers ─────────────────────────────────────────────────────────
 replicateWild : Int -> List Pat
@@ -90,7 +128,7 @@ buildOracle : List Decl -> Oracle
 buildOracle prog = Oracle {
   typeCtors = concatMapList dataTypeCtors prog ++ builtinTypeCtors,
   ctorArity = concatMapList dataArity prog ++ builtinArity,
-  ctorType = concatMapList dataCtorType prog ++ builtinCtorType
+  ctorType = concatMapList dataCtorType prog ++ builtinCtorType,
 }
 
 builtinTypeCtors : List (String, List String)
@@ -105,7 +143,7 @@ builtinCtorType = [
   ("False", "Bool"),
   ("Cons", "List"),
   ("Nil", "List"),
-  ("Unit", "Unit")
+  ("Unit", "Unit"),
 ]
 
 dataTypeCtors : Decl -> List (String, List String)

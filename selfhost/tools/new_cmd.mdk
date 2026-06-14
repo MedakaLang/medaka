@@ -24,7 +24,7 @@ tomlTemplate name =
     [
       "[package]\nname = \"",
       name,
-      "\"\nversion = \"0.1.0\"\nentry = \"main.mdk\"\n"
+      "\"\nversion = \"0.1.0\"\nentry = \"main.mdk\"\n",
     ]
 
 mainTemplate : String

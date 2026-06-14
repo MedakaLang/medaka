@@ -10,7 +10,12 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkToLines, checkToLinesWithRuntime, setCoherenceUserDecls, collectDoWellformedErrors}
+import types.typecheck.{
+  checkToLines,
+  checkToLinesWithRuntime,
+  setCoherenceUserDecls,
+  collectDoWellformedErrors,
+}
 
 main = match args ()
   [targetPath] => withTarget targetPath

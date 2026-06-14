@@ -71,7 +71,29 @@
 -- let / lambda arg / match-pattern var) named `f` shadows it.  Mirrors the
 -- binder-threading of typecheck.mdk's `rewriteArgScoped`.
 
-import frontend.ast.{Decl(..), Expr(..), Pat(..), Arm(..), Guard(..), GuardArm(..), DoStmt(..), LcQual(..), Section(..), InterpPart(..), FieldAssign(..), RecPatField(..), LetBind(..), FunClause(..), IfaceMethod(..), MethodDefault(..), ImplMethod(..), PropParam(..), UsePath(..), UseMember(..), Variant(..)}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  Pat(..),
+  Arm(..),
+  Guard(..),
+  GuardArm(..),
+  DoStmt(..),
+  LcQual(..),
+  Section(..),
+  InterpPart(..),
+  FieldAssign(..),
+  RecPatField(..),
+  LetBind(..),
+  FunClause(..),
+  IfaceMethod(..),
+  MethodDefault(..),
+  ImplMethod(..),
+  PropParam(..),
+  UsePath(..),
+  UseMember(..),
+  Variant(..),
+}
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY

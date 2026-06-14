@@ -41,7 +41,19 @@
 --   nullary/payload Gty match below is correct, and TIER=1 native fuzzing is restored
 --   (30/30 seeds build crash-free).
 
-import frontend.ast.{Lit(..), Ty(..), Pat(..), Arm(..), DoStmt(..), Route(..), Expr(..), DataVis(..), ConPayload(..), Variant(..), Decl(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Pat(..),
+  Arm(..),
+  DoStmt(..),
+  Route(..),
+  Expr(..),
+  DataVis(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+}
 import tools.printer.{programToString}
 import string.{toInt}
 
@@ -450,7 +462,7 @@ invArith ctx =
   [
     binop "==" (binop "+" a (ELit (LInt 0))) a,
     binop "==" (binop "*" a (ELit (LInt 1))) a,
-    binop "==" (binop "-" (binop "+" a b) b) a
+    binop "==" (binop "-" (binop "+" a b) b) a,
   ]
 
 invEq : Ctx -> Gadt -> <Rand, Mut> List Expr
@@ -460,7 +472,7 @@ invEq ctx a =
   [
     binop "==" x x,
     binop "==" (binop "==" x y) (EApp (EApp (EVar "eq") x) y),
-    binop "==" (binop "==" x y) (binop "==" y x)
+    binop "==" (binop "==" x y) (binop "==" y x),
   ]
 
 invOrd : Ctx -> Gadt -> <Rand, Mut> List Expr
@@ -470,7 +482,7 @@ invOrd ctx a =
   [
     binop "==" (binop "<" x y) (EApp (EApp (EVar "lt") x) y),
     EUnOp "not" (binop "&&" (binop "<" x y) (binop "<" y x)),
-    binop "<=" x x
+    binop "<=" x x,
   ]
 
 invOrdTrans : Ctx -> <Rand, Mut> Expr

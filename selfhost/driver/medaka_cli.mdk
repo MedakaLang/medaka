@@ -14,10 +14,23 @@
 -- check-policy/etc.) prints "not yet in native CLI" and exits 1; those land in
 -- later slices (run/build = Slice 2, test = Slice 3, repl/lsp = Slice 4).
 
-import tools.check.{runCheck, checkHasErrors, runCheckModules, checkModulesHasErrors}
+import tools.check.{
+  runCheck,
+  checkHasErrors,
+  runCheckModules,
+  checkModulesHasErrors,
+}
 import tools.fmt.{formatSource}
 import tools.new_cmd.{newProject}
-import driver.build_cmd.{BuildResult, BuildOk, BuildErr, runBuild, baseOf, chopExt, envOr}
+import driver.build_cmd.{
+  BuildResult,
+  BuildOk,
+  BuildErr,
+  runBuild,
+  baseOf,
+  chopExt,
+  envOr,
+}
 import support.util.{reverseL}
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
@@ -66,7 +79,7 @@ usage _ =
       "  medaka fmt [paths...]     Format .mdk files in place (or --check).\n",
       "  medaka new <name>         Scaffold a new project directory.\n",
       "  medaka lsp                Run the language server over stdio.\n",
-      "  medaka help               Show this message.\n"
+      "  medaka help               Show this message.\n",
     ])
 
 -- ── deferred subcommands ──────────────────────────────────────────────────

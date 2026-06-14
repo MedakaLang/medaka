@@ -10,10 +10,60 @@
 -- map (the IR deliberately stays close to the core AST so the equivalence gate
 -- is a clean diff, not a rewrite).
 
-import frontend.ast.{Lit(..), Pat(..), RecPatField(..), Expr(..), Arm(..), Guard(..), DoStmt(..), FieldAssign(..), LetBind(..), FunClause(..), Addr(..), Decl(..), Variant(..), ConPayload(..), Field(..), Ty(..), Constraint(..), IfaceMethod(..), MethodDefault(..), ImplMethod(..)}
-import ir.core_ir.{CExpr(..), CArm(..), CGuard(..), CStmt(..), CField(..), CBind(..), CClause(..), CImplEntry(..), CImplBody(..), CProgram(..), CTree(..), CTBranch(..), CHead(..)}
-import eval.eval.{buildCtorToType, buildCtorFieldOrders, ctorFieldOrdersRef, buildIfaceDispatch, lookupPositions, tyvarsInArgs, headTyconHead}
-import support.util.{contains, concatMapList, listLen, allList, anyList, lookupAssoc}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  RecPatField(..),
+  Expr(..),
+  Arm(..),
+  Guard(..),
+  DoStmt(..),
+  FieldAssign(..),
+  LetBind(..),
+  FunClause(..),
+  Addr(..),
+  Decl(..),
+  Variant(..),
+  ConPayload(..),
+  Field(..),
+  Ty(..),
+  Constraint(..),
+  IfaceMethod(..),
+  MethodDefault(..),
+  ImplMethod(..),
+}
+import ir.core_ir.{
+  CExpr(..),
+  CArm(..),
+  CGuard(..),
+  CStmt(..),
+  CField(..),
+  CBind(..),
+  CClause(..),
+  CImplEntry(..),
+  CImplBody(..),
+  CProgram(..),
+  CTree(..),
+  CTBranch(..),
+  CHead(..),
+}
+import eval.eval.{
+  buildCtorToType,
+  buildCtorFieldOrders,
+  ctorFieldOrdersRef,
+  buildIfaceDispatch,
+  lookupPositions,
+  tyvarsInArgs,
+  headTyconHead,
+}
+import support.util.{
+  contains,
+  concatMapList,
+  listLen,
+  allList,
+  anyList,
+  lookupAssoc,
+}
 
 -- a synthetic binder for the lowered composition operators; constructed
 -- directly (never parsed) so the unusual name is harmless.

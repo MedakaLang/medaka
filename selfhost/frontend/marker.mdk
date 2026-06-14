@@ -14,7 +14,37 @@
 -- NOTE: the prelude-shadowing logic (Phase 78a/78b) is not yet ported — it is
 -- added incrementally for the corpus files that shadow prelude names.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+}
 import frontend.desugar.{mapProg, mapExpr, mapDecl}
 import support.util.{contains, concatMapList}
 

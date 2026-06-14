@@ -164,7 +164,21 @@
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
-import ir.core_ir.{CExpr(..), CField(..), CBind(..), CClause(..), CStmt(..), CProgram(..), CArm(..), CGuard(..), CTree(..), CTBranch(..), CHead(..), CImplEntry(..), CImplBody(..)}
+import ir.core_ir.{
+  CExpr(..),
+  CField(..),
+  CBind(..),
+  CClause(..),
+  CStmt(..),
+  CProgram(..),
+  CArm(..),
+  CGuard(..),
+  CTree(..),
+  CTBranch(..),
+  CHead(..),
+  CImplEntry(..),
+  CImplBody(..),
+}
 import ir.core_ir_lower.{compileTree, canonPat}
 import support.util.{reverseL, joinNl, lookupAssoc, listLen}
 import backend.llvm_preamble.{preambleLines}
@@ -1074,7 +1088,7 @@ utf8Bytes cp
     240 + cp / 262144,
     128 + (cp / 4096) % 64,
     128 + (cp / 64) % 64,
-    128 + cp % 64
+    128 + cp % 64,
   ]
 
 -- escape a byte list for an LLVM `c"…"` constant: EVERY byte as `\HH` (uppercase
@@ -1345,7 +1359,7 @@ isUnicodeExtern name =
       "charToUpper",
       "charToLower",
       "stringToUpper",
-      "stringToLower"
+      "stringToLower",
     ]
 
 emitUnicodeExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
@@ -1483,7 +1497,7 @@ isFileExtern name =
       "readAll",
       "readExactly",
       "makeDir",
-      "runCommand"
+      "runCommand",
     ]
 
 emitFileExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
@@ -7236,7 +7250,7 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
     recFields = Ref (collectRecords groups),
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
-    globalsReg = Ref (initGlobalsReg (valBinds groups))
+    globalsReg = Ref (initGlobalsReg (valBinds groups)),
   }
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)
@@ -7377,7 +7391,7 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
     recFields = Ref (collectRecords groups),
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
-    globalsReg = Ref (initGlobalsRegReady (valBinds groups))
+    globalsReg = Ref (initGlobalsRegReady (valBinds groups)),
   }
   let _ = resetDistinctTypeNames ()
   let _ = installKnownFnMap (collectFns groups)

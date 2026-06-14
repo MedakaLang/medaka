@@ -26,9 +26,21 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import support.util.{joinNl}
-import frontend.resolve.{resolveToLines, resolveModulesToLines, singleFileImportErrors, resErrorSexp}
+import frontend.resolve.{
+  resolveToLines,
+  resolveModulesToLines,
+  singleFileImportErrors,
+  resErrorSexp,
+}
 import frontend.exhaust.{exhaustToLines}
-import types.typecheck.{checkToLinesWithRuntime, setCoherenceUserDecls, collectDoWellformedErrors, checkErrorsWithRuntime, checkModulesEntryReport, checkModulesEntryHasErrors}
+import types.typecheck.{
+  checkToLinesWithRuntime,
+  setCoherenceUserDecls,
+  collectDoWellformedErrors,
+  checkErrorsWithRuntime,
+  checkModulesEntryReport,
+  checkModulesEntryHasErrors,
+}
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),

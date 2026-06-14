@@ -23,7 +23,14 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{checkModules, markModules}
-import support.timer.{perfEnabled, now, emitPhaseA, emitTotalA, allocSnap, totalDecls}
+import support.timer.{
+  perfEnabled,
+  now,
+  emitPhaseA,
+  emitTotalA,
+  allocSnap,
+  totalDecls,
+}
 import support.util.{listLen}
 
 main : <IO, Mut> Unit

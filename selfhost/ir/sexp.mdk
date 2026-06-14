@@ -3,7 +3,38 @@
 -- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..), Attr(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+  Attr(..),
+}
 import support.util.{escStr, joinNl, joinWith}
 
 export
@@ -202,7 +233,7 @@ declSexp (DData vis n ps vs ds) =
       escStr n,
       slist (map escStr ps),
       slist (map variantSexp vs),
-      slist (map escStr ds)
+      slist (map escStr ds),
     ]
 declSexp (DRecord vis n ps fs ds) =
   node
@@ -212,7 +243,7 @@ declSexp (DRecord vis n ps fs ds) =
       escStr n,
       slist (map escStr ps),
       slist (map fieldSexp fs),
-      slist (map escStr ds)
+      slist (map escStr ds),
     ]
 declSexp (DUse pub path) = node "DUse" [boolStr pub, usePathSexp path]
 declSexp (DEffect pub n) = node "DEffect" [boolStr pub, escStr n]
@@ -235,7 +266,7 @@ declSexp (DNewtype p n ps con fty ds) =
       slist (map escStr ps),
       escStr con,
       tySexp fty,
-      slist (map escStr ds)
+      slist (map escStr ds),
     ]
 declSexp (DLetGroup p binds) =
   node "DLetGroup" [boolStr p, slist (map letBindSexp binds)]
@@ -259,7 +290,7 @@ declSexp DInterface { pub, def, name, typarams, supers, methods } =
       escStr name,
       slist (map escStr typarams),
       slist (map superSexp supers),
-      slist (map ifaceMethodSexp methods)
+      slist (map ifaceMethodSexp methods),
     ]
 declSexp DImpl { pub, def, iface, tys, name, reqs, methods } =
   node
@@ -271,7 +302,7 @@ declSexp DImpl { pub, def, iface, tys, name, reqs, methods } =
       slist (map tySexp tys),
       optStrSexp name,
       slist (map requireSexp reqs),
-      slist (map implMethodSexp methods)
+      slist (map implMethodSexp methods),
     ]
 
 methodDefaultSexp : Option MethodDefault -> String

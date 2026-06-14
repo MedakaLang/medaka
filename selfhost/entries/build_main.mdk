@@ -13,7 +13,15 @@
 -- from the environment (the gate script sets them).  Output defaults to the
 -- input's basename sans .mdk, mirroring lib/build_cmd.ml.
 
-import driver.build_cmd.{BuildResult, BuildOk, BuildErr, runBuild, baseOf, chopExt, envOr}
+import driver.build_cmd.{
+  BuildResult,
+  BuildOk,
+  BuildErr,
+  runBuild,
+  baseOf,
+  chopExt,
+  envOr,
+}
 import support.util.{reverseL}
 
 main : <IO, Mut, Panic> Unit

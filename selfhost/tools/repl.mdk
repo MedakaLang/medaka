@@ -30,7 +30,12 @@ import frontend.lexer.{Token(..), tokenize}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
-import types.typecheck.{checkProgramDiags, checkProgramSchemes, ppScheme, Scheme(..)}
+import types.typecheck.{
+  checkProgramDiags,
+  checkProgramSchemes,
+  ppScheme,
+  Scheme(..),
+}
 import eval.eval.{Value(..), evalOneRootEnv, ppValue, lookupBinding, force}
 
 -- ── Session state ─────────────────────────────────────────────────────────

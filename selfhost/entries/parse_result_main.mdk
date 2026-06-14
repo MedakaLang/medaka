@@ -15,7 +15,13 @@
 -- value (`Result ParseError (List Decl)`) and rendered.  Contrast
 -- selfhost/entries/parse_main.mdk, which drives the panicking `parse`.
 
-import frontend.parser.{parseResult, ParseError(..), parseErrorLine, parseErrorCol, parseErrorMessage}
+import frontend.parser.{
+  parseResult,
+  ParseError(..),
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
+}
 
 renderErr : ParseError -> String
 renderErr pe = "parse error "

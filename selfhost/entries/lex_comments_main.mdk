@@ -17,7 +17,13 @@
 -- Uses only prelude + global externs (no stdlib import), so it resolves with
 -- `selfhost/` as the sole project root.
 
-import frontend.lexer.{Comment, collectComments, commentLine, commentCol, commentText}
+import frontend.lexer.{
+  Comment,
+  collectComments,
+  commentLine,
+  commentCol,
+  commentText,
+}
 import support.util.{joinNl}
 
 -- Escape embedded newlines so a multi-line block comment renders on one line.

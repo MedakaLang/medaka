@@ -18,11 +18,28 @@
 -- one per line, sorted by the harness.
 
 import frontend.ast.{Decl, Loc(..)}
-import frontend.parser.{parse, parseLocated, parseResult, ParseError, parseErrorLine, parseErrorCol, parseErrorMessage}
+import frontend.parser.{
+  parse,
+  parseLocated,
+  parseResult,
+  ParseError,
+  parseErrorLine,
+  parseErrorCol,
+  parseErrorMessage,
+}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveProgram, ppResError, resolveModule, ModuleExports}
+import frontend.resolve.{
+  resolveProgram,
+  ppResError,
+  resolveModule,
+  ModuleExports,
+}
 import frontend.exhaust.{checkGuardExhaustiveness}
-import types.typecheck.{checkProgramDiags, checkModulesDiags, setCoherenceUserDecls}
+import types.typecheck.{
+  checkProgramDiags,
+  checkModulesDiags,
+  setCoherenceUserDecls,
+}
 import driver.loader.{loadProgramFilesLocated}
 
 -- ── types ──────────────────────────────────────────────────────────────────

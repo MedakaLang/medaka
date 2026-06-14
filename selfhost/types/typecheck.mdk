@@ -11,7 +11,38 @@
 -- the prelude), effect rows, records, interfaces/impls + constraint solving,
 -- and explicit type signatures.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Route(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), FunClause(..), FieldAssign(..), LetBind(..), Expr(..), Loc(..), ConPayload(..), Field(..), Variant(..), IfaceMethod(..), MethodDefault(..), Require(..), ImplMethod(..), DataVis(..), Decl(..), PropParam(..), LcQual(..), Section(..), InterpPart(..), GuardArm(..), UsePath(..), UseMember(..)}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Route(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  FunClause(..),
+  FieldAssign(..),
+  LetBind(..),
+  Expr(..),
+  Loc(..),
+  ConPayload(..),
+  Field(..),
+  Variant(..),
+  IfaceMethod(..),
+  MethodDefault(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Decl(..),
+  PropParam(..),
+  LcQual(..),
+  Section(..),
+  InterpPart(..),
+  GuardArm(..),
+  UsePath(..),
+  UseMember(..),
+}
 import frontend.desugar.{mapProg}
 -- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
 -- reuses the Maranget matrix machinery already ported in exhaust.mdk — the only
@@ -1345,7 +1376,7 @@ sigToSchemeTvs ty =
   let etbl = freshEffMap (dedupS (effTailNames ty))
   (
     Forall (map monoTyvarId (map snd tvs)) (map effvarIdOf etbl) (fromAstTypeE etbl tvs ty),
-    tvs
+    tvs,
   )
 
 -- tvs maps a declared type-parameter name to its tyvar

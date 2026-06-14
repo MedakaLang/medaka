@@ -11,7 +11,12 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{elaborateDict, constrainedSigNames, preludeReturnPosDictNames, preludeArgPosDictNames}
+import types.typecheck.{
+  elaborateDict,
+  constrainedSigNames,
+  preludeReturnPosDictNames,
+  preludeArgPosDictNames,
+}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{lowerProgram}
 import ir.core_ir_eval.{cevalMain}

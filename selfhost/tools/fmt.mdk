@@ -27,7 +27,16 @@
 import frontend.ast.{DataVis(..), Variant(..), Decl(..)}
 import tools.printer.{render, printDecl, printDataDeclCommented, Doc}
 import frontend.lexer.{Comment, commentLine, commentText, collectComments}
-import frontend.parser.{parseWithPositions, Positions, DeclPos, positionsDecls, positionsVariantLines, positionsLastContentLine, declPosLine, declPosEndLine}
+import frontend.parser.{
+  parseWithPositions,
+  Positions,
+  DeclPos,
+  positionsDecls,
+  positionsVariantLines,
+  positionsLastContentLine,
+  declPosLine,
+  declPosEndLine,
+}
 
 -- ── State ─────────────────────────────────────────
 -- pieces : output fragments, REVERSED (cons-prepend, reverse+concat at end)
@@ -155,12 +164,12 @@ declDoc (FmtState pieces cs vlines cursor started) (DData vis n params variants 
       if lenL vcomments == lenL variants && not (allEmpty vcomments) then
         (
           render (printDataDeclCommented vis n params variants derives vcomments),
-          FmtState pieces csRest vlinesRest cursor started
+          FmtState pieces csRest vlinesRest cursor started,
         )
       else
         (
           render (printDecl (DData vis n params variants derives)),
-          FmtState pieces cs vlinesRest cursor started
+          FmtState pieces cs vlinesRest cursor started,
         )
 declDoc st decl = (render (printDecl decl), st)
 

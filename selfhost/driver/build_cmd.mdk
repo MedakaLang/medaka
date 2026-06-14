@@ -147,7 +147,7 @@ detectGCBrew cc = match runCommand "brew" ["--prefix", "bdw-gc"]
     let prefix = trimWS out
     if prefix != "" && fileExists (joinPath prefix "include/gc.h") then Some (
       ["-I" ++ joinPath prefix "include"],
-      ["-L" ++ joinPath prefix "lib", "-lgc"]
+      ["-L" ++ joinPath prefix "lib", "-lgc"],
     ) else detectGCBare cc
   _ => detectGCBare cc
 

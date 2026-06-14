@@ -12,8 +12,47 @@
 -- against real exports, privacy, aliases) is the reference's resolve_module and
 -- is NOT needed here: single-file mode stubs imports into scope.
 
-import frontend.ast.{Lit(..), Ty(..), Constraint(..), Addr(..), Pat(..), RecPatField(..), Guard(..), Arm(..), DoStmt(..), InterpPart(..), GuardArm(..), FieldAssign(..), LcQual(..), Section(..), FunClause(..), LetBind(..), Expr(..), UseMember(..), UsePath(..), PropParam(..), MethodDefault(..), IfaceMethod(..), Super(..), Require(..), ImplMethod(..), DataVis(..), Field(..), ConPayload(..), Variant(..), Decl(..)}
-import support.util.{contains, concatMapList, listLen, escStr, joinNl, lookupAssoc, reverseL}
+import frontend.ast.{
+  Lit(..),
+  Ty(..),
+  Constraint(..),
+  Addr(..),
+  Pat(..),
+  RecPatField(..),
+  Guard(..),
+  Arm(..),
+  DoStmt(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LcQual(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  Expr(..),
+  UseMember(..),
+  UsePath(..),
+  PropParam(..),
+  MethodDefault(..),
+  IfaceMethod(..),
+  Super(..),
+  Require(..),
+  ImplMethod(..),
+  DataVis(..),
+  Field(..),
+  ConPayload(..),
+  Variant(..),
+  Decl(..),
+}
+import support.util.{
+  contains,
+  concatMapList,
+  listLen,
+  escStr,
+  joinNl,
+  lookupAssoc,
+  reverseL,
+}
 
 -- ── Errors (mirror lib/resolve.ml's `error`) ──────────────────────────────
 public export data ResError
@@ -298,13 +337,13 @@ checkStmt env scope (DoBind p e) = (checkPat env p ++ checkExpr env scope e, pat
 checkStmt env scope (DoLet _ False p e) = (checkPat env p ++ checkExpr env scope e, patBindings p ++ scope)
 checkStmt env scope (DoLet _ True p e) = (
   checkPat env p ++ checkExpr env (patBindings p ++ scope) e,
-  patBindings p ++ scope
+  patBindings p ++ scope,
 )
 checkStmt env scope (DoAssign _ e) = (checkExpr env scope e, scope)
 checkStmt env scope (DoFieldAssign _ _ e) = (checkExpr env scope e, scope)
 checkStmt env scope (DoLetElse p e alt) = (
   checkPat env p ++ checkExpr env scope e ++ checkExpr env scope alt,
-  patBindings p ++ scope
+  patBindings p ++ scope,
 )
 
 checkInterp : Env -> List String -> InterpPart -> List ResError
@@ -623,7 +662,7 @@ buildEnv runtimeDecls preludeDecls prog =
     interfaces = map fst pIfaces ++ map fst uIfaces,
     ifaceMethods = pIfaces ++ uIfaces,
     effects = effectNames prog,
-    imported = imported
+    imported = imported,
   }
 
 whenL : Bool -> List a -> List a
@@ -890,7 +929,7 @@ emptyAdds = ImportAdds {
   iaCtors = [],
   iaIfaces = [],
   iaFieldOwners = [],
-  iaErrors = []
+  iaErrors = [],
 }
 
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
@@ -901,7 +940,7 @@ mergeAdds a b = ImportAdds {
   iaCtors = a.iaCtors ++ b.iaCtors,
   iaIfaces = a.iaIfaces ++ b.iaIfaces,
   iaFieldOwners = a.iaFieldOwners ++ b.iaFieldOwners,
-  iaErrors = a.iaErrors ++ b.iaErrors
+  iaErrors = a.iaErrors ++ b.iaErrors,
 }
 
 collectImports : List ModuleExports -> List Decl -> ImportAdds
@@ -932,7 +971,7 @@ stubOrUnknown known path mid =
     iaCtors = [],
     iaIfaces = [],
     iaFieldOwners = [],
-    iaErrors = [UnknownModule mid]
+    iaErrors = [UnknownModule mid],
   }
   else
     let names = useStubNames path
@@ -943,7 +982,7 @@ stubOrUnknown known path mid =
       iaCtors = [],
       iaIfaces = [],
       iaFieldOwners = [],
-      iaErrors = []
+      iaErrors = [],
     }
 
 realImport : ModuleExports -> UsePath -> ImportAdds
@@ -956,7 +995,7 @@ realImport exp path =
     iaCtors = filterContains exp.expCtors names,
     iaIfaces = filterContains exp.expInterfaces names,
     iaFieldOwners = ownedFieldOwners exp exp.expFieldOwners,
-    iaErrors = errs
+    iaErrors = errs,
   }
 
 -- field-ownership pairs whose owner is an exported type/ctor (copied into scope
@@ -1026,7 +1065,7 @@ buildEnvMM runtimeDecls preludeDecls known prog =
     interfaces = baseIfaces,
     ifaceMethods = pIfaces ++ uIfaces ++ impIfaceMethods,
     effects = effectNames prog ++ impEffects,
-    imported = adds.iaImported
+    imported = adds.iaImported,
   }
   (env, adds.iaErrors)
 
@@ -1041,7 +1080,7 @@ buildExports known modId prog env = ModuleExports {
   expFieldOwners = expFieldOwnersDirect prog ++ reExpFieldOwners known prog,
   expInterfaces = expInterfacesDirect prog ++ reExpInterfaces known prog,
   expIfaceMethods = expIfaceMethodsDirect prog ++ reExpIfaceMethods known prog,
-  expEffects = expEffectsDirect prog ++ reExpEffects known prog
+  expEffects = expEffectsDirect prog ++ reExpEffects known prog,
 }
 
 -- pub DTypeSig/DExtern/DFunDef
