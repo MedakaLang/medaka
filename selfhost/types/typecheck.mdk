@@ -716,6 +716,12 @@ promotedRef = Ref []
 dictEligibleRef : Ref (List String)
 dictEligibleRef = Ref []
 
+-- O(log n) membership mirror of dictEligibleRef (set in lockstep at both set
+-- sites).  maybeInferConstraint tests it per SCC member per discovery pass — an
+-- O(members × eligible) scan over the whole program when it was a list.
+dictEligibleSetRef : Ref (SMap Unit)
+dictEligibleSetRef = Ref STip
+
 -- Whether checkProgramSeeded ALSO infers each parametric impl's return-position
 -- method bodies (instance-`requires` dict-passing, Phase 83/84 single-level).  ON
 -- only for the elaborate / dict path (elaborateDict sets it); OFF for the
@@ -2884,6 +2890,7 @@ export
 elaborateDict : List Decl -> List String -> List String -> List Decl -> <Mut> List Decl
 elaborateDict runtimeDecls dictNames eligibleNames prog =
   let _ = set_ref dictEligibleRef eligibleNames
+  let _ = set_ref dictEligibleSetRef (namesToSet eligibleNames STip)
   let _ = set_ref implInferEnabled True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
   let _ = set_ref argDispatchIdxRef (argDispatchIndices prog)
@@ -5852,8 +5859,8 @@ registerInferredConstraints sigs ((m, sch) :: rest) =
 
 maybeInferConstraint : List (String, Ty) -> String -> Scheme -> <Mut> Unit
 maybeInferConstraint sigs m sch
-  | not (containsName m dictEligibleRef.value) = ()
-  | hasSig sigs m = ()
+  | not (smHasKey m dictEligibleSetRef.value) = ()
+  | smHasKey m sigNameSetRef.value = ()
   | otherwise = registerInferredFor m (inferredConstraintIds m (schemeIds sch))
 
 hasSig : List (String, Ty) -> String -> Bool
@@ -6450,6 +6457,7 @@ elaborateModules runtimeDecls coreDecls modules =
   -- run, which dict-passes prelude+modules unconditionally — so promotion-on-eval
   -- matches them.  Mirrors elaborateDict's dictEligibleRef seed.
   let _ = set_ref dictEligibleRef (moduleUserFnNames modules)
+  let _ = set_ref dictEligibleSetRef (namesToSet (moduleUserFnNames modules) STip)
   -- Cause A / Phase 2: run a JOINT-flattened promotion fixpoint over runtime ++ core
   -- ++ all modules (mirror discoverPromoted) so an unsignatured fn whose body
   -- dispatches a method in ARG position (`f s = println s` → inferred `Display a => …`)
