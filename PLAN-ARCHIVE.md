@@ -7897,3 +7897,128 @@ bootstrap pattern) **+** frozen GOLDEN snapshots for structural dumps
   are the safety net** — every refactor must be semantics-preserving (all gates
   byte-identical, all `bootstrap_*`/`selfcompile_*` green), so this is the safe
   moment to do it. Pairs naturally with the completeness/coverage work (item 2).
+
+---
+
+## Stage 4 — tooling-port completion log (archived 2026-06-14)
+
+_Moved verbatim from PLAN.md on 2026-06-14. Per-tool / per-slice completion record of the
+Stage-4 tooling port (fmt/test/new/repl/build/lsp) + the Phase-C native-CLI capstone. All DONE._
+
+The compiler pipeline self-hosts (`selfhost/`); the native backend compiles it. What
+remains in OCaml (`lib/`+`bin/`) is the **tooling around** the pipeline. **Decision
+(2026-06-10): port ALL of it to Medaka, targeting a natively-compiled `medaka` binary
+(LSP + REPL in scope) — the full-purity retirement endpoint.** Each tool is
+differential-tested against its OCaml twin (same oracle pattern as the pipeline).
+
+Host capabilities already present (`stdlib/runtime.mdk`): stdin (`readLine`/`readLineOpt`/
+`readAll`), file IO (`readFile`/`writeFile`/`appendFile`/`fileExists`), `args`, `getEnv`,
+`exit`, `json.mdk`. **Missing:** a subprocess/`exec` extern (for `medaka build`→`clang`),
+and a TOML reader (for `medaka.toml`).
+
+**Phase A — prerequisites (parallelizable; independent of the emitter-gap work):**
+**Phase A — prerequisites (parallelizable; independent of the emitter-gap work):**
+1. ✅ **`printer.mdk`** (AST→source, mirror `lib/printer.ml`) — DONE 2026-06-10. Full
+   Wadler/Leijen doc algebra, every AST node, **26/26 byte-identical** to OCaml
+   `program_to_string`; `dev/print_probe.ml` oracle + `test/diff_selfhost_printer.sh`.
+   NOTE: this is `program_to_string` (AST→source core), NOT `format_program` (comment-
+   preserving) — see A.5.
+2. ✅ **Subprocess extern `runCommand`** — interpreter side DONE 2026-06-10
+   (`runtime.mdk` + `eval.ml` `Unix.create_process` + `medaka_rt.c` `fork`/`execvp`;
+   `: String -> List String -> <IO> Result String (Int, String, String)`). **FOLLOW-UP
+   remaining:** the `llvm_emit.mdk` extern-table entry for native emission (deferred during
+   GAP 1; do now that `llvm_emit.mdk` is free).
+3. ✅ **TOML reader** (`stdlib/toml.mdk`) — DONE 2026-06-10. Mirrors `project_config.ml`'s
+   subset (`[section]`, `key="string"`, string arrays, `#` comments); 12/12 doctests.
+4. **Diagnostics surfacing layer** (mirror `lib/diagnostics.ml` 479) — structured errors
+   the CLI + LSP consume. ⏳ TODO.
+5. ✅ **Comment side-channel** (selfhost lexer) — DONE 2026-06-10. `RComment` in
+   `lexer.mdk` (stripped before layout → token stream byte-identical); `collectComments`
+   surfaces line/col/text; **8/8 byte-identical** to `lib/`'s channel. Unblocks the fmt port.
+
+**Phase B — tools (each differential-tested vs OCaml):**
+6. ✅ Formatter `medaka fmt` — DONE 2026-06-10 (`a933af9`). `selfhost/{fmt,printer}.mdk` +
+   `fmt_main.mdk`; comment interleaving over the position+comment channels; **37/37 byte-identical**
+   to `medaka fmt` (11 comment-heavy + 26 comment-free). Gate `test/diff_selfhost_fmt.sh`.
+7. ✅ `medaka test` — DONE 2026-06-10 (`c6a4fd0`). `selfhost/{doctest,prop_runner,test_main}.mdk`;
+   **6/6 byte-identical** (both doctest paths + passing props + FAIL path); `eval.mdk` gained an RNG +
+   `evalModulesRootEnv` + eval-entry exports. Gate `test/diff_selfhost_test.sh`.
+   **Completeness follow-ups (B.7, not blocking — task #28):**
+   - **(a) Error-path doctests not mirrorable** — OCaml `eval_suppressed` traps a per-example runtime
+     panic → one `ERROR …` line; the selfhost eval oracle has NO per-binding exception recovery (a
+     panic aborts the whole run). Needs per-binding panic trapping in selfhost eval.
+   - **(b) Prop RNG parity (failing props only)** — 3 RNGs in play (reference SplitMix64 externs, OCaml
+     `Random` in `prop_runner.ml`, selfhost's new LCG); passing props are RNG-independent (match), but a
+     FAILING prop's shrunk counterexample diverges. Reference uses OCaml `Random`, NOT the SplitMix64
+     externs (see [[project_rng_splitmix64]]).
+   - **(c) Selfhost eval-oracle extern/typecheck gaps block doctests on some stdlib files** (pre-existing,
+     not doctest bugs): `map.mdk`/`set.mdk` map/set literal sugar in synth bindings → `unsupported
+     expression (slice 1)`; `array.mdk` needs `arrayCopy`; `hash_map`/`hash_set` need `hashInt`;
+     `core.mdk` char doctest hits `charCode: not a Char`. **Most actionable cluster** — closing it widens
+     doctest coverage to the full stdlib.
+8. ✅ `medaka new` — DONE 2026-06-10 (`88c3b55`). `selfhost/new_cmd.mdk` + `new_main.mdk`; 4
+   scaffolded files byte-identical; added `makeDir` extern. Gate `diff_selfhost_new.sh`.
+9. ✅ REPL — DONE 2026-06-10 (`a300f73c` merge). `selfhost/repl.mdk` + `repl_main.mdk`; banner/
+   prompt/`:type`/`:browse`/`:reset`/`:quit` + error recovery; gate `diff_selfhost_repl.sh`.
+   (`:load`/`:reload` deferred → process isolation, per [[no-catchable-panics-isolation]].)
+10. LSP (`lsp_server.ml`+`lsp_log.ml`, 912+83) — **SCOPED 2026-06-10 (7-slice plan, task #36).**
+    Expr-level locations are CHEAP (transparent `ELoc` wrapper, fixpoint-safe via sexp+core_ir
+    strips). 2 hard prereqs: **#37 `readExactly` stdin extern** (JSON-RPC body) + **#38 typecheck
+    env/`ppScheme` exposure** (hover/completion/inlay). parse-error-as-Result ✅ (`1fa79c0`),
+    diagnostic-loc via `ELoc` (B.10.2). Slices: JSON-RPC skeleton → diagnostics → ELoc → located
+    diags → fmt/symbols/def/highlight → hover/completion/inlay → analyze_project.
+11. ✅ `build` driver — DONE 2026-06-10 (`1bc6005`). `selfhost/build_cmd.mdk` + `build_main.mdk`;
+    shell-out emit (Ref isolation) + `runCommand`→clang; 9/9 differential builds == OCaml `medaka
+    build`. (`runCommand`/`makeDir` native-emit done, #18 `a0c7b111`.)
+
+**Phase C — capstone (#57, ✅ COMPLETE 2026-06-11 — Slices 0–4 DONE):**
+12. CLI dispatcher `selfhost/medaka_cli.mdk` (replaces `bin/main.ml`, 1076 LOC), native-compiled into
+    the `medaka` binary — the retirement integration piece. Converges with bar-item-5 (self-bootstrap).
+    **UNBLOCKED 2026-06-10** by clause-label SSA (#53). **Slices landed:**
+    - **Slice 0+1 ✅ (`8a6c2f7`):** split `check.mdk` into logic (`runCheck`) + driver `check_main.mdk`
+      (mirrors `fmt_main.mdk`); `medaka_cli.mdk` dispatcher routes `check`/`fmt`/`new` + help + a
+      "not yet in native CLI" stub for deferred subcommands. `check.mdk`/`medaka_cli.mdk` are NOT in
+      the emitter graph (`elaborateModules`) → seed byte-identical. Gate `test/diff_native_cli.sh`.
+    - **Slice 2 ✅ (`dd6edbc`):** wired `run` + `build`. `build` → `build_cmd.runBuild` (thin —
+      emit is a `runCommand` shell-out, emitter NOT pulled in). `run` → `eval.mdk` load→typecheck→eval,
+      which **pulls the ENTIRE front-end + interpreter into `medaka_cli`'s native module graph** (the
+      ultimate multi-module emittability stress test). **It native-compiled CLEAN — no new emitter gap.**
+      Combined OCaml-free toolchain = one **1.59 MB** binary (check/fmt/new/build/run). **OCaml-free
+      build+run proven end-to-end** (native `./medaka build` + `MEDAKA_EMITTER=./medaka_emitter` + clang,
+      zero OCaml at runtime). `diff_native_cli.sh` 50/0; seed byte-identical; fixpoint C3a/C3b green.
+      *Adjacent gap found (#61, not retirement-blocking):* native `args` returns whole process argv (no
+      slicing primitive) → `run FILE a b c` hands the program the CLI's full argv, and native `run`
+      can't host the emit shell-out → OCaml-free emit host must be `MEDAKA_EMITTER`. A `mdk_set_args`
+      primitive would fix both.
+    - **Slice 3 ✅ (`test`):** factored `test_main.mdk`'s drive logic into a logic-only `test_cmd.mdk`
+      (exports `runTest` + `rootsOrDefault`/`dirOf`); `test_main.mdk` is now a thin argv driver, and
+      `medaka_cli.mdk` gained `runTestCmd` (reads `MEDAKA_ROOT`, drives `runTest` over doctests + props)
+      + a `("test" :: rest)` arm — mirroring `runRunCmd`/`runBuildCmd`. `test` pulls `prop_runner` into the
+      native module graph for the FIRST time, which surfaced (and is gated by) the closed **emitBlock
+      arbitrary-irrefutable block-let gap** (`prop_runner.mdk:265` `let PropParam x ty = …`; see Stage-3
+      bar item 1 + `selfhost/EMITTER-GAPS.md`). `test_cmd`/`medaka_cli` are NOT in the emitter graph →
+      seed byte-identical. Gates: `diff_selfhost_test` byte-identical (10/10), `diff_native_cli` 53/0
+      (extended with `test/{doc,prop,nodoc}` — `test/prop` is the native prop_runner block-let proof).
+    - **Slice 4 ✅ (CAPSTONE COMPLETE, `repl`/`lsp`):** added `runReplCmd` + `runLspCmd` directly to
+      `medaka_cli.mdk` importing `repl.{initSession, replLoop}` + `lsp.{runServer}` (no new `*_cmd.mdk`
+      — both logic modules were already callable); `[] => runReplCmd []` arm matches `bin/main.ml`'s
+      bare-invocation → REPL behavior. `MEDAKA_ROOT` for stdlib path (same `envOr` convention as other
+      arms). The universal per-module name-mangling fix (`332ef41`, merged pre-work) resolved any
+      cross-module name collisions (e.g. `isIdentChar` in repl.mdk/lsp.mdk) without function renames.
+      `diff_native_cli.sh` extended with `repl/session` (same input as `diff_selfhost_repl.sh` piped
+      to native `medaka repl`, strip_unit trailing `0`) and `lsp/session` (initialize+didOpen+exit
+      framed to native `medaka lsp`, compared semantically vs interpreted `lsp_main.mdk`). Gates:
+      `diff_selfhost_repl` PASS; `diff_selfhost_lsp` 5/0; `diff_native_cli` 54/0; fixpoint C3a YES /
+      C3b YES; seed byte-identical. **Phase C capstone: native `medaka` does
+      check/fmt/new/build/run/test/repl/lsp OCaml-free.**
+    - **Remaining:** ~~Slice 4 (`repl`/`lsp`)~~ — DONE.
+
+    The parked dispatch gaps (#54 map / #55 sum-product / #50 parametric-Ord / #21 nested dicts /
+    C7-native) are verified **NOT on this critical path** (the tooling never touches them) → end-user
+    stdlib-completeness, not retirement-blocking.
+
+**Implied sub-tracks:**
+- **Stdlib emittability sweep** — native-compiling these tools needs the FULL stdlib
+  emittable (`json`/`map`/`string`/`io`/…), not just `core.mdk`. Each big tool will hit
+  native construct gaps → a forcing function feeding the GAP-2/tuple/emitter work.
+- Coverage (`coverage.ml`, 148) + bench (`bench_runner.ml`, 44) — auxiliary, port last.
