@@ -660,8 +660,8 @@ requestUri params = fieldStr "uri" (fieldOr "textDocument" params)
 -- else /tmp/medaka-lsp.log.  appendFile opens/appends/closes each call, so every
 -- line is durable before the next step (no buffering to strand a pre-crash
 -- entry).  Always on during the soak/dev phase; gate behind an env flag if noisy.
--- (No timestamp: `wallTimeSec` is interpreter-only, not yet a native extern —
--- append order gives message sequence, which is what crash diagnosis needs.)
+-- Each line is prefixed with the wall-clock epoch seconds (`wallTimeSec`, native
+-- since the extern was wired) so log entries correlate to when a crash happened.
 logFilePath : Unit -> <IO> String
 logFilePath _ = match getEnv "MEDAKA_LSP_LOG"
   Some v => if v == "" then "/tmp/medaka-lsp.log" else v
@@ -669,7 +669,8 @@ logFilePath _ = match getEnv "MEDAKA_LSP_LOG"
 
 logLine : String -> <IO> Unit
 logLine s =
-  let _ = appendFile (logFilePath ()) (stringConcat [s, "\n"])
+  let ts = wallTimeSec ()
+  let _ = appendFile (logFilePath ()) (stringConcat [floatToString ts, " ", s, "\n"])
   ()
 
 -- ── JSON-RPC framing ────────────────────────────────────────────────────────
