@@ -23,6 +23,8 @@
 -- reference rejects that too ("Unterminated string literal"), so it isn't valid
 -- Medaka; there is nothing to mirror.
 
+import support.char.{isSp, isTab, isNL, isCR, isQuote, isApos, isBackslash, isBacktick, isSpace, isDigit, isLower, isUpper, isAlnum, isHexDigit}
+
 public export data Token
   = TInt Int
   | TFloat Float
@@ -234,48 +236,8 @@ tokenToString TEof = "EOF"
 -- layout pass get a source line too.
 data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int String
 
--- ── Character classification (ASCII, matching lib/lexer.mll's char classes) ──
-isSp : Char -> Bool
-isSp c = c == ' '
-
-isTab : Char -> Bool
-isTab c = c == '\t'
-
-isNL : Char -> Bool
-isNL c = c == '\n'
-
-isCR : Char -> Bool
-isCR c = c == '\r'
-
-isQuote : Char -> Bool
-isQuote c = c == '"'
-
-isApos : Char -> Bool
-isApos c = c == '\''
-
-isBackslash : Char -> Bool
-isBackslash c = c == '\\'
-
-isBacktick : Char -> Bool
-isBacktick c = c == '`'
-
-isSpace : Char -> Bool
-isSpace c = isSp c || isTab c
-
-isDigit : Char -> Bool
-isDigit c = c >= '0' && c <= '9'
-
-isLower : Char -> Bool
-isLower c = c >= 'a' && c <= 'z'
-
-isUpper : Char -> Bool
-isUpper c = c >= 'A' && c <= 'Z'
-
-isAlnum : Char -> Bool
-isAlnum c = isLower c || isUpper c || isDigit c || c == '_' || isApos c
-
-isHexDigit : Char -> Bool
-isHexDigit c = isDigit c || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+-- ── Character classification: ASCII Char -> Bool predicates now live in
+-- support/char.mdk (imported at the top of this module).
 
 -- ── Low-level source access ─────────────────────────────────────────────
 at : Array Char -> Int -> Char

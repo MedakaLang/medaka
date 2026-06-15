@@ -97,6 +97,69 @@ escOne c
   | c == '\r' = "\\r"
   | otherwise = charToStr c
 
+-- ── More generic list/option/string/int helpers ───────────────────────────
+
+export
+isEmptyL : List a -> Bool
+isEmptyL [] = True
+isEmptyL _ = False
+
+export
+filterList : (a -> Bool) -> List a -> List a
+filterList _ [] = []
+filterList p (x::xs)
+  | p x = x :: filterList p xs
+  | otherwise = filterList p xs
+
+export
+initList : List a -> List a
+initList [] = []
+initList [_] = []
+initList (x::xs) = x :: initList xs
+
+export
+zipL : List a -> List b -> List (a, b)
+zipL [] _ = []
+zipL _ [] = []
+zipL (x::xs) (y::ys) = (x, y) :: zipL xs ys
+
+export
+maxI : Int -> Int -> Int
+maxI a b = if a >= b then a else b
+
+export
+minI : Int -> Int -> Int
+minI a b = if a <= b then a else b
+
+-- prefix/suffix tests: (prefix/suffix, string) argument order.
+export
+startsWith : String -> String -> Bool
+startsWith pre s =
+  let n = stringLength pre
+  n <= stringLength s && stringSlice 0 n s == pre
+
+export
+endsWith : String -> String -> Bool
+endsWith suf s =
+  let n = stringLength s
+  let k = stringLength suf
+  k <= n && stringSlice (n - k) n s == suf
+
+export
+isSome : Option a -> Bool
+isSome (Some _) = True
+isSome None = False
+
+export
+mapOption : (a -> b) -> Option a -> Option b
+mapOption _ None = None
+mapOption f (Some x) = Some (f x)
+
+export
+orElseOpt : Option a -> Option a -> Option a
+orElseOpt (Some x) _ = Some x
+orElseOpt None y = y
+
 -- ── Canonical compiler-internal names ─────────────────────────────────────
 -- Names produced in one stage and consumed in another (cross-module contract);
 -- defined once here so the stages can't silently drift out of agreement.

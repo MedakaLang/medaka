@@ -45,6 +45,10 @@ import support.util.{
   joinWith,
   fallthroughName,
   noneHeadTag,
+  isEmptyL,
+  filterList,
+  initList,
+  mapOption,
 }
 
 -- ── values & environment (mutually recursive) ─────────────────────────────
@@ -894,11 +898,6 @@ hasTag : String -> Value -> Bool
 hasTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
 hasTag _ _ = False
 
-filterList : (a -> Bool) -> List a -> List a
-filterList _ [] = []
-filterList p (x::xs)
-  | p x = x :: filterList p xs
-  | otherwise = filterList p xs
 
 matchesTag : String -> Value -> Bool
 matchesTag tag (VTypedImpl t k _ _ _) = t == tag || k == tag
@@ -1442,7 +1441,7 @@ lookupPositions iface mname (((i, m), p)::rest)
 -- re-running the body — identical VALUE, effects/work run once like the oracle.
 implMethodValue : EvalEnv -> List Int -> List Pat -> Expr -> Value
 implMethodValue env positions [] body
-  | nullList positions = memoThunk env body
+  | isEmptyL positions = memoThunk env body
   | otherwise = VClosure env [PVar "$eta"] (EApp body (EVar "$eta"))
 implMethodValue env _ pats body = VClosure env pats body
 
@@ -1467,9 +1466,6 @@ storeMemo cell v = seqV (set_ref cell (Some v)) v
 seqV : Unit -> Value -> Value
 seqV _ v = v
 
-nullList : List a -> Bool
-nullList [] = True
-nullList _ = False
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
 declImplEntries : EvalEnv -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value))
@@ -1632,9 +1628,6 @@ unChar : Value -> Char
 unChar (VChar s) = arrayGetUnsafe 0 (stringToChars s)
 unChar _ = panic "expected a Char"
 
-mapOption : (a -> b) -> Option a -> Option b
-mapOption _ None = None
-mapOption f (Some x) = Some (f x)
 
 orderingToValue : Ordering -> Value
 orderingToValue Lt = VCon "Lt" []
@@ -2144,10 +2137,6 @@ joinDots [] = ""
 joinDots [x] = x
 joinDots (x::xs) = x ++ "." ++ joinDots xs
 
-initList : List a -> List a
-initList [] = []
-initList [_] = []
-initList (x::xs) = x :: initList xs
 
 lastOfList : List String -> String
 lastOfList [] = ""

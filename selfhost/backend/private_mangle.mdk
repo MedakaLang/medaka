@@ -94,7 +94,7 @@ import frontend.ast.{
   UseMember(..),
   Variant(..),
 }
-import support.util.{contains, concatMapList, reverseL, lookupAssoc}
+import support.util.{contains, concatMapList, reverseL, lookupAssoc, isEmptyL, filterList, initList}
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY
@@ -131,7 +131,7 @@ unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String)
 unitCtorExportEntry (mid, decls) = (mid, concatMapList ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
-ctorExportEntries (DData _ tyname _ variants _) = [(tyname, filterStr nonReservedCtor (map variantCtorName variants))]
+ctorExportEntries (DData _ tyname _ variants _) = [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
 ctorExportEntries (DRecord _ name _ _ _) =
   if nonReservedCtor name then
     [(name, [name])]
@@ -181,7 +181,7 @@ buildUnitCtorRenameMap mid ctorExportsPerUnit decls =
 -- local (this-unit-declared) constructor names, reserved ones excluded.
 unitLocalCtorNames : List Decl -> List String
 unitLocalCtorNames decls =
-  filterStr nonReservedCtor (concatMapList localCtorNames decls)
+  filterList nonReservedCtor (concatMapList localCtorNames decls)
 
 localCtorNames : Decl -> List String
 localCtorNames (DData _ _ _ variants _) = map variantCtorName variants
@@ -281,7 +281,7 @@ mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
   let rmFn = buildUnitRenameMap mid exportsPerUnit decls
   let rmCtor = buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   let rm = rmFn ++ rmCtor
-  if isEmptyPM rm then decls else map (renameDecl rm) decls
+  if isEmptyL rm then decls else map (renameDecl rm) decls
 -- Function and constructor names occupy disjoint namespaces (ctors Capitalized,
 -- fns lowercase), so the two bare-name maps merge without key conflict.  A merged
 -- single map lets renameScoped's existing EVar arm rewrite a nullary/partial ctor
@@ -372,7 +372,7 @@ originEntry mid exports n
 useModIdU : UsePath -> String
 useModIdU (UseName ns) =
   if lenGt1 ns then
-    joinDotU (initListU ns)
+    joinDotU (initList ns)
   else
     firstOrU "" ns
 useModIdU (UseGroup ns _) = joinDotU ns
@@ -383,10 +383,6 @@ lenGt1 : List a -> Bool
 lenGt1 (_::_::_) = True
 lenGt1 _ = False
 
-initListU : List a -> List a
-initListU [] = []
-initListU [_] = []
-initListU (x::rest) = x :: initListU rest
 
 firstOrU : String -> List String -> String
 firstOrU d [] = d
@@ -422,7 +418,7 @@ pubFnNames decls =
   let defined = unitDefNames ("", decls)
   let pubSigs = pubSigNames decls
   let pubDefs = pubDefNames decls
-  filterStr (n => contains n defined) (pubSigs ++ pubDefs)
+  filterList (n => contains n defined) (pubSigs ++ pubDefs)
 
 -- names whose DFunDef / DLetGroup binder is itself `pub = True`.
 pubDefNames : List Decl -> List String
@@ -433,9 +429,6 @@ pubDefNames ((DLetGroup True binds)::rest) = map letBindName binds
 pubDefNames ((DAttrib _ d)::rest) = pubDefNames [d] ++ pubDefNames rest
 pubDefNames (_::rest) = pubDefNames rest
 
-filterStr : (String -> Bool) -> List String -> List String
-filterStr _ [] = []
-filterStr p (x::xs) = if p x then x :: filterStr p xs else filterStr p xs
 
 -- ── collision-name detection (RETAINED — kept available, no longer the trigger) ──
 -- all top-level FUNCTION names defined in a unit (DFunDef + DLetGroup binders),
@@ -817,9 +810,6 @@ dedupGoPM (x::xs) seen =
   else
     dedupGoPM xs (x :: seen)
 
-isEmptyPM : List a -> Bool
-isEmptyPM [] = True
-isEmptyPM _ = False
 
 identityPM : a -> a
 identityPM x = x

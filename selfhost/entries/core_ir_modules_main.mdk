@@ -20,6 +20,7 @@ import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import driver.loader.{loadProgram}
 import ir.core_ir_eval.{cevalModulesOutput}
+import support.path.{dirOf}
 
 main = match args ()
   coreP::entry::roots => run coreP entry (rootsOrDefault entry roots)
@@ -29,16 +30,6 @@ rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
 rootsOrDefault _ roots = roots
 
-dirOf : String -> String
-dirOf path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo path 0 = "."
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
 
 -- desugar + annotate each loaded module (the loader returns parsed-not-desugared
 -- decls); annotateProgram is the §2.0 EMIT pass, run per-module so each module's

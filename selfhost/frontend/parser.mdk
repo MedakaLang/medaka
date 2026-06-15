@@ -58,6 +58,7 @@ import frontend.lexer.{
   offsetToLineCol,
 }
 import support.util.{reverseL}
+import support.char.{isUpper}
 
 -- ── The Parser monad ────────────────────────────────────────────────────
 public export data PR a = POk a Int | PErr String Int
@@ -402,10 +403,7 @@ isCtorName s = isCtorChars (stringToChars s)
 isCtorChars : Array Char -> Bool
 isCtorChars cs
   | arrayLength cs == 0 = False
-  | otherwise = isUpperC (arrayGetUnsafe 0 cs)
-
-isUpperC : Char -> Bool
-isUpperC c = c >= 'A' && c <= 'Z'
+  | otherwise = isUpper (arrayGetUnsafe 0 cs)
 
 -- Peel transparent ELoc wrappers to expose the underlying expr shape.  Mirrors
 -- parser.mly's local `strip` (used before `expr_to_pat`/section detection): the

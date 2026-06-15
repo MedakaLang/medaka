@@ -23,6 +23,7 @@ import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateModules}
 import eval.eval.{evalModulesOutput}
+import support.path.{dirOf}
 
 main = match args ()
   runtimeP::coreP::entry::roots => run runtimeP coreP entry (rootsOrDefault entry roots)
@@ -32,16 +33,6 @@ rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
 rootsOrDefault _ roots = roots
 
-dirOf : String -> String
-dirOf path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo path 0 = "."
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)

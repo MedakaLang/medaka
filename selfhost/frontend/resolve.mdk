@@ -52,6 +52,7 @@ import support.util.{
   joinNl,
   lookupAssoc,
   reverseL,
+  initList,
 }
 
 -- ── Errors (mirror lib/resolve.ml's `error`) ──────────────────────────────
@@ -616,10 +617,6 @@ joinDot [] = ""
 joinDot [x] = x
 joinDot (x::rest) = x ++ "." ++ joinDot rest
 
-initList : List a -> List a
-initList [] = []
-initList [_] = []
-initList (x::rest) = x :: initList rest
 
 lastOf : List String -> String
 lastOf [] = ""

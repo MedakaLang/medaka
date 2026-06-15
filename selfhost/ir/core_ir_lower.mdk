@@ -64,6 +64,7 @@ import support.util.{
   anyList,
   lookupAssoc,
   noneHeadTag,
+  isEmptyL,
 }
 
 -- a synthetic binder for the lowered composition operators; constructed
@@ -177,7 +178,7 @@ compileArms arms = compileTree (map armHasGuard arms) (initialRows arms 0)
 -- tree leaf must therefore be a CTGuard (fall-through on matchPat failure) rather
 -- than a CTLeaf (which assumes the pattern is guaranteed to match the scrutinee).
 armHasGuard : Arm -> Bool
-armHasGuard (Arm pat gs _) = not (nullL gs) || patNeedsGuard pat
+armHasGuard (Arm pat gs _) = not (isEmptyL gs) || patNeedsGuard pat
 
 patNeedsGuard : Pat -> Bool
 patNeedsGuard (PRng _ _ _) = True
@@ -410,9 +411,6 @@ nthBool (b::_) 0 = b
 nthBool (_::rest) n = nthBool rest (n - 1)
 nthBool [] _ = False
 
-nullL : List a -> Bool
-nullL [] = True
-nullL _ = False
 
 lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (lower e)
@@ -627,7 +625,7 @@ compileArmsC : List CArm -> CTree
 compileArmsC arms = compileTree (map carmHasGuard arms) (cInitialRows arms 0)
 
 carmHasGuard : CArm -> Bool
-carmHasGuard (CArm pat gs _) = not (nullL gs) || patNeedsGuard pat
+carmHasGuard (CArm pat gs _) = not (isEmptyL gs) || patNeedsGuard pat
 
 cInitialRows : List CArm -> Int -> List (List Pat, Int)
 cInitialRows [] _ = []
@@ -873,7 +871,7 @@ methodConstraintIfaceEntries _ = []
 methodConstraintIfaceEntry : List String -> IfaceMethod -> List (String, List String)
 methodConstraintIfaceEntry typarams (IfaceMethod mname mty _) =
   let ifaces = methodLevelConstraintIfaces typarams mty
-  if isEmptyList ifaces then [] else [(mname, ifaces)]
+  if isEmptyL ifaces then [] else [(mname, ifaces)]
 
 -- the interface name of each method-level constraint in [ty], in declaration
 -- order (peels TyConstrained/TyEffect like methodConstraintSlotIds).
@@ -907,9 +905,6 @@ tyMentionsNonParam (TyTuple ts) params =
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 
-isEmptyList : List a -> Bool
-isEmptyList [] = True
-isEmptyList _ = False
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- Per data-constructor name: the head type-name of each declared field, IN

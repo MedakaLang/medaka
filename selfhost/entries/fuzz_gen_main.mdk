@@ -56,7 +56,7 @@ import frontend.ast.{
 }
 import tools.printer.{programToString}
 import string.{toInt}
-import support.util.{listLen}
+import support.util.{listLen, maxI}
 
 -- ── small list helpers (no nth/listInit in prelude) ─────────────────────────
 nthL : Int -> List a -> a
@@ -364,8 +364,6 @@ genData ctx name depth =
   match pick (adtVariants a)
     (con, ftys) => applyFields ctx depth (EVar con) ftys
 
-maxI : Int -> Int -> Int
-maxI a b = if a >= b then a else b
 
 -- mapM-style: like map but threads the Mut effect (fresh-name side effects)
 mapMut : (a -> <e> b) -> List a -> <e> List b

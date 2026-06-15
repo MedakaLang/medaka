@@ -23,7 +23,7 @@ import frontend.ast.{Decl, DUse}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import eval.eval.{Value(..), lookupBinding, force, ppValue}
-import support.util.{listLen, reverseL, concatMapList, joinNl}
+import support.util.{listLen, reverseL, concatMapList, joinNl, startsWith}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -83,8 +83,8 @@ substr3 : Int -> Int -> String -> String
 substr3 a b s = stringSlice a b s
 
 -- True if `s` starts with `p`
-startsWithStr : String -> String -> Bool
-startsWithStr p s =
+startsWith : String -> String -> Bool
+startsWith p s =
   let lp = slen p
   if slen s < lp then False else substr3 0 lp s == p
 
@@ -147,7 +147,7 @@ clLine : (Int, String) -> Int
 clLine (l, _) = l
 
 isInputLine : (Int, String) -> Bool
-isInputLine c = startsWithStr "-- > " (clText c)
+isInputLine c = startsWith "-- > " (clText c)
 
 inputBody : (Int, String) -> String
 inputBody c =
@@ -157,7 +157,7 @@ inputBody c =
 isExpectedLine : (Int, String) -> Bool
 isExpectedLine c =
   let t = clText c
-  startsWithStr "-- " t && not (isInputLine c)
+  startsWith "-- " t && not (isInputLine c)
 
 expectedBody : (Int, String) -> String
 expectedBody c =
@@ -168,7 +168,7 @@ isBlankComment : (Int, String) -> Bool
 isBlankComment c = clText c == "--"
 
 isBlockComment : (Int, String) -> Bool
-isBlockComment c = startsWithStr "{-" (clText c)
+isBlockComment c = startsWith "{-" (clText c)
 
 -- ── Block-comment expansion ────────────────────────────────────────────────
 -- A `{- … -}` lexeme is one entry with embedded newlines.  Re-shape each inner

@@ -12,14 +12,10 @@
 
 import frontend.ast.{Decl, DUse, UsePath, UseName, UseGroup, UseWild, UseAlias}
 import frontend.parser.{parse, parseLocated}
-import support.util.{contains, listLen, reverseL}
+import support.util.{contains, listLen, reverseL, initList, startsWith, endsWith}
 
 -- ── small list helpers (no stdlib import — selfhost is single-root) ──
 
-initL : List a -> List a
-initL [] = []
-initL [_] = []
-initL (x::xs) = x :: initL xs
 
 lastOr : a -> List a -> a
 lastOr d [] = d
@@ -55,17 +51,6 @@ slashToDot : String -> String
 slashToDot s = joinDot (splitOnChar "/" s)
 
 -- ── path / module-id utilities ──
-
-startsWith : String -> String -> Bool
-startsWith pre s =
-  let n = stringLength pre
-  n <= stringLength s && stringSlice 0 n s == pre
-
-endsWith : String -> String -> Bool
-endsWith suf s =
-  let n = stringLength s
-  let k = stringLength suf
-  k <= n && stringSlice (n - k) n s == suf
 
 dropPrefix : Int -> String -> String
 dropPrefix k s = stringSlice k (stringLength s) s
@@ -136,7 +121,7 @@ parentGo path i =
 importModId : UsePath -> String
 importModId (UseName ns) =
   if listLen ns > 1 then
-    joinDot (initL ns)
+    joinDot (initList ns)
   else
     lastOr "" ns
 importModId (UseGroup ns _) = joinDot ns

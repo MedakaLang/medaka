@@ -50,6 +50,7 @@ import support.util.{
   listLen,
   lookupAssoc,
   joinNl,
+  orElseOpt,
 }
 
 -- ── small helpers ─────────────────────────────────────────────────────────
@@ -275,9 +276,6 @@ usefulWild oracle col0 pmat restQ =
   let col0t = orElseOpt col0 (inferCol0Type oracle pmat)
   usefulWildCtors oracle (bindCtors oracle col0t) pmat restQ
 
-orElseOpt : Option a -> Option a -> Option a
-orElseOpt (Some x) _ = Some x
-orElseOpt None y = y
 
 bindCtors : Oracle -> Option String -> Option (List String)
 bindCtors _ None = None

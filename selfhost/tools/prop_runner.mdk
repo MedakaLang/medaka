@@ -34,7 +34,7 @@ import eval.eval.{
   ppValue,
   rngStateRef,
 }
-import support.util.{listLen, lookupAssoc, reverseL}
+import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
 
 -- ── RNG wrappers (call the eval externs through tiny Medaka shims) ───────────
 -- The externs are bound by name in the eval frame, but prop_runner runs OUTSIDE
@@ -179,10 +179,6 @@ genField tydefs subst (Field fname fty) = (fname, genForType tydefs subst fty)
 genFieldTy : List (String, TyDef) -> List (String, Ty) -> Field -> <Mut> Value
 genFieldTy tydefs subst (Field _ fty) = genForType tydefs subst fty
 
-zipL : List a -> List b -> List (a, b)
-zipL [] _ = []
-zipL _ [] = []
-zipL (x::xs) (y::ys) = (x, y) :: zipL xs ys
 
 nthList : List a -> Int -> a
 nthList (x::_) 0 = x
@@ -217,11 +213,6 @@ shrinkInt n =
   let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
   map VInt (filterList (x => x != n) cands)
 
-filterList : (a -> Bool) -> List a -> List a
-filterList _ [] = []
-filterList p (x::xs)
-  | p x = x :: filterList p xs
-  | otherwise = filterList p xs
 
 -- ── prop evaluation ──────────────────────────────────────────────────────────
 -- evalEnv is the program's binding environment (List (String, Value)); each
@@ -349,7 +340,7 @@ export
 runAllProps : List (String, Value) -> List Decl -> <IO, Mut> Bool
 runAllProps evalEnv program =
   let props = filterProps program
-  if isEmpty props then True
+  if isEmptyL props then True
   else
     let tydefs = buildTyDefs program
     let results = runEach tydefs evalEnv props
@@ -368,9 +359,6 @@ countTrue [] = 0
 countTrue (True::rest) = 1 + countTrue rest
 countTrue (False::rest) = countTrue rest
 
-isEmpty : List a -> Bool
-isEmpty [] = True
-isEmpty _ = False
 
 export
 hasProps : List Decl -> Bool

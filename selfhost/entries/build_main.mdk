@@ -18,11 +18,10 @@ import driver.build_cmd.{
   BuildOk,
   BuildErr,
   runBuild,
-  baseOf,
-  chopExt,
   envOr,
 }
 import support.util.{reverseL}
+import support.path.{baseOf, chopExt}
 
 main : <IO, Mut, Panic> Unit
 main = match parseArgs (args ())

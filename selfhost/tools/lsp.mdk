@@ -57,6 +57,8 @@ import frontend.parser.{
   declPosEndLine,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
+import support.char.{isIdentChar, isDigit}
+import support.util.{maxI}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkProgramSchemes, ppScheme, Scheme(..)}
 import tools.fmt.{formatSource}
@@ -189,8 +191,6 @@ diagnosticsFor runtimeSrc coreSrc src = match parseResult src
 -- parseResult line is 1-based, col 0-based (matches the OCaml loader); LSP
 -- wants 0-based lines, so subtract 1 from the line.
 
-maxI : Int -> Int -> Int
-maxI a b = if a >= b then a else b
 
 -- ── document store accessor (request handlers) ──────────────────────────────
 -- Look up an open document's source by uri.  Request handlers (formatting/
@@ -226,18 +226,6 @@ formattingEdits src = match parseResult src
 
 -- ── identifier-at-cursor + occurrence scan (pure string ops) ────────────────
 -- Mirrors lib/lsp_server.ml is_ident_char / identifier_at / find_all_occurrences.
-
-isIdentChar : Char -> Bool
-isIdentChar c =
-  let n = charCode c
-  n >= 97 && n <= 122
-    || n >= 65 && n <= 90
-    || n >= 48 && n <= 57
-    || c == '_'
-    || c == '\''
--- a-z
--- A-Z
--- 0-9
 
 -- Byte offset of 0-based (line, col): walk to the line start, add col.  Returns
 -- None if the line doesn't exist or the offset is past EOF.
@@ -589,8 +577,8 @@ prefixStart arr lineStart i
   | otherwise = i
 
 -- True when string n has prefix p (mirror plen==0 || prefix match).
-hasPrefix : String -> String -> Bool
-hasPrefix p n =
+startsWith : String -> String -> Bool
+startsWith p n =
   let pl = stringLength p
   if pl == 0 then True else stringLength n >= pl && stringSlice 0 pl n == p
 
@@ -599,7 +587,7 @@ hasPrefix p n =
 filterCompletions : String -> List String -> List (String, Scheme) -> <Mut> List Json
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, s)::rest)
-  | hasPrefix prefix n && not (anyName seen n) = jCompletionItem n (ppScheme s) :: filterCompletions prefix (n :: seen) rest
+  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppScheme s) :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 -- One CompletionItem { label, kind, detail }.  kind 3 = Function (LSP spec).
@@ -852,9 +840,6 @@ parseDigits arr i n acc seen
   | arrayGetUnsafe i arr == ' ' && not seen = parseDigits arr (i + 1) n acc seen
   | isDigit (arrayGetUnsafe i arr) = parseDigits arr (i + 1) n (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48)) True
   | otherwise = if seen then Some acc else None
-
-isDigit : Char -> Bool
-isDigit c = charCode c >= 48 && charCode c <= 57
 
 {- ── textDocument/semanticTokens/full ────────────────────────────────────────
 

@@ -62,23 +62,12 @@ import tools.doctest.{
 }
 import tools.prop_runner.{runAllProps, hasProps}
 import support.util.{listLen}
+import support.path.{dirOf, stripMdk}
 
 export
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault target [] = [dirOf target]
 rootsOrDefault _ roots = roots
-
-export
-dirOf : String -> String
-dirOf path = dirGo path (stringLength path)
-
-dirGo : String -> Int -> String
-dirGo _ 0 = "."
-dirGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice 0 (i - 1) path
-  else
-    dirGo path (i - 1)
 
 export
 runTest : String -> String -> String -> List String -> <IO, Mut> Unit
@@ -204,11 +193,6 @@ afterLastSlash path i =
     stringSlice i (stringLength path) path
   else
     afterLastSlash path (i - 1)
-
-stripMdk : String -> String
-stripMdk s =
-  let n = stringLength s
-  if n >= 4 && stringSlice (n - 4) n s == ".mdk" then stringSlice 0 (n - 4) s else s
 
 -- ── doctest reporting (mirrors lib/test_cmd.ml) ──────────────────────────────
 

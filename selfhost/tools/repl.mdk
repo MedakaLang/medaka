@@ -37,7 +37,7 @@ import types.typecheck.{
   Scheme(..),
 }
 import eval.eval.{Value(..), evalOneRootEnv, ppValue, lookupBinding, force}
-import support.util.{contains}
+import support.util.{contains, startsWith}
 
 -- ── Session state ─────────────────────────────────────────────────────────
 accumulatedRef : Ref (List Decl)
@@ -351,12 +351,6 @@ processReset _ =
   putStrLn "Session reset."
 
 -- ── Meta-command dispatch ─────────────────────────────────────────────────
-startsWith : String -> String -> Bool
-startsWith prefix s =
-  let pl = stringLength prefix
-  let sl = stringLength s
-  sl >= pl && stringSlice 0 pl s == prefix
-
 -- Returns False → exit the REPL loop.
 processCommand : String -> <IO, Mut> Bool
 processCommand cmd =
