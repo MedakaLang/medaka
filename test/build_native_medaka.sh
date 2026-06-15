@@ -78,6 +78,31 @@ trim_unit() {
   fi
 }
 
+# The existing $EMITTER can be too old to parse current source after a parser
+# change (it crashes with "parse error" re-emitting the graph).  The gzipped seed
+# carries the current parser, so re-bootstrap the emitter from it ONCE and retry.
+# A genuine syntax error in source fails the retry too (the seed emitter can't
+# parse it either), so this never masks a real parse error.
+RESEEDED=0
+reseed_emitter() {
+  [ "$RESEEDED" = "1" ] && return 1
+  RESEEDED=1
+  echo "  existing emitter can't parse current source (likely a parser change) — re-bootstrapping the emitter from the gzipped seed ..."
+  SEED_TOLERANT=1 sh "$ROOT/test/bootstrap_from_seed.sh" "$EMITTER" tolerant
+  [ "$?" = 0 ] && [ -x "$EMITTER" ]
+}
+
+# emit_graph OUT_LL ERR_FILE TARGET_MDK — run the emitter over a graph; on
+# failure, reseed once and retry. Returns the (final) emitter exit status.
+emit_graph() {
+  out_ll="$1"; err_file="$2"; target="$3"
+  "$EMITTER" "$RUNTIME" "$CORE" "$target" "$SELFHOST" "$STDLIB" > "$out_ll" 2>"$err_file" && return 0
+  reseed_emitter || return 1
+  echo "  retrying emit with the seed-bootstrapped emitter ..."
+  "$EMITTER" "$RUNTIME" "$CORE" "$target" "$SELFHOST" "$STDLIB" > "$out_ll" 2>"$err_file"
+}
+
+
 # ---- STAGE A (WARM): existing emitter rebuilds itself from CURRENT source --------
 # Skip if no selfhost/**.mdk source is newer than the emitter binary (correctness-
 # preserving: an up-to-date emitter re-emits byte-identically anyway).
@@ -88,7 +113,7 @@ else
   [ -n "$NEWER" ] && echo "stage A: selfhost source changed ($NEWER) — rebuilding emitter from current source ..."
   [ "$FORCE_EMITTER_REBUILD" = "1" ] && echo "stage A: FORCE_EMITTER_REBUILD=1 — rebuilding emitter from current source ..."
   EMIT_LL="$WORK/emitter.ll"
-  if ! "$EMITTER" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB" > "$EMIT_LL" 2>"$WORK/emitA.err"; then
+  if ! emit_graph "$EMIT_LL" "$WORK/emitA.err" "$DRIVER"; then
     echo "FAIL (emitter crashed re-emitting its own graph):"; cat "$WORK/emitA.err"; exit 1
   fi
   trim_unit "$EMIT_LL"
@@ -104,7 +129,7 @@ fi
 # ---- STAGE B (WARM): the (fresh) emitter emits the medaka_cli graph -> ./medaka --
 CLI_LL="$WORK/medaka_cli.ll"
 echo "stage B: medaka_emitter -> medaka_cli.ll ..."
-if ! "$EMITTER" "$RUNTIME" "$CORE" "$CLI" "$SELFHOST" "$STDLIB" > "$CLI_LL" 2>"$WORK/emit.err"; then
+if ! emit_graph "$CLI_LL" "$WORK/emit.err" "$CLI"; then
   echo "FAIL (emitter crashed compiling medaka_cli.mdk):"; cat "$WORK/emit.err"; exit 1
 fi
 trim_unit "$CLI_LL"
