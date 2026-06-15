@@ -2376,15 +2376,31 @@ matchCol0Type ty = match headTyconMono ty
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> <Mut> Unit
 inferArms _ _ _ [] = ()
-inferArms env scrutTy result ((Arm pat _ body)::rest) =
-  let _ = inferArm env scrutTy result pat body
+inferArms env scrutTy result ((Arm pat gs body)::rest) =
+  let _ = inferArm env scrutTy result pat gs body
   inferArms env scrutTy result rest
 
-inferArm : TcEnv -> Mono -> Mono -> Pat -> Expr -> <Mut> Unit
-inferArm env scrutTy result pat body =
+inferArm : TcEnv -> Mono -> Mono -> Pat -> List Guard -> Expr -> <Mut> Unit
+inferArm env scrutTy result pat gs body =
   let pr = inferPat env pat
   let _ = unify (fst pr) scrutTy
-  unify result (infer (extendVars env (snd pr)) body)
+  let envBody = inferArmGuards (extendVars env (snd pr)) gs
+  unify result (infer envBody body)
+
+-- Thread an arm's guard qualifiers left-to-right (mirror of lib/typecheck.ml's
+-- EMatch guard fold): a `GBool` must be `Bool` and leaves the env unchanged; a
+-- `GBind p e` infers `e`, binds `p` against it, and extends the env so the bound
+-- vars are in scope for LATER qualifiers and the arm body.
+inferArmGuards : TcEnv -> List Guard -> <Mut> TcEnv
+inferArmGuards env [] = env
+inferArmGuards env ((GBool g)::rest) =
+  let _ = unify (infer env g) (TCon "Bool")
+  inferArmGuards env rest
+inferArmGuards env ((GBind p e)::rest) =
+  let te = infer env e
+  let pr = inferPat env p
+  let _ = unify (fst pr) te
+  inferArmGuards (extendVars env (snd pr)) rest
 
 inferLetGroup : TcEnv -> List LetBind -> Expr -> <Mut> Mono
 inferLetGroup env binds body =

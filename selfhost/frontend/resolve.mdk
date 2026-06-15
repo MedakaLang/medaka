@@ -314,10 +314,25 @@ checkFunClause env scope (FunClause pats body) = concatMapList (checkPat env) pa
 
 checkArm : Env -> List String -> Arm -> List ResError
 checkArm env scope (Arm pat gs body) =
-  let scope2 = patBindings pat ++ scope
+  let scope0 = patBindings pat ++ scope
+  let (gErrs, scope2) = checkArmGuards env scope0 gs
   checkPat env pat
-    ++ concatMapList (checkGuard env scope2) gs
+    ++ gErrs
     ++ checkExpr env scope2 body
+
+-- Resolve an arm's guard qualifiers left-to-right, threading each pattern-bind's
+-- binders into the LATER qualifiers AND the arm body (mirror of lib/resolve.ml's
+-- EMatch fold).  Returns the accumulated errors and the body's scope.  A `GBind`
+-- also resolves its bind expression in the pre-bind scope and checks its pattern.
+checkArmGuards : Env -> List String -> List Guard -> (List ResError, List String)
+checkArmGuards _ scope [] = ([], scope)
+checkArmGuards env scope ((GBool e)::rest) =
+  let (rErrs, scope2) = checkArmGuards env scope rest
+  (checkExpr env scope e ++ rErrs, scope2)
+checkArmGuards env scope ((GBind p e)::rest) =
+  let here = checkExpr env scope e ++ checkPat env p
+  let (rErrs, scope2) = checkArmGuards env (patBindings p ++ scope) rest
+  (here ++ rErrs, scope2)
 
 checkGuardArm : Env -> List String -> GuardArm -> List ResError
 checkGuardArm env scope (GuardArm gs body) = concatMapList (checkGuard env scope) gs
