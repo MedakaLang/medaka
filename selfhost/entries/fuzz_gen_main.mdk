@@ -56,15 +56,12 @@ import frontend.ast.{
 }
 import tools.printer.{programToString}
 import string.{toInt}
+import support.util.{listLen}
 
 -- ── small list helpers (no nth/listInit in prelude) ─────────────────────────
 nthL : Int -> List a -> a
 nthL _ (x::[]) = x
 nthL n (x::xs) = if n <= 0 then x else nthL (n - 1) xs
-
-lenL : List a -> Int
-lenL [] = 0
-lenL (_::xs) = 1 + lenL xs
 
 -- build [f 0, f 1, …, f (n-1)]  (effectful f: each call may draw from the RNG)
 listInitGo : Int -> Int -> (Int -> <e> a) -> <e> List a
@@ -93,7 +90,7 @@ randSmallInt : Unit -> <Rand> Int
 randSmallInt _ = randBelow 10
 
 pick : List a -> <Rand> a
-pick xs = nthL (randBelow (lenL xs)) xs
+pick xs = nthL (randBelow (listLen xs)) xs
 
 chance : Int -> Int -> <Rand> Bool
 chance num den = randBelow den < num

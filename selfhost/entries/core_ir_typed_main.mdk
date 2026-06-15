@@ -21,6 +21,7 @@ import frontend.desugar.{desugar}
 import types.typecheck.{elaborateOne}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{lowerProgram}
+import support.util.{splitLast}
 import ir.core_ir_eval.{cevalOutput}
 
 main = match args ()
@@ -31,12 +32,6 @@ withRuntime runtimePath rest = match splitLast rest
   Some (preludePaths, targetPath) => withFiles runtimePath preludePaths targetPath
   None => ePutStrLn "usage: <runtime.mdk> <prelude.mdk>... <file.mdk>"
 
-splitLast : List a -> Option (List a, a)
-splitLast [] = None
-splitLast [x] = Some ([], x)
-splitLast (x::rest) = match splitLast rest
-  Some (init, lst) => Some (x :: init, lst)
-  None => None
 
 withFiles runtimePath preludePaths targetPath = match readFile runtimePath
   Ok rsrc => withPreludes rsrc preludePaths targetPath

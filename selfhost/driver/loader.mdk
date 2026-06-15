@@ -12,16 +12,9 @@
 
 import frontend.ast.{Decl, DUse, UsePath, UseName, UseGroup, UseWild, UseAlias}
 import frontend.parser.{parse, parseLocated}
+import support.util.{contains, listLen, reverseL}
 
 -- ── small list helpers (no stdlib import — selfhost is single-root) ──
-
-memStr : String -> List String -> Bool
-memStr _ [] = False
-memStr x (y::ys) = x == y || memStr x ys
-
-lenL : List a -> Int
-lenL [] = 0
-lenL (_::xs) = 1 + lenL xs
 
 initL : List a -> List a
 initL [] = []
@@ -142,7 +135,7 @@ parentGo path i =
 -- `import core.{…}` is a no-op the loader must skip (else it duplicates).
 importModId : UsePath -> String
 importModId (UseName ns) =
-  if lenL ns > 1 then
+  if listLen ns > 1 then
     joinDot (initL ns)
   else
     lastOr "" ns
@@ -216,10 +209,6 @@ takeTo : String -> List String -> List String
 takeTo _ [] = []
 takeTo target (x::xs) = if x == target then [x] else x :: takeTo target xs
 
-reverseL : List a -> List a
-reverseL [] = []
-reverseL (x::xs) = reverseL xs ++ [x]
-
 joinArrow : List String -> String
 joinArrow [] = ""
 joinArrow [x] = x
@@ -227,9 +216,9 @@ joinArrow (x::xs) = stringConcat [x, " → ", joinArrow xs]
 
 visitMod : List String -> List String -> List String -> List (String, List Decl) -> String -> <IO> Result String (List String, List (String, List Decl))
 visitMod roots stack visited acc modId =
-  if memStr modId visited then Ok (visited, acc)
+  if contains modId visited then Ok (visited, acc)
   else
-    if memStr modId stack then Err (stringConcat ["cyclic dependency: ", joinArrow (cycleChain modId stack)])
+    if contains modId stack then Err (stringConcat ["cyclic dependency: ", joinArrow (cycleChain modId stack)])
     else
       match readModuleProg roots modId
         Err e => Err e
@@ -262,9 +251,9 @@ loadProgram entry roots = match visitMod roots [] [] [] (moduleIdOfPath roots en
 
 visitModF : (String -> <Mut> List Decl) -> (String -> <Mut> Option String) -> List String -> List String -> List String -> List (String, String, List Decl) -> String -> <IO, Mut> Result String (List String, List (String, String, List Decl))
 visitModF parseFn read roots stack visited acc modId =
-  if memStr modId visited then Ok (visited, acc)
+  if contains modId visited then Ok (visited, acc)
   else
-    if memStr modId stack then Err (stringConcat ["cyclic dependency: ", joinArrow (cycleChain modId stack)])
+    if contains modId stack then Err (stringConcat ["cyclic dependency: ", joinArrow (cycleChain modId stack)])
     else
       match readModuleProgF parseFn read roots modId
         Err e => Err e

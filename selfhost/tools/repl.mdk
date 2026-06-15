@@ -37,6 +37,7 @@ import types.typecheck.{
   Scheme(..),
 }
 import eval.eval.{Value(..), evalOneRootEnv, ppValue, lookupBinding, force}
+import support.util.{contains}
 
 -- ── Session state ─────────────────────────────────────────────────────────
 accumulatedRef : Ref (List Decl)
@@ -189,10 +190,6 @@ declTypeAnnotations (DInterface { name = n, ... }::rest) =
   ("interface", n) :: declTypeAnnotations rest
 declTypeAnnotations (_::rest) = declTypeAnnotations rest
 
-containsName : String -> List String -> Bool
-containsName _ [] = False
-containsName x (y::rest) = x == y || containsName x rest
-
 startsWithAt : String -> Bool
 startsWithAt s = stringLength s > 0 && stringSlice 0 1 s == "@"
 
@@ -200,7 +197,7 @@ startsWithAt s = stringLength s > 0 && stringSlice 0 1 s == "@"
 userSchemes : List (String, Scheme) -> List String -> List (String, Scheme)
 userSchemes [] _ = []
 userSchemes ((n, s)::rest) known
-  | containsName n known = userSchemes rest known
+  | contains n known = userSchemes rest known
   | startsWithAt n = userSchemes rest known
   | otherwise = (n, s) :: userSchemes rest known
 

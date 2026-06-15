@@ -63,6 +63,17 @@ export
 joinNl : List String -> String
 joinNl xs = joinWith "\n" xs
 
+-- Split a list into its leading prefix and final element: Some (init, last),
+-- or None for the empty list.  (Was duplicated byte-identically across ~10
+-- entry mains.)
+export
+splitLast : List a -> Option (List a, a)
+splitLast [] = None
+splitLast [x] = Some ([], x)
+splitLast (x::rest) = match splitLast rest
+  Some (init, lst) => Some (x :: init, lst)
+  None => None
+
 -- minimal string escaping for the structural / diagnostic dumps (matches
 -- dev/astdump.ml's esc_str and dev/diagdump.ml): backslash, quote, \n \t \r.
 export

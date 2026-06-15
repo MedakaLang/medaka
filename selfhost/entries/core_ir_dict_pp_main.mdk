@@ -19,6 +19,7 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{lowerProgram}
+import support.util.{splitLast}
 import ir.core_ir_eval.{cevalMain}
 
 main = match args ()
@@ -27,12 +28,6 @@ main = match args ()
 withRuntime runtimePath rest = match splitLast rest
   Some (preludePaths, targetPath) => withFiles runtimePath preludePaths targetPath
   None => ePutStrLn "usage"
-splitLast : List a -> Option (List a, a)
-splitLast [] = None
-splitLast [x] = Some ([], x)
-splitLast (x::rest) = match splitLast rest
-  Some (init, lst) => Some (x :: init, lst)
-  None => None
 withFiles runtimePath preludePaths targetPath = match readFile runtimePath
   Ok rsrc => withPreludes rsrc preludePaths targetPath
   Err msg => ePutStrLn msg

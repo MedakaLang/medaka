@@ -41,6 +41,7 @@ import types.typecheck.{
   setCoherenceUserDecls,
 }
 import driver.loader.{loadProgramFilesLocated}
+import support.util.{joinNl, lookupAssoc}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 
@@ -137,11 +138,6 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 
 -- ── helpers ────────────────────────────────────────────────────────────────
 
-joinNl : List String -> String
-joinNl [] = ""
-joinNl [x] = x
-joinNl (x::xs) = x ++ "\n" ++ joinNl xs
-
 -- ── multi-file / project-wide analysis (B.10.5) ─────────────────────────────
 --
 -- Mirror of lib/diagnostics.ml's `analyze_project` (:335-479): load a root file's
@@ -213,12 +209,6 @@ pushDiags f (d::ds) buckets = pushDiags f ds (pushDiag f d buckets)
 -- the last source that parsed (so one broken file doesn't blank the whole
 -- project's downstream analysis).  A buffer that parses updates the cache.
 
-cacheLookup : String -> List (String, String) -> Option String
-cacheLookup _ [] = None
-cacheLookup f ((k, v)::rest)
-  | k == f = Some v
-  | otherwise = cacheLookup f rest
-
 cachePut : String -> String -> List (String, String) -> List (String, String)
 cachePut f v xs = (f, v) :: cacheRemove f xs
 
@@ -241,7 +231,7 @@ wrappedRead cacheRef staleRef read path = match read path
     Err e =>
       let diag = Diag SevError (parseErrorMessage e) (Some (parseErrLoc path e))
       let _ = set_ref staleRef ((path, diag) :: staleRef.value)
-      match cacheLookup path cacheRef.value
+      match lookupAssoc path cacheRef.value
         Some good => Some good
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed

@@ -94,6 +94,7 @@ import frontend.ast.{
   UseMember(..),
   Variant(..),
 }
+import support.util.{contains, concatMapList, reverseL, lookupAssoc}
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY
@@ -127,7 +128,7 @@ unitExportEntry (mid, decls) = (mid, dedupPM (pubFnNames decls))
 -- what the importing unit actually brings into scope, and unmangled-because-private
 -- is harmless (an unimported ctor is never referenced cross-unit).
 unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String))
-unitCtorExportEntry (mid, decls) = (mid, concatMapPM ctorExportEntries decls)
+unitCtorExportEntry (mid, decls) = (mid, concatMapList ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
 ctorExportEntries (DData _ tyname _ variants _) = [(tyname, filterStr nonReservedCtor (map variantCtorName variants))]
@@ -173,14 +174,14 @@ isReservedCtor n = n == "Cons"
 buildUnitCtorRenameMap : String -> List (String, List (String, List String)) -> List Decl -> List (String, String)
 buildUnitCtorRenameMap mid ctorExportsPerUnit decls =
   let localCtors = dedupPM (unitLocalCtorNames decls)
-  let localEntries = concatMapPM (localCtorRenameEntry mid) localCtors
+  let localEntries = concatMapList (localCtorRenameEntry mid) localCtors
   let importEntries = ctorImportEntries mid ctorExportsPerUnit decls
   localEntries ++ importEntries
 
 -- local (this-unit-declared) constructor names, reserved ones excluded.
 unitLocalCtorNames : List Decl -> List String
 unitLocalCtorNames decls =
-  filterStr nonReservedCtor (concatMapPM localCtorNames decls)
+  filterStr nonReservedCtor (concatMapList localCtorNames decls)
 
 localCtorNames : Decl -> List String
 localCtorNames (DData _ _ _ variants _) = map variantCtorName variants
@@ -198,16 +199,16 @@ localCtorRenameEntry mid n = [(n, mangledName mid n)]
 -- ctors as implicit prelude (`Rep`'s RCon/RInt/… — Ordering/Option/Result ctors are
 -- reserved and were never entered).  Local-first ordering already shadows these.
 ctorImportEntries : String -> List (String, List (String, List String)) -> List Decl -> List (String, String)
-ctorImportEntries _ ctorExportsPerUnit decls = concatMapPM (declCtorImportEntries ctorExportsPerUnit) decls
+ctorImportEntries _ ctorExportsPerUnit decls = concatMapList (declCtorImportEntries ctorExportsPerUnit) decls
   ++ coreCtorImportEntries ctorExportsPerUnit
 
 coreCtorImportEntries : List (String, List (String, List String)) -> List (String, String)
 coreCtorImportEntries ctorExportsPerUnit = match lookupCtorExports "core" ctorExportsPerUnit
-  Some entries => concatMapPM coreCtorEntry entries
+  Some entries => concatMapList coreCtorEntry entries
   None => []
 
 coreCtorEntry : (String, List String) -> List (String, String)
-coreCtorEntry (_, ctors) = concatMapPM (n => [(n, mangledName "core" n)]) ctors
+coreCtorEntry (_, ctors) = concatMapList (n => [(n, mangledName "core" n)]) ctors
 
 declCtorImportEntries : List (String, List (String, List String)) -> Decl -> List (String, String)
 declCtorImportEntries ctorExportsPerUnit (DUse _ path) =
@@ -224,8 +225,8 @@ useCtorPathEntries ctorExportsPerUnit path =
     match lookupCtorExports mid ctorExportsPerUnit
       None => []
       Some typeEntries => match path
-        UseGroup _ members => concatMapPM (ctorMemberEntry mid typeEntries) members
-        UseWild _ => concatMapPM (typeCtorEntries mid) typeEntries
+        UseGroup _ members => concatMapList (ctorMemberEntry mid typeEntries) members
+        UseWild _ => concatMapList (typeCtorEntries mid) typeEntries
         UseName _ => []
         UseAlias _ _ => []
 -- `import M.{T(..), Ctor, …}`: a `(..)` member is a TYPE whose ctors all come
@@ -241,12 +242,12 @@ ctorMemberEntry : String -> List (String, List String) -> UseMember -> List (Str
 ctorMemberEntry mid typeEntries (UseMember name wild) =
   if wild then
     match lookupCtorTypeEntry name typeEntries
-      Some ctors => concatMapPM (originCtorEntry mid) ctors
+      Some ctors => concatMapList (originCtorEntry mid) ctors
       None => []
-  else if containsPM name (concatMapPM snd typeEntries) then originCtorEntry mid name else []
+  else if contains name (concatMapList snd typeEntries) then originCtorEntry mid name else []
 
 typeCtorEntries : String -> (String, List String) -> List (String, String)
-typeCtorEntries mid (_, ctors) = concatMapPM (originCtorEntry mid) ctors
+typeCtorEntries mid (_, ctors) = concatMapList (originCtorEntry mid) ctors
 
 originCtorEntry : String -> String -> List (String, String)
 originCtorEntry mid n = [(n, mangledName mid n)]
@@ -287,14 +288,14 @@ mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
 -- reference, and renameDecl/renamePat add the def-site + pattern ctor rewrites.
 
 -- The unit's rename map.  Order matters: LOCAL definitions are prepended LAST so a
--- local def shadows an imported same-named binding (lookupPM is first-match).
+-- local def shadows an imported same-named binding (lookupAssoc is first-match).
 buildUnitRenameMap : String -> List (String, List String) -> List Decl -> List (String, String)
 buildUnitRenameMap mid exportsPerUnit decls =
   let localFns = dedupPM (unitDefNames (mid, decls))
-  let localEntries = concatMapPM (localRenameEntry mid) localFns
+  let localEntries = concatMapList (localRenameEntry mid) localFns
   let importEntries = importRenameEntries mid exportsPerUnit decls
   localEntries ++ importEntries
--- local first ⇒ shadows any imported entry with the same key under lookupPM.
+-- local first ⇒ shadows any imported entry with the same key under lookupAssoc.
 
 -- a local top-level fn → its module-qualified symbol, UNLESS excluded (`main`).
 localRenameEntry : String -> String -> List (String, String)
@@ -314,14 +315,14 @@ isExcludedName n = n == "main"
 -- import-entry ordering below).
 -- explicit sibling imports first (they shadow the implicit prelude), prelude last.
 importRenameEntries : String -> List (String, List String) -> List Decl -> List (String, String)
-importRenameEntries _ exportsPerUnit decls = concatMapPM (declImportEntries exportsPerUnit) decls
+importRenameEntries _ exportsPerUnit decls = concatMapList (declImportEntries exportsPerUnit) decls
   ++ coreImportEntries exportsPerUnit
 
 -- core's exports as implicit-prelude entries (`name → core__name`), excluding
 -- `main` (core has none, but be safe).
 coreImportEntries : List (String, List String) -> List (String, String)
 coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
-  Some names => concatMapPM coreEntry names
+  Some names => concatMapList coreEntry names
   None => []
 
 coreEntry : String -> List (String, String)
@@ -352,8 +353,8 @@ usePathEntries exportsPerUnit path =
     match lookupExports mid exportsPerUnit
       None => []
       Some exports => match path
-        UseGroup _ members => concatMapPM (memberEntry mid exports) members
-        UseWild _ => concatMapPM (originEntry mid exports) exports
+        UseGroup _ members => concatMapList (memberEntry mid exports) members
+        UseWild _ => concatMapList (originEntry mid exports) exports
         UseName ns => originEntry mid exports (lastOfPM ns)
         UseAlias _ _ => []
 
@@ -365,7 +366,7 @@ memberEntry mid exports (UseMember n _) = originEntry mid exports n
 originEntry : String -> List String -> String -> List (String, String)
 originEntry mid exports n
   | isExcludedName n = []
-  | containsPM n exports = [(n, mangledName mid n)]
+  | contains n exports = [(n, mangledName mid n)]
   | otherwise = []
 
 useModIdU : UsePath -> String
@@ -421,7 +422,7 @@ pubFnNames decls =
   let defined = unitDefNames ("", decls)
   let pubSigs = pubSigNames decls
   let pubDefs = pubDefNames decls
-  filterStr (n => containsPM n defined) (pubSigs ++ pubDefs)
+  filterStr (n => contains n defined) (pubSigs ++ pubDefs)
 
 -- names whose DFunDef / DLetGroup binder is itself `pub = True`.
 pubDefNames : List Decl -> List String
@@ -440,7 +441,7 @@ filterStr p (x::xs) = if p x then x :: filterStr p xs else filterStr p xs
 -- all top-level FUNCTION names defined in a unit (DFunDef + DLetGroup binders),
 -- wrapped through DAttrib.  Only function-shaped decls can collide as @mdk_<name>.
 unitDefNames : (String, List Decl) -> List String
-unitDefNames (_, decls) = concatMapPM declDefNames decls
+unitDefNames (_, decls) = concatMapList declDefNames decls
 
 declDefNames : Decl -> List String
 declDefNames (DFunDef _ n _ _) = [n]
@@ -566,7 +567,7 @@ renameLetBindDef rm (LetBind n clauses) =
   LetBind (renameDefName rm n) (map (renameFunClause rm []) clauses)
 
 renameDefName : List (String, String) -> String -> String
-renameDefName rm n = match lookupPM n rm
+renameDefName rm n = match lookupAssoc n rm
   Some n2 => n2
   None => n
 
@@ -594,7 +595,7 @@ propParamNamePM (PropParam n _) = n
 -- typecheck.mdk's rewriteArgScoped exactly.
 renameScoped : List (String, String) -> List String -> Expr -> Expr
 renameScoped rm bound (EVar n)
-  | not (containsPM n bound) = match lookupPM n rm
+  | not (contains n bound) = match lookupAssoc n rm
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
@@ -771,11 +772,11 @@ patVarsPM (PCons h t) = patVarsPM h ++ patVarsPM t
 patVarsPM (PTuple ps) = patVarsListPM ps
 patVarsPM (PList ps) = patVarsListPM ps
 patVarsPM (PAs x p) = x :: patVarsPM p
-patVarsPM (PRec _ fields _) = concatMapPM recPatFieldVarsPM fields
+patVarsPM (PRec _ fields _) = concatMapList recPatFieldVarsPM fields
 patVarsPM _ = []
 
 patVarsListPM : List Pat -> List String
-patVarsListPM ps = concatMapPM patVarsPM ps
+patVarsListPM ps = concatMapList patVarsPM ps
 
 -- ── pattern CONSTRUCTOR rewrite ───────────────────────────────────────────────
 -- Rewrite the constructor name of every PCon / PRec in a pattern to its mangled
@@ -805,35 +806,16 @@ recPatFieldVarsPM (RecPatField label None) = [label]
 recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 
 -- ── small list helpers (local; keep this module self-contained) ───────────────
-concatMapPM : (a -> List b) -> List a -> List b
-concatMapPM _ [] = []
-concatMapPM f (x::xs) = f x ++ concatMapPM f xs
-
-containsPM : String -> List String -> Bool
-containsPM _ [] = False
-containsPM x (y::ys) = x == y || containsPM x ys
-
-lookupPM : String -> List (String, String) -> Option String
-lookupPM _ [] = None
-lookupPM x ((k, v)::rest) = if x == k then Some v else lookupPM x rest
-
 dedupPM : List String -> List String
 dedupPM xs = dedupGoPM xs []
 
 dedupGoPM : List String -> List String -> List String
-dedupGoPM [] seen = reverseLPM seen
+dedupGoPM [] seen = reverseL seen
 dedupGoPM (x::xs) seen =
-  if containsPM x seen then
+  if contains x seen then
     dedupGoPM xs seen
   else
     dedupGoPM xs (x :: seen)
-
-reverseLPM : List a -> List a
-reverseLPM xs = reverseGoPM xs []
-
-reverseGoPM : List a -> List a -> List a
-reverseGoPM [] acc = acc
-reverseGoPM (x::xs) acc = reverseGoPM xs (x :: acc)
 
 isEmptyPM : List a -> Bool
 isEmptyPM [] = True

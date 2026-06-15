@@ -37,6 +37,7 @@ import frontend.parser.{
   declPosLine,
   declPosEndLine,
 }
+import support.util.{listLen, reverseL}
 
 -- ── State ─────────────────────────────────────────
 -- pieces : output fragments, REVERSED (cons-prepend, reverse+concat at end)
@@ -109,16 +110,10 @@ takeNVariantLines vlines k = takeNVarGo vlines k []
 
 takeNVarGo : List Int -> Int -> List Int -> (List Int, List Int)
 takeNVarGo vlines k acc
-  | k <= 0 = (vlines, reverseList acc)
+  | k <= 0 = (vlines, reverseL acc)
   | otherwise = match vlines
-    [] => (vlines, reverseList acc)
+    [] => (vlines, reverseL acc)
     x::rest => takeNVarGo rest (k - 1) (x :: acc)
-
-reverseList : List a -> List a
-reverseList xs = reverseListGo xs []
-reverseListGo : List a -> List a -> List a
-reverseListGo [] acc = acc
-reverseListGo (x::xs) acc = reverseListGo xs (x :: acc)
 
 -- Pop (WITHOUT emitting) the pending comments strictly above `line`, returning
 -- their lexemes in source order plus the leftover comment stream (OCaml
@@ -127,12 +122,12 @@ takeBefore : List Comment -> Int -> (List String, List Comment)
 takeBefore cs line = takeBeforeGo cs line []
 
 takeBeforeGo : List Comment -> Int -> List String -> (List String, List Comment)
-takeBeforeGo [] _ acc = (reverseList acc, [])
+takeBeforeGo [] _ acc = (reverseL acc, [])
 takeBeforeGo (c::rest) line acc =
   if commentLine c < line then
     takeBeforeGo rest line (commentText c :: acc)
   else
-    (reverseList acc, c :: rest)
+    (reverseL acc, c :: rest)
 
 -- For each variant line, pop its preceding interior comments.  Returns the
 -- per-variant comment lexeme lists (parallel to vls) and the leftover stream.
@@ -146,10 +141,6 @@ allEmpty : List (List String) -> Bool
 allEmpty [] = True
 allEmpty (x::xs) = isEmptyL x && allEmpty xs
 
-lenL : List a -> Int
-lenL [] = 0
-lenL (_::xs) = 1 + lenL xs
-
 -- ── Per-declaration rendering ─────────────────────
 
 -- Render one declaration's Doc, consuming variant lines for a DData (always, to
@@ -158,10 +149,10 @@ lenL (_::xs) = 1 + lenL xs
 -- Returns (renderedString, newState) — the Doc is rendered here so the comment
 -- pops are threaded back into the state.
 declDoc : FmtState -> Decl -> (String, FmtState)
-declDoc (FmtState pieces cs vlines cursor started) (DData vis n params variants derives) = match takeNVariantLines vlines (lenL variants)
+declDoc (FmtState pieces cs vlines cursor started) (DData vis n params variants derives) = match takeNVariantLines vlines (listLen variants)
   (vlinesRest, vls) => match vcommentsFor cs vls
     (vcomments, csRest) =>
-      if lenL vcomments == lenL variants && not (allEmpty vcomments) then
+      if listLen vcomments == listLen variants && not (allEmpty vcomments) then
         (
           render (printDataDeclCommented vis n params variants derives vcomments),
           FmtState pieces csRest vlinesRest cursor started,
@@ -228,11 +219,11 @@ walkDecls st (d::ds) (p::ps) = walkDecls (stepDecl st d p) ds ps
 export
 formatProgram : List Decl -> List DeclPos -> List Int -> List Comment -> Int -> String
 formatProgram decls declPositions variantLines comments _lastContentLine =
-  if lenL declPositions != lenL decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
+  if listLen declPositions != listLen decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
   else
     let st0 = FmtState [] comments variantLines 0 False
     match drainAll (walkDecls st0 decls declPositions)
-      FmtState finalPieces _ _ _ _ => stringConcat (reverseList finalPieces)
+      FmtState finalPieces _ _ _ _ => stringConcat (reverseL finalPieces)
 -- After the walk, the final `flush_before max_int` drains EVERY remaining
 -- comment; `drainAll` does that unconditionally (no max_int literal needed).
 

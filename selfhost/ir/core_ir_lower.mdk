@@ -1032,12 +1032,8 @@ variantArity : Variant -> (String, Int)
 variantArity (Variant n payload) = (n, payloadArityL payload)
 
 payloadArityL : ConPayload -> Int
-payloadArityL (ConPos tys) = lengthL tys
-payloadArityL (ConNamed fs) = lengthL fs
-
-lengthL : List a -> Int
-lengthL [] = 0
-lengthL (_::xs) = 1 + lengthL xs
+payloadArityL (ConPos tys) = listLen tys
+payloadArityL (ConNamed fs) = listLen fs
 
 -- a readable tag for the unsupported-node panic
 nodeTag : Expr -> String

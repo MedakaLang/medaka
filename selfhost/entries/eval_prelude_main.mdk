@@ -11,6 +11,7 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import support.util.{splitLast}
 import eval.eval.{evalMain}
 
 main = match splitLast (args ())
@@ -18,12 +19,6 @@ main = match splitLast (args ())
   None => ePutStrLn "usage: medaka run selfhost/entries/eval_prelude_main.mdk <prelude.mdk>... <file.mdk>"
 
 -- split a non-empty list into (init, last)
-splitLast : List a -> Option (List a, a)
-splitLast [] = None
-splitLast [x] = Some ([], x)
-splitLast (x::rest) = match splitLast rest
-  Some (init, lst) => Some (x :: init, lst)
-  None => None
 
 withPreludes : List String -> String -> <IO, Mut> Unit
 withPreludes preludePaths targetPath = match readAllDecls preludePaths

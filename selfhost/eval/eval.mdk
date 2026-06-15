@@ -42,6 +42,7 @@ import support.util.{
   reverseL,
   anyList,
   lookupAssoc,
+  joinWith,
   fallthroughName,
   noneHeadTag,
 }
@@ -141,10 +142,6 @@ joinComma xs = joinWith ", " xs
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
 
-joinWith : String -> List String -> String
-joinWith _ [] = ""
-joinWith _ [x] = x
-joinWith sep (x::rest) = x ++ sep ++ joinWith sep rest
 
 -- ── small helpers ─────────────────────────────────────────────────────────
 arrayToListG : Array a -> List a

@@ -23,7 +23,7 @@ import frontend.ast.{Decl, DUse}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import eval.eval.{Value(..), lookupBinding, force, ppValue}
-import support.util.{listLen, reverseL}
+import support.util.{listLen, reverseL, concatMapList, joinNl}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -223,16 +223,8 @@ sealExample None _ = None
 sealExample (Some (inp, ln)) expectedRev =
   let exp = match reverseL expectedRev
     [] => None
-    lines => Some (joinNlLocal lines)
+    lines => Some (joinNl lines)
   Some (Example inp exp ln)
-
-joinNlLocal : List String -> String
-joinNlLocal xs = joinWithLocal "\n" xs
-
-joinWithLocal : String -> List String -> String
-joinWithLocal _ [] = ""
-joinWithLocal _ [x] = x
-joinWithLocal sep (x::rest) = x ++ sep ++ joinWithLocal sep rest
 
 extractFromBlock : List (Int, String) -> List Example
 extractFromBlock block = reverseL (extractGo [] None [] block)
@@ -263,7 +255,7 @@ extractExamples : List Comment -> List Example
 extractExamples comments =
   let pairs = map commentToPair comments
   let expanded = concatMapC pairs
-  concatMapL extractFromBlock (splitIntoBlocks expanded)
+  concatMapList extractFromBlock (splitIntoBlocks expanded)
 
 commentToPair : Comment -> (Int, String)
 commentToPair c = (commentLine c, commentText c)
@@ -272,10 +264,6 @@ concatMapC : List (Int, String) -> List (Int, String)
 concatMapC [] = []
 concatMapC (c::rest) = (if isBlockComment c then expandBlock c else [c])
   ++ concatMapC rest
-
-concatMapL : (a -> List b) -> List a -> List b
-concatMapL _ [] = []
-concatMapL f (x::xs) = f x ++ concatMapL f xs
 
 -- ── Synthesizing the per-example binding ────────────────────────────────────
 -- An example with an expected line is rendered through the user-facing `debug`

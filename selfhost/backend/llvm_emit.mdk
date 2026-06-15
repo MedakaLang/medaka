@@ -180,7 +180,7 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import ir.core_ir_lower.{compileTree, canonPat}
-import support.util.{reverseL, joinNl, lookupAssoc, listLen, fallthroughName}
+import support.util.{reverseL, joinNl, lookupAssoc, listLen, contains, fallthroughName}
 import backend.llvm_preamble.{preambleLines}
 import support.ordmap.{OrdMap(..), omInsert, omLookup, omFromNames, omFromPairs}
 
@@ -495,7 +495,7 @@ markDefaultEmitted name =
   set_ref emittedDefaultsRef (name :: emittedDefaultsRef.value)
 
 defaultAlreadyEmitted : String -> <Mut> Bool
-defaultAlreadyEmitted name = containsStr name emittedDefaultsRef.value
+defaultAlreadyEmitted name = contains name emittedDefaultsRef.value
 
 -- the impl currently being emitted: its type-head tag, and the NAMES of its
 -- params that are self-returning function callbacks (set in emitGroupBody).
@@ -515,7 +515,7 @@ clearCurImplSelfFns _ = let _ = set_ref curImplTagRef "" in set_ref curSelfFnPar
 
 -- is `name` a self-returning function param of the impl currently being emitted?
 isCurSelfFnParam : String -> <Mut> Bool
-isCurSelfFnParam name = containsStr name curSelfFnParamsRef.value
+isCurSelfFnParam name = contains name curSelfFnParamsRef.value
 
 -- gap helpers: when recording is on, log the reason + return a placeholder so
 -- emission continues; otherwise `panic` (the unchanged normal-path behaviour).
@@ -726,7 +726,7 @@ isKnownFn e name = match knownFnMapRef.value
   Some m => match omLookup name m
     Some _ => True
     None => False
-  None => containsStr name (fnNames e)
+  None => contains name (fnNames e)
 
 -- the inferred return type of a known function (Int if unknown — keeps the
 -- pre-signature behaviour for any head the table somehow misses).
@@ -835,7 +835,7 @@ taggedMethodNames ((CImplEntry m _ (CImplTagged _ _ _ _ _))::rest) =
 taggedMethodNames (_::rest) = taggedMethodNames rest
 
 isImplMethod : Emit -> String -> <Mut> Bool
-isImplMethod e name = containsStr name (implMethodNames e)
+isImplMethod e name = contains name (implMethodNames e)
 
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
@@ -891,10 +891,6 @@ ctorsOfTypeIn _ [] = []
 ctorsOfTypeIn ty ((c, t)::rest)
   | t == ty = c :: ctorsOfTypeIn ty rest
   | otherwise = ctorsOfTypeIn ty rest
-
-containsStr : String -> List String -> Bool
-containsStr _ [] = False
-containsStr x (y::ys) = if x == y then True else containsStr x ys
 
 -- ── tag / box helpers (the value-representation, made concrete) ──────────────
 -- untag an immediate int word -> raw i64 (arithmetic shift, preserves sign).
@@ -1119,7 +1115,7 @@ hexDigit d
 -- are the obvious next additions (a follow-on slice).
 isStrExtern : String -> Bool
 isStrExtern name =
-  containsStr name ["intToString", "stringConcat", "stringLength"]
+  contains name ["intToString", "stringConcat", "stringLength"]
 
 emitStrExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitStrExtern e env "intToString" args = match emitArgs e env args
@@ -1154,7 +1150,7 @@ emitStrExtern _ _ name _ = gapE ("unsupported string extern " ++ name)
 -- %.12g+dot logic but returns a mdk_str_lit box instead of printf-ing).
 isNumExtern : String -> Bool
 isNumExtern name =
-  containsStr name ["intToFloat", "floatToInt", "floatToString"]
+  contains name ["intToFloat", "floatToInt", "floatToString"]
 
 emitNumExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitNumExtern e env "intToFloat" args = match emitArgs e env args
@@ -1185,7 +1181,7 @@ emitNumExtern _ _ name _ = gapE ("unsupported numeric extern " ++ name)
 -- All return Unit (LTUnit); the operand "1" is an arbitrary immediate never read.
 isIoExtern : String -> Bool
 isIoExtern name =
-  containsStr name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
+  contains name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
 
 emitIoExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitIoExtern e env "putStr" args = match emitArgs e env args
@@ -1220,7 +1216,7 @@ emitIoExtern _ _ name _ = gapE ("unsupported IO extern " ++ name)
 -- auto-print emitted downstream is dead code.  Return ("1", LTUnit) so
 -- emitPrint sees LTUnit (safe) rather than LTCon/LTClosure (compile panic).
 isAbortExtern : String -> Bool
-isAbortExtern name = containsStr name ["panic", "exit"]
+isAbortExtern name = contains name ["panic", "exit"]
 
 emitAbortExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitAbortExtern e env name args = match emitArgs e env args
@@ -1237,7 +1233,7 @@ emitAbortExtern e env name args = match emitArgs e env args
 -- arraySetUnsafe: store to element slot; returns Unit.
 isArrIntrinsic : String -> Bool
 isArrIntrinsic name =
-  containsStr name ["arrayLength", "arrayGetUnsafe", "arraySetUnsafe"]
+  contains name ["arrayLength", "arrayGetUnsafe", "arraySetUnsafe"]
 
 emitArrIntrinsic : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitArrIntrinsic e env "arrayLength" args = match emitArgs e env args
@@ -1263,7 +1259,7 @@ emitArrIntrinsic _ _ name _ = gapE ("unsupported array intrinsic " ++ name)
 -- Project to scalar via .[i] (CIndex) in every fixture.
 isArrLeafExtern : String -> Bool
 isArrLeafExtern name =
-  containsStr
+  contains
     name
     ["arrayMake", "arrayCopy", "arrayBlit", "arrayFill", "arrayFromList"]
 
@@ -1303,7 +1299,7 @@ emitArrLeafExtern _ _ name _ = gapE ("unsupported array leaf extern " ++ name)
 -- charCode is a pure re-type — emit the operand as-is and return LTInt.
 -- charToStr delegates to mdk_char_to_str (runtime/medaka_rt.c).
 isCharExtern : String -> Bool
-isCharExtern name = containsStr name ["charCode", "charToStr"]
+isCharExtern name = contains name ["charCode", "charToStr"]
 
 emitCharExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitCharExtern e env "charCode" args = match emitArgs e env args
@@ -1320,7 +1316,7 @@ emitCharExtern _ _ name _ = gapE ("unsupported char extern " ++ name)
 -- slice 9: string↔char conversions + codepoint slicing.
 isStrCharExtern : String -> Bool
 isStrCharExtern name =
-  containsStr name ["stringToChars", "stringFromChars", "stringSlice"]
+  contains name ["stringToChars", "stringFromChars", "stringSlice"]
 
 emitStrCharExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitStrCharExtern e env "stringToChars" args = match emitArgs e env args
@@ -1349,7 +1345,7 @@ emitStrCharExtern _ _ name _ = gapE ("unsupported str-char extern " ++ name)
 -- symbols like + $ = ^ ` | ~ are excluded).
 isUnicodeExtern : String -> Bool
 isUnicodeExtern name =
-  containsStr
+  contains
     name
     [
       "charIsAlpha",
@@ -1428,7 +1424,7 @@ emitUnicodeExtern _ _ name _ = gapE ("unsupported unicode extern " ++ name)
 -- value): never auto-printed — fixtures `match` it down to a scalar.
 isAdtExtern : String -> Bool
 isAdtExtern name =
-  containsStr
+  contains
     name
     ["charFromCode", "stringToFloat", "stringIndexOf", "stringCompare"]
 
@@ -1462,7 +1458,7 @@ emitAdtExtern _ _ name _ = gapE ("unsupported adt extern " ++ name)
 -- slice 12: args + env externs.  `args ()` → List String of argv[1..];
 -- `getEnv name` → Option String.  Results are LTCon — never auto-printed.
 isEnvExtern : String -> Bool
-isEnvExtern name = containsStr name ["args", "getEnv"]
+isEnvExtern name = contains name ["args", "getEnv"]
 
 emitEnvExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitEnvExtern e env "args" args = match emitArgs e env args
@@ -1485,7 +1481,7 @@ emitEnvExtern _ _ name _ = gapE ("unsupported env extern " ++ name)
 -- but NOT fixtured — the gate does not pipe stdin.
 isFileExtern : String -> Bool
 isFileExtern name =
-  containsStr
+  contains
     name
     [
       "readFile",
@@ -1576,7 +1572,7 @@ emitFileExtern _ _ name _ = gapE ("unsupported file extern " ++ name)
 -- randomFloat returns a boxed Float word; setSeed is Unit.
 isRngExtern : String -> Bool
 isRngExtern name =
-  containsStr
+  contains
     name
     ["randomInt", "randomBool", "randomFloat", "randomChar", "setSeed"]
 
@@ -1615,7 +1611,7 @@ emitRngExtern _ _ name _ = gapE ("unsupported rng extern " ++ name)
 -- wallTimeSec / allocBytes: both take Unit and return a boxed Float (same ABI
 -- as randomFloat).  C: mdk_wall_time_sec / mdk_alloc_bytes in medaka_rt.c.
 isPerfExtern : String -> Bool
-isPerfExtern name = containsStr name ["wallTimeSec", "allocBytes"]
+isPerfExtern name = contains name ["wallTimeSec", "allocBytes"]
 
 emitPerfExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitPerfExtern e env "wallTimeSec" args = match emitArgs e env args
@@ -1638,7 +1634,7 @@ emitPerfExtern _ _ name _ = gapE ("unsupported perf extern " ++ name)
 -- untags the 0/1 bool word.  See runtime/medaka_rt.c mdk_hash_*.
 isHashExtern : String -> Bool
 isHashExtern name =
-  containsStr
+  contains
     name
     ["hashInt", "hashChar", "hashBool", "hashFloat", "hashString"]
 
@@ -1683,7 +1679,7 @@ emitHashExtern _ _ name _ = gapE ("unsupported hash extern " ++ name)
 -- The String/Char arg word passes straight to the C helper (mdk_debug_*_lit
 -- reads the cell / untags the codepoint); result is a heap String (LTStr).
 isDebugLitExtern : String -> Bool
-isDebugLitExtern name = containsStr name ["debugStringLit", "debugCharLit"]
+isDebugLitExtern name = contains name ["debugStringLit", "debugCharLit"]
 
 emitDebugLitExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> <Mut> (String, LTy)
 emitDebugLitExtern e env "debugStringLit" args = match emitArgs e env args
@@ -2112,7 +2108,7 @@ clausesFreeVars self ((CClause pats body)::rest) = freeVars (self :: patVarNames
 
 anyInList : List String -> List String -> Bool
 anyInList [] _ = False
-anyInList (x::xs) ys = if containsStr x ys then True else anyInList xs ys
+anyInList (x::xs) ys = if contains x ys then True else anyInList xs ys
 
 -- lambda-lift a LOCAL FUNCTION binding from a `let`/`where` group into a (possibly
 -- self-recursive) closure.  Captures are the free variables across all clauses
@@ -3248,7 +3244,7 @@ innerDefaultReqCount e method tag = match implFor e (innerDefaultMethodE method)
 -- typecheck.mdk's innerDefaultMethod): Ord defaults reduce to `compare`.
 innerDefaultMethodE : String -> String
 innerDefaultMethodE m
-  | containsStr m ["lt", "gt", "lte", "gte", "min", "max"] = "compare"
+  | contains m ["lt", "gt", "lte", "gte", "min", "max"] = "compare"
   | otherwise = m
 
 -- `n` element-dict PVar params named `$reqdict_<i>..` (emitGroupBody's all-PVar path
@@ -4213,7 +4209,7 @@ envHasKey ((n, _)::rest) k = if n == k then True else envHasKey rest k
 
 dedupS : List String -> List String
 dedupS [] = []
-dedupS (x::xs) = if containsStr x xs then dedupS xs else x :: dedupS xs
+dedupS (x::xs) = if contains x xs then dedupS xs else x :: dedupS xs
 
 -- the free variables of a Core IR expression given a set of already-bound names.
 -- Returns names (with duplicates; the caller dedups).  Covers the slice-1/3/4
@@ -4221,7 +4217,7 @@ dedupS (x::xs) = if containsStr x xs then dedupS xs else x :: dedupS xs
 -- emit time, so they never reach a lifted lambda body here).
 freeVars : List String -> CExpr -> List String
 freeVars _ (CLit _) = []
-freeVars b (CVar x _) = if containsStr x b then [] else [x]
+freeVars b (CVar x _) = if contains x b then [] else [x]
 freeVars b (CApp f a) = freeVars b f ++ freeVars b a
 freeVars b (CLam ps body) = freeVars (patVarNames ps ++ b) body
 freeVars b (CLet recF pat e1 e2) =
@@ -4260,9 +4256,9 @@ freeVars _ _ = []
 -- parameter that the enclosing closure must capture from its env.
 routeDictNames : List String -> List Route -> List String
 routeDictNames _ [] = []
-routeDictNames b ((RDict d)::rest) = (if containsStr d b then [] else [d])
+routeDictNames b ((RDict d)::rest) = (if contains d b then [] else [d])
   ++ routeDictNames b rest
-routeDictNames b ((RDictFwd d)::rest) = (if containsStr d b then [] else [d])
+routeDictNames b ((RDictFwd d)::rest) = (if contains d b then [] else [d])
   ++ routeDictNames b rest
 routeDictNames b (_::rest) = routeDictNames b rest
 
@@ -4406,7 +4402,7 @@ cellTag e name =
   else
     if name == "False" then 0
     else
-      if containsStr name ["$tuple", "$ref", "$closure"] then hashName name
+      if contains name ["$tuple", "$ref", "$closure"] then hashName name
       else
         match reservedTag name
           Some t => t
@@ -4466,7 +4462,7 @@ nubStr xs = nubStrAcc xs []
 nubStrAcc : List String -> List String -> List String
 nubStrAcc [] _ = []
 nubStrAcc (x::xs) seen =
-  if containsStr x seen then
+  if contains x seen then
     nubStrAcc xs seen
   else
     x :: nubStrAcc xs (x :: seen)
@@ -5476,7 +5472,7 @@ routeIsKey _ _ = False
 -- SelfByMethod: the CMethod-aware walk (freeVars CANNOT see a method name —
 -- TRMC-DESIGN §"SAFETY-CRITICAL").
 selfFree : SelfRef -> CExpr -> Bool
-selfFree (SelfByVar self) ex = not (containsStr self (freeVars [] ex))
+selfFree (SelfByVar self) ex = not (contains self (freeVars [] ex))
 selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 
 -- does `ex` mention the self-method `method`@`tag` (a `CMethod method (RKey tag)`
@@ -6060,8 +6056,8 @@ topoValGo all names (b::rest) done acc =
 
 topoValVisit : List CBind -> List String -> CBind -> List String -> List CBind -> List String -> (List String, List CBind)
 topoValVisit all names b done acc visiting
-  | containsStr (bindName b) done = (done, acc)
-  | containsStr (bindName b) visiting = (done, acc)
+  | contains (bindName b) done = (done, acc)
+  | contains (bindName b) visiting = (done, acc)
   | otherwise =
     let deps = intersectStr (dedupS (bindFreeVars b)) names
     let (done2, acc2) = topoValVisitDeps all names deps done acc (bindName b :: visiting)
@@ -6093,7 +6089,7 @@ bindFreeVars _ = []
 -- accumulate so a let/match-bound local is not mistaken for a global.
 eagerVars : List String -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
-eagerVars b (CVar x _) = if containsStr x b then [] else [x]
+eagerVars b (CVar x _) = if contains x b then [] else [x]
 eagerVars _ (CLit _) = []
 eagerVars b (CApp f a) = eagerVars b f ++ eagerVars b a
 eagerVars b (CLet recF pat e1 e2) =
@@ -6170,7 +6166,7 @@ findBind name (b::rest) =
 intersectStr : List String -> List String -> List String
 intersectStr [] _ = []
 intersectStr (x::rest) ys
-  | containsStr x ys = x :: intersectStr rest ys
+  | contains x ys = x :: intersectStr rest ys
   | otherwise = intersectStr rest ys
 
 -- the initial globals registry (slice E1b): every value binding's name registered
@@ -6817,7 +6813,7 @@ findFieldIdx table label = match findRecordByLabel table label
 findRecordByLabel : List (String, List String) -> String -> Option (String, List String)
 findRecordByLabel [] _ = None
 findRecordByLabel ((name, labels)::rest) label =
-  if containsStr label labels then
+  if contains label labels then
     Some (name, labels)
   else
     findRecordByLabel rest label

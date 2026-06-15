@@ -23,6 +23,7 @@ import ir.core_ir.{
   CTBranch(..),
   CHead(..),
 }
+import support.util.{reverseL}
 
 -- ── tokenizer ─────────────────────────────────────────────────────────────────
 
@@ -87,13 +88,6 @@ escPair 'r' = "\\r"
 escPair '"' = "\\\""
 escPair '\\' = "\\\\"
 escPair c = charToStr c
-
-reverseL : List a -> List a
-reverseL xs = revGo xs []
-
-revGo : List a -> List a -> List a
-revGo [] acc = acc
-revGo (x::xs) acc = revGo xs (x :: acc)
 
 -- ── generic S-expression tree ─────────────────────────────────────────────────
 
