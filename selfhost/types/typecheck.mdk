@@ -4727,8 +4727,14 @@ inferDefaultMethod env typarams (IfaceMethod mname mty (Some (MethodDefault pats
   let ids = methodConstraintSlotIds typarams mty (snd st)
   let _ = set_ref currentFn ""
   let inst = instantiateTracked (fst st)
-  let _ = registerMethodDictSlots mname 0 ids (snd inst)
-  inferDefaultMethodBody env (fst inst) pats body
+  let _ = inferDefaultMethodBody env (fst inst) pats body
+  -- register AFTER body inference, so each constraint var's id in [snd inst] is
+  -- its SURVIVING (normalized) union-find root — the same id the in-body return-
+  -- position `empty`/`++` site normalizes to (activeDictVarOf reads that root).
+  -- Registering BEFORE inference recorded the pre-unification id; the in-body
+  -- site could become the surviving root instead, so activeDictVarOf missed it →
+  -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
+  registerMethodDictSlots mname 0 ids (snd inst)
 inferDefaultMethod _ _ _ = ()
 
 -- Infer a default method body against [expectedTy], suppressing the outer
@@ -4962,17 +4968,11 @@ registerMethodDictSlots mname slot (id::rest) subst =
 
 registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> <Mut> Unit
 registerOneMethodDict mname slot id subst = match lookupAssocI id subst
-  None => dbgROMD mname "noSubst"
+  None => ()
   Some m => match normalize m
     TVar cell =>
-      let _ = dbgROMD mname ("TVar:" ++ intToString (tyvarId cell))
       set_ref activeDictVars ((tyvarId cell, dictParamName mname slot) :: activeDictVars.value)
-    _ => dbgROMD mname "notTVar"
-
-dbgROMD : String -> String -> <Mut> Unit
-dbgROMD mname tag
-  | mname == "crush" = panic ("DBG ROMD crush=" ++ tag)
-  | otherwise = ()
+    _ => ()
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
 -- declarations live in [allProg] (method types + typarams).
