@@ -25,6 +25,7 @@ import tools.lsp_harness.{
   semanticData,
   decodeSemToks,
   lenTokensShareType,
+  hasTokenType,
   check,
   summary,
 }
@@ -148,6 +149,34 @@ fixtureSemanticTokens medaka fixDir =
             None => check "semantic tokens: Expr names share one type" False
             Some ints => check "semantic tokens: Expr names share one type" (lenTokensShareType 4 3 (decodeSemToks ints))
 
+{- Fixture 6: semanticTokens/full over roles.mdk — `Color` (type) + `Red`
+   (constructor) must classify to DIFFERENT legend types: type=1 AND enumMember=2
+   both present.  Guards the type-vs-constructor split the context classifier adds
+   over v1 (which colored every uppercase name `type`). -}
+fixtureSemanticRoles : String -> String -> <IO, Mut> Unit
+fixtureSemanticRoles medaka fixDir =
+  let path = stringConcat [fixDir, "/roles.mdk"]
+  match readFile path
+    Err _ => check "semantic tokens: type != constructor" False
+    Ok src =>
+      let uri = fileUri path
+      let msgs = [
+        initializeMsg 1,
+        initializedMsg,
+        didOpenMsg uri src,
+        requestMsg 2 "textDocument/semanticTokens/full" (docParams uri),
+        exitMsg,
+      ]
+      match runSession medaka msgs
+        Err _ => check "semantic tokens: type != constructor" False
+        Ok out => match parseFrames out
+          (frames, _) => match semanticData 2 frames
+            None => check "semantic tokens: type != constructor" False
+            Some ints =>
+              let toks = decodeSemToks ints
+              check "semantic tokens: type != constructor"
+                (hasTokenType 1 toks && hasTokenType 2 toks)
+
 main =
   let medaka = envOr "MEDAKA" "./medaka"
   let root = envOr "MEDAKA_ROOT" "."
@@ -157,4 +186,5 @@ main =
   let _ = fixtureTypeError medaka fixDir
   let _ = fixtureUnparseableNoCrash medaka fixDir
   let _ = fixtureSemanticTokens medaka fixDir
-  summary 5
+  let _ = fixtureSemanticRoles medaka fixDir
+  summary 6

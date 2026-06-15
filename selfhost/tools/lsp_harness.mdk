@@ -332,6 +332,14 @@ allSameType : Int -> List DecTok -> Bool
 allSameType _ [] = True
 allSameType ty0 ((DecTok _ _ _ ty)::rest) = ty == ty0 && allSameType ty0 rest
 
+-- Does the decoded token stream contain at least one token of legend type `ty`?
+-- Used to assert the classifier emits DISTINCT types (e.g. type=1 AND
+-- enumMember=2 both present → it separates types from constructors).
+export
+hasTokenType : Int -> List DecTok -> Bool
+hasTokenType _ [] = False
+hasTokenType ty ((DecTok _ _ _ t)::rest) = t == ty || hasTokenType ty rest
+
 -- Total diagnostics across every publishDiagnostics notification for `uri`.
 -- (Threshold checks — ==0 / >=1 — so summing across republishes is fine.)
 export

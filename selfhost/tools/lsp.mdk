@@ -846,8 +846,10 @@ parseDigits arr i n acc seen
 
 -- The legend, in index order.  These names match standard theme scopes so
 -- default themes color them without per-theme config.
+--   0 keyword  1 type  2 enumMember(constructor)  3 function  4 property(field)
+--   5 string   6 number
 semanticLegend : List String
-semanticLegend = ["keyword", "type", "function", "variable", "string", "number", "operator"]
+semanticLegend = ["keyword", "type", "enumMember", "function", "property", "string", "number"]
 
 semanticTokensOptions : Json
 semanticTokensOptions =
@@ -863,108 +865,136 @@ semanticTokensOptions =
       ("full", JBool True),
     ]
 
-{- The semantic token type index (into `semanticLegend`) for a token, or None to
-   SKIP it (synthetic/layout tokens and punctuation we leave to TextMate).  The
-   span is supplied separately; classification is purely by token shape. -}
-semTokenType : Token -> Option Int
-semTokenType (TUpper _) = Some 1
-semTokenType (TIdent _) = Some 3
-semTokenType (TBacktickIdent _) = Some 2
-semTokenType (TString _) = Some 4
-semTokenType (TChar _) = Some 4
-semTokenType (TInterpOpen _) = Some 4
-semTokenType (TInterpMid _) = Some 4
-semTokenType (TInterpEnd _) = Some 4
-semTokenType (TInt _) = Some 5
-semTokenType (TFloat _) = Some 5
-semTokenType (TBool _) = Some 0
--- keywords → keyword
-semTokenType TLet = Some 0
-semTokenType TRec = Some 0
-semTokenType TWith = Some 0
-semTokenType TMut = Some 0
-semTokenType TIn = Some 0
-semTokenType TIf = Some 0
-semTokenType TThen = Some 0
-semTokenType TElse = Some 0
-semTokenType TMatch = Some 0
-semTokenType TData = Some 0
-semTokenType TRecord = Some 0
-semTokenType TInterface = Some 0
-semTokenType TDefault = Some 0
-semTokenType TImpl = Some 0
-semTokenType TImport = Some 0
-semTokenType TExport = Some 0
-semTokenType TPublic = Some 0
-semTokenType TWhere = Some 0
-semTokenType TOf = Some 0
-semTokenType TRequires = Some 0
-semTokenType TDo = Some 0
-semTokenType TAs = Some 0
-semTokenType TExtern = Some 0
-semTokenType TDeriving = Some 0
-semTokenType TType = Some 0
-semTokenType TNewtype = Some 0
-semTokenType TProp = Some 0
-semTokenType TTest = Some 0
-semTokenType TBench = Some 0
-semTokenType TEffect = Some 0
-semTokenType TFunction = Some 0
--- operators / punctuation → operator
-semTokenType TPlus = Some 6
-semTokenType TMinus = Some 6
-semTokenType TStar = Some 6
-semTokenType TSlash = Some 6
-semTokenType TMod = Some 6
-semTokenType TEqEq = Some 6
-semTokenType TNeq = Some 6
-semTokenType TLt = Some 6
-semTokenType TGt = Some 6
-semTokenType TLeq = Some 6
-semTokenType TGeq = Some 6
-semTokenType TAnd = Some 6
-semTokenType TOr = Some 6
-semTokenType TCons = Some 6
-semTokenType TPlusPlus = Some 6
-semTokenType TPipeRight = Some 6
-semTokenType TRCompose = Some 6
-semTokenType TLCompose = Some 6
-semTokenType TFatArrow = Some 6
-semTokenType TArrow = Some 6
-semTokenType TLArrow = Some 6
-semTokenType TBang = Some 6
-semTokenType TQuestion = Some 6
-semTokenType TEqual = Some 6
-semTokenType TColon = Some 6
-semTokenType TPipe = Some 6
-semTokenType TDotStar = Some 6
-semTokenType TDotDot = Some 6
-semTokenType TDotDotEq = Some 6
--- bare delimiters / layout / adjacency markers → SKIP (leave to TextMate)
-semTokenType _ = None
+{- Token → semantic role, threaded with a small syntactic CONTEXT so the same
+   token SHAPE colors by ROLE: an uppercase name is a `type` in type position but
+   an `enumMember` (constructor) in expression/pattern position; a lowercase name
+   is a `function` only at a definition head (top-level, line start) — references,
+   locals and params stay default foreground.  No AST/parse is needed (the AST has
+   no per-occurrence spans) and no parser changes: a single ordered pass over the
+   token stream tracks indent depth, line-start, and a type/expr/data/record mode.
+   Layout tokens (NEWLINE/INDENT/DEDENT) carry the depth/line-start signal and emit
+   no token.  Robust on unparseable buffers (pure token walk). -}
+
+-- Decides how an uppercase name (and record fields) is colored at this point.
+data SMode = MExpr | MType | MDataHead | MDataVariant | MDataPayload | MRecord
+
+-- depth (indent nesting; 0 = top level), lineStart (next token begins a logical
+-- line), mode.
+data SemCtx = SemCtx Int Bool SMode
+
+isKeywordTok : Token -> Bool
+isKeywordTok TLet = True
+isKeywordTok TRec = True
+isKeywordTok TWith = True
+isKeywordTok TMut = True
+isKeywordTok TIn = True
+isKeywordTok TIf = True
+isKeywordTok TThen = True
+isKeywordTok TElse = True
+isKeywordTok TMatch = True
+isKeywordTok TData = True
+isKeywordTok TRecord = True
+isKeywordTok TInterface = True
+isKeywordTok TDefault = True
+isKeywordTok TImpl = True
+isKeywordTok TImport = True
+isKeywordTok TExport = True
+isKeywordTok TPublic = True
+isKeywordTok TWhere = True
+isKeywordTok TOf = True
+isKeywordTok TRequires = True
+isKeywordTok TDo = True
+isKeywordTok TAs = True
+isKeywordTok TExtern = True
+isKeywordTok TDeriving = True
+isKeywordTok TType = True
+isKeywordTok TNewtype = True
+isKeywordTok TProp = True
+isKeywordTok TTest = True
+isKeywordTok TBench = True
+isKeywordTok TEffect = True
+isKeywordTok TFunction = True
+isKeywordTok _ = False
+
+-- An uppercase name's role given the current mode: constructor in expr/variant
+-- position, type otherwise.
+upperRole : SMode -> Int
+upperRole MExpr = 2
+upperRole MDataVariant = 2
+upperRole _ = 1
+
+-- The legend index for a token (None = leave default fg), given depth/lineStart/mode.
+roleOf : Token -> Int -> Bool -> SMode -> Option Int
+roleOf (TUpper _) _ _ mode = Some (upperRole mode)
+roleOf (TIdent _) depth lineStart mode =
+  if lineStart && (depth == 0) then Some 3      -- top-level definition head
+  else match mode
+    MRecord => Some 4                            -- record field name
+    _ => None                                    -- local / param / reference
+roleOf (TBacktickIdent _) _ _ _ = Some 3
+roleOf (TString _) _ _ _ = Some 5
+roleOf (TChar _) _ _ _ = Some 5
+roleOf (TInterpOpen _) _ _ _ = Some 5
+roleOf (TInterpMid _) _ _ _ = Some 5
+roleOf (TInterpEnd _) _ _ _ = Some 5
+roleOf (TInt _) _ _ _ = Some 6
+roleOf (TFloat _) _ _ _ = Some 6
+roleOf (TBool _) _ _ _ = Some 0
+roleOf t _ _ _ = if isKeywordTok t then Some 0 else None
+
+-- The mode AFTER consuming a token.
+nextMode : Token -> SMode -> SMode
+nextMode TData _ = MDataHead
+nextMode TNewtype _ = MDataHead
+nextMode TRecord _ = MRecord
+nextMode TInterface _ = MType
+nextMode TExtern _ = MType
+nextMode TType _ = MType
+nextMode TDeriving _ = MType
+nextMode TRequires _ = MType
+nextMode TOf _ = MType
+nextMode TColon MRecord = MRecord
+nextMode TColon _ = MType
+nextMode TEqual MDataHead = MDataVariant
+nextMode TEqual MRecord = MRecord
+nextMode TEqual _ = MExpr
+nextMode TPipe MDataVariant = MDataVariant
+nextMode TPipe MDataPayload = MDataVariant
+nextMode (TUpper _) MDataVariant = MDataPayload
+nextMode _ mode = mode
 
 {- A classified token ready for delta-encoding: absolute 0-based line + char,
    UTF-16 length, and the legend index. -}
 public export data SemTok = SemTok Int Int Int Int
 
-{- Build the absolute SemTok list from the offset-paired token stream.  `arr` is
-   the source as a char array (for offset→line/col).  Filters: synthetic tokens
-   (empty span, start == end), unclassified tokens (None), and any token that
-   straddles a line boundary (LSP semantic tokens may not span lines — only a
-   triple-quoted string would, and those stay with TextMate; DEFERRED). -}
-semToksOf : Array Char -> List Token -> List (Int, Int) -> List SemTok
-semToksOf _ [] _ = []
-semToksOf _ _ [] = []
-semToksOf arr (t::ts) ((s, e)::ps)
-  | s >= e = semToksOf arr ts ps
-  | otherwise = match semTokenType t
-    None => semToksOf arr ts ps
-    Some ty => match (posOfOffset arr s, posOfOffset arr e)
-      ((sl, sc), (el, ec)) =>
-        if sl == el then
-          SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps
-        else
-          semToksOf arr ts ps
+-- Classify one token: its role (None = emit nothing) + the updated context.
+-- Layout tokens update depth/line-start; a real token may flip the mode and
+-- always clears line-start.
+classify : Token -> SemCtx -> (Option Int, SemCtx)
+classify (TIndent _) (SemCtx depth ls mode) = (None, SemCtx (depth + 1) ls mode)
+classify TDedent (SemCtx depth ls mode) = (None, SemCtx (depth - 1) ls mode)
+classify TNewline (SemCtx depth _ mode) =
+  let mode2 = if depth <= 0 then MExpr else mode
+  (None, SemCtx depth True mode2)
+classify tok (SemCtx depth ls mode) =
+  (roleOf tok depth ls mode, SemCtx depth False (nextMode tok mode))
+
+{- Build the absolute SemTok list, threading the context.  Filters tokens with no
+   role, empty/synthetic spans (start == end), and any token straddling a line
+   boundary (LSP forbids multi-line tokens; only a triple-quoted string could, and
+   those stay with TextMate). -}
+semToksOf : Array Char -> List Token -> List (Int, Int) -> SemCtx -> List SemTok
+semToksOf _ [] _ _ = []
+semToksOf _ _ [] _ = []
+semToksOf arr (t::ts) ((s, e)::ps) ctx = match classify t ctx
+  (roleOpt, ctx2) => match roleOpt
+    None => semToksOf arr ts ps ctx2
+    Some ty =>
+      if s >= e then semToksOf arr ts ps ctx2
+      else match (posOfOffset arr s, posOfOffset arr e)
+        ((sl, sc), (el, ec)) =>
+          if sl == el then SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
+          else semToksOf arr ts ps ctx2
 
 {- Delta-encode the (start-ordered) SemTok list into the flat 5-int LSP array.
    prevLine/prevChar start at 0, so the first token's deltaLine is its absolute
@@ -981,7 +1011,7 @@ semanticTokensData : String -> List Int
 semanticTokensData src =
   let arr = stringToChars src
   match tokenizeWithOffsetPairs src
-    (toks, pairs) => encodeSemToks 0 0 (semToksOf arr toks pairs)
+    (toks, pairs) => encodeSemToks 0 0 (semToksOf arr toks pairs (SemCtx 0 True MExpr))
 
 -- ── request dispatch ────────────────────────────────────────────────────────
 --
