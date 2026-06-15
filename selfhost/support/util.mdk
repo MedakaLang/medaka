@@ -3,6 +3,8 @@
 -- every stage needs live here once instead of being re-implemented per file.
 -- (typecheck.mdk is still being ported and keeps its own local copies for now.)
 
+import support.ordmap.{OrdMap(..), omLookup, omInsert}
+
 export
 contains : String -> List String -> Bool
 contains _ [] = False
@@ -62,6 +64,25 @@ intersperseStr sep (x::rest) = x :: sep :: intersperseStr sep rest
 export
 joinNl : List String -> String
 joinNl xs = joinWith "\n" xs
+
+-- Join dotted path components with "." in O(total length) (see joinWith).
+export
+joinDot : List String -> String
+joinDot xs = joinWith "." xs
+
+-- Deduplicate a String list keeping the FIRST occurrence in first-occurrence
+-- order (NOT sorted).  Uses the shared support.ordmap weight-balanced tree as a
+-- `seen` set for O(log n) membership → O(n·log n) overall, vs the naive O(n²)
+-- list-scan copies the stages used to carry.
+export
+dedup : List String -> List String
+dedup xs = dedupGo xs OTip
+
+dedupGo : List String -> OrdMap Unit -> List String
+dedupGo [] _ = []
+dedupGo (x::xs) seen = match omLookup x seen
+  Some _ => dedupGo xs seen
+  None => x :: dedupGo xs (omInsert x () seen)
 
 -- Split a list into its leading prefix and final element: Some (init, last),
 -- or None for the empty list.  (Was duplicated byte-identically across ~10

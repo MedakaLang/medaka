@@ -49,6 +49,8 @@ import support.util.{
   filterList,
   initList,
   mapOption,
+  joinDot,
+  dedup,
 }
 
 -- ── values & environment (mutually recursive) ─────────────────────────────
@@ -1497,7 +1499,7 @@ defaultEntry env typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)
 export
 coalesceImpls : List (String, (Int, Value)) -> List (String, Value)
 coalesceImpls scored =
-  map (n => (n, coalesceOne n scored)) (nub (map fst scored))
+  map (n => (n, coalesceOne n scored)) (dedup (map fst scored))
 
 coalesceOne : String -> List (String, (Int, Value)) -> Value
 coalesceOne name scored =
@@ -1524,18 +1526,8 @@ insertScore x (y::ys)
   | otherwise = x :: y :: ys
 
 export
-nub : List String -> List String
-nub xs = nubGo xs []
-
-nubGo : List String -> List String -> List String
-nubGo [] _ = []
-nubGo (x::xs) seen
-  | contains x seen = nubGo xs seen
-  | otherwise = x :: nubGo xs (x :: seen)
-
-export
 implMethodNames : List Decl -> List String
-implMethodNames prog = nub (concatMapList implDeclNames prog)
+implMethodNames prog = dedup (concatMapList implDeclNames prog)
 
 implDeclNames : Decl -> List String
 implDeclNames DImpl { methods, ... } = map implMethodName methods
@@ -2125,18 +2117,12 @@ memberNm (UseMember n _) = n
 useModuleId : UsePath -> String
 useModuleId (UseName ns) =
   if listLen ns > 1 then
-    joinDots (initList ns)
+    joinDot (initList ns)
   else
     firstOrEmpty ns
-useModuleId (UseGroup ns _) = joinDots ns
-useModuleId (UseWild ns) = joinDots ns
-useModuleId (UseAlias ns _) = joinDots ns
-
-joinDots : List String -> String
-joinDots [] = ""
-joinDots [x] = x
-joinDots (x::xs) = x ++ "." ++ joinDots xs
-
+useModuleId (UseGroup ns _) = joinDot ns
+useModuleId (UseWild ns) = joinDot ns
+useModuleId (UseAlias ns _) = joinDot ns
 
 lastOfList : List String -> String
 lastOfList [] = ""

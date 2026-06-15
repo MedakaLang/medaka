@@ -12,7 +12,7 @@
 
 import frontend.ast.{Decl, DUse, UsePath, UseName, UseGroup, UseWild, UseAlias}
 import frontend.parser.{parse, parseLocated}
-import support.util.{contains, listLen, reverseL, initList, startsWith, endsWith}
+import support.util.{contains, listLen, reverseL, initList, startsWith, endsWith, joinDot}
 
 -- ── small list helpers (no stdlib import — selfhost is single-root) ──
 
@@ -21,11 +21,6 @@ lastOr : a -> List a -> a
 lastOr d [] = d
 lastOr _ [x] = x
 lastOr d (_::xs) = lastOr d xs
-
-joinDot : List String -> String
-joinDot [] = ""
-joinDot [x] = x
-joinDot (x::xs) = stringConcat [x, ".", joinDot xs]
 
 -- split a String on a single-char separator (mirrors String.split_on_char).
 -- Always returns ≥1 segment; empty input → [""].  No-sep input → [s].

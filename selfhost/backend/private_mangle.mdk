@@ -94,7 +94,7 @@ import frontend.ast.{
   UseMember(..),
   Variant(..),
 }
-import support.util.{contains, concatMapList, reverseL, lookupAssoc, isEmptyL, filterList, initList}
+import support.util.{contains, concatMapList, reverseL, lookupAssoc, isEmptyL, filterList, initList, joinDot, dedup}
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY
@@ -118,7 +118,7 @@ mangleUnits coreDecls modules =
 -- exported (pub) top-level function names of a unit: the cross-module-importable
 -- definitions another unit's reference can resolve to.
 unitExportEntry : (String, List Decl) -> (String, List String)
-unitExportEntry (mid, decls) = (mid, dedupPM (pubFnNames decls))
+unitExportEntry (mid, decls) = (mid, dedup (pubFnNames decls))
 
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
 -- (mid, [(typeName, [ctorName])]) for every data/record/newtype the unit declares.
@@ -173,7 +173,7 @@ isReservedCtor n = n == "Cons"
 -- enter the map.
 buildUnitCtorRenameMap : String -> List (String, List (String, List String)) -> List Decl -> List (String, String)
 buildUnitCtorRenameMap mid ctorExportsPerUnit decls =
-  let localCtors = dedupPM (unitLocalCtorNames decls)
+  let localCtors = dedup (unitLocalCtorNames decls)
   let localEntries = concatMapList (localCtorRenameEntry mid) localCtors
   let importEntries = ctorImportEntries mid ctorExportsPerUnit decls
   localEntries ++ importEntries
@@ -291,7 +291,7 @@ mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
 -- local def shadows an imported same-named binding (lookupAssoc is first-match).
 buildUnitRenameMap : String -> List (String, List String) -> List Decl -> List (String, String)
 buildUnitRenameMap mid exportsPerUnit decls =
-  let localFns = dedupPM (unitDefNames (mid, decls))
+  let localFns = dedup (unitDefNames (mid, decls))
   let localEntries = concatMapList (localRenameEntry mid) localFns
   let importEntries = importRenameEntries mid exportsPerUnit decls
   localEntries ++ importEntries
@@ -372,12 +372,12 @@ originEntry mid exports n
 useModIdU : UsePath -> String
 useModIdU (UseName ns) =
   if lenGt1 ns then
-    joinDotU (initList ns)
+    joinDot (initList ns)
   else
     firstOrU "" ns
-useModIdU (UseGroup ns _) = joinDotU ns
-useModIdU (UseWild ns) = joinDotU ns
-useModIdU (UseAlias ns _) = joinDotU ns
+useModIdU (UseGroup ns _) = joinDot ns
+useModIdU (UseWild ns) = joinDot ns
+useModIdU (UseAlias ns _) = joinDot ns
 
 lenGt1 : List a -> Bool
 lenGt1 (_::_::_) = True
@@ -392,11 +392,6 @@ lastOfPM : List String -> String
 lastOfPM [] = ""
 lastOfPM [x] = x
 lastOfPM (_::rest) = lastOfPM rest
-
-joinDotU : List String -> String
-joinDotU [] = ""
-joinDotU [x] = x
-joinDotU (x::rest) = x ++ "." ++ joinDotU rest
 
 lookupExports : String -> List (String, List String) -> Option (List String)
 lookupExports _ [] = None
@@ -450,7 +445,7 @@ letBindName (LetBind n _) = n
 -- EVERY function is module-qualified — but the merge-sort dedup is harmless and
 -- self-contained, so it is left in place.
 collidingNames : List String -> List String
-collidingNames names = dedupPM (adjDupsPM (msortPM names))
+collidingNames names = dedup (adjDupsPM (msortPM names))
 
 msortPM : List String -> List String
 msortPM [] = []
@@ -799,17 +794,6 @@ recPatFieldVarsPM (RecPatField label None) = [label]
 recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 
 -- ── small list helpers (local; keep this module self-contained) ───────────────
-dedupPM : List String -> List String
-dedupPM xs = dedupGoPM xs []
-
-dedupGoPM : List String -> List String -> List String
-dedupGoPM [] seen = reverseL seen
-dedupGoPM (x::xs) seen =
-  if contains x seen then
-    dedupGoPM xs seen
-  else
-    dedupGoPM xs (x :: seen)
-
 
 identityPM : a -> a
 identityPM x = x

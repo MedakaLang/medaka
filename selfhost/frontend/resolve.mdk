@@ -53,6 +53,7 @@ import support.util.{
   lookupAssoc,
   reverseL,
   initList,
+  joinDot,
 }
 
 -- ── Errors (mirror lib/resolve.ml's `error`) ──────────────────────────────
@@ -611,11 +612,6 @@ useModId (UseName ns) =
 useModId (UseGroup ns _) = joinDot ns
 useModId (UseWild ns) = joinDot ns
 useModId (UseAlias ns _) = joinDot ns
-
-joinDot : List String -> String
-joinDot [] = ""
-joinDot [x] = x
-joinDot (x::rest) = x ++ "." ++ joinDot rest
 
 
 lastOf : List String -> String
