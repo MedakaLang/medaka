@@ -8,6 +8,9 @@ NEWLINE
 NEWLINE
 NEWLINE
 NEWLINE
+NEWLINE
+NEWLINE
+NEWLINE
 EFFECT
 UPPER "Net"
 UPPER "Prefix"
@@ -46,6 +49,89 @@ EQUAL
 IDENT "netGet"
 IDENT "path"
 NEWLINE
+DATA
+UPPER "Async"
+IDENT "e"
+IDENT "a"
+EQUAL
+UPPER "Done"
+IDENT "a"
+PIPE
+UPPER "Suspend"
+LPAREN
+UPPER "Unit"
+ARROW
+LT
+IDENT "e"
+GT
+UPPER "Async"
+IDENT "e"
+IDENT "a"
+RPAREN
+NEWLINE
+IDENT "runAsync"
+COLON
+UPPER "Async"
+IDENT "e"
+IDENT "a"
+ARROW
+LT
+IDENT "e"
+GT
+IDENT "a"
+NEWLINE
+IDENT "runAsync"
+IDENT "m"
+EQUAL
+MATCH
+IDENT "m"
+INDENT
+UPPER "Done"
+IDENT "a"
+FAT_ARROW
+IDENT "a"
+NEWLINE
+UPPER "Suspend"
+IDENT "t"
+FAT_ARROW
+IDENT "runAsync"
+LPAREN
+IDENT "t"
+LPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "liftIO"
+COLON
+LPAREN
+UPPER "Unit"
+ARROW
+LT
+IDENT "e"
+GT
+IDENT "a"
+RPAREN
+ARROW
+UPPER "Async"
+IDENT "e"
+IDENT "a"
+NEWLINE
+IDENT "liftIO"
+IDENT "act"
+EQUAL
+UPPER "Suspend"
+LPAREN
+IDENT "u"
+FAT_ARROW
+UPPER "Done"
+LPAREN
+IDENT "act"
+IDENT "u"
+RPAREN
+RPAREN
+NEWLINE
 IDENT "main"
 COLON
 LT
@@ -67,6 +153,13 @@ effect Stdout
 extern netGet : String -> <Net "a.com/foo"> String
 fetch : String -> <Net "a.com/foo"> String
 fetch path = netGet path
+data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+runAsync : Async e a -> <e> a
+runAsync m = match m
+  Done a => a
+  Suspend t => runAsync (t ())
+liftIO : (Unit -> <e> a) -> Async e a
+liftIO act = Suspend (u => Done (act u))
 main : <IO> Unit
 main = println "effect param ok"
 === TYPES ===
@@ -123,6 +216,7 @@ isNone : Option a -> Bool
 isOk : Result a b -> Bool
 isSome : Option a -> Bool
 length : a b -> Int
+liftIO : (Unit -> a) -> Async b a
 lt : a -> a -> Bool
 lte : a -> a -> Bool
 main : Unit
@@ -147,6 +241,7 @@ print : a -> <IO> Unit
 println : a -> <IO> Unit
 product : a b -> b
 pure : a -> b a
+runAsync : Async a b -> b
 shrink : a -> List a
 signum : a -> a
 snd : (a, b) -> b

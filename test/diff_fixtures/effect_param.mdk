@@ -7,6 +7,9 @@
 --   * `internal effect Mut`   — non-public effect decl
 --   * `effect Stdout`         — plain (domainless) effect decl
 --   * `<Net "a.com/foo">`      — effect-row atom with a Prefix-pattern argument
+--   * `data Async e a = … <e> …` — an effect-row PARAMETER on a data decl:
+--       `e` is kind-inferred KRow from its use in the Suspend field's effect
+--       tail, so `runAsync : Async e a -> <e> a` performs exactly the stored row
 effect Net Prefix
 internal effect Mut
 effect Stdout
@@ -15,6 +18,16 @@ extern netGet : String -> <Net "a.com/foo"> String
 
 fetch : String -> <Net "a.com/foo"> String
 fetch path = netGet path
+
+data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+
+runAsync : Async e a -> <e> a
+runAsync m = match m
+  Done a => a
+  Suspend t => runAsync (t ())
+
+liftIO : (Unit -> <e> a) -> Async e a
+liftIO act = Suspend (u => Done (act u))
 
 main : <IO> Unit
 main = println "effect param ok"

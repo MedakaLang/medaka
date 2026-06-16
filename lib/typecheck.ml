@@ -66,6 +66,13 @@ and mono =
   | TApp   of mono * mono
   | TFun   of mono * effrow * mono    (* arg -> effect row -> result *)
   | TTuple of mono list
+  | TEff   of effrow
+    (* An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
+       with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
+       by kind-directed elaboration at a Row-kinded param position (see
+       [data_param_kinds] / [from_ast_type] / [register_data]); consumed only by
+       [unify]'s TApp~TApp recursion.  Never appears in code that lacks an
+       effect-poly data type, so its addition is purely additive. *)
 
 (* An effect row (Phase 79): a set of concrete effect labels plus an optional
    tail variable.
@@ -283,6 +290,18 @@ let exit_level  () = decr current_level
    Prefix domain while a bare label stays PUnit. *)
 let effect_domains : (string, param) Hashtbl.t = Hashtbl.create 16
 
+(* The kind of a data-type parameter, inferred from usage (no kind syntax).
+   A param whose name appears in any field's effect-tail position (`<e>`) is
+   [KRow]; every other param is [KType].  Drives the kind-directed
+   type-application elaboration in [from_ast_type] that places a [TEff] row in
+   the param's argument slot. *)
+type kind = KType | KRow
+
+(* Type-constructor name → its parameters' kinds, in declaration order.  Empty
+   for every type with no effect-row parameter (the common case), so the
+   KRow branch in [from_ast_type] never fires for existing code → additive. *)
+let data_param_kinds : (string, kind list) Hashtbl.t = Hashtbl.create 16
+
 (* ── v2 Stage 3: the builtin-effect taxonomy (design §3.1/§4) ───────────────
    The single source of truth for every minted builtin label: its domain (the
    ⊤ param it carries) and its security-vs-internal classification.  The
@@ -372,6 +391,7 @@ let dtop_for (label : string) : param =
    data on the row, so this never touches dict-passing or method machinery. *)
 let populate_effect_domains (decls : Ast.decl list) : unit =
   seed_effect_domains ();
+  Hashtbl.reset data_param_kinds;
   List.iter (function
     | Ast.DEffect (_, name, domain, internal) ->
       register_effect_domain name domain internal
@@ -736,6 +756,45 @@ let ast_effrow etbl = function
     { labels = atoms_of_written es; tail }
   | _ -> pure_row
 
+(* Find-or-create the shared effvar for a source effect-tail name in [etbl]
+   (same discipline as [ast_effrow]'s tail resolution). *)
+let eff_tail_var etbl name =
+  match Hashtbl.find_opt etbl name with
+  | Some v -> v
+  | None -> let v = fresh_effvar () in Hashtbl.add etbl name v; v
+
+(* The row to place in a Row-kinded type-application argument slot.  A bare
+   `e` (TyVar) becomes an OPEN row tailed by the shared effvar for that name; an
+   explicit `<…>` resolves via [ast_effrow] (so `<>` ⇒ closed empty); anything
+   else gets a fresh open row. *)
+let row_arg_of etbl = function
+  | Ast.TyVar n -> { labels = []; tail = Some (eff_tail_var etbl n) }
+  | Ast.TyEffect _ as t -> ast_effrow etbl t
+  | _ -> open_row ()
+
+(* Un-curry a left-nested application spine: `TyApp (TyApp (h, a), b)` →
+   `(h, [a; b])`. *)
+let ty_spine (t : Ast.ty) : Ast.ty * Ast.ty list =
+  let rec go acc = function
+    | Ast.TyApp (f, x) -> go (x :: acc) f
+    | h -> (h, acc)
+  in
+  go [] t
+
+(* Names appearing in an effect-tail position (`<… | e>`) anywhere in a type.
+   A data param whose name is in this set for some field is [KRow]. *)
+let rec eff_tail_names_ty (t : Ast.ty) : string list =
+  match t with
+  | Ast.TyEffect (_, tl, inner) ->
+    (match tl with Some n -> [n] | None -> []) @ eff_tail_names_ty inner
+  | Ast.TyApp (a, b) | Ast.TyFun (a, b) ->
+    eff_tail_names_ty a @ eff_tail_names_ty b
+  | Ast.TyTuple ts -> List.concat_map eff_tail_names_ty ts
+  | Ast.TyConstrained (cs, inner) ->
+    List.concat_map (fun (_, args) -> List.concat_map eff_tail_names_ty args) cs
+    @ eff_tail_names_ty inner
+  | Ast.TyCon _ | Ast.TyVar _ -> []
+
 (* ── Following links and union-find compaction ──── *)
 
 let rec normalize = function
@@ -764,7 +823,7 @@ let rec occurs_adjust id level = function
     occurs_adjust id level a; lower_row_levels level r; occurs_adjust id level b
   | TTuple ts ->
     List.iter (occurs_adjust id level) ts
-
+  | TEff r -> lower_row_levels level r
 (* ── Effect-row unification (Phase 79c) ──────────── *)
 
 (* Unify two effect rows.  An open row (one with a tail variable) absorbs the
@@ -823,6 +882,10 @@ let rec unify t1 t2 =
     unify a1 a2; unify_row r1 r2; unify b1 b2
   | TTuple ts1, TTuple ts2 when List.length ts1 = List.length ts2 ->
     List.iter2 unify ts1 ts2
+  | TEff r1, TEff r2 ->
+    (* Two effect rows in type-constructor argument position (e.g. the `e` of
+       `Async e a`): unify them as rows, exactly as the TFun effect slot does. *)
+    unify_row r1 r2
   | _ ->
     fail (TypeMismatch (t1, t2))
 
@@ -840,6 +903,7 @@ let rec free_unbound acc = function
     free_unbound (free_unbound acc a) b
   | TTuple ts ->
     List.fold_left free_unbound acc ts
+  | TEff _ -> acc  (* a row holds effvars, never tyvars *)
 
 (* Free generalizable effect variables: a row's tail effvar at a level deeper
    than the current scope.  Collected alongside [free_unbound]'s tyvars so a
@@ -861,6 +925,15 @@ let rec free_effvars acc = function
     in
     free_effvars acc b
   | TTuple ts -> List.fold_left free_effvars acc ts
+  | TEff r ->
+    (* A row in type-argument position: collect its tail effvar (the quantified
+       row var of an effect-poly data type), mirroring the TFun row case. *)
+    (match (effrow_norm r).tail with
+     | Some v ->
+       (match !v with
+        | EUnbound (id, level) when level > !current_level && not (List.mem id acc) -> id :: acc
+        | _ -> acc)
+     | None -> acc)
 
 let generalize t = Forall (free_unbound [] t, free_effvars [] t, t)
 
@@ -913,6 +986,10 @@ let instantiate_raw (Forall (vars, evars, t)) =
     | TApp (a, b)  -> TApp (walk pos a, walk pos b)
     | TFun (a, r, b) -> TFun (walk (not pos) a, reopen pos r, walk pos b)
     | TTuple ts    -> TTuple (List.map (walk pos) ts)
+    | TEff r -> TEff (subst_row esub r)
+      (* A row in type-argument position is INVARIANT (TApp~TApp unifies args
+         exactly, no subsumption), so it is substituted but never re-opened —
+         `runAsync : Async e a -> <e> a` performs exactly the stored row. *)
   in
   (sub, walk true t)
 
@@ -937,6 +1014,7 @@ let rec find_tvar_in_mono t id =
     List.fold_left
       (fun acc t -> match acc with Some _ -> acc | None -> find_tvar_in_mono t id)
       None ts
+  | TEff _ -> None
 
 (* ── Value restriction (Phase 66) ───────────────── *)
 
@@ -968,6 +1046,7 @@ let rec lower_to_current t = match normalize t with
   | TFun (a, r, b) ->
     lower_to_current a; lower_row_levels !current_level r; lower_to_current b
   | TTuple ts -> List.iter lower_to_current ts
+  | TEff r -> lower_row_levels !current_level r
 
 (* Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
    otherwise. *)
@@ -992,6 +1071,7 @@ let instantiate_with (Forall (vars, evars, t)) (subs : (int * mono) list) =
     | TApp (a, b)  -> TApp (walk a, walk b)
     | TFun (a, r, b) -> TFun (walk a, subst_row esub r, walk b)
     | TTuple ts    -> TTuple (List.map walk ts)
+    | TEff r -> TEff (subst_row esub r)
   in
   walk t
 
@@ -1012,6 +1092,7 @@ let instantiate_method (Forall (vars, evars, t)) track_ids =
     | TApp (a, b)  -> TApp (walk a, walk b)
     | TFun (a, r, b) -> TFun (walk a, subst_row esub r, walk b)
     | TTuple ts    -> TTuple (List.map walk ts)
+    | TEff r -> TEff (subst_row esub r)
   in
   let result = walk t in
   let tracked = List.filter_map (fun id ->
@@ -1069,6 +1150,21 @@ let pp_mono_in (names, counter) t =
       if prec > 1 then "(" ^ s ^ ")" else s
     | TTuple ts ->
       Printf.sprintf "(%s)" (String.concat ", " (List.map (go 0) ts))
+    | TEff effs ->
+      (* A row in type-argument position (the `e` of `Async e a`).  Bare open
+         tail → just the row var's name (so it reads `Async e a`); with labels →
+         `<IO>` / `<IO | e>`; closed empty → `<>`.  Effvar ids are offset to a
+         private letter namespace so they never collide with tyvar letters. *)
+      let effs = effrow_norm effs in
+      let lbl = match effrow_labels effs with [] -> "" | ls -> render_atoms ls in
+      let tail_s = match effs.tail with
+        | Some { contents = EUnbound (id, _) } -> name_of (id + 1_000_000)
+        | _ -> "" in
+      (match lbl, tail_s with
+       | "", "" -> "<>"
+       | "", t  -> t
+       | l,  "" -> Printf.sprintf "<%s>" l
+       | l,  t  -> Printf.sprintf "<%s | %s>" l t)
   in
   go 0 t
 
@@ -1497,7 +1593,19 @@ let from_ast_type ?(aliases=Hashtbl.create 0) ?(tbl=Hashtbl.create 4)
          let v = fresh_var () in
          Hashtbl.add env n v;
          v)
-    | Ast.TyApp (a, b) -> TApp (go a, go b)
+    | Ast.TyApp _ as app ->
+      let (head, args) = ty_spine app in
+      (match head with
+       | Ast.TyCon n ->
+         (match Hashtbl.find_opt data_param_kinds n with
+          | Some kinds when List.length kinds = List.length args ->
+            List.fold_left2
+              (fun acc k arg -> match k with
+                 | KRow  -> TApp (acc, TEff (row_arg_of etbl arg))
+                 | KType -> TApp (acc, go arg))
+              (TCon n) kinds args
+          | _ -> List.fold_left (fun acc a -> TApp (acc, go a)) (go head) args)
+       | _ -> List.fold_left (fun acc a -> TApp (acc, go a)) (go head) args)
     | Ast.TyFun (a, b) ->
       let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
       TFun (go a, ast_effrow etbl b, bm)
@@ -1525,7 +1633,19 @@ let from_ast_type_with_constraints ?(aliases=Hashtbl.create 0) ast_ty =
   let rec go = function
     | Ast.TyCon n             -> TCon n
     | Ast.TyVar n             -> lookup n
-    | Ast.TyApp (a, b)        -> TApp (go a, go b)
+    | Ast.TyApp _ as app        ->
+      let (head, args) = ty_spine app in
+      (match head with
+       | Ast.TyCon n ->
+         (match Hashtbl.find_opt data_param_kinds n with
+          | Some kinds when List.length kinds = List.length args ->
+            List.fold_left2
+              (fun acc k arg -> match k with
+                 | KRow  -> TApp (acc, TEff (row_arg_of etbl arg))
+                 | KType -> TApp (acc, go arg))
+              (TCon n) kinds args
+          | _ -> List.fold_left (fun acc a -> TApp (acc, go a)) (go head) args)
+       | _ -> List.fold_left (fun acc a -> TApp (acc, go a)) (go head) args)
     | Ast.TyFun (a, b)        ->
       let bm = match b with Ast.TyEffect (_, _, t) -> go t | t -> go t in
       TFun (go a, ast_effrow etbl b, bm)
@@ -1603,6 +1723,7 @@ let instantiate_record info =
     | TApp (a, b)  -> TApp (walk a, walk b)
     | TFun (a, effs, b) -> TFun (walk a, effs, walk b)
     | TTuple ts    -> TTuple (List.map walk ts)
+    | TEff _ as t -> t  (* records carry no row params; pass through *)
   in
   let result = walk info.rec_result in
   let fields = List.map (fun (n, t) -> (n, walk t)) info.rec_fields in
@@ -3299,21 +3420,53 @@ let register_data ?(aliases=Hashtbl.create 0) env (name, params, variants) =
      vars sit at level (current + 1); after exit_level the surrounding scope
      drops back to current_level and `generalize` can quantify them. *)
   enter_level ();
-  let param_vars = List.map (fun p -> (p, fresh_var ())) params in
+  (* Kind inference (no kind syntax): a param is KRow iff its name appears in
+     some field's effect-tail position (`<… | p>`), else KType.  Recorded in
+     [data_param_kinds] BEFORE building ctor types so a self-referential field
+     (`Suspend (Unit -> <e> Async e a)`) elaborates `Async`'s own row param. *)
+  let tail_names =
+    List.concat_map (fun v ->
+      let field_tys = match v.Ast.con_payload with
+        | Ast.ConPos tys    -> tys
+        | Ast.ConNamed flds -> List.map (fun f -> f.Ast.field_type) flds
+      in
+      List.concat_map eff_tail_names_ty field_tys)
+      variants
+  in
+  let kinds = List.map (fun p -> if List.mem p tail_names then KRow else KType) params in
+  Hashtbl.replace data_param_kinds name kinds;
+  (* One representation per param, shared across all ctors (like the legacy
+     param TVars).  KType → a fresh TVar; KRow → a fresh effvar wrapped in a
+     [TEff] so it occupies the type-application argument slot.  [krow_evars]
+     seeds each ctor's etbl so a field's `<p>` tail resolves to the SAME
+     effvar that the result type carries. *)
+  let param_reprs =
+    List.map2 (fun p k -> match k with
+      | KType -> (p, fresh_var ())
+      | KRow  -> (p, TEff { labels = []; tail = Some (fresh_effvar ()) }))
+      params kinds
+  in
+  let krow_evars =
+    List.filter_map (fun (p, repr) -> match repr with
+      | TEff { tail = Some ev; _ } -> Some (p, ev)
+      | _ -> None)
+      param_reprs
+  in
   let result_t =
     List.fold_left
       (fun acc (_, v) -> TApp (acc, v))
       (TCon name)
-      param_vars
+      param_reprs
   in
   let ctor_monos = List.map (fun v ->
     let etbl = Hashtbl.create 4 in
+    List.iter (fun (p, ev) -> Hashtbl.replace etbl p ev) krow_evars;
     let rec go = function
       | Ast.TyCon n ->
-        (try List.assoc n param_vars
+        (try List.assoc n param_reprs
          with Not_found -> TCon n)
       | Ast.TyVar n ->
-        (try List.assoc n param_vars
+        (try List.assoc n param_reprs
          with Not_found ->
            (* A payload type variable not bound by the type's parameter list is
               an error (no existential quantification): reject it instead of
@@ -3603,6 +3756,7 @@ let rec mono_ids_tc m = match normalize m with
   | TVar _ | TCon _ -> []
   | TApp (a, b) | TFun (a, _, b) -> mono_ids_tc a @ mono_ids_tc b
   | TTuple ts -> List.concat_map mono_ids_tc ts
+  | TEff _ -> []
 
 (* Phase 83/84: does an interface param appear in an *argument* position of this
    method's type?  If so the method dispatches on a value argument — arg-tag
@@ -3744,6 +3898,7 @@ let impls_overlap (xs : mono list) (ys : mono list) : bool =
     | TFun (a1, _, b1), TFun (a2, _, b2) -> go a1 a2 && go b1 b2
     | TTuple a, TTuple b ->
       List.length a = List.length b && List.for_all2 go a b
+    | TEff _, TEff _ -> true
     | _ -> false
   in
   List.length xs = List.length ys && List.for_all2 go xs ys
@@ -3775,6 +3930,7 @@ let subsumes ~(general : mono list) ~(specific : mono list) : bool =
     | TApp (f1, a1), TApp (f2, a2) -> go f1 f2 && go a1 a2
     | TFun (a1, _, b1), TFun (a2, _, b2) -> go a1 a2 && go b1 b2
     | TTuple a, TTuple b -> List.length a = List.length b && List.for_all2 go a b
+    | TEff _, TEff _ -> true
     | _ -> false
   in
   List.length general = List.length specific && List.for_all2 go general specific
@@ -3935,6 +4091,7 @@ let rec is_concrete = function
   | TCon _ -> true
   | TApp (a, b) | TFun (a, _, b) -> is_concrete a && is_concrete b
   | TTuple ts -> List.for_all is_concrete ts
+  | TEff _ -> true  (* effvars don't gate type-concreteness (TFun ignores its row too) *)
 
 (* One-directional structural matching: pattern (from impl type_args) may
    contain unbound TVars that act as wildcards; concrete must be fully resolved. *)
@@ -3950,6 +4107,7 @@ let rec mono_matches ~pattern ~concrete =
     mono_matches ~pattern:b1 ~concrete:b2
   | TTuple ps, TTuple cs when List.length ps = List.length cs ->
     List.for_all2 (fun p c -> mono_matches ~pattern:p ~concrete:c) ps cs
+  | TEff _, TEff _ -> true  (* rows don't participate in impl-head selection *)
   | _ -> false
 
 (* Impls in env.impls whose head matches (iface_name, concrete_args), after the
@@ -3981,6 +4139,7 @@ let impl_head_subst (patterns : mono list) (concrete : mono list)
     | TApp (f1, a1), TApp (f2, a2) -> go f1 f2 && go a1 a2
     | TFun (a1, _, b1), TFun (a2, _, b2) -> go a1 a2 && go b1 b2
     | TTuple a, TTuple b -> List.length a = List.length b && List.for_all2 go a b
+    | TEff _, TEff _ -> true
     | _ -> false
   in
   if List.length patterns = List.length concrete
@@ -3997,6 +4156,7 @@ let rec subst_apply subst m = match normalize m with
   | TApp (a, b) -> TApp (subst_apply subst a, subst_apply subst b)
   | TFun (a, e, b) -> TFun (subst_apply subst a, e, subst_apply subst b)
   | TTuple ts -> TTuple (List.map (subst_apply subst) ts)
+  | TEff _ as t -> t
 
 (* Phase 65: discharge an impl's `requires` constraints.  Given an `entry`
    selected for ground `concrete_args`, substitute the head TVars into each
@@ -4071,6 +4231,7 @@ let rec mono_unbound_ids m =
   | TCon _ -> []
   | TApp (a, b) | TFun (a, _, b) -> mono_unbound_ids a @ mono_unbound_ids b
   | TTuple ts -> List.concat_map mono_unbound_ids ts
+  | TEff _ -> []
 
 (* Phase 69.x: a method/dict occurrence whose discriminating type is still a
    type variable may be one of the *enclosing* constrained function's type

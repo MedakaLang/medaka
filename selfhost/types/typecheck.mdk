@@ -80,6 +80,12 @@ public export data Mono
   | TFun Mono EffRow Mono
   -- arg -> <effect row> result
   | TTuple (List Mono)
+  | TEff EffRow
+  -- An effect row occupying a type-CONSTRUCTOR ARGUMENT slot, for a data type
+  -- with an effect-row parameter (`data Async e a = … <e> …`).  Produced ONLY
+  -- by kind-directed elaboration at a Row-kinded param position; consumed only
+  -- by unifyN's TApp~TApp recursion.  Never appears in code lacking an
+  -- effect-poly data type, so its addition is purely additive.
 
 public export data Tyvar = Unbound Int Int | Link Mono  -- Unbound id level | Link
 
@@ -936,6 +942,7 @@ freeEffvars t = match normalize t
   TApp a b => freeEffvars a ++ freeEffvars b
   TFun a r b => freeEffvars a ++ rowFreeEffvars r ++ freeEffvars b
   TTuple ts => concatMapList freeEffvars ts
+  TEff r => rowFreeEffvars r
 
 rowFreeEffvars : EffRow -> List Int
 rowFreeEffvars r = match effrowNorm r
@@ -959,6 +966,15 @@ public export data RecordInfo = RecordInfo (List Int) Mono (List (String, Mono))
 
 recordsRef : Ref (List (String, RecordInfo))
 recordsRef = Ref []
+
+-- Kind of a data-type parameter, inferred from usage: KRow iff the param name
+-- appears in a field's effect-tail position (`<e>`), else KType.  Drives
+-- kind-aware type-app elaboration (a KRow arg becomes a TEff row, not a TApp
+-- tyvar) and ctor-result-type construction.  Per-type, positional.
+public export data Kind = KType | KRow
+
+dataParamKindsRef : Ref (List (String, List Kind))
+dataParamKindsRef = Ref []
 
 -- return-position method sites discovered during inference: (method name, the
 -- EMethodAt route ref to fill, the EMethodAt impl-dicts ref to fill, the method's
@@ -1383,6 +1399,7 @@ resetState _ =
   let _ = set_ref effvarCounter 0
   let _ = set_ref curEffect (EffRow [] None)
   let _ = set_ref recordsRef []
+  let _ = set_ref dataParamKindsRef []
   let _ = set_ref pendingSites []
   let _ = set_ref pendingRLocalSites []
   let _ = set_ref pendingBinopSites []
@@ -1445,6 +1462,7 @@ occursAdjust id level t = match normalize t
     let _ = lowerRowLevels level r
     occursAdjust id level b
   TTuple ts => occursAdjustList id level ts
+  TEff r => lowerRowLevels level r
 
 occursAdjustVar : Int -> Int -> Ref Tyvar -> <Mut> Unit
 occursAdjustVar id level cell = match cell.value
@@ -1484,6 +1502,7 @@ unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
 unifyN (TTuple ts1) (TTuple ts2)
   | listLen ts1 == listLen ts2 = unifyList ts1 ts2
   | otherwise = typeMismatch (TTuple ts1) (TTuple ts2)
+unifyN (TEff r1) (TEff r2) = unifyRow r1 r2
 unifyN a b = typeMismatch a b
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> <Mut> Unit
@@ -1554,6 +1573,9 @@ lowerToCurrent t = match normalize t
     let _ = lowerRowLevels currentLevel.value r
     lowerToCurrent b
   TTuple ts => lowerToCurrentList ts
+  TEff r =>
+    let _ = lowerRowLevels currentLevel.value r
+    ()
 
 lowerToCurrentList : List Mono -> <Mut> Unit
 lowerToCurrentList [] = ()
@@ -1578,6 +1600,7 @@ freeGenVars lvl t = match normalize t
   TApp a b => freeGenVars lvl a ++ freeGenVars lvl b
   TFun a _ b => freeGenVars lvl a ++ freeGenVars lvl b
   TTuple ts => concatMapList (freeGenVars lvl) ts
+  TEff _ => []
 
 dedupI : List Int -> List Int
 dedupI xs = dedupIGo xs []
@@ -1607,6 +1630,7 @@ substMono subst esub t = match normalize t
   TApp a b => TApp (substMono subst esub a) (substMono subst esub b)
   TFun a eff b => TFun (substMono subst esub a) (substRow esub eff) (substMono subst esub b)
   TTuple ts => TTuple (map (substMono subst esub) ts)
+  TEff r => TEff (substRow esub r)
 
 -- Phase 146 variance-aware re-open: when instantiating a generalized scheme,
 -- re-open a CLOSED row carrying concrete labels (`EffRow labels None`) at a
@@ -1632,6 +1656,7 @@ substMonoP pos subst esub t = match normalize t
   TApp a b => TApp (substMonoP pos subst esub a) (substMonoP pos subst esub b)
   TFun a eff b => TFun (substMonoP (not pos) subst esub a) (reopenRow pos (substRow esub eff)) (substMonoP pos subst esub b)
   TTuple ts => TTuple (map (substMonoP pos subst esub) ts)
+  TEff r => TEff (substRow esub r)
 
 -- ── rendering (mirrors lib/typecheck.ml pp_mono byte-for-byte) ─────────────
 export
@@ -1667,6 +1692,31 @@ ppGo ctx cnt prec t = match normalize t
   TApp a b => ppApp ctx cnt prec a b
   TFun a eff b => ppFun ctx cnt prec a eff b
   TTuple ts => "(" ++ joinWith ", " (ppEach ctx cnt 0 ts) ++ ")"
+  TEff r => ppEffArg ctx cnt r
+
+-- Render a row sitting in type-argument position (the `e` of `Async e a`).  Bare
+-- open tail → the row var's name (reads `Async e a`); labels → `<IO>`/`<IO | e>`;
+-- closed empty → `<>`.  Effvar ids are offset into a private letter namespace so
+-- they never collide with tyvar letters.  Mirrors lib/typecheck.ml pp_mono TEff.
+ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> <Mut> String
+ppEffArg ctx cnt r = match effrowNorm r
+  EffRow labels tail =>
+    let lbl = match labels
+      [] => ""
+      ls => renderAtoms ls
+    let tailS = match tail
+      Some cell => match cell.value
+        EUnbound id _ => nameOf ctx cnt (id + 1000000)
+        ELink _ => ""
+      None => ""
+    ppEffArgFmt lbl tailS
+
+ppEffArgFmt : String -> String -> String
+ppEffArgFmt l t
+  | l == "" && t == "" = "<>"
+  | l == "" = t
+  | t == "" = "<" ++ l ++ ">"
+  | otherwise = "<" ++ l ++ " | " ++ t ++ ">"
 
 ppVar : Ref (List (Int, String)) -> Ref Int -> Ref Tyvar -> <Mut> String
 ppVar ctx cnt cell = match cell.value
@@ -1722,16 +1772,16 @@ tyVarNames (TyConstrained _ t) = tyVarNames t
 -- an annotation / signature mono with free tyvars realized as fresh vars
 astTypeFresh : Ty -> <Mut> Mono
 astTypeFresh ty =
-  let etbl = freshEffMap (dedup (effTailNames ty))
-  fromAstTypeE etbl (freshTvMap (dedup (tyVarNames ty))) ty
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
+  fromAstTypeE etbl (freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))) ty
 
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
 -- annotation tyvar stayed a distinct unbound var (C3 AnnotationTooGeneral).
 astTypeFreshTbl : Ty -> <Mut> (Mono, List (String, Mono))
 astTypeFreshTbl ty =
-  let etbl = freshEffMap (dedup (effTailNames ty))
-  let tvs = freshTvMap (dedup (tyVarNames ty))
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
+  let tvs = freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))
   (fromAstTypeE etbl tvs ty, tvs)
 
 freshTvMap : List String -> <Mut> List (String, Mono)
@@ -1748,8 +1798,8 @@ sigToScheme ty = fst (sigToSchemeTvs ty)
 -- subst maps them.
 sigToSchemeTvs : Ty -> <Mut> (Scheme, List (String, Mono))
 sigToSchemeTvs ty =
-  let tvs = freshTvMap (dedup (tyVarNames ty))
-  let etbl = freshEffMap (dedup (effTailNames ty))
+  let tvs = freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
   (
     Forall (map monoTyvarId (map snd tvs)) (map effvarIdOf etbl) (fromAstTypeE etbl tvs ty),
     tvs,
@@ -1793,11 +1843,20 @@ tailCell etbl (Some n) = lookupAssoc n etbl
 fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstType tvs ty = fromAstTypeE [] tvs ty
 
+-- un-curry a left-nested TyApp chain into (head, args).  `headTyconTy` only
+-- returns the head; this also keeps the spine for kind-directed elaboration.
+tyAppSpine : Ty -> (Ty, List Ty)
+tyAppSpine (TyApp a b) = match tyAppSpine a
+  (head, args) => (head, args ++ [b])
+tyAppSpine t = (t, [])
+
 fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 fromAstTypeE etbl tvs (TyCon n) = TCon n
 fromAstTypeE etbl tvs (TyVar n) = fromOption (TCon n) (lookupAssoc n tvs)
-fromAstTypeE etbl tvs (TyApp a b) =
-  TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
+fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon n, args) =>
+    fromAstTypeApp etbl tvs n args (TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b))
+  _ => TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
 fromAstTypeE etbl tvs (TyFun a b) =
   TFun
     (fromAstTypeE etbl tvs a)
@@ -1806,6 +1865,62 @@ fromAstTypeE etbl tvs (TyFun a b) =
 fromAstTypeE etbl tvs (TyTuple ts) = TTuple (map (fromAstTypeE etbl tvs) ts)
 fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
+
+-- a TyCon-headed type-app: when the head is a data type with a KRow param, refold
+-- the spine kind-directed (KRow arg → TEff row); otherwise use the plain fallback
+-- (byte-identical to the legacy left-nested TApp recursion → additive).
+fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Mono -> Mono
+fromAstTypeApp etbl tvs n args fallback = match lookupAssoc n dataParamKindsRef.value
+  Some kinds if listLen kinds == listLen args =>
+    foldAppKinds etbl tvs (TCon n) kinds args
+  _ => fallback
+
+-- refold a kinded type-app spine: a KType arg recurses, a KRow arg becomes a
+-- TEff row (resolved through the shared etbl, so it aliases the field/sig tail).
+foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
+foldAppKinds _ _ acc [] [] = acc
+foldAppKinds etbl tvs acc (k::ks) (a::as2) =
+  foldAppKinds etbl tvs (TApp acc (kindArgMono etbl tvs k a)) ks as2
+foldAppKinds _ _ acc _ _ = acc
+
+kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
+kindArgMono etbl tvs KType arg = fromAstTypeE etbl tvs arg
+kindArgMono etbl tvs KRow arg = TEff (rowArgOf etbl arg)
+
+-- a row sitting in a KRow type-app slot: a bare name resolves through the shared
+-- etbl (seeded by the caller so the cell aliases the field/sig tail); an explicit
+-- `<…>` builds directly; anything else is the pure closed row.
+rowArgOf : List (String, Ref Effvar) -> Ty -> EffRow
+rowArgOf etbl (TyVar n) = match lookupAssoc n etbl
+  Some cell => EffRow [] (Some cell)
+  None => pureRow
+rowArgOf etbl (TyEffect labels tail _) = EffRow (atomsOfWritten labels) (tailCell etbl tail)
+rowArgOf _ _ = pureRow
+
+-- names a type uses in a KRow type-app argument slot (so a caller can seed them
+-- into an etbl with shared effvars before elaborating).  Walks the whole type.
+rowArgNames : Ty -> List String
+rowArgNames (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon n, args) =>
+    rowArgNamesApp n args (rowArgNames a ++ rowArgNames b)
+  _ => rowArgNames a ++ rowArgNames b
+rowArgNames (TyFun a b) = rowArgNames a ++ rowArgNames b
+rowArgNames (TyTuple ts) = concatMapList rowArgNames ts
+rowArgNames (TyEffect _ _ t) = rowArgNames t
+rowArgNames (TyConstrained _ t) = rowArgNames t
+rowArgNames _ = []
+
+rowArgNamesApp : String -> List Ty -> List String -> List String
+rowArgNamesApp n args fallback = match lookupAssoc n dataParamKindsRef.value
+  Some kinds if listLen kinds == listLen args =>
+    krowArgVarNames kinds args ++ concatMapList rowArgNames args
+  _ => fallback
+
+krowArgVarNames : List Kind -> List Ty -> List String
+krowArgVarNames [] _ = []
+krowArgVarNames _ [] = []
+krowArgVarNames (KRow::ks) (TyVar n :: as2) = n :: krowArgVarNames ks as2
+krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── environment ───────────────────────────────────────────────────────────
 -- The type environment uses the shared `OrdMap` (support.ordmap): a persistent
@@ -2897,12 +3012,63 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 
 registerVariants : TcEnv -> String -> List String -> List Variant -> <Mut> TcEnv
 registerVariants env name params variants =
-  let paramVars = freshVars (listLen params)
-  let tvs = zipL params paramVars
-  let paramIds = map monoTyvarId paramVars
-  let result = applyParams (TCon name) paramVars
+  let kinds = inferParamKinds params variants
+  let _ = set_ref dataParamKindsRef ((name, kinds) :: dataParamKindsRef.value)
+  let paramReprs = mintParamReprs kinds
+  let tvs = ktypeTvs params kinds paramReprs
+  let etbl = krowEtbl params kinds paramReprs
+  let paramTyIds = collectTyIds paramReprs
+  let rowEffvarIds = collectRowEffvarIds paramReprs
+  let result = applyParams (TCon name) paramReprs
   let _ = registerNamedFieldVariants name params variants
-  addVariants env tvs paramIds result variants
+  addVariants env tvs etbl paramTyIds rowEffvarIds result variants
+
+-- A data param is KRow iff its name appears in a field's effect-tail position
+-- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
+inferParamKinds : List String -> List Variant -> List Kind
+inferParamKinds params variants =
+  let tailNames = concatMapList variantFieldTailNames variants
+  map (p => if contains p tailNames then KRow else KType) params
+
+variantFieldTailNames : Variant -> List String
+variantFieldTailNames (Variant _ payload) = concatMapList effTailNames (payloadAstTypes payload)
+
+payloadAstTypes : ConPayload -> List Ty
+payloadAstTypes (ConPos tys) = tys
+payloadAstTypes (ConNamed fields) = map fieldTyOf fields
+
+fieldTyOf : Field -> Ty
+fieldTyOf (Field _ ty) = ty
+
+-- one representation per param shared across all ctors: KType → fresh TVar,
+-- KRow → a TEff wrapping a fresh effvar (the row the param stands for).
+mintParamReprs : List Kind -> <Mut> List Mono
+mintParamReprs [] = []
+mintParamReprs (KType::ks) = freshVar () :: mintParamReprs ks
+mintParamReprs (KRow::ks) = TEff (EffRow [] (Some (freshEffvar ()))) :: mintParamReprs ks
+
+-- KType param names → their TVar (the tvs map fromAstTypeE consults for tyvars)
+ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
+ktypeTvs (p::ps) (KType::ks) (r::rs) = (p, r) :: ktypeTvs ps ks rs
+ktypeTvs (p::ps) (_::ks) (_::rs) = ktypeTvs ps ks rs
+ktypeTvs _ _ _ = []
+
+-- KRow param names → the effvar cell inside their TEff repr, so a field's `<e>`
+-- and a nested `Async e a` row-arg resolve to the SAME cell the result carries.
+krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
+krowEtbl (p::ps) (KRow::ks) (TEff (EffRow _ (Some cell))::rs) = (p, cell) :: krowEtbl ps ks rs
+krowEtbl (p::ps) (_::ks) (_::rs) = krowEtbl ps ks rs
+krowEtbl _ _ _ = []
+
+collectTyIds : List Mono -> List Int
+collectTyIds (TVar cell :: rs) = tyvarId cell :: collectTyIds rs
+collectTyIds (_::rs) = collectTyIds rs
+collectTyIds [] = []
+
+collectRowEffvarIds : List Mono -> List Int
+collectRowEffvarIds (TEff (EffRow _ (Some cell)) :: rs) = effvarId cell :: collectRowEffvarIds rs
+collectRowEffvarIds (_::rs) = collectRowEffvarIds rs
+collectRowEffvarIds [] = []
 
 -- a named-field data variant (`C { f : T, … }`, e.g. ast's DInterface) carries a
 -- record-shaped payload: register its field layout keyed by the CONSTRUCTOR name
@@ -2929,19 +3095,19 @@ applyParams : Mono -> List Mono -> Mono
 applyParams head [] = head
 applyParams head (p::ps) = applyParams (TApp head p) ps
 
-addVariants : TcEnv -> List (String, Mono) -> List Int -> Mono -> List Variant -> TcEnv
-addVariants env _ _ _ [] = env
-addVariants env tvs paramIds result ((Variant cname payload)::rest) =
-  let ctorType = foldrFun (payloadTypes tvs payload) result
-  let env2 = addCtor env cname (Forall paramIds [] ctorType)
-  addVariants env2 tvs paramIds result rest
+addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
+addVariants env _ _ _ _ _ [] = env
+addVariants env tvs etbl paramTyIds rowEffvarIds result ((Variant cname payload)::rest) =
+  let ctorType = foldrFun (payloadTypesE etbl tvs payload) result
+  let env2 = addCtor env cname (Forall paramTyIds rowEffvarIds ctorType)
+  addVariants env2 tvs etbl paramTyIds rowEffvarIds result rest
 
-payloadTypes : List (String, Mono) -> ConPayload -> List Mono
-payloadTypes tvs (ConPos tys) = map (fromAstType tvs) tys
-payloadTypes tvs (ConNamed fields) = map (fieldType tvs) fields
+payloadTypesE : List (String, Ref Effvar) -> List (String, Mono) -> ConPayload -> List Mono
+payloadTypesE etbl tvs (ConPos tys) = map (fromAstTypeE etbl tvs) tys
+payloadTypesE etbl tvs (ConNamed fields) = map (fieldTypeE etbl tvs) fields
 
-fieldType : List (String, Mono) -> Field -> Mono
-fieldType tvs (Field _ ty) = fromAstType tvs ty
+fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
+fieldTypeE etbl tvs (Field _ ty) = fromAstTypeE etbl tvs ty
 
 -- ── top-level driver ──────────────────────────────────────────────────────
 funClausePair : FunClause -> (List Pat, Expr)
@@ -3052,6 +3218,7 @@ monoUnboundIds t = match normalize t
   TApp a b => monoUnboundIds a ++ monoUnboundIds b
   TFun a _ b => monoUnboundIds a ++ monoUnboundIds b
   TTuple ts => concatMapList monoUnboundIds ts
+  TEff _ => []
 
 anyIn : List Int -> List Int -> Bool
 anyIn xs ys = anyList (x => containsI x ys) xs
@@ -4039,6 +4206,7 @@ cohGoR subst (TFun a1 _ b1) (TFun a2 _ b2) = cohGo subst a1 a2
 cohGoR subst (TTuple xs) (TTuple ys)
   | listLen xs == listLen ys = cohOverlapGo subst (zipL xs ys)
   | otherwise = False
+cohGoR _ (TEff _) (TEff _) = True
 cohGoR _ _ _ = False
 
 -- bind id := m in the wildcard subst and return True
@@ -4076,6 +4244,7 @@ cohSubR subst (TFun a1 _ b1) (TFun a2 _ b2) = cohSub subst a1 a2
 cohSubR subst (TTuple xs) (TTuple ys)
   | listLen xs == listLen ys = cohSubGo subst (zipL xs ys)
   | otherwise = False
+cohSubR _ (TEff _) (TEff _) = True
 cohSubR _ _ _ = False
 
 -- rigid structural equality (the specific side's vars match only the same id)
@@ -4090,6 +4259,7 @@ cohEqR (TFun a1 _ b1) (TFun a2 _ b2) = cohEqMono a1 a2 && cohEqMono b1 b2
 cohEqR (TTuple xs) (TTuple ys)
   | listLen xs == listLen ys = cohEqAll (zipL xs ys)
   | otherwise = False
+cohEqR (TEff _) (TEff _) = True
 cohEqR _ _ = False
 
 cohEqAll : List (Mono, Mono) -> <Mut> Bool

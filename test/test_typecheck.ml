@@ -1013,6 +1013,39 @@ let t_eff_constrained_signature = assert_type
 let e_eff_escape_wrong_effect = assert_err
   "f : <Rand> Unit\nf = print \"hi\"\n"
 
+(* Effect-row data parameter: `Async e a` is polymorphic in an effect row.
+   The `<e>` in the Suspend field shares one quantified effvar with the result
+   `Async e a`, so `runAsync : Async e a -> <e> a` performs exactly the stored
+   row.  Declaring the effect (<IO>) → typechecks. *)
+let t_eff_row_data_param = assert_type
+  {|data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+runAsync : Async e a -> <e> a
+runAsync m = match m
+  Done a => a
+  Suspend t => runAsync (t ())
+liftIO : (Unit -> <e> a) -> Async e a
+liftIO act = Suspend (u => Done (act u))
+good : <IO> Unit
+good = runAsync (liftIO (u => println "hi"))
+|}
+  "good" "Unit"
+
+(* Negative: the effect row threads — `runAsync` of an <IO>-carrying Async in a
+   pure binding must leak.  (If `TEff` collapsed the row to pure, this would
+   wrongly typecheck — the proof the row is real.) *)
+let e_eff_row_data_param_leak = assert_err
+  {|data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+runAsync : Async e a -> <e> a
+runAsync m = match m
+  Done a => a
+  Suspend t => runAsync (t ())
+liftIO : (Unit -> <e> a) -> Async e a
+liftIO act = Suspend (u => Done (act u))
+bad : Unit
+bad = runAsync (liftIO (u => println "hi"))
+|}
+
+
 (* IO effect inferred through a lambda body in an unannotated fn — no error *)
 let t_eff_infer_lambda = assert_type
   "bad = (x => print x) \"hi\"\n" "bad" "Unit"
@@ -4280,6 +4313,8 @@ let () =
       test_case "err: escape pure annot"    `Quick e_eff_escape_annotated_pure;
       test_case "constrained sig keeps effect" `Quick t_eff_constrained_signature;
       test_case "err: wrong effect"         `Quick e_eff_escape_wrong_effect;
+      test_case "effect-row data param"      `Quick t_eff_row_data_param;
+      test_case "err: effect-row leak"       `Quick e_eff_row_data_param_leak;
       test_case "infer HOF effectful arg"   `Quick t_eff_infer_hof;
       test_case "infer HOF alias"           `Quick t_eff_infer_hof_alias;
       test_case "err: escape via inferred"  `Quick e_eff_escape_via_inferred;
