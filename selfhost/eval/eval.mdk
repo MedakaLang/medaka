@@ -2140,6 +2140,28 @@ evalModulesOutput preludeDecls modules =
   let _ = runMainForEffect binds
   outputRef.value
 
+-- ASYNC-DESIGN Stage 2 (D5): the `main : Async _` analog of evalModulesOutput.
+-- A `main` whose inferred type heads in `Async` forces to an INERT Async value
+-- (its row sits unperformed behind `Suspend` thunks), so forcing it alone prints
+-- nothing.  Instead drive it through the program's own `runAsync` (looked up in
+-- the root module's FULL env — locals ∪ imports ∪ globals — so an imported
+-- `runAsync` is reachable), which trampolines the suspensions and performs the
+-- stored row, appending to outputRef.  Mirrors bin/main.ml's Run-branch dispatch.
+export
+evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <Mut> String
+evalModulesOutputAsync preludeDecls modules =
+  let _ = set_ref outputRef ""
+  let binds = evalModulesRootEnv preludeDecls modules
+  let _ = driveAsyncMain binds
+  outputRef.value
+
+driveAsyncMain : List (String, Value) -> <Mut> Value
+driveAsyncMain binds = match lookupBinding "main" binds
+  None => panic "program has no 'main' binding"
+  Some mv => match lookupBinding "runAsync" binds
+    Some rf => apply rf (force mv)
+    None => panic "main : Async _ requires `runAsync` in scope — add `import async`"
+
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
 -- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
 -- 1-element module map [(rootId, prog)] through the multi-module eval path,

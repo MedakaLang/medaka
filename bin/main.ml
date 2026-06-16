@@ -1066,9 +1066,31 @@ cd into a member or specify a file\n"; exit 1
           eval_modules dict-passes the marked prelude + all modules internally
           (Phase 69.x) and threads the prelude through the global frame. *)
        (try
-         let top_env = Medaka_lib.Eval.eval_modules modules in
+         let (top_env, root_env) = Medaka_lib.Eval.eval_modules_ex modules in
          if not (List.mem_assoc "main" top_env) then begin
            Printf.eprintf "error: program has no 'main' binding\n"; exit 1
+         end;
+         (* Stage 2 (ASYNC-DESIGN §3 / D5): a `main : Async _` is a deferred
+            description — forcing its binding only builds the trampoline, it does
+            not perform the suspended effects.  Drive it through the stdlib
+            scheduler `runAsync` (the v1 runtime lives in stdlib, not the backend
+            — D6).  `main : Unit` / IO-shaped main is unchanged (its effects ran
+            when the binding was forced).  Detection is type-directed: main's
+            inferred head tycon is `Async`. *)
+         let main_is_async =
+           match List.assoc_opt "main" !final_schemes with
+           | Some (Medaka_lib.Typecheck.Forall (_, _, m)) ->
+             Medaka_lib.Typecheck.head_tycon_mono m = Some "Async"
+           | None -> false
+         in
+         if main_is_async then begin
+           match List.assoc_opt "runAsync" root_env with
+           | Some run_fn ->
+             ignore (Medaka_lib.Eval.apply run_fn (List.assoc "main" top_env))
+           | None ->
+             Printf.eprintf
+               "error: main : Async _ requires `runAsync` in scope — add `import async`\n";
+             exit 1
          end
        with Medaka_lib.Eval.Eval_error (msg, loc_opt) ->
          Printf.eprintf "%s: panic: %s\n" (pp_loc loc_opt) msg;

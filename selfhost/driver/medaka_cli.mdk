@@ -29,8 +29,8 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram, findProjectRoot}
-import types.typecheck.{elaborateModules, resetTypeErrorsSticky, hadTypeErrors}
-import eval.eval.{evalModulesOutput}
+import types.typecheck.{elaborateModules, resetTypeErrorsSticky, hadTypeErrors, mainTypeIsAsync}
+import eval.eval.{evalModulesOutput, evalModulesOutputAsync}
 import tools.test_cmd.{runTest}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
@@ -342,7 +342,7 @@ runRunCmd argv = match dropFlags argv
               True =>
                 let _ = ePutStrLn ("error: type error in " ++ target ++ " — run `medaka check` for details")
                 exit 1
-              False => putStr (evalModulesOutput (fst elaborated) (snd elaborated))
+              False => putStr (runProgramOutput (fst elaborated) (snd elaborated))
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
 -- per-module typecheck (checkModuleFullImpl), which pushes into the
@@ -352,6 +352,15 @@ runRunCmd argv = match dropFlags argv
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
+
+-- ASYNC-DESIGN Stage 2 (D5): route a `main : Async _` through the program's
+-- `runAsync` (perform its stored row) instead of forcing it to an inert Async
+-- value; a plain `main` keeps the ordinary force-for-effect path.  mainTypeIsAsync
+-- reads the scheme elaborateModules just stashed, so this must run post-elaborate.
+runProgramOutput : List Decl -> List (String, List Decl) -> <Mut> String
+runProgramOutput preludeDecls modules = match mainTypeIsAsync ()
+  True => evalModulesOutputAsync preludeDecls modules
+  False => evalModulesOutput preludeDecls modules
 
 -- ── test ──────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `test` arm + test_main.mdk: read <MEDAKA_ROOT>/stdlib/

@@ -1378,6 +1378,31 @@ currentLoc = Ref None
 occursCheckFailed : Ref Bool
 occursCheckFailed = Ref False
 
+-- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
+-- by elabModulesGo on the EVAL path so the native `run` driver can detect a
+-- `main : Async _` and route it through `runAsync` (perform its row) instead of
+-- forcing it to an inert Async value.  Last module wins (the entry is last in
+-- dependency order), matching bin/main.ml's `final_schemes` lookup.  `None` until
+-- a module binding `main` is elaborated; reset at the top of elaborateModules so a
+-- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
+mainSchemeRef : Ref (Option Scheme)
+mainSchemeRef = Ref None
+
+-- Head type-constructor of a (possibly applied) mono: walk the TApp left spine to
+-- the constructor.  `Async e Unit` → Some "Async".
+monoHeadCon : Mono -> <Mut> Option String
+monoHeadCon m = match normalize m
+  TCon n => Some n
+  TApp a _ => monoHeadCon a
+  _ => None
+
+-- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
+export
+mainTypeIsAsync : Unit -> <Mut> Bool
+mainTypeIsAsync _ = match mainSchemeRef.value
+  Some (Forall _ _ t) => monoHeadCon t == Some "Async"
+  None => False
+
 -- ── non-exhaustive-match warning accumulator (the type-aware `check_match`) ──
 -- `inferMatch` pushes a warning here for every `match` whose non-guarded arms
 -- don't cover the scrutinee's type.  `matchOracle` is the ctor oracle the matrix
@@ -7030,6 +7055,7 @@ elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (
 -- with argStampEnabled True, where impl inference was already ON — also unchanged.
 elaborateModules runtimeDecls coreDecls modules =
   let _ = set_ref implInferEnabled True
+  let _ = set_ref mainSchemeRef None
   let _ = set_ref crossModuleFunConstraintsRef []
   let _ = set_ref crossModuleMethodConstraintsRef []
   let allDecls = coreDecls ++ concatMapList snd modules
@@ -7419,6 +7445,9 @@ elabModulesGo _ _ _ _ [] = ()
 elabModulesGo baseSeed depEnv accData accAll ((mid, prog)::rest) =
   let seed = baseSeed ++ importSeed prog depEnv
   let schemes = elabModuleStamp seed accData (accAll ++ prog) prog
+  let _ = match lookupAssoc "main" schemes
+    Some s => set_ref mainSchemeRef (Some s)
+    None => ()
   let pubV = pickSchemes (publicValNames prog) schemes
   elabModulesGo
     baseSeed
