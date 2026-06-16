@@ -1345,12 +1345,18 @@ type env = {
        the single-file path (no imports to fall back to). *)
   impls         : impl_entry list ref;          (* all registered impls *)
   method_usages : (ident * ident * tyvar_info ref list * string option * (ident * mono list) list * Ast.resolved option ref option * Ast.loc option * ident option) list ref;  (* (method, iface, param_var_refs, impl_hint, method_dict_args, method_occurrence_ref, call_site_loc, enclosing_fn) — enclosing_fn (Phase 136) picks the right dict among merged mutual-recursion siblings sharing a constraint var id *)
-  numlit_refs   : (tyvar_info ref * float option ref * int) list ref;
+  numlit_refs   : (tyvar_info ref * float option ref * int * Ast.resolved option ref) list ref;
     (* PLAN.md #11: one entry per source integer literal (ENumLit).  [tyvar] is
        the literal's fresh Num-obligated type var; [fref] is the node's own float
-       cell; [n] the int value.  After defaulting + grounding, a post-HM pass
-       stamps [fref := Some (float n)] iff [tyvar] ground to Float, and Dict_pass
-       rewrites the node to ELit (LFloat f) / ELit (LInt n) accordingly. *)
+       cell; [n] the int value; [dref] is the node's `fromInt`-route cell (filled
+       by check_method_usages).  After defaulting + grounding, the post-HM pass
+       set_numlit_floats decides the literal's runtime rep:
+         - tyvar ground to Int   ⇒ fref None, dref cleared ⇒ ELit (LInt n)
+         - tyvar ground to Float ⇒ fref Some f, dref cleared ⇒ ELit (LFloat f)
+         - tyvar still polymorphic `Num a` (the soundness case, e.g. the `1` in
+           `inc x = x + 1`) ⇒ fref None, dref KEPT (its RDict route onto the
+           enclosing Num dict) ⇒ Dict_pass emits `EApp (EMethodRef (dref,
+           "fromInt"), ELit (LInt n))`. *)
   fun_constraints : (ident, (ident * int list) list) Hashtbl.t;
     (* fn_name → [(iface_name, [bound_var_ids_in_scheme])] *)
   inferred_constraints : (ident, (ident * int list) list) Hashtbl.t;
@@ -2067,13 +2073,28 @@ let rec infer env = function
      var + the node's float cell in numlit_refs for the later re-tag.  Recording
      here AND (when under `+`) in binop_type is harmless: both unify the same var
      and both demand `Num`, which is idempotent. *)
-  | ENumLit (n, fref) ->
+  | ENumLit (n, fref, dref) ->
+    (* Model the literal exactly as `fromInt n` for *typing + routing*: infer the
+       `fromInt` method occurrence (stashing [dref] as its method ref so
+       check_method_usages fills it with the resolved Num route), then apply it to
+       an Int argument.  This reuses the whole Phase-69 EMethodRef machinery: the
+       `Num` obligation, the per-call route resolution (RKey when the result
+       grounds to a concrete Num type, RDict onto the enclosing `Num a` dict when
+       the literal stays polymorphic — exactly the `fromInt 0` in core.mdk's
+       `sum`).  We unify the result var into numlit_refs so set_numlit_floats can
+       still re-tag a Float literal to a runtime float (the common, dict-free
+       fast path), and so the post-HM decision can tell concrete-Int / concrete-
+       Float / still-polymorphic apart. *)
+    let saved_mref = !current_method_ref in
+    current_method_ref := Some dref;
+    let from_int_ty = infer env (EVar "fromInt") in   (* Int -> a, records usage, will fill dref *)
+    current_method_ref := saved_mref;
     let a = fresh_var () in
     let r = match a with TVar r -> r | _ -> fail (InternalError "fresh_var did not yield a TVar") in
-    env.method_usages :=
-      ("add", "Num", [r], None, [], None, !current_loc, !current_fn) :: !(env.method_usages);
-    env.numlit_refs := (r, fref, n) :: !(env.numlit_refs);
+    unify from_int_ty (TFun (t_int, open_row (), a));
+    env.numlit_refs := (r, fref, n, dref) :: !(env.numlit_refs);
     a
+
 
   | EVar x ->
     if String.length x > 0 && x.[0] = '@' then
@@ -4667,10 +4688,24 @@ let primitive_head = function
    `eval_arith` rejects mixed int/float tags).  All other cases (Int, or an
    exotic user `Num` type) leave the cell None ⇒ stays `ELit (LInt n)`. *)
 let set_numlit_floats env =
-  List.iter (fun (r, fref, n) ->
+  List.iter (fun (r, fref, _n, dref) ->
     match normalize (TVar r) with
-    | TCon "Float" -> fref := Some (float_of_int n)
-    | _ -> ()
+    | TCon "Float" ->
+      (* concrete Float: re-tag to a runtime float constant; no fromInt needed. *)
+      fref := Some (float_of_int _n); dref := None
+    | TCon "Int" ->
+      (* concrete Int (incl. via ambiguous→Int defaulting): plain int literal,
+         clear the fromInt route so Dict_pass emits ELit (LInt n) directly. *)
+      fref := None; dref := None
+    | _ ->
+      (* The var did NOT ground to a primitive: either a still-polymorphic `Num a`
+         (the soundness case — `1` in `inc x = x + 1`) or an exotic user numeric
+         type.  In both, leave the dref's `fromInt` route in place so the literal
+         dispatches through the Num dictionary at runtime (Int→identity,
+         Float→intToFloat, user→its fromInt).  A genuinely-unresolved dref (route
+         never filled, e.g. an unreachable position) is treated as Int below by
+         Dict_pass's None-dref fallback. *)
+      fref := None
   ) !(env.numlit_refs)
 
 let check_binop_usages env =

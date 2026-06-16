@@ -21,7 +21,7 @@ let parse src =
      Int meaning), so normalize `ENumLit (n, _)` back to `ELit (LInt n)` — the
      `float option ref` is type-inference scratch, irrelevant to parse structure. *)
   let denumlit = function
-    | ENumLit (n, _) -> ELit (LInt n)
+    | ENumLit (n, _, _) -> ELit (LInt n)
     | e -> e
   in
   Ast.strip_locs_program prog
@@ -1933,7 +1933,7 @@ let test_bench_expr () =
 |} with
   (* PLAN.md #11: bench bodies aren't reached by the `denumlit` normalization in
      `parse` (map_decl doesn't recurse into DBench), so int lits stay ENumLit. *)
-  | DBench { bench_name = "add"; bench_body = EBinOp ("+", ENumLit (1, _), ENumLit (2, _), _); _ } -> ()
+  | DBench { bench_name = "add"; bench_body = EBinOp ("+", ENumLit (1, _, _), ENumLit (2, _, _), _); _ } -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
 let test_bench_export () =

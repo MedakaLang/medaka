@@ -90,7 +90,7 @@ let rec expr_to_pat = function
   | EVar x when is_ctor_name x -> PCon (x, [])  (* bare nullary constructor, e.g. `None` *)
   | EVar x       -> PVar x
   | ELit l       -> PLit l
-  | ENumLit (n, _) -> PLit (LInt n)   (* PLAN.md #11 §0.4: int patterns stay Int *)
+  | ENumLit (n, _, _) -> PLit (LInt n)   (* PLAN.md #11 §0.4: int patterns stay Int *)
   | ETuple es    -> PTuple (List.map expr_to_pat es)
   | EListLit es  -> PList  (List.map expr_to_pat es)
   | EBinOp ("::", a, b, _) -> PCons (expr_to_pat a, expr_to_pat b)
@@ -787,7 +787,7 @@ section_op_bare:
   | MINUS      { "-" }
 
 expr_atom:
-  | INT                                              { ELoc (of_pos $startpos $endpos, ENumLit ($1, ref None)) }
+  | INT                                              { ELoc (of_pos $startpos $endpos, ENumLit ($1, ref None, ref None)) }
   | nonint_lit                                       { ELoc (of_pos $startpos $endpos, ELit $1) }
   | IDENT                                            { ELoc (of_pos $startpos $endpos, EVar $1) }
   | UPPER                                            { ELoc (of_pos $startpos $endpos, EVar $1) }

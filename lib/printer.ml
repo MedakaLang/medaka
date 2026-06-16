@@ -347,7 +347,7 @@ let rec print_expr min_prec e =
 
 and print_expr_raw = function
   | ELit l -> print_lit l
-  | ENumLit (n, _) -> text (string_of_int n)
+  | ENumLit (n, _, _) -> text (string_of_int n)
   | EVar n -> text n
   | EMethodRef (_, n) -> text n
   | EDictApp (_, n) -> text n  (* marker-installed; transparent like EMethodRef *)

@@ -75,7 +75,7 @@ let rec sexp_expr e =
   (* PLAN.md #11: render an `ENumLit` exactly as `(ELit (LInt n))` so the
      OCaml astdump stays byte-identical to the selfhost sexp (which has no
      ENumLit node) and the parse-fixture diff gate keeps passing. *)
-  | ENumLit (n, _)     -> node "ELit" [node "LInt" [string_of_int n]]
+  | ENumLit (n, _, _)  -> node "ELit" [node "LInt" [string_of_int n]]
   | EVar x             -> node "EVar" [esc_str x]
   | EApp (f, x)        -> node "EApp" [sexp_expr f; sexp_expr x]
   | ELam (ps, b)       -> node "ELam" [slist (List.map sexp_pat ps); sexp_expr b]
