@@ -29,5 +29,18 @@ runAsync m = match m
 liftIO : (Unit -> <e> a) -> Async e a
 liftIO act = Suspend (u => Done (act u))
 
+-- regression guard (native-only bug, fixed): a KRow param `e` that appears
+-- ONLY as a type-app argument (no `<e>` tail anywhere in the signature) must
+-- still resolve to the shared row effvar.  `instantiateSigTracked`'s Pass-A
+-- pre-unify etbl seeded from `effTailNames` ALONE collapsed `e` to the pure
+-- closed row, so `yld` inferred `Async <> Unit` and an effectful continuation
+-- threaded after it spuriously "leaked" <IO>.  Fix: seed `rowArgNames` too.
+yld : Async e Unit
+yld = Suspend (_ => Done ())
+
+seqIO : Async e a -> (a -> Async e b) -> Async e b
+seqIO (Done a) k = k a
+seqIO (Suspend t) k = Suspend (u => seqIO (t u) k)
+
 main : <IO> Unit
-main = println "effect param ok"
+main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))

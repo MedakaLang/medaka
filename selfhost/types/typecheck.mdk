@@ -6119,8 +6119,8 @@ preunifySig sigs m v = match lookupAssoc m sigs
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
 instantiateSigTracked : Ty -> <Mut> (Mono, List (String, Mono))
 instantiateSigTracked ty =
-  let tvs = freshTvMap (dedup (tyVarNames ty))
-  let etbl = freshEffMap (dedup (effTailNames ty))
+  let tvs = freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
   (fromAstTypeE etbl tvs ty, tvs)
 
 -- the (iface, tyvarName) pairs of a signature's `=>` constraints (each constraint

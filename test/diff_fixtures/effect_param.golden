@@ -132,6 +132,76 @@ IDENT "u"
 RPAREN
 RPAREN
 NEWLINE
+NEWLINE
+NEWLINE
+NEWLINE
+NEWLINE
+NEWLINE
+NEWLINE
+IDENT "yld"
+COLON
+UPPER "Async"
+IDENT "e"
+UPPER "Unit"
+NEWLINE
+IDENT "yld"
+EQUAL
+UPPER "Suspend"
+LPAREN
+UNDERSCORE
+FAT_ARROW
+UPPER "Done"
+LPAREN
+RPAREN
+RPAREN
+NEWLINE
+IDENT "seqIO"
+COLON
+UPPER "Async"
+IDENT "e"
+IDENT "a"
+ARROW
+LPAREN
+IDENT "a"
+ARROW
+UPPER "Async"
+IDENT "e"
+IDENT "b"
+RPAREN
+ARROW
+UPPER "Async"
+IDENT "e"
+IDENT "b"
+NEWLINE
+IDENT "seqIO"
+LPAREN
+UPPER "Done"
+IDENT "a"
+RPAREN
+IDENT "k"
+EQUAL
+IDENT "k"
+IDENT "a"
+NEWLINE
+IDENT "seqIO"
+LPAREN
+UPPER "Suspend"
+IDENT "t"
+RPAREN
+IDENT "k"
+EQUAL
+UPPER "Suspend"
+LPAREN
+IDENT "u"
+FAT_ARROW
+IDENT "seqIO"
+LPAREN
+IDENT "t"
+IDENT "u"
+RPAREN
+IDENT "k"
+RPAREN
+NEWLINE
 IDENT "main"
 COLON
 LT
@@ -141,8 +211,22 @@ UPPER "Unit"
 NEWLINE
 IDENT "main"
 EQUAL
+IDENT "runAsync"
+LPAREN
+IDENT "seqIO"
+IDENT "yld"
+LPAREN
+UNDERSCORE
+FAT_ARROW
+IDENT "liftIO"
+LPAREN
+IDENT "u"
+FAT_ARROW
 IDENT "println"
 STRING "effect param ok"
+RPAREN
+RPAREN
+RPAREN
 NEWLINE
 NEWLINE
 EOF
@@ -160,8 +244,13 @@ runAsync m = match m
   Suspend t => runAsync (t ())
 liftIO : (Unit -> <e> a) -> Async e a
 liftIO act = Suspend (u => Done (act u))
+yld : Async e Unit
+yld = Suspend (_ => Done ())
+seqIO : Async e a -> (a -> Async e b) -> Async e b
+seqIO (Done a) k = k a
+seqIO (Suspend t) k = Suspend (u => seqIO (t u) k)
 main : <IO> Unit
-main = println "effect param ok"
+main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
 === TYPES ===
 abs : a -> a
 add : a -> a -> a
@@ -242,6 +331,7 @@ println : a -> <IO> Unit
 product : a b -> b
 pure : a -> b a
 runAsync : Async a b -> b
+seqIO : Async a b -> (b -> Async a c) -> Async a c
 shrink : a -> List a
 signum : a -> a
 snd : (a, b) -> b
@@ -254,5 +344,6 @@ to_rep : a -> Rep
 unless : Bool -> a Unit -> a Unit
 when : Bool -> a Unit -> a Unit
 xor : Bool -> Bool -> Bool
+yld : Async <IO | a> Unit
 === EVAL ===
 effect param ok
