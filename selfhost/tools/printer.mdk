@@ -944,12 +944,24 @@ visPrefix VisPublic = text "public export "
 visPrefix VisAbstract = text "export "
 visPrefix VisPrivate = Nil
 
--- `data` body: `= V1` then `| Vn` per remaining variant, one group with the head.
+-- `data` body.  Flat: `= V1 | V2 | …`.  Broken (new multiline form): a
+-- line-final `=` on the header line, then one `| Vn` per variant (the FIRST
+-- variant also gets a leading `|`):
+--   data Foo =
+--     | Bar
+--     | Baz
+-- FlatAlt picks the per-variant separator by group mode (broken → `Line "| "`,
+-- flat → `" "` for the first / `" | "` for the rest).  The `=` stays on the
+-- header line (outside `nest`); the variants `nest` by 2.
 dataVariantDocs : List Variant -> Doc
 dataVariantDocs [] = Nil
 dataVariantDocs (v::vs) =
-  nest
-    (Cat (Cat Line (Cat (text "= ") (printVariant v))) (concatD (map (v2 => Cat Line (Cat (text "| ") (printVariant v2))) vs)))
+  Cat
+    (text " =")
+    (nest
+      (Cat
+        (Cat (FlatAlt (Cat Line (text "| ")) (text " ")) (printVariant v))
+        (concatD (map (v2 => Cat (FlatAlt (Cat Line (text "| ")) (text " | ")) (printVariant v2)) vs))))
 
 -- Render a `data` declaration with interior comments interleaved before the
 -- variants they document.  Mirror of lib/printer.ml's `print_data_decl_commented`.
@@ -974,8 +986,10 @@ dataVariantDocsCommented : List Variant -> List (List String) -> Doc
 dataVariantDocsCommented [] _ = Nil
 dataVariantDocsCommented _ [] = Nil
 dataVariantDocsCommented (v::vs) (vc::vcs) =
-  nest
-    (Cat (Cat (commentLinesDoc vc) (Cat Hardline (Cat (text "= ") (printVariant v)))) (concatD (map2VariantComment vs vcs)))
+  Cat
+    (text " =")
+    (nest
+      (Cat (Cat (commentLinesDoc vc) (Cat Hardline (Cat (text "| ") (printVariant v)))) (concatD (map2VariantComment vs vcs))))
 
 -- Mirror of List.map2 (fun v vc -> comment_lines vc ^^ Hardline ^^ "| " ^^ variant).
 map2VariantComment : List Variant -> List (List String) -> List Doc
