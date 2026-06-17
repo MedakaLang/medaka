@@ -7,25 +7,32 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
-## ⚠️ FIRST — reconcile concurrent multi-session state (verify before trusting this doc)
-This session ran alongside at least one other. `git worktree list` showed several live worktrees
-+ a concurrent branch. Resolve the state BEFORE starting:
-- **`main` branch tip = `7284d20`** — holds THIS session's work (#11 complete + QoL 148/150), fully gated.
-- **UNMERGED concurrent branch `fix/unit-main-autoprint-fmt-numlit` = `d0a99a9`** — built directly ON
-  `7284d20` (main + exactly one commit), checked out in the primary checkout `/Users/val/medaka`. It
-  fixes a **6th #11 follow-up gap**: the native printer (`printer.mdk`) lacked an `ENumLit` arm (it
-  alone sees the pre-desugar node) → `fmt` SIGTRAP on int literals; PLUS suppresses **Unit-`main`
-  auto-print** (the old trailing `0`/`()` was the CLI's own Unit main — this RETIRES the "compare
-  `head -1`, run/build print trailing 0" workaround) and re-captured **187 build goldens**. Memory:
-  `project_unit_main_no_autoprint`, `project_head_stale_goldens_fmt_regression`. **ACTION:** confirm
-  that session is no longer active, then verify `d0a99a9`'s gates (fixpoint C3a/C3b + the 187-golden
-  build gate) and FF-merge it to `main` (it's a clean FF). Do NOT merge if that session is still live.
-- **STALE MEMORY to ignore:** `project_head_stale_goldens_fmt_regression` says "STILL OPEN:
-  diff_selfhost_typecheck(2)+errors(2) … native under-defaults ambiguous Num `fa`→`a` vs OCaml `Int`."
-  That was written before this session's **gap 5** fix (`18176ea`) — it is **CLOSED**; both gates are
-  0-failing on `main`/`d0a99a9`. Don't re-investigate it.
+## Multi-session state — RECONCILED (concurrent `d0a99a9` now merged)
+This session ran alongside at least one other (several agent worktrees + a concurrent branch existed).
+As of this handoff the state is reconciled and on `main`:
+- **`main` branch tip = `76177ca`** — holds THIS session's #11 arc + QoL 148/150, the concurrent
+  `d0a99a9` work, its completion fix, and a fresh seed. **Fully gated, all diff gates 0-failing,
+  fixpoint C3a/C3b YES, `bootstrap_from_seed` C3a PASS.**
+- **Concurrent `d0a99a9` (Unit-`main` no-autoprint + native printer `ENumLit` arm/fmt SIGTRAP) — MERGED**
+  (`62e8f80`). It landed INCOMPLETE (suppressed Unit-main in native-emit only → 5 `diff_selfhost_llvm`
+  interp-vs-golden failures); **completed in `7540a7e`** by suppressing the Unit-`main` auto-print in
+  `dev/eval_probe.ml` too + recapturing the 5 stale `.eval.golden`. **Now native, interp, and CLI all
+  agree: a Unit `main` prints nothing; value `main`s print their result.** This RETIRES the old
+  "run/build print a trailing `0`, compare `head -1`" workaround — Unit mains are clean now. Memory:
+  `project_unit_main_no_autoprint`. **GOTCHA for whoever merges another concurrent branch:** that
+  Unit-main change touched the emitter graph (`llvm_emit.mdk` `mainIsUnit`) — re-mint the seed after
+  (done here). And a "native-emit-only" output change will silently fail `diff_selfhost_llvm` (golden
+  from `dev/eval_probe`) unless the OCaml probe is aligned too — always run the FULL diff battery, not
+  just the build gate, after an output-semantics change.
+- **`project_head_stale_goldens_fmt_regression` memory is now mostly stale** — its "STILL OPEN" Num
+  defaulting + `default_body` wording are CLOSED (`18176ea`); its fmt/Unit-main items are merged. Trust
+  this HANDOFF + `project_numpoly_literals_done` over it.
+- **Worktree hygiene:** several worktrees were live (`agent-af09870d`, `fluttering-jumping-platypus`,
+  `keen-stirring-lecun`, `rosy-marinating-backus`@`aeeed21`-stale, plus this session's
+  `lively-herding-gizmo`). Audit `git worktree list`; prune the ones whose branches are merged into
+  `main` (preserve any with unmerged commits + any still-running agent's).
 
-## RESUME — #11 Num-polymorphic integer literals COMPLETE (run + build, both compilers, full parity). `main` = 7284d20
+## RESUME — #11 Num-polymorphic integer literals COMPLETE (run + build, both compilers, full parity; + concurrent d0a99a9 merged). `main` = 76177ca
 **#11 SHIPPED end-to-end (2026-06-16), native == OCaml oracle on every front, all diff gates 0-failing,
 fixpoint C3a/C3b YES, seed re-minted (`bootstrap_from_seed` C3a PASS).** Expression-position integer
 literals are `Num a`-polymorphic in both compilers. Design+locked decisions: `NUMLIT-DESIGN.md` (§0).
@@ -54,7 +61,8 @@ differential oracle earned its keep. Each was found by verifying the feature's F
    no-prelude HM driver wasn't recording the literal's `Num` obligation at all (so nothing to default);
    recorded it unconditionally + suppressed the no-prelude reject for a grounded `Num Int`; + specialized
    default-method-body error. `4fc5f47`/`18176ea`.
-6. **fmt printer ENumLit gap** — found+fixed by the CONCURRENT session (see d0a99a9 above), unmerged.
+6. **fmt printer ENumLit gap** — found+fixed by the CONCURRENT session (`d0a99a9`, now MERGED) +
+   its Unit-main completion `7540a7e`. See the reconciliation section at top.
 
 **QoL diagnostics (this session, on `main`):** Phase 148 (non-contiguous top-level binding clauses →
 `DuplicateBinding` error, `7d755a9`) + Phase 150 (`do` on a non-monad → tailored monad message via an
@@ -108,7 +116,7 @@ Then the manifest/platform layer (the earlier `CAPABILITY-EFFECTS-RESEARCH.md` d
 
 **Prior (superseded) NEXT note — manifest-format design — is deferred until the v2 language features land.**
 
-## Where things stand (`main` branch = 7284d20; concurrent `d0a99a9` unmerged — see top; nothing pushed)
+## Where things stand (`main` branch = 76177ca; concurrent d0a99a9 MERGED — see top; nothing pushed)
 The big multi-session arc is essentially done. Verify current state, don't trust this verbatim:
 - `cd /Users/val/medaka && git log --oneline -20 main` (the recent landings) AND `git worktree list`
   (check for the concurrent `fix/unit-main-autoprint-fmt-numlit` branch + agent worktrees still live).
@@ -195,7 +203,7 @@ removal gate.**
 - **Seed:** emitter-graph changes leave the gz seed (`selfhost/seed/emitter.ll.gz`) stale; agents
   do NOT re-mint (they rely on the fixpoint). The ORCHESTRATOR re-mints
   (`CHECK_OCAML=0 bash test/refresh_seed.sh` → verify `bootstrap_from_seed.sh`) only at real
-  checkpoints. Currently FRESH (re-minted at `7284d20`, this session's #11-complete checkpoint;
+  checkpoints. Currently FRESH (re-minted at `76177ca`, after merging d0a99a9 emitter change;
   `bootstrap_from_seed` C3a PASS byte-for-byte). NOTE: the concurrent `d0a99a9` is emit/printer work
   — if you merge it, re-check whether its changes touched the emitter graph and re-mint if so.
 - Build in the worktree with `dune build --root .`; never `dune test` (hangs); opam env is pre-set

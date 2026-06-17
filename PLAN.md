@@ -31,24 +31,18 @@ dicts — the GENUINE #21 nested-element-dict flattening solved, not contained;
 Set-literal / mutual-rec-Monoid dict gaps** are fixed. **Remaining = the soak itself:**
 a clean bug-free stretch of native-only dev, then the confidence-gated `lib/` removal.
 
-**Open soak findings (2026-06-16 — surfaced fixing the Unit-`main` auto-print + fmt
-regressions; pick up next):**
-- **Native under-defaults ambiguous `Num` bindings** (`diff_selfhost_typecheck`:
-  `index_default`, `poly_let`). `fa = [10, 20, 30].[1]` infers `fa : a` natively but
-  `fa : Int` on the OCaml oracle (confirmed against a freshly-rebuilt dev probe — a
-  live divergence, NOT a stale golden). Design intent is "ground ambiguous `Num` → Int",
-  so native is the likely culprit — a defaulting residual in array-index / `let`-bound
-  positions (cf. the #11 "value-level defaulting" item). Do **not** recapture the goldens;
-  fix the native defaulting, then they go green.
-- **Native type-error wording diverges** (`diff_selfhost_typecheck_errors`:
-  `default_body_type_error`). Native reports `Type mismatch: Int vs Bool`; the oracle
-  reports `Method 'greetDefault': expected type Int but got Bool` (method-context-aware).
-  Native loses the method context — tighten the native diagnostic to match, or accept and
-  recapture once the wording is settled.
-- Both are genuine native/OCaml behavioral divergences (soak material), distinct from the
-  stale/missing Num-poly goldens that WERE recaptured this session (bootstrap_lex/parse/
-  desugar/mark/typecheck, diff_native_cli). The native printer's missing `ENumLit` arm
-  (fmt SIGTRAP on every int literal) was also fixed.
+**Soak findings from the Unit-`main` auto-print + fmt work (2026-06-16/17) — ALL CLOSED:**
+- **Native under-defaulted ambiguous `Num` bindings** (`fa = [10,20,30].[1]` → native `fa : a` vs
+  oracle `fa : Int`; `poly_let`/`index_default`) — ✅ CLOSED by the #11 value-level-defaulting fix
+  (`4fc5f47`/`18176ea`): the no-prelude HM driver wasn't recording the literal's `Num` obligation, so
+  nothing to default; now recorded unconditionally. `diff_selfhost_typecheck` 12/0.
+- **Native type-error wording** (`default_body_type_error`: native `Type mismatch: Int vs Bool` vs
+  oracle `Method 'greetDefault': expected type Int but got Bool`) — ✅ CLOSED (`18176ea`): specialized
+  default-method-body error. `diff_selfhost_typecheck_errors` 35/0.
+- **Native printer missing `ENumLit` arm** (fmt SIGTRAP on int literals) + **Unit-`main` auto-print
+  suppression** — ✅ CLOSED in `d0a99a9` (merged); the interp-side `dev/eval_probe` lag (5
+  `diff_selfhost_llvm` failures) closed in `7540a7e`. `diff_selfhost_llvm` 180/0. Native, interp,
+  and CLI now all consistent: a Unit `main` prints nothing; value `main`s print their result.
 
 **🏁 Medaka is a native self-hosting compiler.** The compiler is written in
 Medaka (`selfhost/`), and the native **LLVM backend now compiles it**: all seven
