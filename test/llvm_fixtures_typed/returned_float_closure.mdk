@@ -1,0 +1,11 @@
+-- A function RETURNING a float-returning closure, then arith over its call results.
+-- `let f = mkAdd 100.0; f 1.0 + f 2.0` did INTEGER arith on the boxed-float call
+-- results -> garbage (the call-result reg wasn't the lambda's alloc reg, so the
+-- closure-return-type table missed it).  collectFloatClosureFns marks mkAdd, and a
+-- saturated call records its result word as a float-returning closure.
+mkAdd : Float -> (Float -> Float)
+mkAdd base = (x => x + base)
+
+main =
+  let f = mkAdd 100.0
+  f 1.0 + f 2.0

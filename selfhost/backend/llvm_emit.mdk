@@ -2656,12 +2656,9 @@ emitApp e env app =
             let fname2 = canonFnName e fname
             if isKnownFn e fname2 && hasArgs args then
               let argOps = emitArgs e env args
-              emitKnownFnSat
-                e
-                ("mdk_" ++ fname2)
-                argOps
-                (fnArity e fname2)
-                (fnRetTy e fname2)
+              let res = emitKnownFnSat e ("mdk_" ++ fname2) argOps (fnArity e fname2) (fnRetTy e fname2)
+              let _ = recordFloatClosureResult e fname2 (lengthS argOps) (fnArity e fname2) res
+              res
             else
               if isImplMethod e fname && hasArgs args then
                 let argOps = emitArgs e env args
@@ -6426,6 +6423,43 @@ collectFloatFw e (CBind name (CClause pats body :: []) :: rest) =
   else collectFloatFw e rest
 collectFloatFw e (_ :: rest) = collectFloatFw e rest
 
+-- module set of top-level fns that RETURN a float-returning closure (their single
+-- clause body is a CLam whose body evidently returns Float, e.g.
+-- `mkAdd base = (x => x + base)`).  A SATURATED call to such a fn yields a closure
+-- whose own saturated call returns Float — so `recordFloatClosureResult` records the
+-- call-result word in closureRetTyRef, letting indirectRetTy type `f 1.0` LTFloat
+-- for `let f = mkAdd 100.0`.  Closes the returned-from-fn case of the closure-call-
+-- result float-arith bug (the direct `let f = (x=>…)` case is handled at emitLam).
+floatClosureFnsRef : Ref (List String)
+floatClosureFnsRef = Ref []
+
+collectFloatClosureFns : Emit -> List CBind -> <Mut> List String
+collectFloatClosureFns _ [] = []
+collectFloatClosureFns e (CBind name (CClause pats body :: []) :: rest) =
+  if isFloatClosureBody e name pats body then
+    name :: collectFloatClosureFns e rest
+  else collectFloatClosureFns e rest
+collectFloatClosureFns e (_ :: rest) = collectFloatClosureFns e rest
+
+isFloatClosureBody : Emit -> String -> List Pat -> CExpr -> <Mut> Bool
+isFloatClosureBody e name pats body = match body
+  CLam _ lamBody =>
+    let ptys = match lookupAssoc name (sigTable e)
+      Some (FnSig ts _) => ts
+      None => allInt pats
+    bodyFloatRet (paramEnv pats ptys 0) lamBody
+  _ => False
+
+-- after a SATURATED known-fn call whose callee returns a float-returning closure,
+-- record the result word as a float-returning closure (closureRetTyRef) so a later
+-- indirect call of it types its result LTFloat.
+recordFloatClosureResult : Emit -> String -> Int -> Int -> (String, LTy) -> <Mut> Unit
+recordFloatClosureResult e fname argc arity (reg, _) =
+  if argc == arity && contains fname floatClosureFnsRef.value then
+    set_ref closureRetTyRef ((reg, LTFloat) :: closureRetTyRef.value)
+  else
+    ()
+
 -- param decls with `double` at the float positions, `i64` elsewhere.
 paramDeclsD : List Pat -> List Int -> Int -> String
 paramDeclsD [] _ _ = ""
@@ -8008,6 +8042,7 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = installCtorMap ctorArs
   let _ = installSigMap (sigTable e)
   let _ = set_ref floatFwSetRef (collectFloatFw e (fnBinds groups))
+  let _ = set_ref floatClosureFnsRef (collectFloatClosureFns e (fnBinds groups))
   let _ = resetEmittedDefaults ()
   let _ = emitPreamble e
   let _ = emitGlobalDecls e (valBinds groups)
@@ -8151,6 +8186,7 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = installCtorMap ctorArs
   let _ = installSigMap (sigTable e)
   let _ = set_ref floatFwSetRef (collectFloatFw e (fnBinds groups))
+  let _ = set_ref floatClosureFnsRef (collectFloatClosureFns e (fnBinds groups))
   let _ = resetGaps ()
   let _ = enableGapRecord ()
   let _ = emitPreamble e
