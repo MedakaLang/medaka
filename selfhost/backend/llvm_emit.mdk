@@ -6047,11 +6047,168 @@ implParamEnvTyped n [] i =
     implParamEnvTyped n [] (i + 1)
 
 -- emit one variable-pattern function clause (the slice-2 path).
+-- ── worker-wrapper float-param unboxing (perf/float-param-unbox) ─────────────
+-- A self-recursive float-accumulator fn (`f acc n | n==0 = acc | otherwise =
+-- f (acc + e) (n-1)`) boxes `acc` at every self-call (i64 ABI) then unboxes it
+-- next iteration; clang TCO-loops the self-call, so the box is the only cost.
+-- Emit a WORKER `@mdk_<name>__fw(double acc, …)` that carries float params as
+-- native `double` (self-calls musttail back into it with unboxed args → NO box per
+-- iteration) + a WRAPPER `@mdk_<name>(i64 …)` (the original ABI) that unboxes float
+-- params, calls the worker, boxes the result. External callers + eta/dispatch see
+-- the unchanged wrapper. Scope: single-clause, all-PVar, non-dict, ≥1 Float param,
+-- Float return, body is CIf/value only (every leaf is a full-arity tail self-call
+-- OR a self-free value). A `match`-bodied fn (CDecision) falls back to normal
+-- codegen (safe; the CDecision-double extension is future work).
+floatPositions : List LTy -> Int -> List Int
+floatPositions [] _ = []
+floatPositions (LTFloat::rest) i = i :: floatPositions rest (i + 1)
+floatPositions (_::rest) i = floatPositions rest (i + 1)
+
+elemInt : Int -> List Int -> Bool
+elemInt _ [] = False
+elemInt n (x::rest) = if n == x then True else elemInt n rest
+
+hasFloatPty : List LTy -> Bool
+hasFloatPty [] = False
+hasFloatPty (LTFloat::_) = True
+hasFloatPty (_::rest) = hasFloatPty rest
+
+-- `self` does not occur free in `ex` (so the leaf is an ordinary value, safe to
+-- compute via the wrapper-ABI path).
+selfFreeW : String -> CExpr -> Bool
+selfFreeW self ex = not (contains self (freeVars [] ex))
+
+-- every leaf of the body is either a full-arity tail self-call or a self-free value;
+-- descends CIf only. Any self occurrence outside a tail self-call ⇒ ineligible.
+floatWorkerOk : String -> Int -> CExpr -> Bool
+floatWorkerOk self arity (CIf c t f) =
+  selfFreeW self c && floatWorkerOk self arity t && floatWorkerOk self arity f
+floatWorkerOk self arity ex = match flattenApp ex []
+  (CVar f _, args) => if f == self then lengthS args == arity else selfFreeW self ex
+  _ => selfFreeW self ex
+
+floatWorkerEligible : Emit -> String -> List Pat -> List LTy -> CExpr -> <Mut> Bool
+floatWorkerEligible e name pats ptys body =
+  let rty = match lookupAssoc name (sigTable e)
+    Some (FnSig _ r) => r
+    None => LTInt
+  let isFloatRet = match rty
+    LTFloat => True
+    _ => False
+  allPVar pats && leadingDictPats pats == 0 && hasFloatPty ptys && isFloatRet
+    && contains name (freeVars [] body) && floatWorkerOk name (lengthS pats) body
+
+-- param decls with `double` at the float positions, `i64` elsewhere.
+paramDeclsD : List Pat -> List Int -> Int -> String
+paramDeclsD [] _ _ = ""
+paramDeclsD ((PVar _)::rest) fp i =
+  let ty = if elemInt i fp then "double" else "i64"
+  let sep = match rest
+    [] => ""
+    _ => ", "
+  ty ++ " %arg" ++ intToString i ++ sep ++ paramDeclsD rest fp (i + 1)
+paramDeclsD _ _ _ = panic "llvm: float-worker params must be plain variables"
+
+-- env for the worker: float params are unboxed doubles (LTFloatU → %argN holds a
+-- double); other params keep their LTy.
+paramEnvD : List Pat -> List LTy -> List Int -> Int -> List (String, (String, LTy))
+paramEnvD [] _ _ _ = []
+paramEnvD ((PVar x)::rest) (ty::tys) fp i =
+  let lty = if elemInt i fp then LTFloatU else ty
+  (x, ("%arg" ++ intToString i, lty)) :: paramEnvD rest tys fp (i + 1)
+paramEnvD ((PVar x)::rest) [] fp i =
+  (x, ("%arg" ++ intToString i, LTInt)) :: paramEnvD rest [] fp (i + 1)
+paramEnvD _ _ _ _ = panic "llvm: float-worker params must be plain variables"
+
+-- a self-call's argument operands: `double <d>` at float positions, `i64 <w>` else,
+-- emitted left-to-right.
+emitWorkerArgs : Emit -> List (String, (String, LTy)) -> List Int -> Int -> List CExpr -> <Mut> String
+emitWorkerArgs _ _ _ _ [] = ""
+emitWorkerArgs e env fp i (a::rest) =
+  let op = match elemInt i fp
+    True => "double " ++ emitFloatD e env a
+    False =>
+      let (w, _) = emitExpr e env a
+      "i64 " ++ w
+  let sep = match rest
+    [] => ""
+    _ => ", "
+  op ++ sep ++ emitWorkerArgs e env fp (i + 1) rest
+
+-- the worker body in tail position: CIf recurses; a full-arity tail self-call
+-- musttails into the worker (NO box); any other (self-free) value rets a double.
+emitFnBodyD : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> CExpr -> <Mut> Unit
+emitFnBodyD e env self worker fp arity (CIf c t f) =
+  let (cv, _) = emitExpr e env c
+  let ci = untagInt e cv
+  let cb = freshReg e
+  let _ = emit e ("  " ++ cb ++ " = icmp ne i64 " ++ ci ++ ", 0")
+  let n = intToString (freshId e)
+  let thenL = "then" ++ n
+  let elseL = "else" ++ n
+  let _ = emit e ("  br i1 " ++ cb ++ ", label %" ++ thenL ++ ", label %" ++ elseL)
+  let _ = emit e (thenL ++ ":")
+  let _ = emitFnBodyD e env self worker fp arity t
+  let _ = emit e (elseL ++ ":")
+  emitFnBodyD e env self worker fp arity f
+emitFnBodyD e env self worker fp arity other =
+  emitTailLeafD e env self worker fp arity other (flattenApp other [])
+
+emitTailLeafD : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> CExpr -> (CExpr, List CExpr) -> <Mut> Unit
+emitTailLeafD e env self worker fp arity _ (CVar f0 _, args)
+  | f0 == self && lengthS args == arity =
+    let ops = emitWorkerArgs e env fp 0 args
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = musttail call double @mdk_" ++ worker ++ "(" ++ ops ++ ")")
+    emit e ("  ret double " ++ r)
+emitTailLeafD e env _ _ _ _ other _ =
+  let d = emitFloatD e env other
+  emit e ("  ret double " ++ d)
+
+-- the wrapper's call args: `double <unbox %argN>` at float positions, `i64 %argN` else.
+wrapperCallArgs : Emit -> List Int -> Int -> List Pat -> <Mut> String
+wrapperCallArgs _ _ _ [] = ""
+wrapperCallArgs e fp i (_::rest) =
+  let op = match elemInt i fp
+    True => "double " ++ unboxFloat e ("%arg" ++ intToString i)
+    False => "i64 %arg" ++ intToString i
+  let sep = match rest
+    [] => ""
+    _ => ", "
+  op ++ sep ++ wrapperCallArgs e fp (i + 1) rest
+
+emitFloatWorkerFn : Emit -> String -> List Pat -> List LTy -> CExpr -> <Mut> Unit
+emitFloatWorkerFn e name pats ptys body =
+  let fp = floatPositions ptys 0
+  let arity = lengthS pats
+  let worker = name ++ "__fw"
+  -- worker: float params as doubles, body emitted double-returning
+  let wenv = paramEnvD pats ptys fp 0
+  let _ = emit e ("define double @mdk_" ++ worker ++ "(" ++ paramDeclsD pats fp 0 ++ ") {")
+  let _ = emit e "entry:"
+  let _ = emitFnBodyD e wenv name worker fp arity body
+  let _ = emit e "}"
+  let _ = emit e ""
+  -- wrapper: original i64 ABI; unbox float params, call worker, box the result
+  let _ = emit e ("define i64 @mdk_" ++ name ++ "(" ++ paramDecls pats 0 ++ ") {")
+  let _ = emit e "entry:"
+  let callArgs = wrapperCallArgs e fp 0 pats
+  let r = freshReg e
+  let _ = emit e ("  " ++ r ++ " = call double @mdk_" ++ worker ++ "(" ++ callArgs ++ ")")
+  let b = boxFloat e r
+  let _ = emit e ("  ret i64 " ++ b)
+  let _ = emit e "}"
+  emit e ""
+
 emitFnClause : Emit -> String -> List Pat -> CExpr -> <Mut> Unit
 emitFnClause e name pats body =
   let ptys = match lookupAssoc name (sigTable e)
     Some (FnSig ts _) => ts
     None => allInt pats
+  if floatWorkerEligible e name pats ptys body then emitFloatWorkerFn e name pats ptys body else emitFnClauseW e name pats ptys body
+
+emitFnClauseW : Emit -> String -> List Pat -> List LTy -> CExpr -> <Mut> Unit
+emitFnClauseW e name pats ptys body =
   let env = paramEnv pats ptys 0
   let _ = emit e ("define i64 @mdk_" ++ name ++ "(" ++ paramDecls pats 0 ++ ") {")
   let _ = emit e "entry:"

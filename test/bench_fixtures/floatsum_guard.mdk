@@ -1,0 +1,9 @@
+-- Guard-style float accumulator (guards desugar to CIf → worker-wrapper eligible).
+-- The accumulator stays an unboxed double across the loop: NO box per iteration.
+sumFg : Float -> Int -> Float
+sumFg acc n
+  | n == 0 = acc
+  | otherwise = sumFg (acc + 1.5) (n - 1)
+
+main : <IO> Unit
+main = putStrLn (floatToString (sumFg 0.0 50000000))

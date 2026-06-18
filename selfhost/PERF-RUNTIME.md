@@ -54,8 +54,8 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 
 1. **Float-expression fusion** — ✅ DONE (Win 1). mandel 6×.
 2. **Let-bound float unboxing** — ✅ DONE (Win 2). mandel_let 2.3×.
-3. **Worker-wrapper float-param unboxing** — remaining; floatsum-class. See
-   "Remaining levers — concrete designs (A)".
+3. **Worker-wrapper float-param unboxing** — ✅ DONE (Win 4, CIf/guard bodies).
+   floatsum_guard 4×. `match`-body extension remains (design A).
 4. **Monomorphization** (user-suggested) — remaining; the meta-lever. Design (C).
 5. **Separate compilation** (user-suggested caching) — remaining; build latency. Design (D).
 6. **arith-on-type-lost-floats fix** — remaining; correctness. Design (B).
@@ -135,6 +135,36 @@ arith escape stress, and clean-stress all == interpreter oracle.
 ## Dead-ends
 
 (none yet)
+
+### Win 4 — worker-wrapper float-param unboxing (2026-06-18, `perf/float-param-unbox`)
+
+floatsum's accumulator is a *param* boxed at each self-call (i64 ABI) then unboxed
+next iteration; clang TCO-loops the call, so the box was the only cost. Emit a
+WORKER `@mdk_<name>__fw(double acc, …)` carrying float params as native `double`
+(self-calls `musttail` back into it with unboxed args → NO box per iteration) + a
+WRAPPER `@mdk_<name>(i64 …)` (original ABI) that unboxes float params, calls the
+worker, boxes the result. External callers + eta/dispatch hit the unchanged wrapper.
+
+Scope (conservative, safe fallback): single-clause, all-PVar, non-dict, ≥1 `Float`
+param, `Float` return, self-recursive, body is CIf/value only — every leaf is a
+full-arity tail self-call OR a self-free value (`floatWorkerOk`). Guards desugar to
+CIf → eligible; a **`match`-bodied** float accumulator (CDecision, e.g. the original
+`floatsum.mdk`) is NOT eligible and falls back to normal codegen (the CDecision-double
+extension is future work). Reuses the Win-2 `LTFloatU` machinery for the worker's
+double params.
+
+**Numbers:** `floatsum_guard` (guard-style 50M accumulator) **0.16s → 0.04s (~4×)**,
+approaching the intsum 0.02s zero-alloc floor. Worker body verified to contain **zero
+`mdk_alloc`** (accumulator stays a `double`; base case `ret double %arg0`). Correct:
+small-N (1500.0) == interpreter; the 50M bench's interpreter oracle is just too slow.
+
+**Gates:** `diff_selfhost_llvm` **180/0**; `selfcompile_fixpoint` **C3a/C3b YES**
+(+ typed/modules/build/stack — see commit). The emitter has no float-accumulator guard
+fns of its own, so its IR is unchanged → fixpoint holds trivially.
+
+**Follow-on:** extend `emitFnBodyD` with a CDecision arm (descend match arms in
+double-return mode, reusing the decision tree with double leaves) so `match`-style
+float accumulators (floatsum.mdk) also benefit. Bounded; same technique.
 
 ### Win 3 — atomic float cells (2026-06-17, `llvm_emit.mdk` + `llvm_preamble.mdk`)
 
