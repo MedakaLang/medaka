@@ -1062,6 +1062,41 @@ pendingImplObligations = Ref []
 numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route))
 numlitRefs = Ref []
 
+-- LSP hover: every local binding (let-bound name, lambda param, function-clause
+-- param, match-arm binder) flows through inferPat's PVar/PAs arms.  Capture
+-- (name, mono var) here so hover can render a *local* variable's inferred type:
+-- `checkProgramSchemes` only returns top-level + global schemes, so without this
+-- a hover over e.g. a `let input = …` name finds nothing and returns null.  The
+-- mono var is union-find-solved by the time inference ends; checkProgramSeeded
+-- then generalizes each into `localSchemesOut`, which the LSP reads as a hover
+-- fallback.  This side-channel does NOT enter the returned env, so completion and
+-- inlay-hint output (which consume the env directly) are unaffected.
+localBindRefs : Ref (List (String, Mono))
+localBindRefs = Ref []
+
+localSchemesOut : Ref (List (String, Scheme))
+localSchemesOut = Ref []
+
+-- Hover side-channel for the SEED (runtime.mdk externs: putStrLn, readLine, …).
+-- checkProgramSeeded keeps the seed in scope for inference but excludes it from
+-- the returned env (see its comment), so externs aren't otherwise hoverable.
+seedSchemesOut : Ref (List (String, Scheme))
+seedSchemesOut = Ref []
+
+-- Getters for the LSP (cross-module).  The raw Refs are nullary value globals
+-- (@mdk_g_), which the import-aware mangling map doesn't carry, so expose them
+-- through functions — the form every other tools→typecheck import already uses.
+export
+currentLocalSchemes : Unit -> <Mut> List (String, Scheme)
+currentLocalSchemes _ = localSchemesOut.value
+
+export
+currentSeedSchemes : Unit -> <Mut> List (String, Scheme)
+currentSeedSchemes _ = seedSchemesOut.value
+
+recordLocalBind : String -> Mono -> <Mut> Unit
+recordLocalBind name v = set_ref localBindRefs ((name, v) :: localBindRefs.value)
+
 -- dict-passing state (the typed pipeline's `=>`-constraint layer):
 --   activeDictVars   : constraint tyvar id → the dict parameter name a method
 --                      occurrence at that variable's type reads (RDict).
@@ -1507,6 +1542,9 @@ resetState _ =
   let _ = set_ref methodIfaceParamsRef []
   let _ = set_ref pendingImplObligations []
   let _ = set_ref numlitRefs []   -- PLAN.md #11
+  let _ = set_ref localBindRefs []
+  let _ = set_ref localSchemesOut []
+  let _ = set_ref seedSchemesOut []
   let _ = set_ref pendingArgStamps []
   let _ = set_ref activeDictVars []
   let _ = set_ref funConstraintsRef []
@@ -1658,6 +1696,14 @@ doRequiresMonadMsg = "`do` requires a monad (e.g. `Option` or `Result`). For imp
 generalize : Mono -> <Mut> Scheme
 generalize t =
   Forall (dedupI (freeGenVars currentLevel.value t)) (dedupI (freeEffvars t)) t
+
+-- Generalize each captured local binding's (now-solved) mono into a Scheme for
+-- the LSP hover fallback (see localBindRefs).  Runs at the end of inference when
+-- currentLevel is back at the top, so a still-free local var quantifies cleanly
+-- to `a`; a ground var (e.g. a `let` bound to a String) renders concretely.
+mapLocalSchemes : List (String, Mono) -> <Mut> List (String, Scheme)
+mapLocalSchemes [] = []
+mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 
 -- ── value restriction (T1) ────────────────────────────────────────────────
 -- A binding RHS is *non-expansive* (a syntactic value) iff it cannot allocate a
@@ -2087,6 +2133,7 @@ monoScheme t = Forall [] [] t
 inferPat : TcEnv -> Pat -> <Mut> (Mono, List (String, Scheme))
 inferPat _ (PVar x) =
   let v = freshVar ()
+  let _ = recordLocalBind x v
   (v, [(x, monoScheme v)])
 inferPat _ PWild = (freshVar (), [])
 inferPat _ (PLit l) = (litType l, [])
@@ -2213,6 +2260,7 @@ inferPatList env pats =
 inferPatAs : TcEnv -> String -> Pat -> <Mut> (Mono, List (String, Scheme))
 inferPatAs env x p =
   let pr = inferPat env p
+  let _ = recordLocalBind x (fst pr)
   (fst pr, (x, monoScheme (fst pr)) :: snd pr)
 
 unifyAll : Mono -> List Mono -> <Mut> Unit
@@ -2240,7 +2288,7 @@ infer _ (ELit l) = litType l
 -- `fromInt` is unbound: fall back to a plain fresh var, dref stays RNone (⇒ Int).
 infer env (ENumLit n fref dref) = inferNumLit env n fref dref
 infer env (EVar x) = inferVar env x
-infer env (EApp f x) = inferApp (EApp f x) (infer env f) (infer env x)
+infer env (EApp f x) = inferAppExpr env f x
 infer env (ELam pats body) = inferLam env pats body
 infer env (ELet isMut isFun pat e1 e2) = inferLet env isMut isFun pat e1 e2
 infer env (ELetGroup binds body) = inferLetGroup env binds body
@@ -2520,6 +2568,7 @@ blockRecLet env x e =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1   -- PLAN.md #11
+  let _ = recordLocalBind x t1   -- LSP hover (block rec-let bypasses inferPat)
   extendVar env x (generalize t1)
 
 blockLet : TcEnv -> Bool -> Pat -> Expr -> <Mut> TcEnv
@@ -2530,6 +2579,7 @@ blockLet env isMut (PVar x) e =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
+  let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
   extendVar env x (genRestricted (not isMut && isNonexpansive e) t)
 -- T1b: a `mut` binding must be monomorphic — generalizing it (when the RHS is
 -- nonexpansive, e.g. `let mut x = []`) lets later assignments re-instantiate,
@@ -3022,6 +3072,81 @@ recordImplObligation x mono = match lookupAssoc x methodIfaceParamsRef.value
     let _ = set_ref pendingImplObligations ((iface, typarams, mty, mono) :: pendingImplObligations.value)
     mono
 
+-- Expected-type propagation for an application whose argument is a lambda.
+-- Inferring `andThen e (stream => Ok [JArray stream])` naively infers the lambda
+-- BODY first with `stream : freshVar`, so a downstream conflicting use inside the
+-- body (`JArray stream` wants `Array Json`) pins `stream` to the WRONG type before
+-- the function's declared param type (`List Json`) is ever reconciled — the later
+-- reconciliation then fails at the application with no good site, and the hover
+-- side-channel records the wrong `stream` type.  Fix (bidirectional "checking"
+-- mode, the do-bind/higher-order case): infer `f` first, peel its parameter type,
+-- and unify it onto the lambda's parameter BEFORE inferring the body.  Then the
+-- body sees `stream : List Json` and the type error localizes to the `JArray`
+-- USE, and recordLocalBind captures the right hover type.  Purely additive: the
+-- final `unify ft (TFun xt …)` in inferApp imposes the same equality regardless,
+-- so the solution is unchanged — we only make it available earlier.
+inferAppExpr : TcEnv -> Expr -> Expr -> <Mut> Mono
+inferAppExpr env f x = match lamUnderLoc x
+  Some (loc, pats, body) =>
+    let ft = infer env f
+    let _ = setLocIfSome loc
+    -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
+    -- type.  Peel that, then peel the lambda type itself for its per-param types.
+    let lamExpected = funDomain (normalize ft)
+    let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
+    inferApp (EApp f x) ft xt
+  None => inferApp (EApp f x) (infer env f) (infer env x)
+
+-- set currentLoc only when the lambda carried a span (mirror the ELoc arm), so
+-- a bare unlocated lambda doesn't blank out an enclosing position.
+setLocIfSome : Option Loc -> <Mut> Unit
+setLocIfSome None = ()
+setLocIfSome (Some l) = set_ref currentLoc (Some l)
+
+-- peek through an ELoc wrapper to a lambda; returns its loc, params and body.
+-- Non-lambda arguments (the common case) take the ordinary inference path.
+lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
+lamUnderLoc (ELam pats body) = Some (None, pats, body)
+lamUnderLoc (ELoc l (ELam pats body)) = Some (Some l, pats, body)
+lamUnderLoc _ = None
+
+-- the function's first parameter type (the lambda's expected type), or a fresh
+-- var when `ft` is not yet a concrete arrow (then nothing is pushed; the trailing
+-- `unify ft (TFun xt …)` reconciles).
+funDomain : Mono -> <Mut> Mono
+funDomain (TFun a _ _) = a
+funDomain _ = freshVar ()
+
+-- peel up to `n` arrow domains off the (normalized) lambda's expected type; those
+-- domains are the lambda's expected PARAM types.  Stops early if it is not (yet)
+-- an arrow — those params fall back to a fresh var in inferLamChecked, and the
+-- trailing `unify ft (TFun xt …)` reconciles them.
+expectedParamTypes : Mono -> Int -> List Mono
+expectedParamTypes _ 0 = []
+expectedParamTypes (TFun a _ b) n = a :: expectedParamTypes (normalize b) (n - 1)
+expectedParamTypes _ _ = []
+
+-- like inferLam, but each lambda param is unified with the corresponding expected
+-- param type (from the function being applied) right after inferPat — so the body
+-- and the hover side-channel see the expected type, not a bare fresh var.
+inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> <Mut> Mono
+inferLamChecked env expected pats body =
+  let pr = inferPats env pats
+  let _ = unifyParamsExpected (fst pr) expected
+  let saved = curEffect.value
+  let _ = set_ref curEffect (openRow ())
+  let bodyTy = infer (extendVars env (snd pr)) body
+  let bodyEff = curEffect.value
+  let _ = set_ref curEffect saved
+  arrowsWithLastEffect (fst pr) bodyEff bodyTy
+
+-- unify each param type with its expected type, for the prefix both lists cover.
+unifyParamsExpected : List Mono -> List Mono -> <Mut> Unit
+unifyParamsExpected (p::ps) (e::es) =
+  let _ = unify p e
+  unifyParamsExpected ps es
+unifyParamsExpected _ _ = ()
+
 inferApp : Expr -> Mono -> Mono -> <Mut> Mono
 inferApp appExpr ft xt =
   let r = freshVar ()
@@ -3079,6 +3204,7 @@ inferRecLet env x e1 e2 =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1   -- PLAN.md #11
+  let _ = recordLocalBind x t1   -- LSP hover (recursive PVar let bypasses inferPat)
   infer (extendVar env x (generalize t1)) e2
 
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> <Mut> Mono
@@ -3096,6 +3222,7 @@ inferLetSimple env pat e1 e2 =
 
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> <Mut> Mono
 inferLetBody env (PVar x) t1 e1 e2 =
+  let _ = recordLocalBind x t1   -- LSP hover (PVar let bypasses inferPat)
   infer (extendVar env x (genRestricted (isNonexpansive e1) t1)) e2
 inferLetBody env pat t1 _ e2 =
   let pr = inferPat env pat
@@ -5524,6 +5651,18 @@ checkProgramSchemes prog =
   let _ = set_ref implInferEnabled False
   checkProgramSeeded [] prog
 
+-- Like checkProgramSchemes but ALSO seeds runtime.mdk's externs (putStrLn,
+-- readLine, …) into scope, so a buffer using them type-checks instead of leaving
+-- the bindings that consume them unconstrained.  Mirrors the OCaml reference's
+-- `check_program`, which seeds `Runtime.entries` into the initial env — the LSP
+-- hover/completion/inlay handlers run this so externs resolve and a `let input =
+-- readLine ()` hovers as `String`, not a free `a`.
+export
+checkProgramSchemesWithRuntime : List Decl -> List Decl -> <Mut> List (String, Scheme)
+checkProgramSchemesWithRuntime runtimeDecls prog =
+  let _ = set_ref implInferEnabled False
+  checkProgramSeeded (externSchemes runtimeDecls) prog
+
 -- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
 -- use of putStrLn/etc. resolves) but NOT part of the output (mirrors the
 -- reference seeding Runtime.entries into initial_env, which aren't returned).
@@ -5547,6 +5686,8 @@ checkProgramSeeded seed prog =
   let _ = checkImplObligations prog pendingImplObligations.value
   let _ = checkCallObligations prog pendingCallObligations.value
   let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals
+  let _ = set_ref localSchemesOut (mapLocalSchemes localBindRefs.value)
+  let _ = set_ref seedSchemesOut seed
   globalS ++ topSchemes
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
@@ -6675,6 +6816,17 @@ registerConstraintRegs ((m, ifaceMonos)::rest) =
 -- body-forced-concrete constraint takes no dict slot); the iface list is filtered the
 -- same way so it stays parallel to the id list.
 registerMember : String -> List (String, Mono) -> <Mut> Unit
+-- An UNCONSTRAINED member (empty constraint list) gets NO funConstraintsRef /
+-- funConstraintIfacesRef entry.  These refs are keyed by BARE NAME and accumulate
+-- across the per-module elaboration; an unconstrained top-level fn that shares a
+-- name with a constrained one in another module (e.g. array.mdk's `find : (a ->
+-- Bool) -> Array a -> Option a` vs core.mdk's `find : Foldable t => …`) would
+-- otherwise register a `(find, [])` entry that, prepended later, wins the
+-- first-match lookup over core's `(find, [foldableId])`.  inferDictAt then reads 0
+-- constraint ids → 0 dict args at the call site → `unbound identifier:
+-- $dict_find_0` at eval.  An unconstrained fn is never marked EDictAt, so it needs
+-- no entry (mirrors registerInferredFor's empty-ids guard).
+registerMember _ [] = ()
 registerMember m ifaceMonos =
   let ids = registerMemberSlots m 0 (map snd ifaceMonos)
   let keptIfaces = keptConstraintIfaces ifaceMonos
@@ -7174,6 +7326,12 @@ checkModuleFullImpl seedVars accData implDecls prog =
   let _ = set_ref crossModuleMethodConstraintsRef methodConstraintsRef.value
   let _ = groundMultiParamObligations implDecls pendingImplObligations.value
   let _ = checkCallObligations (implDecls ++ prog) pendingCallObligations.value
+  -- LSP hover: leave THIS module's locals + seed (runtime+core+imports) in the
+  -- side-channels, mirroring checkProgramSeeded.  The entry module is checked
+  -- LAST in the multi-module path, so the channels end holding ITS values, which
+  -- is what project-aware hover reads (imported names live in seedVars).
+  let _ = set_ref localSchemesOut (mapLocalSchemes localBindRefs.value)
+  let _ = set_ref seedSchemesOut seedVars
   globalS ++ topSchemes
 -- C5: compute this module's standalone-shadow set BEFORE inference, so the
 -- inferMethodAt arg-position record can gate on it (resetState cleared it via
@@ -7476,12 +7634,16 @@ checkModuleFullDiags seedVars accData prog =
 -- ISOLATED diagnostics via checkModuleFullDiags.  Returns one
 -- (mid, (errs, warns)) per module in load order.  Core is checked ONCE (its
 -- diagnostics are not surfaced — it is the trusted prelude, as in checkModules).
-checkModulesDiagsGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
-checkModulesDiagsGo _ _ [] = []
-checkModulesDiagsGo accV accData ((mid, prog)::rest) =
-  let (schemes, errs, warns) = checkModuleFullDiags accV accData prog
+-- IMPORT-SCOPED seed (baseSeed ++ importSeed prog depEnv), exactly like
+-- checkModulesGo — NOT a flat union of every earlier module's publics, which let
+-- a same-named function from a non-imported module win by load order (e.g.
+-- string.reverse shadowing the list.reverse a module imports → spurious errors).
+checkModulesDiagsGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
+checkModulesDiagsGo _ _ _ [] = []
+checkModulesDiagsGo baseSeed depEnv accData ((mid, prog)::rest) =
+  let (schemes, errs, warns) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  (mid, (errs, warns)) :: checkModulesDiagsGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+  (mid, (errs, warns)) :: checkModulesDiagsGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) rest
 
 export
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
@@ -7490,10 +7652,12 @@ checkModulesDiags runtimeDecls coreDecls modules =
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
   checkModulesDiagsGo
     (runtimeSeed ++ coreSchemes)
+    []
     (publicDataDecls coreDecls)
     modules
 
 -- the entry module is last in dependency-first order
+export
 entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
 entryOwnSchemes [] = []
 entryOwnSchemes [(_, ss)] = ss
@@ -7516,23 +7680,33 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
   checkModulesEntryFullGo
     (runtimeSeed ++ coreSchemes)
+    []
     (publicDataDecls coreDecls)
     modules
 
--- thread the public accumulators exactly as checkModulesDiagsGo.  The returned
+-- thread the public accumulators exactly as checkModulesGo.  The returned
 -- triple keeps the ENTRY (last) module's SCHEMES and WARNINGS (those belong to the
 -- entry's report), but ACCUMULATES type errors from EVERY module: a type error in
 -- an IMPORTED module is still a hard error of `check`ing the entry graph and must
 -- surface (otherwise it silently reaches codegen — the G1-class soundness hole).
 -- Earlier-module errors are prepended (dependency-first) to the entry's own.
-checkModulesEntryFullGo : List (String, Scheme) -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
-checkModulesEntryFullGo _ _ [] = ([], [], [])
-checkModulesEntryFullGo accV accData [(_, prog)] =
-  checkModuleFullDiags accV accData prog
-checkModulesEntryFullGo accV accData ((_, prog)::rest) =
-  let (schemes, errs, _) = checkModuleFullDiags accV accData prog
+--
+-- Each module's VALUE seed is IMPORT-SCOPED (`baseSeed ++ importSeed prog depEnv`,
+-- exactly like checkModulesGo), NOT the flat union of every earlier module's public
+-- schemes.  A flat union let a same-named function from a non-imported module win by
+-- load order — e.g. `string.reverse : String -> String` shadowing the `list.reverse`
+-- a module actually imported, producing spurious `String vs List a` errors (json.mdk).
+-- baseSeed (runtime + core) is always in scope; depEnv keys earlier modules' public
+-- schemes by module id for importSeed to pick from.  accData stays a flat union
+-- (data/type collisions aren't the issue here; mirrors checkModulesGo).
+checkModulesEntryFullGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
+checkModulesEntryFullGo _ _ _ [] = ([], [], [])
+checkModulesEntryFullGo baseSeed depEnv accData [(_, prog)] =
+  checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData prog
+checkModulesEntryFullGo baseSeed depEnv accData ((mid, prog)::rest) =
+  let (schemes, errs, _) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  let (eSchemes, eErrs, eWarns) = checkModulesEntryFullGo (accV ++ pubV) (accData ++ publicDataDecls prog) rest
+  let (eSchemes, eErrs, eWarns) = checkModulesEntryFullGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) rest
   (eSchemes, errs ++ eErrs, eWarns)
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
