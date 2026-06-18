@@ -387,15 +387,16 @@ to no other cell: strings are already atomic; cons/ADT/tuple/closure carry point
   closure-call-RESULT arith `f 1.0 + f 2.0` (closure ABI returns erased i64). Both
   need type provenance the Core IR erased.
 
-- **PRE-EXISTING SOUNDNESS BUG — nested closure capturing the OUTER lambda's PARAM**
-  (found 2026-06-18). `let a=2; let g=(x => (y => x + a)); (g 1) 9` → compiled prints
-  garbage (pointer-ish, varies run-to-run), interp = 3. Single-level `let`-capture is
-  fine (`(x => x+a+b)` works); the bug is the inner closure capturing the *enclosing
-  lambda's parameter* (`x`). NO floats involved — independent of the capture fix above
-  (which is inert with no floats; fixpoint over the nested-closure-heavy emitter
-  unchanged). Compiled-only; interp correct. Not root-caused; likely the outer param
-  word isn't captured into the inner cell correctly. See memory
-  `project_nested_closure_param_capture_bug`. No fixture yet.
+- **PRE-EXISTING SOUNDNESS BUG — over/partial-application of a LET-BOUND multi-level
+  lambda** (found 2026-06-18). `let g=(x => (y => x + a)); (g 1) 9` → compiled prints
+  garbage/empty, interp correct. **Idiomatic paths all WORK:** 2-param `(x y => …)`,
+  top-level curried fns (`makeAdder n = (m => m+n)`), HOF application (`map (mk 100) xs`).
+  **Only FAILS** for DIRECT double-application `(g a) b` or let-partial `let h=g a; h b`
+  of a LET-BOUND lambda. NO floats — independent of the capture fix above (inert with no
+  floats; fixpoint over the nested-closure-heavy emitter unchanged). Compiled-only.
+  Hypothesis: emitter compiles the let-bound-closure application as a wrong-arity DIRECT
+  call (over-application) instead of generic apply (the EApp saturation-decision path).
+  See memory `project_nested_closure_param_capture_bug`. No fixture yet; not root-caused.
 
 - `then`/`else` may not start a continuation line (layout) — forces inline
   if-then-else in float fixtures. Known, pre-existing; recorded in memory
