@@ -1,0 +1,8 @@
+gmax : Ord a => a -> a -> a
+gmax a b = if a <= b then b else a
+loop : Int -> Int -> Int
+loop acc n = match n
+  0 => acc
+  _ => loop (gmax acc (n - 1)) (n - 1)
+main : <IO> Unit
+main = putStrLn (intToString (loop 0 50000000))

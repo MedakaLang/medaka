@@ -291,14 +291,27 @@ handled in many emit sites) → needs a fixture (arith over a destructured/captu
 float) + full gates. Correctness > perf; do supervised.
 
 ### C. Monomorphization (the meta-lever — user-suggested)
-Specialize polymorphic functions per concrete type instantiation. Subsumes float
-unboxing GENERALLY (a `fold (+) 0.0 floats` gets an unboxed-`double` accumulator —
-which A cannot reach), devirtualizes dict-passing (turns runtime dict lookups into
-direct calls), and enables instance-level DCE (the deferred backend item — see
-AGENTS.md "Why selfhost stays stdlib-free"). Largest ceiling, largest effort/risk;
-touches typecheck (collect instantiations) + emit (emit specialized copies) +
-dispatch. Stage it: start with monomorphizing `Num`-instantiated functions to unbox
-float/int, measured against `fold`-over-floats and dict-heavy benches.
+**Measured this session: dict-passing/dispatch overhead is ~4×** — a polymorphic
+`gmax : Ord a => a -> a -> a` in a 50M loop is 0.16s vs a monomorphic `imax : Int ->
+Int -> Int` at 0.04s. The polymorphic define is `@mdk_disp__gmax(i64 %dict, i64, i64)`
+and `a <= b` dispatches through `%dict` at runtime. This is broad — every constrained
+function (stdlib `Eq`/`Ord`/`Num`/`Foldable`, the compiler's own generics, user code)
+pays it.
+
+Specialize polymorphic functions per concrete type instantiation: at a call site where
+all type args are concrete (the dict-pass already resolves WHICH impl — an `RKey` like
+`Int`/`Ord`), emit a specialized copy `@mdk_<fn>$<Type>(…)` with the dict param removed
+and dict-method calls bound to the concrete impl (so `<=` inlines / calls
+`@mdk_impl_Int_*` directly), and rewrite the call site to it (no dict arg). Subsumes
+float unboxing GENERALLY (a `fold (+) 0.0 floats` gets an unboxed-`double` accumulator —
+which the worker-wrapper cannot reach), devirtualizes dispatch (the ~4× above), and
+enables instance-level DCE (AGENTS.md "Why selfhost stays stdlib-free").
+
+Scope/risk: touches `dict_pass.mdk` (collect concrete (fn × dict) pairs at call sites)
++ emit (emit specialized bodies; rewrite call sites) — the route-fragile dispatch
+machinery. Stage it: start with fully-concrete-primitive dicts on top-level constrained
+fns (e.g. `Ord`/`Num`), gated by `selfcompile_fixpoint` + `diff_selfhost_llvm`/`_dict`.
+Largest ceiling; a real multi-stage project (not a single-session change).
 
 ### D. Separate compilation (the BUILD-latency caching lever) — ❌ MOOT
 **Measured this session: a full native compiler rebuild is ~8s (clang ~3.3s).** The
