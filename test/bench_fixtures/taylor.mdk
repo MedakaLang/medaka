@@ -1,0 +1,15 @@
+term : Float -> Float -> Float -> Int -> Float
+term acc x p k = match k
+  0 => acc
+  _ =>
+    let p2 = p * x
+    let t = p2 / fromInt k
+    term (acc + t) x p2 (k - 1)
+
+expSum : Float -> Float -> Int -> Float
+expSum total x n = match n
+  0 => total
+  _ => expSum (total + term 1.0 x 1.0 12) (x + 0.0001) (n - 1)
+
+main : <IO> Unit
+main = putStrLn (floatToString (expSum 0.0 0.0 1000000))

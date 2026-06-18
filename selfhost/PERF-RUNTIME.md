@@ -10,6 +10,17 @@ min-of-3, production build flags (`-O2 -Wl,-stack_size,0x20000000`, GC
 `MEDAKA_EMITTER=./medaka_emitter` (the OCaml `medaka build` path is dead — its
 interpreter can no longer parse the selfhost emitter source).
 
+## Real-world validation (2026-06-18)
+
+Beyond the micro-benches, a realistic mixed-float kernel — `taylor.mdk`: exp(x) via a
+12-term Taylor series summed over 1M x-values (12M float iterations; let-bound terms,
+a float accumulator, `fromInt` division) — measured **0.20s (main baseline) → 0.12s
+(~1.7×)** with all 7 wins. The realistic factor is smaller than the pure-float
+micro-benches (mandel 6×, floatsum 12×) because `taylor`'s `term` has a CBlock body
+(not worker-wrapped) and `fromInt k` boxes — but fusion + let-unboxing + atomic cells
+still cut it 1.7×. Honest takeaway: dense pure-float kernels get 6–12×; realistic mixed
+code with calls/blocks gets ~1.5–2×.
+
 ## TL;DR (overnight session 3, 2026-06-17/18)
 
 **7 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
