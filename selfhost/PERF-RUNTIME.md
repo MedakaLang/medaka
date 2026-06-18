@@ -23,11 +23,11 @@ let-block numeric loops now reach ~10× when the hot loop becomes alloc-free.
 
 ## TL;DR (overnight session 3, 2026-06-17/18)
 
-**10 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
+**11 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
 were heap-boxed on every op (~18× tax); fusion + let-unboxing + atomic cells +
-worker-wrapper (CIf/match/let-block bodies) + `fromInt`→`sitofp` take **floatsum
-0.38→0.03 (~12×)**, **mandel 0.18→0.03 (6×)**, realistic `taylor` **0.20→0.02 (~10×,
-hot loop now alloc-free)**. (b) **constant-cell hoisting** — dict witnesses,
+worker-wrapper + `fromInt`→`sitofp` + a general float-ABI (`$fw` for float helper fns)
+take **floatsum 0.38→0.03 (~12×)**, **mandel 0.18→0.03 (6×)**, realistic `taylor`
+**0.20→0.02 (~10×)**, **fhelp (float helper in a loop) 0.21→0.02**. (b) **constant-cell hoisting** — dict witnesses,
 string/list/tuple/record literals that are compile-time constants were heap-allocated
 at every evaluation; hoisting them to `internal constant` module globals takes
 **dispatch 0.16→~0.03 (~5–8×)** and eliminates the per-eval alloc for constant
@@ -80,8 +80,8 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 
 ## Levers (ranked)
 
-**10 wins banked** (all fixpoint-gated, on an 8-branch stack
-`…→compound-const→float-worker-block→fromint-fuse`):
+**11 wins banked** (all fixpoint-gated, on a 9-branch stack
+`…→float-worker-block→fromint-fuse→float-helper-abi`):
 
 1. **Float-expression fusion** — ✅ Win 1. mandel 6×.
 2. **Let-bound float unboxing** (`LTFloatU`) — ✅ Win 2. mandel_let 2.3×.
@@ -93,21 +93,15 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 8. **Constant tuple/record cells** — ✅ Win 8. tuplit alloc elim.
 9. **Worker-wrapper CBlock (let-block) bodies** — ✅ Win 9. taylor 0.12→0.07.
 10. **`fromInt`/`intToFloat`→`sitofp` fusion** — ✅ Win 10. taylor 0.07→0.02 (cumul ~10×; hot loop alloc-free).
+11. **General float-ABI (`$fw` for float helper fns)** — ✅ Win 11. fhelp 0.21→0.02; non-recursive
+    float helpers called in float context use a double-ABI `$fw` (no box). Incidentally fixes the
+    top-level-float-fn case of the arith-type-lost bug (reroute yields a double).
 
 Constant-cell hoisting covers every safe cell type; float boxing comprehensively
-addressed across CIf/match/let-block accumulators + int→float conversion.
+addressed across CIf/match/let-block accumulators, int→float conversion, AND helper-fn
+call boundaries.
 
 **Remaining (structural / risky — not done):**
-- **General float-ABI for helper functions** (next float lever; medium-broad). The
-  worker-wrapper only fires for SELF-RECURSIVE float accumulators; a non-recursive float
-  helper called in a loop (`sq x = x*x+1.0`, called 30M× in `fhelp.mdk`) still **boxes
-  its return per call** (0.21s; `go__fw` itself is alloc-free, `sq` boxes 1×). Fix:
-  emit a `double`-ABI `$fw` variant for every float fn whose body `emitFnBodyD` can
-  handle (the worker eligibility minus the self-recursive requirement), keep the
-  original i64-ABI fn for normal callers (no regression), and reroute float-context
-  calls in `emitFloatLeaf` to `$fw` (like the `fromInt` fuse but general); a pre-pass
-  builds the set of fns that get a `$fw` (call sites may precede the callee), and DCE
-  drops unused `$fw`. Touches `emitApp`/call-site rerouting (route-fragile) → supervised.
 - **Monomorphization** — mostly captured by Win 5 for constant dicts; would still help
   RDict-forwarded dicts inside polymorphic fns + polymorphic-`fold` float unboxing. Big. Design (C).
 - **GC allocation density** — bintrees ~50% GC_malloc, listsum/cons churn, the emitter's
