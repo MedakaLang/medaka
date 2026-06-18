@@ -426,6 +426,15 @@ at slightly lower compile (2.5s vs 3.3s); not worth changing the default.
 The real performance opportunity is RUNTIME (compiled-program speed), not build
 latency — see the float wins above and the remaining runtime levers below.
 
+## Branch certification (perf/fromint-fuse — all 10 wins stacked, 2026-06-18)
+
+The full 10-win stack re-certified together on the top branch — all green:
+`selfcompile_fixpoint` C3a/C3b YES; `diff_selfhost_llvm` 180/0, `_typed` 37/0,
+`_modules` 13/0; `diff_selfhost_build` 25/0; `diff_selfhost_eval_run` 28/0, `_dict`
+25/0, `_list` 2/0, `_typed` 3/0; `diff_native_stack` 7/0. (`diff_native_cli` 58/3 —
+the 3 are pre-existing `check`/`lsp`, not emit.) Adopt-everything branch:
+`perf/fromint-fuse`; each win also isolated on its own branch for cherry-picking.
+
 ## Branch certification (perf/float-unbox, 2026-06-17)
 
 All EMIT-path gates byte-identical / green after both float wins:
