@@ -1055,6 +1055,20 @@ let t_run_command_fail = assert_output
 |}
   "spawn-error\n"
 
+(* Top-level `let rec … with …` group (DLetGroup): group members are mutually
+   in-scope for each other and for the rest of the program.
+   Residual: DLetGroup is NOT yet lowered through the self-hosted Core IR / native
+   `medaka build` path (funClausesOf skips DLetGroup; build path has further
+   $dict gaps) — this assertion covers the OCaml-AST-eval path only. *)
+let t_letgroup_toplevel = assert_output
+  {|let rec step a n = bump n
+with bump n = down (n + 2)
+with down n = n - 1
+caller x = step True x
+main = println (debug (step True 5, bump 10, down 4, caller 100))
+|}
+  "(6, 11, 3, 101)\n"
+
 let () = Alcotest.run "Run"
   [("run", [
     "point-free prelude toList (Phase 121)", `Quick, t_pointfree_prelude_tolist;
@@ -1113,4 +1127,5 @@ let () = Alcotest.run "Run"
     "prelude method shadow", `Quick, t_prelude_method_shadow;
     "runCommand: subprocess exec + capture", `Quick, t_run_command;
     "runCommand: spawn failure", `Quick, t_run_command_fail;
+    "top-level let rec with group (DLetGroup)", `Quick, t_letgroup_toplevel;
   ])]
