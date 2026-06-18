@@ -30,6 +30,7 @@ pass=0; fail=0
 for g in "$FIXDIR"/*.golden; do
   fix="$(basename "$g" .golden)"
   [ -f "$FIXDIR/$fix.mdk" ] || continue
+  case "$fix" in numlit_*) continue ;; esac   # require typed fromInt elaboration; covered by the typed gates
   self="$("$RUN" "$CORE" "$LIST" "$FIXDIR/$fix.mdk" 2>/dev/null | strip_unit)"
   golden="$(sed -n '/=== EVAL ===/,$p' "$g" | sed '1d')"
   if [ "$self" = "$golden" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$fix"

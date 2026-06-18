@@ -24,6 +24,11 @@ FIXDIR="$ROOT/test/diff_fixtures"
 # sole "()" line.  The OCaml-captured golden has none; drop it.
 strip_unit() { sed '$ s/()$//; ${/^$/d;}'; }
 
+# Normalize float-token text: collapse "FLOAT <value>" → "FLOAT" so that host
+# float-formatting differences (OCaml %g "2" vs native "2.0") don't cause false
+# failures.  This mirrors the normalization in diff_selfhost_lex_files.sh.
+norm() { sed 's/^FLOAT .*/FLOAT/'; }
+
 # Extract the lines between '=== TOKENS ===' and the next '=== ' header.
 golden_tokens() {
   awk '/^=== TOKENS ===$/ {f=1; next} /^=== / {f=0} f' "$1"
@@ -49,8 +54,8 @@ for mdk in "$FIXDIR"/*.mdk; do
   base="$(basename "${mdk%.mdk}")"
   golden="${mdk%.mdk}.golden"
   [ -f "$golden" ] || continue
-  expected="$(golden_tokens "$golden")"
-  actual="$("$RUN" "$mdk" 2>/dev/null | strip_unit)"
+  expected="$(golden_tokens "$golden" | norm)"
+  actual="$("$RUN" "$mdk" 2>/dev/null | strip_unit | norm)"
   if [ "$expected" = "$actual" ]; then
     pass=$((pass + 1))
     printf 'ok   %s\n' "$base"

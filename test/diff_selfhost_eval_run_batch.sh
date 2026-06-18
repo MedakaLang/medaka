@@ -20,6 +20,7 @@ targets=""
 for g in "$FIXDIR"/*.golden; do
   fix="$(basename "$g" .golden)"
   [ -f "$FIXDIR/$fix.mdk" ] || continue
+  case "$fix" in numlit_*) continue ;; esac   # require typed fromInt elaboration; covered by the typed gates
   targets="$targets $FIXDIR/$fix.mdk"
 done
 
@@ -30,6 +31,7 @@ pass=0; fail=0
 for g in "$FIXDIR"/*.golden; do
   fix="$(basename "$g" .golden)"
   [ -f "$FIXDIR/$fix.mdk" ] || continue
+  case "$fix" in numlit_*) continue ;; esac   # require typed fromInt elaboration; covered by the typed gates
   self="$(printf '%s' "$ALL" | section "$FIXDIR/$fix.mdk")"
   golden="$(sed -n '/=== EVAL ===/,$p' "$g" | sed '1d')"
   if [ "$self" = "$golden" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$fix"
