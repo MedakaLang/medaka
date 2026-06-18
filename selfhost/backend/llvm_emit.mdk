@@ -1958,6 +1958,12 @@ emitArithW e env op l r =
       let _ = emit e ("  " ++ res ++ " = call i64 @" ++ numOp op ++ "(i64 " ++ lv ++ ", i64 " ++ rv ++ ")")
       (res, LTNum)
     _ => match rty
+      LTFloat =>
+        let ld = unboxFloat e lv
+        let rd = unboxFloat e rv
+        let res = freshReg e
+        let _ = emit e ("  " ++ res ++ " = " ++ floatOp op ++ " double " ++ ld ++ ", " ++ rd)
+        (boxFloat e res, LTFloat)
       LTNum =>
         let res = freshReg e
         let _ = emit e ("  " ++ res ++ " = call i64 @" ++ numOp op ++ "(i64 " ++ lv ++ ", i64 " ++ rv ++ ")")

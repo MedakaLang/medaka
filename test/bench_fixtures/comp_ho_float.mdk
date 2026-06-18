@@ -1,0 +1,4 @@
+comp : (Float -> Float) -> Float -> Float
+comp f x = f x + 1.0
+main : <IO> Unit
+main = putStrLn (floatToString (comp (y => y * 2.0) 5.0))
