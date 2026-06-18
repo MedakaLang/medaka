@@ -14,27 +14,29 @@ interpreter can no longer parse the selfhost emitter source).
 
 Beyond the micro-benches, a realistic mixed-float kernel — `taylor.mdk`: exp(x) via a
 12-term Taylor series summed over 1M x-values (12M float iterations; let-bound terms,
-a float accumulator, `fromInt` division) — measured **0.20s (main baseline) → 0.07s
-(~2.9×)** with all 9 wins. (It was 0.12s/1.7× through Win 8; Win 9's CBlock worker
-support unboxed `term`'s accumulator for the rest.) Honest takeaway: dense pure-float
-kernels get 6–12×; realistic mixed code with let-blocks/calls gets ~2–3×.
+a float accumulator, `fromInt` division) — measured **0.20s (main baseline) → 0.02s
+(~10×)** with all 10 wins; the hot worker loop (`term__fw`) is now **allocation-free**
+(0 `mdk_alloc`). Progression: 0.12s through Win 8 (fusion/let-unbox/atomic), 0.07s with
+Win 9 (CBlock worker unboxed the accumulator), 0.02s with Win 10 (`fromInt`→`sitofp`
+removed the last per-iter box). Takeaway: both dense pure-float kernels AND realistic
+let-block numeric loops now reach ~10× when the hot loop becomes alloc-free.
 
 ## TL;DR (overnight session 3, 2026-06-17/18)
 
-**9 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
+**10 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
 were heap-boxed on every op (~18× tax); fusion + let-unboxing + atomic cells +
-worker-wrapper (incl. CBlock let-block bodies) take **floatsum 0.38→0.03 (~12×)**,
-**mandel 0.18→0.03 (6×)**, realistic `taylor` 0.20→0.07 (~2.9×).
-(b) **constant-cell hoisting** — dict witnesses, string/list/tuple/record literals that
-are compile-time constants were heap-allocated at every evaluation; hoisting them to
-`internal constant` module globals takes **dispatch 0.16→~0.03 (~5–8×)** and eliminates
-the per-eval alloc for constant strings/lists/tuples/records. Every win is on an
-isolated branch (7-branch stack), output-gated (`diff_selfhost_*` byte-identical to the
-interpreter oracle) and `selfcompile_fixpoint` C3a/C3b YES. Also corrected a stale doc
-claim: clang `-O2` of the emitter is ~3.3s and a full rebuild ~8s (not the ~127s in
-PERF-RESULTS), so the build-caching lever is moot. Found + recorded one pre-existing
-soundness bug (arith on type-lost floats) and one pre-existing usability bug (unbound
-constrained fn on imported stdlib). Realistic mixed-float code (`taylor`) gets ~1.7×.
+worker-wrapper (CIf/match/let-block bodies) + `fromInt`→`sitofp` take **floatsum
+0.38→0.03 (~12×)**, **mandel 0.18→0.03 (6×)**, realistic `taylor` **0.20→0.02 (~10×,
+hot loop now alloc-free)**. (b) **constant-cell hoisting** — dict witnesses,
+string/list/tuple/record literals that are compile-time constants were heap-allocated
+at every evaluation; hoisting them to `internal constant` module globals takes
+**dispatch 0.16→~0.03 (~5–8×)** and eliminates the per-eval alloc for constant
+strings/lists/tuples/records. Every win is on an isolated branch (8-branch stack),
+output-gated (`diff_selfhost_*` byte-identical to the interpreter oracle) and
+`selfcompile_fixpoint` C3a/C3b YES. Also corrected a stale doc claim: clang `-O2` of
+the emitter is ~3.3s and a full rebuild ~8s (not the ~127s in PERF-RESULTS), so the
+build-caching lever is moot. Found + recorded 2 pre-existing bugs (arith on type-lost
+floats; unbound constrained fn on imported stdlib).
 
 ## Benchmark suite (`test/bench_fixtures/`)
 
@@ -78,23 +80,22 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 
 ## Levers (ranked)
 
-**9 wins banked** (all fixpoint-gated, on a 7-branch stack
-`…→list-const→compound-const→float-worker-block`):
+**10 wins banked** (all fixpoint-gated, on an 8-branch stack
+`…→compound-const→float-worker-block→fromint-fuse`):
 
 1. **Float-expression fusion** — ✅ Win 1. mandel 6×.
 2. **Let-bound float unboxing** (`LTFloatU`) — ✅ Win 2. mandel_let 2.3×.
 3. **Atomic float cells** — ✅ Win 3. floatsum ~16%.
-4. **Worker-wrapper float-param unboxing** (CIf/guard + 2-arm match) — ✅ Win 4.
-   floatsum 0.16→0.03 (cumulative 0.38→0.03 ≈ 12×).
-5. **Constant dict-witness hoisting** — ✅ Win 5. dispatch ~5–8× (≈ monomorphic — so it
-   captured most of the dispatch/monomorphization win for constant dicts).
+4. **Worker-wrapper float-param unboxing** (CIf/guard + 2-arm match) — ✅ Win 4. floatsum ≈12× cumul.
+5. **Constant dict-witness hoisting** — ✅ Win 5. dispatch ~5–8× (≈ monomorphic).
 6. **Constant string-literal cells** — ✅ Win 6. strlit ~elim.
 7. **Constant list-literal cells** — ✅ Win 7. listlit alloc elim.
 8. **Constant tuple/record cells** — ✅ Win 8. tuplit alloc elim.
-9. **Worker-wrapper CBlock (let-block) bodies** — ✅ Win 9. taylor 0.12→0.07 (cumulative 2.9×).
+9. **Worker-wrapper CBlock (let-block) bodies** — ✅ Win 9. taylor 0.12→0.07.
+10. **`fromInt`/`intToFloat`→`sitofp` fusion** — ✅ Win 10. taylor 0.07→0.02 (cumul ~10×; hot loop alloc-free).
 
 Constant-cell hoisting covers every safe cell type; float boxing comprehensively
-addressed across CIf/match/let-block accumulator shapes.
+addressed across CIf/match/let-block accumulators + int→float conversion.
 
 **Remaining (structural / risky — not done):**
 - **Monomorphization** — mostly captured by Win 5 for constant dicts; would still help
