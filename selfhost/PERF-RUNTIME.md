@@ -23,18 +23,19 @@ code with calls/blocks gets ~1.5–2×.
 
 ## TL;DR (overnight session 3, 2026-06-17/18)
 
-**7 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
+**8 fixpoint-gated native-codegen wins.** Two themes: (a) **float unboxing** — floats
 were heap-boxed on every op (~18× tax); fusion + let-unboxing + atomic cells +
 worker-wrapper take **floatsum 0.38→0.03 (~12×)** and **mandel 0.18→0.03 (6×)**.
-(b) **constant-cell hoisting** — dict witnesses, string literals, and list literals
-that are compile-time constants were heap-allocated at every evaluation; hoisting them
-to `internal constant` module globals takes **dispatch 0.16→~0.03 (~5–8×)**, **strlit
-~elim**, **listlit alloc elim**. Every win is on an isolated branch, output-gated
-(`diff_selfhost_*` byte-identical to the interpreter oracle) and `selfcompile_fixpoint`
-C3a/C3b YES. Also corrected a stale doc claim: clang `-O2` of the emitter is ~3.3s and a
-full rebuild ~8s (not the ~127s in PERF-RESULTS), so the build-caching lever is moot.
-Found + recorded one pre-existing soundness bug (arith on type-lost floats) and one
-pre-existing usability bug (unbound constrained fn on imported stdlib).
+(b) **constant-cell hoisting** — dict witnesses, string/list/tuple/record literals that
+are compile-time constants were heap-allocated at every evaluation; hoisting them to
+`internal constant` module globals takes **dispatch 0.16→~0.03 (~5–8×)** and eliminates
+the per-eval alloc for constant strings/lists/tuples/records. Every win is on an
+isolated branch (5-branch stack), output-gated (`diff_selfhost_*` byte-identical to the
+interpreter oracle) and `selfcompile_fixpoint` C3a/C3b YES. Also corrected a stale doc
+claim: clang `-O2` of the emitter is ~3.3s and a full rebuild ~8s (not the ~127s in
+PERF-RESULTS), so the build-caching lever is moot. Found + recorded one pre-existing
+soundness bug (arith on type-lost floats) and one pre-existing usability bug (unbound
+constrained fn on imported stdlib). Realistic mixed-float code (`taylor`) gets ~1.7×.
 
 ## Benchmark suite (`test/bench_fixtures/`)
 
@@ -78,8 +79,8 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 
 ## Levers (ranked)
 
-**7 wins banked** (all fixpoint-gated, on a 5-branch stack
-`perf/float-unbox`→`float-param-unbox`→`dict-const`→`str-const`→`list-const`):
+**8 wins banked** (all fixpoint-gated, on a 6-branch stack
+`perf/float-unbox`→`float-param-unbox`→`dict-const`→`str-const`→`list-const`→`compound-const`):
 
 1. **Float-expression fusion** — ✅ Win 1. mandel 6×.
 2. **Let-bound float unboxing** (`LTFloatU`) — ✅ Win 2. mandel_let 2.3×.
@@ -90,6 +91,10 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
    captured most of the dispatch/monomorphization win for constant dicts).
 6. **Constant string-literal cells** — ✅ Win 6. strlit ~elim.
 7. **Constant list-literal cells** — ✅ Win 7. listlit alloc elim.
+8. **Constant tuple/record cells** — ✅ Win 8. tuplit alloc elim.
+
+Constant-cell hoisting now covers every safe cell type (dicts, strings, lists, tuples,
+records); float boxing is comprehensively addressed.
 
 **Remaining (structural / risky — not done):**
 - **Monomorphization** — mostly captured by Win 5 for constant dicts; would still help
