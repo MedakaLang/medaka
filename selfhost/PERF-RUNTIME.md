@@ -376,13 +376,26 @@ to no other cell: strings are already atomic; cons/ADT/tuple/closure carry point
   boxed-float *pointers* → garbage (e.g. `3.75e+255`). The native interpreter is
   correct (dynamic). `emitCmp` already routes the ambiguous-LTy case through the
   runtime discriminator `@mdk_value_cmp_raw`; **`emitArith` has no such fallback**
-  (`emitArithW`'s `_ =>` branch assumes `LTInt` ⇒ immediate int). Independent of the
-  float-unboxing work (that branch is unchanged). Fix: route the ambiguous
-  `LTInt`/`LTUnknown` arith case through a tag-dispatched `@mdk_num_*` (handles
-  immediate-int AND float-box), mirroring the `emitCmp` precedent — at a small cost
-  to genuine int arith unless provenance distinguishes "definitely immediate". Needs
-  a fixture (`arith` over a tuple-destructured/captured float) + full gates. Recorded;
-  not fixed tonight (esoteric, non-blocking, risks the int fast-path).
+  (`emitArithW`'s `_ =>` branch assumes `LTInt` ⇒ immediate int).
+  **PARTIALLY FIXED:** (a) Win 12 — one-operand-statically-Float arith now uses the
+  float path. (b) 2026-06-18, commit 03c432e — **closure float CAPTURES fixed**:
+  `loadCaptures` now threads the enclosing emit env (env param added to the 5
+  `*Define` emitters) and binds a captured float `LTFloat` via the new `capTypeOf`
+  (boxed-float convention; everything else stays `LTInt` → zero non-float change).
+  This fixed the COMMON `map (x => x * scale)` idiom (captured float). **STILL OPEN:**
+  (1) both operands tuple/record-destructured floats (`(a,b) => a + b`); (2)
+  closure-call-RESULT arith `f 1.0 + f 2.0` (closure ABI returns erased i64). Both
+  need type provenance the Core IR erased.
+
+- **PRE-EXISTING SOUNDNESS BUG — nested closure capturing the OUTER lambda's PARAM**
+  (found 2026-06-18). `let a=2; let g=(x => (y => x + a)); (g 1) 9` → compiled prints
+  garbage (pointer-ish, varies run-to-run), interp = 3. Single-level `let`-capture is
+  fine (`(x => x+a+b)` works); the bug is the inner closure capturing the *enclosing
+  lambda's parameter* (`x`). NO floats involved — independent of the capture fix above
+  (which is inert with no floats; fixpoint over the nested-closure-heavy emitter
+  unchanged). Compiled-only; interp correct. Not root-caused; likely the outer param
+  word isn't captured into the inner cell correctly. See memory
+  `project_nested_closure_param_capture_bug`. No fixture yet.
 
 - `then`/`else` may not start a continuation line (layout) — forces inline
   if-then-else in float fixtures. Known, pre-existing; recorded in memory
