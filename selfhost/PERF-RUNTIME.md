@@ -359,6 +359,20 @@ to no other cell: strings are already atomic; cons/ADT/tuple/closure carry point
 
 ## Bugs / language gaps observed
 
+- **SOUNDNESS SWEEP 2026-06-18 (post-fixes) — codegen verified CLEAN for common
+  patterns.** After the six arith-typelost / closure-application fixes, a broad
+  compiled-vs-interp sweep found NO further codegen divergences across: ADT float
+  payloads (`Pt a b => a*a+b*b`), float list comprehensions, NESTED record float
+  access (`o.inner.v + o.inner.v`), fn-returned float TUPLES (`let (a,b)=mk 3.0;
+  a+b`), Option Float, `sum`/`fold`/fold-product over floats, float-array `get`+arith.
+  All apparent failures were test-author errors identical in BOTH backends (not
+  divergences): array fns need `import array.*` (wildcard) not `import array`, and
+  mutating array `set` requires the caller's effect row to include `<Mut>`
+  (`main : <IO, Mut> Unit`) — the effect checker correctly rejects undeclared `<Mut>`.
+  Remaining known type-lost-float residual: closure RETURNED-from-a-fn then arith'd
+  (rare; needs fnRetTy "returns-float-closure" propagation).
+
+
 - **PRE-EXISTING — "unbound constrained fn" on imported constrained stdlib fns.**
   `medaka build`/`run` of a user program importing `list`/`map`/`set` and calling a
   constrained fn like `sort : Ord a => …` or `insert` panics
