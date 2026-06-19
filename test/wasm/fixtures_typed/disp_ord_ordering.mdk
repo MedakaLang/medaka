@@ -1,0 +1,15 @@
+-- W5: an Ord-shaped `cmp : a -> a -> Ordering` impl (RKey), result MATCHED on (W3).
+-- cmp 2 5 = Lt → 100.
+interface MyOrd a where
+  cmp : a -> a -> Ordering
+
+impl MyOrd Int where
+  cmp a b = if a < b then Lt else if a > b then Gt else Eq
+
+rank : Ordering -> Int
+rank o = match o
+  Lt => 100
+  Eq => 200
+  Gt => 300
+
+main = rank (cmp (2) (5))

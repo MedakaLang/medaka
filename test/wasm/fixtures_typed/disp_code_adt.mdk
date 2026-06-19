@@ -1,0 +1,17 @@
+-- W5: arg-position dispatch, two impls at distinct ADTs (RKey static call per arg).
+-- `code Cat` → $mdk_impl_Animal_code, `code Blue` → $mdk_impl_Color_code; 1 + 4 = 5.
+interface Code a where
+  code : a -> Int
+
+data Animal = Cat | Dog
+data Color = Red | Blue
+
+impl Code Animal where
+  code Cat = 1
+  code Dog = 2
+
+impl Code Color where
+  code Red = 3
+  code Blue = 4
+
+main = code Cat + code Blue

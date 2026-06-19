@@ -1,0 +1,12 @@
+-- W5 (RDict + Num-shaped): `Add a` with `plus : a -> a -> a`; a constrained
+-- `sum3 : Add a => a -> a -> a -> a` dict-passes `plus`.  At Int: 1+2+3 = 6.
+interface Add a where
+  plus : a -> a -> a
+
+impl Add Int where
+  plus a b = a + b
+
+sum3 : Add a => a -> a -> a -> a
+sum3 x y z = plus (plus x y) z
+
+main = sum3 (1) (2) (3)

@@ -1,0 +1,22 @@
+-- W5 (RDict): a polymorphic constrained fn `same : MyEq a => a -> a -> Bool`
+-- instantiated at Int AND a user ADT.  `same` is dict-passed (leading $dict param);
+-- its `myeq` call dispatches at RUNTIME on the dict-witness tag (the RDict if-chain);
+-- the two call sites in main supply the Int / Color witness (CDict).  Result: false.
+interface MyEq a where
+  myeq : a -> a -> Bool
+
+data Color = Red | Green | Blue
+
+impl MyEq Int where
+  myeq a b = a == b
+
+impl MyEq Color where
+  myeq Red Red = True
+  myeq Green Green = True
+  myeq Blue Blue = True
+  myeq _ _ = False
+
+same : MyEq a => a -> a -> Bool
+same x y = myeq x y
+
+main = if same (3) (3) then same Green Blue else False

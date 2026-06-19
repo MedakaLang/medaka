@@ -1,0 +1,14 @@
+-- W5: a hand-written Eq-shaped interface on a user ADT, RKey dispatch returning Bool.
+-- `myeq Green Green` → True (multi-clause impl coalesced + wildcard fallthrough).
+interface MyEq a where
+  myeq : a -> a -> Bool
+
+data Color = Red | Green | Blue
+
+impl MyEq Color where
+  myeq Red Red = True
+  myeq Green Green = True
+  myeq Blue Blue = True
+  myeq _ _ = False
+
+main = myeq Green Green

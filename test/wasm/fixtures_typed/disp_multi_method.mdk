@@ -1,0 +1,14 @@
+-- W5: two methods on one user ADT (RKey for each), combined in main.
+interface Tag a where
+  toNum : a -> Int
+  isFirst : a -> Bool
+
+data Light = On | Off
+
+impl Tag Light where
+  toNum On = 7
+  toNum Off = 9
+  isFirst On = True
+  isFirst Off = False
+
+main = if isFirst On then toNum Off else toNum On

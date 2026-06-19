@@ -78,10 +78,11 @@
 -- `emitExpr` returns a flat list of instruction lines.  In ref-mode the value left
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..)}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CStmt(..),
-  CArm(..), CGuard(..), CTree(..), CTBranch(..), CHead(..)
+  CArm(..), CGuard(..), CTree(..), CTBranch(..), CHead(..),
+  CImplEntry(..), CImplBody(..)
 }
 import support.util.{
   joinNl, joinWith, reverseL, contains, concatMapList, filterList,
@@ -105,22 +106,29 @@ data WTy = WInt | WBool | WUnit | WRef
 -- useClos: whether this program uses closures / higher-order application / a
 --   multi-clause-or-pattern-param fn (→ the §4 closure ABI + universal apply, and
 --   forces ref-mode since a closure captures heterogeneous values).
-data Prog = Prog (List (String, Int)) (List (String, String)) (List String) Bool (List String) (List String) (List (String, Int)) Bool
+-- impls (W5): the lowered typeclass impl/default entries (CProgram's 4th field).
+--   Threaded so the CMethod/CDict dispatch arms can resolve candidate impls
+--   (RDict runtime switch needs the full candidate set; RKey the single match).
+data Prog = Prog (List (String, Int)) (List (String, String)) (List String) Bool (List String) (List String) (List (String, Int)) Bool (List CImplEntry)
 
 progUseRef : Prog -> Bool
-progUseRef (Prog _ _ _ u _ _ _ _) = u
+progUseRef (Prog _ _ _ u _ _ _ _ _) = u
 
 progFnNames : Prog -> List String
-progFnNames (Prog _ _ _ _ fns _ _ _) = fns
+progFnNames (Prog _ _ _ _ fns _ _ _ _) = fns
 
 progValNames : Prog -> List String
-progValNames (Prog _ _ _ _ _ vals _ _) = vals
+progValNames (Prog _ _ _ _ _ vals _ _ _) = vals
 
 progFnArs : Prog -> List (String, Int)
-progFnArs (Prog _ _ _ _ _ _ ars _) = ars
+progFnArs (Prog _ _ _ _ _ _ ars _ _) = ars
 
 progUseClos : Prog -> Bool
-progUseClos (Prog _ _ _ _ _ _ _ uc) = uc
+progUseClos (Prog _ _ _ _ _ _ _ uc _) = uc
+
+-- W5: the lowered typeclass impl entries (CProgram's 4th field).
+progImpls : Prog -> List CImplEntry
+progImpls (Prog _ _ _ _ _ _ _ _ impls) = impls
 
 -- the declared arity (param count) of a top-level function, or -1 if not a fn.
 progFnArity : Prog -> String -> Int
@@ -158,7 +166,7 @@ noteFuncRef nm =
 
 export
 emitProgram : CProgram -> <Mut> String
-emitProgram (CProgram groups ctorArs ctorTypes _) =
+emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref lamIdRef 0
   let _ = set_ref liftedFnsRef []
   let _ = set_ref funcRefsRef []
@@ -167,12 +175,18 @@ emitProgram (CProgram groups ctorArs ctorTypes _) =
   let fnArs = collectFnArities groups
   let _ = set_ref fnsUsedAsValuesRef (scanFnValueUses fnNames fnArs ctorArs groups)
   let useClos = programUsesClosures groups ctorArs
-  -- closures force the uniform (ref eq) rep (a closure captures heterogeneous values)
-  let useRef = useClos || programUsesAdt groups ctorArs
+  -- closures force the uniform (ref eq) rep (a closure captures heterogeneous
+  -- values); so does ANY dispatch — an impl method / method occurrence threads
+  -- (ref eq) impl args + i31 dict witnesses, the W5 §8.6 uniform rep.
+  let useRef = useClos || programUsesAdt groups ctorArs || not (isEmptyList impls)
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos
+  let prog = Prog ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos impls
   if useRef then emitRefProgram prog groups
   else emitScalarProgram fnNames valNames groups
+
+isEmptyList : List a -> Bool
+isEmptyList [] = True
+isEmptyList _ = False
 
 -- a top-level fn's arity = its (first clause's) param count.  Multi-clause fns share
 -- one arity (all clauses agree); use the first clause.
@@ -555,13 +569,16 @@ emitRefProgram prog groups =
   let globals = map oneGlobalRef valNames
   -- emit user fns FIRST (this is what accumulates lifted lambdas into liftedFnsRef).
   let fns = concatMapList (emitRefFnBind prog) (userFnBinds groups)
+  -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
+  -- (ref eq) functions the RKey direct call / RDict if-chain dispatch into.
+  let implFns = emitImplFns prog
   let initLines = emitRefInit prog groups
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
   let lifted = if progUseClos prog then concatMapList (x => x) (reverseL liftedFnsRef.value) else []
   let applyRt = if progUseClos prog then closApplyLines else []
   let elemDecl = if progUseClos prog then [emitElemDeclare ()] else []
   joinNl (header ++ typeSection ++ imports ++ elemDecl ++ globals
-            ++ fns ++ lifted ++ applyRt ++ initLines ++ [")"])
+            ++ fns ++ implFns ++ lifted ++ applyRt ++ initLines ++ [")"])
 
 -- the `(elem declare func …)` line listing every fn `ref.func`'d (lifted lambdas,
 -- the PAP code, and any top-level fn used as a value) — required so `ref.func`
@@ -599,7 +616,7 @@ emitTypeSection prog =
 -- with their ctor list.  Reserved types are handled separately so they are never
 -- double-declared.
 userTypesWithCtors : Prog -> List String
-userTypesWithCtors (Prog _ ctorTypes typeNames _ _ _ _ _) =
+userTypesWithCtors (Prog _ ctorTypes typeNames _ _ _ _ _ _) =
   filterList (t => not (isReservedType t)) typeNames
 
 -- per-type: a root struct (just the i32 tag) + one struct per PAYLOAD ctor (tag +
@@ -703,14 +720,32 @@ emitRefMain prog groups = match findMain groups
 -- the printable static kind of a ref-mode main body: an Int (decimal) or a Bool
 -- (true/false).  Determined structurally — arithmetic/Int-lit → Int; a comparison
 -- / Bool-lit / `!` → Bool.  A match's kind is its first arm's body kind.
+isWBool : WTy -> Bool
+isWBool WBool = True
+isWBool _ = False
+
+-- a CIf main's kind: WBool if either branch is conclusively Bool, else the then kind.
+ifKind : Prog -> CExpr -> CExpr -> WTy
+ifKind prog t f =
+  if isWBool (refMainKind prog t) then WBool
+  else if isWBool (refMainKind prog f) then WBool
+  else refMainKind prog t
+
 refMainKind : Prog -> CExpr -> WTy
 refMainKind prog e = match e
   CLit (LInt _) => WInt
   CLit (LBool _) => WBool
+  -- the Bool constructors as values (a dispatched main `… else False`); also lets a
+  -- CIf whose arms are dispatch calls recover Bool-ness from a literal-Bool branch.
+  CVar "True" _ => WBool
+  CVar "False" _ => WBool
   CBinPrim op _ _ => binOpTy op
   CUnOp "!" _ => WBool
   CUnOp _ _ => WInt
-  CIf _ t _ => refMainKind prog t
+  -- a CIf main: prefer whichever branch is conclusively Bool (a comparison / Bool
+  -- ctor / `!`), else fall back to the then branch.  A W5 dispatch fixture often has
+  -- `if <Bool-cond> then <method-call : Bool> else False` — the else pins it Bool.
+  CIf _ t f => ifKind prog t f
   CLet _ _ _ b => refMainKind prog b
   CBlock stmts => refMainKindBlock prog stmts
   CDecision _ arms _ => refMainKindArms prog arms
@@ -906,6 +941,218 @@ paramDeclRef p = " (param $" ++ gname p ++ " (ref eq))"
 localDeclRef : String -> String
 localDeclRef l = "(local $" ++ gname l ++ " (ref eq))"
 
+-- ── §W5 typeclass dispatch (dict-passing) ────────────────────────────────────
+-- Parallels the LLVM emitter (emitMethod/emitDictApp/dictWordsOf + emitImpls).
+-- STAGE2-DESIGN §2.4c policy: dispatch is RUNTIME DICT-PASSING.  The Core IR
+-- carries the resolved Routes as DATA on CMethod/CDict; this section reads them.
+--
+-- DICT-WITNESS REPRESENTATION (the WasmGC analogue of the LLVM i64 "dict word").
+-- Every value here is a (ref eq).  A dict witness is an i31 immediate carrying
+-- `hashName(impl-head-tag)` — the SAME djb2 hash the LLVM emitter stores at field
+-- 0 of its dict cell.  Threading it as a (ref eq) i31 rides the uniform W4 ABI for
+-- free: a constrained fn's leading `$dict_*` params are ordinary (ref eq) params,
+-- and at a dispatch site the witness is unboxed (`i31.get_s`) back to the i32 tag
+-- word.  For minimal Eq/Ord/Num at Int/Bool/ADT the per-instance `requires` dicts
+-- are empty, so a one-level witness is just `i32.const <hashName tag>; ref.i31`
+-- (no heap cell needed — the LLVM emitter's nested-cell layout is W5-out-of-scope).
+--
+--   RKey tag   → a STATIC direct call to $mdk_impl_<tag>_<method> (llvm_emit line
+--                2846: an RKey is a compile-time direct call).
+--   RDict d    → the in-scope dict param $d carries hashName(tag); unbox it and
+--   RDictFwd d   if-chain over the method's candidate impls (i32.eq against each
+--                impl's hashName(routeKey)) → call the matching impl.  Sparse hash
+--                keys ⇒ an if-chain, NOT a br_table (which is for dense ctor tags).
+--   RNone      → arg-tag fallback (gap this slice; no minimal fixture needs it).
+
+-- the method occurrence (return-/arg-position), applied to `args`.  `implRoutes`
+-- (per-instance requires) + `methRoutes` (method-level constraints) are the leading
+-- dict witnesses, prepended to the args (in methRoutes++implRoutes order, matching
+-- llvm_emit's dictWordsOf (methRoutes ++ implRoutes)).
+emitMethodRef : Prog -> List String -> Int -> String -> Route -> List Route -> List Route -> List CExpr -> <Mut> List String
+emitMethodRef prog env d name route implRoutes methRoutes args = match route
+  RKey tag _ =>
+    let dictWords = concatMapList (routeWitness prog env d) (methRoutes ++ implRoutes)
+    let argInstrs = concatMapList (a => emitRefExpr prog env d a) args
+    dictWords ++ argInstrs ++ ["call $" ++ implFnSym tag name]
+  RDict dpar => emitMethodDispatchRef prog env d name dpar args
+  RDictFwd dpar => emitMethodDispatchRef prog env d name dpar args
+  RNone => gap ("wasm W5: RNone arg-tag dispatch for '" ++ name ++ "' is out of slice")
+
+-- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
+-- it, then if-chain over the method's candidate impls comparing the loaded tag
+-- against each impl's hashName(routeKey); on a match call $mdk_impl_<symTag>_<m>.
+-- The chain runs inside a result block; each arm `br`s out with its value.
+emitMethodDispatchRef : Prog -> List String -> Int -> String -> String -> List CExpr -> <Mut> List String
+emitMethodDispatchRef prog env d name dpar args =
+  let impls = methodImpls prog name
+  let argInstrs = concatMapList (a => emitRefExpr prog env d a) args
+  -- the dict tag is read repeatedly; stash it in the scratch local for this depth.
+  let tagRead = readDictParam prog env dpar
+  let blk = "$disp_" ++ name ++ "_" ++ intToString d
+  let chain = emitDispatchChain prog name impls blk tagRead argInstrs
+  ["block " ++ blk ++ " (result (ref eq))"]
+    ++ indent chain
+    ++ ["unreachable", "end"]
+
+-- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
+-- routeKey?  if so: emit the dict witnesses for this impl's requires (empty for the
+-- minimal slice) ++ the args, call the impl, `br` out of the result block carrying
+-- its (ref eq).  The `if` carries NO result type — the matched branch exits via
+-- `br $blk` (which supplies the block's value), the else branch falls through to the
+-- next comparison; after the whole chain an `unreachable` (a well-typed dict always
+-- names a candidate) satisfies the block's (ref eq) fallthrough requirement.
+emitDispatchChain : Prog -> String -> List (String, String) -> String -> List String -> List String -> <Mut> List String
+emitDispatchChain _ _ [] _ _ _ = []
+emitDispatchChain prog name ((tag, key)::rest) blk tagRead argInstrs =
+  tagRead
+    ++ ["i32.const " ++ intToString (dictTag key), "i32.eq", "if"]
+    ++ indent (argInstrs ++ ["call $" ++ implFnSym tag name, "br " ++ blk])
+    ++ ["else"]
+    ++ indent (emitDispatchChain prog name rest blk tagRead argInstrs)
+    ++ ["end"]
+
+-- read a dict PARAM (a (ref eq) i31 witness) into its i32 tag word.  The param is a
+-- leading $dict_* local bound by dict-passing; it is always in `env`.
+readDictParam : Prog -> List String -> String -> List String
+readDictParam _ env dpar =
+  if contains dpar env then ["local.get $" ++ gname dpar, "ref.cast (ref i31)", "i31.get_s"]
+  else gap ("wasm W5: dict param '" ++ dpar ++ "' not in scope")
+
+-- materialize a Route as its leading dict witness instruction(s): a concrete RKey →
+-- the i31 of hashName(tag); a forwarded RDict/RDictFwd → re-push the in-scope dict
+-- param.  Nested `requires` (RKey with non-empty reqs) are out of the minimal slice.
+routeWitness : Prog -> List String -> Int -> Route -> List String
+routeWitness _ _ _ (RKey tag []) = ["i32.const " ++ intToString (dictTag tag), "ref.i31"]
+routeWitness _ _ _ (RKey tag _) = gap ("wasm W5: nested requires-dict witness for '" ++ tag ++ "' is out of slice")
+routeWitness _ env _ (RDict dpar) =
+  if contains dpar env then ["local.get $" ++ gname dpar]
+  else gap ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+routeWitness _ env _ (RDictFwd dpar) =
+  if contains dpar env then ["local.get $" ++ gname dpar]
+  else gap ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+routeWitness _ _ _ RNone = gap "wasm W5: RNone route as a dict witness"
+
+-- a constrained-function occurrence applied to `args`: prepend the materialized
+-- dict witnesses (one per `=>` constraint, in route order) to the args, then call
+-- the lifted $name (whose leading params are the $dict_* the dict-pass injected).
+emitDictRef : Prog -> List String -> Int -> String -> List Route -> List CExpr -> <Mut> List String
+emitDictRef prog env d name routes args =
+  if contains name (progFnNames prog) then
+    let dictWords = concatMapList (routeWitness prog env d) routes
+    let argInstrs = concatMapList (a => emitRefExpr prog env d a) args
+    dictWords ++ argInstrs ++ ["call $" ++ gname name]
+  else gap ("wasm W5: CDict over unknown function '" ++ name ++ "'")
+
+-- the impl-function symbol: $mdk_impl_<tag>_<method>.  For the minimal slice every
+-- (method, head-tag) pair has a SOLE impl, so the bare head tag is the symbol tag
+-- (no C7 same-head-tycon collision; that canonical-key path is out of scope).
+implFnSym : String -> String -> String
+implFnSym tag method = "mdk_impl_" ++ gname tag ++ "_" ++ gname method
+
+-- ── §W5 impl-function emission ───────────────────────────────────────────────
+-- Coalesce the CImplEntry list (one entry per clause) by (method, symTag) into
+-- per-impl clause groups, then emit each as a wasm function $mdk_impl_<tag>_<m>
+-- via the SAME clause machinery top-level fns use (emitClausesRef).  Multi-clause
+-- impls (`eq Red Red = …; eq _ _ = …`) coalesce into a fall-through chain.
+emitImplFns : Prog -> <Mut> List String
+emitImplFns prog = concatMapList (emitImplGroup prog) (implGroups (progImpls prog))
+
+-- (method, tag, arity, clauses) per distinct impl key, in first-seen order.
+data ImplG = ImplG String String Int (List CClause)
+
+implGroups : List CImplEntry -> List ImplG
+implGroups entries = map (gatherImplGroup entries) (distinctImplKeys entries)
+
+-- the (method, tag) keys present, first-seen order.
+distinctImplKeys : List CImplEntry -> List (String, String)
+distinctImplKeys entries = dedupPairs (concatMapList implKeyOf entries) []
+
+implKeyOf : CImplEntry -> List (String, String)
+implKeyOf (CImplEntry m _ (CImplTagged tag _ _ _ _ _)) = [(m, tag)]
+implKeyOf _ = []
+
+-- dedup a (method, tag) key list, first-seen order (dedupKeep is String-only).
+dedupPairs : List (String, String) -> List (String, String) -> List (String, String)
+dedupPairs [] acc = reverseL acc
+dedupPairs (p::rest) acc = if containsPair p acc then dedupPairs rest acc else dedupPairs rest (p :: acc)
+
+containsPair : (String, String) -> List (String, String) -> Bool
+containsPair _ [] = False
+containsPair (a, b) ((c, dd)::rest) = if a == c && b == dd then True else containsPair (a, b) rest
+
+gatherImplGroup : List CImplEntry -> (String, String) -> ImplG
+gatherImplGroup entries (m, tag) =
+  let clauses = concatMapList (implClauseFor m tag) entries
+  let arity = implGroupArity clauses
+  ImplG m tag arity clauses
+
+implClauseFor : String -> String -> CImplEntry -> List CClause
+implClauseFor m tag (CImplEntry n _ (CImplTagged t _ _ _ pats body)) =
+  if n == m && t == tag then [CClause pats body] else []
+implClauseFor _ _ _ = []
+
+implGroupArity : List CClause -> Int
+implGroupArity ((CClause pats _)::_) = listLen pats
+implGroupArity [] = 0
+
+emitImplGroup : Prog -> ImplG -> <Mut> List String
+emitImplGroup prog (ImplG method tag arity clauses) =
+  let fnName = implFnSym tag method
+  let params = synthParams arity
+  let bodyLines = emitClausesImpl prog fnName params arity clauses
+  let allLocals = clauseLocals clauses
+  let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+  let scratch = scratchLocals (clausesMaxDepth clauses)
+  let sig = "  (func $" ++ fnName
+    ++ joinWith "" (map paramDeclRef params)
+    ++ " (result (ref eq))"
+  let localDecls = map localDeclRef (extraLocals ++ scratch)
+  [sig] ++ map (l => "  " ++ l) localDecls ++ indent bodyLines ++ ["  )"]
+
+-- impl bodies use the SAME clause emission as top-level fns; the synthetic fn
+-- "name" (used only for the internal clause-block labels) is the impl symbol.
+emitClausesImpl : Prog -> String -> List String -> Int -> List CClause -> <Mut> List String
+emitClausesImpl prog fnName params arity clauses = emitClausesRef prog fnName params arity clauses
+
+-- the candidate impls for a method: (symTag, routeKey) per group.  routeKey is the
+-- key the RDict witness hashes (the canonical impl key); for the minimal slice the
+-- bare head tag IS the key (sole impl per head), so symTag == routeKey == tag.
+methodImpls : Prog -> String -> List (String, String)
+methodImpls prog method = dedupPairs (concatMapList (methodImplKey method) (progImpls prog)) []
+
+methodImplKey : String -> CImplEntry -> List (String, String)
+methodImplKey method (CImplEntry n _ (CImplTagged tag _ _ _ _ _)) =
+  if n == method then [(tag, tag)] else []
+methodImplKey _ _ = []
+
+-- ── hashName (djb2, seed 5381) — BYTE-IDENTICAL to llvm_emit.hashName so the
+-- dict-witness tag matches across backends + the route-key dispatch agrees. ──
+hashName : String -> Int
+hashName s = hashChars (stringToChars s) 0 5381
+
+hashChars : Array Char -> Int -> Int -> Int
+hashChars cs i acc =
+  if i >= arrayLength cs then acc
+  else hashChars cs (i + 1) (acc * 33 + charCode (arrayGetUnsafe i cs))
+
+-- the i31-safe dict-witness tag: hashName masked into the low 30 bits (positive
+-- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
+-- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
+-- (e.g. hashName "Color" = 210671116836, a 38-bit value) overflows `i32.const`.
+-- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
+-- unchanged, and — being applied identically at witness CREATION (routeWitness) and
+-- at the dispatch COMPARISON (emitDispatchChain) — preserves the equality test.
+-- (No bitwise primitive in the selfhost subset; `% 2^30` is the mask.  Collisions
+-- across 30-bit-equal tag names are astronomically unlikely for the small impl-tag
+-- alphabet; the LLVM 64-bit scheme has the same theoretical collision shape.)
+dictTag : String -> Int
+dictTag s = posMod (hashName s) 1073741824
+
+-- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
+-- djb2 i64 accumulator can wrap negative).
+posMod : Int -> Int -> Int
+posMod n m = ((n % m) + m) % m
+
 -- ── ref-mode expression emitter — every result is a (ref eq) on the stack ────
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a
 -- value into the scratch local `$__rf<d>` and recurses at d+1, so simultaneously-
@@ -924,6 +1171,9 @@ emitRefExpr prog env d e = match e
   CApp f a => emitAppRef prog env d (CApp f a)
   CDecision scrut arms tree => emitDecisionRef prog env d scrut arms tree
   CLam pats body => emitClosure prog env d pats body
+  CMethod name route implRoutes methRoutes =>
+    emitMethodRef prog env d name route implRoutes methRoutes []
+  CDict name routes => emitDictRef prog env d name routes []
   other => gap ("ref-mode: unsupported Core IR node " ++ ctag other)
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
@@ -944,6 +1194,12 @@ emitVarRef : Prog -> List String -> Int -> String -> <Mut> List String
 emitVarRef prog env d x =
   if contains x env then ["local.get $" ++ gname x]
   else if contains x (progValNames prog) then ["global.get $" ++ gname x, "ref.as_non_null"]
+  -- the Bool constructors used as VALUES (e.g. an `eq` impl body `… = True`) are
+  -- i31 immediates 1/0 — the same rep as `emitLitRef (LBool _)`, so `if` reads them
+  -- via `i31.get_u` uniformly.  (Surface `True`/`False` literals desugar to CLit;
+  -- these reach the emitter only as bare ctor occurrences, e.g. from impl bodies.)
+  else if x == "True" then ["i32.const 1", "ref.i31"]
+  else if x == "False" then ["i32.const 0", "ref.i31"]
   else if isCtor prog x then emitCtorConstruct prog env d x []
   else if contains x (progFnNames prog) then
     let _ = noteFuncRef ("$mdk_w_" ++ x)
@@ -1017,6 +1273,13 @@ emitAppRef prog env d app =
         argInstrs ++ ["call $" ++ gname f]
       else
         emitIndirectApp prog env d hd args
+    -- W5: a method occurrence applied to its args (the common return-/arg-position
+    -- dispatch shape — a CMethod head under a CApp).  Dispatch on the route.
+    CMethod name route implRoutes methRoutes =>
+      emitMethodRef prog env d name route implRoutes methRoutes args
+    -- W5: a constrained-function occurrence applied to its real args.  The dict
+    -- witnesses (from `routes`) are PREPENDED to the args at the call.
+    CDict name routes => emitDictRef prog env d name routes args
     _ => emitIndirectApp prog env d hd args
 
 -- an indirect application: emit the head (a (ref eq) closure value), pack the args
@@ -1080,6 +1343,14 @@ emitAppTail prog env arity app =
         let hi = emitRefExpr prog env 0 hd
         let arr = emitArgsArray prog env 0 args
         hi ++ arr ++ ["return_call $mdk_apply"]
+    -- W5: a dispatched method/constrained-fn in tail position.  Compute the
+    -- dispatch result via the value emitter (an RKey direct call, an RDict
+    -- if-chain, or a CDict dict-prepended call) and `return` it.  (return_call
+    -- specialization of the RKey direct call is deferred; the dispatch fixtures
+    -- here are not deep-recursive through a method, so a plain return is sound.)
+    CMethod name route implRoutes methRoutes =>
+      emitMethodRef prog env 0 name route implRoutes methRoutes args ++ ["return"]
+    CDict name routes => emitDictRef prog env 0 name routes args ++ ["return"]
     _ =>
       let hi = emitRefExpr prog env 0 hd
       let arr = emitArgsArray prog env 0 args
@@ -1639,20 +1910,20 @@ binOpTy op =
 -- ── ctor / type info (ref mode) ──────────────────────────────────────────────
 
 isCtor : Prog -> String -> Bool
-isCtor (Prog ctorArs _ _ _ _ _ _ _) name = isSome (lookupAssoc name ctorArs) || isReservedCtor name
+isCtor (Prog ctorArs _ _ _ _ _ _ _ _) name = isSome (lookupAssoc name ctorArs) || isReservedCtor name
 
 isReservedCtor : String -> Bool
 isReservedCtor name = isSome (reservedCtorOrdinal name)
 
 ctorArity : Prog -> String -> Int
-ctorArity (Prog ctorArs _ _ _ _ _ _ _) name = match lookupAssoc name ctorArs
+ctorArity (Prog ctorArs _ _ _ _ _ _ _ _) name = match lookupAssoc name ctorArs
   Some a => a
   None => reservedCtorArity name
 
 -- a ctor's owning type name (user types via the ctor→type map; reserved ctors map
 -- to their fixed type names).
 ctorTypeName : Prog -> String -> String
-ctorTypeName (Prog _ ctorTypes _ _ _ _ _ _) name = match lookupAssoc name ctorTypes
+ctorTypeName (Prog _ ctorTypes _ _ _ _ _ _ _) name = match lookupAssoc name ctorTypes
   Some ty => ty
   None => reservedTypeOf name
 
@@ -1671,7 +1942,7 @@ ctorsOfType prog ty =
   else ctorsOfTypeUser prog ty
 
 ctorsOfTypeUser : Prog -> String -> List String
-ctorsOfTypeUser (Prog _ ctorTypes _ _ _ _ _ _) ty =
+ctorsOfTypeUser (Prog _ ctorTypes _ _ _ _ _ _ _) ty =
   map fstPair (filterList (e => eqStr (sndPair e) ty) ctorTypes)
 
 -- the number of ctors a type has (the br_table's slot count).
