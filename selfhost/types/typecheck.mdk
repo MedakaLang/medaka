@@ -4130,12 +4130,17 @@ rewriteRPDict _ _ e = e
 -- function whose parameter happens to share a method name (`arithOp lt rt`,
 -- `composeOp gt ht`, `exprToPat … sub`) has that parameter mis-marked as a method
 -- occurrence → arg-tag dispatch with no impl groups at emit time.  Gated on
--- argNames so the golden path is provably unchanged.  rpNames stays scope-blind
--- in BOTH paths (no return-position method name is shadowed by a local in the
--- corpus); the arg-position (`an`) and constrained-fn (`dn`) arms are scope-aware
--- in the emit path — a local shadowing an arg-method (`lt`/`gt`/`sub`) or a
--- constrained fn (`elem`, `let elem = freshVar ()` in inferArrayLit/inferIndex/
--- inferPatList) stays a plain EVar instead of becoming `EMethodAt`/`EDictAt`.
+-- argNames so the golden path is provably unchanged.  The rp/an/dn arms are ALL
+-- scope-aware on this (emit + run `elaborateDict`) path: a local binder shadowing
+-- a return-position method name (`let debug = 99` inside a fn body) keeps the
+-- reference a plain EVar so inference resolves it to the local instead of
+-- mis-stamping RKey<resultType> and dispatching to the prelude impl.  Mirrors
+-- lib/typecheck.ml's `env.locals` guard, which skips the method_iface table for
+-- any locally-bound name (the OCaml EVar-arm recovery).  Byte-identical for the
+-- corpus (no corpus rp/arg/constrained name is shadowed by a local — the guard
+-- only changes behaviour for a genuinely-shadowing local: an arg-method
+-- `lt`/`gt`/`sub`, a constrained fn `elem`, or a return-position method `debug`).
+-- The non-emit `mapProg` path (argNames == []) stays scope-blind.
 prePassDictArg : List String -> List String -> List String -> List Decl -> List Decl
 prePassDictArg rpNames dictNames [] prog =
   mapProg (rewriteRPDictArg rpNames dictNames []) prog
@@ -4216,7 +4221,7 @@ propParamName (PropParam n _) = n
 -- same `bound`.
 rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
 rewriteArgScoped (ArgRw rp dn an) bound (EVar n)
-  | contains n rp = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | contains n rp && not (contains n bound) = EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | contains n an && not (contains n bound) = EMethodAt n (Ref RNone) (Ref []) (Ref [])
   | contains n dn && not (contains n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
