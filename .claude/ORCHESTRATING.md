@@ -189,6 +189,11 @@ to the decisive checks:
   sensible defaults rather than over-asking.
 - **Defer expensive regenerations.** Batch costly artifacts (big regenerated files)
   to real checkpoints instead of after every sub-task, to avoid churn commits.
+- **For a large task delegated in pieces, give "incremental-landing" permission + ask for the
+  next gap.** Tell the agent: land a coherent gated chunk, stub the rest with a recognizable
+  marker, and REPORT the precise residual. This keeps a sub-task from ballooning and makes a
+  blocked hand-off self-documenting — the honest STOP with a precise punch-list (ideally + a
+  pointer to where the fix already exists) is the deliverable, not a failure.
 
 ---
 
@@ -216,37 +221,6 @@ thing. The pattern that worked:
 Re-mint expensive artifacts (the seed) once at the **completed-change checkpoint**, not
 per sub-part. A *comment-only* edit to an emitter-graph file does NOT invalidate the seed
 (emitted IR is identical) — but any logic change does.
-
----
-
-## Staged slice-pipeline for a new backend / large additive build (the WasmGC session)
-
-Building the WasmGC backend (W1→W9b) as ~10 sequential slices in one session worked cleanly.
-The reusable shape:
-
-- **Design-doc first, then slices.** A read-only Plan agent produced `WASMGC-DESIGN.md` (value-rep
-  contract, MVP-first slice list W1–W9, locked design forks). Every implementation agent shared
-  that one spec. Surface the forks to the user; lock scope before slicing.
-- **Slices that touch the SAME hot file are strictly SEQUENTIAL** (the emitter `wasm_emit.mdk` was
-  every slice's file). Verify-green + merge each before the next branches — never two agents on it.
-- **Parallelize only genuinely disjoint work.** Lexer/parser fixes (comment-layout, multi-line
-  `if`) ran in parallel with an emitter slice because the files don't overlap. Check
-  `git diff --name-only <base>..<branch>` for overlap before merging concurrent branches.
-- **Bounded-read hands the agent the TEMPLATE.** Before each slice I grepped the LLVM emitter for the
-  parallel arms (`emitMethod`/`emitDecision`/`methodArityOf`…) + the Core IR node defs, and handed
-  the agent file:line pointers ("port this"). Agents moved fast and correctly; the ones told "the
-  LLVM emitter already solves this, port it" (W9b) turned a research-shaped gap into a scoped fix.
-- **Incremental-landing permission + report-the-next-gap.** Telling each agent "land a coherent
-  gated chunk, leave clean `panic` gaps for the rest, and REPORT the precise residual" kept slices
-  from ballooning (W6→W6a, W8→W8b) and made integration slices self-documenting. W9's honest STOP
-  with a precise punch-list + a pointer to the fix *was the deliverable* — a clean stop is a win.
-- **Verify the newly-opened frontier yourself, end-to-end, outside the harness.** At the MVP
-  milestone I compiled+ran a real-prelude multi-file program through `wasm-tools`+Node directly
-  (not just the gate) — and caught my own wrong CLI invocation before trusting "green." A milestone
-  claim needs a hand-run of the thing it newly enables.
-- **Decisive check per slice:** the emitter isn't in the self-host graph, so NO fixpoint — the
-  output-diff gate (`diff_wasm*.sh`, emitter-WAT vs `medaka build` oracle) is decisive. The two
-  lexer fixes WERE in the graph → fixpoint mandatory + seed re-mint at that checkpoint.
 
 ---
 
