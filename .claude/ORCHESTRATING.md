@@ -219,8 +219,54 @@ per sub-part. A *comment-only* edit to an emitter-graph file does NOT invalidate
 
 ---
 
+## Staged slice-pipeline for a new backend / large additive build (the WasmGC session)
+
+Building the WasmGC backend (W1→W9b) as ~10 sequential slices in one session worked cleanly.
+The reusable shape:
+
+- **Design-doc first, then slices.** A read-only Plan agent produced `WASMGC-DESIGN.md` (value-rep
+  contract, MVP-first slice list W1–W9, locked design forks). Every implementation agent shared
+  that one spec. Surface the forks to the user; lock scope before slicing.
+- **Slices that touch the SAME hot file are strictly SEQUENTIAL** (the emitter `wasm_emit.mdk` was
+  every slice's file). Verify-green + merge each before the next branches — never two agents on it.
+- **Parallelize only genuinely disjoint work.** Lexer/parser fixes (comment-layout, multi-line
+  `if`) ran in parallel with an emitter slice because the files don't overlap. Check
+  `git diff --name-only <base>..<branch>` for overlap before merging concurrent branches.
+- **Bounded-read hands the agent the TEMPLATE.** Before each slice I grepped the LLVM emitter for the
+  parallel arms (`emitMethod`/`emitDecision`/`methodArityOf`…) + the Core IR node defs, and handed
+  the agent file:line pointers ("port this"). Agents moved fast and correctly; the ones told "the
+  LLVM emitter already solves this, port it" (W9b) turned a research-shaped gap into a scoped fix.
+- **Incremental-landing permission + report-the-next-gap.** Telling each agent "land a coherent
+  gated chunk, leave clean `panic` gaps for the rest, and REPORT the precise residual" kept slices
+  from ballooning (W6→W6a, W8→W8b) and made integration slices self-documenting. W9's honest STOP
+  with a precise punch-list + a pointer to the fix *was the deliverable* — a clean stop is a win.
+- **Verify the newly-opened frontier yourself, end-to-end, outside the harness.** At the MVP
+  milestone I compiled+ran a real-prelude multi-file program through `wasm-tools`+Node directly
+  (not just the gate) — and caught my own wrong CLI invocation before trusting "green." A milestone
+  claim needs a hand-run of the thing it newly enables.
+- **Decisive check per slice:** the emitter isn't in the self-host graph, so NO fixpoint — the
+  output-diff gate (`diff_wasm*.sh`, emitter-WAT vs `medaka build` oracle) is decisive. The two
+  lexer fixes WERE in the graph → fixpoint mandatory + seed re-mint at that checkpoint.
+
+---
+
 ## Failure modes seen
 
+- **Agent commits on its OWN-named branch, not the `worktree-agent-<id>` branch.** Several agents
+  reported a branch like `wasm-w8-leaf-externs` and committed there; the `worktree-agent-<id>` branch
+  stayed at the base. Merging the worktree-id branch is then a silent no-op (this session: gate read
+  52/52 instead of 68/68). **Merge by the reported SHA**, and confirm with `git branch --contains <sha>`
+  before trusting the merge.
+- **Salvaging a session-limit-killed agent.** An agent can die mid-run (usage limit) having committed
+  NOTHING — but its WIP is live in its worktree (`git -C <worktree> status`). Preserve it (commit on
+  its branch), then verify INDEPENDENTLY from scratch (it left no report) and give it a real commit
+  message. This session W5 was fully salvaged this way; the work was real and correct.
+- **Two more stale-binary footguns (beyond `FORCE=1 build_oracles`):** (1) `make medaka`'s
+  `find -newer` short-circuit can leave `./medaka` NOT carrying a lexer/compiler-graph change →
+  `FORCE_EMITTER_REBUILD=1 make medaka` when verifying such a change. (2) the OCaml oracle
+  `_build/default/bin/main.exe` is rebuilt by `dune build --root . bin/main.exe`, NOT by `make medaka`
+  — a stale main.exe made a fixed repro falsely read `oracle=REJECT`. Rebuild the specific binary the
+  check reads before trusting it.
 - Agent commits then ends with an empty/"waiting" report → verify from git + gates.
 - **A returned agent with ≈0 tool uses + a boilerplate/empty result = a failed run, not a
   completed one.** Don't act on it; re-spawn (sometimes a different agent type helps).

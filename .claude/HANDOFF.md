@@ -1,4 +1,4 @@
-# Next-orchestrator handoff — Medaka, soak tail (2026-06-18)
+# Next-orchestrator handoff — Medaka, WasmGC backend + soak (2026-06-19)
 
 You are the **orchestrator** for Medaka, a self-hosting functional language whose native
 LLVM backend is now CANONICAL (compiles itself + all user code OCaml-free). You design and
@@ -7,9 +7,46 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
+## RESUME — WasmGC 2nd backend: MVP MET (2026-06-19). `main` ≈ `923b1ea` (+W8b in flight)
+
+**The active workstream.** A direct **Core IR → WAT text** WasmGC emitter (`selfhost/backend/wasm_emit.mdk`
++ `wasm_preamble.mdk`), paralleling the LLVM emitter. Design + locked forks: **`selfhost/WASMGC-DESIGN.md`**
+(§9 slice list, §10 forks). Authoritative status: memory **`project_wasmgc_backend`**. PLAN.md hub row added.
+
+- **Slices W1–W9b DONE + on `main`.** W1 toolchain · W2 scalar · W3 ADTs/match (`br_table`) · W4
+  closures/`call_ref`/TCO (`return_call`, arity-in-struct) · W5 dispatch (`CMethod`/`CDict`) · W6a strings
+  (`(array i8)`+cp_count, byte-write IO) · W7 collections · W8 RNG/hash/string-externs · W9 + **W9b** the
+  real-prelude + multi-module pipeline. **MVP = real-`core.mdk`-prelude + multi-file compute+print programs
+  compile to WasmGC and run byte-identical to `medaka build`** — independently verified end-to-end (Node 24).
+- **Gates** (all green): `test/wasm/diff_wasm.sh` 68 (prelude-free entry), `diff_wasm_typed.sh` 6 (typed
+  entry, own-interface dispatch fixtures), `diff_wasm_modules.sh` 9 (real-prelude/multi-module, incl
+  multi-file `mm_sum→43`). Oracle = `./medaka build` (needs `MEDAKA_EMITTER=$PWD/medaka_emitter` env).
+- **KEY: `wasm_emit.mdk` + its entries are OUTSIDE the self-host compiler graph** (only `test/bin/wasm_*`
+  import them, not `medaka_cli.mdk`) → **no fixpoint, no seed re-mint** for emitter changes. The decisive
+  check is the output-diff gate. (The 2 lexer ergonomics fixes this session WERE in-graph → fixpoint + seed.)
+- **Engines installed** (engine drift is real — `WASMGC-DESIGN.md` §11): `wasm-tools` 1.252, `wasmtime` 45,
+  **Node 24 via nvm** — the default `node` 20.11 FAILS the finalized Wasm 3.0 GC encoding ("invalid array
+  index"); the gates auto-`nvm use 24`. `make medaka` may need `FORCE_EMITTER_REBUILD=1` to carry a graph change.
+- **IN FLIGHT — W8b** (close-out): Floats (literals/arith, `floatToString` = faithful in-WAT `%.12g` —
+  fixed-precision, NOT shortest-dtoa — with a host-import fallback allowed; `intToFloat`/`floatToInt`/`hashFloat`/
+  `randomFloat`/`stringToFloat`) + `stringIndexOf`/`stringCompare`. Verify all 3 gates + the floatToString
+  edge-case fixtures; reconcile `WASMGC-DESIGN.md` §9/§11 after it lands (deferred during W8b to avoid racing
+  its gap-list edit).
+- **WasmGC roadmap AFTER W8b** (next agents): (1) **IO/WASI host surface** — file/exec/stdin/args/env, the
+  capability-manifest payoff (this is where the wedge value lands; currently the only big deferred set besides
+  floats); (2) **Wasmtime execution cross-check** (a WASI write path — today only `wasmtime compile` accepts the
+  module; running needs host imports); (3) **Float-unboxing perf** (starts all-floats-boxed); (4) **browser
+  interop** (JS String Builtins); (5) **self-host-on-WasmGC** (far horizon — needs the withheld IO surface).
+
+### Lexer ergonomics fixes landed this session (both compilers, fixpoint-gated, seed re-minted)
+- **Comment-only lines now layout-transparent** + **multi-line `if`/`then`/`else`** (leading `then`/`else`
+  continues the `if`). Both in `lib/lexer.mll` + `selfhost/frontend/lexer.mdk`, mirrored, no associativity
+  change. Memory `project_comment_line_layout_fix`.
+
 ## RESUME — 2026-06-18 correctness arc COMPLETE. `main` = `e638673`
 
 **All items below are on `main`, fixpoint-gated (C3a/C3b YES), independently verified, seed re-minted.**
+
 
 ### Stale-golden / gate cleanup (start of session)
 - Recaptured stale goldens (desugar/mark/lextok/test) after prior source edits.
