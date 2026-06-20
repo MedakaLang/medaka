@@ -319,6 +319,40 @@ let test_expr_if_dangling_else_binds_inner () =
          ELit LUnit) -> ()
   | e -> failwith (Printf.sprintf "wrong shape: %s" (Ast.pp_expr e))
 
+(* Multi-line `if` where `then`/`else` lead a continuation line at the SAME
+   indent as the `if`.  The lexer's else-continuation filter now drops the
+   layout NEWLINE before THEN as well as ELSE, so this lexes identically to the
+   one-liner `if c then a else b` and produces the same EIf. *)
+let test_expr_if_multiline_leading_then_else () =
+  match parse_one "main =\n  if 1 == 1\n  then 10\n  else 20\n" with
+  | DFunDef (false, "main", [],
+      EIf (EBinOp ("==", ELit (LInt 1), ELit (LInt 1), _),
+           ELit (LInt 10), ELit (LInt 20))) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
+(* Same, but `then`/`else` are INDENTED under the `if`.  The Phase-137 deferred
+   INDENT is now resolved as a continuation (not a block) when the deeper line
+   starts with THEN/ELSE, so this too collapses to the bare EIf. *)
+let test_expr_if_multiline_indented_then_else () =
+  match parse_one "main =\n  if 1 == 1\n    then 10\n    else 20\n" with
+  | DFunDef (false, "main", [],
+      EIf (EBinOp ("==", ELit (LInt 1), ELit (LInt 1), _),
+           ELit (LInt 10), ELit (LInt 20))) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
+(* Nested multi-line if/then/else: the inner if (with its own multi-line
+   then/else) sits in the outer `then` branch.  Verifies the continuation rule
+   does NOT change dangling-else association — `else` binds to the nearest
+   `if`, byte-identical to the one-liner nesting. *)
+let test_expr_if_multiline_nested () =
+  match parse_one
+    "g a b =\n  if a\n  then\n    if b\n    then 1\n    else 2\n  else 3\n" with
+  | DFunDef (false, "g", [PVar "a"; PVar "b"],
+      EIf (EVar "a",
+           EIf (EVar "b", ELit (LInt 1), ELit (LInt 2)),
+           ELit (LInt 3))) -> ()
+  | d -> failwith (Printf.sprintf "wrong shape: %s" (pp_decl d))
+
 let test_expr_application () =
   match parse_expr "f x y\n" with
   | EApp (EApp (EVar "f", EVar "x"), EVar "y") -> ()
@@ -2097,6 +2131,9 @@ let () =
       test_case "if else-less inline" `Quick test_expr_if_elseless_inline;
       test_case "if else-less block"  `Quick test_expr_if_elseless_block;
       test_case "if dangling else binds inner" `Quick test_expr_if_dangling_else_binds_inner;
+      test_case "if multiline leading then/else" `Quick test_expr_if_multiline_leading_then_else;
+      test_case "if multiline indented then/else" `Quick test_expr_if_multiline_indented_then_else;
+      test_case "if multiline nested" `Quick test_expr_if_multiline_nested;
       test_case "application"       `Quick test_expr_application;
       test_case "infix backtick"    `Quick test_expr_infix_backtick;
       test_case "list literal"      `Quick test_expr_list_literal;

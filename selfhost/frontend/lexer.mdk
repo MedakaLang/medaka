@@ -985,6 +985,8 @@ wouldIndent col off stack rest prev opener
 resolveCont : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int)
 resolveCont col off stack ((RTok t toff tend)::more) prev opener
   | canStartAtom t = layout (RTok t toff tend :: more) stack prev opener
+  | t == TThen = layout (RTok t toff tend :: more) stack prev opener
+  | t == TElse = layout (RTok t toff tend :: more) stack prev opener
   | otherwise = (TIndent, off) :: layout (RTok t toff tend :: more) (col :: stack) None False
 resolveCont col off stack rest prev opener = layout rest stack None False
 
@@ -1006,10 +1008,13 @@ closeDedents [_] off = [(TEof, off)]
 closeDedents (_::tl) off =
   (TDedent, off) :: (TNewline, off) :: closeDedents tl off
 
--- Phase 122 else-continuation filter: drop a NEWLINE immediately before ELSE.
+-- Phase 122 else-continuation filter: drop a NEWLINE immediately before ELSE
+-- or THEN (a `then`/`else` leading the next line continues the enclosing `if`).
 elseFilter : List (Token, Int) -> List (Token, Int)
 elseFilter ((TNewline, _)::(TElse, eoff)::rest) =
   (TElse, eoff) :: elseFilter rest
+elseFilter ((TNewline, _)::(TThen, eoff)::rest) =
+  (TThen, eoff) :: elseFilter rest
 elseFilter (t::rest) = t :: elseFilter rest
 elseFilter [] = []
 
@@ -1060,6 +1065,8 @@ wouldIndentPairs col off stack rest prev opener
 resolveContPairs : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int, Int)
 resolveContPairs col off stack ((RTok t toff tend)::more) prev opener
   | canStartAtom t = layoutPairs (RTok t toff tend :: more) stack prev opener
+  | t == TThen = layoutPairs (RTok t toff tend :: more) stack prev opener
+  | t == TElse = layoutPairs (RTok t toff tend :: more) stack prev opener
   | otherwise = (TIndent, off, off) :: layoutPairs (RTok t toff tend :: more) (col :: stack) None False
 resolveContPairs col off stack rest prev opener =
   layoutPairs rest stack None False
@@ -1082,6 +1089,8 @@ closeDedentsPairs (_::tl) off =
 elseFilterPairs : List (Token, Int, Int) -> List (Token, Int, Int)
 elseFilterPairs ((TNewline, _, _)::(TElse, es, ee)::rest) =
   (TElse, es, ee) :: elseFilterPairs rest
+elseFilterPairs ((TNewline, _, _)::(TThen, es, ee)::rest) =
+  (TThen, es, ee) :: elseFilterPairs rest
 elseFilterPairs (t::rest) = t :: elseFilterPairs rest
 elseFilterPairs [] = []
 

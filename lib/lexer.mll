@@ -693,7 +693,11 @@ let rec token (lexbuf : Lexing.lexbuf) : token =
    INDENT is committed and [t] replayed. *)
 and resolve_pending col t lexbuf =
   pending_indent := None;
-  if can_start_atom t then
+  if can_start_atom t || t = THEN || t = ELSE then
+    (* `then`/`else` leading a deeper line continue the enclosing `if` (the
+       grammar wants `IF expr_or THEN …` with no intervening layout), exactly
+       like an atom-starter continues an application — swallow the INDENT,
+       leaving the indent stack at the statement's base column. *)
     note t
   else if t = NEWLINE || t = EOF then
     filter_newline t lexbuf
@@ -707,13 +711,15 @@ and resolve_pending col t lexbuf =
   end
 
 (* Phase 122 `else`-continuation filter: drop a layout NEWLINE immediately
-   before ELSE (keeping any DEDENT), so the grammar never sees `newlines ELSE`. *)
+   before ELSE or THEN (keeping any DEDENT), so the grammar never sees
+   `newlines ELSE`/`newlines THEN` — a `then`/`else` leading the next line
+   continues the enclosing `if`. *)
 and filter_newline t lexbuf =
   if t <> NEWLINE then note t
   else begin
     let nl_sp = lexbuf.Lexing.lex_start_p and nl_ep = lexbuf.Lexing.lex_curr_p in
     let next = raw_token lexbuf in
-    if next = ELSE then note next       (* drop the NEWLINE; ELSE positions are current *)
+    if next = ELSE || next = THEN then note next  (* drop the NEWLINE; THEN/ELSE positions are current *)
     else begin
       (* keep the NEWLINE; buffer `next` with its positions; restore the
          NEWLINE's positions for this return *)
