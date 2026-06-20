@@ -7,7 +7,7 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
-## RESUME — WasmGC 2nd backend: MVP MET (2026-06-19). `main` ≈ `923b1ea` (+W8b in flight)
+## RESUME — WasmGC 2nd backend: MVP MET + W8b DONE (2026-06-19). `main` = `7bae959`
 
 **The active workstream.** A direct **Core IR → WAT text** WasmGC emitter (`selfhost/backend/wasm_emit.mdk`
 + `wasm_preamble.mdk`), paralleling the LLVM emitter. Design + locked forks: **`selfhost/WASMGC-DESIGN.md`**
@@ -18,7 +18,7 @@ footguns) and `AGENTS.md` (the agent-facing router/map).
   (`(array i8)`+cp_count, byte-write IO) · W7 collections · W8 RNG/hash/string-externs · W9 + **W9b** the
   real-prelude + multi-module pipeline. **MVP = real-`core.mdk`-prelude + multi-file compute+print programs
   compile to WasmGC and run byte-identical to `medaka build`** — independently verified end-to-end (Node 24).
-- **Gates** (all green): `test/wasm/diff_wasm.sh` 68 (prelude-free entry), `diff_wasm_typed.sh` 6 (typed
+- **Gates** (all green): `test/wasm/diff_wasm.sh` 85 (prelude-free entry), `diff_wasm_typed.sh` 6 (typed
   entry, own-interface dispatch fixtures), `diff_wasm_modules.sh` 9 (real-prelude/multi-module, incl
   multi-file `mm_sum→43`). Oracle = `./medaka build` (needs `MEDAKA_EMITTER=$PWD/medaka_emitter` env).
 - **KEY: `wasm_emit.mdk` + its entries are OUTSIDE the self-host compiler graph** (only `test/bin/wasm_*`
@@ -27,16 +27,19 @@ footguns) and `AGENTS.md` (the agent-facing router/map).
 - **Engines installed** (engine drift is real — `WASMGC-DESIGN.md` §11): `wasm-tools` 1.252, `wasmtime` 45,
   **Node 24 via nvm** — the default `node` 20.11 FAILS the finalized Wasm 3.0 GC encoding ("invalid array
   index"); the gates auto-`nvm use 24`. `make medaka` may need `FORCE_EMITTER_REBUILD=1` to carry a graph change.
-- **IN FLIGHT — W8b** (close-out): Floats (literals/arith, `floatToString` = faithful in-WAT `%.12g` —
-  fixed-precision, NOT shortest-dtoa — with a host-import fallback allowed; `intToFloat`/`floatToInt`/`hashFloat`/
-  `randomFloat`/`stringToFloat`) + `stringIndexOf`/`stringCompare`. Verify all 3 gates + the floatToString
-  edge-case fixtures; reconcile `WASMGC-DESIGN.md` §9/§11 after it lands (deferred during W8b to avoid racing
-  its gap-list edit).
+- **DONE — W8b** (main `993d4f3`): Floats (literals → `f64.const`+`struct.new $float`; arith/cmp via
+  structural Float recovery; `intToFloat`/`floatToInt`/`hashFloat`/`randomFloat` pure WAT; `floatToString`
+  = HOST IMPORT `mdk_float_fmt` reproducing `%.12g` byte-for-byte — the authorized one host-dependent
+  formatter, parallel to the IO seam) + `stringIndexOf`/`stringCompare` (pure WAT building Option Int /
+  Ordering). Gates 85/6/9. `WASMGC-DESIGN.md` §9/§11 + memory `project_wasmgc_backend` reconciled.
+  **DEFERRED (clean gaps):** `stringToFloat` (strtod port). Surfaced 2 pre-existing native float-literal
+  gaps → memory `project_float_literal_native_gaps` (LLVM e-form const build bug FIXED `7bae959`;
+  scientific-notation source literals still rejected at check by both compilers — open/deferred).
 - **WasmGC roadmap AFTER W8b** (next agents): (1) **IO/WASI host surface** — file/exec/stdin/args/env, the
   capability-manifest payoff (this is where the wedge value lands; currently the only big deferred set besides
-  floats); (2) **Wasmtime execution cross-check** (a WASI write path — today only `wasmtime compile` accepts the
+  `stringToFloat`); (2) **Wasmtime execution cross-check** (a WASI write path — today only `wasmtime compile` accepts the
   module; running needs host imports); (3) **Float-unboxing perf** (starts all-floats-boxed); (4) **browser
-  interop** (JS String Builtins); (5) **self-host-on-WasmGC** (far horizon — needs the withheld IO surface).
+  interop** (JS String Builtins) / the in-browser playground (`PLAYGROUND-DESIGN.md`); (5) **self-host-on-WasmGC** (far horizon — needs the withheld IO surface).
 
 ### Lexer ergonomics fixes landed this session (both compilers, fixpoint-gated, seed re-minted)
 - **Comment-only lines now layout-transparent** + **multi-line `if`/`then`/`else`** (leading `then`/`else`
