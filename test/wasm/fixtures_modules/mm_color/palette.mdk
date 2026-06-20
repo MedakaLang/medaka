@@ -1,0 +1,7 @@
+-- W9 multi-module: a sibling module exporting an ADT + a function over it.
+public export data Color = Red | Green | Blue
+
+export colorCode : Color -> Int
+colorCode Red = 1
+colorCode Green = 2
+colorCode Blue = 3

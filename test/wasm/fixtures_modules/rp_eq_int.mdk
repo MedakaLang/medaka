@@ -1,0 +1,2 @@
+-- W9 real-prelude: Eq Int dispatch via the real prelude.
+main = (2 + 2) == 4

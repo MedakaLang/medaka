@@ -1,0 +1,3 @@
+-- W9 real-prelude: Num Int arithmetic + auto-printed Int main (dispatch through the
+-- REAL core.mdk Num/Eq prelude, DCE-pruned).
+main = 2 + 3 * 4

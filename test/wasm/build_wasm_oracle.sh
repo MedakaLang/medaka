@@ -17,8 +17,10 @@ MEDAKA="$ROOT/medaka"
 EMITTER="$ROOT/medaka_emitter"
 ENTRY="$ROOT/selfhost/entries/wasm_emit_main.mdk"
 ENTRY_TYPED="$ROOT/selfhost/entries/wasm_emit_typed_main.mdk"
+ENTRY_MODULES="$ROOT/selfhost/entries/wasm_emit_modules_main.mdk"
 OUT="$ROOT/test/bin/wasm_emit_main"
 OUT_TYPED="$ROOT/test/bin/wasm_emit_typed_main"
+OUT_MODULES="$ROOT/test/bin/wasm_emit_modules_main"
 
 command -v clang >/dev/null 2>&1 || { echo "no clang — skipping (W2/W5 oracle needs the native build path)"; exit 2; }
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka"; exit 2; }
@@ -29,3 +31,5 @@ mkdir -p "$ROOT/test/bin"
 echo "built $ENTRY -> $OUT"
 "$MEDAKA" build "$ENTRY_TYPED" -o "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
 echo "built $ENTRY_TYPED -> $OUT_TYPED"
+"$MEDAKA" build "$ENTRY_MODULES" -o "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
+echo "built $ENTRY_MODULES -> $OUT_MODULES"

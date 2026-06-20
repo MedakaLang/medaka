@@ -188,6 +188,19 @@ progFnArity prog n = match lookupAssoc n (progFnArs prog)
   Some a => a
   None => -1
 
+-- W9: canonicalize a referenced fn name against the defined-fn set, mirroring DCE's
+-- canonRef + the LLVM emitter's canonFnName.  `mangleUnits` renames prelude defs to
+-- `core__<name>` AND rewrites uses present at mangle time — but the desugar/elaborate
+-- passes SYNTHESIZE bare prelude references afterwards (notably string-interp `\{e}`
+-- → `debug`/`debugStringLit`/`displayListItems`, and `!=` → `not`).  Such a bare ref
+-- does not match its `core__`-mangled def by string equality, so resolve it: if the
+-- bare name isn't a defined fn but its `core__` form is, use the mangled name.
+canonFn : Prog -> String -> String
+canonFn prog n =
+  if contains n (progFnNames prog) then n
+  else if contains ("core__" ++ n) (progFnNames prog) then "core__" ++ n
+  else n
+
 -- ── program entry ────────────────────────────────────────────────────────────
 -- W4 module-level state for lambda lifting.  `lamIdRef` is the fresh-id counter for
 -- lifted-lambda names (`$mdk_lamN`); `liftedFnsRef` accumulates the lifted top-level
@@ -221,6 +234,9 @@ strSegsRef = Ref []
 
 strSegIdRef : Ref Int
 strSegIdRef = Ref 0
+
+curBindRef : Ref String
+curBindRef = Ref "?"
 
 -- ── W7 collection state ──────────────────────────────────────────────────────
 -- Which collection reps the program actually uses (gates their type-section decls,
@@ -321,10 +337,11 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref tupleAritiesRef []
   let _ = set_ref recFieldsRef (collectRecFields groups)
   let _ = scanProgW7 groups
+  let _ = scanImplsW7 impls
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let fnArs = collectFnArities groups
-  let _ = set_ref fnsUsedAsValuesRef (scanFnValueUses fnNames fnArs ctorArs groups)
+  let _ = set_ref fnsUsedAsValuesRef (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
   let useClos = programUsesClosures groups ctorArs
   -- closures force the uniform (ref eq) rep (a closure captures heterogeneous
   -- values); so does ANY dispatch — an impl method / method occurrence threads
@@ -387,6 +404,22 @@ isLeafExternW name = contains name [
   "randomInt", "randomBool", "randomChar", "setSeed",
   "hashInt", "hashChar", "hashBool"]
 
+-- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to
+-- build an eta closure when the extern is referenced as a VALUE (point-free / passed
+-- as an argument), mirroring the LLVM emitter's emitExternEtaClosure.
+externArityW : String -> Int
+externArityW name =
+  if contains name ["flushStdout", "randomBool"] then 0
+  else if contains name ["intToString", "charToStr", "stringLength", "putStr",
+    "putStrLn", "ePutStr", "ePutStrLn", "stringToUpper", "stringToLower", "hashString",
+    "stringConcat", "setSeed", "randomChar", "hashInt", "hashChar", "hashBool"] then 1
+  else if contains name ["randomInt"] then 2
+  else if contains name ["stringSlice"] then 3
+  else 1
+
+isWasmEtaExtern : String -> Bool
+isWasmEtaExtern name = isStrExternW name || isLeafExternW name
+
 -- ── W8b DEFERRED Float externs ────────────────────────────────────────────────
 -- These need Float boxing (struct $float) + a byte-exact %.12g float formatter (the
 -- `N.0` whole-float canonicalization, nan/inf), which is non-trivial in pure WAT
@@ -395,6 +428,27 @@ isLeafExternW name = contains name [
 isDeferredFloatExternW : String -> Bool
 isDeferredFloatExternW name = contains name [
   "floatToString", "stringToFloat", "randomFloat", "hashFloat", "intToFloat", "floatToInt"]
+
+-- W9: a DEFERRED Float extern (boxing + %.12g dtoa is W8b) lowers to a `unreachable`
+-- TRAP STUB rather than aborting the whole build.  The real prelude's `impl Debug/
+-- Display/Hash/Num Float` reference these, and DCE retains every impl WHOLE, so the
+-- refs are unconditionally reachable in EVERY real-prelude program even when no Float
+-- is ever displayed.  Stubbing (instead of `gap`) lets the Int/Bool/String/List
+-- programs emit and run; a program that ACTUALLY evaluates a Float-extern call traps
+-- loudly (and diverges from the LLVM oracle, which has full Float) — so W9 fixtures
+-- avoid Float, and the W8b Float port remains the precise remaining-MVP item.
+-- `unreachable` is stack-polymorphic, so it validates as any `(result (ref eq))`.
+floatExternStub : String -> List String
+floatExternStub _ = ["unreachable"]
+
+-- W9: the QUOTING debug externs `debugStringLit`/`debugCharLit` (used by `impl Debug
+-- String`/`impl Debug Char` to render `"hi"`/`'a'` with quotes+escapes) have no
+-- WasmGC runtime yet.  Like the Float externs they are reached UNCONDITIONALLY (those
+-- impls are retained whole by DCE) but only EXECUTED when a String/Char is `debug`ged,
+-- which W9 fixtures avoid (they use `display`/auto-print, not quoted `debug`).  Stub
+-- to a trap so the program emits; the port of these externs is a remaining-MVP item.
+isUnimplStrExternW : String -> Bool
+isUnimplStrExternW name = contains name ["debugStringLit", "debugCharLit"]
 
 programUsesStr : List CBind -> Bool
 programUsesStr groups = anyBind bindUsesStr groups
@@ -438,12 +492,30 @@ headUsesStr h = exprUsesStr h
 scanProgW7 : List CBind -> <Mut> Unit
 scanProgW7 groups = forEachU (b => scanBindW7 b) groups
 
+-- W9: scan impl method bodies + interface defaults for collection/extern use too
+-- (e.g. `eq (x::xs) (y::ys)` forces lists; `display n = intToString n` forces $str).
+scanImplsW7 : List CImplEntry -> <Mut> Unit
+scanImplsW7 impls = forEachU scanImplEntryW7 impls
+
+scanImplEntryW7 : CImplEntry -> <Mut> Unit
+scanImplEntryW7 (CImplEntry _ _ body) = match body
+  CImplTagged _ _ _ _ pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
+  CImplDefault pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
+
 forEachU : (a -> <Mut> Unit) -> List a -> <Mut> Unit
 forEachU _ [] = ()
 forEachU f (x::xs) = let _ = f x in forEachU f xs
 
 scanBindW7 : CBind -> <Mut> Unit
-scanBindW7 (CBind _ clauses) = forEachU (c => scanExprW7 (clauseBodyOf c)) clauses
+scanBindW7 (CBind _ clauses) = forEachU scanClauseW7 clauses
+
+-- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
+-- collection type sections even when the body has no collection literal — e.g.
+-- core.mdk's debugListItems `(y::rest)` heads) AND its body.
+scanClauseW7 : CClause -> <Mut> Unit
+scanClauseW7 (CClause pats body) =
+  let _ = forEachU scanPatW7 pats
+  scanExprW7 body
 
 scanExprW7 : CExpr -> <Mut> Unit
 scanExprW7 e = match e
@@ -471,6 +543,10 @@ scanExprW7 e = match e
   CBlock stmts => forEachU scanStmtW7 stmts
   CDecision scrut arms tree => let _ = scanExprW7 scrut in let _ = forEachU (a => scanArmW7 a) arms in scanTreeW7 tree
   CMatch scrut arms => let _ = scanExprW7 scrut in forEachU (a => scanArmW7 a) arms
+  -- W9: descend a CLetGroup so its lifted members' bodies (and their externs /
+  -- collection use, e.g. arbitraryList's `go` using `randomInt` + `::`) gate the
+  -- runtime/type sections.
+  CLetGroup binds b => let _ = forEachU (bd => scanBindW7 bd) binds in scanExprW7 b
   _ => ()
 
 scanW7Head : CExpr -> <Mut> Unit
@@ -499,6 +575,7 @@ noteW8Extern name =
 -- string `++` is the pure-WAT binary concat ($mdk_str_append) — note the leaf op.
 noteW8Binop : String -> <Mut> Unit
 noteW8Binop "++" = let _ = set_ref useStrLeafRef True in set_ref useStrRef True
+noteW8Binop "::" = set_ref useListRef True
 noteW8Binop _ = ()
 
 scanArmW7 : CArm -> <Mut> Unit
@@ -623,6 +700,18 @@ scanFnValueUses : List String -> List (String, Int) -> List (String, Int) -> Lis
 scanFnValueUses fnNames fnArs ctorArs groups =
   dedupKeep (concatMapList (scanBindValueUses fnNames fnArs ctorArs) groups)
 
+-- W9: the impl method bodies + interface defaults also use top-level fns as values
+-- (e.g. `toList = identity` in `impl Foldable List`), so their fn-value uses must seed
+-- the closure-wrapper set too — else `$mdk_w_<f>` is referenced but never emitted.
+scanImplValueUses : List String -> List (String, Int) -> List (String, Int) -> List CImplEntry -> List String
+scanImplValueUses fnNames fnArs ctorArs impls =
+  dedupKeep (concatMapList (e => scanImplEntryValueUses fnNames fnArs ctorArs e) impls)
+
+scanImplEntryValueUses : List String -> List (String, Int) -> List (String, Int) -> CImplEntry -> List String
+scanImplEntryValueUses fnNames fnArs ctorArs (CImplEntry _ _ body) = match body
+  CImplTagged _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
+  CImplDefault _ b => scanExprValueUses fnNames fnArs ctorArs b
+
 scanBindValueUses : List String -> List (String, Int) -> List (String, Int) -> CBind -> List String
 scanBindValueUses fnNames fnArs ctorArs (CBind _ clauses) =
   concatMapList (c => scanExprValueUses fnNames fnArs ctorArs (clauseBodyOf c)) clauses
@@ -632,11 +721,17 @@ clauseBodyOf (CClause _ body) = body
 
 scanExprValueUses : List String -> List (String, Int) -> List (String, Int) -> CExpr -> List String
 scanExprValueUses fnNames fnArs ctorArs e = match e
-  CVar x _ => if contains x fnNames then [x] else []
+  CVar x _ =>
+    if contains x fnNames then [x]
+    else if contains ("core__" ++ x) fnNames then ["core__" ++ x]
+    else []
   CApp f a =>
     let (hd, args) = flattenApp (CApp f a) []
     let here = match hd
-      CVar fn _ =>
+      CVar fn0 _ =>
+        let fn = if contains fn0 fnNames then fn0
+                 else if contains ("core__" ++ fn0) fnNames then "core__" ++ fn0
+                 else fn0
         if contains fn fnNames then
           (if arityOf fnArs fn == listLen args then [] else [fn])
         else []
@@ -650,6 +745,9 @@ scanExprValueUses fnNames fnArs ctorArs e = match e
   CBlock stmts => concatMapList (s => scanStmtValueUses fnNames fnArs ctorArs s) stmts
   CDecision scrut arms _ => scanExprValueUses fnNames fnArs ctorArs scrut ++ concatMapList (a => scanExprValueUses fnNames fnArs ctorArs (armBody a)) arms
   CMatch scrut arms => scanExprValueUses fnNames fnArs ctorArs scrut ++ concatMapList (a => scanExprValueUses fnNames fnArs ctorArs (armBody a)) arms
+  CLetGroup binds b =>
+    concatMapList (bd => scanBindValueUses fnNames fnArs ctorArs bd) binds
+      ++ scanExprValueUses fnNames fnArs ctorArs b
   _ => []
 
 scanStmtValueUses : List String -> List (String, Int) -> List (String, Int) -> CStmt -> List String
@@ -1292,6 +1390,7 @@ refPrintFor WRef = gap "ref-mode main produced a non-scalar value — printing A
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> <Mut> List String
 emitRefFnBind prog (CBind name clauses) =
+  let _ = set_ref curBindRef name
   let arity = clauseArityOf clauses
   let params = synthParams arity
   let bodyLines = emitClausesRef prog name params arity clauses
@@ -1321,14 +1420,21 @@ synthParams n = map (i => "a" ++ intToString i) (rangeList 0 n)
 -- positions (so the body env binds them) and tail-emit.  Otherwise: a fallthrough
 -- chain of guarded blocks.
 emitClausesRef : Prog -> String -> List String -> Int -> List CClause -> <Mut> List String
-emitClausesRef prog name params arity clauses = match clauses
+emitClausesRef prog name params arity clauses = emitClausesRefEnv prog [] name params arity clauses
+
+-- W9: env-seeded clause emission — `baseEnv` names (a CLetGroup's sibling closures +
+-- captured outer vars, bound as locals before the body) are in scope in every clause
+-- body in addition to the clause's own param bindings.  The non-letgroup path passes
+-- baseEnv=[] (emitClausesRef).
+emitClausesRefEnv : Prog -> List String -> String -> List String -> Int -> List CClause -> <Mut> List String
+emitClausesRefEnv prog baseEnv name params arity clauses = match clauses
   [(CClause pats body)] =>
     if allPlainParams pats then
       let aliases = bindParamAliases pats params
-      let env = map patName pats
+      let env = map patName pats ++ baseEnv
       aliases ++ emitRefTail prog env arity body
-    else emitClauseChainRef prog name params arity clauses
-  _ => emitClauseChainRef prog name params arity clauses
+    else emitClauseChainRefEnv prog baseEnv name params arity clauses
+  _ => emitClauseChainRefEnv prog baseEnv name params arity clauses
 
 -- when the single clause's params are plain PVars, alias each to the synthetic
 -- positional wasm param ($a<i>): `local.get $a<i>; local.set $<srcname>`.  (The
@@ -1354,17 +1460,20 @@ allPlainParams pats = not (anyList (p => not (isPlainParam p)) pats)
 -- through to the next clause.  The last clause's failure is `unreachable` (a
 -- well-typed exhaustive fn won't reach it).
 emitClauseChainRef : Prog -> String -> List String -> Int -> List CClause -> <Mut> List String
-emitClauseChainRef prog name params arity clauses = emitClauseChainGo prog name params arity clauses 0
+emitClauseChainRef prog name params arity clauses = emitClauseChainGo prog [] name params arity clauses 0
 
-emitClauseChainGo : Prog -> String -> List String -> Int -> List CClause -> Int -> <Mut> List String
-emitClauseChainGo _ _ _ _ [] _ = ["unreachable"]
-emitClauseChainGo prog name params arity ((CClause pats body)::rest) i =
+emitClauseChainRefEnv : Prog -> List String -> String -> List String -> Int -> List CClause -> <Mut> List String
+emitClauseChainRefEnv prog baseEnv name params arity clauses = emitClauseChainGo prog baseEnv name params arity clauses 0
+
+emitClauseChainGo : Prog -> List String -> String -> List String -> Int -> List CClause -> Int -> <Mut> List String
+emitClauseChainGo _ _ _ _ _ [] _ = ["unreachable"]
+emitClauseChainGo prog baseEnv name params arity ((CClause pats body)::rest) i =
   let clLabel = "$cl_" ++ name ++ "_" ++ intToString i
-  let (tests, binds, env) = clausePatCode prog pats params clLabel
+  let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
   ["block " ++ clLabel]
     ++ indent (tests ++ binds ++ emitRefTail prog env arity body)
     ++ ["end"]
-    ++ emitClauseChainGo prog name params arity rest (i + 1)
+    ++ emitClauseChainGo prog baseEnv name params arity rest (i + 1)
 
 -- generate (tests, binds, env) for a clause's parameter patterns against the
 -- synthetic positional params.  A `br clLabel` on a failed test falls to the next
@@ -1372,6 +1481,9 @@ emitClauseChainGo prog name params arity ((CClause pats body)::rest) i =
 -- the discriminant + bind fields.  PVar → bind to a local.  PWild → nothing.
 clausePatCode : Prog -> List Pat -> List String -> String -> (List String, List String, List String)
 clausePatCode prog pats params clLabel = clausePatGo prog (zipPats pats params) clLabel [] [] []
+
+clausePatCodeEnv : Prog -> List String -> List Pat -> List String -> String -> (List String, List String, List String)
+clausePatCodeEnv prog baseEnv pats params clLabel = clausePatGo prog (zipPats pats params) clLabel [] [] baseEnv
 
 clausePatGo : Prog -> List (Pat, String) -> String -> List String -> List String -> List String -> (List String, List String, List String)
 clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
@@ -1389,6 +1501,13 @@ patTestBind prog pat occ clLabel env = match pat
     (occ ++ ["ref.cast (ref i31)", "i31.get_s", "i32.const " ++ intToString n, "i32.ne", "br_if " ++ clLabel], [], env)
   PLit (LBool b) =>
     (occ ++ ["ref.cast (ref i31)", "i31.get_u", "i32.const " ++ (if b then "1" else "0"), "i32.ne", "br_if " ++ clLabel], [], env)
+  -- W9: a `()` (Unit) clause head — Unit is the i31 0 immediate, irrefutable here
+  -- (the type guarantees the value is Unit), so no test and no binding.
+  PLit LUnit => ([], [], env)
+  -- W9: a Char-literal clause head — a Char is an i31 codepoint immediate (same rep
+  -- as emitLitRef (LChar)); compare the i31 against the codepoint constant.
+  PLit (LChar c) =>
+    (occ ++ ["ref.cast (ref i31)", "i31.get_u", "i32.const " ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))), "i32.ne", "br_if " ++ clLabel], [], env)
   PCon c args =>
     let ctest = discrimReadOf occ (ctorTypeName prog c) ++ ["i32.const " ++ intToString (ctorOrdinal prog c), "i32.ne", "br_if " ++ clLabel]
     let (b, env2) = bindConFields prog env c args occ
@@ -1397,7 +1516,49 @@ patTestBind prog pat occ clLabel env = match pat
     let setX = occ ++ ["local.set $" ++ gname x]
     let (t, b, env2) = patTestBind prog p occ clLabel (x :: env)
     (t, setX ++ b, env2)
+  -- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
+  -- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
+  -- the head (field 1) and tail (field 2) recursively (nested patterns may also be
+  -- refutable, e.g. `[x] = (x :: [])`).
+  PCons h t =>
+    let consTest = discrimReadOf occ "List" ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+    let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+    let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+    let (ht, hb, env2) = patTestBind prog h hSnip clLabel env
+    let (tt, tb, env3) = patTestBind prog t tSnip clLabel env2
+    (consTest ++ ht ++ tt, hb ++ tb, env3)
+  -- W9: a refutable fixed-length list clause head `[p0, p1, …]` — descend the Cons
+  -- spine: each element's cell must be a Cons (else fall through), then the final
+  -- tail must be Nil (ordinal 1).
+  PList ps => patTestBindList prog ps occ clLabel env
+  -- W9: a tuple clause head `(p0, p1, …)` — a tuple is single-shape (irrefutable),
+  -- so no test; bind each field (field i+1 of $C_Tup<n>) and recurse for nested
+  -- refutable subpatterns.
+  PTuple ps => patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
   other => gap ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
+
+-- (tests, binds, env') for a refutable fixed-length list clause head against `occ`.
+-- Each element requires its cell be a Cons; the spine end requires Nil.
+patTestBindList : Prog -> List Pat -> List String -> String -> List String -> (List String, List String, List String)
+patTestBindList _ [] occ clLabel env =
+  (discrimReadOf occ "List" ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel], [], env)
+patTestBindList prog (p::ps) occ clLabel env =
+  let consTest = discrimReadOf occ "List" ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+  let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+  let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+  let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
+  let (tt, tb, env3) = patTestBindList prog ps tSnip clLabel env2
+  (consTest ++ ht ++ tt, hb ++ tb, env3)
+
+-- (tests, binds, env') for a tuple clause head: each field i+1 of $C_Tup<n> (after
+-- the i32 tag), recursing into the sub-pattern (which may itself be refutable).
+patTestBindTuple : Prog -> String -> List Pat -> List String -> String -> List String -> Int -> (List String, List String, List String)
+patTestBindTuple _ _ [] _ _ env _ = ([], [], env)
+patTestBindTuple prog tc (p::rest) occ clLabel env i =
+  let fieldSnip = occ ++ ["ref.cast (ref $" ++ ctorStructName tc ++ ")", "struct.get $" ++ ctorStructName tc ++ " " ++ intToString (i + 1)]
+  let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
+  let (rt, rb, env3) = patTestBindTuple prog tc rest occ clLabel env2 (i + 1)
+  (ft ++ rt, fb ++ rb, env3)
 
 -- all locals a clause group needs: every clause's param-bound vars + body locals.
 clauseLocals : List CClause -> List String
@@ -1495,7 +1656,7 @@ emitMethodDispatchRef prog env d name dpar args =
   -- the dict tag is read repeatedly; stash it in the scratch local for this depth.
   let tagRead = readDictParam prog env dpar
   let blk = "$disp_" ++ name ++ "_" ++ intToString d
-  let chain = emitDispatchChain prog name impls blk tagRead argInstrs
+  let chain = emitDispatchChain prog name impls blk tagRead argInstrs (listLen args)
   ["block " ++ blk ++ " (result (ref eq))"]
     ++ indent chain
     ++ ["unreachable", "end"]
@@ -1507,15 +1668,36 @@ emitMethodDispatchRef prog env d name dpar args =
 -- `br $blk` (which supplies the block's value), the else branch falls through to the
 -- next comparison; after the whole chain an `unreachable` (a well-typed dict always
 -- names a candidate) satisfies the block's (ref eq) fallthrough requirement.
-emitDispatchChain : Prog -> String -> List (String, String) -> String -> List String -> List String -> <Mut> List String
-emitDispatchChain _ _ [] _ _ _ = []
-emitDispatchChain prog name ((tag, key)::rest) blk tagRead argInstrs =
+emitDispatchChain : Prog -> String -> List (String, String) -> String -> List String -> List String -> Int -> <Mut> List String
+emitDispatchChain _ _ [] _ _ _ _ = []
+emitDispatchChain prog name ((tag, key)::rest) blk tagRead argInstrs nArgs =
+  -- W9: a `requires`-bearing impl (e.g. `Debug (List a) requires Debug a`) compiles
+  -- to a fn whose leading params are the forwarded `requires` dicts BEFORE the method
+  -- args.  The dispatch site only has the method args, so prepend one PLACEHOLDER dict
+  -- witness per missing leading param (impl arity − method arg count).  This is a STUB:
+  -- it makes the call arity-correct so the program emits + validates, and is harmless
+  -- for any value whose `debug`/`show` never recurses into the element dict (W9
+  -- fixtures avoid container `debug`/`show`).  Faithful element-dict forwarding in the
+  -- WasmGC dispatch chain is the precise remaining-MVP item (the nested-dict gap).
+  let reqDicts = implReqDictCount prog name tag nArgs
+  let placeholders = concatMapList (_ => ["i32.const 0", "ref.i31"]) (rangeList 0 reqDicts)
   tagRead
     ++ ["i32.const " ++ intToString (dictTag key), "i32.eq", "if"]
-    ++ indent (argInstrs ++ ["call $" ++ implFnSym tag name, "br " ++ blk])
+    ++ indent (placeholders ++ argInstrs ++ ["call $" ++ implFnSym tag name, "br " ++ blk])
     ++ ["else"]
-    ++ indent (emitDispatchChain prog name rest blk tagRead argInstrs)
+    ++ indent (emitDispatchChain prog name rest blk tagRead argInstrs nArgs)
     ++ ["end"]
+
+-- leading `requires`-dict count for a method's impl at `tag`: the impl fn's arity
+-- (clause pattern count, dict-pass injects leading $dict_* params) minus the method's
+-- user-arg count.  >= 0; 0 for the unconstrained impls (Int/Bool/…).
+implReqDictCount : Prog -> String -> String -> Int -> Int
+implReqDictCount prog method tag userArgs =
+  let a = implArityFor prog method tag
+  if a > userArgs then a - userArgs else 0
+
+implArityFor : Prog -> String -> String -> Int
+implArityFor prog method tag = implGroupArity (concatMapList (implClauseFor method tag) (progImpls prog))
 
 -- read a dict PARAM (a (ref eq) i31 witness) into its i32 tag word.  The param is a
 -- leading $dict_* local bound by dict-passing; it is always in `env`.
@@ -1674,6 +1856,7 @@ emitRefExpr prog env d e = match e
   CUnOp op x => emitUnRef prog env d op x
   CIf c t f => emitIfRef prog env d c t f
   CLet recF pat e1 e2 => emitLetRef prog env d recF pat e1 e2
+  CLetGroup binds body => emitLetGroupRef prog env d binds body
   CBlock stmts => emitBlockRef prog env d stmts
   CApp f a => emitAppRef prog env d (CApp f a)
   CDecision scrut arms tree => emitDecisionRef prog env d scrut arms tree
@@ -1692,7 +1875,7 @@ emitRefExpr prog env d e = match e
   CFieldAccess ex label => emitFieldAccessRef prog env d ex label
   CRecordUpdate base fields => emitRecordUpdateRef prog env d base fields
   CVariantUpdate con base fields => emitVariantUpdateRef prog env d con base fields
-  other => gap ("ref-mode: unsupported Core IR node " ++ ctag other)
+  other => gap ("ref-mode: unsupported Core IR node " ++ ctag other ++ " [in " ++ curBindRef.value ++ "]")
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -1700,7 +1883,12 @@ emitLitRef : Lit -> <Mut> List String
 emitLitRef (LInt n) = ["i32.const " ++ intToString n, "ref.i31"]
 emitLitRef (LBool b) = [if b then "i32.const 1" else "i32.const 0", "ref.i31"]
 emitLitRef LUnit = ["i32.const 0", "ref.i31"]
-emitLitRef (LFloat _) = gap "ref-mode: Float literal is deferred (boxed (struct f64))"
+-- W9: a Float literal in ref-mode (boxed (struct f64) is W8b) lowers to a TRAP STUB,
+-- not a `gap`.  Float literals appear in always-retained prelude impl bodies (e.g.
+-- `pi`/`e` in core, `impl Num Float`), so DCE can't prune them and they'd abort EVERY
+-- real-prelude build; but they're only EVALUATED by a program that uses a Float, which
+-- W9 fixtures avoid.  `unreachable` is stack-polymorphic → validates as (ref eq).
+emitLitRef (LFloat _) = ["unreachable"]
 -- W6: a String literal is a §3.3 `$str` boxed value.  Its UTF-8 bytes go in a
 -- passive data segment (the §11-preferred non-const-array init), read at run time by
 -- `array.new_data`; the cached cp_count is computed at emit time (UTF-8 codepoint
@@ -1775,14 +1963,54 @@ emitVarRef prog env d x =
   -- these reach the emitter only as bare ctor occurrences, e.g. from impl bodies.)
   else if x == "True" then ["i32.const 1", "ref.i31"]
   else if x == "False" then ["i32.const 0", "ref.i31"]
+  else if x == "otherwise" then ["i32.const 1", "ref.i31"]
+  -- W9: builtin Char bounds fit in an i31 → emit directly (codepoints 1 / 0x21FFFF).
+  else if x == "charMinBound" then ["i32.const 1", "ref.i31"]
+  else if x == "charMaxBound" then ["i32.const 2228223", "ref.i31"]
+  -- W9: builtin Int/Float bounds (intMinBound/intMaxBound = 64-bit, overflow i31; pi/e
+  -- = Float) are W8b-shaped — they appear only in always-retained Bounded/Num impl
+  -- bodies (DCE can't prune them), executed only by a program that actually uses them,
+  -- which W9 fixtures avoid.  Trap-stub so the program emits.
+  else if contains x ["intMinBound", "intMaxBound", "pi", "e"] then ["unreachable"]
   else if isCtor prog x then emitCtorConstruct prog env d x []
-  else if isDeferredFloatExternW x then
-    gap ("wasm W8b: Float extern '" ++ x ++ "' deferred (needs Float boxing + %.12g float formatter)")
+  else if isDeferredFloatExternW x then floatExternStub x
+  else if isUnimplStrExternW x then floatExternStub x
   else if contains x (progFnNames prog) then
     let _ = noteFuncRef ("$mdk_w_" ++ x)
     ["ref.func $mdk_w_" ++ x, "i32.const " ++ intToString (progFnArity prog x),
      "array.new_fixed $argarr 0", "struct.new $clos"]
-  else gap ("ref-mode: unbound variable '" ++ x ++ "'")
+  -- W9: a bare prelude reference synthesized post-mangle (string-interp / `!=`) →
+  -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
+  else if not (canonFn prog x == x) then emitVarRef prog env d (canonFn prog x)
+  -- W9: a str/leaf extern referenced as a VALUE (point-free / passed as an arg) —
+  -- build an eta closure wrapping a lifted `$mdk_ext_<name>` that calls the extern
+  -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
+  else if isWasmEtaExtern x then emitExternEtaClosure prog x
+  else gap ("ref-mode: unbound variable '" ++ x ++ "' [in " ++ curBindRef.value ++ "]")
+
+-- W9: lift `$mdk_ext_<name>` (a $codety) that unpacks its $args into synthetic CVar
+-- locals and emits the extern call, then build the closure struct at the use site.
+emitExternEtaClosure : Prog -> String -> <Mut> List String
+emitExternEtaClosure prog name =
+  let arity = externArityW name
+  let lamName = "$mdk_ext_" ++ name
+  let _ = noteFuncRef lamName
+  let _ = addLifted (emitExternEtaDefine prog lamName name arity)
+  ["ref.func " ++ lamName, "i32.const " ++ intToString arity,
+   "array.new_fixed $argarr 0", "struct.new $clos"]
+
+emitExternEtaDefine : Prog -> String -> String -> Int -> <Mut> List String
+emitExternEtaDefine prog lamName name arity =
+  let params = synthParams arity
+  let argPrologue = concatMapList (argLoadAt) (zipIdx params 0)
+  let argVars = map (p => CVar p AGlobal) params
+  let call = if isStrExternW name then emitStrExternRef prog params 0 name argVars
+             else emitLeafExternRef prog params 0 name argVars
+  let localLines = map (l => localDeclRef l) params
+  ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
+    ++ map (l => "  " ++ l) localLines
+    ++ indent (argPrologue ++ call ++ ["return"])
+    ++ ["  )"]
 
 -- arithmetic / comparison: unbox both operands from i31 to i32, do the i32 op, then
 -- re-box (arithmetic → i31 int; comparison → i31 0/1 bool).
@@ -1792,6 +2020,11 @@ emitBinRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> <Mut> Lis
 emitBinRef prog env d "++" l r =
   emitRefExpr prog env d l ++ ["ref.cast (ref $str)"]
     ++ emitRefExpr prog env d r ++ ["ref.cast (ref $str)", "call $mdk_str_append"]
+-- W9: `::` is cons — build a $C_Cons cell {tag=0, head=l, tail=r} (same rep the W7
+-- list-literal / Cons match machinery uses).  Reached from prelude fns that cons in
+-- expression position (e.g. `gen () :: acc` in arbitraryList's where-go).
+emitBinRef prog env d "::" l r =
+  ["i32.const 0"] ++ emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["struct.new $C_Cons"]
 emitBinRef prog env d op l r =
   let li = emitRefExpr prog env d l ++ ["ref.cast (ref i31)", "i31.get_s"]
   let ri = emitRefExpr prog env d r ++ ["ref.cast (ref i31)", "i31.get_s"]
@@ -1848,12 +2081,13 @@ emitAppRef : Prog -> List String -> Int -> CExpr -> <Mut> List String
 emitAppRef prog env d app =
   let (hd, args) = flattenApp app []
   match hd
-    CVar f _ =>
+    CVar f0 _ =>
+      let f = canonFn prog f0
       if isCtor prog f then emitCtorConstruct prog env d f args
       else if isStrExternW f then emitStrExternRef prog env d f args
       else if isLeafExternW f then emitLeafExternRef prog env d f args
-      else if isDeferredFloatExternW f then
-        gap ("wasm W8b: Float extern '" ++ f ++ "' deferred (needs Float boxing + %.12g float formatter)")
+      else if isDeferredFloatExternW f then floatExternStub f
+      else if isUnimplStrExternW f then floatExternStub f
       else if contains f (progFnNames prog) && listLen args == progFnArity prog f then
         let argInstrs = concatMapList (a => emitRefExpr prog env d a) args
         argInstrs ++ ["call $" ++ gname f]
@@ -2011,8 +2245,11 @@ emitAppTail : Prog -> List String -> Int -> CExpr -> <Mut> List String
 emitAppTail prog env arity app =
   let (hd, args) = flattenApp app []
   match hd
-    CVar f _ =>
+    CVar f0 _ =>
+      let f = canonFn prog f0
       if isCtor prog f then emitRefExpr prog env 0 app ++ ["return"]
+      else if isStrExternW f || isLeafExternW f || isDeferredFloatExternW f || isUnimplStrExternW f then
+        emitAppRef prog env 0 app ++ ["return"]
       else if contains f (progFnNames prog) && listLen args == progFnArity prog f then
         concatMapList (a => emitRefExpr prog env 0 a) args ++ ["return_call $" ++ gname f]
       else
@@ -2215,6 +2452,86 @@ argLoadAt (p, i) =
   ["local.get $args", "i32.const " ++ intToString i, "array.get $argarr", "ref.as_non_null",
    "local.set $" ++ gname p]
 
+-- ── W9: CLetGroup (where / local letrec functions) ───────────────────────────
+-- A `where`/`let`-group of (possibly mutually-recursive, multi-clause) LOCAL
+-- functions, lambda-lifted to top-level functions.  Strategy (the wasm peer of
+-- llvm_emit.emitKnotRun):
+--   * groupCaps = the free vars across ALL bindings' clause bodies, minus every
+--     binding's own params and minus the group's own names, kept to those visible
+--     in the enclosing env.  This single capture set is shared by every member.
+--   * each binding `name` is lifted to `$mdk_lgN_<name>` whose $env carries
+--     groupCaps.  Its prologue (a) loads groupCaps from $env, (b) REBUILDS every
+--     group member's closure (ref.func + arity + an $argarr of groupCaps) into a
+--     local — so a member body referencing itself or a sibling resolves to a fresh
+--     closure with the same captures (the knot is tied by reconstruction, no cyclic
+--     heap value needed), (c) loads its own params from $args, then emits the
+--     clause chain.
+--   * the USE site (the group body) rebuilds the same closures into locals from the
+--     enclosing env, then emits the body — so the body sees each group name bound.
+-- A zero-binding group is just its body.
+emitLetGroupRef : Prog -> List String -> Int -> List CBind -> CExpr -> <Mut> List String
+emitLetGroupRef prog env d binds body =
+  let gid = freshLamId ()
+  let names = map lgBindName binds
+  let allParams = concatMapList lgBindParams binds
+  let groupCaps = filterList (c => contains c env)
+        (dedupKeep (filterList (notIn (names ++ allParams)) (concatMapList (freeVarsClauses []) binds)))
+  -- emit each lifted top-level fn (drained into the module like other lifted lams).
+  let _ = forEachU (b => emitLgLifted prog gid names groupCaps binds b) binds
+  -- at the use site: rebuild every member closure from the enclosing env, bind to a
+  -- local, then emit the body with those names in scope.
+  let rebuilds = concatMapList (b => rebuildLgClosure prog gid groupCaps b) binds
+  rebuilds ++ emitRefTail2 prog (names ++ env) d body
+
+-- when a group body is in NON-tail position we still want to evaluate it leaving a
+-- value on the stack; emitRefExpr handles every node, so use it directly (the body
+-- closures are already bound as locals above).
+emitRefTail2 : Prog -> List String -> Int -> CExpr -> <Mut> List String
+emitRefTail2 prog env d body = emitRefExpr prog env d body
+
+-- params of a CLetGroup binding (the first clause's pattern arity → synthetic names).
+lgBindParams : CBind -> List String
+lgBindParams (CBind _ clauses) = synthParams (clauseArityOf clauses)
+
+-- the lifted member function `$mdk_lg<gid>_<name>`: $env = groupCaps; prologue loads
+-- caps, rebuilds every member closure into its local, loads own params, emits clauses.
+emitLgLifted : Prog -> Int -> List String -> List String -> List CBind -> CBind -> <Mut> Unit
+emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
+  let _ = set_ref curBindRef ("lg:" ++ name)
+  let lamName = "$mdk_lg" ++ intToString gid ++ "_" ++ gname name
+  let _ = noteFuncRef lamName
+  let arity = clauseArityOf clauses
+  let params = synthParams arity
+  let capPrologue = concatMapList (capLoadAt) (zipIdx groupCaps 0)
+  let memberRebuilds = concatMapList (b => rebuildLgClosure prog gid groupCaps b) binds
+  let argPrologue = concatMapList (argLoadAt) (zipIdx params 0)
+  let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
+  let memberLocals = names
+  let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
+  let scratch = scratchLocals (clausesMaxDepth clauses)
+  let localLines = ["(local $__self_clos (ref $clos))"]
+    ++ map (n => "(local $" ++ gname n ++ " (ref eq))") memberLocals
+    ++ map (l => localDeclRef l) (params ++ groupCaps ++ bodyLocals ++ scratch)
+    ++ w7LocalDecls (clausesMaxDepth clauses)
+  let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
+  let def = ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
+    ++ map (l => "  " ++ l) localLines
+    ++ indent (setup ++ capPrologue ++ memberRebuilds ++ argPrologue ++ bodyLines)
+    ++ ["  )"]
+  addLifted def
+
+-- rebuild ONE member's closure value (ref.func + arity + $argarr of groupCaps) and
+-- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
+-- member's prologue; groupCaps must be bound as locals in either context.
+rebuildLgClosure : Prog -> Int -> List String -> CBind -> List String
+rebuildLgClosure prog gid groupCaps (CBind name clauses) =
+  let lamName = "$mdk_lg" ++ intToString gid ++ "_" ++ gname name
+  let arity = clauseArityOf clauses
+  let capInstrs = concatMapList (c => ["local.get $" ++ gname c]) groupCaps
+  ["ref.func " ++ lamName, "i32.const " ++ intToString arity]
+    ++ capInstrs ++ ["array.new_fixed $argarr " ++ intToString (listLen groupCaps), "struct.new $clos",
+       "local.set $" ++ gname name]
+
 zipIdx : List String -> Int -> List (String, Int)
 zipIdx [] _ = []
 zipIdx (x::xs) i = (x, i) :: zipIdx xs (i + 1)
@@ -2235,7 +2552,21 @@ freeVarsExpr bound e = match e
   CBlock stmts => freeVarsStmts bound stmts
   CDecision scrut arms _ => freeVarsExpr bound scrut ++ concatMapList (freeVarsArm bound) arms
   CMatch scrut arms => freeVarsExpr bound scrut ++ concatMapList (freeVarsArm bound) arms
+  CLetGroup binds b =>
+    let names = map lgBindName binds
+    let bound2 = names ++ bound
+    concatMapList (freeVarsClauses bound2) binds ++ freeVarsExpr bound2 b
   _ => []
+
+-- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
+freeVarsClauses : List String -> CBind -> List String
+freeVarsClauses bound (CBind _ clauses) = concatMapList (freeVarsClause bound) clauses
+
+freeVarsClause : List String -> CClause -> List String
+freeVarsClause bound (CClause pats body) = freeVarsExpr (concatMapList patVars pats ++ bound) body
+
+lgBindName : CBind -> String
+lgBindName (CBind n _) = n
 
 freeVarsStmts : List String -> List CStmt -> List String
 freeVarsStmts _ [] = []
@@ -2582,7 +2913,11 @@ emitConSwitchRef prog env d decLabel root foc rest arms branches dft =
 -- `ref.test (ref i31)` selects the rep; both yield the SAME dense ordinal.
 discrimReadOf : List String -> String -> List String
 discrimReadOf svRead ty =
-  svRead ++ ["ref.test (ref i31)", "if (result i32)"]
+  -- W9: Bool is always an i31 (0/1) — it has no $T_Bool root struct, so emit the i31
+  -- read directly (the generic two-branch form would reference an undeclared type in
+  -- its dead struct branch and fail wasm-tools validation).
+  if ty == "Bool" then svRead ++ ["ref.cast (ref i31)", "i31.get_u"]
+  else svRead ++ ["ref.test (ref i31)", "if (result i32)"]
     ++ indent (svRead ++ ["ref.cast (ref i31)", "i31.get_u"])
     ++ ["else"]
     ++ indent (svRead ++ ["ref.cast (ref $" ++ typeRootName ty ++ ")", "struct.get $" ++ typeRootName ty ++ " 0"])
@@ -2762,6 +3097,10 @@ collectExprLocals e = match e
   CBlock stmts => concatMapList collectStmtLocals stmts
   CDecision scrut arms _ => collectExprLocals scrut ++ concatMapList collectArmLocals arms
   CMatch scrut arms => collectExprLocals scrut ++ concatMapList collectArmLocals arms
+  -- W9: a CLetGroup's member NAMES are bound as closure locals at the use site (the
+  -- enclosing fn must declare them); the bindings' own clause locals belong to the
+  -- LIFTED fns, not here, so only the group body's locals are collected here.
+  CLetGroup binds body => map lgBindName binds ++ collectExprLocals body
   _ => []
 
 collectStmtLocals : CStmt -> List String
@@ -2846,7 +3185,7 @@ isReservedCtor name = isSome (reservedCtorOrdinal name)
 -- "Tup<n>" (its own single-ctor synthetic type "$Tuple<n>").  List = Cons/Nil under
 -- type "List".
 isSyntheticCtor : String -> Bool
-isSyntheticCtor name = name == "Cons" || name == "Nil" || isTupleCtorName name
+isSyntheticCtor name = name == "Cons" || name == "Nil" || name == "True" || name == "False" || isTupleCtorName name
 
 tupleCtorName : Int -> String
 tupleCtorName n = "Tup" ++ intToString n
@@ -2858,16 +3197,27 @@ isTupleCtorName name = startsWithStr name "Tup" && allDigitsFrom (stringToChars 
 syntheticCtorType : String -> String
 syntheticCtorType "Cons" = "List"
 syntheticCtorType "Nil" = "List"
+-- W9: with the REAL prelude, `Bool` is a builtin (not a `data` decl), so its ctors
+-- True/False are not in the ctor table.  Treat them as synthetic Bool ctors:
+-- type "Bool", ordinals False=0/True=1, nullary, rep = i31 (same as emitVarRef's
+-- True/False fast path and emitLitRef LBool), so discrimReadOf's i31 branch reads
+-- the ordinal directly.
+syntheticCtorType "True" = "Bool"
+syntheticCtorType "False" = "Bool"
 syntheticCtorType name = "$Tuple" ++ intToString (trailingIntOf name)
 
 syntheticCtorOrdinal : String -> Int
 syntheticCtorOrdinal "Cons" = 0
 syntheticCtorOrdinal "Nil" = 1
+syntheticCtorOrdinal "False" = 0
+syntheticCtorOrdinal "True" = 1
 syntheticCtorOrdinal _ = 0
 
 syntheticCtorArity : String -> Int
 syntheticCtorArity "Cons" = 2
 syntheticCtorArity "Nil" = 0
+syntheticCtorArity "True" = 0
+syntheticCtorArity "False" = 0
 syntheticCtorArity name = trailingIntOf name
 
 ctorArity : Prog -> String -> Int
@@ -3214,7 +3564,12 @@ ctag _ = "?"
 ptag : Pat -> String
 ptag (PVar _) = "PVar"
 ptag PWild = "PWild"
-ptag (PLit _) = "PLit"
+ptag (PLit (LInt _)) = "PLit-LInt"
+ptag (PLit (LFloat _)) = "PLit-LFloat"
+ptag (PLit (LString _)) = "PLit-LString"
+ptag (PLit (LChar _)) = "PLit-LChar"
+ptag (PLit (LBool _)) = "PLit-LBool"
+ptag (PLit LUnit) = "PLit-LUnit"
 ptag (PCon _ _) = "PCon"
 ptag (PTuple _) = "PTuple (W7)"
 ptag (PCons _ _) = "PCons (list — W7)"

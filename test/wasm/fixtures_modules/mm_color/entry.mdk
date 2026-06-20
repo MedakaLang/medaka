@@ -1,0 +1,5 @@
+-- W9 multi-module entry: imports the sibling `palette` module's type + function and
+-- computes over the imported constructors (cross-module dispatch through the real
+-- prelude's Num).  Value-main auto-prints the Int.
+import palette.{Color(..), colorCode}
+main = colorCode Green + colorCode Blue
