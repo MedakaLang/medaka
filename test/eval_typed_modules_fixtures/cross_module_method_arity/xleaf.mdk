@@ -1,0 +1,15 @@
+-- WS-2/D2 method-level analog: two modules declare distinct interfaces sharing the
+-- bare method name `shape` but with DIFFERENT method-level `=>`-constraint arity
+-- (Num e here; (Num e, Num f) in yleaf).  Pre-fix, the bare methodConstraintsRef
+-- first-match sized one impl to the other's dict-param count → a dict mis-bound into
+-- a value param (`unknown op '+'` under run, garbage under build, run≠build), while
+-- `check` accepted it.  Fixed by crossModuleMethodConstraintsQualRef + scopeMethodArities.
+export interface BuildA t where
+  shape : Num e => e -> t
+data BoxA = MkBoxA Int
+export impl BuildA BoxA where
+  shape n = MkBoxA (n + n)
+unboxA : BoxA -> Int
+unboxA (MkBoxA x) = x
+export callX : Int
+callX = unboxA (shape 3 : BoxA)

@@ -1,0 +1,3 @@
+import xleaf.{callX}
+export cx : Int
+cx = callX

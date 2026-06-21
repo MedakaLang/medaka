@@ -1,0 +1,3 @@
+import xmid.{cx}
+import ymid.{cy}
+main = println (intToString cx ++ " " ++ intToString cy)
