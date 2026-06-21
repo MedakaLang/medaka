@@ -231,6 +231,17 @@ per sub-part. A *comment-only* edit to an emitter-graph file does NOT invalidate
   stayed at the base. Merging the worktree-id branch is then a silent no-op (this session: gate read
   52/52 instead of 68/68). **Merge by the reported SHA**, and confirm with `git branch --contains <sha>`
   before trusting the merge.
+- **An agent's self-reported `BASE_OK` can be FALSE — verify the base yourself before merging.** A
+  STEP-0 `git merge main` + `merge-base --is-ancestor` self-check is necessary but not sufficient: this
+  session a write-agent reported `BASE_OK` yet its branch was rooted at the *session-start* commit,
+  missing every overnight landing (its worktree/merge silently didn't catch up to the real tip). The
+  catch was the orchestrator's own pre-merge sanity check: `git diff --stat <main> <branch>` showed
+  ~1400 spurious deletions and a recent fixture file listed as *deleted*. **Always `git diff --stat`
+  the branch against current main before merging** — a surface that doesn't match the agent's "small
+  additive change" report (mass deletions, recent files vanishing) means a stale/wrong base; do NOT
+  merge. Cross-check with `git merge-base --is-ancestor <recent-landing-sha> <branch>`. (Bake a base
+  assert into agent prompts too — `test -f <a-recent-landing-file>` + `grep -q <a-recent-symbol>` — but
+  the orchestrator's diff-stat is the real net, since the agent's own report is what's untrustworthy.)
 - **Salvaging a session-limit-killed agent.** An agent can die mid-run (usage limit) having committed
   NOTHING — but its WIP is live in its worktree (`git -C <worktree> status`). Preserve it (commit on
   its branch), then verify INDEPENDENTLY from scratch (it left no report) and give it a real commit
