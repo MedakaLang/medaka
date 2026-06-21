@@ -158,6 +158,29 @@ case "$nosup_out" in
   *) fail=$((fail+1)); printf 'FAIL super-xmod/reject (under-rejection regressed: [%s])\n' "$nosup_out" ;;
 esac
 
+# 7b. cross-module prelude-Ord obligation (Bug B regression guard).  An import-
+#     bearing program whose entry uses an `Ord`-constrained operation on a prelude
+#     type (`Int`) records a (Ord, Int) CALL obligation.  checkModuleFullImpl's
+#     checkCallObligations matched it against `implDecls ++ prog` only, which OMITS
+#     `accData` (the prelude's `impl Ord Int`) → spurious `No impl of Ord for Int`.
+#     The fix threads `accData` into the call-obligation impl universe.  This MUST
+#     be CLEAN (exit 0), matching run/build.
+cat > "$TMP/ordlib.mdk" <<'EOF'
+export pick : Ord a => a -> a -> a
+pick x y = if x < y then y else x
+EOF
+cat > "$TMP/orduse.mdk" <<'EOF'
+import ordlib.{pick}
+main = println (pick 3 7)
+EOF
+ord_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/orduse.mdk" 2>/dev/null)"
+ord_code=$?
+case "$ord_out" in
+  *"No impl of Ord"*) fail=$((fail+1)); printf 'FAIL ord-xmod (spurious prelude-Ord reject: [%s])\n' "$ord_out" ;;
+  *) if [ "$ord_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   ord-xmod (prelude Ord Int obligation satisfied cross-module)\n'
+     else fail=$((fail+1)); printf 'FAIL ord-xmod (exit %d: [%s])\n' "$ord_code" "$ord_out"; fi ;;
+esac
+
 # 8. global cross-module coherence (D3 / WS-2 part-2).  Two DIFFERENT modules each
 #    define `impl C T` for the SAME instance: each module is LOCALLY coherent, but
 #    jointly incoherent (silent dispatch ambiguity — cuseM2 would print cuseM1's

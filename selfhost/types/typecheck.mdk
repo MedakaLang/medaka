@@ -8185,7 +8185,7 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
             let _ = checkImplObligations (accData ++ implDecls ++ prog) pendingImplObligations.value
             setNumlitFloats ()
           else ()
-  let _ = checkCallObligations (implDecls ++ prog) pendingCallObligations.value
+  let _ = checkCallObligations (accData ++ implDecls ++ prog) pendingCallObligations.value
   -- LSP hover: leave THIS module's locals + seed (runtime+core+imports) in the
   -- side-channels, mirroring checkProgramSeeded.  The entry module is checked
   -- LAST in the multi-module path, so the channels end holding ITS values, which

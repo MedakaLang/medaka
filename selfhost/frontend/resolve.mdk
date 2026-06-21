@@ -240,6 +240,13 @@ checkExpr env scope (ESlice e0 lo hi _) = checkExpr env scope e0
 checkExpr env scope (EIndex e0 i) = checkExpr env scope e0
   ++ checkExpr env scope i
 checkExpr env scope (EAnnot e0 t) = checkExpr env scope e0 ++ checkType env t
+-- EHeadAnnot is the synthetic `:~` head-pin desugar emits for Map/Set literals
+-- (`fromEntries [...] :~ Map _k _v`).  The container type (Map/Set/…) is a real
+-- type, so validate it like EAnnot via checkType — except the multi-module env
+-- already carries imported types so an `import map`-bearing program resolves
+-- `Map`, while a bare `Map { … }` with no import resolves to UnknownType, both
+-- matching the OCaml oracle (lib/resolve.ml EHeadAnnot arm, Phase 108).
+checkExpr env scope (EHeadAnnot e0 t) = checkExpr env scope e0 ++ checkType env t
 checkExpr env scope (EBlock stmts) = checkStmts env scope stmts
 checkExpr env scope (EDo stmts) = checkStmts env scope stmts
 checkExpr env scope (EStringInterp parts) =

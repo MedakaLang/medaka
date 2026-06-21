@@ -1,0 +1,6 @@
+-- Regression: a Map/Set container literal desugars to an EHeadAnnot `:~` head-pin
+-- (`fromEntries [...] :~ Map _k _v`).  resolve's checkExpr was missing the
+-- EHeadAnnot arm → a non-exhaustive panic (SIGTRAP) on `medaka check`.  With no
+-- `import map.*` the synthetic head type `Map` is genuinely unknown, so resolve
+-- must report UnknownType "Map" (matching the OCaml oracle), NOT crash.
+main = println (Map { 1 => 2 })
