@@ -39,7 +39,7 @@ The real divergences are narrower and cluster as follows:
 | # | Divergence | Spec | Severity | Bites canonical? |
 |---|---|---|---|---|
 | **D1** | Interface `requires` (superclass) is **semantically inert** — no existence gate, no `supers` evidence | §3 `super`, §6 C2 | **Soundness** | **Yes** (confirmed) |
-| **D2** | Dict-param arity keyed by **bare name**, not module-qualified identity | §8 I1 | **Soundness** | Yes (latent) |
+| **D2** | Dict-param arity keyed by **bare name**, not module-qualified identity — ✅ CLOSED (fn `e488cd9`, method `880e0fe`; full re-key deferred) | §8 I1 | **Soundness** | Yes (latent) |
 | **D3** | **No global instance environment** — `IE` assembled per-module | §6 C4 / §8 I2 | Coherence | Yes (latent) |
 | **D4** | Overlap escape-hatches resolve to **arg-tag at runtime**, no uniqueness enforcement | §6 C1, §5 | Coherence | Yes (narrow) |
 | **D5** | **Superclass acyclicity (W1)** unenforced | §3 W1 | Robustness | Esoteric |
@@ -76,7 +76,7 @@ adversarial input. **D7–D10** are fidelity/cleanup, not bugs.
 | §6 C3 resolution determinism | **CONFORMS** | single per-module resolution |
 | §6 C4 single global IE | **DIVERGES (D3)** | per-module assembly `typecheck.mdk:7717-7780` |
 | §7 single-evaluator law | **CONFORMS in substance** | one route-stamped Core IR; parity 26/26; residual D9 |
-| §8 I1 identity-keyed arity | **DIVERGES (D2)** | bare-name `funConstraintsRef` `typecheck.mdk:1117` |
+| §8 I1 identity-keyed arity | **CONFORMS in substance (D2 closed)** | module-qualified mirrors (fn `e488cd9` / method `880e0fe`) consulted per scope; bare `funConstraintsRef` `typecheck.mdk` kept (load-bearing), full retirement deferred |
 | §8 I2 global IE after import | **DIVERGES (D3)** | same root as C4 |
 | §8 I3 evidence travels | **CONFORMS** | use-site discharge `typecheck.mdk:2408-2429` |
 
@@ -132,7 +132,19 @@ OCaml during the self-host.
 
 ---
 
-### D2 — Dict-param arity keyed by bare name, not binding identity — **SOUNDNESS (latent), both impls**
+### D2 — Dict-param arity keyed by bare name, not binding identity — **SOUNDNESS (latent), both impls** — ✅ CLOSED (fn `e488cd9`, method twin `880e0fe`)
+
+> **RESOLUTION (2026-06-21):** the observable collision is closed for BOTH
+> function-level (`e488cd9`) and method-level (`880e0fe`) dict arity, via additive
+> module-qualified mirror tables (`crossModuleFunConstraintsQualRef` /
+> `crossModuleMethodConstraintsQualRef`) consulted per dict-pass scope. The
+> method-level case was a genuine *unmitigated* soundness bug (silent: `check`
+> passes, `run`/`build` diverge into crash/garbage). The bare tables are KEPT
+> (load-bearing — see below); full retirement is deferred (`selfhost/WS2-REKEY-DIAGNOSIS.md`).
+> EMPIRICAL CORRECTION: the bare arity table is **not** redundant at the call site —
+> neutering the inference seed (`typecheck.mdk:8136`) under-applies cross-module calls;
+> it is the sole source of constraint-slot ids (the `Scheme` carries no constraint list).
+
 
 **Spec:** §8 I1 — dictionary-parameter arity is part of the binding's
 *module-qualified identity*, never its bare name; conflating them "forces phantom

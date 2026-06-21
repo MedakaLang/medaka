@@ -1,5 +1,14 @@
 # WS-2 full re-key — diagnosis & deferral (module-qualified dict-arity identity)
 
+> **Follow-up (2026-06-21, `880e0fe`):** a bare-name cross-module scan prompted by this
+> diagnosis found the **method-level twin** of D2 — `methodConstraintsRef` had the same
+> collision with **no** qualified mirror (a genuine *unmitigated* silent soundness bug:
+> `check` passes, `run` crashes, `build` prints garbage, `run`≠`build`). It is now CLOSED
+> with the same proven additive pattern (`crossModuleMethodConstraintsQualRef` +
+> `scopeMethodArities`), **no** AST/resolve change. The full re-key described below
+> (retiring the bare tables entirely) remains deferred. See DICT-CONFORMANCE-ROADMAP.md
+> WS-2 UPDATE.
+
 **Status: DEFERRED to a supervised landing.** The observable bug is already
 closed; the remaining work is pure code-health with **zero observable payoff**,
 and the only principled path (full AST-origin re-key) is a large change through

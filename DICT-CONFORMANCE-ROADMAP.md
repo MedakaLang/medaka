@@ -15,7 +15,7 @@ and merged to local `main`. Sequence of commits: `afe4b89`→`72a1477` (+ D9).
 |------|--------|---------------|
 | **D1** existence gate (WS-1a) | ✅ closed | `afe4b89` + multi-module over-reject fix `00cf2f7` |
 | **D1** dispatch (WS-1b) | ✅ closed | sole-impl emit fix `83bb5c7` + `expand_supers` flatten `db091fd` + **ambiguity-defaulting `72a1477`** (sole→default / ≥2→`AmbiguousImpl`). Return-pos superclass under a `=>` constraint now run==build==oracle (sole 43, chain3b 1005). |
-| **D2** cross-module arity collision | ✅ closed | `e488cd9` (module-qualified define-side arity). **Full re-key (Option B) DEFERRED as net-negative** — empirically proven (agent `a95c…`): `e488cd9` IS the principled module-qualified re-key; the call site is already definer-correct via scheme resolution (not bare-name); remaining bare table serves a collision-free E6 job. D2 dissolved (verified 3-way 1/2/3 reversed-order, unsignatured-promoted). Adding an `EVar` origin field = eval-dict footgun risk for zero gain. |
+| **D2** cross-module arity collision | ✅ closed (fn + method) | `e488cd9` (module-qualified define-side FN arity) + **method-level twin `880e0fe`** (`crossModuleMethodConstraintsQualRef` + `scopeMethodArities`). **Full re-key (Option B) DEFERRED — zero observable payoff, highest-footgun path** (`selfhost/WS2-REKEY-DIAGNOSIS.md`, `56ad164`). NOTE — prior agent `a95c…`'s "call site already definer-correct, bare table redundant" claim was **EMPIRICALLY REFUTED**: neutering the seed at `typecheck.mdk:8136` → `intToString: not an Int` under-application. The bare table is **load-bearing** (the `Scheme` carries no constraint list, so it is the sole source of which callee ids are dict slots); it is benign only by construction (dep-order + most-recent-prepend + per-module import-scoped env). Retiring it needs an AST `EVar` definer-origin pass (does not exist; `annotateProgram`/`EVarAt` is unwired + single-module). Verified: fn 3-way 1/2/3 + reversed-order; method-arity 1-vs-2 collision (`cross_module_method_arity`, was a silent `check`-passes/`run`-crashes/`build`-garbage soundness bug). |
 | **D3** global coherence | ✅ closed | `84642d0` — orphan cross-module `impl C T` conflicts rejected (names both modules); user-only impl set (prelude excluded); fixpoint = selfhost-self-coherence canary. |
 | **D4** return/phantom overlap | ✅ closed | `fdaefda` (WS-3) — most-specific-wins route stamped for ground return-position. |
 | **D5/D6** well-formedness (WS-4) | ✅ closed | `adbbb97` — cyclic-superinterface rejected; instance-termination depth fuse. |
@@ -202,7 +202,30 @@ methods dispatch from the static dict, not arg-tag:
 > Gates: fixpoint C3a/C3b YES; eval_dict 26/0, build 30/0, resolve 15/0, argstamp parity
 > 26/26, all green.
 >
-> **NOT done (deferred follow-ups):** (1) the principled full re-key + **retirement of the
+> **UPDATE (2026-06-21, `880e0fe`): the METHOD-level twin of D2 is now also CLOSED.**
+> The same bare-name collision existed for **method-level** `=>` constraints
+> (`methodConstraintsRef`) with **no** qualified mirror — a genuine unmitigated soundness
+> bug (two interfaces sharing method name `shape` at arity 1 vs 2: `check` passes, `run`
+> crashes `unknown op '+'`, `build` prints garbage, `run`≠`build`, order-dependent). Fixed
+> by the **same proven additive pattern**: `crossModuleMethodConstraintsQualRef` +
+> `attributeMethodModuleArities` (prog-filtered by the interface's module) +
+> `scopeMethodArities` (sets `methodConstraintsRef` per dict-pass scope in
+> `dictPassModulesIfEnabled`/`dictPassModulesScoped`; no sig-fallback; keeps non-colliding
+> entries so an impl in a different module than its interface is safe). Fixture
+> `cross_module_method_arity/` (drives `evalModules`, golden "6 9"). Gates: all 12 diff
+> 0-failing; fixpoint C3a/C3b YES.
+>
+> **CORRECTION to the deferral rationale:** the earlier note that the full re-key was
+> "net-negative because the call site is already definer-correct / the bare table is
+> redundant" (agent `a95c…`) is **EMPIRICALLY REFUTED**. Neutering the inference seed at
+> `typecheck.mdk:8136` → `intToString: not an Int` under-application: the bare
+> `crossModuleFunConstraintsRef` is **load-bearing** (the `Scheme` carries no constraint
+> list, so it is the *sole* source of which callee tyvar ids are dict slots for
+> cross-module callees). It is benign today only **by construction** (dependency-order
+> processing + most-recent-prepend + per-module import-scoped env), not because it is
+> redundant. The re-key is deferred for the honest reason — **zero observable payoff,
+> highest-footgun path** — see `selfhost/WS2-REKEY-DIAGNOSIS.md` (`56ad164`) for the
+> file:line supervised-landing roadmap. (1) the principled full re-key + **retirement of the
 > bare `crossModuleFunConstraintsRef` + Phase-134 per-scope decl-filter + empty-entry
 > seeding** — the qualified table is an additive mirror, the workarounds stay; (2) the AST
 > module-origin threading (avoided); (3) **WS-1b's `expand_supers` is NOT unblocked by this**
