@@ -37,6 +37,7 @@ import tools.test_cmd.{runTest}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
 import tools.doc.{runDoc}
+import tools.check_policy.{runCheckPolicy, runAcceptedPlugin, PolicyArgs(..), parsePolicyArgs, PolicyOutcome(..)}
 
 main : <IO, Mut, Panic> Unit
 main = match args ()
@@ -51,6 +52,7 @@ main = match args ()
   "run"::rest => runRunCmd rest
   "test"::rest => runTestCmd rest
   "doc"::rest => runDocCmd rest
+  "check-policy"::rest => runCheckPolicyCmd rest
   "repl"::rest => runReplCmd rest
   "lsp"::rest => runLspCmd rest
   sub::_ => notYet sub
@@ -590,6 +592,47 @@ runDocCmd argv = match dropFlags argv
             let _ = ePutStrLn msg
             exit 1
           Ok tsrc => putStr (runDoc rsrc csrc tsrc target)
+
+-- ── check-policy ───────────────────────────────────────────────────────────
+-- WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.  Mirrors bin/main.ml's `check-policy`
+-- arm: parse `--allow L1,L2,… / --fn name / <file>`, type-check the plugin, read
+-- the named fn's inferred effect row, and accept (+ run on a sample request) or
+-- reject (+ print the call chain) per the policy.  Prelude sources come from
+-- MEDAKA_ROOT, as check/run/doc do.  runCheckPolicy returns (report, accepted?);
+-- we print the report and exit 0 (accept) / 1 (reject) — the OCaml arm exits the
+-- same way.  Defaults (allow "Cache,Log", fn "transform") match the oracle.
+runCheckPolicyCmd : List String -> <IO, Mut, Panic> Unit
+runCheckPolicyCmd argv = match parsePolicyArgs argv
+  PolicyArgs None _ _ =>
+    let _ = ePutStrLn "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
+    exit 1
+  PolicyArgs (Some target) allow fn =>
+    let root = envOr "MEDAKA_ROOT" "."
+    let rtPath = root ++ "/stdlib/runtime.mdk"
+    let corePath = root ++ "/stdlib/core.mdk"
+    match readFile rtPath
+      Err msg =>
+        let _ = ePutStrLn msg
+        exit 1
+      Ok rsrc => match readFile corePath
+        Err msg =>
+          let _ = ePutStrLn msg
+          exit 1
+        Ok csrc => match readFile target
+          Err msg =>
+            let _ = ePutStrLn msg
+            exit 1
+          Ok tsrc =>
+            -- Print the accept/reject HEADER first (OCaml prints `✅ accepted`
+            -- to stdout before running the plugin); on accept, then run the plugin
+            -- (a panic on an unstubbed extern surfaces post-header, like OCaml).
+            match runCheckPolicy rsrc csrc tsrc allow fn
+              PolicyReject report =>
+                let _ = putStr report
+                exit 1
+              PolicyAccept header pluginFn coreD rtD userD =>
+                let _ = putStr header
+                putStr (runAcceptedPlugin pluginFn coreD rtD userD)
 
 -- dirname on a POSIX path (mirrors build_cmd.dirOf, kept local to avoid an extra
 -- import of a non-exported helper).

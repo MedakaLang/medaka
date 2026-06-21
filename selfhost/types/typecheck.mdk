@@ -130,6 +130,7 @@ normHole p = p
 -- exactly `Atom "Foo" (dtopFor "Foo")` (= PUnit in Stage 1).
 public export data Atom = Atom String Param
 
+export
 atomLabel : Atom -> String
 atomLabel (Atom l _) = l
 
@@ -490,6 +491,7 @@ effrowNorm (EffRow labels tail) = match tail
   None => EffRow labels tail
 
 -- the concrete labels (atoms) currently known for a row (ignores the open tail)
+export
 effrowLabels : EffRow -> List Atom
 effrowLabels r = match effrowNorm r
   EffRow labels _ => labels
@@ -1665,6 +1667,7 @@ containsI _ [] = False
 containsI x (y::ys) = x == y || containsI x ys
 
 -- ── union-find core ───────────────────────────────────────────────────────
+export
 normalize : Mono -> Mono
 normalize (TVar cell) = match cell.value
   Link t => normalize t

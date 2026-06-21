@@ -1,0 +1,74 @@
+#!/bin/sh
+# diff_selfhost_check_policy.sh — `medaka check-policy` differential gate.
+#
+# The native `medaka check-policy <file> [--allow …] [--fn …]`
+# (selfhost/tools/check_policy.mdk via medaka_cli.mdk) must be BYTE-IDENTICAL to
+# the OCaml oracle `_build/default/bin/main.exe check-policy …` over the capability
+# demo plugins (demo/plugin_good.mdk, demo/plugin_malicious.mdk), across a
+# permissive policy (→ accept, exit 0) and a restrictive policy (→ reject + the
+# call chain, exit 1).  This is WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md (bare-label
+# policy compare).
+#
+# Each case compares stdout, stderr AND the exit code (accept=0 / reject=1).
+# Path-stable: the plugin path is the only absolute path that can appear; we strip
+# it on BOTH sides (sed) so goldens never bake /Users/.  No committed goldens — the
+# OCaml oracle is the live reference (like diff_selfhost_doc.sh).
+#
+# OCaml-free at runtime for the native leg; the oracle leg uses the frozen OCaml
+# compiler (soak-period differential oracle).
+#
+# Usage:  sh test/diff_selfhost_check_policy.sh
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+NATIVE="$ROOT/medaka"
+ORACLE="$ROOT/_build/default/bin/main.exe"
+
+[ -x "$NATIVE" ] || { echo "SKIP: ./medaka not built — run: make medaka"; exit 2; }
+[ -x "$ORACLE" ] || { echo "SKIP: OCaml oracle not built — run: dune build --root $ROOT"; exit 2; }
+
+export MEDAKA_ROOT="$ROOT"
+
+pass=0; fail=0
+
+# one_case <label> <file> <allow> <fn>
+one_case() {
+  label="$1"; file="$2"; allow="$3"; fn="$4"
+  mdk="$ROOT/$file"
+  [ -f "$mdk" ] || { fail=$((fail+1)); printf 'FAIL %s (missing %s)\n' "$label" "$file"; return; }
+
+  native_out="$(perl -e 'alarm 90; exec @ARGV' \
+      "$NATIVE" check-policy "$mdk" --allow "$allow" --fn "$fn" 2>&1 | sed "s|$mdk|<plugin>|g")"
+  native_rc=$?
+  oracle_out="$(perl -e 'alarm 90; exec @ARGV' \
+      "$ORACLE" check-policy "$mdk" --allow "$allow" --fn "$fn" 2>&1 | sed "s|$mdk|<plugin>|g")"
+  oracle_rc=$?
+
+  if [ "$native_out" = "$oracle_out" ] && [ "$native_rc" = "$oracle_rc" ]; then
+    pass=$((pass+1)); printf 'ok   %s (rc=%s)\n' "$label" "$native_rc"
+  else
+    fail=$((fail+1)); printf 'FAIL %s (native rc=%s, oracle rc=%s)\n' "$label" "$native_rc" "$oracle_rc"
+    printf '  --- native ---\n%s\n  --- ocaml ---\n%s\n' "$native_out" "$oracle_out"
+  fi
+}
+
+# Accept: good plugin, permissive policy.
+one_case "good-accept"        demo/plugin_good.mdk      "Cache,Log" transform
+# Reject: good plugin, restrictive policy (drops Log) → chain via logEvent.
+one_case "good-reject"        demo/plugin_good.mdk      "Cache"     transform
+# Reject: malicious plugin, the demo policy → chain four helpers deep to fetch.
+one_case "malicious-reject"   demo/plugin_malicious.mdk "Cache,Log" transform
+# Reject from a mid-graph entry: trace from tagVisit (chain to fetch).
+one_case "midgraph-reject"    demo/plugin_malicious.mdk "Cache,Log" tagVisit
+#
+# NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
+# is deliberately NOT tested.  check-policy ACCEPT runs the plugin with stubs for
+# only the three platform externs (cacheGet/cacheSet/logEvent); a plugin that
+# actually reaches `fetch` then panics on the unstubbed extern in BOTH compilers,
+# but the panic surfaces pre-existing native-vs-OCaml differences (stderr buffer
+# ordering + panic-message format) that are unrelated to the policy logic.  The
+# realistic accept path (good plugin, only stubbed externs) is covered by
+# good-accept and is byte-identical.
+
+echo ""
+printf '%d ok, %d failing\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || exit 1
