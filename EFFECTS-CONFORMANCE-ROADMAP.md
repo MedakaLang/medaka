@@ -51,6 +51,30 @@
 >
 > **Remaining:** WS-3b (parameterize Env(Set)/Exec(Prefix) — now unblocked by WS-3),
 > WS-4 (`Product`/structured Net — largest), WS-5 (extern-row assurance — standing).
+>
+> **WS-3b — Env/Exec domain-directed hole-fill: ✅ native machinery DONE (2026-06-21,
+> `2188e6a`); shared-runtime extern flip DEFERRED.** Landed (native-only): `Env`=`PSet`
+> / `Exec`=`PPrefix` in `seedEffectDomains`; **domain-directed inferred-hole fill** —
+> `holeFillParam`/`fillHoleAtom` now build `PSet (Some [s])` for a Set label vs
+> `PPrefix (Some s)` for a Prefix label (unrecovered → `dtopFor label`, the domain ⊤);
+> `atomOfWritten` special-cases the universal hole `_` before domain dispatch so `<Env
+> _>` stays a recognized hole. Exercised via per-program `effect Env Set`/`effect Exec
+> Prefix` + local externs. Gate `test/effect_param_domain.sh` 6/0 (Env hole-fill + ∪
+> djoin, Exec hole-fill, accept/reject); all canaries byte-identical; fixpoint C3a/C3b
+> YES; `unify_row`/escape/manifest untouched.
+> **DEFERRED — the `getEnv`/`runCommand` re-annotation in `stdlib/runtime.mdk`** (so the
+> *builtin* externs carry `<Env _>`/`<Exec _>`): the FROZEN OCaml oracle registers BOTH
+> `Env` AND `Exec` as **atomic** (`PUnit`, `lib/typecheck.ml:333-339`) and reads the
+> **embedded** `runtime.mdk` (`lib/stdlib_content.ml`), so the param annotation makes
+> the oracle reject runtime.mdk (`label 'Exec' is atomic and takes no parameter`) →
+> breaks the oracle-gated `diff_selfhost_check_policy`. The flip lands with **zero
+> further native work** once the Set/Prefix-Env/Exec domains reach OCaml `lib/` OR
+> `lib/` is removed (soak tail) — the domain-directed fill is already in place and
+> fixpoint-proven. (Footgun: editing `runtime.mdk` stale-bakes the oracle until `dune
+> build bin/main.exe` regenerates the embed.)
+
+> **Remaining:** WS-4 (`Product`/structured Net — largest), WS-5 (extern-row
+> assurance — standing). WS-3b's shared-runtime flip rides the `lib/`-removal soak tail.
 
 The audit's verdict: the effect **typing core is sound and conformant**; the gaps
 are the **unrealized capability manifest** (E1 — the one that matters), **deferred
