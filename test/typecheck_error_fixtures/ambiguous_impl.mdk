@@ -1,0 +1,20 @@
+interface Sup a where
+  mk : Int -> a
+interface Sub a requires Sup a where
+  label : a -> Int
+data Widget = Widget Int
+data Gadget = Gadget Int
+impl Sup Widget where
+  mk n = Widget (n * 3 + 1)
+impl Sub Widget where
+  label (Widget n) = n
+impl Sup Gadget where
+  mk n = Gadget (n * 5)
+impl Sub Gadget where
+  label (Gadget n) = n
+build : Sub a => Int -> a
+build n = mk n
+roundtrip : Sub a => Int -> Int
+roundtrip n = label (build n)
+main : <IO> Unit
+main = putStrLn (intToString (roundtrip 14))

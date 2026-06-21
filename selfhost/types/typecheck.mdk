@@ -1202,7 +1202,12 @@ crossModuleFunConstraintsQualRef = Ref []
 crossModuleFunConstraintIfacesRef : Ref (List (String, List String))
 crossModuleFunConstraintIfacesRef = Ref []
 
-pendingDictApps : Ref (List (Ref (List Route), List Mono))
+-- WS-1c: the third field is the slot-parallel interface-name list (one per mono),
+-- so resolveDictApps can resolve an UNDETERMINED top-level constraint (a constraint
+-- tyvar pinned by neither arg nor result) by counting that interface's impls: sole
+-- impl → a concrete RKey to it; ≥2 → an AmbiguousImpl error.  Recorded from the same
+-- `expanded` (iface, id) pairing inferDictAtFound already builds for recordCallObligations.
+pendingDictApps : Ref (List (Ref (List Route), List Mono, List String))
 pendingDictApps = Ref []
 
 -- method-level-constraint dict-passing (the reference's res_method_dicts, Phase
@@ -2012,6 +2017,29 @@ tyVarNames (TyTuple ts) = concatMapList tyVarNames ts
 tyVarNames (TyEffect _ _ t) = tyVarNames t
 tyVarNames (TyConstrained _ t) = tyVarNames t
 
+-- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
+-- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
+-- var that NEVER appears in the value type (`Mk a => Int -> Int` — `a` only in `Mk a`)
+-- was dropped from the fresh-var map and the generalized scheme: the scheme didn't
+-- quantify `a`, so a call-site instantiation couldn't pin it (anyIdPinned False), the
+-- call fell to the recursive-app path with empty ids → an empty dict → runtime
+-- `intToString: not an Int` / a null build dict.  Including these names (deduped
+-- against tyVarNames, so a constraint var ALSO in the value type is unaffected) lets
+-- the constraint var be freshened + quantified like any other, so the undetermined
+-- call routes through the normal pendingDictApps path (routeUndeterminedTop).
+constraintVarNamesTy : Ty -> List String
+constraintVarNamesTy (TyConstrained cs t) =
+  concatMapList constraintArgVarNames cs ++ constraintVarNamesTy t
+constraintVarNamesTy (TyEffect _ _ t) = constraintVarNamesTy t
+constraintVarNamesTy _ = []
+
+constraintArgVarNames : Constraint -> List String
+constraintArgVarNames (Constraint _ tys) = concatMapList tyVarNames tys
+
+-- tyVarNames PLUS the signature's constraint-only vars (deduped).
+tyVarNamesWithConstraints : Ty -> List String
+tyVarNamesWithConstraints ty = dedup (tyVarNames ty ++ constraintVarNamesTy ty)
+
 -- an annotation / signature mono with free tyvars realized as fresh vars
 astTypeFresh : Ty -> <Mut> Mono
 astTypeFresh ty =
@@ -2041,7 +2069,7 @@ sigToScheme ty = fst (sigToSchemeTvs ty)
 -- subst maps them.
 sigToSchemeTvs : Ty -> <Mut> (Scheme, List (String, Mono))
 sigToSchemeTvs ty =
-  let tvs = freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))
+  let tvs = freshTvMap (removeAllS (rowArgNames ty) (tyVarNamesWithConstraints ty))
   let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
   (
     Forall (map monoTyvarId (map snd tvs)) (map effvarIdOf etbl) (fromAstTypeE etbl tvs ty),
@@ -2523,9 +2551,10 @@ recordSite name tagRef implRef methodType =
 -- pin those monos.  funConstraintsRef[f] gives f's constraint tyvar ids, mapped
 -- through the instantiation subst to this call's fresh vars.
 inferDictAt : TcEnv -> String -> Ref (List Route) -> <Mut> Mono
-inferDictAt env name routesRef = match lookupVar env name
-  None => panic ("unbound constrained fn: " ++ name)
-  Some scheme => inferDictAtFound name routesRef (instantiateTracked scheme)
+inferDictAt env name routesRef =
+  match lookupVar env name
+    None => panic ("unbound constrained fn: " ++ name)
+    Some scheme => inferDictAtFound name routesRef (instantiateTracked scheme)
 
 -- The callee's constraints are registered (funConstraintsRef has it) ⇒ a normal
 -- call: map each constraint id through the instantiation subst to this call's
@@ -2558,13 +2587,13 @@ inferDictAtFound name routesRef inst
     let expanded = expandSupersPairs superDeclsRef.value (zipL declaredIfaces declaredIds)
     let ids = map snd expanded
     let monos = constraintMonosOf ids (snd inst)
-    let _ = set_ref pendingDictApps ((routesRef, monos) :: pendingDictApps.value)
+    let ifaces = map fst expanded
+    let _ = set_ref pendingDictApps ((routesRef, monos, ifaces) :: pendingDictApps.value)
     let _ = set_ref dictAppFns ((currentFn.value, monos) :: dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
     -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
     -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
-    let ifaces = map fst expanded
     let _ = recordCallObligations ifaces monos
     fst inst
   | otherwise =
@@ -4037,7 +4066,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let _ = resolveSites implTable keyTable (returnPosMethodNames prog2) pendingSites.value
   let _ = resolveBinopSites implTable keyTable pendingBinopSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
-  let _ = resolveDictApps implTable pendingDictApps.value
+  let _ = resolveDictApps prog2 implTable pendingDictApps.value
   let _ = resolveMethodDicts implTable pendingMethodDicts.value
   let _ = resolveArgStamps implTable keyTable pendingArgStamps.value
   dictPass allNames prog2
@@ -5795,13 +5824,85 @@ findImplEntry ((ImplEntry tag2 ms hty reqs itys)::rest) tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List ImplEntry -> List (Ref (List Route), List Mono) -> <Mut> Unit
-resolveDictApps _ [] = ()
-resolveDictApps implTable ((routesRef, monos)::rest) =
-  let routes = routesOfMonos implTable monos
+resolveDictApps : List Decl -> List ImplEntry -> List (Ref (List Route), List Mono, List String) -> <Mut> Unit
+resolveDictApps _ _ [] = ()
+resolveDictApps prog implTable ((routesRef, monos, ifaces)::rest) =
+  let routes = routesOfMonosTop prog implTable monos ifaces
   let _ = set_ref routesRef routes
-  resolveDictApps implTable rest
+  resolveDictApps prog implTable rest
 
+
+-- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
+-- Identical to routesOfMonos except for the UNDETERMINED case (the constraint var is
+-- pinned by neither an argument nor the result): instead of the nested-recursion
+-- RNone (which yields an empty dict → runtime `intToString: not an Int` / a null
+-- build dict), look up how many impls of the slot's interface exist:
+--   • exactly ONE  → stamp a concrete RKey to that impl's head tag (deterministic
+--                    dispatch on both run and build);
+--   • two or more  → genuinely ambiguous → pushTypeError AmbiguousImpl (DELIBERATELY
+--                    diverges from the frozen oracle's silent first-wins);
+--   • zero         → keep RNone (existing no-impl behaviour/error).
+-- Kept SEPARATE from routesOfMonos/routeOfMono so the nested element-dict recursion
+-- (argReqRoute → routeOfMono) is untouched — a blanket RNone→RKey there would corrupt
+-- element-dict routing.
+routesOfMonosTop : List Decl -> List ImplEntry -> List Mono -> List String -> <Mut> List Route
+routesOfMonosTop _ _ [] _ = []
+routesOfMonosTop prog implTable (m::rest) [] =
+  routeOfMonoTop prog implTable "" m :: routesOfMonosTop prog implTable rest []
+routesOfMonosTop prog implTable (m::rest) (iface::ifacesRest) =
+  routeOfMonoTop prog implTable iface m :: routesOfMonosTop prog implTable rest ifacesRest
+
+routeOfMonoTop : List Decl -> List ImplEntry -> String -> Mono -> <Mut> Route
+routeOfMonoTop prog implTable iface m = match activeDictVarOf m
+  Some dname => RDict dname
+  None => match headTyconMono m
+    Some tag => RKey tag (argImplRequiresRoutesRec implTable tag m)
+    None => routeUndeterminedTop prog implTable iface
+
+-- the undetermined-constraint resolution: count impls of [iface] in [prog].
+routeUndeterminedTop : List Decl -> List ImplEntry -> String -> <Mut> Route
+routeUndeterminedTop prog implTable iface
+  | iface == "" = RNone
+  | otherwise = match implHeadTagsForIface prog iface
+    [] => RNone
+    [tag] => RKey tag (argImplRequiresRoutesRec implTable tag (TCon tag))
+    _ => reportAmbiguousImpl iface
+
+reportAmbiguousImpl : String -> <Mut> Route
+reportAmbiguousImpl iface =
+  let _ = pushTypeError (ambiguousImplMsg iface)
+  RNone
+
+-- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
+-- one head ty per impl; we read its head tycon).  Dedups so a prelude impl imported
+-- twice via multi-module loading doesn't read as ambiguous.
+implHeadTagsForIface : List Decl -> String -> List String
+implHeadTagsForIface prog iface = dedupStr (concatMapList (implHeadTagForIface iface) prog)
+
+implHeadTagForIface : String -> Decl -> List String
+implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
+implHeadTagForIface want DImpl { iface, tys, ... }
+  | iface == want = match tys
+    (headTy::_) => match headTyconTy headTy
+      Some tag => [tag]
+      None => []
+    [] => []
+  | otherwise = []
+implHeadTagForIface _ _ = []
+
+dedupStr : List String -> List String
+dedupStr xs = dedupStrGo [] xs
+
+dedupStrGo : List String -> List String -> List String
+dedupStrGo _ [] = []
+dedupStrGo seen (x::rest)
+  | contains x seen = dedupStrGo seen rest
+  | otherwise = x :: dedupStrGo (x :: seen) rest
+
+ambiguousImplMsg : String -> String
+ambiguousImplMsg iface = "ambiguous instance for '"
+  ++ iface
+  ++ " a': cannot determine which impl; annotate the type"
 
 routesOfMonos : List ImplEntry -> List Mono -> <Mut> List Route
 routesOfMonos _ [] = []
@@ -6605,7 +6706,39 @@ checkCallObligationsGo heads seen ((iface, occ, loc)::rest) =
 checkOneCallObligation : List (String, List Ty) -> String -> Mono -> Option Loc -> <Mut> Unit
 checkOneCallObligation heads iface occ loc =
   let args = [normalize occ]
-  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt loc (noImplFoundMsg iface args) else if not (allConcreteHeads args) then () else if implMatches heads iface args then () else pushTypeErrorOnceAt loc (noImplFoundMsg iface args)
+  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt loc (noImplFoundMsg iface args) else if not (allConcreteHeads args) then checkUndeterminedObligation heads iface occ loc else if implMatches heads iface args then () else pushTypeErrorOnceAt loc (noImplFoundMsg iface args)
+
+-- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
+-- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).
+-- If the var is a FORWARDED enclosing-fn dict (activeDictVarOf Some), it's resolved
+-- by dict-passing — fine.  Otherwise it is genuinely free, and the route must pick
+-- an impl with no type to guide it: ONE impl of [iface] → sole-impl default (no
+-- error; routeUndeterminedTop stamps it concretely); TWO or more → genuinely
+-- ambiguous → AmbiguousImpl (the deliberate divergence from the oracle's silent
+-- first-wins).  Skip "Num" (its literal defaulting handles ambiguity) and ifaces
+-- with no user impls (zero → existing no-impl path).  This runs on BOTH the check
+-- path (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+checkUndeterminedObligation : List (String, List Ty) -> String -> Mono -> Option Loc -> <Mut> Unit
+checkUndeterminedObligation heads iface occ loc
+  | iface == "Num" = ()
+  | isSome (activeDictVarOf occ) = ()
+  | implCountForIface heads iface >= 2 = pushTypeErrorOnceAt loc (ambiguousImplMsg iface)
+  | otherwise = ()
+
+-- the number of DISTINCT-head impls of [iface] in [heads] (one (iface, tys) per
+-- impl).  Dedups by head-tycon so a prelude impl imported twice doesn't inflate.
+implCountForIface : List (String, List Ty) -> String -> Int
+implCountForIface heads iface = listLen (dedupStr (implHeadTagsFromHeads heads iface))
+
+implHeadTagsFromHeads : List (String, List Ty) -> String -> List String
+implHeadTagsFromHeads [] _ = []
+implHeadTagsFromHeads ((iface2, tys)::rest) iface
+  | iface2 == iface = match tys
+    (headTy::_) => match headTyconTy headTy
+      Some tag => tag :: implHeadTagsFromHeads rest iface
+      None => implHeadTagsFromHeads rest iface
+    [] => implHeadTagsFromHeads rest iface
+  | otherwise = implHeadTagsFromHeads rest iface
 
 -- PLAN.md #11: after HM + defaulting every source integer literal's type var is
 -- ground (or a genuine `Num a` survivor).  Decide each literal's runtime rep
@@ -7458,7 +7591,7 @@ preunifySig sigs m v = match lookupAssoc m sigs
 -- like astTypeFresh but also returns the tyvar-name → fresh-var map
 instantiateSigTracked : Ty -> <Mut> (Mono, List (String, Mono))
 instantiateSigTracked ty =
-  let tvs = freshTvMap (removeAllS (rowArgNames ty) (dedup (tyVarNames ty)))
+  let tvs = freshTvMap (removeAllS (rowArgNames ty) (tyVarNamesWithConstraints ty))
   let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
   (fromAstTypeE etbl tvs ty, tvs)
 
@@ -8937,7 +9070,7 @@ elabModuleStamp mid seedVars accData implDecls prog =
   let _ = resolveArgStamps stampImplTable (buildKeyTable implDecls) pendingArgStamps.value
   let _ = resolveRLocalSites (buildKeyTable implDecls) pendingRLocalSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
-  let _ = resolveDictApps stampImplTable pendingDictApps.value
+  let _ = resolveDictApps implDecls stampImplTable pendingDictApps.value
   let _ = resolveMethodDicts stampImplTable pendingMethodDicts.value
   schemes
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so

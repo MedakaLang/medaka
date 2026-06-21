@@ -1,0 +1,11 @@
+interface Mk a where
+  mk : Int -> a
+  un : a -> Int
+data Widget = Widget Int
+impl Mk Widget where
+  mk n = Widget (n + 1)
+  un (Widget n) = n
+roundtrip : Mk a => Int -> Int
+roundtrip n = un (mk n)
+main : <IO> Unit
+main = putStrLn (intToString (roundtrip 10))

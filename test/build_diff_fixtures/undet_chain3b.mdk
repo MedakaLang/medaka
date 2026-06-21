@@ -1,0 +1,19 @@
+interface Base a where
+  mk : Int -> a
+interface Mid a requires Base a where
+  midOp : a -> Int
+interface Top a requires Mid a where
+  topOp : a -> Int
+data Widget = Widget Int
+impl Base Widget where
+  mk n = Widget (n * 200 + 5)
+impl Mid Widget where
+  midOp (Widget n) = n
+impl Top Widget where
+  topOp (Widget n) = n
+make2 : Base a => Int -> a
+make2 n = mk n
+roundtrip : Top a => Int -> Int
+roundtrip n = midOp (make2 n)
+main : <IO> Unit
+main = putStrLn (intToString (roundtrip 5))
