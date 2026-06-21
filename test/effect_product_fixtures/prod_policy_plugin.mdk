@@ -1,0 +1,12 @@
+-- WS-4 check-policy product plugin (native-only).  `transform` reaches a product
+-- Net fetch confined to Host="idp.example.com/*" Method={"GET","POST"}.  A policy
+-- admitting that product ACCEPTS; a narrower product policy REJECTS.
+effect Net Product
+
+extern fetch : String -> <Net Host="idp.example.com/api" Method={"GET"}> String
+
+transform : String -> <Net Host="idp.example.com/*" Method={"GET", "POST"}> String
+transform req = fetch req
+
+main : <IO> Unit
+main = println "product plugin"

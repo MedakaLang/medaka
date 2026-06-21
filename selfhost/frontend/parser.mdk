@@ -103,6 +103,13 @@ failP msg = Parser (toks pos => PErr msg pos)
 peekP : Parser Token
 peekP = Parser (toks pos => POk (peekTok toks pos) pos)
 
+-- Peek the token ONE PAST the current (lookahead-2) without consuming.  Used by
+-- the WS-4 product effect-param clause to disambiguate a product axis (`Host=`)
+-- from a comma-separated next atom: a `TUpper` immediately FOLLOWED by `TEqual`
+-- starts a product axis.  Pure read of `pos + 1` (no advance).
+peek2P : Parser Token
+peek2P = Parser (toks pos => POk (peekTok toks (pos + 1)) pos)
+
 -- Read the current token index without consuming.  Used by the position
 -- side-channel (`parseWithPositions`) to capture per-decl / per-variant token
 -- spans; does not affect parsing (it's a pure read of `pos`).
@@ -1599,7 +1606,66 @@ effAtomP = do
 effParamP : Parser (Option String)
 effParamP = do
   t <- peekP
-  effParamFor t
+  t2 <- peek2P
+  effParamDispatch t t2
+
+-- WS-4: a `TUpper` axis-name immediately followed by `TEqual` (`Host=`) starts a
+-- PRODUCT param (keyword-axes, Option A).  Otherwise fall through to the existing
+-- single-domain clauses (string / hole / brace-set / none).  This is the only
+-- ambiguity point: a bare `TUpper` with NO following `=` is the next comma-less
+-- atom — but atoms are comma-SEPARATED, so a label-juxtaposed upper can only be a
+-- product axis; the `= ` lookahead distinguishes it cleanly with zero collision.
+effParamDispatch : Token -> Token -> Parser (Option String)
+effParamDispatch (TUpper _) TEqual = productParamP
+effParamDispatch t _ = effParamFor t
+
+-- parse `Host="…" Method={…} …` (space-separated axes; loop while peek is an
+-- upper-name followed by `=`).  Encode into the carrier sentinel `@P{…;…}`.
+productParamP : Parser (Option String)
+productParamP = do
+  axes <- productAxes
+  pure (Some (encodeProductParam axes))
+
+productAxes : Parser (List (String, String))
+productAxes = do
+  a <- productAxis
+  rest <- productAxesMore
+  pure (a :: rest)
+
+productAxesMore : Parser (List (String, String))
+productAxesMore = do
+  t <- peekP
+  t2 <- peek2P
+  productAxesMoreFor t t2
+
+productAxesMoreFor : Token -> Token -> Parser (List (String, String))
+productAxesMoreFor (TUpper _) TEqual = productAxes
+productAxesMoreFor _ _ = pure []
+
+-- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).  Returns the
+-- axis name and the per-axis carrier value (`"…"` kept quoted; `{a,b}` re-encoded).
+productAxis : Parser (String, String)
+productAxis = do
+  name <- upperNameP
+  expectTok TEqual
+  v <- productAxisVal
+  pure (name, v)
+
+productAxisVal : Parser String
+productAxisVal = do
+  t <- peekP
+  productAxisValFor t
+
+productAxisValFor : Token -> Parser String
+productAxisValFor (TString s) = do
+  advance
+  pure ("\"" ++ s ++ "\"")        -- Prefix axis: keep quoted for the decoder
+productAxisValFor TLBrace = do
+  expectTok TLBrace
+  elems <- sepBy1 stringLitP (expectTok TComma)
+  expectTok TRBrace
+  pure (encodeSetParam elems)       -- Set axis: `{a,b}` (same as the Set carrier)
+productAxisValFor _ = failP "expected product axis value (\"prefix\" or {set})"
 
 effParamFor : Token -> Parser (Option String)
 effParamFor (TString s) = do
@@ -1623,6 +1689,22 @@ effParamFor _ = pure None
 -- authority tokens contain no commas/braces).
 encodeSetParam : List String -> String
 encodeSetParam elems = "{" ++ joinComma elems ++ "}"
+
+-- WS-4: encode product axes into the carrier sentinel `@P{Axis=val;Axis=val}`
+-- (mirror of `encodeSetParam`; `decodeProductParam` in typecheck.mdk decodes it).
+-- Each val is already in its per-axis carrier form (`"prefix"` or `{a,b}`).  The
+-- sentinel `@P{` prefix + `;` separator round-trips through the `Option String`
+-- carrier with no AST `TyEffect` ripple.
+encodeProductParam : List (String, String) -> String
+encodeProductParam axes = "@P{" ++ joinSemi (map encodeAxis axes) ++ "}"
+
+encodeAxis : (String, String) -> String
+encodeAxis (name, v) = name ++ "=" ++ v
+
+joinSemi : List String -> String
+joinSemi [] = ""
+joinSemi [x] = x
+joinSemi (x::xs) = x ++ ";" ++ joinSemi xs
 
 joinComma : List String -> String
 joinComma [] = ""

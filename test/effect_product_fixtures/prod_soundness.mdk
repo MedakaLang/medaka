@@ -1,0 +1,20 @@
+-- WS-4 SOUNDNESS fixture (the dsubN axis-defaulting trap).  The extern's product
+-- constrains ONLY the Host axis (Method ABSENT => Method = TOP = "any method").
+-- The bound CONSTRAINS Method to {"GET"}.  An inferred row that is TOP on Method
+-- is BROADER than a bound confining Method => it must ESCAPE => REJECT.
+--
+-- A BUGGY dsubN that "skips axes absent from the inferred side" would treat the
+-- missing Method as trivially-subsumed and ACCEPT => unsound (code claiming "any
+-- method" would pass a "GET only" bound).  The correct dsubN looks a missing
+-- axis up against the bound axis's sub-domain TOP (PSet None) and finds TOP is
+-- NOT subset of {"GET"} => REJECT.  This fixture MUST reject.
+effect Net Product
+
+-- bare host-only product (Method = TOP)
+extern fetch : String -> <Net Host="idp.example.com/api"> String
+
+call : Unit -> <Net Host="idp.example.com/*" Method={"GET"}> String
+call _ = fetch "x"
+
+main : <IO> Unit
+main = println "should not typecheck (unsound if accepted)"

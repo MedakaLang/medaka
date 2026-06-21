@@ -1,0 +1,14 @@
+-- WS-4 HOST-AXIS LIFT: under a Product-registered Net, a bare `<Net "a.com/*">`
+-- (plain string, no axis keywords) lifts to Host="a.com/*", Method=TOP.  Here the
+-- extern's bare host literal is in-prefix of the bound's Host AND the bound's
+-- Method is TOP (absent) => ACCEPT.  Proves the §3 lift keeps single-axis
+-- annotations ergonomic under an opt-in product Net.
+effect Net Product
+
+extern fetch : String -> <Net "idp.example.com/api/*"> String
+
+call : Unit -> <Net Host="idp.example.com/*"> String
+call _ = fetch "x"
+
+main : <IO> Unit
+main = println "host-axis lift accept"

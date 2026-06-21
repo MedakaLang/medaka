@@ -1,0 +1,14 @@
+-- WS-4 PRODUCT (structured Net) accept.  `effect Net Product` opts this program
+-- into the Host(Prefix) x Method(Set) product domain.  The extern is annotated
+-- with a NARROW product `<Net Host="idp.example.com/api" Method={"GET"}>`; the
+-- declared bound is WIDER on BOTH axes (host prefix admits the path, method set
+-- is a superset) => pointwise subsumption => ACCEPT.
+effect Net Product
+
+extern fetch : String -> <Net Host="idp.example.com/api" Method={"GET"}> String
+
+call : Unit -> <Net Host="idp.example.com/*" Method={"GET", "POST"}> String
+call _ = fetch "x"
+
+main : <IO> Unit
+main = println "product accept"

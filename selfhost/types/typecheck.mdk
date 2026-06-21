@@ -105,7 +105,15 @@ public export data Effvar = EUnbound Int Int | ELink EffRow  -- EUnbound id leve
 -- Stage 1 is the REPRESENTATION only: every param is built at ⊤, so the row is
 -- byte-identical to the v1 set-of-bare-labels.  Stage 2 adds the Prefix domain's
 -- analysis with NO change to this row code.  (Mirror of lib/typecheck.ml.)
-public export data Param = PUnit | PPrefix (Option String) | PSet (Option (List String))
+-- WS-4: a PRODUCT refinement domain — a label refined on several named AXES at
+-- once, each axis a value in an existing sub-domain (e.g. structured `Net` =
+-- `Host(Prefix) × Method(Set)`).  Represented as a sorted assoc-list keyed by
+-- axis name; an axis ABSENT from the list is ⊤ on that axis, and `PProduct []`
+-- is the product ⊤ (no axis constrained).  The lattice ops are POINTWISE
+-- (`dsubN`/`djoinN`/`drenderN` below).  No `dmeetN`/⊥ arm: the escape check and
+-- policy compare only ever call `dsub`/`djoin` — ⊓ is unreachable today and is
+-- deliberately omitted (model ⊥ as `Option Param`→`None` if ever needed).
+public export data Param = PUnit | PPrefix (Option String) | PSet (Option (List String)) | PProduct (List (String, Param))
 
 -- v2 Stage 2b inferred-hole marker (mirror of lib/typecheck.ml).  A leaf
 -- extern's `<Net _>` parses to the param string "_" (`effHoleSrc`), which
@@ -126,6 +134,10 @@ isHoleParam _ = False
 normHole : Param -> Param
 normHole (PPrefix (Some s)) = if isHoleStr s then PPrefix None else PPrefix (Some s)
 normHole p = p
+-- WS-4: per-axis holes are out of scope (the hole marker stays at the whole-atom
+-- `Param` level, not per axis), so `normHole (PProduct …)` is the identity — the
+-- explicit clause above (`normHole p = p`) already covers it.  Documented so a
+-- reader doesn't mistake the absence for an oversight.
 -- an atom = a label applied to a domain parameter.  A v1 atomic label `Foo` is
 -- exactly `Atom "Foo" (dtopFor "Foo")` (= PUnit in Stage 1).
 public export data Atom = Atom String Param
@@ -167,6 +179,7 @@ domainParam : Option String -> Bool -> Param
 domainParam _ True = PUnit
 domainParam (Some "Prefix") False = PPrefix None
 domainParam (Some "Set") False = PSet None
+domainParam (Some "Product") False = PProduct []   -- WS-4: structured (multi-axis) domain ⊤
 domainParam _ False = PUnit
 
 -- re-seed to the builtins, then register every `effect …` decl in the program.
@@ -196,6 +209,7 @@ dtopFor : String -> Param
 dtopFor label = match lookupDomain label effectDomains.value
   PPrefix None => PPrefix None
   PSet None => PSet None
+  PProduct _ => PProduct []     -- WS-4: product domain ⊤ (no axis constrained)
   _ => PUnit
 
 -- the concrete (literal) part of a Prefix pattern: drop a single trailing `*`
@@ -219,7 +233,45 @@ dsubN (PPrefix None) (PPrefix (Some _)) = False
 dsubN _ (PSet None) = True                      -- anything ⊑ ⊤ (Set domain)
 dsubN (PSet (Some a)) (PSet (Some b)) = subsetStr a b   -- a ⊆ b
 dsubN (PSet None) (PSet (Some _)) = False
+-- WS-4: PRODUCT subsumption is POINTWISE.  `a ⊑ b` iff for EVERY axis CONSTRAINED
+-- in `b`, a's value on that axis ⊑ b's value.  SOUNDNESS-CRITICAL: an axis absent
+-- from `a` means a is UNCONSTRAINED (⊤) on that axis, which is NOT ⊑ a constrained
+-- b-axis — so a missing a-axis must be looked up against the SUB-DOMAIN ⊤ of the
+-- b-axis (`subTopOf bp`), not silently skipped.  (Skipping it would under-
+-- approximate the escape check ⇒ unsound: an `a` silent on Method would falsely
+-- subsume a `b` that confines Method.)  Axes constrained in `a` but ⊤ in `b` need
+-- no check (anything ⊑ ⊤), so we iterate b's axes only.
+dsubN _ (PProduct []) = True                    -- anything ⊑ product-⊤
+dsubN (PProduct ax) (PProduct bx) =
+  allList (axisSub ax) bx
 dsubN _ _ = False                              -- domain mismatch — never happens (one domain per label)
+
+-- one b-axis ⊑ check: a's value on `name` (its sub-domain ⊤ when a is silent) ⊑ bp.
+axisSub : List (String, Param) -> (String, Param) -> Bool
+axisSub ax (name, bp) = dsubN (lookupAxisOrTop name ax bp) bp
+
+-- a's value for axis `name`, or the SUB-DOMAIN ⊤ of `bp` when `a` is silent (the
+-- soundness default — a missing axis is ⊤ on that axis, NOT ⊑ a constrained bound).
+lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
+lookupAxisOrTop name ax bp = match lookupAxis name ax
+  Some v => v
+  None => subTopOf bp
+
+-- the ⊤ of a sub-domain param's domain.
+subTopOf : Param -> Param
+subTopOf (PPrefix _) = PPrefix None
+subTopOf (PSet _) = PSet None
+subTopOf (PProduct _) = PProduct []
+subTopOf _ = PUnit
+
+lookupAxis : String -> List (String, Param) -> Option Param
+lookupAxis _ [] = None
+lookupAxis name ((k, v)::rest) = if name == k then Some v else lookupAxis name rest
+
+-- total `all` over a list (avoids relying on a stdlib import in selfhost).
+allList : (a -> Bool) -> List a -> Bool
+allList _ [] = True
+allList f (x::xs) = if f x then allList f xs else False
 
 -- a ⊆ b for string sets (lists treated as sets)
 subsetStr : List String -> List String -> Bool
@@ -243,7 +295,53 @@ djoinN (PSet (Some a)) (PSet (Some b)) =
   -- ∪, saturating to ⊤ (PSet None) past the cardinality cap (setCardCap = 16)
   let u = sortUniqS (a ++ b)
   if listLen u > setCardCap then PSet None else PSet (Some u)
+-- WS-4: PRODUCT join is POINTWISE — for every axis present in EITHER side, join
+-- the two sub-params (a side silent on an axis = sub-⊤ there, which makes the join
+-- ⊤ on that axis — correct over-approximation).  `productNorm` then drops axes
+-- that joined to sub-⊤ and re-sorts; all-⊤ collapses to `PProduct []`.  Component
+-- saturation (prefix→LCP→⊤, set→card-cap→⊤) is inherited from the recursive calls.
+djoinN (PProduct ax) (PProduct bx) =
+  productNorm (map (joinAxis ax bx) (axisUnion ax bx))
 djoinN p _ = p                                 -- domain mismatch — never happens
+
+-- join the two sides' values on axis `name` (missing side = sub-⊤).  The sub-⊤
+-- to use is taken from whichever side HAS the axis (both sides' axes are sub-⊤
+-- compatible since one label has one product shape).
+joinAxis : List (String, Param) -> List (String, Param) -> String -> (String, Param)
+joinAxis ax bx name =
+  match (lookupAxis name ax, lookupAxis name bx)
+    (Some pa, Some pb) => (name, djoinN pa pb)
+    (Some pa, None) => (name, djoinN pa (subTopOf pa))
+    (None, Some pb) => (name, djoinN (subTopOf pb) pb)
+    (None, None) => (name, PUnit)            -- unreachable (name ∈ union)
+
+-- the sorted union of axis NAMES present in either side.
+axisUnion : List (String, Param) -> List (String, Param) -> List String
+axisUnion ax bx = sortUniqS (map fst ax ++ map fst bx)
+
+-- canonicalize a product: drop axes whose value is its sub-domain ⊤ (unconstrained
+-- ⇒ omit), sort by axis name; all-⊤ ⇒ `PProduct []` (the product ⊤).
+productNorm : List (String, Param) -> Param
+productNorm axes = PProduct (sortAxes (filterList (p => not (isSubTop (snd p))) axes))
+
+-- is a sub-param the ⊤ of its sub-domain?
+isSubTop : Param -> Bool
+isSubTop (PPrefix None) = True
+isSubTop (PSet None) = True
+isSubTop (PProduct []) = True
+isSubTop PUnit = True
+isSubTop _ = False
+
+-- sort an axis assoc-list by axis name (insertion sort — the axis count is tiny).
+sortAxes : List (String, Param) -> List (String, Param)
+sortAxes [] = []
+sortAxes (x::xs) = insertAxis x (sortAxes xs)
+
+insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
+insertAxis x [] = [x]
+insertAxis x (y::ys) = match stringCompare (fst x) (fst y)
+  Gt => y :: insertAxis x ys
+  _ => x :: y :: ys
 
 -- Set-domain cardinality cap: a join whose union exceeds this many distinct
 -- authority elements saturates to ⊤ (PSet None), bounding the lattice height.
@@ -269,9 +367,32 @@ drenderN (PPrefix None) = ""
 drenderN (PPrefix (Some s)) = " \"" ++ s ++ "\""
 drenderN (PSet None) = ""                       -- ⊤ renders empty (like the others)
 drenderN (PSet (Some xs)) = " {" ++ joinWith ", " (map quoteStr xs) ++ "}"
+-- WS-4: render a product as the chosen USER SURFACE (keyword-axes, capitalized:
+-- `Host="…" Method={…}`) so error/manifest text round-trips back through the
+-- parser.  Product-⊤ (`PProduct []`) renders empty, like every other ⊤.
+drenderN (PProduct []) = ""
+drenderN (PProduct ax) = " " ++ renderProductLit ax
 
 quoteStr : String -> String
 quoteStr s = "\"" ++ s ++ "\""
+
+-- WS-4: render a product's constrained axes as `Host="…" Method={…}` (space-
+-- separated, axis-sorted) — the Option-A keyword-axes user surface.  Each axis
+-- value renders via its sub-domain (`drenderN` drops the leading space, which we
+-- supply per axis as `Name=`).  Only constrained axes appear (⊤ axes are absent
+-- by `productNorm`), so the surface is minimal.
+renderProductLit : List (String, Param) -> String
+renderProductLit ax = joinWith " " (map renderAxis ax)
+
+renderAxis : (String, Param) -> String
+renderAxis (name, p) = name ++ "=" ++ renderAxisVal p
+
+-- an axis value WITHOUT the leading-space that `drenderN` prefixes (we reuse the
+-- sub-domain rendering but strip the space, so Host="a/*" / Method={"GET"}).
+renderAxisVal : Param -> String
+renderAxisVal (PPrefix (Some s)) = "\"" ++ s ++ "\""
+renderAxisVal (PSet (Some xs)) = "{" ++ joinWith ", " (map quoteStr xs) ++ "}"
+renderAxisVal _ = ""   -- a ⊤ axis never reaches here (productNorm drops it)
 
 -- ── atom-set helpers (replace the v1 String-set ops) ───────────────────────
 -- render one atom: label + domain refinement text (⊤ ⇒ just the label)
@@ -364,6 +485,7 @@ atomOfWritten (l, Some pat) =
   else match dtopFor l
     PPrefix None => Atom l (PPrefix (Some pat))
     PSet None => Atom l (PSet (Some (decodeSetParam pat)))
+    PProduct _ => Atom l (decodeProductParam pat)
     _ => Atom l (dtopFor l)
 
 -- A Set-domain written param is carried in the `Option String` carrier as a
@@ -376,6 +498,68 @@ decodeSetParam s =
   if n >= 2 && stringSlice 0 1 s == "{" && stringSlice (n - 1) n s == "}"
   then sortUniqS (filterList (x => x != "") (splitOnComma (stringSlice 1 (n - 1) s)))
   else sortUniqS (filterList (x => x != "") (splitOnComma s))
+
+-- WS-4: a PRODUCT written param is carried in the `Option String` carrier as a
+-- structured SENTINEL string the parser's `effParamFor` product clause builds:
+--
+--   @P{Host="idp.example.com/*";Method={GET,POST}}
+--
+-- Grammar (internal wire form, NOT user syntax — that is §4 of WS-4-DESIGN.md):
+--   @P{                         -- product sentinel prefix
+--     <Axis>=<val>              -- one or more axes, ';'-separated
+--   }                           -- closing brace
+-- where <val> is either `"…"` (a Prefix sub-param) or `{a,b}` (a Set sub-param).
+-- A PLAIN string with NO `@P{` sentinel is the §3 "host-axis lift": a bare
+-- `<Net "a.com/*">` under a Product-registered Net means Host=a.com/*, Method=⊤.
+-- (A *third* nested level would make this encoding fiddly — WS-4 is the natural
+-- stopping point for the carrier hack; widen the AST carrier THEN, not piecemeal.)
+export
+decodeProductParam : String -> Param
+decodeProductParam s =
+  let n = stringLength s
+  if n >= 4 && stringSlice 0 3 s == "@P{" && stringSlice (n - 1) n s == "}"
+  then productNorm (map decodeAxis (splitOnSemi (stringSlice 3 (n - 1) s)))
+  else productNorm [("Host", PPrefix (Some s))]
+
+-- decode one `Axis=val` axis spec.  val = `"…"` ⇒ Prefix; `{a,b}` ⇒ Set.
+decodeAxis : String -> (String, Param)
+decodeAxis spec = match splitOnFirstEqStr spec
+  None => (spec, PUnit)          -- malformed (no '='): treated as ⊤ ⇒ dropped by productNorm
+  Some i =>
+    let name = stringSlice 0 i spec
+    let rhs = stringSlice (i + 1) (stringLength spec) spec
+    (name, decodeAxisVal rhs)
+
+decodeAxisVal : String -> Param
+decodeAxisVal rhs =
+  let n = stringLength rhs
+  if n >= 2 && stringSlice 0 1 rhs == "{" && stringSlice (n - 1) n rhs == "}"
+  then PSet (Some (decodeSetParam rhs))
+  else if n >= 2 && stringSlice 0 1 rhs == "\"" && stringSlice (n - 1) n rhs == "\""
+  then PPrefix (Some (stringSlice 1 (n - 1) rhs))
+  else PPrefix (Some rhs)
+
+-- index of the first '=' in a string, or None.
+splitOnFirstEqStr : String -> Option Int
+splitOnFirstEqStr s = splitOnFirstEqGo s 0 (stringLength s)
+
+splitOnFirstEqGo : String -> Int -> Int -> Option Int
+splitOnFirstEqGo s i n =
+  if i >= n then None
+  else if stringSlice i (i + 1) s == "=" then Some i
+  else splitOnFirstEqGo s (i + 1) n
+
+-- split a string on ';' (product-axis separator).
+splitOnSemi : String -> List String
+splitOnSemi s = splitOnSemiGo s 0 0 []
+
+splitOnSemiGo : String -> Int -> Int -> List String -> List String
+splitOnSemiGo s start i acc =
+  let n = stringLength s
+  if i >= n then reverseL (stringSlice start n s :: acc)
+  else if stringSlice i (i + 1) s == ";"
+    then splitOnSemiGo s (i + 1) (i + 1) (stringSlice start i s :: acc)
+    else splitOnSemiGo s start (i + 1) acc
 
 -- split a string on ',' (Set-element separator; authority tokens contain none)
 splitOnComma : String -> List String
@@ -583,11 +767,14 @@ fillHoleAtom lets firstArg a =
 -- Set-domain (Env) ⇒ a singleton authority set `PSet (Some [s])`.  No recovery
 -- (no arg / Unknown) ⇒ the domain's ⊤ (`dtopFor label`), NOT a hardcoded
 -- `PPrefix None` — an unfilled Env hole must degrade to `PSet None`, not Prefix-⊤.
+-- WS-4: Product-domain (Net) ⇒ Host=recovered-literal, Method=⊤ (α has no method
+-- info — a sound over-approximation).
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 holeFillParam label lets (Some e) = match alpha lets e
   Known s => match dtopFor label
     PSet None => PSet (Some (sortUniqS [s]))
     PPrefix None => PPrefix (Some s)
+    PProduct _ => productNorm [("Host", PPrefix (Some s))]
     _ => dtopFor label
   Unknown => dtopFor label
 holeFillParam label _ None = dtopFor label
@@ -738,8 +925,32 @@ checkOneEffectParam l pat = match dtopFor l
   PSet None =>
     -- Set-domain param is a brace-set literal `{a,b}` (parser-encoded); always well-formed.
     ()
+  PProduct _ =>
+    checkProductAxes l (decodeProductParam pat)
   _ => pushTypeError (effectParamMsg l
     ("label '" ++ l ++ "' is atomic and takes no parameter (declare it `effect " ++ l ++ " Prefix` to parameterize)"))
+
+-- WS-4: validate a decoded product's axes: a Host (Prefix) axis must pass
+-- prefixPatternOk; a Method (Set) axis is always well-formed; any other axis name
+-- is rejected (only Host/Method are known product axes for Net).
+checkProductAxes : String -> Param -> <Mut> Unit
+checkProductAxes l (PProduct axes) = checkProductAxesGo l axes
+checkProductAxes _ _ = ()
+
+checkProductAxesGo : String -> List (String, Param) -> <Mut> Unit
+checkProductAxesGo _ [] = ()
+checkProductAxesGo l ((name, p)::rest) =
+  let _ = checkOneAxis l name p
+  checkProductAxesGo l rest
+
+checkOneAxis : String -> String -> Param -> <Mut> Unit
+checkOneAxis l "Host" (PPrefix (Some pat)) =
+  if prefixPatternOk pat then ()
+  else pushTypeError (effectParamMsg l
+    ("Host pattern \"" ++ pat ++ "\" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)"))
+checkOneAxis _ "Method" _ = ()
+checkOneAxis l name _ = pushTypeError (effectParamMsg l
+  ("unknown product axis '" ++ name ++ "' (known axes: Host, Method)"))
 
 
 -- T2: oracle `MutLetRequiresBlock` message (lib/typecheck.ml:788-789) — must be

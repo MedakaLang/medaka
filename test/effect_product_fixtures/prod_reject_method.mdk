@@ -1,0 +1,13 @@
+-- WS-4 PRODUCT reject: METHOD out of set.  Host is in-prefix, but the extern
+-- performs Method={"POST"} while the bound admits only {"GET"}.  Method axis
+-- escapes => REJECT.  This proves the Method axis confines INDEPENDENTLY of Host
+-- (Host is fine here; only Method escapes).
+effect Net Product
+
+extern fetch : String -> <Net Host="idp.example.com/api" Method={"POST"}> String
+
+call : Unit -> <Net Host="idp.example.com/*" Method={"GET"}> String
+call _ = fetch "x"
+
+main : <IO> Unit
+main = println "should not typecheck"

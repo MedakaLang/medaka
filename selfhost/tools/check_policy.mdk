@@ -55,6 +55,7 @@ import types.typecheck.{
   atomParam,
   dsub,
   drender,
+  decodeProductParam,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{sortUniqS, joinWith, reverseL, escStr}
@@ -79,13 +80,19 @@ parsePolicyGo (f::rest) file allow fn = match file
 -- Split the --allow value on ',', dropping empties (mirror String.split_on_char
 -- ',' then filter (<> "")).
 splitComma : String -> List String
-splitComma s = filterNonEmpty (splitCommaGo (stringToChars s) (arrayLength (stringToChars s)) 0 0)
+splitComma s = filterNonEmpty (splitCommaGo (stringToChars s) (arrayLength (stringToChars s)) 0 0 0)
 
-splitCommaGo : Array Char -> Int -> Int -> Int -> List String
-splitCommaGo cs n start i
+-- WS-4: brace-depth-aware label split.  Commas INSIDE `{…}` (a product Method
+-- set, e.g. `Method={GET,POST}`) do NOT separate policy labels.  `depth` tracks
+-- nesting; a top-level comma (depth 0) splits.  Backward-compat: existing
+-- brace-free policies have depth 0 throughout ⇒ identical to the old split.
+splitCommaGo : Array Char -> Int -> Int -> Int -> Int -> List String
+splitCommaGo cs n start i depth
   | i >= n = [sliceStr cs start n]
-  | arrayGetUnsafe i cs == ',' = sliceStr cs start i :: splitCommaGo cs n (i + 1) (i + 1)
-  | otherwise = splitCommaGo cs n start (i + 1)
+  | arrayGetUnsafe i cs == '{' = splitCommaGo cs n start (i + 1) (depth + 1)
+  | arrayGetUnsafe i cs == '}' = splitCommaGo cs n start (i + 1) (depth - 1)
+  | arrayGetUnsafe i cs == ',' && depth == 0 = sliceStr cs start i :: splitCommaGo cs n (i + 1) (i + 1) depth
+  | otherwise = splitCommaGo cs n start (i + 1) depth
 
 sliceStr : Array Char -> Int -> Int -> String
 sliceStr cs a b = stringFromChars (arrayFromList (sliceGo cs a b))
@@ -115,7 +122,22 @@ parsePolicyTok tok = match splitOnFirstEq (stringToChars tok) (arrayLength (stri
     let n = arrayLength cs
     let label = sliceStr cs 0 i
     let rhs = sliceStr cs (i + 1) n
-    (label, PPrefix (Some rhs))
+    -- WS-4: a PRODUCT policy rhs (`Host="…";Method={…}`) carries an axis `=`.
+    -- Detect it and decode via the shared `decodeProductParam` (wrapping in the
+    -- carrier sentinel `@P{…}`), so the policy compare reaches `dsub` over a
+    -- `PProduct` — pointwise subsumption is inherited.  A plain prefix rhs
+    -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
+    if rhsIsProduct rhs
+    then (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
+    else (label, PPrefix (Some rhs))
+
+-- a policy rhs is a product when it contains an axis assignment `=` (after the
+-- label `=` already consumed) — e.g. `Host="…"` / `Method={…}`.  A bare prefix
+-- pattern (`a.com/*`) has no `=`.
+rhsIsProduct : String -> Bool
+rhsIsProduct rhs = match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
+  None => False
+  Some _ => True
 
 -- Index of the first '=' in the char array, or None.
 splitOnFirstEq : Array Char -> Int -> Int -> Option Int
@@ -490,7 +512,36 @@ atomToToml a =
   let label = atomLabel a
   match atomParam a
     PPrefix (Some s) => label ++ " = \"" ++ s ++ "\""
+    PProduct ax => label ++ " = { " ++ productTomlInline ax ++ " }"   -- WS-4 inline table
     _ => label ++ " = true"
+
+-- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
+-- `host = "…"`, a Set axis → `method = ["GET", "POST"]` (TOML keys lowercased
+-- by convention).  Comma-joined.
+productTomlInline : List (String, Param) -> String
+productTomlInline ax = joinWith ", " (map axisToToml ax)
+
+axisToToml : (String, Param) -> String
+axisToToml (name, PPrefix (Some s)) = lowerFirst name ++ " = \"" ++ s ++ "\""
+axisToToml (name, PSet (Some xs)) = lowerFirst name ++ " = [" ++ joinWith ", " (map quoteTok xs) ++ "]"
+axisToToml (name, _) = lowerFirst name ++ " = true"
+
+quoteTok : String -> String
+quoteTok s = "\"" ++ s ++ "\""
+
+-- lowercase the first char of an axis name (Host → host) for TOML-key convention.
+lowerFirst : String -> String
+lowerFirst s =
+  let n = stringLength s
+  if n == 0 then s
+  else lowerChar (stringSlice 0 1 s) ++ stringSlice 1 n s
+
+lowerChar : String -> String
+lowerChar "H" = "h"
+lowerChar "M" = "m"
+lowerChar "S" = "s"
+lowerChar "P" = "p"
+lowerChar c = c
 
 -- Filter atoms to security labels only, then render TOML.
 -- Returns the full TOML block (empty string if no security effects).
@@ -563,7 +614,24 @@ atomToAllowTok a =
   let label = atomLabel a
   match atomParam a
     PPrefix (Some s) => label ++ "=" ++ s
+    PProduct ax => label ++ "=" ++ productAllowRhs ax   -- WS-4 round-trip form
     _ => label
+
+-- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —
+-- `;`-separated so it round-trips through `parsePolicyTok`/`splitComma` (the
+-- brace-depth-aware comma split keeps `{…}` intact).
+productAllowRhs : List (String, Param) -> String
+productAllowRhs ax = joinSemiTok (map axisToAllow ax)
+
+axisToAllow : (String, Param) -> String
+axisToAllow (name, PPrefix (Some s)) = name ++ "=\"" ++ s ++ "\""
+axisToAllow (name, PSet (Some xs)) = name ++ "={" ++ joinWith "," xs ++ "}"
+axisToAllow (name, _) = name ++ "=true"
+
+joinSemiTok : List String -> String
+joinSemiTok [] = ""
+joinSemiTok [x] = x
+joinSemiTok (x::xs) = x ++ ";" ++ joinSemiTok xs
 
 -- Full manifest extraction returning the atom list (for round-trip gate).
 export

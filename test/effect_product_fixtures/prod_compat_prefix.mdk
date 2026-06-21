@@ -1,0 +1,11 @@
+-- WS-4 BACKWARD-COMPAT: a bare `<Net "a.com/*">` program that does NOT opt into
+-- the Product domain (no `effect Net Product`).  Net stays the builtin Prefix
+-- domain; this behaves EXACTLY as before WS-4 (host prefix subsumption only).
+-- Also covered by the abstraction-leak canary; this is the explicit local case.
+extern fetch : String -> <Net "a.com/sub/*"> String
+
+call : Unit -> <Net "a.com/*"> String
+call _ = fetch "x"
+
+main : <IO> Unit
+main = println "prefix net backward compat"
