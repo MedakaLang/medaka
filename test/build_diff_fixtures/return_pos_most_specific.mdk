@@ -1,0 +1,14 @@
+interface Def a where
+  def : a
+impl Def (List a) where
+  def = []
+impl Def (List Int) where
+  def = [7]
+useGeneric : List Bool
+useGeneric = def
+useSpecific : List Int
+useSpecific = def
+main =
+  println (length useGeneric)
+  println (length useSpecific)
+  println (sum useSpecific)

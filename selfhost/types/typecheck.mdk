@@ -5211,14 +5211,115 @@ keyForSite table name resultMono = match matchedEntry table name resultMono
   None => None
 
 -- the entry whose method set contains [name] and whose head pattern matches the
--- concrete result mono (the impl the checker dispatches into at this site).
+-- concrete result mono (the impl the checker dispatches into at this site).  When
+-- SEVERAL entries' head patterns match (overlapping instances, e.g. `Def (List a)`
+-- and `Def (List Int)` both matching the ground result `List Int`), pick the
+-- MOST-SPECIFIC one — the entry that is strictly more specific than (or equal to)
+-- every other matching entry (WS-3/D4 return-position most-specific-wins).  No
+-- unique most-specific (equal heads or incomparable partial overlap) → keep the
+-- FIRST match, behaviour unchanged.  Mirrors lib/typecheck.ml's
+-- `strictly_more_specific` selection at a call site.
 matchedEntry : List KeyEntry -> String -> Mono -> Option KeyEntry
-matchedEntry [] _ _ = None
-matchedEntry ((KeyEntry methodNames tag headTy key)::rest) name resultMono
+matchedEntry table name resultMono =
+  pickMostSpecificEntry (matchingEntries table name resultMono)
+
+-- all entries defining [name] whose head pattern matches [resultMono].
+matchingEntries : List KeyEntry -> String -> Mono -> List KeyEntry
+matchingEntries [] _ _ = []
+matchingEntries ((KeyEntry methodNames tag headTy key)::rest) name resultMono
   | contains name methodNames = match matchTyMono headTy resultMono
-    Some _ => Some (KeyEntry methodNames tag headTy key)
-    None => matchedEntry rest name resultMono
-  | otherwise = matchedEntry rest name resultMono
+    Some _ => (KeyEntry methodNames tag headTy key)::matchingEntries rest name resultMono
+    None => matchingEntries rest name resultMono
+  | otherwise = matchingEntries rest name resultMono
+
+-- pick the entry strictly more specific than every OTHER matching entry; if no
+-- such unique entry exists (≤1 match, equal heads, or incomparable overlap) keep
+-- the head of the list (the pre-existing first-match behaviour).
+pickMostSpecificEntry : List KeyEntry -> Option KeyEntry
+pickMostSpecificEntry [] = None
+pickMostSpecificEntry (e::rest) = match findMostSpecificEntry (e::rest) (e::rest)
+  Some best => Some best
+  None => Some e
+
+findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
+findMostSpecificEntry [] _ = None
+findMostSpecificEntry (c::cs) all
+  | entryCoversAllOthers c all = Some c
+  | otherwise = findMostSpecificEntry cs all
+
+-- is [cand]'s head pattern more specific than (or structurally equal to) every
+-- entry in [all]?  Equal-head entries are covered trivially; a genuinely more-
+-- general entry is NOT covered, so [cand] is rejected for it.
+entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
+entryCoversAllOthers cand all = allList (entryCovers cand) all
+
+entryCovers : KeyEntry -> KeyEntry -> Bool
+entryCovers (KeyEntry _ _ candTy _) (KeyEntry _ _ otherTy _) =
+  tyHeadEq candTy otherTy || tyStrictlyMoreSpecific candTy otherTy
+
+-- the two entries are the SAME head pattern (structurally equal up to var
+-- renaming) — no ordering needed, the candidate trivially covers it.
+tyHeadEq : Ty -> Ty -> Bool
+tyHeadEq a b = tySubsumes a b && tySubsumes b a
+
+-- [a] is STRICTLY more specific than [b]: [b] subsumes [a] but not vice versa.
+tyStrictlyMoreSpecific : Ty -> Ty -> Bool
+tyStrictlyMoreSpecific a b = tySubsumes b a && not (tySubsumes a b)
+
+-- is [specific] an instance of [general]?  Only the GENERAL side's TyVars act as
+-- wildcards (bound consistently — bound twice must see structurally equal types);
+-- the SPECIFIC side's TyVars are rigid and match only the same name.  Mirrors
+-- lib/typecheck.ml's `subsumes`.
+tySubsumes : Ty -> Ty -> Bool
+tySubsumes general specific = match tySubsumeGo general specific (Some [])
+  Some _ => True
+  None => False
+
+tySubsumeGo : Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+tySubsumeGo _ _ None = None
+tySubsumeGo (TyVar gn) s (Some sub) = match lookupAssoc gn sub
+  Some prev => if tyStructEq prev s then Some sub else None
+  None => Some ((gn, s)::sub)
+tySubsumeGo (TyCon a) s acc = match s
+  TyCon b => if a == b then acc else None
+  _ => None
+tySubsumeGo (TyApp f1 a1) s acc = match s
+  TyApp f2 a2 => tySubsumeGo a1 a2 (tySubsumeGo f1 f2 acc)
+  _ => None
+tySubsumeGo (TyFun a1 b1) s acc = match s
+  TyFun a2 b2 => tySubsumeGo b1 b2 (tySubsumeGo a1 a2 acc)
+  _ => None
+tySubsumeGo (TyTuple ts1) s acc = match s
+  TyTuple ts2 => if listLen ts1 == listLen ts2 then tySubsumeGoList ts1 ts2 acc else None
+  _ => None
+tySubsumeGo (TyEffect _ _ t1) s acc = tySubsumeGo t1 (stripTyWrap s) acc
+tySubsumeGo (TyConstrained _ t1) s acc = tySubsumeGo t1 (stripTyWrap s) acc
+
+tySubsumeGoList : List Ty -> List Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
+tySubsumeGoList [] [] acc = acc
+tySubsumeGoList (t1::ts1) (t2::ts2) acc = tySubsumeGoList ts1 ts2 (tySubsumeGo t1 t2 acc)
+tySubsumeGoList _ _ _ = None
+
+stripTyWrap : Ty -> Ty
+stripTyWrap (TyEffect _ _ t) = stripTyWrap t
+stripTyWrap (TyConstrained _ t) = stripTyWrap t
+stripTyWrap t = t
+
+-- structural equality of two AST type patterns (rigid; TyVar names must match).
+tyStructEq : Ty -> Ty -> Bool
+tyStructEq (TyCon a) (TyCon b) = a == b
+tyStructEq (TyVar a) (TyVar b) = a == b
+tyStructEq (TyApp f1 a1) (TyApp f2 a2) = tyStructEq f1 f2 && tyStructEq a1 a2
+tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2
+tyStructEq (TyTuple ts1) (TyTuple ts2) = tyStructEqList ts1 ts2
+tyStructEq (TyEffect _ _ t1) (TyEffect _ _ t2) = tyStructEq t1 t2
+tyStructEq (TyConstrained _ t1) (TyConstrained _ t2) = tyStructEq t1 t2
+tyStructEq _ _ = False
+
+tyStructEqList : List Ty -> List Ty -> Bool
+tyStructEqList [] [] = True
+tyStructEqList (t1::ts1) (t2::ts2) = tyStructEq t1 t2 && tyStructEqList ts1 ts2
+tyStructEqList _ _ = False
 
 -- do two distinct impls of [name] share head tycon [tag]?  (≥2 entries that
 -- define [name] at the same head tycon.)
