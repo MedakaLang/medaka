@@ -21,7 +21,7 @@ and merged to local `main`. Sequence of commits: `afe4b89`→`72a1477` (+ D9).
 | **D5/D6** well-formedness (WS-4) | ✅ closed | `adbbb97` — cyclic-superinterface rejected; instance-termination depth fuse. |
 | **D7** supers fidelity | ✅ sufficient | `expand_supers` flatten (`db091fd`) closes the dispatch gap; the two-field `VDict.supers` record (deluxe form) is non-defect / observationally-equivalent — not pursued. |
 | **D8** phantom-position | ✅ closed | `aa020b0` (WS-5) — method not mentioning its interface param rejected at check. |
-| **D9** vestigial argStamp flag / **D10** stale docs | 🔄 in progress | cosmetic cleanup (flag rename + doc corrections). |
+| **D9** vestigial argStamp flag / **D10** stale docs | 🟡 deferred (cosmetic) | Provably-inert flag rename (`argStampEnabled`→`emitArgStampPasses`) + stale-comment corrections. NOT done: an unattended agent built the rename on a stale base (caught at verify, not merged); marginal value, redo supervised. Zero behavioral impact either way. |
 
 **Newly-discovered (NOT conformance items, logged for follow-up):**
 - `medaka check` **SIGTRAPs** on a `Map { … }` + `toList` program (pre-existing; check should never crash).
