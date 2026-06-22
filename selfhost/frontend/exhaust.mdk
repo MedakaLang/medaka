@@ -60,7 +60,7 @@ import support.util.{
 -- reuse the same synthetic per-arity tuple constructor names.)
 export
 tupleCtorName : Int -> String
-tupleCtorName n = "__tuple" ++ intToString n ++ "__"
+tupleCtorName n = "__tuple\{n}__"
 
 -- recover the arity from a tupleCtorName result, else None
 tupleArityOfName : String -> Option Int
@@ -161,19 +161,19 @@ variantCtorType : String -> Variant -> (String, String)
 variantCtorType tyname (Variant n _) = (n, tyname)
 
 oGetCtors : Oracle -> String -> Option (List String)
-oGetCtors oracle t = match tupleArityOfName t
-  Some _ => Some [t]
-  None => lookupAssoc t oracle.typeCtors
+oGetCtors oracle t
+  | (Some _) <- tupleArityOfName t = Some [t]
+  | otherwise = lookupAssoc t oracle.typeCtors
 
 oGetCtorType : Oracle -> String -> Option String
-oGetCtorType oracle c = match tupleArityOfName c
-  Some _ => Some c
-  None => lookupAssoc c oracle.ctorType
+oGetCtorType oracle c
+  | (Some _) <- tupleArityOfName c = Some c
+  | otherwise = lookupAssoc c oracle.ctorType
 
 oGetArity : Oracle -> String -> Int
-oGetArity oracle c = match tupleArityOfName c
-  Some a => a
-  None => fromOption 0 (lookupAssoc c oracle.ctorArity)
+oGetArity oracle c
+  | (Some a) <- tupleArityOfName c = a
+  | otherwise = fromOption 0 (lookupAssoc c oracle.ctorArity)
 
 -- ── pattern → canonical matrix pattern ────────────────────────────────────
 export
@@ -192,8 +192,7 @@ desugarPat (PList (h::rest)) =
   PCon "Cons" [desugarPat h, desugarPat (PList rest)]
 desugarPat (PAs _ p) = desugarPat p
 desugarPat (PRec _ _ True) = PWild
-desugarPat (PRec name _ False) =
-  PLit (LString ("__partial_rec_" ++ name ++ "__"))
+desugarPat (PRec name _ False) = PLit (LString "__partial_rec_\{name}__")
 desugarPat (PRng _ _ _) = PWild
 
 -- ── matrix operations ─────────────────────────────────────────────────────
