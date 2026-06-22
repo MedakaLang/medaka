@@ -145,4 +145,30 @@ if [ "$fail" -eq 0 ]; then
   fi
 fi
 
-[ "$fail" -eq 0 ] && [ "$tco_fail" -eq 0 ] && [ "$disp_fail" -eq 0 ]
+# ── Stage-1b self-TMC IR-shape assertion (WASMGC-TRMC Stage 1b) ────────────────
+# The `stripComments`-shaped fixture's `strip` fn is a MULTI-CLAUSE, PATTERN-PARAM
+# self-recursive builder {cons-tail + plain-tail-drop + base}.  Stage-1b routes its
+# clause-dispatch chain through the destination-passing loop, so NO recursive
+# `call $strip` survives in the loop body — every leaf edge is a `br $tmcloop`
+# (cons-into-dest / plain-tail-drop) or `br $tmcexit` (base).  Proves "self-TMC fired
+# for the patterned multi-clause shape", not merely that the program ran.
+strip_fail=0
+if [ "$fail" -eq 0 ]; then
+  swat="$WORK/w_trmc_strip_clauses.s1b.wat"
+  if "$EMITBIN" "$FIXDIR/w_trmc_strip_clauses.mdk" > "$swat" 2>/dev/null; then
+    sbody="$(awk '/\(func \$strip /{f=1} f{print} f&&/^  \)$/{exit}' "$swat")"
+    if printf '%s' "$sbody" | grep -qE '^\s*call \$strip\b'; then
+      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: a recursive 'call \$strip' survives in the loop (overflow shape)"; strip_fail=1
+    elif ! printf '%s' "$sbody" | grep -q 'br \$tmcloop'; then
+      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$tmcloop' in \$strip (self-TMC did not fire)"; strip_fail=1
+    elif ! printf '%s' "$sbody" | grep -q 'br \$tmcexit'; then
+      echo "S1B-ASSERT FAIL w_trmc_strip_clauses: no 'br \$tmcexit' in \$strip (base leaf not redirected)"; strip_fail=1
+    else
+      echo "S1B-ASSERT ok   w_trmc_strip_clauses: \$strip (multi-clause patterned {cons-tail+plain-tail-drop+base}) lowers to the dest-passing loop, 0 recursive call \$strip"
+    fi
+  else
+    echo "S1B-ASSERT FAIL w_trmc_strip_clauses (emit)"; strip_fail=1
+  fi
+fi
+
+[ "$fail" -eq 0 ] && [ "$tco_fail" -eq 0 ] && [ "$disp_fail" -eq 0 ] && [ "$strip_fail" -eq 0 ]

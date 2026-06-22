@@ -3780,9 +3780,16 @@ wasmTrmcTry : Prog -> String -> Int -> List CClause -> <Mut> (Option (List Strin
 wasmTrmcTry prog name arity clauses =
   let self = SelfByVar name
   let pairs = map clauseToPair clauses
+  -- Stage-1b: a multi-clause fn whose params carry list/ctor PATTERNS (the
+  -- `stripComments` {cons-tail + plain-tail-drop + base} shape) is NOW admitted —
+  -- emitWasmTrmcFn routes it through the clause-dispatch chain (emitClauseChainGo)
+  -- with the TMC context live, so each clause's tail leaf is TMC-aware (cons-into-dest,
+  -- plain-tail-drop+loop, base+exit) instead of the stack-growing recursive call the
+  -- ordinary emitClausesRef path emits.  All-PVar single/multi-clause stays the fast
+  -- direct-body path.  (Mirrors llvm_emit's trmcTryFn forceSingle=False / emitClauseTree
+  -- reuse.)
   if arity > 0
      && wTrmcNonDict clauses
-     && wTrmcAllPVarParams clauses
      && trmcEligible (c => isCtor prog c) (c => ctorArity prog c) self arity pairs then
     match wTrmcUniformCtor prog self arity pairs
       Some ctorName => Some (emitWasmTrmcFn prog name arity clauses ctorName)
@@ -3857,24 +3864,30 @@ lastStmtExpr (_::rest) = lastStmtExpr rest
 emitWasmTrmcFn : Prog -> String -> Int -> List CClause -> String -> <Mut> List String
 emitWasmTrmcFn prog name arity clauses ctorName =
   let params = synthParams arity
-  let (spats, sbody) = match clauses
-    (CClause ps b)::_ => (ps, b)
-    [] => ([], CLit LUnit)
-  let selfIdx = wTrmcSelfIdxFor prog (SelfByVar name) arity sbody
+  -- the recursive self-call field index — scan EVERY clause body (the cons/ctor-tail
+  -- leaf may live in a LATER clause: `stripComments`'s base `[]` is clause 1, the
+  -- cons-tail is clause 3), not just the first.
+  let selfIdx = wTrmcSelfIdxClauses prog (SelfByVar name) arity clauses
   let pslots = map gname params
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
-  -- bind the clause's PVar params to the synthetic $a<i> positions (single clause; the
-  -- multi-clause all-PVar case agrees param-by-param so the first clause's names suffice).
-  let aliases = bindParamAliases spats params
-  let env = map patName spats
   let saved = wTrmcCtxRef.value
   let _ = set_ref wTrmcCtxRef (WTrmcOn (SelfByVar name) arity pslots ctorName selfIdx loopLbl exitLbl)
-  let bodyLines = emitRefTail prog env arity sbody
+  -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
+  -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
+  -- a clause carries a list/ctor pattern, e.g. `stripComments`): route through the
+  -- clause-dispatch chain (emitClauseChainGo) with the TMC context LIVE, so each
+  -- clause's tail leaf is TMC-aware (cons-into-dest / plain-tail-drop+loop / base+exit).
+  let bodyLines = match clauses
+    [(CClause ps b)] =>
+      if allPlainParams ps && not (exprHasFallthrough b) then
+        bindParamAliases ps params ++ emitRefTail prog (map patName ps) arity b
+      else emitClauseChainGo prog [] name params arity clauses 0
+    _ => emitClauseChainGo prog [] name params arity clauses 0
   let _ = set_ref wTrmcCtxRef saved
   let loopShell = ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
-      ++ indent (aliases ++ bodyLines)
+      ++ indent bodyLines
       ++ ["end", "end"]
       ++ ["local.get " ++ wTrmcHeadL, "ref.as_non_null"]
   -- locals: the tmc bookkeeping + temps (t0..t_arity), then the ordinary clause/scratch.
@@ -3897,6 +3910,16 @@ wTrmcSelfIdxFor : Prog -> SelfRef -> Int -> CExpr -> <Mut> Int
 wTrmcSelfIdxFor prog self arity body = match wTrmcFirstCtorTail prog self arity body
   Some ex => ctorTailSelfIdx ex
   None => 1
+
+-- the recursive self-call field index, scanning EVERY clause's body for the first
+-- cons/ctor-tail leaf (the leaf may live in a clause after a base clause).  Defaults
+-- to 1 (Cons tail field) when no clause has a ctor-tail (a pure plain-tail fn).
+wTrmcSelfIdxClauses : Prog -> SelfRef -> Int -> List CClause -> <Mut> Int
+wTrmcSelfIdxClauses _ _ _ [] = 1
+wTrmcSelfIdxClauses prog self arity ((CClause _ body)::rest) =
+  match wTrmcFirstCtorTail prog self arity body
+    Some ex => ctorTailSelfIdx ex
+    None => wTrmcSelfIdxClauses prog self arity rest
 
 wTrmcFirstCtorTail : Prog -> SelfRef -> Int -> CExpr -> <Mut> Option CExpr
 wTrmcFirstCtorTail prog self arity (CIf _ t f) = match wTrmcFirstCtorTail prog self arity t
@@ -4532,9 +4555,22 @@ emitLamDefine prog lamName pats captured body =
     ++ map (l => localDeclRef l) (synthPs ++ captured ++ patBoundVars ++ bodyLocals ++ scratch)
     ++ w7LocalDecls (maxRefDepth body)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
+  -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
+  -- fn's TMC loop context (wTrmcCtxRef) nor a dispatch-group context (wDispCtxRef).
+  -- emitLamDefine can run while one of those is LIVE (a cons-tail clause body whose
+  -- lead-field / recomputed-arg builds a closure is emitted under a live wTrmcCtxRef),
+  -- and without clearing it the lambda body's tail leaves would emit `$__tmc_*` /
+  -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
+  let savedTrmc = wTrmcCtxRef.value
+  let savedDisp = wDispCtxRef.value
+  let _ = set_ref wTrmcCtxRef WTrmcOff
+  let _ = set_ref wDispCtxRef WDispOff
+  let bodyLines = emitRefTail prog bodyEnv arity body
+  let _ = set_ref wTrmcCtxRef savedTrmc
+  let _ = set_ref wDispCtxRef savedDisp
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map (l => "  " ++ l) localLines
-    ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ emitRefTail prog bodyEnv arity body)
+    ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ bodyLines)
     ++ ["  )"]
 
 -- bind a list of (pattern, synthetic-local-name) lambda params: for each, run
@@ -4618,7 +4654,16 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let capPrologue = flatMap (capLoadAt) (zipIdx groupCaps 0)
   let memberRebuilds = flatMap (b => rebuildLgClosure prog gid groupCaps b) binds
   let argPrologue = flatMap (argLoadAt) (zipIdx params 0)
+  -- a lifted letgroup member is an independent function: clear any live TMC /
+  -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
+  -- (see emitLamDefine — same hazard when lifted under a live wTrmcCtxRef).
+  let savedTrmc = wTrmcCtxRef.value
+  let savedDisp = wDispCtxRef.value
+  let _ = set_ref wTrmcCtxRef WTrmcOff
+  let _ = set_ref wDispCtxRef WDispOff
   let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
+  let _ = set_ref wTrmcCtxRef savedTrmc
+  let _ = set_ref wDispCtxRef savedDisp
   let memberLocals = names
   let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
   let scratch = scratchLocals (clausesMaxDepth clauses)

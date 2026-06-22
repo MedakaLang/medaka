@@ -1,0 +1,29 @@
+-- WASMGC-TRMC Stage 1b (§9.1): a MULTI-CLAUSE, PATTERN-PARAM self-recursive builder
+-- of the `stripComments` shape — the lexer fn that overflows check_main under Node.
+-- The clause set is {cons-tail self-call, plain-tail-drop self-call, base}:
+--   strip [] = []                         -- base
+--   strip ((TC _)::rest) = strip rest      -- plain-tail self-call (drop, the F3 case)
+--   strip (r::rest) = r :: strip rest      -- cons-tail self-call (keep)
+-- These are NOT all-PVar params, so the Stage-1 fast path rejected them and the W4
+-- clause-dispatch chain emitted the cons-tail as a struct.new ARG → the leaf frame
+-- stayed live → at depth 400000 V8 throws `RangeError: Maximum call stack size
+-- exceeded`.  Stage-1b routes the clause-dispatch chain through the destination-passing
+-- loop (cons-into-dest / plain-tail-drop+loop / base+exit), so `strip` loops in constant
+-- stack and the program prints the kept-token count.
+data Tok = TC Int | TK Int
+
+strip : List Tok -> List Tok
+strip [] = []
+strip ((TC _)::rest) = strip rest
+strip (r::rest) = r :: strip rest
+
+len : Int -> List Tok -> Int
+len acc [] = acc
+len acc (_::rest) = len (acc + 1) rest
+
+-- build a deep mixed list: even => a comment token (dropped), odd => a kept token.
+build : Int -> List Tok
+build 0 = []
+build n = (if n % 2 == 0 then TC n else TK n) :: build (n - 1)
+
+main = len 0 (strip (build 400000))
