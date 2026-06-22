@@ -1,0 +1,2 @@
+-- W11b: charIsAlpha '5' → False
+main = charIsAlpha '5'

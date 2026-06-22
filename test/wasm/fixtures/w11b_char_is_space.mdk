@@ -1,0 +1,2 @@
+-- W11b: charIsSpace ' ' → True
+main = charIsSpace ' '

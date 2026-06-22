@@ -591,6 +591,68 @@ hashStringRuntimeLines = [
   "    (i32.wrap_i64 (i64.and (local.get $h) (i64.const 0x3FFFFFFF))))",
 ]
 
+-- ── W11b: ASCII char classification + case-mapping runtime ────────────────────
+-- Byte-identical to medaka_rt.c mdk_char_is_* / mdk_char_to_* (ASCII-only).
+-- Each takes an UNBOXED i32 codepoint (caller does ref.cast + i31.get_u first)
+-- and returns an i32 (0/1 for predicates; codepoint for case-mappers).
+-- The caller wraps the result with ref.i31.
+export
+charClassRuntimeLines : List String
+charClassRuntimeLines = [
+  "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──",
+  "  (func $mdk_char_is_alpha (param $c i32) (result i32)",
+  "    (i32.or",
+  "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))",
+  "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))))",
+  "  (func $mdk_char_is_space (param $c i32) (result i32)",
+  "    (i32.or",
+  "      (i32.eq (local.get $c) (i32.const 32))",
+  "      (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))))",
+  "  (func $mdk_char_is_upper (param $c i32) (result i32)",
+  "    (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90))))",
+  "  (func $mdk_char_is_lower (param $c i32) (result i32)",
+  "    (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122))))",
+  "  ;; charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps ASCII.",
+  "  ;; Included: ! \" # % & ' ( ) * , - . / : ; ? @ [ \\ ] _ { }",
+  "  ;; Excluded ($+<=>^`|~): those are Unicode symbols (Sm/Sc/Sk), not punctuation.",
+  "  ;; Right-associative OR chain over 23 chars = 22 i32.or nodes.",
+  "  (func $mdk_char_is_punct (param $c i32) (result i32)",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 33))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 34))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 35))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 37))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 38))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 39))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 40))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 41))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 42))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 44))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 45))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 46))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 47))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 58))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 59))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 63))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 64))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 91))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 92))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 93))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 95))",
+  "    (i32.or (i32.eq (local.get $c) (i32.const 123))",
+  "           (i32.eq (local.get $c) (i32.const 125))",
+  "    )))))))))))))))))))))))",
+  "  (func $mdk_char_to_upper (param $c i32) (result i32)",
+  "    (if (result i32)",
+  "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))",
+  "      (then (i32.sub (local.get $c) (i32.const 32)))",
+  "      (else (local.get $c))))",
+  "  (func $mdk_char_to_lower (param $c i32) (result i32)",
+  "    (if (result i32)",
+  "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))",
+  "      (then (i32.add (local.get $c) (i32.const 32)))",
+  "      (else (local.get $c))))",
+]
+
 -- ── W8b Float externs (RUNTIME-DESIGN §5 Float / WASMGC-DESIGN §3.3 boxed Float) ──
 -- The §3.3 boxed Float is `(struct $float (field f64))`, declared unconditionally in
 -- the rec group.  A Float value is a boxed (ref eq) struct; a Float LITERAL emits

@@ -1,0 +1,2 @@
+-- W11b: charIsPunct '!' → True (included in medaka_rt.c switch)
+main = charIsPunct '!'
