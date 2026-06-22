@@ -207,11 +207,14 @@ states the tab rule; (optional) `fmt` warns on mixed indentation.
 
 **Source:** F6. **Not a layout item.** Native `check` parse/resolve/type errors
 print without `file:line:col`; the oracle is positioned. This is a CLI
-diagnostics-quality gap, independent of the lexer (token streams agree). Recorded
-here only to disclaim it: it is **out of scope** for the layout roadmap. If
-pursued, it belongs with the diagnostics pipeline
-(`selfhost/driver/…` + `diagnostics`), gated by
-`diff_selfhost_diagnostics` — not by any layout gate.
+diagnostics-quality gap, independent of the lexer (token streams agree).
+
+> **UPDATE (2026-06-21): pursued + DONE as a separate diagnostics workstream —
+> `selfhost/DIAGNOSTICS-SURFACING-PLAN.md` (S1–S4).** Native `medaka check` now
+> prints positioned, humane, carat-rendered diagnostics byte-identical to the
+> oracle (parse/type/resolve spans + non-exhaustive-match warning spans). It is
+> NOT a layout change — recorded here only because F6 surfaced it during the
+> layout audit.
 
 ---
 

@@ -245,9 +245,17 @@ runtime. Full per-tool / per-slice completion log archived in
 [PLAN-ARCHIVE.md → Stage 4 — tooling-port completion log](./PLAN-ARCHIVE.md#stage-4--tooling-port-completion-log-archived-2026-06-14).
 
 **Remaining (minor, not retirement-blocking):**
-- **Diagnostics surfacing layer** (mirror `lib/diagnostics.ml` — structured errors for the
-  CLI + LSP): marked TODO; verify whether the native CLI's current error surfacing already
-  covers it in practice before treating it as open.
+- **Diagnostics surfacing layer** — ✅ **substantially DONE (2026-06-21, WS-4/F6,
+  `selfhost/DIAGNOSTICS-SURFACING-PLAN.md`).** Native `medaka check` now prints
+  positioned, humane, **carat-rendered** diagnostics (`file:L:C: message` + source line
+  + `^`, on stderr) for parse/type/resolve, byte-identical to the OCaml oracle; resolve
+  errors carry real spans (`Option Loc` threaded through the resolve walk); non-exhaustive
+  match warnings carry a span. Gates: `diff_selfhost_check_json` 9/0, `diff_native_cli`
+  `error/*` 7/7 vs live oracle + 99/0 overall, fixpoint C3a/C3b YES, seed re-minted.
+  **Open position-accuracy follow-ups** (separate, not blocking): parse-error column is
+  "which-token"-wrong on non-trivial inputs (deeper self-hosted-parser position tracking);
+  pattern-position errors inherit the enclosing-`match` span; guard-exhaustiveness +
+  multi-module warnings still `None`. See the plan doc's residuals.
 - **Auxiliary port:** `coverage.ml` + `bench_runner.ml` — port last.
 
 ### Future idea (parked, not scheduled): effect-reannotation utility

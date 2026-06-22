@@ -117,9 +117,21 @@ capture (cheap); touching `check.mdk` text re-captures the `resolve_fixtures`
   `ResError` ctors + the whole resolve walk; resolve-error spans byte-identical to
   oracle (`main = foo + 1` → `1:7`, span `{0,7}-{0,10}`). Decl/build-phase errors
   intentionally `None` → oracle dummy `{0,0}`. check_json 9/0, fixpoint C3a/C3b YES.
-- **Stage C — IN PROGRESS:** carat rendering + exhaust/guard spans.
+- **Stage C — DONE** (`main` 395a276): carat rendering (`ppDiagCliSrc`) byte-identical
+  to the oracle (errors now on **stderr**, `file:L:C: msg` + `  | N | src | ^` block);
+  non-exhaustive-match warning span threaded (`matchWarningLocs` in typecheck). Carat
+  gate = extended `diff_native_cli.sh` `error/*` 7/7 vs live oracle. fixpoint C3a/C3b YES.
+  **Seed re-minted** (`87886da`, `bootstrap_from_seed` C3a PASS).
+- **Residual #4 — RESOLVED** (`main` eab10c1): captured the 22 WS-7 layout-fixture
+  `native_cli_goldens/check/` goldens that WS-7 missed → `diff_native_cli` 99/0 green
+  (goldens are native self-goldens — that gate's check/* section is re-rooted, captured
+  from `./medaka`, NOT the oracle).
 
-**Tracked residuals (NOT Stage C scope — separate follow-ups):**
+**WS-4 COMPLETE.** `medaka check` now prints positioned, humane, carat-rendered
+diagnostics for parse/type/resolve, byte-identical to the oracle; non-exhaustive-match
+warnings carry a span. Remaining are the position-accuracy follow-ups below (separate).
+
+**Tracked residuals (NOT WS-4 scope — separate follow-ups):**
 1. **Parse-error column is "which-token"-wrong on non-trivial inputs** (oracle vs
    native disagree on the error point, e.g. `data = 5` → oracle `{0,6}` / native
    `{1,0}`). Deeper self-hosted-parser position/recovery tracking, not a span-plumbing
@@ -132,7 +144,6 @@ capture (cheap); touching `check.mdk` text re-captures the `resolve_fixtures`
 3. **Pattern-position errors inherit the enclosing `match`-expr span** (native) rather
    than the scrutinee's — only affects `UnknownConstructor`-in-pattern (already excluded
    by #2). Low priority refinement.
-4. **`diff_native_cli` shows 22 `(no golden)` skips** from the WS-7 layout lexer
-   fixtures (`test/diff_fixtures/*.mdk` with no native-CLI golden). Not failures, not a
-   WS-4 regression — but worth deciding whether those fixtures should be excluded from
-   `diff_native_cli`'s discovery or given goldens. Minor.
+4. **`diff_native_cli` WS-7 fixture goldens — RESOLVED** (`main` eab10c1): the 22
+   `(no golden)` skips from the WS-7 layout fixtures were closed by capturing their
+   `native_cli_goldens/check/` goldens → 99/0 green.
