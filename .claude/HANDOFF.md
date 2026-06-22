@@ -47,12 +47,16 @@ self-hosting the compiler (the frontend-only-playground goal). Owning doc:
   which module/global. **The next frontier:** fix it → `check_main` runs → diff its inferred schemes
   vs the native oracle = the self-hosted-front-end-on-WasmGC demo. Then back stages, then `medaka_cli`
   (needs `json` module + the deliberately-skipped runCommand/writeFile for `build`).
-- **HARNESS NOTE for the final byte-diff demo:** `test/wasm/run.js` DOES split `MDK_ARGS` on spaces
-  into argv (line ~66) and has the full readFile/fileExists/getEnv/args byte-channel host imports. A
-  quick `parse_main` run got the whole arg string as one readFile path (ENOENT) — likely a per-entry
-  `main`-signature detail or the guest-side `args()` list marshaling, NOT a run.js bug. Re-verify with
-  `check_main`'s exact 3-arg `main` (`[runtime, core, target]`) when doing the end-to-end byte-diff
-  demo; the instantiate-phase crashes the agents target are BEFORE args, so unaffected.
+- **REAL BUG flagged for the final byte-diff demo — `args()` returns the whole arg string as ONE
+  element.** Isolated repro: `main = match args () { a::b::_ => println (a++"|"++b); a::_ => println
+  ("one:"++a); [] => println "none" }`; native build `… foo bar` → `foo|bar` (2 args, correct), but
+  wasm `MDK_ARGS="foo bar" node test/wasm/run.js mod.wasm` → `one:foo bar` (args()=`["foo bar"]`, ONE
+  element). `run.js` DOES `MDK_ARGS.split(' ')` into argv (line ~66) with per-arg `mdk_args_count`/
+  `mdk_arg_len`/`mdk_arg_byte`, so the bug is most likely the **guest-side `args()` list-building loop**
+  in `wasm_emit.mdk`'s `ioArgsRuntimeLines` (builds one concatenated `$str` instead of N). Does NOT
+  block the instantiate-phase crash debugging (crashes are before args), but MUST be fixed for the
+  `check_main` 3-arg byte-diff demo. (The IO agent's earlier `a bb ccc`→a/bb/ccc hand-verify apparently
+  didn't catch this — re-test with a multi-element match.)
 - **SEED: re-minted (`11f2229`), `bootstrap_from_seed` PASS** (was stale from the in-graph
   `core_ir_lower.mdk` structural-batch change; fixpoint C3a/C3b held throughout).
 - **METHODOLOGY notes from this arc:** (1) the per-binding census measures EMITTABILITY only — it is
