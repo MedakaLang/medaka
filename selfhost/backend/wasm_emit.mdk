@@ -2645,21 +2645,29 @@ emitImplGroup : Prog -> ImplG -> <Mut> List String
 emitImplGroup prog (ImplG method tag arity clauses) =
   let fnName = implFnSym tag method
   let params = synthParams arity
-  -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
-  -- so the body's bare-CVar arithmetic lowers to f64.  `signum`/`abs`/`negate`/`add`/…
-  -- all take Float args.  Reset for every other impl (Int/String/etc. stay i31).
-  let _ = set_ref floatLocalsRef (if tag == "Float" then flatMap clausePatVars clauses else [])
-  let bodyLines = emitClausesImpl prog fnName params arity clauses
-  let _ = set_ref floatLocalsRef []
-  let allLocals = clauseLocals clauses
-  let extraLocals = filterList (notIn params) (dedupKeep allLocals)
-  let scratch = scratchLocals (clausesMaxDepth clauses)
-  let sig = "  (func $" ++ fnName
-    ++ joinWith "" (map paramDeclRef params)
-    ++ " (result (ref eq))"
-  let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
-  [sig] ++ map (l => "  " ++ l) (localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
+  -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
+  -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
+  -- destination-passing loop — the WasmGC peer of llvm_emit's trmcImplTry.  Eligibility +
+  -- the safety-critical `mentionsSelfMethod` disqualification are in wTrmcImplTry; an
+  -- ineligible impl (non-tail self, dict-passed, no cons-tail) returns None → ordinary body.
+  match wTrmcImplTry prog method tag arity clauses
+    Some tmcDef => tmcDef
+    None =>
+      -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
+      -- so the body's bare-CVar arithmetic lowers to f64.  `signum`/`abs`/`negate`/`add`/…
+      -- all take Float args.  Reset for every other impl (Int/String/etc. stay i31).
+      let _ = set_ref floatLocalsRef (if tag == "Float" then flatMap clausePatVars clauses else [])
+      let bodyLines = emitClausesImpl prog fnName params arity clauses
+      let _ = set_ref floatLocalsRef []
+      let allLocals = clauseLocals clauses
+      let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+      let scratch = scratchLocals (clausesMaxDepth clauses)
+      let sig = "  (func $" ++ fnName
+        ++ joinWith "" (map paramDeclRef params)
+        ++ " (result (ref eq))"
+      let localDecls = map localDeclRef (extraLocals ++ scratch)
+      let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+      [sig] ++ map (l => "  " ++ l) (localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
 
 clausePatVars : CClause -> List String
 clausePatVars (CClause pats _) = flatMap patVars pats
@@ -3799,7 +3807,34 @@ wasmTrmcTry prog name arity clauses =
 clauseToPair : CClause -> (List Pat, CExpr)
 clauseToPair (CClause pats body) = (pats, body)
 
--- a non-dict define: no clause has a leading `$dict_…`/`$dict…` param (dict-passed
+-- Phase 2 B-dispatch (mirror of llvm_emit.trmcImplTry): a DISPATCHED self-recursive
+-- cons/ctor-tail IMPL method (the `List` Functor `map`: `map f (x::xs) = f x :: map f xs`,
+-- recursing via a `CMethod method (RKey tag)` node) is emitted as an O(1)-stack
+-- destination-passing loop, just like a top-level builder.  Without this the ordinary
+-- impl-body emit lowers the self-call as a `call $mdk_impl_<tag>_<method>` inside the
+-- cons args (the frame stays live → deep lists overflow V8's stack).
+--
+-- The self-ref is `SelfByMethod method tag` (the self-call head is `CMethod method
+-- (RKey tag)`, NOT a `CVar`).  SAFETY-CRITICAL: `freeVars (CMethod …)` is BLIND to the
+-- method NAME — the analysis (`trmcEligible`/`isCtorTail`/`selfFree`) routes the
+-- `SelfByMethod` disqualification through `mentionsSelfMethod`, so a body that
+-- self-recurses via `CMethod` in a NON-tail position is rejected (stays ordinary) rather
+-- than wrongly transformed (dropped recursion → silent miscompile).
+--
+-- Scope = F2(a): NON-dict, NON-eta impls.  Returns Some def when eligible (the whole
+-- `(func …)` define via emitWasmTrmcCore with the impl symbol + SelfByMethod), else None
+-- so emitImplGroup falls back to the ordinary emitClausesImpl body.
+wTrmcImplTry : Prog -> String -> String -> Int -> List CClause -> <Mut> (Option (List String))
+wTrmcImplTry prog method tag arity clauses =
+  let self = SelfByMethod method tag
+  let pairs = map clauseToPair clauses
+  if arity > 0
+     && wTrmcNonDict clauses
+     && trmcEligible (c => isCtor prog c) (c => ctorArity prog c) self arity pairs then
+    match wTrmcUniformCtor prog self arity pairs
+      Some ctorName => Some (emitWasmTrmcCore prog (implFnSym tag method) self (implFnSym tag method) arity clauses ctorName)
+      None => None
+  else None-- a non-dict define: no clause has a leading `$dict_…`/`$dict…` param (dict-passed
 -- methods / lifted lambdas are out of scope for Stage 1).
 wTrmcNonDict : List CClause -> Bool
 wTrmcNonDict clauses = not (anyList clauseHasLeadingDict clauses)
@@ -3863,27 +3898,38 @@ lastStmtExpr (_::rest) = lastStmtExpr rest
 -- Every cons/ctor leaf `br $tmcloop` (no recursive call); the base leaf `br $tmcexit`.
 emitWasmTrmcFn : Prog -> String -> Int -> List CClause -> String -> <Mut> List String
 emitWasmTrmcFn prog name arity clauses ctorName =
+  -- top-level define: the func symbol is `gname name`, the self-ref is `SelfByVar name`,
+  -- and `name` doubles as the clause-block label root.
+  emitWasmTrmcCore prog (gname name) (SelfByVar name) name arity clauses ctorName
+
+-- the shared destination-passing-loop emitter for BOTH the top-level path (SelfByVar) and
+-- the Phase-2 B-dispatch impl path (SelfByMethod).  `funcSym` is the rendered func symbol
+-- (no leading `$`; `gname name` for a top-level fn, `implFnSym tag method` for an impl);
+-- `self` is the SelfRef the TMC analysis + leaf-emit thread (CVar vs CMethod recognition);
+-- `lblRoot` is the clause-block label root (unique per emitted define).
+emitWasmTrmcCore : Prog -> String -> SelfRef -> String -> Int -> List CClause -> String -> <Mut> List String
+emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorName =
   let params = synthParams arity
   -- the recursive self-call field index — scan EVERY clause body (the cons/ctor-tail
   -- leaf may live in a LATER clause: `stripComments`'s base `[]` is clause 1, the
   -- cons-tail is clause 3), not just the first.
-  let selfIdx = wTrmcSelfIdxClauses prog (SelfByVar name) arity clauses
+  let selfIdx = wTrmcSelfIdxClauses prog self arity clauses
   let pslots = map gname params
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
   let saved = wTrmcCtxRef.value
-  let _ = set_ref wTrmcCtxRef (WTrmcOn (SelfByVar name) arity pslots ctorName selfIdx loopLbl exitLbl)
+  let _ = set_ref wTrmcCtxRef (WTrmcOn self arity pslots ctorName selfIdx loopLbl exitLbl)
   -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
   -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
-  -- a clause carries a list/ctor pattern, e.g. `stripComments`): route through the
-  -- clause-dispatch chain (emitClauseChainGo) with the TMC context LIVE, so each
-  -- clause's tail leaf is TMC-aware (cons-into-dest / plain-tail-drop+loop / base+exit).
+  -- a clause carries a list/ctor pattern, e.g. `stripComments`/the `map` impl): route
+  -- through the clause-dispatch chain (emitClauseChainGo) with the TMC context LIVE, so
+  -- each clause's tail leaf is TMC-aware (cons-into-dest / plain-tail-drop+loop / base+exit).
   let bodyLines = match clauses
     [(CClause ps b)] =>
       if allPlainParams ps && not (exprHasFallthrough b) then
         bindParamAliases ps params ++ emitRefTail prog (map patName ps) arity b
-      else emitClauseChainGo prog [] name params arity clauses 0
-    _ => emitClauseChainGo prog [] name params arity clauses 0
+      else emitClauseChainGo prog [] lblRoot params arity clauses 0
+    _ => emitClauseChainGo prog [] lblRoot params arity clauses 0
   let _ = set_ref wTrmcCtxRef saved
   let loopShell = ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
@@ -3898,7 +3944,7 @@ emitWasmTrmcFn prog name arity clauses ctorName =
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let localDecls = map localDeclRef (extraLocals ++ scratch)
   let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
-  let sig = "  (func $" ++ gname name
+  let sig = "  (func $" ++ funcSym
     ++ joinWith "" (map paramDeclRef params)
     ++ " (result (ref eq))"
   [sig] ++ map (l => "  " ++ l) (tmcLocals ++ localDecls ++ w7Decls) ++ indent loopShell ++ ["  )"]

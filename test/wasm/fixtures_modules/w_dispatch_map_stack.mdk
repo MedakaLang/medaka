@@ -1,0 +1,18 @@
+-- layer-8 fixture: the dispatched `List` Functor `map` over a list large enough to
+-- overflow V8's stack BEFORE the WasmGC impl-method TMC (Phase 2 B-dispatch) lands.
+--
+-- `map`'s impl is `map f (x::xs) = f x :: map f xs` — the self-call (`CMethod map
+-- (RKey List)`) sits in cons-tail position, so without the destination-passing loop
+-- the emitted `$mdk_impl_List_map` recurses via `call $mdk_impl_List_map` inside the
+-- `struct.new $C_Cons` args → the frame stays live → a 2,000,000-element list overflows
+-- (`Maximum call stack size exceeded`).  With wTrmcImplTry the impl is a constant-stack
+-- loop (a `loop $tmcloop` / `br $tmcloop`, NO recursive `call`), so it runs.
+--
+-- `firstOf` is inlined (no `import list`) so the modules path sees only runtime+core; it
+-- forces the WHOLE mapped spine (strict WasmGC list cells) then reads cell 0 WITHOUT a
+-- `fold`/`length` (those are a SEPARATE accumulator-recursion TMC layer, out of scope).
+firstOf : List Int -> Int
+firstOf [] = 0
+firstOf (x::_) = x
+
+main = "head=" ++ intToString (firstOf (map (x => x * 2) [1..2000000]))

@@ -90,6 +90,23 @@ run_fixture() {
   else
     fail=$((fail+1)); printf 'FAIL %s\n  oracle: %s\n  wasm  : %s\n  (%s)\n' "$name" "$ref" "$got" "$(cat "$WORK/run.err")"
   fi
+
+  # layer-8 IR-shape assertion: the dispatched `List map` impl must lower to the
+  # destination-passing loop (Phase 2 B-dispatch / wTrmcImplTry) — its $mdk_impl_List_map
+  # body has a `loop $tmcloop` and ZERO recursive `call $mdk_impl_List_map` (the cons-tail
+  # self-call became a `br $tmcloop`).  A regression that drops the impl-TMC would re-emit
+  # the recursive call → deep lists overflow V8 → silent re-break of this fixture's value.
+  if [ "$name" = "w_dispatch_map_stack.mdk" ]; then
+    local mapbody
+    mapbody="$(awk '/func \$mdk_impl_List_map/{f=1} f&&/^  \(func /&&!/mdk_impl_List_map/{f=0} f' "$wat")"
+    local rec; rec="$(printf '%s' "$mapbody" | grep -c 'call \$mdk_impl_List_map')"
+    local lp;  lp="$(printf '%s' "$mapbody" | grep -c 'loop \$tmcloop')"
+    if [ "$rec" -eq 0 ] && [ "$lp" -ge 1 ]; then
+      printf 'TMC-ASSERT ok   %s: $mdk_impl_List_map is a dest-passing loop, 0 recursive call $mdk_impl_List_map\n' "$name"
+    else
+      fail=$((fail+1)); printf 'TMC-ASSERT FAIL %s: recursive-call=%s loop=%s (expected 0 / >=1)\n' "$name" "$rec" "$lp"
+    fi
+  fi
 }
 
 # single-file fixtures
