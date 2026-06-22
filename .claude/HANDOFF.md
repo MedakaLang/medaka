@@ -7,6 +7,58 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
+## RESUME — 🏁 WasmGC SELF-HOST PUSH: front-end EMITS+ASSEMBLES+VALIDATES; lexer RUNS (2026-06-22). `main` ≈ `a889a23`
+
+**The active workstream + the big result of this session.** Drove the WasmGC backend toward
+self-hosting the compiler (the frontend-only-playground goal). Owning doc:
+**`selfhost/WASM-SELFHOST-ROADMAP.md`** (authoritative status + the gate commands). Memory:
+`project_wasmgc_backend`. Every landing below was reproduced on the binary, gated, and merged.
+
+- **🏁 Per-binding emitter-gap census 1428 → 0.** Built a gap-record census mode
+  (`selfhost/entries/wasm_emit_gaps_main.mdk` + `enableGapRecordW` in `wasm_emit.mdk`) over the
+  whole compiler graph (`all_modules_entry.mdk` + `selfhost` root). Closed **9 categories**: panic
+  + array intrinsics; Ref (`$refbox`); `__fallthrough__` (label encoded in the Core-IR node, NOT a
+  mutable ref — the emitter is LAZY, forces strings at final assembly); string-literal clause heads
+  + charCode; destructuring/refutable/assign let-binds; UTF-8 codec externs; **nested-closure
+  free-var capture** (THE key fix — `freeVarsExpr` lacked compound-value-node arms (CTuple/CRecord/…)
+  so do-notation `pure (a,b)` dropped earlier `<-` binds); structural batch (Char/String match-switch
+  heads, ctor/tuple lambda-params, record-ctor registration via `registerRecordCtors` in
+  `lowerProgramEmit` — the ONE in-graph change, fixpoint + diff_selfhost_build verified); char-class
+  externs; **IO host surface** (readFile/fileExists/args/getEnv/exit via length+byte-at-a-time host
+  imports, `run.js` shim with a swappable vfs seam for the browser). diff_wasm 85→130.
+- **🏁 Whole-program LINKAGE closed + VALIDATE_OK.** `check_main.mdk` (the real
+  lex→parse→resolve→exhaust→typecheck front-end) emits a **6.77 MB WAT** that now `wasm-tools parse`s
+  AND `validate`s. Linkage fix: `scanFnValueUses` had the SAME compound-value-node hole as
+  `freeVarsExpr` (value-uses in CTuple/CRecord/CRecordUpdate missed → closure-wrapper ref to an
+  undefined fn). Validate layer (peeled class-by-class): eta-saturate plain constrained fns
+  (`elem=fold…`), ctor-as-value eta-closures, and the litswitch phantom-`if`-result-in-nested-tower
+  bug. Gate: **`test/wasm/assemble_check_main.sh`** (ASSEMBLE_OK + VALIDATE_OK).
+- **🏁 The self-hosted LEXER RUNS under Node byte-identical to native.** Runtime layer-1 fixed:
+  `debugStringLit`/`debugCharLit` were stubbed to `unreachable` but the real lexer calls them on
+  every token; added a real WAT escape runtime byte-identical to `lib/eval.ml`.
+- **🟡 IN PROGRESS — runtime layer-2: the self-hosted PARSER null-derefs.** Localized to
+  `runP parseProgram` (`frontend/parser.mdk:3108`), **data-independent** (`parse ""` alone crashes);
+  the basic closure-in-ADT shape is ruled out (a 2-arg P monad runs fine). A bisection agent is
+  narrowing it (suspect: parser module-level loc `Ref` global-init OR a knot-tied/forward-referenced
+  combinator read-before-init — a closure/global ordering bug the lexer doesn't have). **This is the
+  next frontier:** fix it → `check_main` runs → diff its inferred schemes vs the native oracle = the
+  self-hosted-front-end-on-WasmGC demo. Then the back stages, then `medaka_cli` (needs `json` module
+  + the deliberately-skipped runCommand/writeFile for `build`).
+- **SEED: re-minted (`11f2229`), `bootstrap_from_seed` PASS** (was stale from the in-graph
+  `core_ir_lower.mdk` structural-batch change; fixpoint C3a/C3b held throughout).
+- **METHODOLOGY notes from this arc:** (1) the per-binding census measures EMITTABILITY only — it is
+  BLIND to whole-program linkage AND runtime correctness; both are separate onion layers found only by
+  emit→assemble→run. (2) the SAME compound-value-node bug bit twice (`freeVarsExpr` capture +
+  `scanFnValueUses` linkage) — when adding a CExpr-walking pass, cover ALL compound value nodes. (3)
+  the lazy emitter forbids mutable-ref-as-state-threaded-across-emit (reads default at use site) —
+  encode in the Core-IR node / locals instead. (4) `wasm_emit.mdk` is OUT of the compiler graph (no
+  fixpoint/seed) EXCEPT changes to `core_ir_lower.mdk`/`dce.mdk`. (5) ALWAYS rebuild the wasm emitter
+  binaries (`bash test/wasm/build_wasm_oracle.sh`) before gating — stale-binary footgun bit twice
+  (the 4 new structural fixtures read as failing on a stale emitter). Gate suite: `test/wasm/{diff_wasm,
+  diff_wasm_typed,diff_wasm_modules,assemble_check_main}.sh` (130/6/13 + VALIDATE_OK); Node ≥22 (gates
+  auto-`nvm use 24`).
+
+
 ## RESUME — Effect-and-capability conformance roadmap substantially CLOSED (2026-06-21). `main` = `9cc7c9f`
 
 **The effect/capability conformance roadmap (`EFFECTS-CONFORMANCE-ROADMAP.md`, audit
