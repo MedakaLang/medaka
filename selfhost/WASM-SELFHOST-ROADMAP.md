@@ -52,15 +52,20 @@ investigate after the big categories close (some are artifacts of the above).
 1. ✅ panic + array externs (`63cab37`, diff_wasm 85→93)
 2. ✅ Ref support (`9566ae2`, →96; census ~636→0)
 3. ✅ `__fallthrough__` (`0d30279`, →99; census 261→0). Lazy-emitter pivot: label encoded in the Core-IR node (`__ft__<lbl>` sentinel), not a mutable ref.
-4. 🟡 charCode + string-literal clause heads (PLit-LString) — next batch
-5. ⬜ scope-threading unbound vars (evalBinop `env`, derive params — CLetGroup/multi-clause free-var capture)
-6. ⬜ block-stmt-in-tail (refutable let-bind) + misc structural arms
-7. ⬜ IO host surface (task #3 — see below)
-8. ⬜ assemble + run the compiler-on-wasm on a trivial input (the self-host proof)
+4. ✅ charCode + string-literal clause heads (PLit-LString) (`d15d5bf`, →102; census 334→153, cascade cleared downstream unbound vars)
+5. ✅ destructuring / refutable / assign let-binds — CSLet tuple/ctor/record destructure + CSLetElse + CSAssign (`38d45f8`, →109; tail-block 56→0, total →119)
+6. 🟡 UTF-8 string externs (stringToChars/charFromCode/stringFromChars, 37) — in progress
+7. ⬜ diffuse unbound vars (~50: where/let-rec/if-let/guard/closure-capture in parser/lexer/typecheck) — being scoped for batch-fix by construct
+8. ⬜ small structural: unknown ctor (8), non-Int switch heads (5), PVar-only clause params (3), dict-param (4)
+9. ⬜ IO host surface (task #3 — see below): readFile/args/getEnv/fileExists/exit
+10. ⬜ assemble + run the compiler-on-wasm on a trivial input (the self-host proof)
 
-**Census progress:** 1428 → 334 (panic, arrays, Ref, fallthrough closed). Remaining
-top: PLit-LString 111, scope-threading unbound ~54, block-tail 35, string/char externs
-~51 (subset), IO externs 4, misc ~21.
+**Census progress: 1428 → 119** (panic, arrays, Ref, fallthrough, string-clauses+charCode,
+destructuring all closed — 92%). Remaining: UTF-8 externs 37, diffuse unbound ~50,
+small structural ~20, IO externs ~4. **Lazy-emitter rule (learned):** this emitter
+forces instruction strings at final assembly, so binding/label state must thread as
+data / locals / Core-IR-encoded sentinels — NOT mutable refs read at a different time
+than set (an LLVM-style `set_ref currentLabel` reads its default at the use site).
 
 ## IO host surface (scoped 2026-06-22 — task #3)
 
