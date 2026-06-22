@@ -77,6 +77,16 @@ Caveat (see the AGENTS.md guard note): in a **match-arm** guard
 only safe when the bind is consumed inside the guard chain — for bind-in-body,
 use the function-clause form above.
 
+The strength of the rewrite scales with whether the `Some`-arm actually
+**binds**. When the match destructures and *uses* the payload (`Some a => … a …`),
+the guard recovers that bind directly (`| Some a <- e = … a …`) — a clear win.
+When the arm **discards** it (`Some _ => …`), there's no destructuring to
+recover; the match is just a binary `Option` test, already compact and
+symmetric, and the guard only trades it for `<-` + `otherwise` ceremony — a
+wash. Convert the binding cases on their own merit; convert the discarding ones
+mainly for **family consistency** (a group of same-shaped functions should read
+uniformly — don't leave one a guard and its sibling a match).
+
 ## 4. Magic strings: three categories, three treatments
 
 Synthetic string literals in compiler code fall into three kinds — keep them
@@ -120,3 +130,75 @@ go i (f :: fs) acc =
 -- GOOD: intent named, no index
 intercalateStr ", " fields
 ```
+
+## 6. Derive `Eq`/`Ord`/`Debug` — don't hand-roll structural equality
+
+`deriving (Eq)` works in selfhost on payload-bearing types, not just nullary
+enums — `Eq`/`Ord`/`Debug` are in scope via the implicit `core.mdk` prelude (the
+no-stdlib rule bans `import list`/`string`/… *modules*, not the prelude). So
+**derive** these instances unless you have a **concrete** reason not to:
+
+- **Underivable** — the function is intentionally *not* full structural `==`:
+  head-only (`tyHeadEq` ignores type args), or over a non-AST type (`valueEq`
+  over runtime `Value`). Keep these hand-rolled; they're a different relation.
+- **Measured hot path** — a derived `==` dispatches through the `Eq` dict; a
+  hand-rolled `litEq : Lit -> Lit -> Bool` is a direct monomorphic call. Only
+  invoke this for a *profiled* hotspot (see `selfhost/PERF-RESULTS.md`), not a
+  hunch. The bar is high: we A/B-tested exactly this shape (`concatMapList` →
+  the prelude's dict-dispatched `flatMap`, ~414 sites, whole self-compile) and
+  measured **no difference** — dict witnesses are hoisted to global constants
+  (`PERF-RUNTIME`), so the dispatch cost the prior assumed is gone. Treat "perf"
+  as disproven until a paired A/B says otherwise.
+
+Everything else: derive it. A hand-rolled structural eq carries a silent hazard
+— the `_ _ = False` catch-all keeps typechecking when a new variant is added,
+quietly returning `False` for it; a derived instance stays correct. And the same
+8-line body tends to get copy-pasted across files (e.g. `litEq` lived verbatim in
+both `exhaust.mdk` and `ir/core_ir_lower.mdk`).
+
+```
+-- BAD: hand-rolled structural eq (drifts; goes stale on a new variant)
+litEq : Lit -> Lit -> Bool
+litEq (LInt a) (LInt b) = a == b
+litEq (LFloat a) (LFloat b) = a == b
+-- … one arm per variant …
+litEq _ _ = False
+
+-- GOOD: derive it on the type; call sites use `==` / `(l ==)`
+data Lit = LInt Int | LFloat Float | … deriving (Eq)
+```
+
+## 7. Prefer the prelude's idioms over re-implementing them
+
+When `core.mdk`'s prelude already provides an operation — `flatMap`/`andThen`
+(the `Thenable` bind), `map`/`filter`, `<>`, list comprehensions, do-blocks —
+use it directly rather than defining a bespoke monomorphic twin in `support/`.
+A duplicate helper fragments the codebase: new code (and AI agents extending it)
+copy whichever form they happened to see first, and the two drift. In a young
+language the *first* pattern in the tree becomes the de-facto standard — so make
+the standard the language's own idiom, not a private alias for it.
+
+This was historically hedged on perf (`concatMapList` is a direct call;
+`flatMap` dispatches through the `Thenable` dict). That cost is **empirically
+negligible** — see §6: a paired A/B measured no difference. So default to the
+prelude idiom; demand a measured A/B before keeping a duplicate for speed.
+
+`flatMap` is the default replacement (same arg order as a `concatMap`-shaped
+helper). Where the call site has extra shape — an inline transform or a guard —
+a **comprehension** or **do-block** reads better still; but a plain flatten of a
+named, list-returning function stays `flatMap`:
+
+```
+-- BAD: bespoke helper re-spelling a prelude op
+concatMapList children nodes
+concatMapList (x => if p x then [x] else []) xs
+
+-- GOOD: prelude idiom; comprehension only where it removes a lambda/guard
+flatMap children nodes               -- plain flatten: flatMap beats a comprehension
+[x | x <- xs, p x]                   -- guard present: comprehension beats flatMap
+```
+
+Reserve a `support/` helper for functionality the prelude genuinely lacks (a
+fold shape it doesn't expose) — not for re-spelling one it has. (Contrast §5,
+which is about reaching for a helper instead of hand-threading an index: there
+the helper *adds* intent; here the bespoke helper merely *shadows* the prelude.)
