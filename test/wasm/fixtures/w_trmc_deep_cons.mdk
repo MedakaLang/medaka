@@ -1,0 +1,12 @@
+-- WASMGC-TRMC Stage 1 (§9.1): a SELF-recursive cons-tail builder (`upto` — the cons
+-- leaf is `lo :: upto (lo+1) hi`, the eligible shape (a)) over a deep range, consumed by
+-- a TAIL-recursive `lenAcc` (constant-stack `return_call`).  WITHOUT destination-passing
+-- TMC the builder recurses 2,000,000 frames deep → Node throws `RangeError: Maximum call
+-- stack size exceeded`; WITH it the builder loops in constant stack and prints 2000000.
+upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+
+lenAcc acc xs = match xs
+  [] => acc
+  _ :: t => lenAcc (acc + 1) t
+
+main = lenAcc 0 (upto 1 2000000)
