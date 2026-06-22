@@ -54,12 +54,6 @@ investigate after the big categories close (some are artifacts of the above).
 3. ✅ `__fallthrough__` (`0d30279`, →99; census 261→0). Lazy-emitter pivot: label encoded in the Core-IR node (`__ft__<lbl>` sentinel), not a mutable ref.
 4. ✅ charCode + string-literal clause heads (PLit-LString) (`d15d5bf`, →102; census 334→153, cascade cleared downstream unbound vars)
 5. ✅ destructuring / refutable / assign let-binds — CSLet tuple/ctor/record destructure + CSLetElse + CSAssign (`38d45f8`, →109; tail-block 56→0, total →119)
-6. 🟡 UTF-8 string externs (stringToChars/charFromCode/stringFromChars, 37) — in progress
-7. ⬜ diffuse unbound vars (~50: where/let-rec/if-let/guard/closure-capture in parser/lexer/typecheck) — being scoped for batch-fix by construct
-8. ⬜ small structural: unknown ctor (8), non-Int switch heads (5), PVar-only clause params (3), dict-param (4)
-9. ⬜ IO host surface (task #3 — see below): readFile/args/getEnv/fileExists/exit
-10. ⬜ assemble + run the compiler-on-wasm on a trivial input (the self-host proof)
-
 6. ✅ UTF-8 string externs (stringToChars/charFromCode/stringFromChars) (`ae16d02`, →115; census →82)
 7. ✅ nested-closure free-var capture — `freeVarsExpr` now descends compound value nodes (CTuple/CRecord/CList/…) so do-notation `pure (a,b)` captures earlier `<-` binds; parallel `maxIndexAt` fix (`508fdd3`, modules →13; census →35)
 8. ✅ structural batch — Char/String match-switch heads, ctor/tuple lambda-params, **record-ctor registration** (`registerRecordCtors` in `lowerProgramEmit` — IN-GRAPH, fixpoint C3a/C3b YES + diff_selfhost_build 35/0), W5 dict-param capture (`freeVarsExpr` CMethod/CDict arms) (`945c685`, →119; census →11)
@@ -71,12 +65,27 @@ investigate after the big categories close (some are artifacts of the above).
 **🏁 MILESTONE (2026-06-22): the per-binding emitter-gap census is 0 — the WasmGC
 emitter can LOWER every construct in the whole compiler graph (1428→0, 9 categories).**
 The next layers toward a *running* self-hosted wasm compiler are (11) whole-program
-linkage and (12) runtime correctness — neither visible to the per-binding census.
+linkage and (12) runtime/validate correctness — neither visible to the per-binding census.
 
-**SEED RE-MINT PENDING:** the structural batch (step 8) changed `core_ir_lower.mdk`
-(in-graph) → committed seed (`selfhost/seed/emitter.ll.gz`) is STALE. Re-mint at the
-next checkpoint (`CHECK_OCAML=0 bash test/refresh_seed.sh` → verify `bootstrap_from_seed.sh`);
-fixpoint C3a/C3b is green so dev is unaffected; `bootstrap_from_seed` red until re-mint.
+**LAYER 11 — whole-program LINKAGE: ✅ CLOSED (`39fd801`).** `check_main.mdk` (the real
+front-end) emits a **6.77 MB WAT** and `wasm-tools parse` now succeeds (0 referenced-but-undefined
+funcs). Root was the SAME compound-value-node bug as the closure-capture fix, but in
+`scanFnValueUses` (value-uses inside CTuple/CRecord/CRecordUpdate weren't scanned → no closure
+wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
+
+**LAYER 12 — `wasm-tools validate` (peeling class-by-class toward VALIDATE_OK):**
+- ✅ func 20 — eta-saturation of PLAIN constrained fns (`elem = fold … `): `etaSaturateFnClause` +
+  method-spine deficit (`6fcf914`).
+- ✅ func 509 — arity>0 ctor used as a VALUE (`map PVar vars`): `emitCtorEtaClosure` (`6fcf914`).
+- 🟡 func 1377 (`setNumlitFloatsGo`) — decision-tree match discriminating same-tag ctors by a STRING
+  field (`TCon "Float"` vs `TCon "Int"`): dead `br $swd*` leaves a value at a block boundary
+  ("values remaining on stack"). Decision-tree-emission class, in progress.
+- Expect further classes after 1377 (the validate onion — each fix surfaces the next; like LLVM's
+  B1–B7 bootstrap stages). After VALIDATE_OK: run check_main under Node (host shim feeds
+  runtime/core/source) + diff schemes vs the native `check_main` oracle = the self-host-of-the-front-end demo.
+
+**SEED: ✅ RE-MINTED (`11f2229`), `bootstrap_from_seed` PASS.** (Was stale from the step-8
+in-graph `core_ir_lower.mdk` change; re-minted at the census-0 checkpoint.)
 
 ## Census progress: 1428 → 0 (per-binding emittability). Lazy-emitter rule: this emitter
 forces instruction strings at final assembly, so binding/label state must thread as
