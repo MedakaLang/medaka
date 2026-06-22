@@ -125,11 +125,14 @@ wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
   `$mdk_value_eq`/`$mdk_value_cmp` (mirror LLVM `@mdk_value_eq`), routed when the program uses strings.
   Broad fix (all string comparisons). Gate `str_value_eq_cmp.mdk`, `diff_wasm` 134. `check_main` runs into
   resolve.
-- 🟡 **layer-10 (NEXT)** — `illegal cast` in `frontend_resolve__variantFieldOwners` (`resolve.mdk:647`, via
-  `fieldOwnersOf→flatMap→mdk_impl_List_andThen`). Same class (wrong-shape `ref.cast`); a nested-ADT match
-  on the `Con` payload (`ConNamed fs`/`ConPos _`). Diagnose the ctor/nested-Variant field-extract cast —
-  emitter-only `wasm_emit.mdk`. The native oracle COMPLETES on the same input → close to a running
-  self-hosted front-end.
+- 🏁 **layer-10 CLOSED (`117a30f`, emitter-only)** — refutable NESTED ctor in a fn-clause head
+  (`Variant cname (ConNamed fs)`): `patTestBind` tested only the outer ctor, descended fields via
+  `bindConFields` (bind-only, no test) → nested `ConNamed` cast unconditional, trapped on a `ConPos`
+  sibling. Fix: descend fields with `patTestBind` via `patTestBindCon` (mirror PCons/PTuple/PList). Gate
+  `w_clause_nested_ctor.mdk`, `diff_wasm` 135. check_main runs into typecheck.
+- 🟡 **layer-11 (NEXT)** — `illegal cast` in `types_typecheck__unifyN` (`typecheck.mdk:2021`). Same class;
+  a 2-arg match over `Mono` ctors (TVar/TCon/TApp/TFun/TTuple/TEff) — multi-arg tuple-scrutinee dispatch
+  or a Mono-ctor field extract. Emitter-only. Native oracle COMPLETES → typecheck is the last stage.
 - **LLVM (b′) port DEFERRED** (2026-06-22) — musttail-arity ISA wall + native doesn't need it; see
   `TRMC-DESIGN.md` §"Phase 3 … DEFERRED" + WIP `selfhost/bprime-llvm-wip.patch`.
 

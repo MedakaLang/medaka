@@ -123,13 +123,20 @@ self-hosting the compiler (the frontend-only-playground goal). Owning doc:
   on runtime shape (both `$str` → byte-compare; else `ref.eq`/i31 compare); `emitBinRef` routes
   comparisons through them when the program uses strings (`useStrRef`), pure-int keeps the i31 fast path.
   Same shape as layer-3. Gate `str_value_eq_cmp.mdk`, `diff_wasm` 134.
-- **🟡 NEXT — runtime layer-10: `illegal cast` in `frontend_resolve__variantFieldOwners`** (`resolve.mdk:647`,
-  via `fieldOwnersOf → flatMap → mdk_impl_List_andThen`). Same CLASS as layer-9/layer-3 (wrong-runtime-shape
-  `ref.cast` miscompile, NOT TMC). `variantFieldOwners (Variant cname (ConNamed fs))` / `(Variant _ (ConPos
-  _))` — a **nested-ADT match on the `Con` payload**; the cast is on the ctor/nested-Variant field extract.
-  Diagnose which `ref.cast` traps + the shape mismatch (nested-ctor discriminant/field extract) — emitter-only
-  `wasm_emit.mdk` lowering bug. The native oracle COMPLETES on the same input (prints the full scheme table),
-  so we are close to a running self-hosted front-end. Faithful run.js trace for the next layer.
+- **🏁 Runtime layer-10 CLOSED (`117a30f`, emitter-only) — refutable NESTED ctor in a function-clause
+  head; `check_main` runs past resolve into typecheck.** `variantFieldOwners (Variant cname (ConNamed
+  fs))` — `patTestBind`'s `PCon` arm emitted a discriminant test only for the OUTER ctor (`Variant`) then
+  descended fields via `bindConFields` which only BINDS (cast+`struct.get`), NO refutability test → the
+  nested `ConNamed` cast was unconditional and trapped on a `ConPos` sibling. Fix (`wasm_emit.mdk`):
+  descend each field with `patTestBind` (test+bind) via `patTestBindCon`, mirroring `PCons`/`PTuple`/`PList`.
+  Gate `w_clause_nested_ctor.mdk`, `diff_wasm` 135.
+- **🟡 NEXT — runtime layer-11: `illegal cast` in `types_typecheck__unifyN`** (`typecheck.mdk:2021`, via
+  `inferMemberClauses→inferMembers→processSCC→checkProgramSeeded`). Same class (wrong-shape `ref.cast`).
+  `unifyN` is a 2-arg match over the `Mono` type ctors (`TVar c`/`TCon`/`TApp`/`TFun … row …`/`TTuple`/
+  `TEff`) — likely the multi-arg synthetic-tuple scrutinee dispatch or a `Mono`-ctor field extract (`TVar`'s
+  `Ref Tyvar`, etc.). Diagnose the trapping cast — emitter-only `wasm_emit.mdk`. The native oracle COMPLETES
+  on the input → typecheck is the last stage; closing its cast layers should reach a running self-hosted
+  front-end. Faithful run.js trace.
 - **LLVM (b′) dispatch-TMC port — SCOPED & DEFERRED (2026-06-22, user-confirmed).** Attempted to mirror
   the WasmGC (b′) TMC into the native backend for "backend sync"; hit a FUNDAMENTAL ISA wall — LLVM
   `musttail` requires caller/callee arity match, but (b′) groups are heterogeneous-arity (router
