@@ -1,0 +1,6 @@
+-- layer-15 defaulted-method emission: `filter` on a `Filterable List` is an
+-- INTERFACE DEFAULT (`filter p = filterMap …`); the type only impls `filterMap`.
+-- Before layer-15 this referenced a never-emitted $mdk_impl_List_filter (the
+-- emitter-WAT assemble hole).  After: a synthesized $mdk_default_filter_List define
+-- (its inner filterMap restamped to the concrete List impl).  Output == oracle.
+main = println (filter (x => x > 1) [1, 2, 3])

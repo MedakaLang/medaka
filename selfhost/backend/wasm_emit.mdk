@@ -256,6 +256,14 @@ methodArityOf method = match lookupAssoc method methodIfaceTableRef.value
   Some (_, arity) => arity
   None => 0
 
+-- the interface a method name belongs to ("" = not an interface method); peer of
+-- llvm_emit's methodIfaceOf.  Used by layer-15 default-method restamping to find
+-- the inner SAME-interface calls in a default body.
+methodIfaceOf : String -> <Mut> String
+methodIfaceOf method = match lookupAssoc method methodIfaceTableRef.value
+  Some (iface, _) => iface
+  None => ""
+
 -- ── decl → DECLARED return type-head name table (W9b — for Unit-main detection) ─
 -- `declSigTypeNames` maps a top-level binding name to (param-type-heads, return-type-
 -- head).  A value main `main = println (10 + 5)` whose head function `println` is
@@ -542,6 +550,8 @@ emitProgram : CProgram -> <Mut> String
 emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref lamIdRef 0
   let _ = set_ref liftedFnsRef []
+  let _ = set_ref emittedDefaultsWRef []
+  let _ = set_ref defaultDefsWRef []
   let _ = set_ref funcRefsRef []
   let _ = set_ref useStrRef (programUsesStr groups)
   let _ = set_ref strSegsRef []
@@ -606,6 +616,8 @@ emitProgramGaps : CProgram -> <Mut> List String
 emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref lamIdRef 0
   let _ = set_ref liftedFnsRef []
+  let _ = set_ref emittedDefaultsWRef []
+  let _ = set_ref defaultDefsWRef []
   let _ = set_ref funcRefsRef []
   let _ = set_ref useStrRef (programUsesStr groups)
   let _ = set_ref strSegsRef []
@@ -1556,6 +1568,12 @@ emitRefProgram prog groups =
   -- (ref eq) functions the RKey direct call / RDict if-chain dispatch into.
   let implFns = emitImplFns prog
   let initLines = emitRefInit prog groups
+  -- layer-15: the synthesized interface-default defines ($mdk_default_<method>_<tag>),
+  -- accumulated during fns/implFns/INIT body emission — a `filter` call may live in a
+  -- value binding / `main` (emitRefInit), so this drain must follow initLines too.
+  -- Each default's inner lambda already drained into liftedFnsRef, so this precedes
+  -- the `lifted` concat.  Drained UNCONDITIONALLY (a default define is a plain fn).
+  let defaultDefs = flatMap (x => x) (reverseL defaultDefsWRef.value)
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
   let lifted = if progUseClos prog then flatMap (x => x) (reverseL liftedFnsRef.value) else []
   let applyRt = if progUseClos prog then closApplyLines else []
@@ -1605,7 +1623,7 @@ emitRefProgram prog groups =
   let ioArgsRt = if useArgsRef.value then ioArgsRuntimeLines else []
   let dataSegs = emitDataSegs ()
   joinNl (header ++ typeSection ++ imports ++ elemDecl ++ globals
-            ++ fns ++ implFns ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt
+            ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
             ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ floatStrRt
@@ -2475,7 +2493,18 @@ emitMethodRef prog env d name route implRoutes methRoutes args = match route
   RKey tag _ =>
     let dictWords = flatMap (routeWitness prog env d) (methRoutes ++ implRoutes)
     let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-    dictWords ++ argInstrs ++ ["call $" ++ implFnSym tag name]
+    -- layer-15 (defaulted-method emission, peer to llvm_emit's emitMethod RKey arm,
+    -- line ~2925): `RKey tag` selects a STATIC impl.  When the type provides a
+    -- CONCRETE impl of [name] at [tag] (`implForW`), call `$mdk_impl_<tag>_<name>`
+    -- directly (the original path).  But an INTERFACE DEFAULT method the type did NOT
+    -- override (`filter` on `Filterable List`, which only impls `filterMap`) has NO
+    -- tagged impl define — calling `$mdk_impl_List_filter` references a never-emitted
+    -- symbol.  Mirror llvm_emit's `None => emitDefaultRKey`: synthesize a per-(method,
+    -- tag) `$mdk_default_<name>_<tag>` define ONCE from the interface default body
+    -- (inner same-iface calls restamped to this tag's concrete impl) and call THAT.
+    match implForW prog name tag
+      Some _ => dictWords ++ argInstrs ++ ["call $" ++ implFnSym tag name]
+      None => emitDefaultRKeyRef prog dictWords argInstrs name tag
   RDict dpar => emitMethodDispatchRef prog env d name dpar args
   RDictFwd dpar => emitMethodDispatchRef prog env d name dpar args
   RNone => gapL ("wasm W5: RNone arg-tag dispatch for '" ++ name ++ "' is out of slice")
@@ -2792,6 +2821,188 @@ methodImplKey : String -> CImplEntry -> <Mut> List (String, String)
 methodImplKey method (CImplEntry n _ (CImplTagged tag _ _ _ _ _)) =
   if n == method then [(tag, tag)] else []
 methodImplKey _ _ = []
+
+-- ── layer-15: defaulted-method emission (peer to llvm_emit's E19 default subsystem) ──
+-- A `Filterable List` provides `filterMap` as a CONCRETE impl but inherits `filter`
+-- as an INTERFACE DEFAULT (`filter p = filterMap (x => if p x then Some x else None)`).
+-- A `filter` call resolves to `RKey "List"` with no tagged impl define, so a naive
+-- `call $mdk_impl_List_filter` references a never-emitted symbol (the WAT-assemble
+-- hole layer-15 closes).  Mirror llvm_emit's emitDefaultRKey/ensureDefaultEmitted/
+-- emitDefaultDefine: when no concrete impl exists at [tag] but the interface has a
+-- default body, synthesize `$mdk_default_<method>_<tag>` ONCE from that default body
+-- (its inner same-interface method calls restamped to THIS tag's concrete impl, so a
+-- partially-applied inner `filterMap` lowers to a direct `$mdk_impl_List_filterMap`
+-- call) and emit a `call $mdk_default_<method>_<tag>` instead.
+
+-- the CONCRETE tagged impl entry for (method, tag), if one exists (mirror of
+-- llvm_emit's implFor/findByTag).  None ⇒ the type did not override the method.
+implForW : Prog -> String -> String -> Option CImplEntry
+implForW prog method tag = findByTagW method tag (progImpls prog)
+
+findByTagW : String -> String -> List CImplEntry -> Option CImplEntry
+findByTagW _ _ [] = None
+findByTagW method tag ((CImplEntry n s (CImplTagged t k iface ps pats body))::rest)
+  | n == method && (t == tag || k == tag) = Some (CImplEntry n s (CImplTagged t k iface ps pats body))
+  | otherwise = findByTagW method tag rest
+findByTagW method tag (_::rest) = findByTagW method tag rest
+
+-- the interface DEFAULT entry (CImplDefault) for a method (mirror of defaultFor/
+-- findDefault).  None ⇒ no default body ⇒ a genuine missing-impl error.
+defaultForW : Prog -> String -> Option CImplEntry
+defaultForW prog method = findDefaultW method (progImpls prog)
+
+findDefaultW : String -> List CImplEntry -> Option CImplEntry
+findDefaultW _ [] = None
+findDefaultW method ((CImplEntry n s (CImplDefault pats body))::rest)
+  | n == method = Some (CImplEntry n s (CImplDefault pats body))
+  | otherwise = findDefaultW method rest
+findDefaultW method (_::rest) = findDefaultW method rest
+
+-- `$mdk_default_<method>_<tag>` (mirror of llvm_emit's defaultFnName, gname-mangled
+-- for wasm symbols).
+defaultFnNameW : String -> String -> String
+defaultFnNameW tag method = "mdk_default_" ++ gname method ++ "_" ++ gname tag
+
+-- the RKey-arm fallback: `defaultFor` finds a default ⇒ synthesize the per-(method,
+-- tag) define once and emit a direct call to it (forwarding the same dict words +
+-- args the concrete impl call would have taken).  No default ⇒ gap (the same
+-- missing-impl error llvm_emit's `None => gapE` reports).
+emitDefaultRKeyRef : Prog -> List String -> List String -> String -> String -> <Mut> List String
+emitDefaultRKeyRef prog dictWords argInstrs name tag = match defaultForW prog name
+  Some entry =>
+    let fname = defaultFnNameW tag name
+    let _ = ensureDefaultEmittedW prog fname tag name entry
+    dictWords ++ argInstrs ++ ["call $" ++ fname]
+  None => gapL ("wasm layer-15: no impl of method '" ++ name ++ "' for type '" ++ tag ++ "'")
+
+-- a module-level set of already-synthesized default symbols (dedup like
+-- llvm_emit's emittedDefaultsRef) + the accumulated define line-blocks, drained
+-- UNCONDITIONALLY in emitProgram (a default define is a plain fn, not closure-gated).
+emittedDefaultsWRef : Ref (List String)
+emittedDefaultsWRef = Ref []
+
+defaultDefsWRef : Ref (List (List String))
+defaultDefsWRef = Ref []
+
+defaultAlreadyEmittedW : String -> <Mut> Bool
+defaultAlreadyEmittedW name = contains name emittedDefaultsWRef.value
+
+markDefaultEmittedW : String -> <Mut> Unit
+markDefaultEmittedW name = set_ref emittedDefaultsWRef (name :: emittedDefaultsWRef.value)
+
+addDefaultDefW : List String -> <Mut> Unit
+addDefaultDefW def = set_ref defaultDefsWRef (def :: defaultDefsWRef.value)
+
+ensureDefaultEmittedW : Prog -> String -> String -> String -> CImplEntry -> <Mut> Unit
+ensureDefaultEmittedW prog fname tag method entry =
+  if defaultAlreadyEmittedW fname then ()
+  else
+    let _ = markDefaultEmittedW fname
+    addDefaultDefW (emitDefaultDefineW prog fname tag method entry)
+
+-- synthesize `$mdk_default_<method>_<tag>` from the interface default body.  Mirror
+-- of llvm_emit's emitDefaultDefine: eta-expand the (point-free) default body to the
+-- method's full declared arity, restamp inner SAME-interface method calls to a
+-- concrete `RKey tag` (so the inner `filterMap` is a direct impl call, not an
+-- un-dispatchable arg-tag site), then emit it with the SAME clause machinery an impl
+-- group uses.  NOTE: cross-interface method-level dicts (foldMap's Monoid `empty`)
+-- and parametric element `requires` (Ord's `lt`→`compare`) are NOT needed for the
+-- `filter`@List case (filter's default calls only same-interface filterMap, no
+-- requires) — those llvm restampCrossIface / reqDict paths are deferred until a
+-- fixture needs them (a constrained default would surface as a NEW undefined symbol).
+emitDefaultDefineW : Prog -> String -> String -> String -> CImplEntry -> <Mut> List String
+emitDefaultDefineW prog fname tag method entry =
+  let pats0 = implDefaultPats entry
+  let body0 = implDefaultBody entry
+  let arity = maxI (listLen pats0) (methodArityOf method)
+  let (pats1, body1) = etaExpandTo pats0 body0 arity (listLen pats0)
+  let body = restampIfaceDictsW methodIfaceTableRef.value (methodIfaceOf method) tag body1
+  emitDefaultDefnGroup prog fname tag method arity [CClause pats1 body]
+
+implDefaultPats : CImplEntry -> List Pat
+implDefaultPats (CImplEntry _ _ (CImplDefault pats _)) = pats
+implDefaultPats _ = []
+
+implDefaultBody : CImplEntry -> CExpr
+implDefaultBody (CImplEntry _ _ (CImplDefault _ body)) = body
+implDefaultBody _ = CLit LUnit
+
+-- emit the synthesized default define `$fname` with the same body/locals machinery
+-- emitImplGroup uses for `$mdk_impl_*`, but under the default symbol name.  (We can't
+-- reuse emitImplGroup directly — it hardcodes implFnSym for the symbol; this is the
+-- emitImplGroup body inlined with `fname` substituted.  No TRMC/Float-impl path: a
+-- default body is not a self-recursive ctor-tail impl, and its params are the
+-- interface's, not Float.)
+emitDefaultDefnGroup : Prog -> String -> String -> String -> Int -> List CClause -> <Mut> List String
+emitDefaultDefnGroup prog fname tag method arity clauses =
+  let params = synthParams arity
+  let bodyLines = emitClausesImpl prog fname params arity clauses
+  let allLocals = clauseLocals clauses
+  let extraLocals = filterList (notIn params) (dedupKeep allLocals)
+  let scratch = scratchLocals (clausesMaxDepth clauses)
+  let sig = "  (func $" ++ fname
+    ++ joinWith "" (map paramDeclRef params)
+    ++ " (result (ref eq))"
+  let localDecls = map localDeclRef (extraLocals ++ scratch)
+  let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+  [sig] ++ map (l => "  " ++ l) (localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
+
+-- restamp every inner SAME-interface method occurrence in the default body to a
+-- concrete `RKey tag` (peer of llvm_emit's restampIfaceDicts, non-parametric path:
+-- empty element-dict routes, no cross-interface threading).  A bare `CVar m` or an
+-- already-marked `CMethod m RNone` whose interface == [iface] becomes
+-- `CMethod m (RKey tag []) [] []` ⇒ the wasm RKey arm calls `$mdk_impl_<tag>_<m>`
+-- directly.  Walks the whole CExpr tree (the arms mirror restampIfaceDicts).
+restampIfaceDictsW : List (String, (String, Int)) -> String -> String -> CExpr -> CExpr
+restampIfaceDictsW tbl iface tag (CVar m ad)
+  | iface != "" && ifaceOfInW tbl m == iface = CMethod m (RKey tag []) [] []
+  | otherwise = CVar m ad
+restampIfaceDictsW tbl iface tag (CMethod m RNone irs mrs)
+  | iface != "" && ifaceOfInW tbl m == iface = CMethod m (RKey tag []) irs mrs
+  | otherwise = CMethod m RNone irs mrs
+restampIfaceDictsW tbl iface tag (CApp f a) =
+  CApp (restampIfaceDictsW tbl iface tag f) (restampIfaceDictsW tbl iface tag a)
+restampIfaceDictsW tbl iface tag (CLam ps b) =
+  CLam ps (restampIfaceDictsW tbl iface tag b)
+restampIfaceDictsW tbl iface tag (CLet r p rhs b) =
+  CLet r p (restampIfaceDictsW tbl iface tag rhs) (restampIfaceDictsW tbl iface tag b)
+restampIfaceDictsW tbl iface tag (CLetGroup bs b) =
+  CLetGroup (map (restampBindW tbl iface tag) bs) (restampIfaceDictsW tbl iface tag b)
+restampIfaceDictsW tbl iface tag (CMatch s arms) =
+  CMatch (restampIfaceDictsW tbl iface tag s) (map (restampArmW tbl iface tag) arms)
+restampIfaceDictsW tbl iface tag (CDecision s arms tr) =
+  CDecision (restampIfaceDictsW tbl iface tag s) (map (restampArmW tbl iface tag) arms) tr
+restampIfaceDictsW tbl iface tag (CIf c t el) =
+  CIf (restampIfaceDictsW tbl iface tag c) (restampIfaceDictsW tbl iface tag t) (restampIfaceDictsW tbl iface tag el)
+restampIfaceDictsW tbl iface tag (CTuple xs) =
+  CTuple (map (restampIfaceDictsW tbl iface tag) xs)
+restampIfaceDictsW tbl iface tag (CList xs) =
+  CList (map (restampIfaceDictsW tbl iface tag) xs)
+restampIfaceDictsW tbl iface tag (CFieldAccess a f) =
+  CFieldAccess (restampIfaceDictsW tbl iface tag a) f
+restampIfaceDictsW tbl iface tag (CIndex a b) =
+  CIndex (restampIfaceDictsW tbl iface tag a) (restampIfaceDictsW tbl iface tag b)
+restampIfaceDictsW _ _ _ other = other
+
+restampBindW : List (String, (String, Int)) -> String -> String -> CBind -> CBind
+restampBindW tbl iface tag (CBind n cl) = CBind n (map (restampClauseW tbl iface tag) cl)
+
+restampClauseW : List (String, (String, Int)) -> String -> String -> CClause -> CClause
+restampClauseW tbl iface tag (CClause ps b) = CClause ps (restampIfaceDictsW tbl iface tag b)
+
+restampArmW : List (String, (String, Int)) -> String -> String -> CArm -> CArm
+restampArmW tbl iface tag (CArm p g b) = CArm p (map (restampGuardW tbl iface tag) g) (restampIfaceDictsW tbl iface tag b)
+
+restampGuardW : List (String, (String, Int)) -> String -> String -> CGuard -> CGuard
+restampGuardW tbl iface tag (CGBool e) = CGBool (restampIfaceDictsW tbl iface tag e)
+restampGuardW tbl iface tag (CGBind p e) = CGBind p (restampIfaceDictsW tbl iface tag e)
+
+-- the interface a method name belongs to ("" = not an interface method); peer of
+-- llvm_emit's ifaceOfIn.
+ifaceOfInW : List (String, (String, Int)) -> String -> String
+ifaceOfInW tbl m = match lookupAssoc m tbl
+  Some (iface, _) => iface
+  None => ""
 
 -- ── hashName (djb2, seed 5381) — BYTE-IDENTICAL to llvm_emit.hashName so the
 -- dict-witness tag matches across backends + the route-key dispatch agrees. ──
