@@ -1,0 +1,2 @@
+-- W11b: charToLower 'Z' → 'z' — print via charToStr
+main = charToStr (charToLower 'Z')

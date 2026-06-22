@@ -174,7 +174,8 @@ import backend.wasm_preamble.{
   rngStateGlobalLines, rngRuntimeLines, hashRuntimeLines, hashStringRuntimeLines,
   floatFmtImportLines, floatRuntimeLines, hashFloatRuntimeLines, randomFloatRuntimeLines,
   strSearchRuntimeLines,
-  strCodecRuntimeLines, charFromCodeRuntimeLines
+  strCodecRuntimeLines, charFromCodeRuntimeLines,
+  charClassRuntimeLines
 }
 
 -- ── static value kind (scalar-mode only; for the auto-print routing) ─────────
@@ -451,6 +452,10 @@ useStrCodecRef = Ref False
 useCharFromCodeRef : Ref Bool
 useCharFromCodeRef = Ref False
 
+-- W11b: the program uses charIsAlpha/charIsSpace/… or charToUpper/charToLower.
+useCharClassRef : Ref Bool
+useCharClassRef = Ref False
+
 -- W8b: the names KNOWN to hold a Float in the CURRENT function/impl body — set while
 -- emitting an `impl Num Float` (etc.) method, whose params are Float but appear as bare
 -- CVars the structural detector can't otherwise see.  `cexprIsFloat` consults this so
@@ -520,6 +525,9 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref useFloatHashRef False
   let _ = set_ref useFloatRngRef False
   let _ = set_ref useStrSearchRef False
+  let _ = set_ref useStrCodecRef False
+  let _ = set_ref useCharFromCodeRef False
+  let _ = set_ref useCharClassRef False
   let _ = set_ref tupleAritiesRef []
   let _ = set_ref recFieldsRef (collectRecFields groups)
   let _ = scanProgW7 groups
@@ -541,6 +549,7 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let useRef = useClos || programUsesAdt groups ctorArs || not (isEmptyList impls) || useStrRef.value
     || useListRef.value || useArrayRef.value || useRefBoxRef.value || not (isEmptyList tupleAritiesRef.value)
     || useRngRef.value || useHashRef.value || useFloatRef.value || useStrSearchRef.value
+    || useCharClassRef.value
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos impls
   if useRef then emitRefProgram prog groups
@@ -574,6 +583,9 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   let _ = set_ref useFloatHashRef False
   let _ = set_ref useFloatRngRef False
   let _ = set_ref useStrSearchRef False
+  let _ = set_ref useStrCodecRef False
+  let _ = set_ref useCharFromCodeRef False
+  let _ = set_ref useCharClassRef False
   let _ = set_ref tupleAritiesRef []
   let _ = set_ref recFieldsRef (collectRecFields groups)
   let _ = scanProgW7 groups
@@ -671,6 +683,9 @@ isLeafExternW name = contains name [
   "hashInt", "hashChar", "hashBool",
   -- W11: charCode : Char -> Int — a Char is an i31 codepoint; charCode = cast+unbox+rebox.
   "charCode",
+  -- W11b: char classification and case-mapping (ASCII-only, byte-identical to medaka_rt.c).
+  "charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower", "charIsPunct",
+  "charToUpper", "charToLower",
   -- W8b Float leaf externs (produce/consume a boxed $float (ref eq)).
   "intToFloat", "floatToInt", "hashFloat", "randomFloat",
   -- W10: `panic : String -> a` lowers to a `unreachable` trap (stack-polymorphic,
@@ -687,8 +702,10 @@ externArityW name =
   else if contains name ["intToString", "charToStr", "stringLength", "putStr",
     "putStrLn", "ePutStr", "ePutStrLn", "stringToUpper", "stringToLower", "hashString",
     "stringConcat", "setSeed", "randomChar", "hashInt", "hashChar", "hashBool",
-    -- W11: charCode : Char -> Int (1-arg leaf).
+    -- W11: charCode : Char -> Int (1-arg leaf); W11b: char classification + case-mapping (1-arg).
     "charCode",
+    "charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower", "charIsPunct",
+    "charToUpper", "charToLower",
     -- W8b: floatToString/intToFloat/floatToInt/hashFloat are 1-arg; randomFloat takes
     -- a Unit arg (like randomChar — emitted + dropped).
     "floatToString", "intToFloat", "floatToInt", "hashFloat", "randomFloat",
@@ -894,6 +911,10 @@ noteW8Extern name =
           then let _ = set_ref useStrCodecRef True in let _ = set_ref useStrRef True in let _ = set_ref useArrayRef True in set_ref useStrLeafRef True else ()
   -- W11b: charFromCode : Int -> Option Char — range-check runtime, no $str/$arr needed.
   let _ = if name == "charFromCode" then set_ref useCharFromCodeRef True else ()
+  -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
+  let _ = if contains name ["charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower",
+                             "charIsPunct", "charToUpper", "charToLower"]
+          then set_ref useCharClassRef True else ()
   -- W10: panic's message arg is a $str (emitted then dropped) → force the $str rep.
   let _ = if name == "panic" then set_ref useStrRef True else ()
   -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
@@ -1443,12 +1464,14 @@ emitRefProgram prog groups =
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt = if useStrCodecRef.value then strCodecRuntimeLines else []
   let charFromCodeRt = if useCharFromCodeRef.value then charFromCodeRuntimeLines else []
+  -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
+  let charClassRt = if useCharClassRef.value then charClassRuntimeLines else []
   let dataSegs = emitDataSegs ()
   joinNl (header ++ typeSection ++ imports ++ elemDecl ++ globals
             ++ fns ++ implFns ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
-            ++ strCodecRt ++ charFromCodeRt
+            ++ strCodecRt ++ charFromCodeRt ++ charClassRt
             ++ dataSegs ++ initLines ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
@@ -1717,8 +1740,9 @@ refMainKind prog e = match e
   CApp f a => match appHead f
     CVar fn _ =>
       if isStrReturningExtern fn then WStr
-      else if fn == "randomBool" then WBool
-      else if fn == "randomChar" then WChar
+      else if contains fn ["randomBool", "charIsAlpha", "charIsSpace", "charIsUpper",
+                           "charIsLower", "charIsPunct"] then WBool
+      else if contains fn ["randomChar", "charToUpper", "charToLower"] then WChar
       -- W8b: a Float-returning extern main (intToFloat/randomFloat) auto-prints as Float.
       else if contains fn ["intToFloat", "randomFloat"] then WFloat
       else if isUnitExtern fn then WUnit
@@ -2954,6 +2978,36 @@ emitLeafExternRef prog env d "hashBool" args = match args
 emitLeafExternRef prog env d "charCode" args = match args
   [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "ref.i31"]
   _ => gapL "wasm W11: charCode takes exactly one argument"
+-- W11b: char classification predicates (ASCII-only, byte-identical to medaka_rt.c).
+-- Char is i31 codepoint; unbox with i31.get_u, call WAT helper, result is i32 0/1 → ref.i31.
+-- charIsAlpha c → (c>='a'&&c<='z')||(c>='A'&&c<='Z')
+emitLeafExternRef prog env d "charIsAlpha" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_is_alpha", "ref.i31"]
+  _ => gapL "wasm W11b: charIsAlpha takes exactly one argument"
+-- charIsSpace c → c==32 || (c>=9 && c<=13)
+emitLeafExternRef prog env d "charIsSpace" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_is_space", "ref.i31"]
+  _ => gapL "wasm W11b: charIsSpace takes exactly one argument"
+-- charIsUpper c → c>='A'&&c<='Z'
+emitLeafExternRef prog env d "charIsUpper" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_is_upper", "ref.i31"]
+  _ => gapL "wasm W11b: charIsUpper takes exactly one argument"
+-- charIsLower c → c>='a'&&c<='z'
+emitLeafExternRef prog env d "charIsLower" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_is_lower", "ref.i31"]
+  _ => gapL "wasm W11b: charIsLower takes exactly one argument"
+-- charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII.
+emitLeafExternRef prog env d "charIsPunct" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_is_punct", "ref.i31"]
+  _ => gapL "wasm W11b: charIsPunct takes exactly one argument"
+-- charToUpper c → if c>='a'&&c<='z' then c-32 else c  (result = Char i31 codepoint)
+emitLeafExternRef prog env d "charToUpper" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_to_upper", "ref.i31"]
+  _ => gapL "wasm W11b: charToUpper takes exactly one argument"
+-- charToLower c → if c>='A'&&c<='Z' then c+32 else c  (result = Char i31 codepoint)
+emitLeafExternRef prog env d "charToLower" args = match args
+  [a] => emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "call $mdk_char_to_lower", "ref.i31"]
+  _ => gapL "wasm W11b: charToLower takes exactly one argument"
 -- W8b Float leaf externs.  intToFloat : i31 Int → $mdk_int_to_float → boxed $float.
 -- floatToInt : $float → $mdk_float_to_int → i31 Int.  hashFloat : $float → masked i32 →
 -- i31.  randomFloat : Unit arg dropped → $mdk_random_float → boxed $float.
