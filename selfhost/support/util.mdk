@@ -60,10 +60,18 @@ export
 joinWith : String -> List String -> String
 joinWith sep xs = stringConcat (intersperseStr sep xs)
 
+-- Tail-recursive accumulator form: the recursive `interspGo` call is the whole
+-- body (tail position) so it compiles to `return_call` (zero stack growth),
+-- where the old double-cons `x :: sep :: self …` grew the stack to depth =
+-- list length and overflowed the WasmGC emitter on big inputs.  Output order is
+-- byte-identical: go sep [a,b,c] [] -> [c,sep,b,sep,a] -> reverseL -> [a,sep,b,sep,c].
 intersperseStr : String -> List String -> List String
-intersperseStr _ [] = []
-intersperseStr _ [x] = [x]
-intersperseStr sep (x::rest) = x :: sep :: intersperseStr sep rest
+intersperseStr sep xs = reverseL (interspGo sep xs [])
+
+interspGo : String -> List String -> List String -> List String
+interspGo _ [] acc = acc
+interspGo _ [x] acc = x :: acc
+interspGo sep (x::rest) acc = interspGo sep rest (sep :: x :: acc)
 
 export
 joinNl : List String -> String
