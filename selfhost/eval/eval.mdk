@@ -790,6 +790,36 @@ narrowMethod v _ = v
 pickByTag : List Value -> String -> Value
 pickByTag vs tag = oneOrMultiV (filterList (hasTag tag) vs) vs
 
+-- @Impl: strip the leading `@` off a hint name (`@Additive` → `Additive`).
+dropAtPrefix : String -> String
+dropAtPrefix s = stringSlice 1 (stringLength s) s
+
+-- @Impl: narrow a method value to the impl named [name].  A VMulti is filtered to
+-- the candidate whose impl key's name-component equals [name] (then stripped of its
+-- dispatch wrapper, exactly like a route-narrowed impl); a single match yields it,
+-- no/many matches leave the value for ordinary dispatch.  A non-VMulti (already a
+-- single impl, or a route-narrowed value) is returned unchanged — mirror of
+-- lib/eval.ml's `other -> other`.
+narrowByImplName : Value -> String -> <Mut> Value
+narrowByImplName (VMulti vs) name = match filterList (implNameMatches name) vs
+  [c] => stripResolved c
+  _ => VMulti vs
+narrowByImplName v _ = v
+
+implNameMatches : String -> Value -> Bool
+implNameMatches name (VTypedImpl _ k _ _ _) = implKeyName k == name
+implNameMatches _ _ = False
+
+-- the name-component of an impl key `iface|args|name` (substring after the LAST `|`).
+implKeyName : String -> String
+implKeyName key = implKeyNameGo (stringToChars key) key 0 0
+
+implKeyNameGo : Array Char -> String -> Int -> Int -> String
+implKeyNameGo cs key i lastPipe
+  | i >= arrayLength cs = stringSlice (lastPipe + 1) (stringLength key) key
+  | arrayGetUnsafe i cs == '|' = implKeyNameGo cs key (i + 1) i
+  | otherwise = implKeyNameGo cs key (i + 1) lastPipe
+
 -- Once a route has pinned a single impl, strip the dispatch wrapper iff its body
 -- is a terminal value (a nullary return-position method like `empty`/`minBound`
 -- that is never applied — its wrapper must not leak into the program).  A body
@@ -1013,6 +1043,16 @@ evalMethodAt env name route implRoutes methodRoutes =
 
 eval env (EDictAt name routesRef) =
   applyDicts env (lookupEnv env name) routesRef.value
+-- @Impl named-instance hint (`combine @Additive 3 4`): the `@Additive` arg is a
+-- DISAMBIGUATION hint, not a real argument.  Evaluate `f` (the method's VMulti, or
+-- a route-narrowed value) and filter it to the candidate whose impl key names the
+-- hint — never applying the bare `@hint` value as an argument.  Mirror of
+-- lib/eval.ml:922-935 (which filters by VNamedImpl name; native filters by the
+-- name-component of the canonical impl key the VTypedImpl carries).
+eval env (EApp f (EVar h))
+  | startsWithAt h = narrowByImplName (eval env f) (dropAtPrefix h)
+eval env (EApp f (ELoc _ (EVar h)))
+  | startsWithAt h = narrowByImplName (eval env f) (dropAtPrefix h)
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
 eval env (ELet _ True (PVar f) e1 e2) = evalRecLet env f e1 e2

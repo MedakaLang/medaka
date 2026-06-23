@@ -1,0 +1,5 @@
+interface Combine a where
+  combine : a -> a -> a
+impl Additive of Combine Int where
+  combine x y = x + y
+main = println (debug (combine @Nope 3 4))

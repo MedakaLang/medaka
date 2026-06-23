@@ -1,0 +1,13 @@
+-- @Impl named-instance hint (Phase-30 spec, mirror test/test_eval.ml:1106).
+-- Two impls of `Combine Int` share head tycon `Int`; the `@Additive` /
+-- `@Multiplicative` hint picks the named impl per call site (arg-tag alone cannot).
+interface Combine a where
+  combine : a -> a -> a
+
+impl Additive of Combine Int where
+  combine x y = x + y
+
+impl Multiplicative of Combine Int where
+  combine x y = x * y
+
+main = putStrLn (intToString (combine @Additive 3 4) ++ " " ++ intToString (combine @Multiplicative 3 4))

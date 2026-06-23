@@ -66,6 +66,7 @@ import support.util.{
   noneHeadTag,
   isEmptyL,
   replicate,
+  startsWith,
 }
 
 -- a synthetic binder for the lowered composition operators; constructed
@@ -85,6 +86,14 @@ lower (ENumLit n r _) = match r.value
   None => CLit (LInt n)
 lower (EVar x) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
+-- @Impl: drop the `@Name` disambiguation-hint argument — it is NOT a runtime arg.
+-- The method head `f` already carries the NAMED impl-key route (stamped by
+-- resolveArgStamp/resolveSite), so lowering `f` alone dispatches to the right impl
+-- (mirror of eval.mdk's hint arm + lib/eval.ml:922).
+lower (EApp f (EVar h))
+  | startsWith "@" h = lower f
+lower (EApp f (ELoc _ (EVar h)))
+  | startsWith "@" h = lower f
 lower (EApp f x) = CApp (lower f) (lower x)
 lower (ELam pats body) = CLam pats (lower body)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)

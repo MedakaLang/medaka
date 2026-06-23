@@ -1279,7 +1279,7 @@ dataParamKindsRef = Ref []
 -- constrained function's constraint variable, that function's dict parameter
 -- (RDict).  The impl-dicts ref is filled (single-module elaborate path only) when
 -- the route is a parametric impl with a `requires` — one route per requires.
-pendingSites : Ref (List (String, Ref Route, Ref (List Route), Mono, Mono, String))
+pendingSites : Ref (List (String, Ref Route, Ref (List Route), Mono, Mono, String, Option String))
 pendingSites = Ref []
 
 -- Phase 151 / Gap G: comparison/equality OPERATOR sites discovered during
@@ -1599,6 +1599,23 @@ currentFn = Ref ""
 currentImplBody : Ref Bool
 currentImplBody = Ref False
 
+-- @Impl named-instance-selection hint.  Set by inferAppExpr's hint arm
+-- (`combine @Additive 3 4`) to `Some "Additive"` while inferring the applied
+-- head `f`; read-and-cleared at the next interface-method occurrence (inferVar on
+-- the check path, inferMethodAt on the run/build path), which captures the name so
+-- the route stamps the NAMED impl key and checkImplObligations validates the name.
+-- Mirrors lib/typecheck.ml's `current_impl_hint`.  Reset by resetState.
+currentImplHintRef : Ref (Option String)
+currentImplHintRef = Ref None
+
+-- @Impl: pending hinted method occurrences (iface, hintName, the dispatch-arg
+-- monos, loc).  Recorded at the method occurrence (via captureImplHint) on BOTH
+-- the check and run/build paths; resolveImplHints validates each hint names an
+-- existing impl (else UnknownImplName) after inference grounds the monos.  Reset
+-- by resetState.
+pendingHints : Ref (List (String, String, List Mono, Option Loc))
+pendingHints = Ref []
+
 -- INFERRED (unsignatured) `=>`-constraint promotion (the reference's two-pass
 -- Elaborate / Phase 83/84/115).  An unsignatured fn whose body uses a
 -- return-position method — or calls a constrained fn — at one of its OWN
@@ -1693,7 +1710,7 @@ enableEmitArgStampPasses _ = set_ref emitArgStampPasses True
 -- concrete site whose head names a parametric `requires` impl can thread the
 -- element dict (resolveArgStamp → argImplDictRoutesFor), exactly as the
 -- return-position pendingSites carry implRef for resolveSite.
-pendingArgStamps : Ref (List (String, Ref Route, Ref (List Route), Mono, String))
+pendingArgStamps : Ref (List (String, Ref Route, Ref (List Route), Mono, String, Option String))
 pendingArgStamps = Ref []
 
 -- the dispatch-index registry: each interface method → index of its first arg
@@ -1744,9 +1761,9 @@ nthArgMono n m = match normalize m
 -- The cell is read later (resolveArgStamps), once inference has solved it.  D3b-1:
 -- also carry [name] + the impl-dicts ref so a concrete-head site can thread the
 -- element dict for a parametric `requires` impl.
-recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> <Mut> Unit
-recordArgStamp name tagRef implRef idx mono = match nthArgMono idx mono
-  Some am => set_ref pendingArgStamps ((name, tagRef, implRef, am, currentFn.value) :: pendingArgStamps.value)
+recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Option String -> <Mut> Unit
+recordArgStamp name tagRef implRef idx mono hint = match nthArgMono idx mono
+  Some am => set_ref pendingArgStamps ((name, tagRef, implRef, am, currentFn.value, hint) :: pendingArgStamps.value)
   None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -1771,14 +1788,14 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- call threads the element dict (concrete element → RKey Int; a recursive element
 -- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
-resolveArgStamps : List ImplEntry -> List KeyEntry -> List (String, Ref Route, Ref (List Route), Mono, String) -> <Mut> Unit
+resolveArgStamps : List ImplEntry -> List KeyEntry -> List (String, Ref Route, Ref (List Route), Mono, String, Option String) -> <Mut> Unit
 resolveArgStamps _ _ [] = ()
-resolveArgStamps implTable keyTable ((name, tagRef, implRef, am, encl)::rest) =
-  let _ = resolveArgStamp implTable keyTable name tagRef implRef am encl
+resolveArgStamps implTable keyTable ((name, tagRef, implRef, am, encl, hint)::rest) =
+  let _ = resolveArgStamp implTable keyTable name tagRef implRef am encl hint
   resolveArgStamps implTable keyTable rest
 
-resolveArgStamp : List ImplEntry -> List KeyEntry -> String -> Ref Route -> Ref (List Route) -> Mono -> String -> <Mut> Unit
-resolveArgStamp implTable keyTable name tagRef implRef am encl = match activeDictVarOfEncl am encl
+resolveArgStamp : List ImplEntry -> List KeyEntry -> String -> Ref Route -> Ref (List Route) -> Mono -> String -> Option String -> <Mut> Unit
+resolveArgStamp implTable keyTable name tagRef implRef am encl hint = match activeDictVarOfEncl am encl
   Some dname => set_ref tagRef (RDict dname)
   None => match headTyconMono am
     Some tag =>
@@ -1788,8 +1805,9 @@ resolveArgStamp implTable keyTable name tagRef implRef am encl = match activeDic
       -- the head `t`).  `keyForSite` upgrades to the canonical full-type impl key
       -- (matched against [am]) so eval's hasTag matches the right impl's `k`.  No
       -- collision (the common single-impl case) → None → bare head, unchanged path.
-      -- Mirrors resolveSite's ground RKey case.
-      let routeKey = fromOption tag (keyForSite keyTable name am)
+      -- @Impl: a named hint overrides BOTH (head and keyForSite) with the NAMED key
+      -- so eval's hasTag picks the impl the user named.  Mirrors resolveSite.
+      let routeKey = fromOption (fromOption tag (keyForSite keyTable name am)) (namedImplKey keyTable name tag hint)
       let _ = set_ref tagRef (RKey routeKey [])
       let dictName = if implDefinesMethodAt implTable name tag then name else innerDefaultMethod name
       set_ref implRef (argImplDictRoutesFor implTable dictName tag am)
@@ -1969,6 +1987,8 @@ resetState _ =
   let _ = set_ref pendingRecDictApps []
   let _ = set_ref currentFn ""
   let _ = set_ref currentImplBody False
+  let _ = set_ref currentImplHintRef None
+  let _ = set_ref pendingHints []
   let _ = set_ref methodSiteFns []
   let _ = set_ref dictAppFns []
   let _ = set_ref promotedRef []
@@ -2840,15 +2860,19 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
   None => panic ("unbound method: " ++ name)
   Some s =>
     let inst = instantiateTracked s
+    -- @Impl: read-and-clear the pending hint ONCE at this method occurrence (the
+    -- oracle clears `current_impl_hint` at the first method usage), validate it,
+    -- and thread it into recordSite so the route stamps the NAMED impl key.
+    let hint = captureImplHint name (fst inst)
     let _ = recordMethodDicts name methodRef (snd inst)
     let _ = recordImplObligation name (fst inst)
     let _ = recordRLocalSite env name tagRef (fst inst)
     match argDispatchOf name
       Some idx =>
-        let _ = recordArgStamp name tagRef implRef idx (fst inst)
+        let _ = recordArgStamp name tagRef implRef idx (fst inst) hint
         let _ = recordArgSiteFn name idx (fst inst)
         fst inst
-      None => recordSite name tagRef implRef (fst inst)
+      None => recordSiteHinted name tagRef implRef (fst inst) hint
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
 -- mono cell UNGATED so resolveRLocalSites can route RLocal when the receiver
 -- grounds to a no-impl head (the arg-stamp path would otherwise leave it RNone
@@ -2898,11 +2922,33 @@ recordMethodDicts name methodRef subst = match lookupAssocSL2 name methodConstra
   Some ids => set_ref pendingMethodDicts ((methodRef, constraintMonosOf ids subst) :: pendingMethodDicts.value)
 
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> <Mut> Mono
-recordSite name tagRef implRef methodType =
+recordSite name tagRef implRef methodType = recordSiteHinted name tagRef implRef methodType None
+
+-- @Impl: recordSite carrying an optional named-impl hint for this occurrence.  The
+-- hint (when present) is threaded into resolveSite, which stamps RKey of the NAMED
+-- impl key instead of the head-tag/most-specific key keyForSite would pick.
+recordSiteHinted : String -> Ref Route -> Ref (List Route) -> Mono -> Option String -> <Mut> Mono
+recordSiteHinted name tagRef implRef methodType hint =
   let stripped = stripArrows methodType
-  let _ = set_ref pendingSites ((name, tagRef, implRef, stripped, methodType, currentFn.value) :: pendingSites.value)
+  let _ = set_ref pendingSites ((name, tagRef, implRef, stripped, methodType, currentFn.value, hint) :: pendingSites.value)
   let _ = set_ref methodSiteFns ((currentFn.value, stripped) :: methodSiteFns.value)
   methodType
+
+-- @Impl: read-and-clear the pending impl hint at a method occurrence of [name].
+-- When set, record a (iface, hintName, dispatch monos, loc) entry on pendingHints
+-- so resolveImplHints can validate the name names a real impl after inference, and
+-- return Some name for the route stamp.  A non-method name, or no pending hint,
+-- returns None (the common case — leaves the hint set for any inner occurrence and
+-- inferAppExpr's final clear).
+captureImplHint : String -> Mono -> <Mut> Option String
+captureImplHint name occ = match currentImplHintRef.value
+  None => None
+  Some hintName => match lookupAssoc name methodIfaceParamsRef.value
+    None => None   -- not an interface method; leave the hint for the real occurrence
+    Some (iface, typarams, mty) =>
+      let _ = set_ref currentImplHintRef None
+      let _ = set_ref pendingHints ((iface, hintName, dispatchMonosOf typarams mty occ, currentLoc.value) :: pendingHints.value)
+      Some hintName
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's
 -- scheme (the call's type), and record the routes ref + the instantiated
@@ -3637,7 +3683,13 @@ inferInfix env op l r =
 
 inferVar : TcEnv -> String -> <Mut> Mono
 inferVar env x = match lookupVar env x
-  Some s => recordImplObligation x (instantiateVarTracked x s)
+  Some s =>
+    let mono = instantiateVarTracked x s
+    -- @Impl (check path): a method occurrence may carry a pending `@Name` hint set
+    -- by inferAppExpr; capture+validate it (the route is unstamped on the check
+    -- path — no EMethodAt ref — so this only records the UnknownImplName check).
+    let _ = captureImplHint x mono
+    recordImplObligation x mono
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -3699,18 +3751,42 @@ recordImplObligation x mono = match lookupAssoc x methodIfaceParamsRef.value
 -- final `unify ft (TFun xt …)` in inferApp imposes the same equality regardless,
 -- so the solution is unchanged — we only make it available earlier.
 inferAppExpr : TcEnv -> Expr -> Expr -> <Mut> Mono
-inferAppExpr env f x = match lamUnderLoc x
-  Some (loc, pats, body) =>
-    let ft = infer env f
-    let _ = setLocIfSome loc
-    -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
-    -- type.  Peel that, then peel the lambda type itself for its per-param types.
-    let lamExpected = funDomain (normalize ft)
-    let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
-    inferApp (envAlphaLets env) (EApp f x) ft xt
-  None => match shadowStandaloneHead env f
-    Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
-    None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
+inferAppExpr env f x = match hintArgName x
+  Some hintName =>
+    -- @Impl disambiguation hint (`combine @Additive 3 4`): set the pending impl
+    -- name so the next method occurrence (inferVar / inferMethodAt) records it,
+    -- infer `f` with the hint arg DROPPED (it is not a real argument — exactly the
+    -- oracle's lib/typecheck.ml:2271-2282), then clear.
+    let _ = set_ref currentImplHintRef (Some hintName)
+    let t = infer env f
+    let _ = set_ref currentImplHintRef None   -- clear if f was not a method call
+    t
+  None => match lamUnderLoc x
+    Some (loc, pats, body) =>
+      let ft = infer env f
+      let _ = setLocIfSome loc
+      -- ft is `(lamType) -> result`; its FIRST domain is the lambda's expected
+      -- type.  Peel that, then peel the lambda type itself for its per-param types.
+      let lamExpected = funDomain (normalize ft)
+      let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
+      inferApp (envAlphaLets env) (EApp f x) ft xt
+    None => match shadowStandaloneHead env f
+      Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
+      None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
+
+-- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
+-- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
+-- the two oracle arms `EApp(f, EVar h)` and `EApp(f, ELoc(_, EVar h))` with
+-- `h.[0]='@'`.  Anything else → None → the ordinary application path.
+hintArgName : Expr -> Option String
+hintArgName (ELoc _ x) = hintArgName x
+hintArgName (EVar n)
+  | isHintName n = Some (stringSlice 1 (stringLength n) n)
+  | otherwise = None
+hintArgName _ = None
+
+isHintName : String -> Bool
+isHintName n = stringLength n > 0 && stringSlice 0 1 n == "@"
 
 -- Bug C (mirror lib/typecheck.ml:2293-2329): peel a single-argument application's
 -- head to a standalone-shadow interface-method reference (`toList m` where `toList`
@@ -4318,8 +4394,8 @@ methodConstrainedIds : Unit -> List Int
 methodConstrainedIds _ =
   flatMap (s => monoUnboundIds (argStampMono s)) pendingArgStamps.value
 
-argStampMono : (String, Ref Route, Ref (List Route), Mono, String) -> Mono
-argStampMono (_, _, _, am, _) = am
+argStampMono : (String, Ref Route, Ref (List Route), Mono, String, Option String) -> Mono
+argStampMono (_, _, _, am, _, _) = am
 
 monoUnboundIds : Mono -> List Int
 monoUnboundIds t = match normalize t
@@ -5121,10 +5197,10 @@ constraintNonParamVars : List String -> Constraint -> List String
 constraintNonParamVars typarams (Constraint _ args) =
   removeAllS typarams (flatMap tyVarNames args)
 
-resolveSites : List ImplEntry -> List KeyEntry -> List String -> List (String, Ref Route, Ref (List Route), Mono, Mono, String) -> <Mut> Unit
+resolveSites : List ImplEntry -> List KeyEntry -> List String -> List (String, Ref Route, Ref (List Route), Mono, Mono, String, Option String) -> <Mut> Unit
 resolveSites _ _ _ [] = ()
-resolveSites implTable keyTable rpNames ((name, tagRef, implRef, resultMono, fullMono, encl)::rest) =
-  let _ = resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl
+resolveSites implTable keyTable rpNames ((name, tagRef, implRef, resultMono, fullMono, encl, hint)::rest) =
+  let _ = resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl hint
   resolveSites implTable keyTable rpNames rest
 
 -- a method occurrence's route: if its discriminating type is a constrained
@@ -5148,18 +5224,45 @@ resolveSites implTable keyTable rpNames ((name, tagRef, implRef, resultMono, ful
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
-resolveSite : List ImplEntry -> List KeyEntry -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> <Mut> Unit
-resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl = match activeDictVarOfEncl resultMono encl
+resolveSite : List ImplEntry -> List KeyEntry -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option String -> <Mut> Unit
+resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl hint = match activeDictVarOfEncl resultMono encl
   Some dname => set_ref tagRef (if contains name rpNames then RDictFwd dname else RDict dname)
   None => match headTyconMono resultMono
     Some tag =>
-      let routeKey = fromOption tag (keyForSite keyTable name resultMono)
+      -- @Impl: a named hint overrides keyForSite's head-tag/most-specific pick with
+      -- the matching NAMED impl key (`Combine|Int|Additive`).  No matching named
+      -- impl → keyForSite's ordinary key (resolveImplHints reports UnknownImplName).
+      let routeKey = fromOption (fromOption tag (keyForSite keyTable name resultMono)) (namedImplKey keyTable name tag hint)
       let _ = set_ref tagRef (RKey routeKey [])
       let paramMonos = fromOption [resultMono] (ifaceParamMonos name fullMono)
       set_ref
         implRef
         (implDictRoutesForFull implTable name tag resultMono paramMonos)
     None => ()
+
+-- @Impl: the canonical impl key of the impl named [hint] that defines method [name]
+-- at head tycon [tag].  None when no hint, or no impl of that name matches (the
+-- error is reported by resolveImplHints).  Matches a KeyEntry whose method set
+-- contains [name], whose head tycon is [tag], and whose key's name-component (the
+-- substring after the final `|`) equals the hint.
+namedImplKey : List KeyEntry -> String -> String -> Option String -> Option String
+namedImplKey _ _ _ None = None
+namedImplKey [] _ _ (Some _) = None
+namedImplKey ((KeyEntry methods tag2 _ key)::rest) name tag (Some hintName)
+  | tag2 == tag && contains name methods && keyNameComponent key == hintName = Some key
+  | otherwise = namedImplKey rest name tag (Some hintName)
+
+-- the name-component of an impl key `iface|args|name` — the substring after the
+-- LAST `|`.  Empty for an anonymous impl.
+keyNameComponent : String -> String
+keyNameComponent key = lastSegmentAfterPipe (stringToChars key) key 0 0
+
+-- scan for the last `|`; return the substring of [key] strictly after it.
+lastSegmentAfterPipe : Array Char -> String -> Int -> Int -> String
+lastSegmentAfterPipe cs key i lastPipe
+  | i >= arrayLength cs = stringSlice (lastPipe + 1) (stringLength key) key
+  | arrayGetUnsafe i cs == '|' = lastSegmentAfterPipe cs key (i + 1) i
+  | otherwise = lastSegmentAfterPipe cs key (i + 1) lastPipe
 
 -- Recover the FULL list of interface-type-parameter monos for a method occurrence,
 -- ordered by the interface's typaram declaration.  Look up the method's interface
@@ -6342,6 +6445,45 @@ ambiguousImplMsg iface = "ambiguous instance for '"
   ++ iface
   ++ " a': cannot determine which impl; annotate the type"
 
+-- @Impl: a hint `@Name` that matches no impl of [iface] for the dispatch args.
+-- Mirrors lib/typecheck.ml:1250-1252 `UnknownImplName` text byte-for-byte:
+-- `No impl named '<name>' found for <iface> <args>`.
+unknownImplNameMsg : String -> String -> List Mono -> <Mut> String
+unknownImplNameMsg iface name args = "No impl named '"
+  ++ name
+  ++ "' found for "
+  ++ iface
+  ++ " "
+  ++ ppMonosShared args
+
+-- @Impl: validate each pending hinted method occurrence — the named impl must
+-- exist for the interface (any head, since the hint may name a same-head sibling).
+-- A hint naming no impl of [iface] → UnknownImplName.  Skips entries whose dispatch
+-- monos are still polymorphic (deferred, like checkImplObligations).
+resolveImplHints : List Decl -> List (String, String, List Mono, Option Loc) -> <Mut> Unit
+resolveImplHints _ [] = ()
+resolveImplHints prog ((iface, hintName, args, loc)::rest) =
+  let _ = resolveOneImplHint prog iface hintName args loc
+  resolveImplHints prog rest
+
+resolveOneImplHint : List Decl -> String -> String -> List Mono -> Option Loc -> <Mut> Unit
+resolveOneImplHint prog iface hintName args loc
+  | contains hintName (implNamesForIface prog iface) = ()
+  | otherwise = pushTypeErrorOnceAt loc (unknownImplNameMsg iface hintName args)
+
+-- the names of every NAMED impl of [iface] declared in [prog].
+implNamesForIface : List Decl -> String -> List String
+implNamesForIface prog iface = flatMap (implNameForIface iface) prog
+
+implNameForIface : String -> Decl -> List String
+implNameForIface want (DAttrib _ d) = implNameForIface want d
+implNameForIface want DImpl { iface = ifn, name, ... }
+  | ifn == want = match name
+    Some n => [n]
+    None => []
+  | otherwise = []
+implNameForIface _ _ = []
+
 routesOfMonos : List ImplEntry -> List Mono -> <Mut> List Route
 routesOfMonos _ [] = []
 routesOfMonos implTable (m::rest) =
@@ -6918,6 +7060,7 @@ checkProgramSeeded seed prog =
   let _ = groundMultiParamObligations prog pendingImplObligations.value
   let _ = checkImplObligations prog pendingImplObligations.value
   let _ = checkCallObligations prog pendingCallObligations.value
+  let _ = resolveImplHints prog pendingHints.value
   let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals
   let _ = set_ref localSchemesOut (mapLocalSchemes localBindRefs.value)
   let _ = set_ref seedSchemesOut seed
@@ -8666,6 +8809,7 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   -- and checkImplObligations is a check-only diagnostic the emit driver doesn't want.
   let _ = if not implInferEnabled.value then
             let _ = checkImplObligations (accData ++ implDecls ++ prog) pendingImplObligations.value
+            let _ = resolveImplHints (accData ++ implDecls ++ prog) pendingHints.value
             setNumlitFloats ()
           else ()
   let _ = checkCallObligations (accData ++ implDecls ++ prog) pendingCallObligations.value
