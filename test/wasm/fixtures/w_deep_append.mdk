@@ -1,0 +1,13 @@
+-- WASMGC layer-16 step 1 (§): a DEEP list `++`.  The runtime list-append helper
+-- `$mdk_append` is invoked over a left operand of length 50000.  The OLD recursive
+-- `$mdk_append` (self-call under `struct.new $C_Cons`) grew the wasm stack to depth
+-- = length(left) and Node threw `RangeError: Maximum call stack size exceeded`.  The
+-- ITERATIVE destination-passing rewrite loops in constant stack → prints 100000.
+-- (`++` must stay VALUE-IDENTICAL: same elements, same order.)
+upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+
+lenAcc acc xs = match xs
+  [] => acc
+  _ :: t => lenAcc (acc + 1) t
+
+main = lenAcc 0 (upto 1 50000 ++ upto 1 50000)
