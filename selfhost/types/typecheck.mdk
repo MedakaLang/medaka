@@ -71,6 +71,7 @@ import support.util.{
   sortUniqS,
   startsWith,
   replicate,
+  escStr,
 }
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
@@ -8304,8 +8305,20 @@ ppTy (TyVar n) = n
 ppTy (TyApp a b) = ppTy a ++ " " ++ ppTyAtom b
 ppTy (TyFun a b) = ppTyFunArg a ++ " -> " ++ ppTy b
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
-ppTy (TyEffect _ _ t) = ppTy t
+ppTy (TyEffect effs tail t) =
+  let labs = map ppEffAtomTy effs
+  let inside = match tail
+    None => joinWith ", " labs
+    Some v => match effs
+      [] => v
+      _ => joinWith ", " labs ++ " | " ++ v
+  "<" ++ inside ++ "> " ++ ppTy t
 ppTy (TyConstrained cs t) = ppConstraints cs ++ " => " ++ ppTy t
+
+-- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
+ppEffAtomTy : (String, Option String) -> String
+ppEffAtomTy (l, None) = l
+ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else l ++ " " ++ escStr s
 
 -- single constraint: no outer parens; multiple: wrap in parens (mirrors OCaml)
 ppConstraints : List Constraint -> String
