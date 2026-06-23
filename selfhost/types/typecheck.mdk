@@ -1317,6 +1317,28 @@ methodIfaceParamsRef = Ref []
 standaloneValuesRef : Ref (List String)
 standaloneValuesRef = Ref []
 
+-- Bug C: importer-shadow method names → their IMPORTED STANDALONE scheme (e.g.
+-- `toList` → `Map k v -> List (k, v)`).  env1 rebinds these names to the polymorphic
+-- INTERFACE-METHOD scheme (so a genuine method call types polymorphically), which
+-- loses the standalone's concrete result element type — typing `toList m : List a`
+-- (a free) instead of `List (String, Int)`, so a downstream `debug` dispatches on the
+-- ungrounded element and renders garbage.  inferAppExpr's standalone-shadow arm reads
+-- THIS to recover the standalone result type when the receiver has no impl, mirroring
+-- lib/typecheck.ml:2312 (`instantiate_raw (lookup_var env mname)`, where the oracle's
+-- env.standalone_values keeps the var bound to the standalone).  Populated per module
+-- in checkModuleFullImpl from seedVars (the import seed, pre-rebind).
+shadowStandaloneSchemesRef : Ref (List (String, Scheme))
+shadowStandaloneSchemesRef = Ref []
+
+-- Bug C: the impl key table for the CURRENT module's full impl universe, stashed at
+-- module start so inferAppExpr's standalone-shadow arm can ask, DURING inference,
+-- whether a concrete receiver head has an impl of the method's interface (the static
+-- analogue of resolveRLocalSite's post-inference check, but needed eagerly so the
+-- call's RESULT type unifies against the standalone — not the method scheme — before
+-- a downstream `debug` dispatches on it).  Set in checkModuleFullImpl from implDecls.
+shadowKeyTableRef : Ref (List KeyEntry)
+shadowKeyTableRef = Ref []
+
 -- C5: method name → dispatch-arg index, built graph-wide from ALL interface decls
 -- (so a PRELUDE method like Foldable's `toList` — absent from a user module's own
 -- decls — still resolves its index during that module's check).  Set per module by
@@ -1925,6 +1947,8 @@ resetState _ =
   let _ = set_ref dataParamKindsRef []
   let _ = set_ref pendingSites []
   let _ = set_ref pendingRLocalSites []
+  let _ = set_ref shadowStandaloneSchemesRef []
+  let _ = set_ref shadowKeyTableRef []
   let _ = set_ref pendingBinopSites []
   let _ = set_ref methodIfaceParamsRef []
   let _ = set_ref pendingImplObligations []
@@ -3683,7 +3707,74 @@ inferAppExpr env f x = match lamUnderLoc x
     let lamExpected = funDomain (normalize ft)
     let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
     inferApp (envAlphaLets env) (EApp f x) ft xt
-  None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
+  None => match shadowStandaloneHead env f
+    Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
+    None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
+
+-- Bug C (mirror lib/typecheck.ml:2293-2329): peel a single-argument application's
+-- head to a standalone-shadow interface-method reference (`toList m` where `toList`
+-- is BOTH a Foldable method AND an imported `Map` standalone).  Handles BOTH the
+-- MARKED form (`EMethodAt`, the eval/build path — carries a route ref to stamp RLocal)
+-- and the UNMARKED form (`EVar`, the `check` path — no route ref; the empty list).
+-- Only fires for a SINGLE-param interface method whose name is a registered importer
+-- shadow with a stashed standalone scheme — exactly the oracle's guard.  Everything
+-- else (no shadow, multi-param iface, non-method head) returns None → the ordinary path.
+shadowStandaloneHead : TcEnv -> Expr -> <Mut> Option (String, List (Ref Route))
+shadowStandaloneHead env (ELoc _ f) = shadowStandaloneHead env f
+shadowStandaloneHead env (EMethodAt name tagRef _ _)
+  | isShadowStandalone name = Some (name, [tagRef])
+  | otherwise = None
+shadowStandaloneHead env (EVar name)
+  | isShadowStandalone name = Some (name, [])
+  | otherwise = None
+shadowStandaloneHead _ _ = None
+
+-- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
+-- stashed standalone scheme, and names a SINGLE-param interface method.
+isShadowStandalone : String -> <Mut> Bool
+isShadowStandalone name =
+  contains name standaloneValuesRef.value
+    && isSome (lookupAssoc name shadowStandaloneSchemesRef.value)
+    && singleParamIfaceMethod name
+
+-- True iff [name]'s interface (in methodIfaceParamsRef) takes exactly ONE type
+-- parameter (the receiver-directed single-arg case the oracle scopes the fallback to).
+singleParamIfaceMethod : String -> <Mut> Bool
+singleParamIfaceMethod name = match lookupAssoc name methodIfaceParamsRef.value
+  Some (_, typarams, _) => listLen typarams == 1
+  None => False
+
+-- Bug C: type `toList m` for a no-impl receiver against the imported STANDALONE
+-- scheme (giving the concrete result element type, e.g. `List (String, Int)`) and
+-- stamp the route RLocal (when marked); if the receiver DOES have an impl (or its head
+-- is not yet concrete) fall through to ordinary dispatch (typed against the method
+-- scheme the env rebound the name to).  Mirror of lib/typecheck.ml:2308-2329.
+inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> <Mut> Mono
+inferShadowApp env mname tagRefs f x =
+  let tx = infer env x
+  match headTyconMono tx
+    Some head =>
+      if implExistsForHead shadowKeyTableRef.value mname head then
+        inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
+      else match lookupAssoc mname shadowStandaloneSchemesRef.value
+        Some sscheme =>
+          let smono = instantiate sscheme
+          let r = freshVar ()
+          let eff = openRow ()
+          let _ = unify smono (TFun tx eff r)
+          let _ = performEffect curEffect eff
+          let _ = stampRoutes tagRefs
+          r
+        None => inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
+    None => inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
+
+-- stamp every route ref (one for the marked EMethodAt form, none for the unmarked
+-- check-path EVar form) RLocal.
+stampRoutes : List (Ref Route) -> <Mut> Unit
+stampRoutes [] = ()
+stampRoutes (r::rest) =
+  let _ = set_ref r RLocal
+  stampRoutes rest
 
 -- set currentLoc only when the lambda carried a span (mirror the ELoc arm), so
 -- a bare unlocated lambda doesn't blank out an enclosing position.
@@ -8477,6 +8568,16 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   let importerShadows = buildStandaloneShadows implDecls prog
   let definerShadows = buildDefinerShadows implDecls prog
   let _ = set_ref standaloneValuesRef (dedup (importerShadows ++ definerShadows))
+  -- Bug C: stash each importer shadow's IMPORTED STANDALONE scheme (e.g. `toList` →
+  -- `Map k v -> List (k, v)`) BEFORE env1 rebinds the name to the interface-method
+  -- scheme, so inferAppExpr can recover the standalone result type for a no-impl
+  -- receiver.  seedVars carries BOTH core's method scheme (`t a -> List a`) and map's
+  -- standalone — pickStandaloneSchemes selects the one whose receiver (first arrow
+  -- domain) has a CONCRETE head tycon (the standalone), never the polymorphic method
+  -- scheme (which would unify `t a ~ Map String Int` → `a ↦ Int`, giving the wrong
+  -- `List Int` result element type).
+  let _ = set_ref shadowStandaloneSchemesRef (pickStandaloneSchemes importerShadows seedVars)
+  let _ = set_ref shadowKeyTableRef (buildKeyTable implDecls)
   let _ = set_ref methodDispatchIdxRef (argDispatchIndices implDecls)
   let _ = set_ref funConstraintsRef crossModuleFunConstraintsRef.value
   let _ = set_ref funConstraintIfacesRef crossModuleFunConstraintIfacesRef.value
@@ -8739,6 +8840,41 @@ pickSchemes (n::ns) table = match lookupAssoc n table
   Some s => (n, s) :: pickSchemes ns table
   None => pickSchemes ns table
 
+-- Bug C: for each importer-shadow name, pick from [table] the scheme that is the
+-- imported STANDALONE — the one whose receiver (first arrow domain) heads in a
+-- CONCRETE type constructor (`Map k v`), NOT the polymorphic interface-method scheme
+-- (`t a`) that shares the same name in the seed.  A name with no concrete-domain
+-- entry contributes nothing (its only binding is the method scheme; the ordinary
+-- dispatch path handles it).
+pickStandaloneSchemes : List String -> List (String, Scheme) -> <Mut> List (String, Scheme)
+pickStandaloneSchemes [] _ = []
+pickStandaloneSchemes (n::ns) table = match concreteDomainScheme n table
+  Some s => (n, s) :: pickStandaloneSchemes ns table
+  None => pickStandaloneSchemes ns table
+
+-- the FIRST scheme bound to [n] in [table] whose first arrow domain has a concrete
+-- (TCon-headed) receiver — i.e. the standalone rather than the `t a` method scheme.
+concreteDomainScheme : String -> List (String, Scheme) -> <Mut> Option Scheme
+concreteDomainScheme _ [] = None
+concreteDomainScheme n ((n2, s)::rest) =
+  if n == n2 && schemeHasConcreteDomain s then Some s
+  else concreteDomainScheme n rest
+
+-- True iff the scheme's type is `dom -> _` and [dom]'s spine head is a TCon (a
+-- concrete receiver), distinguishing the standalone `Map k v -> …` from the method
+-- `t a -> …` whose domain head is a quantified tyvar.
+schemeHasConcreteDomain : Scheme -> <Mut> Bool
+schemeHasConcreteDomain (Forall _ _ t) = match normalize t
+  TFun dom _ _ => monoSpineHeadIsCon dom
+  _ => False
+
+monoSpineHeadIsCon : Mono -> <Mut> Bool
+monoSpineHeadIsCon m = match normalize m
+  TApp a _ => monoSpineHeadIsCon a
+  TCon _ => True
+  TTuple _ => True
+  _ => False
+
 -- ── IMPORT-SCOPED per-module seeding (mirrors lib/typecheck.ml:4513-4543) ────
 -- The multi-module drivers must NOT flat-seed the cumulative UNION of every
 -- dependency's public schemes into each module's env: omInsert is last-write-wins,
@@ -8846,15 +8982,23 @@ checkModules runtimeDecls coreDecls modules =
 -- driver can thread accV/accData exactly as checkModulesGo does.
 export
 checkModuleFullDiags : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
-checkModuleFullDiags seedVars accData accImpls prog =
+checkModuleFullDiags seedVars accData accAll prog =
   let _ = set_ref implInferEnabled False
   let _ = set_ref matchWarnings []
   let _ = set_ref matchOracle (buildOracle (accData ++ prog))
-  let schemes = checkModuleFull seedVars accData prog
+  -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
+  -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
+  -- an imported standalone funDef that shadows an interface method (`map`'s `toList`
+  -- vs Foldable's): without it the importer-shadow set is EMPTY on the CHECK path and
+  -- `toList m` routes to method dispatch → spurious `No impl of Foldable for Map`.
+  -- implInferEnabled stays False, so this does NOT trigger impl-body inference — it
+  -- only feeds the shadow/dispatch-index/key tables, matching the eval path's
+  -- elabModuleStamp (which passes accAll ++ prog too).
+  let schemes = checkModuleFullImpl "" seedVars accData accAll prog
   let _ = checkCoherence prog
-  let _ = checkInterfaceCycles (accImpls ++ accData ++ prog)
+  let _ = checkInterfaceCycles (accAll ++ accData ++ prog)
   let _ = checkPhantomMethods prog
-  let _ = checkSuperImpls prog (accImpls ++ accData ++ prog)
+  let _ = checkSuperImpls prog (accAll ++ accData ++ prog)
   (schemes, reverseL typeErrors.value, reverseL matchWarnings.value)
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
 -- module via accData, plus this module's own prog), NOT just `prog`.  The
@@ -8883,17 +9027,17 @@ checkModuleFullDiags seedVars accData accImpls prog =
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
 checkModulesDiagsGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
 checkModulesDiagsGo _ _ _ _ [] = []
-checkModulesDiagsGo baseSeed depEnv accData accImpls ((mid, prog)::rest) =
-  let (schemes, errs, warns) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accImpls prog
+checkModulesDiagsGo baseSeed depEnv accData accAll ((mid, prog)::rest) =
+  let (schemes, errs, warns) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accAll prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  (mid, (errs, warns)) :: checkModulesDiagsGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) (accImpls ++ allImplDecls prog) rest
+  (mid, (errs, warns)) :: checkModulesDiagsGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) (accAll ++ prog) rest
 
 export
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
 checkModulesDiags runtimeDecls coreDecls modules =
   let runtimeSeed = externSchemes runtimeDecls
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
-  let perMod = checkModulesDiagsGo (runtimeSeed ++ coreSchemes) [] (publicDataDecls coreDecls) (allImplDecls coreDecls) modules
+  let perMod = checkModulesDiagsGo (runtimeSeed ++ coreSchemes) [] (publicDataDecls coreDecls) coreDecls modules
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
@@ -8929,7 +9073,7 @@ checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> <M
 checkModulesEntryFull runtimeDecls coreDecls modules =
   let runtimeSeed = externSchemes runtimeDecls
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
-  let (schemes, errs, warns) = checkModulesEntryFullGo (runtimeSeed ++ coreSchemes) [] (publicDataDecls coreDecls) (allImplDecls coreDecls) modules
+  let (schemes, errs, warns) = checkModulesEntryFullGo (runtimeSeed ++ coreSchemes) [] (publicDataDecls coreDecls) coreDecls modules
   -- D3 / WS-2 part-2: cross-module coherence over the USER modules only (prelude
   -- excluded — it is checked separately and a user impl may override a prelude one).
   -- Prepend any conflict (dependency-first, ahead of the entry's own errors).
@@ -8954,12 +9098,12 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
 -- (data/type collisions aren't the issue here; mirrors checkModulesGo).
 checkModulesEntryFullGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
 checkModulesEntryFullGo _ _ _ _ [] = ([], [], [])
-checkModulesEntryFullGo baseSeed depEnv accData accImpls [(_, prog)] =
-  checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accImpls prog
-checkModulesEntryFullGo baseSeed depEnv accData accImpls ((mid, prog)::rest) =
-  let (schemes, errs, _) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accImpls prog
+checkModulesEntryFullGo baseSeed depEnv accData accAll [(_, prog)] =
+  checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accAll prog
+checkModulesEntryFullGo baseSeed depEnv accData accAll ((mid, prog)::rest) =
+  let (schemes, errs, _) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accAll prog
   let pubV = pickSchemes (publicValNames prog) schemes
-  let (eSchemes, eErrs, eWarns) = checkModulesEntryFullGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) (accImpls ++ allImplDecls prog) rest
+  let (eSchemes, eErrs, eWarns) = checkModulesEntryFullGo baseSeed ((mid, pubV) :: depEnv) (accData ++ publicDataDecls prog) (accAll ++ prog) rest
   (eSchemes, errs ++ eErrs, eWarns)
 
 -- render the entry report: type errors win (each `TYPE ERROR: …`), else the
