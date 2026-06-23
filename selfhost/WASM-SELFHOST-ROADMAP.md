@@ -146,17 +146,17 @@ wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
   `LTUnit`); a first attempt ported only branch 1 (`declRetTypeOf`) and was INEFFECTIVE (check_main's `main` is
   unannotated). Fix (approach B): `mainBodyIsUnit` now descends `CMatch`/`CDecision`/`CBlock` — Unit iff every
   tail leaf is Unit (conservative; never suppresses a value main). Verified byte-identical by the orchestrator.
-- 🟢 **BEYOND — the EMITTER on WasmGC (the whole-compiler / browser-playground goal). RECON DONE
-  (2026-06-22): the frontier is ~ONE emit-gap wide, NOT a 12-layer peel.** Target = `wasm_emit_modules_main.mdk`
-  (emits WAT), invoked with roots `<selfhost> <stdlib>`. A full gap-census of the emitter compiling its OWN graph
-  records EXACTLY ONE blocker: `routeWitness` (`wasm_emit.mdk:2522`) gaps a NESTED requires-dict witness
-  (`RKey tag [reqs]`, the `__tuple2__` from `Debug (HashMap k v)` — pulled in by `dce.mdk`'s lone `import hash_map`).
-  Everything else lowers (the 12 front-end layers built shared slices the emitter reuses). **Fix = port
-  `llvm_emit.mdk:2896-2898`'s nested-dict-cell rep into wasm `routeWitness` + the RKey-direct-call consumption side
-  (emitter-only, ~1 layer).** Then re-census→0, emit→parse→validate→run under Node, diff vs native
-  `test/bin/wasm_emit_modules_main` for byte-identity, peel any residual runtime layers (few — shared codepaths).
-  FOOTGUN: build scripts need `bash` not `sh`. (Also: `dce.mdk → stdlib hash_map` is an AGENTS.md violation;
-  prefer fixing the witness gap generally over removing hash_map.)
+- 🏁🏁 **THE EMITTER RUNS ON WasmGC (the in-browser-compiler milestone, 2026-06-22).** The WasmGC-compiled
+  emitter (`wasm_emit_modules_main`) runs end-to-end under Node and compiles a Medaka program to a working
+  WasmGC module — ORCHESTRATOR-VERIFIED: it compiles `println (1+2)` → 52,443-line WAT, which assembles +
+  runs + prints `3`. Path: layer-14 nested-dict cell (census 0) → layer-15 default-method emission (assemble
+  +validate) → layer-16 step1 iterative `$mdk_append` (`ca2cdc5`) + step2 tail-recursive `intersperseStr`
+  (`e9dd965`, in-graph, fixpoint YES, seed re-minted) cleared the two ~52K-deep list-join overflows. Gates:
+  native 181/13/41/35/92 unchanged, diff_wasm 138/6/17, fixpoint C3a/C3b YES. **Residual (layer-17,
+  pre-existing): `hashName`/`dictTag` i32-vs-i64 width** — the wasm-emitter's WAT differs from native ONLY in
+  dispatch-hash `i32.const`s (deltas 2^30; `wasm_emit.mdk:3028` djb2 `acc*33` overflows i32 in the wasm
+  runtime, i64 native). Self-consistent (emitted program runs correctly); true byte-identity-to-native needs
+  the hash-width fix. Deferred-latent: `List_andThen`/`flatMap` (~3653-deep, didn't surface).
 - **LLVM (b′) port DEFERRED** (2026-06-22) — musttail-arity ISA wall + native doesn't need it; see
   `TRMC-DESIGN.md` §"Phase 3 … DEFERRED" + WIP `selfhost/bprime-llvm-wip.patch`.
 
