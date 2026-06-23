@@ -8,6 +8,40 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`selfhost/README.md`](./selfhost/README.md).
 
+## Current status (2026-06-23) — dogfood soak session 2
+
+**A parser-combinator dogfood library + 4 compiler/tooling bugs it surfaced**
+(`main` = `5855012`, seed re-minted, `bootstrap_from_seed` C3a byte-for-byte PASS, fixpoint
+C3a/C3b YES). Built a real library to exercise the language; everything below was
+reproduced on the binary, gated (run==build byte-identical where applicable), and merged:
+
+- **`parsec/` — a char-level parser-combinator library** (`03720e7`/`40dd1d2`/`50da658`/`5fc6ee8`):
+  added an `Alternative` typeclass (`noMatch` + `orElse`, named methods — **no `<|>` operator**,
+  deliberate readability choice) with `List`/`Option` impls to `stdlib/core.mdk`; a `Parser a`
+  library with `Mappable`/`Applicative`/`Thenable`/`Alternative` impls + do-notation + primitives
+  + combinators (`many`/`some`/`sepBy`/`between`/`chainl1`/`choice`); and a **TOML parser** built on
+  it. Headline result: higher-kinded typeclass dispatch is byte-identical across the tree-walker
+  (`run`) and native codegen (`build`).
+- **Finding #1 — run/build accepted programs `check` rejects** (`521a96e`) — the run/build guards
+  consulted only `hadTypeErrors`; **resolve-phase** errors (`PrivateNameAccess` et al.) slipped past.
+  Now run/build run the resolve-error gate and abort before eval/emit, exactly like `check`. Closes
+  the long-open "emit lacks a hadTypeErrors guard before codegen" gap for the resolve channel.
+- **Finding #2 — humane resolve-error rendering** (`521a96e`) — native multi-module `check` raw-ADT
+  printed `(PrivateNameAccess …)`; now all 18 `ResError` variants render humanely, byte-identical to
+  the OCaml oracle (`'X' is private to module Y`).
+- **Finding #1b — selfhost source violated its own Phase-148 contiguity rule** (`a987a7a`,
+  unmasked by #1) — `eval`/`declSexp` were split by intervening decls; `dropS`/`clauseArity`/
+  `isDictParamName`/`startsWithStr` were **dead duplicate definitions**. Made contiguous / removed the
+  dead copies (pure reorg, fixpoint-proven behavior-preserving).
+- **Finding #3 — `medaka test` couldn't resolve project-sibling imports** (`e2846d0`) — two bugs:
+  `loader.mdk`'s `findProjectRoot` returned `""` for a bare dir name (walk-up stopped), and the
+  doctest path keyed the root module by last-path-component not the full dotted id. Doctests in a
+  `medaka.toml` project that import siblings now work.
+- **Golden cleanup** (`766cca7`) — Stage A's `core.mdk` edit had left `core.{desugar,mark,lextok}`
+  goldens stale (only `core.test.golden` was recaptured); recaptured them + captured a pre-existing
+  missing `local_shadow_method` sexp golden. **Lesson: a `stdlib/core.mdk` edit ripples to the
+  desugar/mark/lextok/sexp golden suite, not just `test` — recapture all of them.**
+
 ## Current status (2026-06-23)
 
 **Soak session 2026-06-23 — 5 correctness landings + a typechecker-item sweep**

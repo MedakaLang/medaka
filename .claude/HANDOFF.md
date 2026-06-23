@@ -7,6 +7,48 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
+## RESUME — Dogfood parser-combinator library + 4 bugs it surfaced (2026-06-23). `main` = `5855012`
+
+**A soak session driven by building a REAL library** (user goal: dogfood important language features).
+Built `parsec/` — a char-level parser-combinator library + a TOML parser on top — which surfaced four
+genuine compiler/tooling bugs the test corpus never hit. All reproduced on the binary, gated, merged;
+seed re-minted (`bootstrap_from_seed` C3a byte-for-byte PASS; fixpoint C3a/C3b YES). Authoritative
+detail: PLAN.md top "## Current status (2026-06-23) — dogfood soak session 2"; memory
+`project_dogfood_parsec`.
+
+- **The library** (`03720e7`/`40dd1d2`/`50da658`/`5fc6ee8`): an `Alternative` typeclass (`noMatch` +
+  `orElse`, **named methods, NO `<|>` operator** — user wants Medaka leaner than Haskell on operators)
+  in `stdlib/core.mdk` + `List`/`Option` impls; `parsec/lib/parser.mdk` (`Parser a` with
+  Mappable/Applicative/Thenable/Alternative + do-notation + the usual combinators); `parsec/lib/toml.mdk`
+  + `toml_demo.mdk`. Run==build byte-identical throughout — higher-kinded dispatch holds across the
+  tree-walker and native codegen.
+- **Finding #1 (`521a96e`)** — run/build accepted programs `check` rejects: the guard checked only
+  `hadTypeErrors`, so RESOLVE-phase errors slipped past run/build. Now run/build gate on resolve errors
+  before eval/emit. Closes the long-open "emit lacks a hadTypeErrors guard before codegen" for the
+  resolve channel.
+- **Finding #2 (`521a96e`)** — native multi-module `check` raw-ADT-printed resolve errors; now all 18
+  `ResError` variants render humanely, byte-identical to the oracle.
+- **Finding #1b (`a987a7a`, unmasked by #1)** — the selfhost source violated its own Phase-148
+  contiguity rule (`eval`/`declSexp` split by intervening decls; `dropS`/`clauseArity`/
+  `isDictParamName`/`startsWithStr` were dead DUPLICATE defs). Made contiguous / removed dups —
+  fixpoint-proven behavior-preserving. (METHOD NOTE: the fix agent first mis-diagnosed this as a
+  resolver false-positive; reproduce-before-trust — `evalMethodAt` genuinely sat between two `eval`
+  clause blocks — corrected it.)
+- **Finding #3 (`e2846d0`)** — `medaka test` couldn't resolve project-sibling imports (doctests in a
+  `medaka.toml` project importing a sibling failed `unknown module`). Two bugs: `loader.mdk`
+  `findProjectRoot` returned `""` for a bare dir name (walk-up stopped); the doctest path keyed the root
+  module by last-path-component not full dotted id. NOTE: `loader.mdk` IS in the emitter self-compile
+  graph (`llvm_emit_modules_main` imports it) — required fixpoint + seed re-mint (the agent wrongly
+  thought it wasn't; orchestrator caught it).
+- **Golden cleanup (`766cca7`)** — recaptured `core.{desugar,mark,lextok}` goldens left stale when Stage
+  A added `Alternative` to core.mdk (only `core.test.golden` had been recaptured). **LESSON: a
+  `stdlib/core.mdk` edit ripples to the WHOLE per-stage golden suite (desugar/mark/lextok/sexp), not just
+  `test` — recapture all + run those gates at the merge.**
+
+**Soak status:** four real bugs found+fixed this session → the soak clock effectively continues (good
+dogfood = real-program use keeps surfacing bugs). `lib/` stays frozen. The `parsec/` project is itself a
+reusable soak asset — extend it (more TOML/JSON/expr parsers) to keep flushing bugs.
+
 ## RESUME — 🏁🏁 SERVER-FREE BROWSER PLAYGROUND LANDED (2026-06-22). `main` = `7d59a70`
 
 **The Medaka compiler, compiled to WasmGC, now runs IN THE BROWSER — the playground compiles +
