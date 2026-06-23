@@ -8,6 +8,28 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`selfhost/README.md`](./selfhost/README.md).
 
+## Current status (2026-06-23)
+
+**Soak session 2026-06-23 — 5 correctness landings + a typechecker-item sweep**
+(`main` = `445c10a`, seed re-minted, `bootstrap_from_seed` C3a PASS). All fixpoint-gated,
+each independently re-verified before merge:
+- **Bug C** (`0d40398`) — `toList m : Map` routes to the map.mdk standalone, not the
+  `Foldable` method (check/run/build).
+- **Empty multi-param container literal** (`98afb77`) — `Map { } : Map Int Int` types
+  correctly via declared-arity head-pin (was rejected `Map vs Map Int`).
+- **Use-time ambiguous-import error** (`421a4bd`, both compilers) — an unqualified name
+  exported by ≥2 non-`core` modules → located `AmbiguousOccurrence` at the use (Haskell
+  semantics). [`MAP-SET-AMBIGUITY-DESIGN.md`](./MAP-SET-AMBIGUITY-DESIGN.md).
+- **`ppTy` effect rows** (`067c897`) — renders `<…>` like OCaml `pp_ty` (was dropping).
+- **`@Impl` named-instance hints ported to native** (`45d52f7`) —
+  [`AT-IMPL-PORT-DESIGN.md`](./AT-IMPL-PORT-DESIGN.md). Closes audit D9.
+- **Typechecker-item sweep:** all 5 documented items reproduce-verified — #1 (ppTy) and D9
+  (@Impl) were real and fixed; **D7, D8, foldMap-RNone confirmed latent/dormant** (not
+  observable on the binary), re-labeled accordingly. (Methodology note: every item needed
+  reproduction — Bug C's filed root cause was stale, the "definer-shadow `toList`" residual
+  was a mislabel that became the empty-literal bug + the ambiguous-import feature, and D9's
+  symptom had shifted. Reproduce-before-trust held throughout.)
+
 ## Current status (2026-06-18)
 
 **Post-flip soak progress (since the 2026-06-12 native-canonical flip):** the
@@ -532,11 +554,11 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
   the concrete-`TCon`-receiver seed entry after `normalize`. Correctly NARROW: `length` on a Map
   (no Map standalone) is still soundly rejected (the oracle over-accepts then panics at runtime —
   native is *more* sound here). Gates: repro flips green; check/typecheck/eval differentials
-  0-failing; fixpoint C3a/C3b YES (orchestrator-re-verified). **Residual (separate, pre-existing,
-  NOT this bug):** `medaka test stdlib/map.mdk` still fails `no matching impl for dispatch` — the
-  orthogonal **definer-shadow** eval path (map's own doctests calling its own `toList`), distinct
-  from the importer-shadow result-type routing fixed here. See [Compiler / language
-  residual](#compiler--language) below.
+  0-failing; fixpoint C3a/C3b YES (orchestrator-re-verified). **Follow-on (now ALSO fixed):**
+  the `medaka test stdlib/map.mdk` failure first filed here as a "definer-shadow" residual was
+  a MISLABEL — bisection showed it was the empty multi-param container-literal typing bug, fixed
+  in `98afb77` (see the entry two above). `medaka test stdlib/map.mdk` now passes (40 doctests +
+  7 props).
 
 - **Empty annotated multi-type-param container literal — ✅ DONE (2026-06-23, `98afb77`, native).**
   Native `check` rejected `Map { } : Map Int Int` with `Type mismatch: Map vs Map Int` where the
