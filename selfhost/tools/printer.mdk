@@ -423,6 +423,17 @@ isContinuationOp op = op == "|>"
   || op == "||"
   || op == "++"
 
+-- `::` is a constructor/structural operator; it binds tight (no surrounding
+-- spaces) in both expression and pattern position.  All other binary operators
+-- are spaced.
+isConstructorOp : String -> Bool
+isConstructorOp op = op == "::"
+
+-- Space around an infix operator: empty for constructor ops (tight), a single
+-- space for everything else.
+opSpace : String -> Doc
+opSpace op = if isConstructorOp op then Nil else text " "
+
 exprPrec : Expr -> Int
 exprPrec (ELit _) = precAtom
 exprPrec (ENumLit _ _ _) = precAtom
@@ -519,7 +530,7 @@ printExprRaw (EBinOp op l r _) =
   let ra = isRightAssoc op
   Cat
     (printExpr (if ra then prec + 1 else prec) l)
-    (Cat (text " ") (Cat (text op) (Cat (text " ") (printExpr (if ra then prec else prec + 1) r))))
+    (Cat (opSpace op) (Cat (text op) (Cat (opSpace op) (printExpr (if ra then prec else prec + 1) r))))
 printExprRaw (EUnOp op e) = Cat (text op) (printExpr precUnary e)
 printExprRaw (EFieldAccess e f) =
   Cat (printExpr precPostfix e) (Cat (text ".") (text f))
@@ -891,8 +902,10 @@ printBinOpTrailing op l r =
   let ra = isRightAssoc op
   let lp = if ra then prec + 1 else prec
   let rp = if ra then prec else prec + 1
+  -- constructor ops (::) are tight: no space flat, break-only newline when broken.
+  let afterOp = if isConstructorOp op then Softline else Line
   group
-    (nest (Cat (printOperand lp l) (Cat (text " ") (Cat (text op) (Cat Line (printOperand rp r))))))
+    (nest (Cat (printOperand lp l) (Cat (opSpace op) (Cat (text op) (Cat afterOp (printOperand rp r))))))
 
 -- An operand of a trailing-break binop: an application breaks its own spine
 -- (cascade step 3) when over-width; anything else renders at the given prec.

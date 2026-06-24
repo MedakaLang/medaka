@@ -10,9 +10,9 @@ empties = [||]
 reverse xs = go xs []
   where
     go [] acc = acc
-    go (y::ys) acc = go ys (y :: acc)
+    go (y::ys) acc = go ys (y::acc)
 
-permute xs = flatMap (h, rest => map (p => h :: p) rest) (selections xs)
+permute xs = flatMap (h, rest => map (p => h::p) rest) (selections xs)
 
 drop n (xs@(_::rest))
   | n <= 0 = xs

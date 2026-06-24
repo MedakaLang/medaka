@@ -234,3 +234,30 @@ Reserve a `support/` helper for functionality the prelude genuinely lacks (a
 fold shape it doesn't expose) — not for re-spelling one it has. (Contrast §5,
 which is about reaching for a helper instead of hand-threading an index: there
 the helper *adds* intent; here the bespoke helper merely *shadows* the prelude.)
+
+## §9 — Write `::` tight, everywhere
+
+The cons operator `::` signals **structure** (list construction), not
+computation, so it carries no surrounding spaces in either patterns or
+expressions. All other binary operators (`+`, `==`, `++`, `&&`, `|>`, …) are
+spaced.
+
+```
+-- BAD: spaces around :: in expression position
+cons x xs = x :: xs
+prepend h t = h :: t
+build n acc = n :: acc
+
+-- GOOD: tight :: in expression position
+cons x xs = x::xs
+prepend h t = h::t
+build n acc = n::acc
+
+-- Pattern position is already tight — keep it that way
+go []         acc = acc
+go (x::xs) acc = go xs (x::acc)
+```
+
+The formatter enforces this rule (`selfhost/tools/printer.mdk`): `::` is
+handled by `opSpace`/`isConstructorOp` which suppresses the surrounding spaces.
+Medaka has no user-defined infix constructors, so `::` is the only case.
