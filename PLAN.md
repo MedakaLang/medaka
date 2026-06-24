@@ -586,12 +586,15 @@ cover the corpus; these are known holes outside it.
      `shl i64 n, 1` + `or i64 …, 1` (via the existing `tagInt` helper); small literals keep the direct
      immediate path unchanged. Fixture `test/llvm_fixtures/lit_int_large_tag.mdk`; `diff_selfhost_llvm`
      182→183, build 35/35.
-  9. **`else`-branch `let` with a multi-line body parse-errors (2026-06-24, SQLite Phase-2 dogfood — minor, workaround exists).**
-     `… else let x = …` with the `let` body continuing on the next line at the `let`'s indentation
-     parse-errored; rewriting to `else` + newline + `let` on its own line fixed it. Adjacent to the
-     (now-fixed) #3 multiline-let-RHS layout area but a distinct shape (an `else`-position `let`). Needs
-     a focused layout repro; not yet root-caused. Affects both compilers (a layout-rule gap, not
-     selfhost-only).
+  9. ✅ **`else let x = e` + indented body — BY-DESIGN, not a bug (2026-06-24, SQLite Phase-2 dogfood).**
+     `… else let x = e` with the body on the NEXT line parse-errors **in both compilers** — they
+     correctly implement `LAYOUT-SEMANTICS.md` (§11 + §7.1/§7.2). With `else let x = 1` on one line,
+     `1` is the last token (`canEndExpr`), so the next line `x + 1` (`canStartAtom`) is absorbed as a
+     continuation, not a new block; and the inline `let` form requires `in`. The spec gives the
+     analogous failing example (`x = id⏎ let …`). **Valid forms:** `else let x = e in body` (one-liner)
+     or `else` on its own line + an indented `let … ⏎ body` block. Documented in SYNTAX.md +
+     LAYOUT-SEMANTICS.md §9. (Separately, a diagnostic-quality nit — the native parse error was
+     *mislocated* — is being improved.)
 
 - ✅ **`let … in` as an indented clause body. CLOSED (both compilers, 2026-06-21).**
   Previously selfhost-only; now both accept e.g. `f x =⏎  let go n = … in go x`.

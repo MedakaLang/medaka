@@ -229,6 +229,12 @@ if x > 0 then                            -- else-less with an indented <Mut> blo
 Branches may be inline or indented blocks, in any combination; `else` may begin
 a line. An else-less `if` is for side effects — its `then` branch must be `Unit`.
 
+A `let` in a branch follows the normal `let` rules: an inline `let` needs `in`
+(`else let x = e in body`), and a multi-statement body uses a block — put `else`
+on its own line, then indent the `let … ⏎ body` (`then`/`else` with a `let` and
+the body on a *following* line, all on the `else` line, is **not** a block opener —
+`else let x = e ⏎ body` is a parse error by design; see LAYOUT-SEMANTICS.md §9).
+
 ## let / mutation
 
 ```

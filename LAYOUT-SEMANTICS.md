@@ -484,7 +484,7 @@ An empty source lexes to exactly `NEWLINE EOF`. (Both lexers: verified.)
 | `where` on its own indented line | implicit | defs must be **deeper** than `where`; both forms in SYNTAX.md verified |
 | `match s` arms | implicit | `match` arms `opener` ⟹ arm line opens block; arms are siblings (II) |
 | `Arm => body` (body on next line) | implicit | `=>` heralds the arm-body block |
-| `if / then / else` (multi-line) | none | `then`/`else` leading a line continue the `if` (§5.4); **no** block |
+| `if / then / else` (multi-line) | none | `then`/`else` leading a line continue the `if` (§5.4); **no** block. Corollary: `else let x = e` with the body on a *following* line is a **parse error by design** — `let x = e`'s RHS (`e`) is the last token (`canEndExpr`, §7.1), so the next line is absorbed as a continuation (§5.0/I.c), not a block; and the inline `let` form requires `in`. Use `else let x = e in body` (one-liner) or `else`-on-its-own-line + an indented `let … ⏎ body` block. Same root as the §11 `x = id⏎ let …` example. |
 | `data T =⏎ \| A \| B` (leading `\|`) | implicit | `=` heralds the variant block; each `\| A` is a sibling line (II). **Lexes identically in both; the OCaml *parser* rejects leading-`\|`, the native parser accepts it — a frozen-oracle parser gap, not a layout gap.** See AUDIT P-DATAPIPE |
 | record `{ … }`, set `{ … }`, list `[ … ]`, array `[\| … \|]`, tuple `( … )` | **explicit** | bracket depth > 0 ⟹ layout **off** (§6); free-form multi-line |
 | string interpolation `"… \{e} …"` | explicit | separate interp depth; layout off inside `e` |
