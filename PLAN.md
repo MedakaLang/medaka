@@ -546,8 +546,24 @@ cover the corpus; these are known holes outside it.
      is rejected; keep sigs single-line. (Surfaced by the RowType layer.)
   5. **Spurious non-exhaustive-match warning on a partial record pattern** (`RowType { width = w }`).
      Workaround: field access (`rt.width`). Diagnostic-quality bug.
-  6. **In-module doctests in a project-lib module hit a single-file-path parse error** — doctests
-     had to live in a dedicated sibling test file (the multi-module doctest path works).
+  6. **In-module doctests + an UNANNOTATED cross-module function → `unbound constrained fn`.**
+     ⚠️ *Original description ("single-file-path parse error") is STALE — that parse error was fixed
+     in `e2846d0`; the multi-module doctest path now resolves sibling imports.* What remains
+     (reproduce-verified 2026-06-24, native): a doctest expression that calls a function **imported
+     from a sibling module** succeeds **iff that imported function has an explicit type signature**;
+     without one, `medaka test` fails with `unbound constrained fn: <name>`. **Repro:** sibling
+     `lib/user.mdk` exporting `myDouble x = x * 2` (no sig), doctested elsewhere → `unbound
+     constrained fn: myDouble`; add `myDouble : Int -> Int` → passes. **Workaround (low-friction,
+     already the project style):** give exported functions used in doctests an explicit signature.
+     **Root cause — NOT doctest-specific:** the cross-module **bare-name dict-arity collision** (see
+     the standing item in [Self-host typecheck / dispatch / runtime — known open items](#self-host-typecheck--dispatch--runtime--known-open-items)
+     below). The doctest path synthesizes `__dt_i__ = debug (expr)` bindings and runs them through the
+     *joint* multi-module typecheck + dict-pass; `collect_arities` keys arity by bare name (AGENTS.md
+     Phase 134 gotcha), so an unannotated cross-module fn gets spurious leading dict params forced on
+     and is treated as a constrained fn whose dict is never bound. A signature pins the arity and
+     sidesteps it. **DEFERRED by decision (2026-06-24):** the fix means touching dict-passing internals
+     during the soak (high-risk/low-reward, clean workaround exists); fix it via the *general* bare-name
+     re-key, not a doctest-path patch.
   7. **OCaml-oracle-only false-reject** (native CORRECT): `let w = rtWidth ra` inside a
      `RowType a -> RowType b` body makes the frozen OCaml oracle reject ("signature more general
      than body" / "infinite type involving a"); native accepts + runs correctly. Auto-resolves at
@@ -608,6 +624,19 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
   arg-tag — safe now, wrong when arg-tag retires). **Confirmed LATENT/safe-now (2026-06-23):**
   `foldMap (x => [x,x]) xs` via the Monoid default works on native build AND oracle. Distinct
   from the eval-path `foldMap` dict gap already closed. Owner: [`selfhost/DISPATCH-INVENTORY.md`](./selfhost/DISPATCH-INVENTORY.md) §D3a.
+- **Cross-module bare-name dict-arity collision (the D2 re-key / Phase 134 root).** `Dict_pass.
+  collect_arities` keys function arity by **bare name**, so when the prelude + all modules are
+  dict-passed *jointly*, a genuinely-constrained function in one module (or the synthetic doctest
+  bindings) can force spurious leading dict params onto an *unconstrained, same-named or unannotated*
+  function elsewhere — its call site then under-applies / it becomes a constrained fn whose dict is
+  never bound. **Observable manifestation today:** the doctest finding #6 above (an unannotated
+  cross-module fn in a doctest expr → `unbound constrained fn`); workaround = annotate the fn.
+  **Principled fix = re-key arity by module-qualified name (DICT-CONFORMANCE "Option B", deferred
+  net-negative there as a zero-observable-gain cleanup).** That earlier deferral predates the doctest
+  manifestation, which makes the re-key now *observably* useful, not just hygienic. Higher-risk
+  (AST-origin threading through resolve/ast/typecheck/eval — AGENTS.md Phase 134 documents how this
+  area repeatedly mis-diagnoses); do it **supervised**, not as a soak-tail drive-by. Owners:
+  AGENTS.md Phase 134 gotcha + memory `project_dict_semantics_spec` (D2).
 - **Helper duplication (code quality).** ~38 generic-helper clusters duplicated across
   selfhost stages; `joinWith`/`joinNl` in `typecheck.mdk`/`eval.mdk` are O(n²) local copies
   despite the O(n) canonical in `support/util.mdk`. Consolidate into `support/`. Owner:
