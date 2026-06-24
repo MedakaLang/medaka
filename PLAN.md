@@ -652,6 +652,19 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
   (AST-origin threading through resolve/ast/typecheck/eval — AGENTS.md Phase 134 documents how this
   area repeatedly mis-diagnoses); do it **supervised**, not as a soak-tail drive-by. Owners:
   AGENTS.md Phase 134 gotcha + memory `project_dict_semantics_spec` (D2).
+- **Pre-existing failing gates (surfaced by the 2026-06-24 full sweep; NOT stale goldens — real
+  native-vs-OCaml behavioral divergences; confirmed unrelated to that session's lexer/parser/exhaust
+  batch by code inspection):**
+  - **`diff_selfhost_effect_hole` — 4 ok / 4 failing.** `reject_sibling` / `reject_computed` /
+    `reject_outer_computed` + a WS-2 outer-let row all report `native_rejected=0, ocaml_rejected=1` —
+    i.e. **native ACCEPTS capability/effect programs that the OCaml oracle REJECTS** on α-precision
+    grounds (native less strict). Potential **capability-soundness gap** (or the gate encodes
+    behavior native's WS-2 α-precision never shipped). Effects-roadmap WS-2 territory; needs a
+    dedicated effects-session diagnosis (is native genuinely under-rejecting, or is the gate ahead of
+    native?). Owners: `EFFECTS-SEMANTICS.md` / memory `project_effects_semantics_spec` (WS-2).
+  - **`diff_selfhost_lsp_b4` — 5 ok / 1 failing.** `completion empty prefix → full env == OCaml
+    (incl alpha,beta)` — native completion environment differs from the OCaml set. Cosmetic-ish
+    (completion list), not a soundness issue. Owner: `lib/lsp_server.ml` ↔ selfhost LSP.
 - **Helper duplication (code quality).** ~38 generic-helper clusters duplicated across
   selfhost stages; `joinWith`/`joinNl` in `typecheck.mdk`/`eval.mdk` are O(n²) local copies
   despite the O(n) canonical in `support/util.mdk`. Consolidate into `support/`. Owner:
