@@ -1009,6 +1009,35 @@ long long mdk_hash_string(long long w) {
   return (long long)(h & MDK_HASH_MASK);
 }
 
+/* intBitsToFloat : Int -> Float.  Reinterpret the 64-bit pattern of the
+ * (untagged) Medaka Int `n` as an IEEE 754 double and return a boxed Float.
+ * The emitter calls untagInt before passing `n`, so `n` is the raw value. */
+long long mdk_int_bits_to_float(long long n) {
+  double d; memcpy(&d, &n, 8);
+  return mdk_box_float(d);
+}
+/* bytesToFloat64 : Array Int -> Int -> Float.  Read 8 bytes big-endian from
+ * a Medaka Array-of-Int cell starting at element index `off`.
+ * Array cell layout: [i64 count | i64 elem0 | i64 elem1 | ...].
+ * Each element is a TAGGED Medaka Int (value * 2 + 1); untag by >> 1.
+ * `off` is also a tagged int passed from the emitter (untagged before call).
+ * Returns a boxed Float. */
+long long mdk_bytes_to_float64(long long arr_word, long long off) {
+  const long long *a = (const long long *)arr_word;
+  /* a[0] = count; a[1+i] = element i (TAGGED: raw >> 1 to get byte value) */
+  unsigned long long bits =
+    ((unsigned long long)((a[1 + off + 0] >> 1) & 0xFF) << 56) |
+    ((unsigned long long)((a[1 + off + 1] >> 1) & 0xFF) << 48) |
+    ((unsigned long long)((a[1 + off + 2] >> 1) & 0xFF) << 40) |
+    ((unsigned long long)((a[1 + off + 3] >> 1) & 0xFF) << 32) |
+    ((unsigned long long)((a[1 + off + 4] >> 1) & 0xFF) << 24) |
+    ((unsigned long long)((a[1 + off + 5] >> 1) & 0xFF) << 16) |
+    ((unsigned long long)((a[1 + off + 6] >> 1) & 0xFF) <<  8) |
+    ((unsigned long long)((a[1 + off + 7] >> 1) & 0xFF)      );
+  double d; memcpy(&d, &bits, 8);
+  return mdk_box_float(d);
+}
+
 /* ── debug literal externs — quoted/escaped rendering, byte-exact, no oracle ───
  * Mirror escape_string_lit / escape_char_lit in lib/eval.ml (the same escapes the
  * lexer's read_string/read_char understand), so `debug` of a String/Char round-

@@ -1632,6 +1632,30 @@ let primitives : (string * value) list =
       match v with
       | VFloat f -> VInt (Int.of_float f)
       | _ -> raise (Eval_error ("floatToInt: expected Float", None))));
+    ("intBitsToFloat", VPrim (fun v ->
+      match v with
+      | VInt n -> VFloat (Int64.float_of_bits (Int64.of_int n))
+      | _ -> raise (Eval_error ("intBitsToFloat: expected Int", None))));
+    ("bytesToFloat64", VPrim (fun arr_v ->
+      VPrim (fun off_v ->
+        match arr_v, off_v with
+        | VArray a, VInt off ->
+          let b i =
+            match a.(off + i) with
+            | VInt x -> Int64.of_int (x land 0xFF)
+            | _ -> raise (Eval_error ("bytesToFloat64: array element not Int", None))
+          in
+          let bits =
+            Int64.logor (Int64.shift_left (b 0) 56)
+            (Int64.logor (Int64.shift_left (b 1) 48)
+            (Int64.logor (Int64.shift_left (b 2) 40)
+            (Int64.logor (Int64.shift_left (b 3) 32)
+            (Int64.logor (Int64.shift_left (b 4) 24)
+            (Int64.logor (Int64.shift_left (b 5) 16)
+            (Int64.logor (Int64.shift_left (b 6)  8)
+                          (b 7))))))) in
+          VFloat (Int64.float_of_bits bits)
+        | _ -> raise (Eval_error ("bytesToFloat64: expected Array Int", None)))));
     ("intToString", VPrim (fun v ->
       match v with
       | VInt n -> VString (string_of_int n)

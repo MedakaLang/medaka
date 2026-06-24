@@ -103,6 +103,8 @@ preambleLines = [
   "declare i64 @mdk_hash_bool(i64)",
   "declare i64 @mdk_hash_float(double)",
   "declare i64 @mdk_hash_string(i64)",
+  "declare i64 @mdk_int_bits_to_float(i64)",
+  "declare i64 @mdk_bytes_to_float64(i64, i64)",
   "declare i64 @mdk_debug_string_lit(i64)",
   "declare i64 @mdk_debug_char_lit(i64)",
   "declare i64 @mdk_wall_time_sec(i64)",

@@ -1807,6 +1807,8 @@ externBindings = [
   ("charMaxBound", VChar (charToStr charMaxBound)),
   ("pi", VFloat pi),
   ("e", VFloat e),
+  ("intBitsToFloat", prim1 pIntBitsToFloat),
+  ("bytesToFloat64", prim2 pBytesToFloat64),
   (fallthroughName, VPrim (_ => VFallthrough)),
 ]
 
@@ -1861,6 +1863,24 @@ pIntToFloat _ = panic "intToFloat: not an Int"
 pFloatToInt : Value -> Value
 pFloatToInt (VFloat f) = VInt (floatToInt f)
 pFloatToInt _ = panic "floatToInt: not a Float"
+
+pIntBitsToFloat : Value -> Value
+pIntBitsToFloat (VInt n) = VFloat (intBitsToFloat n)
+pIntBitsToFloat _ = panic "intBitsToFloat: not an Int"
+
+getByte64 : Int -> Array Value -> Int -> Int
+getByte64 off arr i = match arrayGetUnsafe (off + i) arr
+  VInt b => bitAnd b 0xFF
+  _ => panic "bytesToFloat64: array element not Int"
+
+assembleBits : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int
+assembleBits b0 b1 b2 b3 b4 b5 b6 b7 =
+  bitOr (shiftLeft b0 56) (bitOr (shiftLeft b1 48) (bitOr (shiftLeft b2 40) (bitOr (shiftLeft b3 32) (bitOr (shiftLeft b4 24) (bitOr (shiftLeft b5 16) (bitOr (shiftLeft b6 8) b7))))))
+
+pBytesToFloat64 : Value -> Value -> Value
+pBytesToFloat64 (VArray arr) (VInt off) =
+  VFloat (intBitsToFloat (assembleBits (getByte64 off arr 0) (getByte64 off arr 1) (getByte64 off arr 2) (getByte64 off arr 3) (getByte64 off arr 4) (getByte64 off arr 5) (getByte64 off arr 6) (getByte64 off arr 7)))
+pBytesToFloat64 _ _ = panic "bytesToFloat64: expected Array Int"
 
 pFloatToString : Value -> Value
 pFloatToString (VFloat f) = VString (floatToString f)

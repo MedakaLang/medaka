@@ -81,6 +81,13 @@ extern setSeed : Int -> <Rand> Unit
 extern charToStr : Char -> String
 extern intToFloat : Int -> Float
 extern floatToInt : Float -> Int
+-- Bit-level reinterpretation of a 64-bit Int as an IEEE 754 double.
+-- Inverse of Int64.bits_of_float / C memcpy(&bits,&d,8).  Pure.
+extern intBitsToFloat : Int -> Float
+-- Read 8 bytes big-endian from `arr` starting at byte index `off` and
+-- reinterpret as an IEEE 754 double.  Bytes in `arr` are Int values 0..255.
+-- Pure (no IO; the array is read-only).
+extern bytesToFloat64 : Array Int -> Int -> Float
 -- Platform bounds backing `impl Bounded Int`/`Bounded Char` in core.mdk.
 -- Int bounds are the 63-bit OCaml `int` limits; Char bounds are U+0000 / U+10FFFF.
 extern intMinBound : Int

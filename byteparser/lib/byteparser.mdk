@@ -20,7 +20,7 @@
 --   `beUint n`  — big-endian unsigned n-byte integer
 --   `beSint n`  — big-endian signed n-byte integer (two's-complement)
 --   `sqVarint`  — SQLite variable-length integer (1–9 bytes)
---   `beFloat64` — 64-bit IEEE 754 float  *** STUB: pending `bytesToFloat64` extern ***
+--   `beFloat64` — 64-bit IEEE 754 float
 
 -- ---------------------------------------------------------------------------
 -- Local helpers (avoid stdlib imports so doctests run standalone)
@@ -356,22 +356,18 @@ sqVarintLoop input pos acc byteNum
   | otherwise = sqVarintStep input pos acc byteNum (arrayGetUnsafe pos input)
 
 -- | Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
+-- Consumes exactly 8 bytes in big-endian order and reinterprets their bit
+-- pattern as an IEEE 754 double via `bytesToFloat64`.
 --
--- *** STUB: pending `bytesToFloat64` extern ***
--- The `bytesToFloat64 : Array Int -> Int -> Float` extern does not yet exist.
--- Reconstructing an IEEE 754 double from raw bytes requires C-level bit
--- manipulation (OCaml `Int64.float_of_bits`) — pure Medaka arithmetic cannot
--- safely reconstruct a `Float` from 8 `Int` bytes because the 64-bit bit
--- pattern may not round-trip through 63-bit tagged Int arithmetic.
---
--- TODO (Fork C in SQLITE-DESIGN.md): Add `bytesToFloat64 : Array Int -> Int -> Float`
--- to `stdlib/runtime.mdk` + `lib/eval.ml`, then replace this stub body with:
---   beFloat64 = do
---     arr <- takeSlice 8
---     pure (bytesToFloat64 arr 0)
+-- > runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
+-- Ok 1.5
+-- > runByteParser beFloat64 (arrayFromList [192, 0, 0, 0, 0, 0, 0, 0])
+-- Ok -2.0
 export
 beFloat64 : ByteParser Float
-beFloat64 = bFailWith "beFloat64: pending bytesToFloat64 extern (see SQLITE-DESIGN.md Fork C)"
+beFloat64 = do
+  arr <- takeSlice 8
+  pure (bytesToFloat64 arr 0)
 
 -- ---------------------------------------------------------------------------
 -- Entry point
