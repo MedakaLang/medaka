@@ -835,6 +835,20 @@ under the doctest runner.
 The five forks from the initial design draft are all resolved. Decisions recorded here;
 rationale collapsed since they are no longer open questions.
 
+### F — `tFloat` coerces `CInt → Float` (REAL affinity) ✅ DECIDED (2026-06-24, `72b4c58`)
+
+**Decision:** the `tFloat : RowType Float` combinator accepts BOTH a `CFloat` cell and a
+`CInt` cell (coercing the latter via `intToFloat`); only genuinely non-numeric cells
+(`CNull`/`CText`/`CBlob`) error.
+
+Rationale (a dogfood finding): SQLite stores a whole-number REAL value (e.g. `10.0` in a
+`REAL` column) on disk as an *integer* serial type — a documented storage optimization,
+transparently converted back to REAL on read. So the on-disk cell for such a row is `CInt`,
+not `CFloat`. A strict (`CFloat`-only) `tFloat` would error on this common case; coercing
+`CInt → Float` makes `tFloat` faithful to the column's REAL affinity. (The raw-cell layer
+still reports the honest `CInt` — coercion is a typed-`RowType` concern only.) Float DECODE
+itself (serial type 7, 8-byte IEEE) goes through `bytesToFloat64`/`beFloat64` → `CFloat`.
+
 ### A — ByteParser location: own `byteparser/` project ✅ DECIDED
 
 **Decision:** ByteParser is its own library project under `byteparser/` with its own
