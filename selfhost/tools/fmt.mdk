@@ -37,7 +37,7 @@ import frontend.parser.{
   declPosLine,
   declPosEndLine,
 }
-import support.util.{listLen, reverseL, isEmptyL, filterList}
+import support.util.{listLen, reverseL, isEmptyL, filterList, splitNl, joinNl}
 
 -- ── State ─────────────────────────────────────────
 -- pieces : output fragments, REVERSED (cons-prepend, reverse+concat at end)
@@ -194,6 +194,73 @@ appendTrailing pieces [] = pieces
 appendTrailing pieces (c::cs) =
   appendTrailing (commentText c :: "  " :: pieces) cs
 
+-- ── Interior (inner-block) trailing comments ──────────────────────────────
+-- A single-line comment on a source line strictly *inside* a multi-line decl
+-- body (line < c.line < end_line) trails an INNER statement (e.g. each
+-- `println …  -- note` line of a bare indented block), not the decl as a whole.
+-- The decl-granular `takeTrailing` only catches the comment on `end_line`, so
+-- the earlier ones used to escape to `drainAll` and flush *below* the decl. We
+-- instead splice each one back inline onto the rendered output line that
+-- originated at its source line.
+--
+-- The decl renders one output line per source line (statements keep their
+-- source line breaks), so output-line index = c.line - decl.line maps a source
+-- line to its rendered line.  We attach `"  " ++ text` to that output line; a
+-- comment whose index is out of range (a reflowed/wrapped statement, rare) is
+-- left in the stream so `drainAll` still emits it rather than dropping it.
+
+isInterior : Int -> Int -> Comment -> Bool
+isInterior startLine endLine c =
+  let l = commentLine c
+  l > startLine && l < endLine && isSingleLine (commentText c)
+
+-- DData (incl. an attribute-wrapped one) routes interior comments through
+-- vcommentsFor, not the generic inline splice.
+isDataDeclF : Decl -> Bool
+isDataDeclF (DData _ _ _ _ _) = True
+isDataDeclF (DAttrib _ inner) = isDataDeclF inner
+isDataDeclF _ = False
+
+-- Splice interior comments into the rendered decl string by output-line index.
+-- Returns (newDeclStr, consumedComments) — consumed ones are removed from the
+-- pending stream; any whose index fell out of range are NOT consumed.
+spliceInterior : String -> Int -> List Comment -> (String, List Comment)
+spliceInterior declStr startLine interior =
+  let outLines = splitNl declStr
+  let n = listLen outLines
+  match attachInterior outLines startLine 0 n interior []
+    (newLines, consumed) => (joinNl newLines, reverseL consumed)
+
+-- Walk the output lines, prepending each comment's inline text onto the line at
+-- its index.  `idx` is the current output-line index; `consumed` accumulates
+-- (reversed) the comments actually attached.
+attachInterior : List String -> Int -> Int -> Int -> List Comment -> List Comment -> (List String, List Comment)
+attachInterior [] _ _ _ _ consumed = ([], consumed)
+attachInterior (ln::rest) startLine idx n interior consumed =
+  match attachOnLine ln startLine idx interior consumed
+    (ln1, consumed1) => match attachInterior rest startLine (idx + 1) n interior consumed1
+      (rest1, consumed2) => (ln1 :: rest1, consumed2)
+
+-- Attach every interior comment whose output-line index == idx onto `ln`.
+attachOnLine : String -> Int -> Int -> List Comment -> List Comment -> (String, List Comment)
+attachOnLine ln _ _ [] consumed = (ln, consumed)
+attachOnLine ln startLine idx (c::cs) consumed =
+  if commentLine c - startLine == idx then
+    match attachOnLine ln startLine idx cs consumed
+      (ln1, consumed1) => (ln1 ++ "  " ++ commentText c, c :: consumed1)
+  else
+    attachOnLine ln startLine idx cs consumed
+
+-- Drop the consumed comments from the pending stream (order-preserving), by
+-- source line — interior comment lines are unique per output line.
+dropConsumed : List Comment -> List Comment -> List Comment
+dropConsumed cs consumed =
+  filterList (c => not (anyLineEq (commentLine c) consumed)) cs
+
+anyLineEq : Int -> List Comment -> Bool
+anyLineEq _ [] = False
+anyLineEq l (c::cs) = if commentLine c == l then True else anyLineEq l cs
+
 -- ── Main walk ─────────────────────────────────────
 
 -- Process one (decl, declPos) pair.  Mirror of one OCaml `List.iter2` body.
@@ -206,13 +273,22 @@ stepDecl st decl dp =
     FmtState pieces1 cs1 vlines1 cursor1 started1 =>
       let pieces2 = blankLineIfNeeded pieces1 line cursor1 started1
       match declDoc (FmtState pieces2 cs1 vlines1 cursor1 started1) decl
-        (declStr, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) => match takeTrailing cs3 endLine
-          (trailing, csRest) =>
-            let pieces4 = appendTrailing (declStr :: pieces3) trailing
-            FmtState ("\n" :: pieces4) csRest vlines3 endLine True
+        (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>
+          -- DData has its own interior-comment machinery (vcommentsFor); leave
+          -- its comments to that path.  Every other decl interleaves inner-block
+          -- trailing comments inline.
+          let interior = if isDataDeclF decl then [] else filterList (isInterior line endLine) cs3
+          match spliceInterior declStr0 line interior
+            (declStr, consumed) =>
+              let cs3b = dropConsumed cs3 consumed
+              match takeTrailing cs3b endLine
+                (trailing, csRest) =>
+                  let pieces4 = appendTrailing (declStr :: pieces3) trailing
+                  FmtState ("\n" :: pieces4) csRest vlines3 endLine True
 -- (1) flush_before loc.line, (2) blank-line gate, (3) render decl (consumes
--- variant lines + interior comments), (4) inline trailing comments,
--- (5) newline + advance cursor to end_line + started := true.
+-- variant lines + interior comments), (4) splice inner-block trailing comments
+-- back inline, (5) end-line inline trailing comment(s),
+-- (6) newline + advance cursor to end_line + started := true.
 
 walkDecls : FmtState -> List Decl -> List DeclPos -> FmtState
 walkDecls st [] _ = st

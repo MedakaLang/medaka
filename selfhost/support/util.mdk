@@ -77,6 +77,24 @@ export
 joinNl : List String -> String
 joinNl xs = joinWith "\n" xs
 
+-- Split a string on '\n' into its lines.  No newline is retained; a trailing
+-- '\n' yields a final empty string, and the empty string yields [""].  Inverse
+-- of joinNl on newline-free pieces.  (Centralizes the latent splitNl cluster —
+-- see HELPER-CENSUS.md — used by the formatter to interleave inner-block
+-- trailing comments into a rendered decl's output lines.)
+export
+splitNl : String -> List String
+splitNl s =
+  let chars = stringToChars s
+  splitNlGo chars (arrayLength chars) 0 0
+
+splitNlGo : Array Char -> Int -> Int -> Int -> List String
+splitNlGo chars n start i
+  | i >= n = [stringFromChars (arraySubChars chars start n)]
+  | arrayGetUnsafe i chars == '\n' =
+    stringFromChars (arraySubChars chars start i) :: splitNlGo chars n (i + 1) (i + 1)
+  | otherwise = splitNlGo chars n start (i + 1)
+
 -- Join dotted path components with "." in O(total length) (see joinWith).
 export
 joinDot : List String -> String
