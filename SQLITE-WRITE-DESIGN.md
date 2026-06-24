@@ -80,11 +80,14 @@ page number (int), the exact `CREATE TABLE …` text.
 
 ## Phased slice plan (each independently `sqlite3`-verifiable)
 
-- **P0 — `writeFileBytes` extern.** 4 sites (`stdlib/runtime.mdk` declare; `lib/eval.ml`
+- **P0 — `writeFileBytes` extern. ✅ DONE (`a97e34b`, re-minted `29d7a9d`, cold-bootstrap PASS).**
+  5 sites (the 4 below + `selfhost/backend/llvm_preamble.mdk` `declare`). Native build == oracle byte-identical.
+  Original P0 detail: 4 sites (`stdlib/runtime.mdk` declare; `lib/eval.ml`
   VPrim oracle; `runtime/medaka_rt.c` `mdk_write_file_bytes` — untag `(arr[i+1]>>1)`, `"wb"`;
   `selfhost/backend/llvm_emit.mdk` register + `emitFileExtern` arm). Fixpoint + seed re-mint +
   oracle parity. Verify: write `[72,73]` → `xxd` shows `48 49`.
-- **P1 — byte builder** `byteparser/lib/bytebuilder.mdk` (`MutArray Int`-backed):
+- **P1 — byte builder ✅ DONE (`75ccf95`).** `byteparser/lib/bytebuilder.mdk` — `emitU8/U16BE/U24BE/U32BE/Bytes/SqVarint/BeSint` + `buildArray`; 33/33 round-trip doctests vs the byteparser decoders. **Builder is backed by `Ref (List Int)`** (O(1) prepend + reverse-on-build), NOT `MutArray` as originally sketched: P1 surfaced a compiler finding — **`arrayBlit` is missing from the native interpreter's primitives table** (`selfhost/eval/eval.mdk`; present in `lib/eval.ml` + the build path), so `MutArray.push` panics `unbound identifier: arrayBlit` under native `run`/`test` (works under `build` + oracle — a run-vs-build gap). Fix = add an `arrayBlit` entry to `selfhost/eval/eval.mdk` (analogous to `arrayCopy` :1789). Tracked separately; the Ref-List builder needs no MutArray so the write path is unblocked.
+- **P1 — (original sketch)** byte builder `byteparser/lib/bytebuilder.mdk` (`MutArray Int`-backed):
   `emitU8/U16BE/U24BE/U32BE/Bytes/SqVarint/BeSint`, `buildArray`. Differentially test each
   `emit*` against its `byteparser` decoder (`emitSqVarint`↔`sqVarint`, `emitU32BE`↔`beUint 4`).
 - **P2 — record encoder** `sqlite/lib/recordenc.mdk`: `encodeRecord : List Cell -> Array Int`
