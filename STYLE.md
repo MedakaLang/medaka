@@ -261,3 +261,22 @@ go (x::xs) acc = go xs (x::acc)
 The formatter enforces this rule (`selfhost/tools/printer.mdk`): `::` is
 handled by `opSpace`/`isConstructorOp` which suppresses the surrounding spaces.
 Medaka has no user-defined infix constructors, so `::` is the only case.
+
+## 10. `export` sits on its own line above a value's type signature
+
+A value/function declaration's `export` modifier goes on its **own line**,
+above the type signature — never collapsed onto it. Collapsing reads as though
+you're exporting *a type* `name : T` rather than marking the binding exported
+(the same reasoning Idris uses for `export`/`public export` on their own line).
+The formatter applies this: `export` over a value signature stays split, while
+`export data`/`export impl` *do* collapse onto one line — those genuinely are
+type-level exports, so `export data Foo = …` reads correctly.
+
+```
+-- GOOD: export on its own line above a value signature
+export
+runParser : Parser a -> String -> Result String a
+
+-- GOOD: export collapsed for a type-level declaration
+export data Parser a = Parser (Array Char -> Int -> PResult a)
+```

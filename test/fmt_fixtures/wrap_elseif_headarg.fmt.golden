@@ -1,0 +1,18 @@
+-- Regression fixture for the formatter wrapping fixes:
+--   * a nested if/else-if chain that overflows 80 must LADDER (each else-if on
+--     its own line), never collapse onto one over-width line;
+--   * a single large parenthesized argument keeps its application head on the
+--     `=` line and breaks INSIDE the argument, not isolating the head.
+classifyPosition wi pos input want =
+  if wi >= arrayLength want then
+    resultForEmptyCase wi
+  else if pos >= arrayLength input then
+    resultForEndOfInput pos
+  else
+    resultForMismatch input want
+
+wrapInParser g p = Parser (input pos =>
+  transformResult
+    (runInner p input pos)
+    (a pos2 => Done (g a) pos2)
+    (m ep => Failed m ep))
