@@ -51,6 +51,8 @@ main =
   println (total [1.0, 2.0])
   println (total [1, 2])
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

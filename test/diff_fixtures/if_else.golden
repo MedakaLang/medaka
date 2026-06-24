@@ -92,6 +92,8 @@ main =
   println (classify 3)
   println (abs (-7))
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 abs : a -> a
 add : a -> a -> a

@@ -118,6 +118,8 @@ main =
   println (compare (A 1) (A 2))
   println (compare (A 2) (A 1))
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

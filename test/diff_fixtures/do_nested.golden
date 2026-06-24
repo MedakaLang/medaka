@@ -20,6 +20,8 @@ main = do
   let x = 1
   println x
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

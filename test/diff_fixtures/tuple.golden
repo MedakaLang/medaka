@@ -88,6 +88,8 @@ main =
   let u = swap t
   println (fst u)
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 addPair : (a, a) -> a

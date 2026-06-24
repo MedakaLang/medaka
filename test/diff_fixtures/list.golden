@@ -108,6 +108,8 @@ main =
   println (sum ([] : List Int))
   println ([1, 2] ++ [3, 4])
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

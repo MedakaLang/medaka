@@ -260,6 +260,8 @@ btick : Int -> Int -> Int
 btick a b = a `addN` b
 main = println (arith 3 4)
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 addN : Int -> Int -> Int

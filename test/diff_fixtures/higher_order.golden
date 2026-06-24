@@ -106,6 +106,8 @@ main =
   println (filter isEven [1, 2, 3, 4, 5, 6])
   println (sumList (map double [1, 2, 3]))
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

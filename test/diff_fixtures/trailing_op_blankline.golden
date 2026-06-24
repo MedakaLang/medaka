@@ -16,6 +16,8 @@ EOF
 r = 1 + 2
 main = println r
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

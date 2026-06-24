@@ -40,6 +40,8 @@ main =
   println (inc 2.5)
   println (inc 5)
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

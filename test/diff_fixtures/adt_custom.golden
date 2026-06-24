@@ -134,6 +134,8 @@ main =
   println (area r)
   println (perimeter r)
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

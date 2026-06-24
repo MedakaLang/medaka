@@ -26,6 +26,8 @@ EOF
 main : <IO> Unit
 main = println (sum [1.0, 2.0, 3.0])
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

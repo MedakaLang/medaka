@@ -32,6 +32,8 @@ shout : String
 shout = "\{greeting}!"
 main = println shout
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

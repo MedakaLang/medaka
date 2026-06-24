@@ -27,6 +27,8 @@ EOF
 === AST ===
 main = if True then if False then println "a" else println "b" else println "c"
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool

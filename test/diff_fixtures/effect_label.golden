@@ -73,6 +73,8 @@ handler k = get k
 main : <IO> Unit
 main = println "effect labels ok"
 === TYPES ===
+noMatch : a b
+orElse : a b -> a b -> a b
 abs : a -> a
 add : a -> a -> a
 all : (a -> Bool) -> b a -> Bool
