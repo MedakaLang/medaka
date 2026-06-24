@@ -110,8 +110,20 @@ page number (int), the exact `CREATE TABLE …` text.
 - **P3 — (original)** single-leaf-page DB writer `sqlite/lib/dbwriter.mdk`: header + page-1
   `sqlite_master` leaf + page-N table leaf; `writeFileBytes`. Verify: `PRAGMA
   integrity_check`=ok, `SELECT` matches, the Medaka reader re-reads the same rows.
-- **P4 — `CREATE TABLE` + multi-row `INSERT` API** within one page (compute IPK/rowid;
+- **P4 — `CREATE TABLE` + multi-row `INSERT` API ✅ DONE (`4e582a6`) — 🏁 v1 WRITE SUPPORT COMPLETE.**
+  `sqlite/lib/writer.mdk`: `ColType`/`Column`/`TableSchema`, `createTableSql` (exact text `pkColumnIndex`
+  + sqlite3 expect; 4 doctests), `writeTable`/`buildTable` (validates row width, derives IPK/rowid,
+  calls `buildDatabase`). Multi-schema `sqlite3`-verified (`writer_api_oracle.sh`): IPK+NULL table,
+  no-IPK auto-rowid table, BLOB column — each integrity_check ok + SELECT match + Medaka-reader round-trip.
+  **Finding (pre-existing, tracked):** the native emitter panics `CFieldAccess: unknown field '<f>'` on
+  DOT-access of a record type imported from another module (the field-label table is built from `CRecord`
+  ctor exprs in the current unit) — worked around with destructuring patterns. Not new; flag for a future
+  emitter fix.
+- **P4 — (original)** `CREATE TABLE` + multi-row `INSERT` API within one page (compute IPK/rowid;
   `Err` on overflow). Verify across schemas.
+
+**🏁 v1 write path COMPLETE (P0–P4):** Medaka builds a fresh single-table `.sqlite` (int/text/null/blob,
+IPK-as-rowid or auto-rowid, single leaf page) that `sqlite3` validates + queries, byte-perfect.
 
 **Deferred:** floats (P5, needs `floatToBytes64` extern); page splits / multi-page;
 `UPDATE`/`DELETE`; overflow pages; transactions/journal/WAL; concurrency/locking.
