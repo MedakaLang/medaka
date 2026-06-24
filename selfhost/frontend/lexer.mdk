@@ -828,9 +828,16 @@ consumeNl src len p indent
   | isTab (at src p) = consumeNl src len (p + 1) ((indent / 8 + 1) * 8)
   | otherwise = (indent, p)
 
+-- A newline run is turned into an `RNewline` marker for the layout pass to
+-- interpret.  Comment-only lines and leading-operator continuation lines are
+-- handled here at scan time (so they never reach layout).  NOTE: the historical
+-- `depth > 0 = scan …` early-out (drop every bracket-interior newline) is GONE
+-- (LAYOUT-BRACKETS §6.1): RNewlines now flow into the layout pass *even inside
+-- brackets*, where the bracket-frame logic drops them in free-form regions but
+-- keeps them live inside a herald-armed nested block.  Outside brackets nothing
+-- changes — `nextIsComment`/`isContinuation` already ran for every newline.
 afterNl : Array Char -> Int -> Int -> Int -> Int -> Int -> Int -> List RawTok
 afterNl src len np depth id indent nlPos
-  | depth > 0 = scan src len np depth id
   | nextIsComment src len np = scan src len np depth id
   | isContinuation src len np = emit src len np depth id (continuationTok src len np) 2 0
   | otherwise = RNewline indent nlPos :: scan src len np depth id
@@ -878,13 +885,61 @@ continuationTok src len np
 -- position) that produced them, so the position side-channel can assign every
 -- token a 1-based source line.  `tokenize` projects out `fst`, so the Token
 -- stream the parser matches on is byte-identical regardless of this threading.
-layout : List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
-layout [] stack prev opener = closeAll stack 0
-layout ((RTok t off _)::rest) stack prev opener =
-  (t, off) :: layout rest stack (Some t) (opener || isOpener t)
-layout ((RComment _ _)::rest) stack prev opener = layout rest stack prev opener
-layout ((RNewline col off)::rest) stack prev opener =
-  applyNl col off rest stack prev opener
+--
+-- `frames` is the BRACKET-FRAME STACK (LAYOUT-BRACKETS §6.1).  It is empty at
+-- top level (no enclosing bracket).  Each open bracket `( [ [| { .{` pushes a
+-- frame holding the count of nested layout contexts that bracket has opened
+-- (head = innermost bracket).  Inside a bracket the DEFAULT is free-form
+-- (newlines invisible); when a herald (`match`/`do`/`function`/`record`) opens a
+-- block the head frame increments and the herald's `INDENT`/`NEWLINE`/`DEDENT`
+-- become live, exactly like top-level layout — until they dedent back below the
+-- herald column (frame → 0, free-form again) or the matching bracket closer
+-- force-flushes the pending `DEDENT`s.
+layout : List RawTok -> List Int -> List Int -> Option Token -> Bool -> List (Token, Int)
+layout [] stack frames prev opener = closeAll stack 0
+layout ((RTok t off _)::rest) stack frames prev opener
+  | bracketOpener t = (t, off) :: layout rest stack (0 :: frames) (Some t) (opener || isOpener t)
+  | bracketCloser t = flushClose t off rest stack frames opener
+  | otherwise = (t, off) :: layout rest stack frames (Some t) (opener || isOpener t)
+layout ((RComment _ _)::rest) stack frames prev opener = layout rest stack frames prev opener
+layout ((RNewline col off)::rest) stack frames prev opener =
+  applyNl col off rest stack frames prev opener
+
+-- A bracket closer force-flushes every nested layout context opened in the
+-- innermost bracket frame (emitting `NEWLINE DEDENT` per context, popping the
+-- indent stack) BEFORE the closer token, so the bracket pair stays balanced and
+-- the grammar sees `… NEWLINE DEDENT )` (the same shape a top-level block dedent
+-- produces).  Then it pops the frame and emits the closer.  `opener` is threaded
+-- (and OR-ed with `isOpener t`) so a same-line herald flag survives the closer
+-- — e.g. `match args () \n arms`: the `(`/`)` of the `()` scrutinee must NOT
+-- clear the `match` opener flag, or the arms' INDENT would be suppressed.
+flushClose : Token -> Int -> List RawTok -> List Int -> List Int -> Bool -> List (Token, Int)
+flushClose t off rest stack [] opener =
+  (t, off) :: layout rest stack [] (Some t) (opener || isOpener t)
+flushClose t off rest stack (f :: fs) opener =
+  flushCloseGo t off rest stack f fs opener
+
+flushCloseGo : Token -> Int -> List RawTok -> List Int -> Int -> List Int -> Bool -> List (Token, Int)
+flushCloseGo t off rest [] f fs opener = (t, off) :: layout rest [] fs (Some t) (opener || isOpener t)
+flushCloseGo t off rest (top :: tl) f fs opener
+  | f <= 0 = (t, off) :: layout rest (top :: tl) fs (Some t) (opener || isOpener t)
+  | otherwise =
+    (TNewline, off) :: (TDedent, off) :: flushCloseGo t off rest tl (f - 1) fs opener
+
+bracketOpener : Token -> Bool
+bracketOpener TLParen = True
+bracketOpener TLBracket = True
+bracketOpener TLArray = True
+bracketOpener TLBrace = True
+bracketOpener TDotLBrace = True
+bracketOpener _ = False
+
+bracketCloser : Token -> Bool
+bracketCloser TRParen = True
+bracketCloser TRBracket = True
+bracketCloser TRArray = True
+bracketCloser TRBrace = True
+bracketCloser _ = False
 
 isOpener : Token -> Bool
 isOpener TMatch = True
@@ -944,6 +999,19 @@ prevIsTrailingOp : Option Token -> Bool
 prevIsTrailingOp (Some t) = isTrailingContinuationOp t
 prevIsTrailingOp None = False
 
+-- Inside a bracket (free-form), the ONLY lines that arm a nested layout context
+-- are the locked herald set (LAYOUT-BRACKETS §6.1): `match`/`record` (carried by
+-- the `opener` flag) and the `do`/`function` keywords (whose own next line opens
+-- the block).  Crucially this is NOT the generic top-level `not prevCanEnd` rule
+-- — after a `,` (or `=` etc.) `prevCanEnd` is also false, but a `,`-led
+-- continuation like `[1,\n 2]` must STAY free-form, not open a block.  The
+-- bare-`INDENT` block herald is DEFERRED inside brackets (no keyword to arm it
+-- without regressing free-form).
+armsHerald : Bool -> Option Token -> Bool
+armsHerald opener (Some TDo) = True
+armsHerald opener (Some TFunction) = True
+armsHerald opener _ = opener
+
 -- a token that can START an application-argument atom
 canStartAtom : Token -> Bool
 canStartAtom (TInt _) = True
@@ -962,41 +1030,69 @@ canStartAtom TAt = True
 canStartAtom (TInterpOpen _) = True
 canStartAtom _ = False
 
-applyNl : Int -> Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
-applyNl col off rest [] prev opener =
-  (TNewline, off) :: layout rest [] None False
-applyNl col off rest (top::tl) prev opener =
-  applyNlTop col off top (top :: tl) rest prev opener
+-- applyNl dispatches on the bracket-frame stack.  Top-level (`frames == []`)
+-- and inside a bracket whose head frame already has live contexts (`f > 0`)
+-- behave like ordinary layout.  Inside a bracket in free-form (`f == 0`) a
+-- newline is DROPPED unless a herald arms a block on a deeper line.
+applyNl : Int -> Int -> List RawTok -> List Int -> List Int -> Option Token -> Bool -> List (Token, Int)
+applyNl col off rest [] frames prev opener =
+  (TNewline, off) :: layout rest [] frames None False
+applyNl col off rest (top::tl) frames prev opener =
+  applyNlFrame col off top (top :: tl) rest frames prev opener
 
-applyNlTop : Int -> Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int)
-applyNlTop col off top stack rest prev opener
-  | col > top = wouldIndent col off stack rest prev opener
-  | col == top = (TNewline, off) :: layout rest stack None False
-  | otherwise = (TNewline, off) :: popDedents col off stack rest
+-- frames == [] (top level) is handled by the first applyNl clause; here frames
+-- is non-empty OR the indent stack is non-empty.  Decide by frame state.
+applyNlFrame : Int -> Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
+applyNlFrame col off top stack rest [] prev opener =
+  applyNlTop col off top stack rest [] prev opener
+applyNlFrame col off top stack rest (f :: fs) prev opener
+  | f > 0 = applyNlTop col off top stack rest (f :: fs) prev opener
+  | col > top && not (prevIsTrailingOp prev) && armsHerald opener prev =
+    (TIndent, off) :: layout rest (col :: stack) (1 :: fs) None False
+  | otherwise = layout rest stack (f :: fs) prev opener
+
+applyNlTop : Int -> Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
+applyNlTop col off top stack rest frames prev opener
+  | col > top = wouldIndent col off stack rest frames prev opener
+  | col == top = (TNewline, off) :: layout rest stack frames None False
+  | otherwise = (TNewline, off) :: popDedents col off stack rest frames
 
 -- col > top: a block opener pushes INDENT; otherwise it's a candidate
 -- continuation, decided by the deeper line's first token (Phase 137)
-wouldIndent : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int)
-wouldIndent col off stack rest prev opener
-  | prevIsTrailingOp prev = layout rest stack prev opener
-  | opener || not (prevCanEnd prev) = (TIndent, off) :: layout rest (col :: stack) None False
-  | otherwise = resolveCont col off stack rest prev opener
+wouldIndent : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
+wouldIndent col off stack rest frames prev opener
+  | prevIsTrailingOp prev = layout rest stack frames prev opener
+  | opener || not (prevCanEnd prev) = (TIndent, off) :: layout rest (col :: stack) (bumpFrame frames) None False
+  | otherwise = resolveCont col off stack rest frames prev opener
+
+-- Increment the innermost bracket frame's open-context count (no-op at top level).
+bumpFrame : List Int -> List Int
+bumpFrame [] = []
+bumpFrame (f :: fs) = (f + 1) :: fs
+
+-- Decrement the innermost bracket frame's open-context count (no-op at top level).
+dropFrame : List Int -> List Int
+dropFrame [] = []
+dropFrame (f :: fs) = (f - 1) :: fs
 
 -- conforms to LAYOUT-SEMANTICS.md §5.4 (Stage B deeper-line then/else path);
 -- edits must keep both mechanisms in step (LAYOUT-CONFORMANCE-ROADMAP WS-2).
-resolveCont : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int)
-resolveCont col off stack ((RTok t toff tend)::more) prev opener
-  | canStartAtom t = layout (RTok t toff tend :: more) stack prev opener
-  | t == TThen = layout (RTok t toff tend :: more) stack prev opener
-  | t == TElse = layout (RTok t toff tend :: more) stack prev opener
-  | otherwise = (TIndent, off) :: layout (RTok t toff tend :: more) (col :: stack) None False
-resolveCont col off stack rest prev opener = layout rest stack None False
+resolveCont : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
+resolveCont col off stack ((RTok t toff tend)::more) frames prev opener
+  | canStartAtom t = layout (RTok t toff tend :: more) stack frames prev opener
+  | t == TThen = layout (RTok t toff tend :: more) stack frames prev opener
+  | t == TElse = layout (RTok t toff tend :: more) stack frames prev opener
+  | otherwise = (TIndent, off) :: layout (RTok t toff tend :: more) (col :: stack) (bumpFrame frames) None False
+resolveCont col off stack rest frames prev opener = layout rest stack frames None False
 
-popDedents : Int -> Int -> List Int -> List RawTok -> List (Token, Int)
-popDedents col off [] rest = layout rest [] None False
-popDedents col off (top::tl) rest
-  | top > col = (TDedent, off) :: (TNewline, off) :: popDedents col off tl rest
-  | otherwise = layout rest (top :: tl) None False
+-- Pop indent contexts down to `col`, decrementing the innermost bracket frame
+-- for each context popped (so a herald block that dedents back below its column
+-- returns the bracket frame to free-form).
+popDedents : Int -> Int -> List Int -> List RawTok -> List Int -> List (Token, Int)
+popDedents col off [] rest frames = layout rest [] frames None False
+popDedents col off (top::tl) rest frames
+  | top > col = (TDedent, off) :: (TNewline, off) :: popDedents col off tl rest (dropFrame frames)
+  | otherwise = layout rest (top :: tl) frames None False
 
 -- end of input: NEWLINE, then DEDENT/NEWLINE pairs back to base, then EOF.
 -- `off` is the EOF char offset (source length) so the synthetic tail tokens
@@ -1033,53 +1129,77 @@ stripComments (r::rest) = r :: stripComments rest
 -- (which drops offsets) and `tokenizeWithOffsets` (the position side-channel).
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
-  elseFilter (layout (stripComments (scan src len 0 0 0)) [0] None False)
+  elseFilter (layout (stripComments (scan src len 0 0 0)) [0] [] None False)
 
 -- Layout variant that threads both START and END offsets per token, used by
 -- `tokenizeWithOffsetPairs`.  Real tokens carry their RTok start+end; synthetic
 -- layout tokens (NEWLINE/INDENT/DEDENT/EOF) carry their position for both
 -- (empty span, matching OCaml's zero-width synthetic positions).
-layoutPairs : List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
-layoutPairs [] stack prev opener = closeAllPairs stack 0
-layoutPairs ((RTok t s e)::rest) stack prev opener =
-  (t, s, e) :: layoutPairs rest stack (Some t) (opener || isOpener t)
-layoutPairs ((RComment _ _)::rest) stack prev opener =
-  layoutPairs rest stack prev opener
-layoutPairs ((RNewline col off)::rest) stack prev opener =
-  applyNlPairs col off rest stack prev opener
+layoutPairs : List RawTok -> List Int -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+layoutPairs [] stack frames prev opener = closeAllPairs stack 0
+layoutPairs ((RTok t s e)::rest) stack frames prev opener
+  | bracketOpener t = (t, s, e) :: layoutPairs rest stack (0 :: frames) (Some t) (opener || isOpener t)
+  | bracketCloser t = flushClosePairs t s e rest stack frames opener
+  | otherwise = (t, s, e) :: layoutPairs rest stack frames (Some t) (opener || isOpener t)
+layoutPairs ((RComment _ _)::rest) stack frames prev opener =
+  layoutPairs rest stack frames prev opener
+layoutPairs ((RNewline col off)::rest) stack frames prev opener =
+  applyNlPairs col off rest stack frames prev opener
 
-applyNlPairs : Int -> Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
-applyNlPairs col off rest [] prev opener =
-  (TNewline, off, off) :: layoutPairs rest [] None False
-applyNlPairs col off rest (top::tl) prev opener =
-  applyNlTopPairs col off top (top :: tl) rest prev opener
+flushClosePairs : Token -> Int -> Int -> List RawTok -> List Int -> List Int -> Bool -> List (Token, Int, Int)
+flushClosePairs t s e rest stack [] opener =
+  (t, s, e) :: layoutPairs rest stack [] (Some t) (opener || isOpener t)
+flushClosePairs t s e rest stack (f :: fs) opener =
+  flushClosePairsGo t s e rest stack f fs opener
 
-applyNlTopPairs : Int -> Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int, Int)
-applyNlTopPairs col off top stack rest prev opener
-  | col > top = wouldIndentPairs col off stack rest prev opener
-  | col == top = (TNewline, off, off) :: layoutPairs rest stack None False
-  | otherwise = (TNewline, off, off) :: popDedentsPairs col off stack rest
+flushClosePairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List Int -> Bool -> List (Token, Int, Int)
+flushClosePairsGo t s e rest [] f fs opener = (t, s, e) :: layoutPairs rest [] fs (Some t) (opener || isOpener t)
+flushClosePairsGo t s e rest (top :: tl) f fs opener
+  | f <= 0 = (t, s, e) :: layoutPairs rest (top :: tl) fs (Some t) (opener || isOpener t)
+  | otherwise =
+    (TNewline, s, s) :: (TDedent, s, s) :: flushClosePairsGo t s e rest tl (f - 1) fs opener
 
-wouldIndentPairs : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int, Int)
-wouldIndentPairs col off stack rest prev opener
-  | prevIsTrailingOp prev = layoutPairs rest stack prev opener
-  | opener || not (prevCanEnd prev) = (TIndent, off, off) :: layoutPairs rest (col :: stack) None False
-  | otherwise = resolveContPairs col off stack rest prev opener
+applyNlPairs : Int -> Int -> List RawTok -> List Int -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlPairs col off rest [] frames prev opener =
+  (TNewline, off, off) :: layoutPairs rest [] frames None False
+applyNlPairs col off rest (top::tl) frames prev opener =
+  applyNlFramePairs col off top (top :: tl) rest frames prev opener
 
-resolveContPairs : Int -> Int -> List Int -> List RawTok -> Option Token -> Bool -> List (Token, Int, Int)
-resolveContPairs col off stack ((RTok t toff tend)::more) prev opener
-  | canStartAtom t = layoutPairs (RTok t toff tend :: more) stack prev opener
-  | t == TThen = layoutPairs (RTok t toff tend :: more) stack prev opener
-  | t == TElse = layoutPairs (RTok t toff tend :: more) stack prev opener
-  | otherwise = (TIndent, off, off) :: layoutPairs (RTok t toff tend :: more) (col :: stack) None False
-resolveContPairs col off stack rest prev opener =
-  layoutPairs rest stack None False
+applyNlFramePairs : Int -> Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlFramePairs col off top stack rest [] prev opener =
+  applyNlTopPairs col off top stack rest [] prev opener
+applyNlFramePairs col off top stack rest (f :: fs) prev opener
+  | f > 0 = applyNlTopPairs col off top stack rest (f :: fs) prev opener
+  | col > top && not (prevIsTrailingOp prev) && armsHerald opener prev =
+    (TIndent, off, off) :: layoutPairs rest (col :: stack) (1 :: fs) None False
+  | otherwise = layoutPairs rest stack (f :: fs) prev opener
 
-popDedentsPairs : Int -> Int -> List Int -> List RawTok -> List (Token, Int, Int)
-popDedentsPairs col off [] rest = layoutPairs rest [] None False
-popDedentsPairs col off (top::tl) rest
-  | top > col = (TDedent, off, off) :: (TNewline, off, off) :: popDedentsPairs col off tl rest
-  | otherwise = layoutPairs rest (top :: tl) None False
+applyNlTopPairs : Int -> Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlTopPairs col off top stack rest frames prev opener
+  | col > top = wouldIndentPairs col off stack rest frames prev opener
+  | col == top = (TNewline, off, off) :: layoutPairs rest stack frames None False
+  | otherwise = (TNewline, off, off) :: popDedentsPairs col off stack rest frames
+
+wouldIndentPairs : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+wouldIndentPairs col off stack rest frames prev opener
+  | prevIsTrailingOp prev = layoutPairs rest stack frames prev opener
+  | opener || not (prevCanEnd prev) = (TIndent, off, off) :: layoutPairs rest (col :: stack) (bumpFrame frames) None False
+  | otherwise = resolveContPairs col off stack rest frames prev opener
+
+resolveContPairs : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
+resolveContPairs col off stack ((RTok t toff tend)::more) frames prev opener
+  | canStartAtom t = layoutPairs (RTok t toff tend :: more) stack frames prev opener
+  | t == TThen = layoutPairs (RTok t toff tend :: more) stack frames prev opener
+  | t == TElse = layoutPairs (RTok t toff tend :: more) stack frames prev opener
+  | otherwise = (TIndent, off, off) :: layoutPairs (RTok t toff tend :: more) (col :: stack) (bumpFrame frames) None False
+resolveContPairs col off stack rest frames prev opener =
+  layoutPairs rest stack frames None False
+
+popDedentsPairs : Int -> Int -> List Int -> List RawTok -> List Int -> List (Token, Int, Int)
+popDedentsPairs col off [] rest frames = layoutPairs rest [] frames None False
+popDedentsPairs col off (top::tl) rest frames
+  | top > col = (TDedent, off, off) :: (TNewline, off, off) :: popDedentsPairs col off tl rest (dropFrame frames)
+  | otherwise = layoutPairs rest (top :: tl) frames None False
 
 closeAllPairs : List Int -> Int -> List (Token, Int, Int)
 closeAllPairs stack off = (TNewline, off, off) :: closeDedentsPairs stack off
@@ -1101,7 +1221,7 @@ elseFilterPairs [] = []
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
   elseFilterPairs
-    (layoutPairs (stripComments (scan src len 0 0 0)) [0] None False)
+    (layoutPairs (stripComments (scan src len 0 0 0)) [0] [] None False)
 
 export
 tokenize : String -> List Token

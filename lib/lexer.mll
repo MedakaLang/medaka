@@ -25,6 +25,28 @@ let last_ident_end : int ref = ref (-1)
    regardless of how the line is broken. *)
 let paren_depth : int ref = ref 0
 
+(* ── LAYOUT-BRACKETS §6.1: bracket-frame stack ─────────────────────────────
+   Parallel to bracket nesting (head = innermost open bracket).  Each frame
+   holds the count of nested layout contexts that bracket has opened.  Inside a
+   bracket the DEFAULT stays free-form (newlines invisible — exactly the old
+   `paren_depth > 0 then ()` behavior); only when a HERALD
+   (`match`/`do`/`function`/`record`) opens a block does the head frame increment
+   and the herald's INDENT/NEWLINE/DEDENT become live, until they dedent back
+   below the herald column (frame → 0, free-form again) or the matching bracket
+   closer force-flushes the pending DEDENTs.  Empty = top level (no bracket).
+   Mirrors `selfhost/frontend/lexer.mdk`'s `frames` thread. *)
+let bracket_frames : int list ref = ref []
+
+let frame_bump () =
+  match !bracket_frames with
+  | f :: fs -> bracket_frames := (f + 1) :: fs
+  | [] -> ()
+
+let frame_drop () =
+  match !bracket_frames with
+  | f :: fs -> bracket_frames := (f - 1) :: fs
+  | [] -> ()
+
 (* ── Phase 137: expression-RHS continuation lines ──────────────────────────
    A more-indented line may continue an unfinished application instead of
    starting a new statement:
@@ -127,6 +149,35 @@ let take_comments () = List.rev !comments
 
 let push_pending t = Queue.push t pending
 
+(* A bracket OPENER: push a fresh free-form frame.  Mirrors selfhost
+   `bracketOpener` pushing `0 :: frames`.  (Also keeps `paren_depth` in sync, as
+   other code may consult it.) *)
+let open_bracket () =
+  incr paren_depth;
+  bracket_frames := 0 :: !bracket_frames
+
+(* A bracket CLOSER: force-flush every nested layout context this frame opened
+   (NEWLINE+DEDENT per context, popping the indent stack) BEFORE the closer
+   token, so the pair stays balanced and the grammar sees `… NEWLINE DEDENT )`.
+   Mirrors selfhost `flushClose`.  Queues the flush tokens, pops the frame, then
+   queues the closer; the caller drains via [raw_token].  Kept in the header
+   (does NOT call the rules) so each closer action is `flush_close TOK;
+   raw_token lexbuf`. *)
+let flush_close (tok : token) : unit =
+  decr paren_depth;
+  (match !bracket_frames with
+   | f :: fs ->
+     let n = ref (if f > 0 then f else 0) in
+     while !n > 0 && (match !indent_stack with _ :: _ -> true | [] -> false) do
+       (match !indent_stack with _ :: rest -> indent_stack := rest | [] -> ());
+       push_pending NEWLINE;
+       push_pending DEDENT;
+       decr n
+     done;
+     bracket_frames := fs
+   | [] -> ());
+  push_pending tok
+
 (* Peek (without consuming) whether the next characters at the current scan
    position begin a line comment (`--`) or a block comment (`{-`).  Used by the
    newline-run rule to keep a *comment-only line transparent to layout*: a line
@@ -143,9 +194,34 @@ let next_is_comment lexbuf =
        || (Bytes.get buf p = '{' && Bytes.get buf (p + 1) = '-')))
 
 let handle_indent col =
-  (* When inside `(...)`/`[...]`/`{...}`, ignore indentation changes
-     — the grouping characters carry the structure, not whitespace. *)
-  if !paren_depth > 0 then ()
+  (* LAYOUT-BRACKETS §6.1.  Inside a bracket whose head frame is in free-form
+     (count = 0), a newline is invisible UNLESS a herald arms a block on a
+     deeper line — exactly mirroring `selfhost/frontend/lexer.mdk`'s
+     `applyNlFrame` free-form branch.  Once a herald block is live (count > 0)
+     OR at top level (no bracket frame), the ordinary layout logic runs, with
+     the head frame bumped/dropped per INDENT/DEDENT so the matching closer can
+     force-flush.  The locked herald set is `match`/`record` (the one-shots) and
+     the `do`/`function` keywords; the generic `not can_end_expr` rule is NOT a
+     herald inside a bracket (a `,`-led `[1,\n 2]` must stay free-form). *)
+  let in_bracket_free_form =
+    match !bracket_frames with f :: _ -> f = 0 | [] -> false in
+  if in_bracket_free_form then begin
+    let was_block_opener = !match_pending || !record_pending in
+    match_pending := false;
+    record_pending := false;
+    let arms_herald =
+      was_block_opener
+      || (match !prev_significant with Some DO | Some FUNCTION -> true | _ -> false) in
+    let trailing =
+      (match !prev_significant with Some t -> is_trailing_continuation_op t | None -> false) in
+    let current = List.hd !indent_stack in
+    if col > current && arms_herald && not trailing then begin
+      indent_stack := col :: !indent_stack;
+      frame_bump ();
+      push_pending INDENT
+    end
+    (* else: free-form continuation — drop the newline entirely. *)
+  end
   else begin
     (* The match/record header (if any) is now complete; snapshot and clear the
        one-shots so the *next* indent decides afresh. *)
@@ -175,6 +251,7 @@ let handle_indent col =
       in
       if opens_block then begin
         indent_stack := col :: !indent_stack;
+        frame_bump ();
         push_pending INDENT
       end else
         (* Candidate continuation: resolved in [token] once the deeper line's
@@ -188,6 +265,7 @@ let handle_indent col =
         match !indent_stack with
         | top :: rest when top > col ->
           indent_stack := rest;
+          frame_drop ();
           push_pending DEDENT;
           push_pending NEWLINE;
           pop ()
@@ -220,6 +298,7 @@ let reset () =
   look := None;
   last_ident_end := -1;
   paren_depth := 0;
+  bracket_frames := [];
   prev_significant := None;
   match_pending := false;
   record_pending := false;
@@ -430,8 +509,8 @@ and read = parse
     }
 
   (* Compound tokens — must come before single-char rules *)
-  | "[|"  { incr paren_depth; LARRAY }
-  | "|]"  { decr paren_depth; RARRAY }
+  | "[|"  { open_bracket (); LARRAY }
+  | "|]"  { flush_close RARRAY; raw_token lexbuf }
   | "=>"  { FAT_ARROW }
   | "->"  { ARROW }
   | "<-"  { LARROW }
@@ -446,7 +525,7 @@ and read = parse
   | "|>"  { PIPE_RIGHT }
   | ">>"  { RCOMPOSE }
   | "<<"  { LCOMPOSE }
-  | ".{"  { incr paren_depth; DOT_LBRACE }
+  | ".{"  { open_bracket (); DOT_LBRACE }
   | ".*"  { DOT_STAR }
   | "@"   { if Lexing.lexeme_start lexbuf = !last_ident_end then AS_AT else AT }
 
@@ -464,14 +543,13 @@ and read = parse
   | ".."  { DOTDOT }
   | '.'   { DOT }
   | '|'   { PIPE }
-  | '('   { incr paren_depth; LPAREN }
-  | ')'   { decr paren_depth; RPAREN }
-  | '['   { incr paren_depth; LBRACKET }
-  | ']'   { decr paren_depth; RBRACKET }
+  | '('   { open_bracket (); LPAREN }
+  | ')'   { flush_close RPAREN; raw_token lexbuf }
+  | '['   { open_bracket (); LBRACKET }
+  | ']'   { flush_close RBRACKET; raw_token lexbuf }
   | '{'   {
-      if !interp_depth > 0 then incr interp_depth
-      else incr paren_depth;
-      LBRACE
+      if !interp_depth > 0 then (incr interp_depth; LBRACE)
+      else (open_bracket (); LBRACE)
     }
   | '}'   {
       if !interp_depth > 0 then begin
@@ -485,8 +563,7 @@ and read = parse
         end else
           RBRACE
       end else begin
-        decr paren_depth;
-        RBRACE
+        flush_close RBRACE; raw_token lexbuf
       end
     }
   | '!'   { BANG }
@@ -706,6 +783,7 @@ and resolve_pending col t lexbuf =
   else begin
     let sp = lexbuf.Lexing.lex_start_p and ep = lexbuf.Lexing.lex_curr_p in
     indent_stack := col :: !indent_stack;
+    frame_bump ();  (* LAYOUT-BRACKETS §6.1: count a deferred-INDENT block in the bracket frame *)
     look := Some (t, sp, ep);
     (* zero-width INDENT positioned just before [t] *)
     lexbuf.Lexing.lex_curr_p <- sp;

@@ -2021,8 +2021,32 @@ sign =
       ]) -> ()
   | d -> failwith ("wrong: " ^ pp_decl d)
 
-(* ── Declaration attributes (Phase 49) ──────────────── *)
+(* ── Bracket block-expressions (LAYOUT-BRACKETS §6.1) ──────────────
+   A herald (`match`/`do`/`function`) block may appear directly inside
+   `( )` / `[ ]` now that the lexer emits INDENT/NEWLINE/DEDENT for the
+   herald's nested block.  These exercise the Gate-A lexer + Gate-B grammar
+   end-to-end at the parse level. *)
+let test_bracket_match_paren () =
+  parses_ok "f x = (match x\n  0 => 1\n  _ => 2)\n" ()
 
+let test_bracket_match_lambda_paren () =
+  parses_ok "main = g (x => match x\n  0 => 1\n  _ => 2)\n" ()
+
+let test_bracket_match_list () =
+  parses_ok "f x = [match x\n  0 => 10\n  _ => 20]\n" ()
+
+let test_bracket_do_paren () =
+  parses_ok "c = (do\n  x <- a\n  pure x)\n" ()
+
+(* Free-form continuation inside brackets must STILL parse (no herald = no
+   nested layout): a trailing-op wrap and a comma-led list line. *)
+let test_bracket_freeform_op () =
+  parses_ok "main = (1 +\n  2)\n" ()
+
+let test_bracket_freeform_list () =
+  parses_ok "main = [1,\n  2, 3]\n" ()
+
+(* ── Declaration attributes (Phase 49) ──────────────── *)
 let test_attr_deprecated () =
   match parse_one "@deprecated \"use bar\"\nfoo x = x\n" with
   | DAttrib ([AttrDeprecated "use bar"], DFunDef (false, "foo", [PVar "x"], EVar "x")) -> ()
@@ -2405,6 +2429,14 @@ let () =
     "function keyword (Phase 44)", [
       test_case "basic two arms"   `Quick test_function_basic;
       test_case "arms with guards" `Quick test_function_guard;
+    ];
+    "bracket block-expressions (LAYOUT-BRACKETS)", [
+      test_case "match in parens"        `Quick test_bracket_match_paren;
+      test_case "match in lambda parens" `Quick test_bracket_match_lambda_paren;
+      test_case "match in list"          `Quick test_bracket_match_list;
+      test_case "do in parens"           `Quick test_bracket_do_paren;
+      test_case "free-form op wrap"      `Quick test_bracket_freeform_op;
+      test_case "free-form list wrap"    `Quick test_bracket_freeform_list;
     ];
     "declaration attributes (Phase 49)", [
       test_case "@deprecated"  `Quick test_attr_deprecated;

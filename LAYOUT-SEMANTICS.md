@@ -326,15 +326,21 @@ in a comment throwing off brace counting).
 
 ### 6.1 Bracket block-expressions — herald-armed nested layout (NEW)
 
-> **Status (staging).** The model below is the *locked* design
-> (`LAYOUT-BRACKETS-DESIGN.md`, LOCKED SCOPE 2026-06-23). It is being landed in
-> stages: the **grammar** side (productions that *accept* the nested tokens) is
-> implemented; the **lexer** side (Stage A actually *emitting* the nested
-> `INDENT`/`NEWLINE`/`DEDENT` for the herald block) is **Stage 3, pending**.
-> Until Stage 3 lands, the prior rule (§6, above) still holds in practice — the
-> lexer emits no layout tokens inside brackets, so a bracketed herald block does
-> not yet parse end-to-end. This subsection documents the target so spec and
-> grammar stay honest about the seam.
+> **Status: LANDED (2026-06-23).** The model below is the *locked* design
+> (`LAYOUT-BRACKETS-DESIGN.md`, LOCKED SCOPE 2026-06-23), now implemented in BOTH
+> lexers (Stage 3 — the lexer Gate A — complete): `selfhost/frontend/lexer.mdk`
+> threads a bracket-frame stack (`frames`) through the layout pass
+> (`flushClose`/`applyNlFrame`/`armsHerald`); `lib/lexer.mll` mirrors it
+> byte-identically (`bracket_frames` + `flush_close` + the free-form branch in
+> `handle_indent`). The grammar (Gate B) was landed earlier. A bracketed
+> `match`/`do`/`function` herald block now lexes, checks, runs, and builds
+> end-to-end. **Two documented limitations** (acceptable per the locked scope):
+> (1) the **bare-`INDENT` block** herald is DEFERRED inside brackets — there is no
+> keyword to arm it without regressing free-form (see the arming rule below); the
+> grammar's `bracket_block` production stays latent for it. (2) The closer on its
+> **own line** after a herald block (`(match x\n  0 => 1\n)`) is rejected by the
+> grammar (`LPAREN bracket_block RPAREN` admits no trailing layout NEWLINE); put
+> the closer on the last arm's line (`… _ => 2)`).
 
 **Prior rule (unchanged default).** Inside a bracket pair layout stays **OFF by
 default** — newlines are invisible, indentation is free-form, exactly as §6
