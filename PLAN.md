@@ -544,8 +544,13 @@ cover the corpus; these are known holes outside it.
      focused layout repro.
   4. **Multi-line `->` type signatures parse-error on native** — a type sig split across lines
      is rejected; keep sigs single-line. (Surfaced by the RowType layer.)
-  5. **Spurious non-exhaustive-match warning on a partial record pattern** (`RowType { width = w }`).
-     Workaround: field access (`rt.width`). Diagnostic-quality bug.
+  5. ✅ **Spurious non-exhaustive-match warning on a partial record pattern** (`RowType { width = w }`).
+     **FIXED (2026-06-24, `b0cfb71`, native).** `exhaust.mdk`'s `desugarPat` lowered a partial record
+     pattern `PRec name _ False` to a sentinel literal the Maranget matrix never recognized as a ctor;
+     now lowers to `PCon name [PWild for unmentioned fields]` (declared field order from the Oracle's
+     new `ctorFields`), mirroring OCaml `lib/exhaust.ml`. Soundness preserved (genuine non-exhaustive
+     matches still warn — negative fixture `test/native_fixtures/real_gap_still_warns.mdk`); fixpoint
+     C3a/C3b YES.
   6. **In-module doctests + an UNANNOTATED cross-module function → `unbound constrained fn`.**
      ⚠️ *Original description ("single-file-path parse error") is STALE — that parse error was fixed
      in `e2846d0`; the multi-module doctest path now resolves sibling imports.* What remains
