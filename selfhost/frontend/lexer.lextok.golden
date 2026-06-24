@@ -192,6 +192,9 @@ PIPE
 UPPER "TSlash"
 NEWLINE
 PIPE
+UPPER "TSlashEq"
+NEWLINE
+PIPE
 UPPER "TMod"
 NEWLINE
 PIPE
@@ -643,6 +646,11 @@ IDENT "tokenToString"
 UPPER "TSlash"
 EQUAL
 STRING "SLASH"
+NEWLINE
+IDENT "tokenToString"
+UPPER "TSlashEq"
+EQUAL
+STRING "SLASHEQ"
 NEWLINE
 IDENT "tokenToString"
 UPPER "TMod"
@@ -6131,6 +6139,24 @@ IDENT "pos"
 IDENT "depth"
 IDENT "id"
 UPPER "TNeq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "/"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TSlashEq"
 INT 2
 INT 0
 NEWLINE
