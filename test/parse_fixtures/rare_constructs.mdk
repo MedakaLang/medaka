@@ -3,8 +3,8 @@
 -- barely use them. Validated byte-for-byte against the OCaml reference by
 -- test/diff_selfhost_parse.sh.
 --
--- Covered here: operator sections, unary not, list comprehensions, the
--- `function` keyword (incl. an `if` arm guard), the `?` try-operator, array
+-- Covered here: operator sections, unary not, the
+-- `function` keyword (incl. an `if` arm guard), array
 -- ranges `[|lo..hi|]`, array slices/index `e.[lo..hi]` / `e.[i]`, range
 -- patterns (int + char), `let mut` + assignment, field assignment, let-else,
 -- a do-block function-let, and record patterns `C { f = p, … }` / `C { .. }`.
@@ -21,20 +21,10 @@ cmpSection = (== 0)
 
 notFlag b = !b
 
-keys m = [k | (k, _) <- entries m]
-
-evens xs = [x | x <- xs, x % 2 == 0]
-
-triples = [(x, y, z) | x <- xs, let s = x + 1, y <- ys, x < y]
-
 classify = function
   0 => "zero"
   n if n < 0 => "neg"
   n => "pos"
-
-tryParse x =
-  let y = (parse x) ?
-  y
 
 arrRange = [|1..5|]
 

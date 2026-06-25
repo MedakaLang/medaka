@@ -79,7 +79,6 @@ import frontend.ast.{
   Guard(..),
   GuardArm(..),
   DoStmt(..),
-  LcQual(..),
   Section(..),
   InterpPart(..),
   FieldAssign(..),
@@ -614,9 +613,6 @@ renameScoped rm bound (EMatch e0 arms) =
   EMatch (renameScoped rm bound e0) (map (renameArm rm bound) arms)
 renameScoped rm bound (EBlock stmts) = EBlock (renameStmts rm bound stmts)
 renameScoped rm bound (EDo stmts) = EDo (renameStmts rm bound stmts)
-renameScoped rm bound (EListComp body quals) =
-  let (quals2, bnd) = renameQuals rm bound quals
-  EListComp (renameScoped rm bnd body) quals2
 -- non-binder composites: recurse children with the same bound
 renameScoped rm bound (ELoc l e) = ELoc l (renameScoped rm bound e)
 renameScoped rm bound (EDoOrigin l e) = EDoOrigin l (renameScoped rm bound e)
@@ -653,7 +649,6 @@ renameScoped rm bound (EIndex e0 i) =
 renameScoped rm bound (EAnnot e0 t) = EAnnot (renameScoped rm bound e0) t
 renameScoped rm bound (EHeadAnnot e0 t) =
   EHeadAnnot (renameScoped rm bound e0) t
-renameScoped rm bound (EQuestion e0) = EQuestion (renameScoped rm bound e0)
 renameScoped rm bound (ERecordCreate n fs) =
   ERecordCreate (renameDefName rm n) (map (renameField rm bound) fs)
 renameScoped rm bound (ERecordUpdate e0 fs) =
@@ -742,21 +737,6 @@ renameStmts rm bound ((DoLetElse p e alt)::rest) =
       (renameScoped rm bound e)
       (renameScoped rm bound alt) ::
     renameStmts rm (patVarsPM p ++ bound) rest
-
-renameQuals : List (String, String) -> List String -> List LcQual -> (List LcQual, List String)
-renameQuals _ bound [] = ([], bound)
-renameQuals rm bound ((LCGen p e)::rest) =
-  let e2 = renameScoped rm bound e
-  let (rest2, bnd) = renameQuals rm (patVarsPM p ++ bound) rest
-  (LCGen (renamePat rm p) e2 :: rest2, bnd)
-renameQuals rm bound ((LCGuard e)::rest) =
-  let e2 = renameScoped rm bound e
-  let (rest2, bnd) = renameQuals rm bound rest
-  (LCGuard e2 :: rest2, bnd)
-renameQuals rm bound ((LCLet m p e)::rest) =
-  let e2 = renameScoped rm bound e
-  let (rest2, bnd) = renameQuals rm (patVarsPM p ++ bound) rest
-  (LCLet m (renamePat rm p) e2 :: rest2, bnd)
 
 letBindNamesPM : List LetBind -> List String
 letBindNamesPM binds = map letBindName binds

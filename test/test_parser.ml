@@ -383,18 +383,6 @@ let test_expr_field_access () =
   | EFieldAccess (EVar "person", "name") -> ()
   | _ -> failwith "wrong"
 
-let test_expr_question_simple () =
-  (* `foo ?` ⇒ EQuestion(EVar "foo") *)
-  match parse_expr "foo ?\n" with
-  | EQuestion (EVar "foo") -> ()
-  | _ -> failwith "wrong"
-
-let test_expr_question_app () =
-  (* `Ok 5 ?` binds looser than application: parses as `(Ok 5) ?` *)
-  match parse_expr "Ok 5 ?\n" with
-  | EQuestion (EApp (EVar "Ok", ELit (LInt 5))) -> ()
-  | _ -> failwith "wrong"
-
 let test_expr_record_create () =
   match parse_expr "Person { name = \"Alice\", age = 30 }\n" with
   | ERecordCreate ("Person", [("name", ELit (LString "Alice")); ("age", ELit (LInt 30))]) -> ()
@@ -1178,14 +1166,6 @@ let test_lambda_aspat_param () =
 let test_spaced_at_is_hint () =
   match parse_expr "combine @Additive" with
   | EApp (EVar "combine", EVar "@Additive") -> ()
-  | e -> failwith (Printf.sprintf "wrong shape: %s" (Ast.pp_expr e))
-
-(* As-pattern in a list-comprehension generator (lc_qual now parses its LHS as
-   an expression and converts via expr_to_pat, like the do-block stmt rule). *)
-let test_listcomp_aspat_gen () =
-  match parse_expr "[y | p@(Some y) <- opts]" with
-  | EListComp (EVar "y",
-      [LCGen (PAs ("p", PCon ("Some", [PVar "y"])), EVar "opts")]) -> ()
   | e -> failwith (Printf.sprintf "wrong shape: %s" (Ast.pp_expr e))
 
 (* ── Import/export declaration tests ─────────────────── *)
@@ -2164,8 +2144,6 @@ let () =
       test_case "array literal"     `Quick test_expr_array_literal;
       test_case "tuple"             `Quick test_expr_tuple;
       test_case "field access"      `Quick test_expr_field_access;
-      test_case "? postfix simple"  `Quick test_expr_question_simple;
-      test_case "? postfix on app"  `Quick test_expr_question_app;
       test_case "record create"     `Quick test_expr_record_create;
       test_case "record update"     `Quick test_expr_record_update;
       test_case "record create pun (all)"    `Quick test_expr_record_create_pun;
@@ -2269,7 +2247,6 @@ let () =
       test_case "do bind as-pat tuple"      `Quick test_do_bind_aspat_tuple;
       test_case "lambda as-pat param"       `Quick test_lambda_aspat_param;
       test_case "spaced @ is hint"          `Quick test_spaced_at_is_hint;
-      test_case "listcomp as-pat gen"       `Quick test_listcomp_aspat_gen;
     ];
     "import declarations", [
       test_case "simple"                   `Quick test_use_simple;

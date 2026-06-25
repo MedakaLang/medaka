@@ -4099,16 +4099,6 @@ let t_sig_none_ok = assert_type
 
 (* ── Robustness (Phase 71) ────────────────────────── *)
 
-(* A node that should have been removed by desugar (here a list comprehension)
-   now surfaces as a catchable InternalError diagnostic instead of an opaque
-   OCaml Assert_failure when typecheck is run without the desugar pass. *)
-let t_internal_error_not_assert () =
-  let prog = parse "r = [x | x <- [1, 2, 3]]\n" in  (* intentionally NOT desugared *)
-  match (try Ok (check_program prog) with Type_error (e, _) -> Error e) with
-  | Error (InternalError _) -> ()
-  | Error e -> failwith ("Expected InternalError, got: " ^ pp_error e)
-  | Ok _ -> failwith "Expected InternalError, but it type-checked"
-
 (* Phase 78a: a user top-level binding may shadow a prelude *plain* function
    (`count`, a standalone DFunDef in core.mdk).  Previously the user clause
    coalesced with the prelude clause in group_fundefs and the program failed to
@@ -4813,9 +4803,6 @@ let () =
       test_case "ok: const sig is genuinely poly"      `Quick t_sig_const_ok;
       test_case "ok: id sig exactly matches body"      `Quick t_sig_id_ok;
       test_case "ok: no sig infers polymorphically"    `Quick t_sig_none_ok;
-    ];
-    "robustness (Phase 71)", [
-      test_case "non-desugared node -> InternalError"  `Quick t_internal_error_not_assert;
     ];
     "prelude shadowing (Phase 78a)", [
       test_case "user fn shadows prelude plain fn"      `Quick t_prelude_fn_shadow;

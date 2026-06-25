@@ -15,7 +15,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -140,8 +139,6 @@ exprSexp (EInfix op a b) = node "EInfix" [escStr op, exprSexp a, exprSexp b]
 exprSexp (EFieldAccess e f) = node "EFieldAccess" [exprSexp e, escStr f]
 exprSexp (ETuple es) = node "ETuple" (map exprSexp es)
 exprSexp (EListLit es) = node "EListLit" (map exprSexp es)
-exprSexp (EListComp body quals) =
-  node "EListComp" [exprSexp body, slist (map lcQualSexp quals)]
 exprSexp (EArrayLit es) = node "EArrayLit" (map exprSexp es)
 exprSexp (ERangeList lo hi incl) =
   node "ERangeList" [exprSexp lo, exprSexp hi, boolStr incl]
@@ -152,7 +149,6 @@ exprSexp (ESlice e lo hi incl) =
 exprSexp (ELetGroup binds body) =
   node "ELetGroup" [slist (map letBindSexp binds), exprSexp body]
 exprSexp (ESection s) = node "ESection" [sectionSexp s]
-exprSexp (EQuestion e) = node "EQuestion" [exprSexp e]
 exprSexp (EFunction arms) = node "EFunction" (map armSexp arms)
 exprSexp (EIndex a i) = node "EIndex" [exprSexp a, exprSexp i]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
@@ -172,11 +168,6 @@ exprSexp (ESetLit n es) = node "ESetLit" [escStr n, slist (map exprSexp es)]
 exprSexp (EAsPat x e) = node "EAsPat" [escStr x, exprSexp e]
 exprSexp (EMethodRef name) = node "EMethodRef" [escStr name]
 exprSexp (EDictApp name) = node "EDictApp" [escStr name]
-
-lcQualSexp : LcQual -> String
-lcQualSexp (LCGen p e) = node "LCGen" [patSexp p, exprSexp e]
-lcQualSexp (LCGuard e) = node "LCGuard" [exprSexp e]
-lcQualSexp (LCLet m p e) = node "LCLet" [boolStr m, patSexp p, exprSexp e]
 
 sectionSexp : Section -> String
 sectionSexp (SecBare op) = node "SecBare" [escStr op]

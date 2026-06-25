@@ -319,8 +319,6 @@ let local_bound_names (prog : program) : (ident, unit) Hashtbl.t =
       List.iter (function
         | DoBind (p, _) | DoLet (_, _, p, _) | DoLetElse (p, _, _) -> add_pat p
         | _ -> ()) stmts
-    | EListComp (_, quals) ->
-      List.iter (function LCGen (p, _) | LCLet (_, p, _) -> add_pat p | LCGuard _ -> ()) quals
     | _ -> ()
   in
   List.iter (fun d ->

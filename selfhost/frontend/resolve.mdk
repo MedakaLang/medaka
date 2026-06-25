@@ -26,7 +26,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -82,8 +81,6 @@ public export data ResError
   | UnknownModule String (Option Loc)
   -- `import` of a module not among known exports
   -- misplaced surface constructs that survive desugar
-  | QuestionMisplaced (Option Loc)
-  -- `?` outside a `let` RHS
   | NonRecursiveValueLet String (Option Loc)
   -- `let x = … x …` (no `rec`) referencing itself
   | DuplicateBinding String (Option Loc)
@@ -110,7 +107,6 @@ resErrorLoc (ExternWithBody _ l) = l
 resErrorLoc (PrivateNameAccess _ _ l) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (UnknownModule _ l) = l
-resErrorLoc (QuestionMisplaced l) = l
 resErrorLoc (NonRecursiveValueLet _ l) = l
 resErrorLoc (DuplicateBinding _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
@@ -269,7 +265,6 @@ checkExpr cur env scope (EFieldAccess e0 _) = checkExpr cur env scope e0
 checkExpr cur env scope (ETuple es) = flatMap (checkExpr cur env scope) es
 checkExpr cur env scope (EListLit es) = flatMap (checkExpr cur env scope) es
 checkExpr cur env scope (EArrayLit es) = flatMap (checkExpr cur env scope) es
-checkExpr cur env scope (EListComp body quals) = checkListComp cur env scope body quals
 checkExpr cur env scope (ERangeList lo hi _) = checkExpr cur env scope lo
   ++ checkExpr cur env scope hi
 checkExpr cur env scope (ERangeArray lo hi _) = checkExpr cur env scope lo
@@ -299,7 +294,6 @@ checkExpr cur env scope (ERecordCreate name fs) =
 checkExpr cur env scope (ERecordUpdate e0 fs) = checkRecordUpdate cur env scope e0 fs
 checkExpr cur env scope (EVariantUpdate con e0 fs) = checkExpr cur env scope e0
   ++ checkRecordCreate cur env scope con fs
-checkExpr cur env scope (EQuestion e0) = QuestionMisplaced cur :: checkExpr cur env scope e0
 checkExpr cur env scope (EAsPat _ e0) = AsPatternMisplaced cur :: checkExpr cur env scope e0
 checkExpr cur env scope (ESection s) = checkSection cur env scope s
 -- ELoc captures its span into `cur` (Stage B), then recurses — so any error in
@@ -471,23 +465,6 @@ checkSection : Option Loc -> Env -> List String -> Section -> List ResError
 checkSection _ _ _ (SecBare _) = []
 checkSection cur env scope (SecRight _ e) = checkExpr cur env scope e
 checkSection cur env scope (SecLeft e _) = checkExpr cur env scope e
-
-checkListComp : Option Loc -> Env -> List String -> Expr -> List LcQual -> List ResError
-checkListComp cur env scope body quals =
-  let (qErrs, scope2) = checkQuals cur env scope quals
-  qErrs ++ checkExpr cur env scope2 body
-
-checkQuals : Option Loc -> Env -> List String -> List LcQual -> (List ResError, List String)
-checkQuals _ _ scope [] = ([], scope)
-checkQuals cur env scope (q::rest) =
-  let (errs, scope2) = checkQual cur env scope q
-  let (restErrs, scope3) = checkQuals cur env scope2 rest
-  (errs ++ restErrs, scope3)
-
-checkQual : Option Loc -> Env -> List String -> LcQual -> (List ResError, List String)
-checkQual cur env scope (LCGen p e) = (checkPat cur env p ++ checkExpr cur env scope e, patBindings p ++ scope)
-checkQual cur env scope (LCGuard e) = (checkExpr cur env scope e, scope)
-checkQual cur env scope (LCLet _ p e) = (checkPat cur env p ++ checkExpr cur env scope e, patBindings p ++ scope)
 
 -- ── check_decl ────────────────────────────────────────────────────────────
 -- Decl-level entry: `cur` starts at `None` (no enclosing expr span yet, mirror
@@ -939,7 +916,6 @@ resErrorSexp (NoExportedConstructors n m _) = "(NoExportedConstructors "
   ++ escStr m
   ++ ")"
 resErrorSexp (UnknownModule n _) = "(UnknownModule " ++ escStr n ++ ")"
-resErrorSexp (QuestionMisplaced _) = "QuestionMisplaced"
 resErrorSexp (NonRecursiveValueLet n _) = "(NonRecursiveValueLet "
   ++ escStr n
   ++ ")"
@@ -986,7 +962,6 @@ ppResError (NoExportedConstructors n m _) = "'"
   ++ m
   ++ " (it is exported abstractly); remove the `(..)` or export it with `public export`."
 ppResError (UnknownModule n _) = "Unknown module: " ++ n
-ppResError (QuestionMisplaced _) = "`?` is only allowed as the right-hand side of a `let` binding, e.g. `let x = expr ?`. Use `<-` inside do-blocks."
 ppResError (AsPatternMisplaced _) = "`@` as-patterns are only allowed in a binding position (a lambda parameter, a do-block bind, or a match pattern)."
 ppResError (NonRecursiveValueLet n _) = "'"
   ++ n

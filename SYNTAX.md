@@ -158,7 +158,6 @@ double >> inc                                  -- left-to-right composition
 f << g                                         -- right-to-left composition
 x `div` y                                      -- backtick infix (any named fn)
 person.name   utils.greet                      -- dot = field/module access ONLY
-Ok 5 ?                                          -- `?` short-circuit unwrap Result/Option
 ```
 
 Sections (parenthesized partial operators):
@@ -396,14 +395,10 @@ foo x = x
 f x = x
 ```
 
-## Refs & list comprehensions
+## Refs
 
 ```
 let mut count = Ref 0 in set_ref count 42     -- Ref cell
-
-[x * 2 | x <- [1,2,3,4,5], x > 2]              -- comprehension: generator + filter
-[(x, y) | x <- [1,2], y <- [3,4]]              -- multi-generator
-[y | x <- [1,2,3], let y = x * x, y > 2]       -- with let-binding qualifier
 ```
 
 ## Map / Set literals

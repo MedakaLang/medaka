@@ -78,8 +78,7 @@ let pending_indent   : int option ref = ref None
    direction (a new token will not silently start rescuing layouts). *)
 let can_end_expr = function
   | IDENT _ | UPPER _ | INT _ | FLOAT _ | STRING _ | CHAR _ | BOOL _
-  | INTERP_END _ | RPAREN | RBRACKET | RBRACE | RARRAY | UNDERSCORE
-  | QUESTION -> true
+  | INTERP_END _ | RPAREN | RBRACKET | RBRACE | RARRAY | UNDERSCORE -> true
   | _ -> false
 
 (* Whether [t] is an expression binary operator that, ending a logical line,
@@ -567,7 +566,6 @@ and read = parse
       end
     }
   | '!'   { BANG }
-  | '?'   { QUESTION }
   | '%'   { MOD }
 
   | eof   {
@@ -850,7 +848,7 @@ let token_to_string : token -> string = function
   | PLUSPLUS -> "PLUSPLUS"
   | PIPE_RIGHT -> "PIPE_RIGHT" | RCOMPOSE -> "RCOMPOSE" | LCOMPOSE -> "LCOMPOSE"
   | FAT_ARROW -> "FAT_ARROW" | ARROW -> "ARROW" | LARROW -> "LARROW"
-  | AT -> "AT" | BANG -> "BANG" | QUESTION -> "QUESTION" | AS_AT -> "AS_AT"
+  | AT -> "AT" | BANG -> "BANG" | AS_AT -> "AS_AT"
   (* Punctuation *)
   | EQUAL -> "EQUAL" | COLON -> "COLON" | COMMA -> "COMMA" | DOT -> "DOT"
   | PIPE -> "PIPE" | UNDERSCORE -> "UNDERSCORE" | LPAREN -> "LPAREN"

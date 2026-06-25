@@ -215,8 +215,8 @@ The OCaml compiler pipeline is complete end-to-end —
 → eval` — with phases through ~145 done (see PLAN-ARCHIVE.md). The language has
 records, ADTs, interfaces (with superinterfaces, `deriving`, dictionary-passing
 for return-position/multi-param dispatch), effect rows, exhaustiveness checking,
-`do`-notation, guards (with fall-through + exhaustiveness lint), list
-comprehensions, string interpolation, type aliases/newtypes, container literals
+`do`-notation, guards (with fall-through + exhaustiveness lint),
+string interpolation, type aliases/newtypes, container literals
 (`Map { k => v }` / `Set { x }`), property testing, doctests, **unit tests**
 (Phase 127), an LSP server, a formatter, and a project-config/`medaka new` surface.
 
@@ -450,6 +450,11 @@ after #56). The complement to the TRMC + big-stack stack-safety work, not a bloc
 `logLine`, dispatch handlers) is written as a stack of `let _ = action` bindings — ~1450 occurrences
 across `selfhost/`. The `_` exists only to give the effect a place in a `let`-chain; the binding
 carries no value. Verbose, and `do`-notation doesn't cover it (no monad to thread in plain Unit-IO).
+The **same `let _ =` tax also applies *inside* a `do` block** for an effect statement: a bare statement
+in a monadic block is a `>>` and must be in the block's monad, so an `<IO>`/`<Mut>` call there must be
+written `let _ = effectfulCall` (the motivating case: `sqlite/lib/dbwriter.mdk buildLeafPage`). With `?`
+removed and `do`/`<-` the single monadic-bind form (2026-06-25), this `let _ =` tax is the only residual
+of mixing effects with a value-monad — which is what makes this idea worth picking up.
 
 **Idea:** allow a **bare expression as a statement** in block bodies, sequenced by the existing
 same-indent NEWLINE — so `putStr header` / `putStr body` on consecutive lines run in order without

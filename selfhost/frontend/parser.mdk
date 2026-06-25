@@ -27,7 +27,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -492,24 +491,7 @@ unaryFor _ = parseInfix
 
 -- backtick infix operators: ``a `div` b`` → EInfix (left-associative)
 parseInfix : Parser Expr
-parseInfix = chainl1 parseQuestion backtickOp
-
--- postfix `?` try-operator (looser than application): `e ?` → EQuestion e
-parseQuestion : Parser Expr
-parseQuestion = do
-  e <- parseApp
-  questionTail e
-
-questionTail : Expr -> Parser Expr
-questionTail e = do
-  t <- peekP
-  questionFor e t
-
-questionFor : Expr -> Token -> Parser Expr
-questionFor e TQuestion = do
-  advance
-  questionTail (EQuestion e)
-questionFor e _ = pure e
+parseInfix = chainl1 parseApp backtickOp
 
 backtickOp : Parser (Expr -> Expr -> Expr)
 backtickOp = do
@@ -975,7 +957,6 @@ listFor _ = do
 listRest : Expr -> Token -> Parser Expr
 listRest first TDotDot = rangeAfter first False
 listRest first TDotDotEq = rangeAfter first True
-listRest first TPipe = listCompAfter first
 listRest first TComma = do
   advance
   t <- peekP
@@ -983,7 +964,7 @@ listRest first TComma = do
 listRest first TRBracket = do
   advance
   pure (EListLit [first])
-listRest _ _ = failP "expected , .. ..= | or ]"
+listRest _ _ = failP "expected , .. ..= or ]"
 
 -- after the first element and a comma: a `]` here is a trailing comma on a
 -- single-element list (`[x,]`); otherwise parse the remaining elements (and
@@ -1004,56 +985,6 @@ rangeAfter lo incl = do
   hi <- parseExpr
   expectTok TRBracket
   pure (ERangeList lo hi incl)
-
--- list comprehension `[ body | qual, … ]` after the body and `|`
-listCompAfter : Expr -> Parser Expr
-listCompAfter body = do
-  advance
-  quals <- sepBy1 lcQual (expectTok TComma)
-  expectTok TRBracket
-  pure (EListComp body quals)
-
-lcQual : Parser LcQual
-lcQual = do
-  t <- peekP
-  lcQualFor t
-
-lcQualFor : Token -> Parser LcQual
-lcQualFor TLet = lcLet
-lcQualFor _ = lcGenOrGuard
-
-lcLet : Parser LcQual
-lcLet = do
-  expectTok TLet
-  t <- peekP
-  lcLetMut t
-
-lcLetMut : Token -> Parser LcQual
-lcLetMut TMut = do
-  advance
-  p <- parsePat
-  expectTok TEqual
-  e <- parseExpr
-  pure (LCLet True p e)
-lcLetMut _ = do
-  p <- parsePat
-  expectTok TEqual
-  e <- parseExpr
-  pure (LCLet False p e)
-
--- a generator `pat <- e` (LHS parsed as an expr, reinterpreted) or a guard
-lcGenOrGuard : Parser LcQual
-lcGenOrGuard = do
-  e <- parseExpr
-  t <- peekP
-  lcGenOrGuardFor e t
-
-lcGenOrGuardFor : Expr -> Token -> Parser LcQual
-lcGenOrGuardFor e TLArrow = do
-  advance
-  rhs <- parseExpr
-  pure (LCGen (exprToPat e) rhs)
-lcGenOrGuardFor e _ = pure (LCGuard e)
 
 -- array literal `[| e, … |]`
 parseArray : Parser Expr

@@ -23,7 +23,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -463,9 +462,6 @@ collectLetBinds (ESlice e0 lo hi _) = collectLetBinds e0
 collectLetBinds (EBlock stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EDo stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EAnnot e0 _) = collectLetBinds e0
-collectLetBinds (EListComp body quals) = collectLetBinds body
-  ++ flatMap lcQualBinds quals
-collectLetBinds (EQuestion e0) = collectLetBinds e0
 collectLetBinds (EStringInterp parts) = flatMap interpBinds parts
 collectLetBinds (EGuards arms) = flatMap guardArmBinds arms
 collectLetBinds (EFunction arms) = flatMap collectArmBinds arms
@@ -504,11 +500,6 @@ doStmtBinds (DoLet _ _ _ e) = collectLetBinds e
 doStmtBinds (DoAssign _ e) = collectLetBinds e
 doStmtBinds (DoFieldAssign _ _ e) = collectLetBinds e
 doStmtBinds (DoLetElse _ e alt) = collectLetBinds e ++ collectLetBinds alt
-
-lcQualBinds : LcQual -> List LetBind
-lcQualBinds (LCGen _ e) = collectLetBinds e
-lcQualBinds (LCGuard e) = collectLetBinds e
-lcQualBinds (LCLet _ _ e) = collectLetBinds e
 
 interpBinds : InterpPart -> List LetBind
 interpBinds (InterpStr _) = []

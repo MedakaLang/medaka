@@ -1074,13 +1074,11 @@ payloadArityL (ConNamed fs) = listLen fs
 
 -- a readable tag for the unsupported-node panic
 nodeTag : Expr -> String
-nodeTag (EQuestion _) = "EQuestion"
 nodeTag (ESection _) = "ESection"
 nodeTag (EFunction _) = "EFunction"
 nodeTag (EGuards _) = "EGuards"
 nodeTag (EDo _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
-nodeTag (EListComp _ _) = "EListComp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"
 nodeTag (ESetLit _ _) = "ESetLit"

@@ -22,7 +22,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -86,9 +85,6 @@ mapKids f (ESlice e0 lo hi incl) =
 mapKids f (EBlock stmts) = EBlock (map (mapDoStmt f) stmts)
 mapKids f (EDo stmts) = EDo (map (mapDoStmt f) stmts)
 mapKids f (EAnnot e0 t) = EAnnot (mapExpr f e0) t
-mapKids f (EListComp body quals) =
-  EListComp (mapExpr f body) (map (mapLcQual f) quals)
-mapKids f (EQuestion e0) = EQuestion (mapExpr f e0)
 mapKids f (EStringInterp parts) = EStringInterp (map (mapInterp f) parts)
 mapKids f (EGuards arms) = EGuards (map (mapGuardArm f) arms)
 mapKids f (EFunction arms) = EFunction (map (mapArm f) arms)
@@ -120,11 +116,6 @@ mapFunClause f (FunClause ps b) = FunClause ps (mapExpr f b)
 
 mapFieldAssign : (Expr -> Expr) -> FieldAssign -> FieldAssign
 mapFieldAssign f (FieldAssign n v) = FieldAssign n (mapExpr f v)
-
-mapLcQual : (Expr -> Expr) -> LcQual -> LcQual
-mapLcQual f (LCGen p e) = LCGen p (mapExpr f e)
-mapLcQual f (LCGuard e) = LCGuard (mapExpr f e)
-mapLcQual f (LCLet m p e) = LCLet m p (mapExpr f e)
 
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
 mapDoStmt f (DoExpr e) = DoExpr (mapExpr f e)
@@ -244,39 +235,6 @@ concatLeft : Expr -> List Expr -> Expr
 concatLeft acc [] = acc
 concatLeft acc (e::rest) = concatLeft (binOp "++" acc e) rest
 
--- ── Pass: desugar_questions (`let p = e ? in rest` → andThen) ────────────
--- Mirror of lib/desugar.ml's rewrite_question_expr.  A `let`-bound `?` lowers to
--- andThen; inside a do-block (EDo) a `?` DoLet becomes a DoBind; a bare EBlock
--- containing any `?` DoLet is promoted to EDo (so do-lowering handles it).
-rewriteQuestion : Expr -> Expr
-rewriteQuestion (ELet m isFun pat e1 e2) = questionLet m isFun pat e1 e2
-rewriteQuestion (EDo stmts) = EDo (map rewriteQStmt stmts)
-rewriteQuestion (EBlock stmts) = blockQuestion stmts
-rewriteQuestion e = e
-
-questionLet : Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-questionLet m isFun pat (EQuestion inner) e2 =
-  callBin "andThen" inner (ELam [pat] e2)
-questionLet m isFun pat e1 e2 = ELet m isFun pat e1 e2
-
-rewriteQStmt : DoStmt -> DoStmt
-rewriteQStmt (DoLet m r pat e) = questionStmt m r pat e
-rewriteQStmt s = s
-
-questionStmt : Bool -> Bool -> Pat -> Expr -> DoStmt
-questionStmt m r pat (EQuestion inner) = DoBind pat inner
-questionStmt m r pat e = DoLet m r pat e
-
-blockQuestion : List DoStmt -> Expr
-blockQuestion stmts
-  | anyQuestionStmt stmts = EDo (map rewriteQStmt stmts)
-  | otherwise = EBlock stmts
-
-anyQuestionStmt : List DoStmt -> Bool
-anyQuestionStmt [] = False
-anyQuestionStmt ((DoLet _ _ _ (EQuestion _))::_) = True
-anyQuestionStmt (_::rest) = anyQuestionStmt rest
-
 -- ── Pass: lower_do_blocks (do-notation → andThen/pure chains) ─────────────
 -- Mirror of lib/desugar.ml's rewrite_do/lower_do.  Only EDo is lowered; bare
 -- EBlock survives (the reference leaves it for eval).  The do_tag the reference
@@ -350,30 +308,6 @@ isRefutable (PAs _ p) = isRefutable p
 anyRefutable : List Pat -> Bool
 anyRefutable [] = False
 anyRefutable (p::ps) = isRefutable p || anyRefutable ps
-
--- ── Pass: desugar_list_comps (`[e | quals]` → andThen/EIf/ELet over quals) ─
--- Mirror of lib/desugar.ml's desugar_list_comp (fold_right over the qualifiers
--- with initial accumulator `[body]`).
-rewriteListComp : Expr -> Expr
-rewriteListComp (EListComp body quals) = desugarListComp body quals
-rewriteListComp e = e
-
-desugarListComp : Expr -> List LcQual -> Expr
-desugarListComp body quals = foldRightLc quals (EListLit [body])
-
-foldRightLc : List LcQual -> Expr -> Expr
-foldRightLc [] acc = acc
-foldRightLc (q::rest) acc = lcStep q (foldRightLc rest acc)
-
-lcStep : LcQual -> Expr -> Expr
-lcStep (LCGen pat xs) acc = callBin "andThen" xs (lcLam pat acc)
-lcStep (LCGuard cond) acc = EIf cond acc (EListLit [])
-lcStep (LCLet m pat e) acc = ELet m False pat e acc
-
-lcLam : Pat -> Expr -> Expr
-lcLam pat acc
-  | isRefutable pat = ELam [PVar "__lc_x"] (EMatch (EVar "__lc_x") [Arm pat [] acc, Arm PWild [] (EListLit [])])
-  | otherwise = ELam [pat] acc
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
 -- Mirror of lib/desugar.ml's expand_decl + the Eq/Debug/Display/Ord/Generic
@@ -860,7 +794,5 @@ desugar prog = mergeIfaceDefaults prog
   |> concatMapDecl expandDecl
   |> desugarRecordPuns
   |> lowerContainerLiterals
-  |> mapProg rewriteListComp
-  |> mapProg rewriteQuestion
   |> mapProg rewriteDo
   |> mapProg rewriteSugar

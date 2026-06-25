@@ -390,23 +390,6 @@ unwrap (MkSum n) = n
 r = unwrap (foldMap MkSum [1, 2, 3, 4])
 |} "r" (VInt 10)
 
-let t_list_comp_guard = assert_val
-  {|r = [x * 2 | x <- [1, 2, 3, 4, 5], x > 2]
-|} "r" (VList [VInt 6; VInt 8; VInt 10])
-
-let t_list_comp_multi_gen = assert_val
-  {|r = [(x, y) | x <- [1, 2], y <- [3, 4]]
-|} "r" (VList [VTuple [VInt 1; VInt 3]; VTuple [VInt 1; VInt 4];
-               VTuple [VInt 2; VInt 3]; VTuple [VInt 2; VInt 4]])
-
-let t_list_comp_let = assert_val
-  {|r = [y | x <- [1, 2, 3], let y = x * x, y > 2]
-|} "r" (VList [VInt 4; VInt 9])
-
-let t_list_comp_refutable_con = assert_val
-  {|r = [x | Some x <- [Some 1, None, Some 2, None, Some 3]]
-|} "r" (VList [VInt 1; VInt 2; VInt 3])
-
 (* ── Pipe operator ──────────────────────────────────────────────────────── *)
 
 let t_pipe = assert_val {|double x = x * 2
@@ -551,42 +534,6 @@ r = do
   x <- Box 1
   pure (x + 1)
 |} "r" (VCon ("Box", [VInt 2]))
-
-(* ── `?` operator: desugars to andThen ──────────────────────────────────── *)
-
-let t_question_ok = assert_val_typed {|r =
-  let x = Ok 5 ?
-  pure (x + 1)
-|} "r" (VCon ("Ok", [VInt 6]))
-
-let t_question_err = assert_val_typed {|r =
-  let x = Err "bad" ?
-  pure (x + 1)
-|} "r" (VCon ("Err", [VString "bad"]))
-
-let t_question_some = assert_val_typed {|r =
-  let x = Some 42 ?
-  pure (x + 1)
-|} "r" (VCon ("Some", [VInt 43]))
-
-let t_question_none = assert_val_typed {|r =
-  let x = None ?
-  pure 99
-|} "r" (VCon ("None", []))
-
-(* Multiple ?-binds chain via nested andThen *)
-let t_question_chain = assert_val_typed {|r =
-  let x = Ok 10 ?
-  let y = Ok 5 ?
-  pure (x - y)
-|} "r" (VCon ("Ok", [VInt 5]))
-
-(* Short-circuit hits the second ? *)
-let t_question_chain_err = assert_val_typed {|r =
-  let x = Ok 10 ?
-  let y = Err "stop" ?
-  pure (x - y)
-|} "r" (VCon ("Err", [VString "stop"]))
 
 (* ── Ref mutation ───────────────────────────────────────────────────────── *)
 
@@ -1923,12 +1870,6 @@ let () =
       test_case "foldMap list"   `Quick t_foldmap_list;
       test_case "foldMap user monoid" `Quick t_foldmap_user_monoid;
     ];
-    "list comprehensions", [
-      test_case "guard"              `Quick t_list_comp_guard;
-      test_case "multi_gen"          `Quick t_list_comp_multi_gen;
-      test_case "let_binding"        `Quick t_list_comp_let;
-      test_case "refutable_con"      `Quick t_list_comp_refutable_con;
-    ];
     "pipe/compose", [
       test_case "pipe"    `Quick t_pipe;
       test_case "compose" `Quick t_compose;
@@ -1955,14 +1896,6 @@ let () =
       test_case "signatured still ok"   `Quick t_poly_monad_signatured;
       test_case "concrete unchanged"    `Quick t_poly_monad_concrete;
       test_case "custom Thenable (P98)" `Quick t_do_custom_thenable;
-    ];
-    "? operator", [
-      test_case "Ok unwraps"          `Quick t_question_ok;
-      test_case "Err short-circuits"  `Quick t_question_err;
-      test_case "Some unwraps"        `Quick t_question_some;
-      test_case "None short-circuits" `Quick t_question_none;
-      test_case "chain Ok/Ok"         `Quick t_question_chain;
-      test_case "chain Ok/Err"        `Quick t_question_chain_err;
     ];
     "ref mutation", [
       test_case "ref_set_read" `Quick t_ref;

@@ -169,8 +169,8 @@ data Lit = LInt Int | LFloat Float | … deriving (Eq)
 ## 7. Prefer the prelude's idioms over re-implementing them
 
 When `core.mdk`'s prelude already provides an operation — `flatMap`/`andThen`
-(the `Thenable` bind), `map`/`filter`, `<>`, list comprehensions, do-blocks —
-use it directly rather than defining a bespoke monomorphic twin in `support/`.
+(the `Thenable` bind), `map`/`filter`, `<>`, do-blocks — use it directly rather
+than defining a bespoke monomorphic twin in `support/`.
 A duplicate helper fragments the codebase: new code (and AI agents extending it)
 copy whichever form they happened to see first, and the two drift. In a young
 language the *first* pattern in the tree becomes the de-facto standard — so make
@@ -182,8 +182,8 @@ negligible** — see §6: a paired A/B measured no difference. So default to the
 prelude idiom; demand a measured A/B before keeping a duplicate for speed.
 
 `flatMap` is the default replacement (same arg order as a `concatMap`-shaped
-helper). Where the call site has extra shape — an inline transform or a guard —
-a **comprehension** or **do-block** reads better still; but a plain flatten of a
+helper). Where the call site has extra shape — a guard or an inline transform —
+a `filter` + `map` (`|>`) pipeline reads better; but a plain flatten of a
 named, list-returning function stays `flatMap`:
 
 ```
@@ -191,9 +191,9 @@ named, list-returning function stays `flatMap`:
 concatMapList children nodes
 concatMapList (x => if p x then [x] else []) xs
 
--- GOOD: prelude idiom; comprehension only where it removes a lambda/guard
-flatMap children nodes               -- plain flatten: flatMap beats a comprehension
-[x | x <- xs, p x]                   -- guard present: comprehension beats flatMap
+-- GOOD: prelude idiom; filter/map pipeline where there's a guard
+flatMap children nodes               -- plain flatten: flatMap
+filter p xs |> map f                 -- guard + transform: filter then map
 ```
 
 ## 8. Prefer multi-clause functions over a `match` on an immediate parameter
@@ -279,4 +279,60 @@ runParser : Parser a -> String -> Result String a
 
 -- GOOD: export collapsed for a type-level declaration
 export data Parser a = Parser (Array Char -> Int -> PResult a)
+```
+
+## 11. Sequencing vs transforming — `do` for monads, `map`/`filter`/`|>` for collections
+
+Medaka has two orthogonal sequencing mechanisms; **the form should match the
+intent**, and there is exactly one spelling for each:
+
+- **Effect sequencing** → a **bare indented block**. Statements in a plain block
+  run in order, sequenced by their `<E>` effects (IO/Mut/…). No keyword.
+- **Monadic sequencing** → a **`do` block**, where `x <- e` binds a value out of a
+  `Thenable` monad (`Result`/`Option`/`Parser`/…). `<-` lives *only* in a `do`
+  block — the `do` keyword is the deliberate delimiter that tells the reader (and
+  the compiler) "this block is monadic, not plain imperative."
+- **Collection transforming** → `map`/`filter`/`flatMap`/`|>`. A data
+  transformation is not "sequencing"; spell it as a pipeline, not a `do` block.
+
+There is no `?` operator and no list comprehension — both were removed as
+redundant special forms (a `?` is just a `<-`; a comprehension is just
+`filter |> map`). Don't reach for either; they no longer parse.
+
+For a `Result`/`Option`, pick the lightest form that fits, and only `match` when
+you actually *use* the failure:
+
+- **`map f x`** — one pure transform of the success (`Err`/`None` passes through).
+- **`flatMap f x`** / **`andThen x f`** — one fallible step feeding another.
+- **`do` + `<-`** — a chain of fallible steps that thread values.
+- **`match`** — *only* to do something with the failure: transform it
+  (`Err e => Err "header: \{e}"`), recover, or branch on it. A pass-through arm
+  (`Err e => Err e`) means you wanted one of the forms above.
+
+An effect statement inside a `do` block is written **`let _ = effectfulCall`**,
+never bare — a bare statement is a monadic `>>` and must be in the block's monad,
+so an `<IO>`/`<Mut>` call is rejected; `let _ =` stays a plain let and the block
+types as `<e> Result _`.
+
+```
+-- BAD: pass-through match repackages the error; comprehension/`?` removed
+findTable db name = match readSchema db
+  Err e => Err e
+  Ok entries => findTableGo name entries
+
+-- GOOD: combinator for one step; do/<- for a chain; let _ = for an effect
+findTable db name = flatMap (findTableGo name) (readSchema db)
+
+scanRows db name = do
+  entry <- findTable db name
+  let _ = writeHeader entry        -- <Mut>; bare would fail in a do block
+  decode entry
+
+-- GOOD: a collection transform is a pipeline, not a do block
+namesIn xs = filter inScope xs |> map nameOf
+
+-- match stays ONLY where the error is transformed
+openDb path = match readFileBytes path
+  Err e => Err "readFileBytes: \{e}"   -- does something with the error
+  Ok bytes => fromBytes bytes
 ```

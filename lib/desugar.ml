@@ -657,9 +657,6 @@ let rec map_expr f e =
     | EAnnot (e0, t)          -> EAnnot (map_expr f e0, t)
     | EHeadAnnot (e0, t)      -> EHeadAnnot (map_expr f e0, t)
     | EInfix (op, e1, e2)    -> EInfix (op, map_expr f e1, map_expr f e2)
-    | EListComp (body, quals) ->
-        EListComp (map_expr f body, List.map (map_lc_qual f) quals)
-    | EQuestion e0            -> EQuestion (map_expr f e0)
     | EStringInterp parts ->
         EStringInterp (List.map (function
           | InterpStr s  -> InterpStr s
@@ -675,11 +672,6 @@ let rec map_expr f e =
     | e0                      -> e0
   in
   f e'
-
-and map_lc_qual f = function
-  | LCGen (p, e)    -> LCGen (p, map_expr f e)
-  | LCGuard e       -> LCGuard (map_expr f e)
-  | LCLet (m, p, e) -> LCLet (m, p, map_expr f e)
 
 and map_do_stmt f = function
   | DoBind (p, e)   -> DoBind (p, map_expr f e)
@@ -745,9 +737,8 @@ let rewrite_container_lit =
 let lower_container_literals prog =
   List.map (map_decl rewrite_container_lit) prog
 
-(* ── List comprehension desugaring ──────────────────────────────────────────
-   [body | x <- xs, guard, let p = e, ...]
-   desugars right-to-left into nested andThen / if-else / let calls. *)
+(* `is_refutable pat` — whether the pattern can fail to match some values.
+   Used by the refutable let-bind desugar below. *)
 
 let rec is_refutable = function
   | PVar _     -> false
@@ -760,33 +751,6 @@ let rec is_refutable = function
   | PRec _     -> true
   | PTuple ps  -> List.exists is_refutable ps
   | PAs (_, p) -> is_refutable p
-
-let desugar_list_comp body quals =
-  List.fold_right (fun qual acc ->
-    match qual with
-    | LCGen (pat, xs) ->
-        let lam =
-          if is_refutable pat then
-            ELam ([PVar "__lc_x"],
-                  EMatch (EVar "__lc_x",
-                          [(pat,  [], acc);
-                           (PWild, [], EListLit [])]))
-          else
-            ELam ([pat], acc)
-        in
-        EApp (EApp (EVar "andThen", xs), lam)
-    | LCGuard cond ->
-        EIf (cond, acc, EListLit [])
-    | LCLet (mut, pat, e) ->
-        ELet (mut, false, pat, e, acc)
-  ) quals (EListLit [body])
-
-let desugar_list_comps prog =
-  let rewrite = function
-    | EListComp (body, quals) -> desugar_list_comp body quals
-    | e -> e
-  in
-  List.map (map_decl rewrite) prog
 
 (* ── Phase 99: lower monadic do-blocks to nested andThen / pure ────────────
    `do { x <- e; rest }`     →  `andThen e (x => lower rest)`
@@ -891,61 +855,6 @@ let rewrite_do = function
 
 let lower_do_blocks prog = List.map (map_decl rewrite_do) prog
 
-(* ── ? operator desugaring ────────────────────────────────────────────────
-   `let pat = e ? in rest` rewrites to `andThen e (pat => rest)`.
-   The runtime semantics fall out of `andThen`'s short-circuit on Err / None.
-
-   Inside a do-block, the indent-based block parses as DoLet/DoBind/DoExpr
-   stmts.  `let pat = e ?` becomes a DoLet, which we rewrite to DoBind —
-   the do-block already dispatches DoBind through the Thenable VMulti, which
-   short-circuits identically.
-
-   Misplaced `?` (anywhere else) survives this pass as a raw EQuestion node
-   and is flagged by resolve.ml. *)
-
-let rewrite_question_expr = function
-  | ELet (mut, is_fun, pat, e1, e2) ->
-    (match strip_loc e1 with
-     | EQuestion inner ->
-       EApp (EApp (EVar "andThen", inner), ELam ([pat], e2))
-     | _ -> ELet (mut, is_fun, pat, e1, e2))
-  | EDo (tag, stmts) ->
-    let rewrite_stmt = function
-      | DoLet (_, _, pat, e) as s ->
-        (match strip_loc e with
-         | EQuestion inner -> DoBind (pat, inner)
-         | _ -> s)
-      | s -> s
-    in
-    EDo (tag, List.map rewrite_stmt stmts)
-  | EBlock stmts ->
-    (* If any DoLet has `?` on its RHS, the whole block is implicitly monadic
-       (Result/Option chaining via `andThen`).  Promote the EBlock to an EDo
-       and rewrite the `?` stmts to DoBind, so the existing EDo dispatch
-       handles `pure` correctly inside (routed by its EMethodRef). *)
-    let has_question =
-      List.exists (function
-        | DoLet (_, _, _, e) ->
-          (match strip_loc e with EQuestion _ -> true | _ -> false)
-        | _ -> false
-      ) stmts
-    in
-    if has_question then
-      let rewrite_stmt = function
-        | DoLet (_, _, pat, e) as s ->
-          (match strip_loc e with
-           | EQuestion inner -> DoBind (pat, inner)
-           | _ -> s)
-      | s -> s
-      in
-      EDo (ref None, List.map rewrite_stmt stmts)
-    else
-      EBlock stmts
-  | e -> e
-
-let desugar_questions prog =
-  List.map (map_decl rewrite_question_expr) prog
-
 (* Coalesce interface method entries that the parser splits in two: a signature
    line `f : T` (method_default = None) and a default-clause line `f p = body`
    (method_type = TyVar "_", method_default = Some) become a single entry that
@@ -1035,23 +944,17 @@ let desugar_program (prog : program) : program =
     | _ -> None) expanded in
   let after_puns = desugar_record_puns record_names expanded in
   let after_lit  = lower_container_literals after_puns in
-  let after_lc   = desugar_list_comps after_lit in
-  let after_q    = desugar_questions after_lc in
-  let after_do   = lower_do_blocks after_q in
+  let after_do   = lower_do_blocks after_lit in
   desugar_sugar after_do
 
 (* Desugar a standalone expression (e.g. a REPL ReplExpr).  Applies the
-   passes that don't require program-level context: list-comp rewrites and
-   `?` rewrites.  Record-pun desugaring needs the list of record-type names,
-   which is only available at program scope, so it's skipped here. *)
+   passes that don't require program-level context.  Record-pun desugaring
+   needs the list of record-type names, which is only available at program
+   scope, so it's skipped here. *)
 let desugar_expr (e : expr) : expr =
-  let rewrite_lc = function
-    | EListComp (body, quals) -> desugar_list_comp body quals
-    | e -> e
-  in
   map_expr rewrite_sugar
     (map_expr rewrite_container_lit
-       (map_expr rewrite_do (map_expr rewrite_question_expr (map_expr rewrite_lc e))))
+       (map_expr rewrite_do e))
 
 let desugar_repl_item (item : repl_item) : repl_item =
   match item with

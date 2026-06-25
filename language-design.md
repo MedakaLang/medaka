@@ -494,24 +494,27 @@ match divide 10 0
 
 Errors are data. Pattern match to handle them. Library authors cannot be lazy and throw — they must model failure explicitly.
 
-#### `?` — Short-Circuit on Error
-The postfix `?` operator unwraps a `Result` or `Option`, returning the error (or `None`) from the enclosing function on failure:
+#### `do`-notation — Sequencing Fallible Steps
+A `do` block sequences a value-level monad (`Result`/`Option`/`Parser`/…). `x <- e` binds the
+success out of the monad and short-circuits the failure (an `Err`/`None`) to the whole block:
 ```
 parseConfig : String -> Result Config String
-parseConfig path =
-  let raw    = readFile path ?     -- on Err, return that Err
-  let parsed = decode raw ?
+parseConfig path = do
+  raw    <- readFile path     -- on Err, the do-block returns that Err
+  parsed <- decode raw
   validate parsed
 
 lookupAge : String -> Map String Person -> Option Int
-lookupAge name m =
-  let p = Map.lookup name m ?     -- on None, return None
+lookupAge name m = do
+  p <- mapLookup name m       -- on None, the do-block returns None
   Some p.age
 ```
 
-`?` desugars to a match-and-early-return. The enclosing function's return type must agree with the type being unwrapped: a `?` on a `Result _ E` requires the function to return `Result _ E`; a `?` on `Option _` requires the function to return `Option _`.
-
-Use `?` for lightweight error chains; reach for `do`-notation when you want explicit binds across many steps or are working in a non-`Result`/`Option` monad.
+A `do` block desugars to nested `andThen`/`pure`. `<-` lives only inside `do` — the keyword is the
+deliberate delimiter that marks a block as monadic rather than plain imperative (a bare indented block
+sequences *effects*, not a monad). An effect statement inside a `do` block is written `let _ =
+effectfulCall` (a bare statement would be a monadic `>>` and is required to be in the block's monad).
+There is no postfix `?` operator — it was removed as a redundant spelling of `<-`.
 
 ### Unrecoverable Errors → `Panic`
 For genuine invariant violations, index out of bounds, stack overflow — situations where the program cannot reasonably continue. Tracked as an effect in the type system (see Effects).

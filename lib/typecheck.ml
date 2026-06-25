@@ -2928,14 +2928,8 @@ let rec infer env = function
   (* The following node shapes are removed by the desugar pass before typecheck;
      reaching one means the desugar pass was skipped (a pipeline-wiring bug), so
      surface a diagnostic rather than crashing with Assert_failure. *)
-  | EListComp _ ->
-    fail (InternalError "EListComp reached typecheck — desugar pass was not run")
-
   | EGuards _ | EFunction _ | ESection _ ->
     fail (InternalError "guard/function/section reached typecheck — desugar pass was not run")
-
-  | EQuestion _ ->
-    fail (InternalError "EQuestion reached typecheck — desugar pass was not run")
 
   | EAsPat _ ->
     (* Valid as-patterns are lowered to PAs by the parser; a surviving EAsPat is

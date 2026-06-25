@@ -123,12 +123,6 @@ type interp_part =
   | InterpStr  of string
   | InterpExpr of expr
 
-(* List comprehension qualifiers *)
-and lc_qual =
-  | LCGen   of pat * expr          (* x <- xs *)
-  | LCGuard of expr                (* boolean guard *)
-  | LCLet   of bool * pat * expr   (* let [mut] p = e *)
-
 (* Guard qualifiers (match arms and desugared function/where guards).
    A sequence succeeds when every qualifier does; on failure control
    falls through to the next arm. *)
@@ -214,8 +208,6 @@ and expr =
        interface at the named output type; never produced by the parser. *)
   | EInfix        of ident * expr * expr                (* x `div` y *)
   | EStringInterp of interp_part list                  (* "text\{expr}text" *)
-  | EListComp     of expr * lc_qual list               (* [e | x <- xs, guard, ...] *)
-  | EQuestion     of expr                              (* e ? — desugared to andThen in let-RHS position *)
   | ERangeList    of expr * expr * bool                 (* [lo..hi] / [lo..=hi]; bool=inclusive *)
   | ERangeArray   of expr * expr * bool                 (* [|lo..hi|] / [|lo..=hi|]; bool=inclusive *)
   | ESlice        of expr * expr * expr * bool          (* e.[lo..hi] / e.[lo..=hi]; bool=inclusive *)
@@ -484,14 +476,6 @@ let rec pp_expr = function
       | InterpExpr e -> "\\{" ^ pp_expr e ^ "}"
     in
     Printf.sprintf "\"%s\"" (String.concat "" (List.map pp_part parts))
-  | EListComp (body, quals) ->
-    let pp_qual = function
-      | LCGen (p, e)    -> Printf.sprintf "%s <- %s" (pp_pat p) (pp_expr e)
-      | LCGuard e       -> pp_expr e
-      | LCLet (m, p, e) -> Printf.sprintf "let %s%s = %s" (if m then "mut " else "") (pp_pat p) (pp_expr e)
-    in
-    Printf.sprintf "[%s | %s]" (pp_expr body) (String.concat ", " (List.map pp_qual quals))
-  | EQuestion e          -> Printf.sprintf "(%s ?)" (pp_expr e)
   | ERangeList (lo, hi, incl) ->
     Printf.sprintf "[%s%s%s]" (pp_expr lo) (if incl then "..=" else "..") (pp_expr hi)
   | ERangeArray (lo, hi, incl) ->
@@ -580,13 +564,6 @@ let rec strip_locs_expr = function
       | InterpStr s  -> InterpStr s
       | InterpExpr e -> InterpExpr (strip_locs_expr e)
     ) parts)
-  | EListComp (body, quals) ->
-    EListComp (strip_locs_expr body, List.map (function
-      | LCGen (p, e)    -> LCGen (p, strip_locs_expr e)
-      | LCGuard e       -> LCGuard (strip_locs_expr e)
-      | LCLet (m, p, e) -> LCLet (m, p, strip_locs_expr e)
-    ) quals)
-  | EQuestion e           -> EQuestion (strip_locs_expr e)
   | ERangeList  (lo, hi, incl) -> ERangeList  (strip_locs_expr lo, strip_locs_expr hi, incl)
   | ERangeArray (lo, hi, incl) -> ERangeArray (strip_locs_expr lo, strip_locs_expr hi, incl)
   | ESlice      (e, lo, hi, incl) -> ESlice (strip_locs_expr e, strip_locs_expr lo, strip_locs_expr hi, incl)

@@ -196,7 +196,7 @@ let parse_attr name msg_opt =
 %token CONS PLUSPLUS
 %token PIPE_RIGHT RCOMPOSE LCOMPOSE
 %token FAT_ARROW ARROW LARROW
-%token AT BANG QUESTION
+%token AT BANG
 %token AS_AT  (* `@` lexed immediately after an identifier: as-pattern operator (`x@p`); distinct from the space-separated prefix-hint AT (`fn @Impl`) *)
 
 (* Punctuation *)
@@ -760,15 +760,8 @@ expr_unary:
   | expr_infix         { $1 }
 
 expr_infix:
-  | expr_infix BACKTICK_IDENT expr_question  { EInfix ($2, $1, $3) }
-  | expr_question                            { $1 }
-
-(* Postfix `?` binds looser than function application: `Ok 5 ?` is `(Ok 5) ?`.
-   This level sits between `expr_infix` and `expr_app` so the whole call is
-   what gets `?`-applied. *)
-expr_question:
-  | expr_question QUESTION  { EQuestion $1 }
-  | expr_app                { $1 }
+  | expr_infix BACKTICK_IDENT expr_app  { EInfix ($2, $1, $3) }
+  | expr_app                            { $1 }
 
 expr_app:
   | expr_app expr_aspat  { EApp ($1, $2) }
@@ -840,8 +833,6 @@ expr_atom:
     { ELoc (of_pos $startpos $endpos, ETuple ($2 :: $4)) }
   | LBRACKET RBRACKET
     { ELoc (of_pos $startpos $endpos, EListLit []) }
-  | LBRACKET expr_no_block PIPE separated_nonempty_list(COMMA, lc_qual) RBRACKET
-    { ELoc (of_pos $startpos $endpos, EListComp ($2, $4)) }
   | LBRACKET separated_nonempty_list(COMMA, bracket_elem) RBRACKET
     { ELoc (of_pos $startpos $endpos, EListLit $2) }
   | LARRAY RARRAY
@@ -931,18 +922,6 @@ match_arm:
 guard_opt:
   | (* empty *)                                       { [] }
   | IF separated_nonempty_list(COMMA, guard_qual)     { $2 }
-
-(* ── List comprehension qualifiers ──────────────────── *)
-
-lc_qual:
-  (* Generator LHS is parsed as an expression and converted to a pattern in the
-     action (like the do-block `stmt` rule), so a `pat`-start generator does not
-     reduce/reduce-conflict with the bare-expression guard production.  The
-     `LARROW` lookahead alone decides generator-vs-guard. *)
-  | expr_no_block LARROW expr_no_block   { LCGen (expr_to_pat $1, $3) }
-  | LET pat EQUAL expr_no_block          { LCLet (false, $2, $4) }
-  | LET MUT pat EQUAL expr_no_block      { LCLet (true,  $3, $5) }
-  | expr_no_block                        { LCGuard $1 }
 
 (* ── Do-notation statements ──────────────────────────── *)
 

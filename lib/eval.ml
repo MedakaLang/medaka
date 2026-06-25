@@ -1126,12 +1126,8 @@ and eval env expr =
 
   | EAnnot (e, _) -> eval env e
 
-  | EListComp _ -> assert false (* eliminated by desugar_list_comps *)
-
   | EGuards _ | EFunction _ | ESection _ ->
     assert false (* eliminated by desugar_sugar *)
-
-  | EQuestion _ -> assert false (* eliminated by desugar_questions *)
 
   | EAsPat _ ->
     (* Lowered to PAs by the parser in binding positions; only reachable here via

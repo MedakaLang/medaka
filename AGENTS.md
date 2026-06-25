@@ -63,7 +63,7 @@ lexer.mll → parser.mly → ast.ml → desugar.ml → resolve.ml → method_mar
 
 Two non-obvious facts that bite when deciding *where* a check belongs:
 - **`desugar.ml` runs first**, before resolve/typecheck. So surface-sugar nodes
-  (`EGuards`, `EFunction`, `ESection`, list comprehensions, string interp) are
+  (`EGuards`, `EFunction`, `ESection`, string interp) are
   **already lowered to core** by the time typecheck/exhaust/eval see the tree. A
   check that needs the sugar shape (e.g. guard *coverage* on `EGuards`) cannot
   live in typecheck/exhaust — it must run pre-desugar (see `Exhaust.
@@ -77,7 +77,7 @@ Two non-obvious facts that bite when deciding *where* a check belongs:
 | Lex | `lib/lexer.mll` | Indentation-sensitive; emits INDENT/DEDENT/NEWLINE |
 | Parse | `lib/parser.mly` | Menhir grammar |
 | AST | `lib/ast.ml` | Node types + source locations |
-| Desugar | `lib/desugar.ml` | Runs FIRST. Lowers surface sugar: `deriving`, record puns, list comprehensions, `EGuards`/`EFunction`/`ESection`/string-interp, `EDo` (do-blocks → nested `andThen`/`pure`, Phase 99) |
+| Desugar | `lib/desugar.ml` | Runs FIRST. Lowers surface sugar: `deriving`, record puns, `EGuards`/`EFunction`/`ESection`/string-interp, `EDo` (do-blocks → nested `andThen`/`pure`, Phase 99) |
 | Resolve | `lib/resolve.ml` | Name binding, single- and multi-module |
 | Mark | `lib/method_marker.ml` | Phase 69: runs after desugar+resolve, before typecheck. Rewrites interface-method `EVar`→`EMethodRef` so typecheck can stamp the resolved impl key per call site and eval routes return-position/multi-param dispatch by it |
 | Typecheck | `lib/typecheck.ml` | Hindley-Milner + interfaces + effects; invokes Exhaust per `EMatch` |
@@ -278,14 +278,10 @@ readability**. Don't force-fit: most candidate sites aren't improvements, and a
 rewrite that doesn't typecheck or that changes semantics is worse than the
 original. **Verify the rewrite on the binary** (`medaka test <file>`) — a
 plausible-looking change here is often wrong (e.g. `function` only applies when
-the body matches the *bare last param*, not `match (g param)`; a comprehension
-desugars over `List`, so `map` over an `Option`/`Array` won't convert).
+the body matches the *bare last param*, not `match (g param)`).
 
 - **Operator sections** — `(==)`, `(+ 1)`, `(2 * _)` (left needs explicit `_`)
   instead of `(x y => x == y)` / `(x => x + 1)` lambdas.
-- **List comprehensions** — `[f x | x <- xs, p x]` *only* when there's a guard
-  or a destructuring lambda to remove; a plain `map f xs` already beats
-  `[f x | x <- xs]`.
 - **`function` keyword** — point-free match, only when the body is
   `match <lastParam>` on the bare final argument.
 - Pipe `|>` / compose `>> <<`, inclusive ranges `[lo..=hi]`, record update

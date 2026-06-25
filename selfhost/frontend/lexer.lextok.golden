@@ -252,9 +252,6 @@ PIPE
 UPPER "TBang"
 NEWLINE
 PIPE
-UPPER "TQuestion"
-NEWLINE
-PIPE
 UPPER "TAsAt"
 NEWLINE
 PIPE
@@ -746,11 +743,6 @@ IDENT "tokenToString"
 UPPER "TBang"
 EQUAL
 STRING "BANG"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TQuestion"
-EQUAL
-STRING "QUESTION"
 NEWLINE
 IDENT "tokenToString"
 UPPER "TAsAt"
@@ -6706,24 +6698,6 @@ IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
-CHAR "?"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TQuestion"
-INT 1
-INT 0
-NEWLINE
-IDENT "singleOp"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
 CHAR "%"
 EQUAL
 IDENT "emit"
@@ -8227,11 +8201,6 @@ UPPER "True"
 NEWLINE
 IDENT "canEndExpr"
 UPPER "TUnderscore"
-EQUAL
-UPPER "True"
-NEWLINE
-IDENT "canEndExpr"
-UPPER "TQuestion"
 EQUAL
 UPPER "True"
 NEWLINE

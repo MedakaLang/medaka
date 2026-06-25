@@ -39,7 +39,6 @@ let unknown_field n  = function UnknownField x        -> x = n | _ -> false
 let field_not_in n r = function FieldNotInRecord (x, y) -> x = n && y = r | _ -> false
 let duplicate n      = function DuplicateDefinition (_, x) -> x = n | _ -> false
 let extern_with_body n = function ExternWithBody x -> x = n | _ -> false
-let question_misplaced     = function QuestionMisplaced -> true | _ -> false
 
 (* ── Valid programs ─────────────────────────── *)
 
@@ -348,16 +347,6 @@ let e_newtype_duplicate =
   assert_err (duplicate "Foo")
     "newtype Foo = Foo Int\nnewtype Foo = Foo String\n"
 
-(* `?` is only legal as the RHS of a `let` binding.  Misplaced uses survive
-   the desugar pass and are flagged here. *)
-let e_question_in_arith =
-  assert_err question_misplaced
-    "f = (Ok 5 ?) + 1\n"
-
-let e_question_in_arg =
-  assert_err question_misplaced
-    "f = Ok (5 ?)\n"
-
 (* ── Phase 57: let rec ──────────────────────── *)
 
 let nonrec_value_let n = function NonRecursiveValueLet x -> x = n | _ -> false
@@ -501,8 +490,6 @@ let () =
       test_case "field not in record"  `Quick e_field_not_in_record;
       test_case "unknown field create" `Quick e_unknown_field_in_create;
       test_case "unknown field update" `Quick e_unknown_field_in_update;
-      test_case "? in arith"           `Quick e_question_in_arith;
-      test_case "? in fn arg"          `Quick e_question_in_arg;
       test_case "let value self-ref"   `Quick e_let_value_self_ref;
       test_case "dup binding (sig)"     `Quick e_dup_binding_sig;
       test_case "dup binding (match)"   `Quick e_dup_binding_match;

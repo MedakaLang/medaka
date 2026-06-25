@@ -309,13 +309,12 @@ let is_continuation_op = function
   | _ -> false
 
 let rec expr_prec = function
-  | ELit _ | EVar _ | EMethodRef _ | EDictApp _ | ETuple _ | EArrayLit _ | EListLit _ | EListComp _
+  | ELit _ | EVar _ | EMethodRef _ | EDictApp _ | ETuple _ | EArrayLit _ | EListLit _
   | ENumLit _
   | EMapLit _ | ESetLit _ | EStringInterp _
   | ERecordCreate _ | ERecordUpdate _ | EVariantUpdate _
   | ERangeList _ | ERangeArray _ | ESlice _ -> prec_atom
-  | EFieldAccess _ | EIndex _
-  | EQuestion _                        -> prec_postfix
+  | EFieldAccess _ | EIndex _ -> prec_postfix
   | EUnOp _                            -> prec_unary
   | EApp _                             -> prec_app
   | EInfix _                           -> prec_infix
@@ -421,7 +420,6 @@ and print_expr_raw = function
     ^^ print_expr (if ra then prec else prec + 1) r
   | EUnOp (op, e) -> text op ^^ print_expr prec_unary e
   | EFieldAccess (e, f) -> print_expr prec_postfix e ^^ text "." ^^ text f
-  | EQuestion e -> print_expr prec_postfix e ^^ text " ?"
   | ERecordCreate (n, fs) ->
     let field (k, v) = text k ^^ text " = " ^^ print_expr prec_top v in
     text n ^^ text " " ^^ braced (List.map field fs)
@@ -484,16 +482,6 @@ and print_expr_raw = function
         | InterpExpr e -> text "\\{" ^^ print_expr prec_top e ^^ text "}"
       ) parts)
     ^^ text "\""
-  | EListComp (body, quals) ->
-    let qual = function
-      | LCGen (pat, xs) -> print_pat pat ^^ text " <- " ^^ print_expr prec_top xs
-      | LCGuard cond    -> print_expr prec_top cond
-      | LCLet (mut, pat, e) ->
-        text "let " ^^ (if mut then text "mut " else Nil)
-        ^^ print_pat pat ^^ text " = " ^^ print_expr prec_top e
-    in
-    text "[" ^^ print_expr prec_top body ^^ text " | "
-    ^^ sep_by (text ", ") (List.map qual quals) ^^ text "]"
   | ERangeList (lo, hi, incl) ->
     text "[" ^^ print_expr prec_top lo
     ^^ text (if incl then "..=" else "..")

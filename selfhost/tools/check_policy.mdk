@@ -38,7 +38,6 @@ import frontend.ast.{
   LetBind(..),
   FunClause(..),
   FieldAssign(..),
-  LcQual(..),
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -185,12 +184,10 @@ collectEVars (EVariantUpdate _ e flds) = collectEVars e ++ concatMapCP collectFi
 collectEVars (ETuple es) = concatMapCP collectEVars es
 collectEVars (EListLit es) = concatMapCP collectEVars es
 collectEVars (EArrayLit es) = concatMapCP collectEVars es
-collectEVars (EListComp e quals) = collectEVars e ++ concatMapCP collectQual quals
 collectEVars (ERangeList a b _) = collectEVars a ++ collectEVars b
 collectEVars (ERangeArray a b _) = collectEVars a ++ collectEVars b
 collectEVars (ESlice a b c _) = collectEVars a ++ collectEVars b ++ collectEVars c
 collectEVars (EIndex a b) = collectEVars a ++ collectEVars b
-collectEVars (EQuestion e) = collectEVars e
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
 collectEVars (EDo stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
@@ -211,10 +208,6 @@ collectGuard (GBind _ e) = collectEVars e
 collectFieldAssign : FieldAssign -> List String
 collectFieldAssign (FieldAssign _ e) = collectEVars e
 
-collectQual : LcQual -> List String
-collectQual (LCGen _ e) = collectEVars e
-collectQual (LCGuard e) = collectEVars e
-collectQual (LCLet _ _ e) = collectEVars e
 
 collectStmt : DoStmt -> List String
 collectStmt (DoExpr e) = collectEVars e

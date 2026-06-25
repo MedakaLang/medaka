@@ -43,7 +43,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -144,7 +143,6 @@ annotateExpr fr (EFieldAccess e0 f) = EFieldAccess (annotateExpr fr e0) f
 annotateExpr fr (ETuple es) = ETuple (map (annotateExpr fr) es)
 annotateExpr fr (EListLit es) = EListLit (map (annotateExpr fr) es)
 annotateExpr fr (EArrayLit es) = EArrayLit (map (annotateExpr fr) es)
-annotateExpr fr (EListComp body quals) = annotateListComp fr body quals
 annotateExpr fr (ERangeList lo hi incl) =
   ERangeList (annotateExpr fr lo) (annotateExpr fr hi) incl
 annotateExpr fr (ERangeArray lo hi incl) =
@@ -168,7 +166,6 @@ annotateExpr fr (EVariantUpdate con e0 fs) =
   EVariantUpdate con (annotateExpr fr e0) (map (annotateFieldAssign fr) fs)
 annotateExpr fr (EMapLit n kvs) = EMapLit n (map (annotateKv fr) kvs)
 annotateExpr fr (ESetLit n es) = ESetLit n (map (annotateExpr fr) es)
-annotateExpr fr (EQuestion e0) = EQuestion (annotateExpr fr e0)
 annotateExpr fr (EAsPat x e0) = EAsPat x (annotateExpr fr e0)
 annotateExpr fr (ESection s) = ESection (annotateSection fr s)
 -- ELoc is transparent: preserve the loc, annotate the wrapped expr.
@@ -263,27 +260,6 @@ annotateSection : List (List String) -> Section -> Section
 annotateSection _ (SecBare op) = SecBare op
 annotateSection fr (SecRight op e) = SecRight op (annotateExpr fr e)
 annotateSection fr (SecLeft e op) = SecLeft (annotateExpr fr e) op
-
--- a list-comprehension's generators / lets extend the scope left-to-right for
--- the later qualifiers and the body (survives only pre-desugar; best-effort)
-annotateListComp : List (List String) -> Expr -> List LcQual -> Expr
-annotateListComp fr body quals =
-  let (quals2, scope2) = annotateQuals fr quals
-  EListComp (annotateExpr scope2 body) quals2
-
-annotateQuals : List (List String) -> List LcQual -> (List LcQual, List (List String))
-annotateQuals scope [] = ([], scope)
-annotateQuals scope ((LCGen p e)::rest) =
-  let e2 = annotateExpr scope e
-  let (rest2, scope2) = annotateQuals (patBindings p :: scope) rest
-  (LCGen p e2 :: rest2, scope2)
-annotateQuals scope ((LCGuard e)::rest) =
-  let (rest2, scope2) = annotateQuals scope rest
-  (LCGuard (annotateExpr scope e) :: rest2, scope2)
-annotateQuals scope ((LCLet m p e)::rest) =
-  let e2 = annotateExpr scope e
-  let (rest2, scope2) = annotateQuals (patBindings p :: scope) rest
-  (LCLet m p e2 :: rest2, scope2)
 
 -- ── annotateDecl ──────────────────────────────────────────────────────────
 -- a top-level function's params become per-parameter frames (the only local

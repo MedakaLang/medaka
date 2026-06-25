@@ -1,16 +1,10 @@
 leftSection = (2 * _)
 cmpSection = (== 0)
 notFlag b = !b
-keys m = [k | (k, _) <- entries m]
-evens xs = [x | x <- xs, x % 2 == 0]
-triples = [(x, y, z) | x <- xs, let s = x + 1, y <- ys, x < y]
 classify = function
   0 => "zero"
   n if n < 0 => "neg"
   n => "pos"
-tryParse x =
-  let y = (parse x) ?
-  y
 arrRange = [|1..5|]
 arrRangeIncl = [|0..=9|]
 sliceIt xs = xs.[1..3]

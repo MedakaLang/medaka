@@ -212,8 +212,6 @@ let do_aspat_bind = mk
 
 let lam_aspat = mk "f = xs@rest => xs\n"
 
-let lc_aspat = mk "f opts = [y | p@(Some y) <- opts]\n"
-
 (* Import/export declarations *)
 let u_simple  = mk "import utils.greet\n"
 let u_group   = mk "import utils.{greet, helper}\n"
@@ -426,12 +424,6 @@ let () =
     "string interpolation", [
       test_case "single hole"   `Quick (mk "x = \"hello \\{name}!\"\n");
       test_case "two holes"     `Quick (mk "x = \"\\{a} and \\{b}\"\n");
-    ];
-    "list comprehensions", [
-      test_case "guard"      `Quick (mk "r = [x * 2 | x <- xs, x > 0]\n");
-      test_case "multi gen"  `Quick (mk "r = [(x, y) | x <- xs, y <- ys]\n");
-      test_case "let"        `Quick (mk "r = [y | x <- xs, let y = x * x, y > 2]\n");
-      test_case "as-pat gen"  `Quick lc_aspat;
     ];
     "local let-rec (Phase 27)", [
       test_case "fun-def form"  `Quick (mk "r = let f x = x + 1 in f 5\n");

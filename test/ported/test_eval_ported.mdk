@@ -366,42 +366,6 @@ doCustomUnwrap = match doCustom
   BoxM n => n
 test "do custom Thenable" = expectEqual 2 doCustomUnwrap
 
--- ── ? operator ───────────────────────────────────────────────────────────────
--- Ported from: t_question_ok, t_question_err, t_question_some, t_question_none,
---              t_question_chain, t_question_chain_err
-
-questionOk =
-  let x = (Ok 5 : Result String Int) ?
-  pure (x + 1)
-test "? Ok unwraps" = expectEqual (Ok 6 : Result String Int) questionOk
-
-questionErr =
-  let x = (Err "bad" : Result String Int) ?
-  pure (x + 1)
-test "? Err short-circuits" = expectEqual (Err "bad" : Result String Int) questionErr
-
-questionSome =
-  let x = Some 42 ?
-  pure (x + 1)
-test "? Some unwraps" = expectEqual (Some 43) questionSome
-
-questionNone =
-  let x = (None : Option Int) ?
-  pure 99
-test "? None short-circuits" = expectEqual (None : Option Int) questionNone
-
-questionChain =
-  let x = (Ok 10 : Result String Int) ?
-  let y = (Ok 5 : Result String Int) ?
-  pure (x - y)
-test "? chain Ok/Ok" = expectEqual (Ok 5 : Result String Int) questionChain
-
-questionChainErr =
-  let x = (Ok 10 : Result String Int) ?
-  let y = (Err "stop" : Result String Int) ?
-  pure (x - y)
-test "? chain Ok/Err" = expectEqual (Err "stop" : Result String Int) questionChainErr
-
 -- ── Ref mutation ─────────────────────────────────────────────────────────────
 -- Ported from: t_ref
 

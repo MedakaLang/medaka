@@ -20,7 +20,6 @@ type error =
   | PrivateNameAccess    of ident * string  (* name, owning module *)
   | NoExportedConstructors of ident * string (* T(..) where T's ctors aren't exported: type, module *)
   | UnknownModule        of ident           (* use references a module that can't be found *)
-  | QuestionMisplaced                       (* `?` outside `let pat = e ?` position *)
   | AsPatternMisplaced                       (* `x@..` outside a binding LHS (lambda param / do-bind / match) *)
   | NonRecursiveValueLet of ident           (* `let x = ... x ...` (no `rec`) where x is in scope on RHS *)
   | DuplicateBinding     of ident           (* non-contiguous clauses of a top-level binding (Phase 148) *)
@@ -50,9 +49,6 @@ let pp_error = function
       n m
   | UnknownModule n ->
     Printf.sprintf "Unknown module: %s" n
-  | QuestionMisplaced ->
-    "`?` is only allowed as the right-hand side of a `let` binding, \
-     e.g. `let x = expr ?`. Use `<-` inside do-blocks."
   | AsPatternMisplaced ->
     "`@` as-patterns are only allowed in a binding position \
      (a lambda parameter, a do-block bind, or a match pattern)."
@@ -779,12 +775,8 @@ let rec check_expr env scope errors e =
       emit errors (UnboundVariable op);
     check_expr env scope errors l;
     check_expr env scope errors r
-  | EListComp _ -> assert false (* eliminated by desugar_list_comps *)
   | EGuards _ | EFunction _ | ESection _ ->
     assert false (* eliminated by desugar_sugar *)
-  | EQuestion e ->
-    emit errors QuestionMisplaced;
-    check_expr env scope errors e
   | EAsPat (_, e) ->
     (* Valid as-patterns are lowered to PAs by the parser (expr_to_pat); reaching
        here means `x@..` appeared in a non-binding expression position. *)

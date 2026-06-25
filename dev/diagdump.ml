@@ -71,7 +71,6 @@ let sexp_error : Resolve.error -> string = function
   | Resolve.PrivateNameAccess (n, m) -> node "PrivateNameAccess" [esc_str n; esc_str m]
   | Resolve.NoExportedConstructors (n, m) -> node "NoExportedConstructors" [esc_str n; esc_str m]
   | Resolve.UnknownModule n          -> node "UnknownModule" [esc_str n]
-  | Resolve.QuestionMisplaced        -> "QuestionMisplaced"
   | Resolve.AsPatternMisplaced       -> "AsPatternMisplaced"
   | Resolve.NonRecursiveValueLet n   -> node "NonRecursiveValueLet" [esc_str n]
   | Resolve.DuplicateBinding n       -> node "DuplicateBinding" [esc_str n]

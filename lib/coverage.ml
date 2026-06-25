@@ -45,8 +45,7 @@ let rec collect_expr acc = function
   | Ast.EInfix (_, l, r) ->
     collect_expr (collect_expr acc l) r
   | Ast.EUnOp (_, e) | Ast.EFieldAccess (e, _) | Ast.EAnnot (e, _)
-  | Ast.EHeadAnnot (e, _)
-  | Ast.EQuestion e -> collect_expr acc e
+  | Ast.EHeadAnnot (e, _) -> collect_expr acc e
   | Ast.ERecordCreate (_, fs) ->
     List.fold_left (fun a (_, e) -> collect_expr a e) acc fs
   | Ast.ERecordUpdate (e, fs) ->
@@ -65,12 +64,6 @@ let rec collect_expr acc = function
       | Ast.InterpExpr e -> collect_expr a e
       | Ast.InterpStr _ -> a
     ) acc parts
-  | Ast.EListComp (e, quals) ->
-    let acc' = collect_expr acc e in
-    List.fold_left (fun a q -> match q with
-      | Ast.LCGen (_, e') | Ast.LCGuard e' -> collect_expr a e'
-      | Ast.LCLet (_, _, e') -> collect_expr a e'
-    ) acc' quals
   | Ast.ERangeList (lo, hi, _) | Ast.ERangeArray (lo, hi, _) ->
     collect_expr (collect_expr acc lo) hi
   | Ast.ESlice (e, lo, hi, _) ->

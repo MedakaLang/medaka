@@ -26,7 +26,6 @@ import frontend.ast.{
   InterpPart(..),
   GuardArm(..),
   FieldAssign(..),
-  LcQual(..),
   Section(..),
   FunClause(..),
   LetBind(..),
@@ -284,9 +283,6 @@ collectVars (ESlice e0 lo hi _) = collectVars e0
 collectVars (EBlock stmts) = flatMap doStmtVars stmts
 collectVars (EDo stmts) = flatMap doStmtVars stmts
 collectVars (EAnnot e0 _) = collectVars e0
-collectVars (EListComp body quals) = collectVars body
-  ++ flatMap lcQualVars quals
-collectVars (EQuestion e0) = collectVars e0
 collectVars (EStringInterp parts) = flatMap interpVars parts
 collectVars (EGuards arms) = flatMap guardArmVars arms
 collectVars (EFunction arms) = flatMap armVars arms
@@ -339,11 +335,6 @@ doStmtVars (DoLet _ _ _ e) = collectVars e
 doStmtVars (DoAssign _ e) = collectVars e
 doStmtVars (DoFieldAssign _ _ e) = collectVars e
 doStmtVars (DoLetElse _ e alt) = collectVars e ++ collectVars alt
-
-lcQualVars : LcQual -> List String
-lcQualVars (LCGen _ e) = collectVars e
-lcQualVars (LCGuard e) = collectVars e
-lcQualVars (LCLet _ _ e) = collectVars e
 
 interpVars : InterpPart -> List String
 interpVars (InterpStr _) = []
@@ -406,9 +397,6 @@ localBoundExpr (ESlice e0 lo hi _) =
 localBoundExpr (EBlock stmts) = flatMap doStmtBound stmts
 localBoundExpr (EDo stmts) = flatMap doStmtBound stmts
 localBoundExpr (EAnnot e0 _) = localBoundExpr e0
-localBoundExpr (EListComp body quals) =
-  localBoundExpr body ++ flatMap lcQualBound quals
-localBoundExpr (EQuestion e0) = localBoundExpr e0
 localBoundExpr (EStringInterp parts) = flatMap interpBound parts
 localBoundExpr (EGuards arms) = flatMap guardArmBound arms
 localBoundExpr (EFunction arms) = flatMap armBound arms
@@ -452,11 +440,6 @@ doStmtBound (DoAssign _ e) = localBoundExpr e
 doStmtBound (DoFieldAssign _ _ e) = localBoundExpr e
 doStmtBound (DoLetElse p e alt) =
   patBindings p ++ localBoundExpr e ++ localBoundExpr alt
-
-lcQualBound : LcQual -> List String
-lcQualBound (LCGen p e) = patBindings p ++ localBoundExpr e
-lcQualBound (LCGuard e) = localBoundExpr e
-lcQualBound (LCLet _ p e) = patBindings p ++ localBoundExpr e
 
 interpBound : InterpPart -> List String
 interpBound (InterpStr _) = []

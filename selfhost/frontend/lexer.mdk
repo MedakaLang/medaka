@@ -108,7 +108,6 @@ public export data Token
   | TLArrow
   | TAt
   | TBang
-  | TQuestion
   | TAsAt
   | TEqual
   | TColon
@@ -207,7 +206,6 @@ tokenToString TArrow = "ARROW"
 tokenToString TLArrow = "LARROW"
 tokenToString TAt = "AT"
 tokenToString TBang = "BANG"
-tokenToString TQuestion = "QUESTION"
 tokenToString TAsAt = "AS_AT"
 tokenToString TEqual = "EQUAL"
 tokenToString TColon = "COLON"
@@ -770,7 +768,6 @@ singleOp src len pos depth id ']' =
 singleOp src len pos depth id '{' = openBrace src len pos depth id
 singleOp src len pos depth id '}' = closeBrace src len pos depth id
 singleOp src len pos depth id '!' = emit src len pos depth id TBang 1 0
-singleOp src len pos depth id '?' = emit src len pos depth id TQuestion 1 0
 singleOp src len pos depth id '%' = emit src len pos depth id TMod 1 0
 singleOp src len pos depth id '@' =
   emit src len pos depth id (atToken src pos) 1 0
@@ -964,7 +961,6 @@ canEndExpr TRBracket = True
 canEndExpr TRBrace = True
 canEndExpr TRArray = True
 canEndExpr TUnderscore = True
-canEndExpr TQuestion = True
 canEndExpr _ = False
 
 prevCanEnd : Option Token -> Bool

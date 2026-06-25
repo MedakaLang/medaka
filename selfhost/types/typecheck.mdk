@@ -37,7 +37,6 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   PropParam(..),
-  LcQual(..),
   Section(..),
   InterpPart(..),
   GuardArm(..),
@@ -1087,10 +1086,6 @@ collectExprErrors (EDo stmts) = match collectDoStmtErrors stmts
   errs => errs
 collectExprErrors (EAnnot e _) = collectExprErrors e
 collectExprErrors (EHeadAnnot e _) = collectExprErrors e
-collectExprErrors (EListComp e quals) = match collectExprErrors e
-  [] => collectLcQualErrors quals
-  errs => errs
-collectExprErrors (EQuestion e) = collectExprErrors e
 collectExprErrors (EStringInterp parts) = collectInterpPartErrors parts
 collectExprErrors (EGuards arms) = collectGuardArmErrors arms
 collectExprErrors (EFunction arms) = collectArmErrors arms
@@ -1171,18 +1166,6 @@ collectFieldAssignErrors : List FieldAssign -> List String
 collectFieldAssignErrors [] = []
 collectFieldAssignErrors ((FieldAssign _ e)::rest) = match collectExprErrors e
   [] => collectFieldAssignErrors rest
-  errs => errs
-
-collectLcQualErrors : List LcQual -> List String
-collectLcQualErrors [] = []
-collectLcQualErrors ((LCGen _ e)::rest) = match collectExprErrors e
-  [] => collectLcQualErrors rest
-  errs => errs
-collectLcQualErrors ((LCGuard e)::rest) = match collectExprErrors e
-  [] => collectLcQualErrors rest
-  errs => errs
-collectLcQualErrors ((LCLet _ _ e)::rest) = match collectExprErrors e
-  [] => collectLcQualErrors rest
   errs => errs
 
 collectInterpPartErrors : List InterpPart -> List String
@@ -4976,7 +4959,7 @@ propParamName (PropParam n _) = n
 -- locals at this node.  At an EVar: the rp arm is scope-blind (unchanged); the
 -- arg-position (`an`) and constrained-fn (`dn`) arms fire only when the name is
 -- NOT shadowed by a local.  Binders
--- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo/EListComp + the where/do/guard
+-- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo + the where/do/guard
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
 rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
@@ -5000,9 +4983,6 @@ rewriteArgScoped rw bound (EMatch e0 arms) =
 rewriteArgScoped rw bound (EBlock stmts) =
   EBlock (rewriteArgStmts rw bound stmts)
 rewriteArgScoped rw bound (EDo stmts) = EDo (rewriteArgStmts rw bound stmts)
-rewriteArgScoped rw bound (EListComp body quals) =
-  let (quals2, bnd) = rewriteArgQuals rw bound quals
-  EListComp (rewriteArgScoped rw bnd body) quals2
 -- non-binder composites: recurse children with the same bound
 rewriteArgScoped rw bound (ELoc l e) = ELoc l (rewriteArgScoped rw bound e)
 rewriteArgScoped rw bound (EDoOrigin l e) = EDoOrigin l (rewriteArgScoped rw bound e)
@@ -5042,8 +5022,6 @@ rewriteArgScoped rw bound (EAnnot e0 t) =
   EAnnot (rewriteArgScoped rw bound e0) t
 rewriteArgScoped rw bound (EHeadAnnot e0 t) =
   EHeadAnnot (rewriteArgScoped rw bound e0) t
-rewriteArgScoped rw bound (EQuestion e0) =
-  EQuestion (rewriteArgScoped rw bound e0)
 rewriteArgScoped rw bound (ERecordCreate n fs) =
   ERecordCreate n (map (rewriteArgField rw bound) fs)
 rewriteArgScoped rw bound (ERecordUpdate e0 fs) =
@@ -5138,23 +5116,6 @@ rewriteArgStmts rw bound ((DoFieldAssign x fs e)::rest) =
 rewriteArgStmts rw bound ((DoLetElse p e alt)::rest) =
   DoLetElse p (rewriteArgScoped rw bound e) (rewriteArgScoped rw bound alt) ::
     rewriteArgStmts rw (patVarsTc p ++ bound) rest
-
--- list-comprehension qualifiers: a generator/let binds for later qualifiers + the
--- body (the LCLet Bool is a mut flag, never recursive, so its RHS sees no binding).
-rewriteArgQuals : ArgRw -> List String -> List LcQual -> (List LcQual, List String)
-rewriteArgQuals _ bound [] = ([], bound)
-rewriteArgQuals rw bound ((LCGen p e)::rest) =
-  let e2 = rewriteArgScoped rw bound e
-  let (rest2, bnd) = rewriteArgQuals rw (patVarsTc p ++ bound) rest
-  (LCGen p e2 :: rest2, bnd)
-rewriteArgQuals rw bound ((LCGuard e)::rest) =
-  let e2 = rewriteArgScoped rw bound e
-  let (rest2, bnd) = rewriteArgQuals rw bound rest
-  (LCGuard e2 :: rest2, bnd)
-rewriteArgQuals rw bound ((LCLet m p e)::rest) =
-  let e2 = rewriteArgScoped rw bound e
-  let (rest2, bnd) = rewriteArgQuals rw (patVarsTc p ++ bound) rest
-  (LCLet m p e2 :: rest2, bnd)
 
 letBindNamesTc : List LetBind -> List String
 letBindNamesTc binds = map letBindNameTc binds
