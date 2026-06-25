@@ -127,9 +127,7 @@ cellInt _        = 0
 -- | Find a user table by name in the schema.
 export
 findTable : Db -> String -> Result String SchemaEntry
-findTable db name = match readSchema db
-  Err e => Err e
-  Ok entries => findTableGo name entries
+findTable db name = flatMap (findTableGo name) (readSchema db)
 
 findTableGo : String -> List SchemaEntry -> Result String SchemaEntry
 findTableGo name []         = Err "table not found: \{name}"
@@ -146,30 +144,27 @@ findTableGo name (e::rest)  =
 -- all rows in rowid order across all pages.
 export
 scanTableRows : Db -> String -> Result String (List Row)
-scanTableRows db name = match findTable db name
-  Err e => Err e
-  Ok entry =>
-    let bytes = dbBytes db
-    let ps = headerPageSize (dbHeader db)
-    let n = entry.rootPage
-    let hdrOff = hdrOffsetOf db n
-    scanTablePage bytes ps n hdrOff
+scanTableRows db name =
+  let entry = findTable db name ?
+  let bytes = dbBytes db
+  let ps = headerPageSize (dbHeader db)
+  let n = entry.rootPage
+  let hdrOff = hdrOffsetOf db n
+  scanTablePage bytes ps n hdrOff
 
 -- | Like `scanTableRows` but also returns the INTEGER PRIMARY KEY column index
 --   (if any) parsed from the schema's CREATE TABLE SQL.  Both the dump path and
 --   the typed query path should use this so the IPK substitution is shared.
 export
 scanTableRowsIpk : Db -> String -> Result String (Option Int, List Row)
-scanTableRowsIpk db name = match findTable db name
-  Err e => Err e
-  Ok entry =>
-    let bytes = dbBytes db
-    let ps = headerPageSize (dbHeader db)
-    let n = entry.rootPage
-    let hdrOff = hdrOffsetOf db n
-    match scanTablePage bytes ps n hdrOff
-      Err e => Err e
-      Ok rows => Ok (pkColumnIndex (schemaSql entry), rows)
+scanTableRowsIpk db name =
+  let entry = findTable db name ?
+  let bytes = dbBytes db
+  let ps = headerPageSize (dbHeader db)
+  let n = entry.rootPage
+  let hdrOff = hdrOffsetOf db n
+  let rows = scanTablePage bytes ps n hdrOff ?
+  Ok (pkColumnIndex (schemaSql entry), rows)
 
 -- ---------------------------------------------------------------------------
 -- INTEGER PRIMARY KEY detection and rowid substitution (shared by dump + typed)
@@ -289,9 +284,7 @@ lowerCode c = if c >= 65 && c <= 90 then c + 32 else c
 -- | All column names of a table, in declaration order.
 export
 columnNames : Db -> String -> Result String (List String)
-columnNames db name = match findTable db name
-  Err e => Err e
-  Ok entry => Ok (colNamesOf (schemaSql entry))
+columnNames db name = map (entry => colNamesOf (schemaSql entry)) (findTable db name)
 
 colNamesOf : String -> List String
 colNamesOf sql = cnGather (stringToChars sql) 0 (arrayLength (stringToChars sql)) (0 - 1) 0 False True []
