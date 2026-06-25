@@ -64,9 +64,11 @@ minimum : a b -> Option b
 mul : a -> a -> a
 negate : a -> a
 neq : a -> a -> Bool
+noMatch : a b
 not : Bool -> Bool
 notElem : a -> b a -> Bool
 or : Bool -> Bool -> Bool
+orElse : a b -> a b -> a b
 otherwise : Bool
 pipe : (a -> b) -> (b -> c) -> a -> c
 print : a -> <IO> Unit
