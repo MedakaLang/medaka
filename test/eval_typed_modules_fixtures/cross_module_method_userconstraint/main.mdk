@@ -1,0 +1,2 @@
+import sibtrav.{Box(..), btraverse}
+main = println (debug (btraverse (x => if x > 0 then Some x else None) (Box 5)))

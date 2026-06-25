@@ -2926,9 +2926,51 @@ argDispatchOf name = lookupAssoc name argDispatchIdxRef.value
 -- resolveMethodDicts can route them after inference.  A method with no method-level
 -- constraint records nothing — methodRef stays [], eval's fold is a no-op.
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> <Mut> Unit
-recordMethodDicts name methodRef subst = match lookupAssocSL2 name methodConstraintsRef.value
+recordMethodDicts name methodRef subst = match alignedMethodConstraintIds name subst
   None => ()
   Some ids => set_ref pendingMethodDicts ((methodRef, constraintMonosOf ids subst) :: pendingMethodDicts.value)
+
+-- D2: the constraint-slot ids of method [name] that line up with THIS occurrence's
+-- instantiation [subst].  methodConstraintsRef can hold MULTIPLE entries for one
+-- (uniquely-named) method, each registered with its own FRESH ids by a different
+-- elaborate sweep (discoverPromotedModules' discovery sweep, then the real
+-- elabModulesGo sweep) — crossModuleMethodConstraintsRef accumulates them across
+-- sweeps and is not re-keyed before recordMethodDicts reads it.  A plain bare-name
+-- first-match (lookupAssocSL2) returns whichever entry is frontmost, which after the
+-- discovery sweep is a STALE entry whose ids belong to a dead id range, disjoint from
+-- the live [subst] keys → constraintMonosOf drops them all → empty route → the
+-- cross-module method-level dict is never threaded ("no matching impl" at run /
+-- SIGSEGV at build).  The LIVE entry is the one the call's instantiateTracked actually
+-- quantified — i.e. whose ids are keys of [subst].  Pick the entry with the most ids
+-- present in [subst] (>0); fall back to bare first-match when none overlap (preserves
+-- the single-entry / no-instantiation goldens byte-for-byte).  Diamond-safe: a method
+-- re-exported through an intermediate keeps the ORIGINAL definer's scheme ids (seedVars
+-- threads the scheme object verbatim), so its [subst] keys match the original entry,
+-- which alignment selects regardless of intermediate sweeps.
+alignedMethodConstraintIds : String -> List (Int, Mono) -> <Mut> Option (List Int)
+alignedMethodConstraintIds name subst =
+  let entries = filterList (e => fst e == name) methodConstraintsRef.value
+  match entries
+    [] => None
+    _ => match bestAlignedEntry subst entries (0 - 1) None
+      Some ids => Some ids
+      None => lookupAssocSL2 name methodConstraintsRef.value
+
+-- among [entries] (all the same-named method-constraint records), the ids of the one
+-- with the most slots present in [subst]; None until a positive-overlap entry is seen.
+bestAlignedEntry : List (Int, Mono) -> List (String, List Int) -> Int -> Option (List Int) -> Option (List Int)
+bestAlignedEntry _ [] _ best = best
+bestAlignedEntry subst ((_, ids)::rest) bestN best =
+  let n = countInSubst ids subst
+  if n > 0 && n > bestN
+    then bestAlignedEntry subst rest n (Some ids)
+    else bestAlignedEntry subst rest bestN best
+
+countInSubst : List Int -> List (Int, Mono) -> Int
+countInSubst [] _ = 0
+countInSubst (id::rest) subst = (match lookupAssocI id subst
+  Some _ => 1
+  None => 0) + countInSubst rest subst
 
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> <Mut> Mono
 recordSite name tagRef implRef methodType = recordSiteHinted name tagRef implRef methodType None
