@@ -1,0 +1,11 @@
+-- Reaches `shared/lib/shared.mdk` under the dep name `sh`; the `mid` dependency
+-- reaches the SAME file under the dep name `core2`.  The shared module declares an
+-- `export impl Tagger Int`, so a double-load (two canonical ids) trips
+-- `conflicting impl`.  The F1b two-names fix realpath-canonicalizes both dep roots
+-- so both spellings collapse to one canonical module id and the file loads once.
+import sh.lib.shared.{bump}
+import mid.helper.{helperVal}
+
+main =
+  println "bump 1 = \{bump 1}"
+  println "helperVal = \{helperVal}"

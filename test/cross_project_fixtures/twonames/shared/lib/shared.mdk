@@ -1,0 +1,18 @@
+-- The single physical dependency reached under TWO different dep NAMES:
+--   * the entry app declares it as `sh  = "../shared"`,
+--   * the intermediate dep declares it as `core2 = "../shared"`.
+-- The two declarations join to DIFFERENT literal `..`-bearing root strings
+-- (`app/../shared` vs `mid/../shared`) but realpath to the SAME directory.  The
+-- `export impl` below is therefore double-counted → `conflicting impl` UNLESS the
+-- loader collapses both dep-name spellings to one canonical module id (the F1b
+-- two-names corner, closed via realpath canonicalization in canonicalModId).
+
+export
+bump : Int -> Int
+bump x = x + 1
+
+export interface Tagger a where
+  tag : a -> Int
+
+export impl Tagger Int where
+  tag x = x * 7

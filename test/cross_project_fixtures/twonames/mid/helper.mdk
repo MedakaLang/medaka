@@ -1,0 +1,7 @@
+-- Reaches the shared dep under the NAME `core2` (its medaka.toml's spelling),
+-- whereas the entry app reaches the SAME physical file under the name `sh`.
+import core2.lib.shared.{bump}
+
+export
+helperVal : Int
+helperVal = bump 100

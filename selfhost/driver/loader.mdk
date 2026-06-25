@@ -317,26 +317,45 @@ readModuleProgF parseFn read deps roots modId = match findModuleFile deps roots 
 -- one canonical id, so both `DUse`s rewrite to the SAME string and dedup at
 -- visitMod.  Single-root loads (no `[dependencies]`) are a NO-OP: no owningRoot is
 -- a dep root, so every canonical id equals the original and no DUse is touched.
--- (Path-keyed identity needs no realpath: the same dep root string is threaded as
--- `owningRoot` to BOTH spellings, so they share an identical canonical id.)
+-- (Same-spelling identity needs no realpath: the same dep root string threads as
+-- `owningRoot` to both spellings.  The remaining two-NAMES corner — one physical
+-- dir declared under two dep names, e.g. entry `bp = "../byteparser"` + a transitive
+-- dep `byteparser = "../byteparser"`, whose `..`-joined roots are different literal
+-- strings — is closed by realpath-canonicalizing the owning root + file path before
+-- the dep-name reverse-lookup and the rel-segment computation: one physical file →
+-- one canonical id regardless of the dep-name spelling.  See revLookupRoot/canonicalModId.)
 
 splitDot : String -> List String
 splitDot s = splitOnChar "." s
 
--- reverse-lookup a declared dependency NAME by its resolved root path.
-revLookupRoot : String -> List (String, String) -> Option String
+-- reverse-lookup a declared dependency NAME by its resolved root path, comparing
+-- REALPATH-canonicalized roots.  Two spellings of one physical directory — the
+-- entry's `bp = "../byteparser"` and a transitive dep's `byteparser = "../byteparser"`,
+-- which `joinPathL` produces as DIFFERENT literal `..`-bearing strings — realpath to
+-- the SAME absolute path, so the SAME dep name is chosen for both.  First match wins,
+-- so the canonical name is deterministic: the entry's deps lead the list (childDeps
+-- appends a crossed-into package's own deps AFTER the inherited ones), so both
+-- spellings pick the same first-declared name.  `cr` is the caller's already-realpath'd
+-- owning root (canonicalize once, compare against each dep root's realpath).
+revLookupRoot : String -> List (String, String) -> <IO> Option String
 revLookupRoot _ [] = None
-revLookupRoot r ((n, dr)::rest) = if dr == r then Some n else revLookupRoot r rest
+revLookupRoot cr ((n, dr)::rest) =
+  if canonicalizePath dr == cr then Some n else revLookupRoot cr rest
 
 -- the canonical modId for an import string `m`, resolved against (deps, roots).
 -- Under a declared dep's root → prefix the dep name onto the module's path-
 -- relative id; otherwise (entry / stdlib root, or unresolved) leave `m` as-is.
+-- Both the owning root and the resolved file path are realpath-canonicalized
+-- before the dep-name reverse-lookup and the relative-segment computation, so a
+-- physical file reached under two dep-NAME spellings yields ONE canonical id.
 canonicalModId : List (String, String) -> List String -> String -> <IO> String
 canonicalModId deps roots m = match findModuleFile deps roots m
   None => m
-  Some (path, owningRoot) => match revLookupRoot owningRoot deps
-    None => m
-    Some depName => stringConcat [depName, ".", moduleIdOfPath [owningRoot] path]
+  Some (path, owningRoot) =>
+    let cOwn = canonicalizePath owningRoot
+    match revLookupRoot cOwn deps
+      None => m
+      Some depName => stringConcat [depName, ".", moduleIdOfPath [cOwn] (canonicalizePath path)]
 
 -- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
