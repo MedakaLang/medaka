@@ -205,13 +205,11 @@ buildLeafPage hdrOff cells =
   let cpEnd    = cpStart + nCells * 2
   -- Cells pack downward from the page end; `packCells` returns the lowest
   -- cell offset reached (the content-area start) after writing every cell and
-  -- its pointer, or Err on overflow.  (Kept as `match`: the Ok arm does `<Mut>`
-  -- work before returning, which doesn't fit a `?`/monadic block.)
-  match packCells page cells cpStart pageSize cpEnd 0
-    Err e => Err e
-    Ok contentStart =>
-      writeLeafHeader page hdrOff nCells contentStart
-      Ok page
+  -- its pointer, or Err on overflow.  The `<Mut>` `writeLeafHeader` is a
+  -- `let _ =` statement (a bare effect statement isn't allowed in a `?` block).
+  let contentStart = packCells page cells cpStart pageSize cpEnd 0 ?
+  let _ = writeLeafHeader page hdrOff nCells contentStart
+  Ok page
 
 -- Pack cells back-to-front; write each cell's page-relative pointer into the
 -- cell-pointer array as we go (pointer index 0 = first/lowest-rowid cell).
