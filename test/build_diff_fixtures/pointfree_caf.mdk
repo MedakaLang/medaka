@@ -1,0 +1,22 @@
+-- Regression: a point-free, `=>`-constrained top-level CAF (zero source params,
+-- a typeclass constraint).  `seqp = trav identity` dict-passes to clause `[$dict]`
+-- with an under-applied CDict body (`trav identity`, trav needing one more arg).
+-- The emitter formerly gave seqp's define arity 1 (dict only) while the saturated
+-- call site passes dict + the list → the value arg was dropped and the inner trav
+-- ran on garbage → SIGSEGV at runtime (native `run` was correct; only build+exec
+-- crashed).  Fixed by extending methodBodyDeficit to eta-saturate an under-applied
+-- CDict-spine body (llvm_emit.mdk).
+--
+-- GOLDEN IS NATIVE-SOURCED (native>oracle): the frozen OCaml oracle mis-evaluates
+-- this shape (returns `[[1, 2, 3]]`); the .build.golden is captured from the native
+-- `medaka build`+exec, which matches native `run`.
+trav : Thenable m => (a -> m b) -> List a -> m (List b)
+trav f xs = match xs
+  []        => pure []
+  (x::rest) => andThen (f x) (y => andThen (trav f rest) (ys => pure (y :: ys)))
+
+seqp : Thenable m => List (m a) -> m (List a)
+seqp = trav identity
+
+main : <IO> Unit
+main = println (debug (seqp [Some 1, Some 2, Some 3]))

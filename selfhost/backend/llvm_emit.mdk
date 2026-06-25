@@ -5761,9 +5761,25 @@ isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
 -- the count of still-unapplied VALUE params of an under-applied method/dict body
 -- (0 = saturated / not a method-or-dict head ⇒ no eta-expansion).  A bare CMethod
 -- needs its full `methodArityOf`; an applied spine `(CApp.. (CMethod..) a1..ak)`
--- needs `methodArityOf - k`.  CDict (a constrained-fn occurrence) is left alone:
--- when its head is point-free it is an arity-0 value alias handled elsewhere, and a
--- partially-applied CDict already passes its supplied args through emitDictApp.
+-- needs `methodArityOf - k`.  A CDict (a `=>`-constrained-function occurrence) head is
+-- handled the SAME way (#21 point-free CAF), but its arity needs care: `fnArity name`
+-- counts the LEADING DICT params dict_pass prepended as well as the value params, so a
+-- CDict's remaining VALUE arity is `fnArity name - <dict count> - <value args applied>`.
+-- The dict count is exactly `listLen routes` (the witnesses this occurrence supplies —
+-- emitDictApp passes one word per route ahead of the value args).  So a bare
+-- `seqp = trav` needs `fnArity trav - routes` eta params and an applied spine
+-- `seqp = trav identity` needs `fnArity trav - routes - k` (here 3 - 1 - 1 = 1).  This
+-- is the load-bearing case the old "leave CDict alone" rule MISSED: when seqp's define
+-- is under-applied (clause `[$dict]`, body `trav identity`) the emitter lowered the body
+-- as a DIRECT under-saturated call to trav (emitDictApp forwards only the supplied args)
+-- AND gave seqp's define arity 1 (dict only) while the saturated call site `seqp xs`
+-- passes dict + xs → the value arg was dropped and trav ran on garbage → SIGSEGV.
+-- Appending the deficit as fresh eta params makes BOTH the define arity and the inner
+-- trav application saturate, byte-identically to the eta-expanded source form.  (The old
+-- comment's "partially-applied CDict passes its supplied args through emitDictApp" is true
+-- but does not produce the missing-args closure a point-free define returns — that is the
+-- bug.)  A SATURATED clause (`seqp xs = trav identity xs`, deficit 3 - 1 - 2 = 0) is left
+-- untouched.
 -- A `where`/`let` wrapper (CLet/CLetGroup) is TRANSPARENT to the deficit — the
 -- under-applied method may be the let-body TAIL (`maximum = fold step None`
 -- desugars its `step` `where`-helper to a CLetGroup around the `fold` spine).  The
@@ -5772,10 +5788,12 @@ methodBodyDeficit : Emit -> CExpr -> <Mut> Int
 methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
 methodBodyDeficit _ (CMethod name _ _ _) = methodArityOf name
+methodBodyDeficit e (CDict name routes) = maxInt 0 (fnArity e name - listLen routes)
 methodBodyDeficit e app =
   let (hd, args) = flattenApp app []
   match hd
     CMethod name _ _ _ => maxInt 0 (methodArityOf name - listLen args)
+    CDict name routes => maxInt 0 (fnArity e name - listLen routes - listLen args)
     _ => 0
 
 -- `n` fresh value-param PVars (`__eta_<i>`) numbered after the existing `start`
