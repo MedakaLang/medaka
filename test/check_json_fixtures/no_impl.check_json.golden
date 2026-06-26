@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"message":"No impl of Debug for Shape","range":{"end":{"character":21,"line":6},"start":{"character":16,"line":6}},"severity":1,"source":"medaka"}]}]}

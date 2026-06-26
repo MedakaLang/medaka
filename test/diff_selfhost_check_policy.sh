@@ -1,64 +1,66 @@
 #!/bin/sh
-# diff_selfhost_check_policy.sh — `medaka check-policy` differential gate.
+# diff_selfhost_check_policy.sh — `medaka check-policy` gate.
 #
-# The native `medaka check-policy <file> [--allow …] [--fn …]`
-# (selfhost/tools/check_policy.mdk via medaka_cli.mdk) must be BYTE-IDENTICAL to
-# the OCaml oracle `_build/default/bin/main.exe check-policy …` over the capability
-# demo plugins (demo/plugin_good.mdk, demo/plugin_malicious.mdk), across a
-# permissive policy (→ accept, exit 0) and a restrictive policy (→ reject + the
-# call chain, exit 1).  This is WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md (bare-label
-# policy compare).
+# WS-1a (bare-label policy compare): the native `medaka check-policy <file>
+# [--allow …] [--fn …]` (selfhost/tools/check_policy.mdk via medaka_cli.mdk) must
+# be BYTE-IDENTICAL to a committed native golden
+# (test/check_policy_fixtures/ws1a_<case>.golden + .rc) over the capability demo
+# plugins (demo/plugin_good.mdk, demo/plugin_malicious.mdk), across a permissive
+# policy (→ accept, exit 0) and a restrictive policy (→ reject + the call chain,
+# exit 1).  This is WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.
 #
-# Each case compares stdout, stderr AND the exit code (accept=0 / reject=1).
+# OCaml-free (LIB-REMOVAL-DESIGN §6 Stage A): the goldens were captured from the
+# canonical native ./medaka — no live OCaml oracle.
+#
+# Each case compares stdout/stderr AND the exit code (accept=0 / reject=1).
 # Path-stable: the plugin path is the only absolute path that can appear; we strip
-# it on BOTH sides (sed) so goldens never bake /Users/.  No committed goldens — the
-# OCaml oracle is the live reference (like diff_selfhost_doc.sh).
-#
-# OCaml-free at runtime for the native leg; the oracle leg uses the frozen OCaml
-# compiler (soak-period differential oracle).
+# it (sed) so goldens never bake /Users/.
 #
 # Usage:  sh test/diff_selfhost_check_policy.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NATIVE="$ROOT/medaka"
-ORACLE="$ROOT/_build/default/bin/main.exe"
+GOLDIR="$ROOT/test/check_policy_fixtures"
 
 [ -x "$NATIVE" ] || { echo "SKIP: ./medaka not built — run: make medaka"; exit 2; }
-[ -x "$ORACLE" ] || { echo "SKIP: OCaml oracle not built — run: dune build --root $ROOT"; exit 2; }
 
 export MEDAKA_ROOT="$ROOT"
 
 pass=0; fail=0
 
-# one_case <label> <file> <allow> <fn>
+# one_case <label> <file> <allow> <fn> <golden-stem>
 one_case() {
-  label="$1"; file="$2"; allow="$3"; fn="$4"
+  label="$1"; file="$2"; allow="$3"; fn="$4"; stem="$5"
   mdk="$ROOT/$file"
-  [ -f "$mdk" ] || { fail=$((fail+1)); printf 'FAIL %s (missing %s)\n' "$label" "$file"; return; }
+  golden="$GOLDIR/${stem}.golden"; rcfile="$GOLDIR/${stem}.rc"
+  [ -f "$mdk" ]    || { fail=$((fail+1)); printf 'FAIL %s (missing %s)\n' "$label" "$file"; return; }
+  [ -f "$golden" ] || { fail=$((fail+1)); printf 'FAIL %s (missing golden %s)\n' "$label" "$golden"; return; }
+  [ -f "$rcfile" ] || { fail=$((fail+1)); printf 'FAIL %s (missing rc %s)\n' "$label" "$rcfile"; return; }
 
-  native_out="$(perl -e 'alarm 90; exec @ARGV' \
-      "$NATIVE" check-policy "$mdk" --allow "$allow" --fn "$fn" 2>&1 | sed "s|$mdk|<plugin>|g")"
+  # Capture stdout+stderr to a tmpfile so $? is the native exit code, not sed's.
+  tmpout="$(mktemp)"
+  perl -e 'alarm 90; exec @ARGV' \
+      "$NATIVE" check-policy "$mdk" --allow "$allow" --fn "$fn" > "$tmpout" 2>&1
   native_rc=$?
-  oracle_out="$(perl -e 'alarm 90; exec @ARGV' \
-      "$ORACLE" check-policy "$mdk" --allow "$allow" --fn "$fn" 2>&1 | sed "s|$mdk|<plugin>|g")"
-  oracle_rc=$?
+  native_out="$(sed "s|$mdk|<plugin>|g" "$tmpout")"; rm -f "$tmpout"
+  ref_out="$(cat "$golden")"; ref_rc="$(cat "$rcfile")"
 
-  if [ "$native_out" = "$oracle_out" ] && [ "$native_rc" = "$oracle_rc" ]; then
+  if [ "$native_out" = "$ref_out" ] && [ "$native_rc" = "$ref_rc" ]; then
     pass=$((pass+1)); printf 'ok   %s (rc=%s)\n' "$label" "$native_rc"
   else
-    fail=$((fail+1)); printf 'FAIL %s (native rc=%s, oracle rc=%s)\n' "$label" "$native_rc" "$oracle_rc"
-    printf '  --- native ---\n%s\n  --- ocaml ---\n%s\n' "$native_out" "$oracle_out"
+    fail=$((fail+1)); printf 'FAIL %s (native rc=%s, golden rc=%s)\n' "$label" "$native_rc" "$ref_rc"
+    printf '  --- native ---\n%s\n  --- golden ---\n%s\n' "$native_out" "$ref_out"
   fi
 }
 
 # Accept: good plugin, permissive policy.
-one_case "good-accept"        demo/plugin_good.mdk      "Cache,Log" transform
+one_case "good-accept"        demo/plugin_good.mdk      "Cache,Log" transform ws1a_good_accept
 # Reject: good plugin, restrictive policy (drops Log) → chain via logEvent.
-one_case "good-reject"        demo/plugin_good.mdk      "Cache"     transform
+one_case "good-reject"        demo/plugin_good.mdk      "Cache"     transform ws1a_good_reject
 # Reject: malicious plugin, the demo policy → chain four helpers deep to fetch.
-one_case "malicious-reject"   demo/plugin_malicious.mdk "Cache,Log" transform
+one_case "malicious-reject"   demo/plugin_malicious.mdk "Cache,Log" transform ws1a_malicious_reject
 # Reject from a mid-graph entry: trace from tagVisit (chain to fetch).
-one_case "midgraph-reject"    demo/plugin_malicious.mdk "Cache,Log" tagVisit
+one_case "midgraph-reject"    demo/plugin_malicious.mdk "Cache,Log" tagVisit  ws1a_midgraph_reject
 #
 # NOTE: an ACCEPT case that admits Fetch (e.g. malicious + --allow Cache,Log,Fetch)
 # is deliberately NOT tested.  check-policy ACCEPT runs the plugin with stubs for

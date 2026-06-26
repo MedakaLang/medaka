@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"message":"the clauses of 'f' must be contiguous: a same-named top-level binding already appears earlier, separated by an intervening declaration. Move all clauses of 'f' (and its type signature) together, or rename one.","range":{"end":{"character":7,"line":2},"start":{"character":6,"line":2}},"severity":1,"source":"medaka"}]}]}

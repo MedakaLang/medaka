@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"message":"Type mismatch: String vs Int","range":{"end":{"character":7,"line":1},"start":{"character":6,"line":1}},"severity":1,"source":"medaka"}]}]}
