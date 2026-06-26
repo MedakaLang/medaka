@@ -8,7 +8,36 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`selfhost/README.md`](./selfhost/README.md).
 
-## Current status (2026-06-23) — formatter hardening (fmt bugs + style rules)
+## Current status (2026-06-25) — soak tail: Traversable shipped + cross-module dispatch + loader identity
+
+**`main` = `8d93c8e`.** A run of soak landings since the 2026-06-23 entries below; each
+reproduced on the binary, gated, merged, seed re-minted at checkpoints (cold
+`bootstrap_from_seed` C3a PASS):
+- **`Traversable t` typeclass shipped** (`b5ae3a2` + `bf7243c` + `104c69a`, seed `da2469d`) —
+  the three "return-position `pure`" dispatch gaps are closed; `traverse`/`sequence` are a real
+  interface in `stdlib/core.mdk` (List/Option/Result). Gap 1 was an oracle-only artifact (already
+  correct on native); gap 2 = CDict-spine eta-saturation in the emitter; gap 3 = impl-body
+  method-level constraint dicts unregistered in eval. Residual: `sequence` ships per-impl (the
+  default-method/free-fn forms still misdispatch). See [Compiler / language](#compiler--language).
+- **D2 cross-module method-constraint dispatch** (`221af36`) + **`export import` re-export**
+  (`a35c87b`) — sibling-module interface methods carrying a user `=>` constraint now dispatch
+  correctly cross-module (root was stale-sweep first-match shadowing, NOT the bare-name collision
+  the deferred D2 re-key targets), and values/fns/methods re-exported through an intermediate module
+  via `export import` resolve downstream. The fn-level `EVarFrom` re-key stays deferred.
+- **F1b loader module identity** (`cf8e12d` + `ac4b04a`, `canonicalizePath` extern `33972aa`) —
+  the same file under two import spellings no longer double-loads (`conflicting impl`); the loader
+  canonicalizes every `DUse` to one dep-name-prefixed modId before resolve/typecheck/eval. The
+  two-dep-NAMES corner is closed via a realpath extern. Native-only.
+- **CFieldAccess abstract-export diagnostic** (`4710d3a` + `e3e7e1b`) — the filed "emitter panics on
+  cross-module `r.field`" was a NON-bug (canonical compiler is correct with `public export data` /
+  the `record` keyword); `export data` is abstract-by-design. Fix = a clear diagnostic
+  (`'Point' is exported abstractly; declare it \`public export\` to expose its fields`) in both
+  resolve (destructure) and typecheck (dot-access).
+- **Removed the `?` operator + list comprehensions** (`27116d9`) — both compilers in lockstep;
+  the model is now: bare block = effect, `do` = monadic (the `<-` delimiter), `map`/`filter`/`|>`
+  = transforms. See memory `project_remove_question_op_and_comprehensions`.
+
+
 
 **Driven by dogfooding `fmt` on the `parsec` library; `main` = `966b546`.** All native-only
 (`printer.mdk`/`fmt.mdk` are OUTSIDE the emitter self-compile graph; the one in-graph helper
@@ -364,9 +393,10 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | **Bug C** — `toList` on an imported `Map` mis-resolves to the `Foldable` method | Compiler / language | ✅ DONE (2026-06-23, `0d40398`) — see [Compiler / language](#compiler--language) |
 | Empty annotated multi-type-param container literal (`Map { } : Map Int Int`) rejected at `check` | Compiler / language | ✅ DONE (2026-06-23, `98afb77`) — see [Compiler / language](#compiler--language) |
 | Phase 101b — `Arbitrary`-driven nested parametric generators (deferred) | Compiler / language | this file → [Compiler / language](#compiler--language) |
-| Generic `Thenable m =>` multi-clause fn w/ return-pos `pure` stack-overflows in eval (use single-clause `match`) | Compiler / language | this file → [Compiler / language](#compiler--language) |
-| Point-free constrained binding (`f = g identity`) mis-dispatches return-pos `pure` to wrong instance (eta-expand) | Compiler / language | this file → [Compiler / language](#compiler--language) |
-| Per-method-constraint dict conflated w/ dispatch type's own instance — blocks `Traversable` interface (traverse/sequence stay list fns) | Compiler / language | this file → [Compiler / language](#compiler--language) |
+| Generic `Thenable m =>` multi-clause fn w/ return-pos `pure` stack-overflows in eval | Compiler / language | ✅ DONE (2026-06-25) — was an oracle-only artifact, already correct on canonical native; see [Compiler / language](#compiler--language) |
+| Point-free constrained binding (`f = g identity`) mis-dispatches return-pos `pure` | Compiler / language | ✅ DONE (2026-06-25, `bf7243c`) — CDict-spine eta-saturation; see [Compiler / language](#compiler--language) |
+| Per-method-constraint dict conflated w/ dispatch type's own instance — blocked `Traversable` interface | Compiler / language | ✅ DONE (2026-06-25, `104c69a` + `b5ae3a2`) — `Traversable t` shipped; see [Compiler / language](#compiler--language) |
+| `sequence` only dispatches correctly per-impl; default-method + generic-free-fn forms misdispatch (residual of the above) | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | Phase 149 (proposed) — record rest-capture + construction spread sugar | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | D7 (latent, verified), foldMap RNone emit-site (latent, verified), helper dedup, deferred GC/TRMC seams | Self-host internals | this file → [Self-host … open items](#self-host-typecheck--dispatch--runtime--known-open-items) |
 | Leading-`|` `data` decls (native-only by design; auto-resolves at `lib/` removal) | Parser | this file → [Known parser gaps](#known-parser-gaps-selfhost-parsermdk) |
@@ -772,76 +802,40 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
 
 ### Compiler / language
 
-- **Generic `Thenable m =>` multi-clause function with return-position `pure`
-  stack-overflows in eval — OPEN (filed 2026-06-24).** A constrained, self-recursive
-  function whose body returns via `pure` loops forever / overflows the stack at eval
-  when written as **separate pattern clauses**, but works when written as a **single
-  clause with an inner `match`**. Minimal repro (bisected — see below):
-  ```
-  -- overflows
-  t f []        = pure []
-  t f (x::rest) = andThen (f x) (y => andThen (t f rest) (ys => pure (y :: ys)))
-  -- works (the only difference is multi-clause → single-clause match)
-  t f xs = match xs
-    []        => pure []
-    (x::rest) => andThen (f x) (y => andThen (t f rest) (ys => pure (y :: ys)))
-  ```
-  Surfaced adding `traverse`/`sequence` to `stdlib/list.mdk` (replacing sqlite's local
-  `mapResult`); `stdlib/list.mdk`'s `traverse` carries an inline comment pinning the
-  single-clause form so nobody "simplifies" it back. **Bisection localized the trigger to
-  the multi-clause-ness ITSELF** — NOT the `<e>` effect row, NOT the function argument,
-  and NOT generic-recursion-with-`pure` on its own (a single-clause generic `rep n x = if
-  n<=0 then pure [] else andThen (rep (n-1) x) (ys => pure (x::ys))` runs fine). Suspected
-  interaction: multi-clause desugar (clauses → one lambda matching a tuple of all args)
-  × dict-passing of the leading `Thenable` dict on the recursive self-reference — the
-  recursive call appears to drop/re-resolve the dict, building unbounded structure. **Bug
-  confirmed on the OCaml oracle (`Fatal error: exception Stack overflow`); native repro
-  status UNVERIFIED** (the shipped stdlib uses the single-clause workaround, which runs
-  correctly on native + passes `diff_selfhost_test list`) — native dict-passing differs,
-  so step 0 is to check whether the multi-clause form also overflows native. Fix likely
-  lands in the desugar→dict-pass→eval seam (`selfhost/frontend/desugar.mdk` /
-  dict-pass / `selfhost/eval/*`, mirror in the frozen `lib/` oracle for gate parity).
-  Root cause NOT yet localized in the compiler; only worked around. See memory
-  `project_generic_monadic_dispatch_gaps`.
+- **Return-position `pure` dispatch gaps (the `Traversable` blockers) — ✅ DONE (2026-06-25,
+  `b5ae3a2` + `bf7243c` + `104c69a`, seed re-minted `da2469d`).** The three filed gaps that
+  blocked promoting `traverse`/`sequence` to a real interface are fixed; `traverse`/`sequence`
+  are now a **`Traversable t` typeclass** in `stdlib/core.mdk` (List/Option/Result instances),
+  and the free-fn workarounds were removed from `list.mdk`. **Every filed symptom had shifted —
+  reproduce-on-current-main beat the doc** (a diagnose-only agent reproduced all three on
+  canonical native, `run` vs `build` vs the frozen oracle):
+  - **Gap 1 (multi-clause `pure` overflow) — was an oracle-only artifact, ALREADY correct on
+    canonical native.** Both native paths evaluated it fine; it survived only as a frozen-`lib/`
+    oracle hang. The filed "confirmed on oracle, native unverified" was the tell. No code change.
+  - **Gap 2 (point-free `sequence = traverse identity`) — fixed `bf7243c`.** Native `run` was
+    already correct; native `build` SIGSEGV'd (the filed `[[1,2,3]]` was the *oracle*). Root: an
+    under-applied **CDict-spine** body the emitter's eta-saturation (`methodBodyDeficit` in
+    `selfhost/backend/llvm_emit.mdk`) skipped (it handled CMethod/CLam spines, not CDict). Fixed
+    by mirroring the CMethod handling for CDict.
+  - **Gap 3 (per-method-constraint dict conflation — THE interface blocker) — fixed `104c69a`.**
+    Native `run` panicked "no matching impl"; native `build` was correct. Root: `inferImplMethod`
+    never registered its method-level `=>` constraint dicts into `activeDictVars` (only
+    `inferDefaultMethod` did), so the impl body's inner `pure []` routed `RNone` → arg-tag →
+    panic. Fixed via a new `registerImplMethodDicts` (the impl-body analog of
+    `registerMethodDictSlots`) in `selfhost/types/typecheck.mdk`.
 
-- **Point-free constrained binding mis-dispatches return-position `pure` to the wrong
-  instance — OPEN (filed 2026-06-24).** A point-free top-level binding that is generic
-  over a return-position class loses its dictionary and defaults to the first/wrong impl.
-  Repro: `sequence = traverse identity` evaluated `sequence [Some 1, Some 2, Some 3]` to
-  `[[1, 2, 3]]` (the **List** `pure`) instead of `Some [1, 2, 3]`; **eta-expanding** to
-  `sequence xs = traverse identity xs` threads the `m` dict from the call site and fixes
-  it. `stdlib/list.mdk`'s `sequence` ships eta-expanded with an inline warning comment.
-  Confirmed on the OCaml oracle; native run of the eta-expanded form is correct (native
-  repro of the point-free bug unverified). This is the return-position-dispatch ambiguity
-  the dict-passing machinery is meant to resolve from the result type, failing for a CAF
-  with no argument to anchor the dict. Likely same dict-pass seam as the entry above;
-  root cause not localized — only worked around. See memory
-  `project_generic_monadic_dispatch_gaps`.
+  Gaps 2 and 3 are **distinct roots** (opposite halves of the eval/emit path-parity fork —
+  emit-hole vs eval-hole — that ARGSTAMP-UNIFY only partly closed), not one shared root. The D2
+  re-key hypothesis was disproven (all three repro single-module). Gates: core 38 doctests / 9
+  props, list 63 / 12, `diff_selfhost_test` 10/0, fixpoint C3a/C3b YES, cold `bootstrap_from_seed`
+  C3a PASS. See memory `project_generic_monadic_dispatch_gaps`.
 
-- **Per-method-constraint dict conflated with the dispatch type's own instance — blocks
-  `Traversable` as an interface — OPEN (filed 2026-06-24).** A `traverse`/`sequence`
-  generalization to a proper `Traversable t requires Mappable t, Foldable t` interface
-  (method `traverse : Thenable m => (a -> <e> m b) -> t a -> <e> m (t b)`, mirroring
-  `Foldable`'s `foldMap : Monoid m => …`) is **expressible and typechecks**, but
-  mis-evaluates: when the method dispatches on a container `t` that is **itself** a
-  `Thenable` (e.g. `List`), the per-method `Thenable m` dict gets bound to the
-  CONTAINER's `Thenable` instead of the caller's `m`, so a return-position `pure` in the
-  body lifts into the wrong monad. Repro (the interface form):
-  ```
-  traverse (x => if x > 0 then Some x else None) [1, 2, 3]
-    -- expected Some [1, 2, 3]; got [[1, 2, 3]]  (List's pure, not Option's)
-  ```
-  Short-circuit cases (`None`/`Err`) pass — only the success path that reaches the rebuild
-  exposes it. **Not source-workable:** delegating the impl body to a free helper that
-  carries `m`'s dict explicitly (the form that works as a *standalone* function — that's
-  why the shipped `list.traverse` is correct) still fails, because the method receives the
-  wrong `m` dict *before* it forwards. `foldMap` is the same shape and presumably has the
-  same latent bug, just never exercised with a return-position superclass method on a
-  self-`Thenable` container. **Decision:** `traverse`/`sequence` stay free functions in
-  `stdlib/list.mdk` until this is fixed; promoting to `Traversable` is gated on
-  distinguishing a per-method-constraint dict from an in-scope instance of the same class
-  for the dispatch type (dict-pass/typecheck/eval seam, same area as the two entries above
-  + the frozen `lib/` oracle). See memory `project_generic_monadic_dispatch_gaps`.
+- **`sequence` dispatch residual (of the above) — OPEN (filed 2026-06-25).** `sequence` only
+  dispatches correctly in **per-impl** form (`sequence ta = traverse identity ta` written into
+  each instance, which is how it ships). The **default-method** form panics ("no matching impl")
+  and the **generic free-function** form SIGSEGVs — the same dispatch-limitation family as gaps
+  2/3 above, contained by shipping per-impl. Not a feature blocker. Same dict-pass/typecheck/eval
+  seam. See memory `project_generic_monadic_dispatch_gaps`.
 
 - **Unqualified-import name collision — use-time ambiguity error — ✅ DONE (2026-06-23, `421a4bd`,
   both compilers).** Two non-`core` modules exporting the same unqualified standalone (e.g. `map`

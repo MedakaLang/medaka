@@ -38,10 +38,10 @@ footguns) and `AGENTS.md` (the agent-facing router/map).
   Fixtures: `test/eval_typed_modules_fixtures/cross_module_record_fields/` +
   `test/resolve_module_fixtures/abstract_record_field/`. Memory: `project_abstract_export_field_diagnostic`.
 
-**What to do next:** continue the soak. Outstanding open items: the residual monadic gap 1 (generic
-multi-clause `pure` overflow — oracle-only, native repro UNVERIFIED), the fn-level D2 `EVarFrom` re-key
-(supervised, deferred), `sequence` per-impl dispatch residual, and broader dogfood/library work. The
-`lib/` removal soak tail continues.
+**What to do next:** continue the soak. Outstanding open items: the `sequence` per-impl dispatch
+residual (the default-method/generic-free-fn forms still misdispatch — `traverse`/`sequence` ship as a
+`Traversable` typeclass, gap 1 turned out oracle-only and is closed), the fn-level D2 `EVarFrom` re-key
+(supervised, deferred), and broader dogfood/library work. The `lib/` removal soak tail continues.
 
 ## RESUME — D2 method-constraint + export-import re-export CLOSED (2026-06-25). `main` = `a35c87b`
 
@@ -80,7 +80,17 @@ open but do not block any feature.
 
 
 
-## RESUME — 🎯 TOMORROW: fix the 3 return-position-`pure` dispatch gaps (unblocks `Traversable`) (2026-06-24). `main` = `1e889fe`
+## RESUME — ✅ RESOLVED 2026-06-25: the 3 return-position-`pure` dispatch gaps (`Traversable` shipped). `main` = `1e889fe` (historical)
+
+> **STATUS: DONE — kept for the diagnosis record.** All three gaps below were closed on 2026-06-25
+> (`b5ae3a2` + `bf7243c` + `104c69a`, seed `da2469d`); `traverse`/`sequence` are now a real
+> `Traversable t` typeclass in `stdlib/core.mdk`. The key correction: **every filed symptom had
+> shifted** — gap 1 was an oracle-only artifact (already correct on native, no code change); gap 2
+> was a native-`build` SIGSEGV (CDict-spine eta-saturation, NOT the filed `[[1,2,3]]` which was the
+> oracle); gap 3 was a native-`run` panic (unregistered impl-body method-level constraint dicts).
+> Gaps 2/3 were **distinct roots**, not the one shared root predicted below. Residual: `sequence`
+> ships per-impl (default-method/free-fn forms still misdispatch). See PLAN.md → Compiler / language
+> and memory `project_generic_monadic_dispatch_gaps`. The original framing follows for the record.
 
 **This is the task to start on.** Adding generic `traverse`/`sequence` to the stdlib (dogfooding the
 sqlite library, which had a hand-rolled `mapResult`) surfaced **three related compiler dispatch gaps**,
