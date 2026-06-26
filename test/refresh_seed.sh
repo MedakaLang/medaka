@@ -1,4 +1,3 @@
-#!/bin/sh
 # RE-MINT the checked-in IR seed (selfhost/seed/emitter.ll.gz) — OCaml-FREE.
 #
 # The seed is the textual LLVM IR of the BUILD driver
@@ -16,10 +15,6 @@
 #      (the native emitter emitting the build driver's own graph; trim trailing ()).
 #   3. gzip -> selfhost/seed/emitter.ll.gz   (committed; ~1.7 MB vs ~11.5 MB raw).
 #
-# Optional cross-check: if the OCaml oracle (_build/default/bin/main.exe) happens to
-# be built, diff the native mint against an interpreted mint — informational only,
-# never required (CHECK_OCAML=0 to skip).
-#
 # Run on-demand (per-release / deliberate refresh), NOT per-PR.
 #
 # Usage:  sh test/refresh_seed.sh
@@ -32,7 +27,6 @@ CORE="$ROOT/stdlib/core.mdk"
 SELFHOST="$ROOT/selfhost"
 STDLIB="$ROOT/stdlib"
 SEED_GZ="$ROOT/selfhost/seed/emitter.ll.gz"
-CHECK_OCAML="${CHECK_OCAML:-1}"
 
 # 1. Make the native emitter current from CURRENT source (OCaml-free; cold-bootstraps
 #    from the existing seed if no emitter binary exists yet).  Build to a scratch
@@ -57,21 +51,6 @@ echo "minting seed: NATIVE emission of the build driver's own graph ..."
 "$EMITTER" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB" > "$TMP"
 trim_unit "$TMP"
 [ -s "$TMP" ] || { echo "FAIL: empty seed IR"; exit 1; }
-
-# Optional cross-check against an interpreted mint (informational; never required).
-MAIN="$ROOT/_build/default/bin/main.exe"
-if [ "$CHECK_OCAML" = "1" ] && [ -x "$MAIN" ]; then
-  OC="$WORK/seed_ocaml.ll"
-  if "$MAIN" run "$DRIVER" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB" > "$OC" 2>/dev/null; then
-    trim_unit "$OC"
-    if cmp -s "$TMP" "$OC"; then
-      echo "cross-check: native mint == OCaml mint, byte-for-byte (C3b holds)."
-    else
-      echo "cross-check WARN: native mint differs from OCaml mint (informational):"
-      cmp "$TMP" "$OC" | head -3
-    fi
-  fi
-fi
 
 # 3. gzip the minted seed into the committed location.
 mkdir -p "$(dirname "$SEED_GZ")"

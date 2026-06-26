@@ -30,12 +30,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Prefer the native `medaka` (the OCaml `medaka build` path is dead — its
 # interpreter can no longer parse the selfhost emitter source). Builds shell out
 # to an emitter, so point MEDAKA_EMITTER at the native emitter for OCaml-free builds.
-if [ -x "$ROOT/medaka" ]; then
-  MAIN="$ROOT/medaka"
-  [ -x "$ROOT/medaka_emitter" ] && export MEDAKA_EMITTER="$ROOT/medaka_emitter"
-else
-  MAIN="$ROOT/_build/default/bin/main.exe"
-fi
+MAIN="$ROOT/medaka"
+[ -x "$ROOT/medaka_emitter" ] && export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 EMIT_DRIVER="selfhost/entries/llvm_emit_modules_main.mdk"
 RUNTIME="stdlib/runtime.mdk"
 CORE="stdlib/core.mdk"
@@ -52,7 +48,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)"; exit 2; }
+[ -x "$MAIN" ] || { echo "build first: make medaka (missing $MAIN)"; exit 2; }
 command -v clang >/dev/null 2>&1 || { echo "no clang on PATH — skipping"; exit 2; }
 
 cd "$ROOT" || exit 2

@@ -30,13 +30,13 @@
 set -u
 N=${1:-3}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MAIN="$ROOT/_build/default/bin/main.exe"
+MAIN="$ROOT/medaka"
 SINGLE_DRIVER="$ROOT/selfhost/entries/profile_main.mdk"
 MODULES_DRIVER="$ROOT/selfhost/entries/profile_modules_main.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 
-[ -x "$MAIN" ] || { echo "build first: dune build --root . (missing $MAIN)" >&2; exit 2; }
+[ -x "$MAIN" ] || { echo "build first: make medaka (missing $MAIN)" >&2; exit 2; }
 [ -f "$SINGLE_DRIVER" ] || { echo "missing $SINGLE_DRIVER" >&2; exit 2; }
 [ -f "$MODULES_DRIVER" ] || { echo "missing $MODULES_DRIVER" >&2; exit 2; }
 
