@@ -76,6 +76,7 @@ println : a -> <IO> Unit
 product : a b -> b
 pure : a -> b a
 safeDiv : Int -> Int -> Option Int
+sequence : a (b c) -> b (a c)
 showResult : Option a -> String
 shrink : a -> List a
 signum : a -> a
@@ -86,6 +87,7 @@ thenCmp : Ordering -> Ordering -> Ordering
 toList : a b -> List b
 toResult : a -> Option b -> Result a b
 to_rep : a -> Rep
+traverse : (a -> b c) -> d a -> b (d c)
 unless : Bool -> a Unit -> a Unit
 when : Bool -> a Unit -> a Unit
 xor : Bool -> Bool -> Bool
