@@ -454,6 +454,7 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | `<>` Semigroup operator (not lexed); JSON pretty-printer + `ToJson`/`FromJson`; single-codepoint string indexing; effect-label refinement | Stdlib | [`STDLIB.md`](./STDLIB.md) §"Remaining work" / §"Label refinement roadmap" |
 | Diagnostic-position follow-ups (parse-error column accuracy; pattern-position spans; guard-exhaustiveness + multi-module match warnings still `None`) | Tooling / diagnostics | this file → [Stage 4](#stage-4--full-tooling-port--native-medaka-retire-ocaml-decided-2026-06-10); [`compiler/DIAGNOSTICS-SURFACING-PLAN.md`](./compiler/DIAGNOSTICS-SURFACING-PLAN.md) |
 | Auxiliary port: `coverage.ml` + `bench_runner.ml` (port last) | Tooling | this file → [Stage 4](#stage-4--full-tooling-port--native-medaka-retire-ocaml-decided-2026-06-10) |
+| Structured type-error ADT (replace string messages; enables LSP error codes/quickfixes) | Parked ideas / diagnostics | this file → "Future idea (parked): structured type-error ADT"; [`compiler/DIAGNOSTICS-SURFACING-PLAN.md`](./compiler/DIAGNOSTICS-SURFACING-PLAN.md) |
 | Effect-reannotation utility; stack-performance recursion lint; bare effectful statements (drop `let _ =`) | Parked ideas | this file → the three "Future idea (parked)" sections below |
 | `medaka add`/`remove`/`update` + `medaka.lock` | Blocked (needs package manager) | this file → [Blocked on a package manager](#blocked-on-a-package-manager-out-of-scope-until-one-exists) |
 
@@ -482,6 +483,28 @@ runtime. Full per-tool / per-slice completion log archived in
   pattern-position errors inherit the enclosing-`match` span; guard-exhaustiveness +
   multi-module warnings still `None`. See the plan doc's residuals.
 - **Auxiliary port:** `coverage.ml` + `bench_runner.ml` — port last.
+
+### Future idea (parked, not scheduled): structured type-error ADT (replace string messages)
+
+**Current state:** `compiler/types/typecheck.mdk` represents type errors as plain `String`
+messages — `pushTypeError : String -> <Mut> Unit` (dedups + accumulates), with each error's
+wording produced by a per-error message-builder function (`ambiguousImplMsg`, `effectParamMsg`,
+`effectLeakMsg`, …). ~34 raise sites. There is **no `TypeError` ADT / `ppError` printer** (that
+was the removed OCaml `lib/typecheck.ml`). The string+builder approach works and is golden-gated.
+
+**Idea:** introduce a structured `TypeError` ADT — one variant per error kind carrying its
+payload (names + `Mono`s) — with a single `ppError` renderer. Benefits are about **structured
+diagnostics**, not the messages themselves: stable error **codes/categories** (LSP `code`/`tags`),
+**quickfix code actions** keyed by error kind, machine-readable diagnostics, and rendering
+consistency enforced structurally (the shared-naming-context concern — two tyvars both printing
+`a` — becomes a single chokepoint instead of per-builder discipline).
+
+**Why parked:** non-trivial churn in the **hottest in-graph file** (every change there needs
+`selfcompile_fixpoint` + a seed re-mint) across ~34 sites + goldens, for no behavioral gain
+today. It only pays off once we want structured LSP diagnostics. **Lands naturally as the
+enabling refactor for** [`compiler/DIAGNOSTICS-SURFACING-PLAN.md`](./compiler/DIAGNOSTICS-SURFACING-PLAN.md)
+work (error codes + LSP quickfixes) — schedule it there, not standalone. Until then the
+string+builder idiom is the convention (the `harden-typechecker` skill documents this).
 
 ### Future idea (parked, not scheduled): effect-reannotation utility
 

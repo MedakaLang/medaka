@@ -18,12 +18,13 @@ locations drift; confirm with search before trusting them.
 
 - **Errors accumulate; phases don't exit on first failure.** They push into
   `compiler/driver/diagnostics.mdk`. Inside `typecheck.mdk` the idiom is
-  `fail (SomeError …)` which raises a type error, caught upstream and collected.
-  Don't add early exit/panic paths, and don't short-circuit a later phase
-  because an earlier one failed.
+  `pushTypeError (someMsg …)` — it dedups and appends the `String` message to the
+  accumulator (there is no `fail`/`raise` ADT path; that was the removed OCaml
+  compiler). Don't add early exit/panic paths, and don't short-circuit a later
+  phase because an earlier one failed.
 - **Level bracketing must be exception-safe.** Generalization uses Rémy levels:
-  hand-balanced `enterLevel ()` / `exitLevel ()` pairs. A `fail` *between* them
-  permanently increments `currentLevel`. **Nuance confirmed in Phase 71:** the
+  hand-balanced `enterLevel ()` / `exitLevel ()` pairs. A non-local exit *between*
+  them permanently increments `currentLevel`. **Nuance confirmed in Phase 71:** the
   whole-program entry points (`checkProgram`, `typecheckModule`) call
   `resetState` on entry, so a leak there is wiped before the next run; and
   within a single run the leak is *relative* — each `processLetrecGroup`
@@ -35,18 +36,18 @@ locations drift; confirm with search before trusting them.
   Still: if you add a path that can `fail` mid-bracket, prefer restoring the
   level (a finally, or reset at the boundary).
 
-## Broken invariants are diagnostics, not crashes (Phase 71)
+## Can't-happen vs. recoverable: `panic` vs. `pushTypeError`
 
-There is **no `assert false` left in `typecheck.mdk`** — don't reintroduce one.
-For a "can't happen" invariant violation, `fail (InternalError "context")`
-(a type_error variant that renders as "Internal type-checker error: …"); it's
-catchable and survives the REPL. **Exception:** a *rendering* path must never
-raise — `ppMono`'s post-normalize `Link` case returns the placeholder `"_"`
-rather than failing, because it runs while formatting an error message. Also
-guard lookups that can miss across module boundaries (`env.interfaces`,
-`env.records`): fall back to the matching user-facing error (`UnknownInterface`,
-`UnknownRecord`) or degrade gracefully rather than letting a raw not-found
-escape.
+A genuinely impossible invariant violation uses `panic "context"`
+(e.g. `panic "unify: tuple arity mismatch"`, `panic ("unbound method: " ++ name)`).
+Native `panic` is **unrecoverable by design** (see the `no-catchable-panics-isolation`
+decision) — so reserve it for true impossibilities, and **don't `panic` on anything a
+user program can actually reach.** A *recoverable* condition a real program can trigger —
+notably a cross-module lookup that can miss (`env.interfaces`, `env.records`) — must
+`pushTypeError` a clear user-facing message (unknown-interface / unknown-record wording)
+rather than panic or let a raw not-found escape. **Exception:** a *rendering* path must
+never panic — `ppMono`'s post-normalize `Link` case returns the placeholder `"_"` rather
+than crashing, because it runs while formatting an error message.
 
 ## Generalization is value-restricted (Phase 66)
 
@@ -69,30 +70,46 @@ gets it for free because `unify tp t1` lowers through `occursAdjust`. Note
 
 ## Adding a `type_error`
 
-The mechanical loop — four edits, all in `compiler/types/typecheck.mdk` unless
-noted:
+**Errors are plain `String` messages, not an ADT.** The native compiler has **no
+`TypeError`/`ppError` ADT** — that was the removed OCaml `lib/typecheck.ml`. The
+native idiom is `pushTypeError : String -> <Mut> Unit` (it dedups, then pushes
+into the accumulator), with each error's wording produced by a small per-error
+**message-builder function** (`ambiguousImplMsg`, `effectParamMsg`,
+`effectLeakMsg`, …) that returns the `String`. So "add a type_error" =
+build the message + push it, not "add a variant + a printer case".
 
-1. **Constructor** — add a variant to the `TypeError` ADT. Carry enough payload
-   to render a useful message (names + the `Mono`s involved).
-2. **Pretty-printer** — add a case to `ppError`. Use `ppMono` for a single type,
-   `ppScheme` for schemes. **When a message names two or more types** (a
-   mismatch, or two impl-head arg lists), render them through one shared naming
-   context — `ppMonoPair a b` / `ppMonos args` / `ppMonosPair a b` (Phase 70)
-   — not separate `ppMono` calls, or two distinct tyvars can both print as `a`.
-   Phrase the message as *what's wrong + how to fix*.
-3. **Raise site** — `fail (YourError …)` from the phase that detects it.
-   `fail` reads the global `currentLoc`, which is correct *during* the `infer`
-   walk but **stale in post-HM passes** (`checkMethodUsages`,
-   `checkConstraintObligations`) — by then it points at the last expression
-   inferred. If your error fires from a deferred/post-HM pass, capture
-   `!currentLoc` into the accumulator tuple at record time and raise with
-   `failAt loc …` instead (Phase 62 did exactly this — follow that pattern).
-4. **Test** — add a fixture to the typecheck golden gate or the
-   `test/diff_compiler_check.sh` suite. Fixtures embed the source inline so
-   failures read cleanly. **Watch for prelude name collisions:** a fixture that
-   reuses a stdlib interface name (e.g. `Monoid`) may pass on a
+The mechanical loop — all in `compiler/types/typecheck.mdk` unless noted:
+
+1. **Message builder** — write (or reuse) a `…Msg : … -> String` helper that
+   formats the message from the names + `Mono`s involved. Grep for an existing
+   `Msg` builder near the error family you're adding and mirror it. Phrase it as
+   *what's wrong + how to fix*. **When a message names two or more types** (a
+   mismatch, two impl-head arg lists), render them through one shared naming
+   context — `ppMonoPair a b` / `ppMonos args` / `ppMonosPair a b` (Phase 70) —
+   not separate `ppMono` calls, or two distinct tyvars can both print as `a`.
+   (`ppMono`/`ppScheme` render a single type/scheme.)
+2. **Raise site** — `pushTypeError (yourMsg …)` from the phase that detects it
+   (or fold the check into an existing selection pass — see below — to cover all
+   `typecheck*` entry points at once). `pushTypeError`/`fail` read the global
+   `currentLoc`, correct *during* the `infer` walk but **stale in post-HM passes**
+   (`checkMethodUsages`, `checkConstraintObligations`, the
+   generalization-boundary obligation checks) — by then it points at the last
+   expression inferred. If your error fires from a deferred/post-HM pass, capture
+   `!currentLoc` into the accumulator/obligation tuple at record time and raise
+   with the located form (`failAt loc …` / a `pushTypeError` that threads the
+   captured loc) instead (Phase 62 / the 2026-06-26 ambiguous-constraint fix did
+   exactly this — follow that pattern).
+3. **Test** — add a fixture to the typecheck golden gate or the
+   `test/diff_compiler_check.sh` / `_typecheck_errors` suite. Fixtures embed the
+   source inline so failures read cleanly. **Watch for prelude name collisions:**
+   a fixture that reuses a stdlib interface name (e.g. `Monoid`) may pass on a
    *duplicate-interface* error rather than the error you intend — use a fresh
    name so the test exercises what it claims.
+
+> A structured error ADT (to replace the string messages) is a *parked* future
+> refactor motivated by structured LSP diagnostics — see PLAN.md. Until then,
+> string + per-error builder is the idiom; do **not** introduce a `TypeError` ADT
+> as part of an unrelated change.
 
 ## Where things live (grep these names, don't trust line numbers)
 
