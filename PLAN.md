@@ -473,6 +473,10 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | `sequence` only dispatches per-impl; default-method form misdispatches | Compiler / language | ✅ DONE (2026-06-26, `f333125`) — `sequence` is now a `Traversable` default via universal default-method specialization; see [Compiler / language](#compiler--language) |
 | Generic prelude free-fn over a typeclass with generic/primitive receiver fails `build` (slice-7) — DEFERRED (zero callers; cross-cutting A+B; = ARGSTAMP-UNIFY irreducible residual) | Compiler / language | [`GAP3-SLICE7-DESIGN.md`](./GAP3-SLICE7-DESIGN.md); this file → [Compiler / language](#compiler--language) |
 | Ambiguous return-position interface constraint silently mis-resolved (`run≠build`) | Compiler / language | ✅ DONE (2026-06-26, `d6e59aa`) — typecheck rejects ambiguous constraints; see [Compiler / language](#compiler--language) + [`RETPOS-DISPATCH-DESIGN.md`](./RETPOS-DISPATCH-DESIGN.md) |
+| 🔴 **Bug 1** — comparison OPERATORS (`==`/`<`/…) on a bare constraint tyvar mis-route (`RNone`→arg-tag) → `run≠build` wrong value (HashSet/HashMap of non-primitives silently wrong) | Compiler / language | 🔴 OPEN (found 2026-06-27) — see [Compiler / language](#compiler--language); memory `project_comparison_operator_forwarded_dict_bug` |
+| 🔴 **Bug 2** — partial/escaping typeclass-method closure doesn't capture forwarded dict → `run≠build` SIGSEGV/empty (even `Int`) | Compiler / language | 🔴 OPEN (found 2026-06-27) — see [Compiler / language](#compiler--language); memory `project_partial_method_closure_dict_capture_bug` |
+| 🔴 **Bug 3** — String `.[]` index/slice sugar array-indexes a String (`CIndex`/`CSlice` type-lost) → `run≠build` wrong Char/oob | Compiler / language | 🔴 OPEN (found 2026-06-27) — see [Compiler / language](#compiler--language); memory `project_string_index_slice_emit_bug` |
+| 🔴 **Bug 4** — polymorphic-Unit `main` (tyvar→Unit via HOF) auto-prints spurious `0` on build (`mainIsUnit` gate doesn't zonk) | Compiler / language | 🔴 OPEN (found 2026-06-27, low sev) — see [Compiler / language](#compiler--language); memory `project_polymorphic_unit_main_autoprint_bug` |
 | OCaml oracle removed (2026-06-26) — prelude no longer typechecks under OCaml (`sequence` default body) | ✅ DONE | see top status entry |
 | Phase 149 (proposed) — record rest-capture + construction spread sugar | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | D7 (latent, verified), foldMap RNone emit-site (latent, verified), helper dedup, deferred GC/TRMC seams | Self-host internals | this file → [Self-host … open items](#self-host-typecheck--dispatch--runtime--known-open-items) |
@@ -932,6 +936,38 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
 
 
 ### Compiler / language
+
+- **🔴 OPEN — four `run≠build` codegen bugs found 2026-06-27 (L2-verification sweep).** While
+  re-checking the (already-DONE) L2 structured-dict task, a reproduce-first sweep surfaced four
+  distinct bugs where `medaka run` (interpreter, the oracle) is correct but `medaka build` (native
+  LLVM) miscompiles. `medaka check` accepts all four — pure backend/route bugs. They survive
+  self-compile because the compiler's own source doesn't use these forms. Minimal repros + root
+  causes are in the memory entries linked below; NOT yet fixed.
+  - **Bug 1 — comparison OPERATORS on a bare constraint tyvar.** `f : Eq a => a -> a -> Bool;
+    f x y = x == y` over a non-primitive (`List Int`/`Box Int`) → constant WRONG VALUE on `build`
+    (`==`/`<`→False, `!=`→True); `eq x y` (direct method) works. Root: `compiler/types/typecheck.mdk`
+    `resolveBinopSite` (~5701) leaves the route `RNone` (arg-tag) for a top-level constraint-var
+    operand instead of routing the fn's forwarded `$dict_<m>` — the `inImpl` gate excludes
+    legitimately-constrained top-level operator sites. **High severity: `HashSet`/`HashMap`
+    membership of non-primitive elements silently wrong** (`bucketHas` uses `==`). Lands in the
+    fragile surviving-unify-var-id route-keying area. (memory `project_comparison_operator_forwarded_dict_bug`)
+  - **Bug 2 — partial/escaping typeclass-method closure under a forwarded dict.** `apply1 (eq y) z`
+    / `map (eq y) xs` inside a `Eq a =>` fn → empty output / SIGSEGV on `build`, even for `Int`.
+    Eta-expanding (`w => eq y w`) fixes it ONLY when consumed locally; a bare dict-closure that
+    ESCAPES (`mkEq y = (z => eq y z)` returned + applied outside) still SIGSEGVs (wrapping it in a
+    ctor/record return works). Root: emitter closure free-var/partial-app path doesn't capture the
+    forwarded `$dict`. (memory `project_partial_method_closure_dict_capture_bug`)
+  - **Bug 3 — String `.[]` index/slice sugar.** `"hello".[0]` → wrong/empty Char (`== 'h'` is
+    False on `build`); `"hello".[1..3]` → wrong/empty. String runtime *functions* (`string.slice`,
+    `startsWith`, …, which call the `stringSlice` extern) are FINE — only the `.[]` sugar breaks.
+    Root: `CIndex`/`CSlice` (`compiler/ir/core_ir.mdk`) carry no receiver-type tag; lowering drops
+    the String-vs-Array distinction and the emitter (`emitExpr (CIndex …) = emitArrayIndex …`)
+    unconditionally array-indexes a String. Same "type-lost at emit" class as the float-arith bugs.
+    **High severity: a fundamental, common string op.** (memory `project_string_index_slice_emit_bug`)
+  - **Bug 4 — polymorphic-Unit `main` spurious `0`.** When `main`'s type is a tyvar that resolves
+    to `Unit` via a polymorphic HOF, `build` auto-prints a trailing `0`; explicit `<IO> Unit` fixes
+    it. Root: the native `mainIsUnit` auto-print-suppression gate doesn't zonk main's inferred type.
+    Low severity (cosmetic). (memory `project_polymorphic_unit_main_autoprint_bug`)
 
 - **Return-position `pure` dispatch gaps (the `Traversable` blockers) — ✅ DONE (2026-06-25,
   `b5ae3a2` + `bf7243c` + `104c69a`, seed re-minted `da2469d`).** The three filed gaps that

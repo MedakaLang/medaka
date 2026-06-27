@@ -285,7 +285,7 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   joint keying is live AND consumed, and it was rendered safe by mangling rather than
   by the keying staying a no-op.
 
-### L2. `routeOfMono` emits `RKey tag []` — nested element-dict reqs dropped at `=>`-call sites — ✅ CLOSED (one-level, 2026-06-10)
+### L2. `routeOfMono` emits `RKey tag []` — nested element-dict reqs dropped at `=>`-call sites — ✅ FULLY CLOSED (one-level 2026-06-10; two-level+ runtime rep 2026-06-10/11; re-verified 2026-06-27)
 
 - **Where:** `compiler/typecheck.mdk` `routeOfMono` (concrete arm returned
   `RKey tag []`, no recursion into impl requires); oracle `lib/typecheck.ml:3909-3913`
@@ -311,13 +311,22 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   `import set.{Set}` programs build + run native == oracle. Fixtures:
   `test/construct_fixtures/nested_requires_dict.mdk`,
   `test/eval_dict_fixtures/nested_requires_box.mdk`.
-- **RESIDUAL (still open):** (1) **two-level+ nesting** (`Box (List (List Int))`):
-  the EMITTER's `dictWordOfRoute (RKey key _) = hashName key` materializes only the
-  head tag — the flat i64 dict witness word cannot carry a nested dict, so deeper
-  reqs SIGSEGV. Needs a richer runtime dict rep (the MEMORY "flat impl-key dict can't
-  carry nested dicts" note). (2) `map`/Map build still hits a SEPARATE arg-tag gap
-  (`no impl of method 'toList' for type 'Map'`), not Cause B. (3) Selfhost still lacks
-  the oracle's `RHeadKey` fallback (non-ground headed monos → `RNone` → arg-tag).
+- **RESIDUAL — ✅ CLOSED (verified 2026-06-27, see EMITTER-GAPS.md line 74).** The "two-level+
+  nesting" residual described below was already fixed and this text was STALE. **(1) two-level+
+  nesting** (`Box (List (List Int))`, the structured runtime dict rep): CLOSED — the boxed-witness
+  cell shipped 2026-06-10 (`205b4de`, "Option A": `dictWordOfRoute`/`emitDictCell` build a heap cell
+  `[head_tag | reqdict_0 | …]` recursively), and the multi-module route-resolution residual
+  (`elaborateModules`/`elabModuleStamp` stamping a flat `RKey "List" []`) closed 2026-06-11
+  (`argImplRequiresRoutesRec`, "arbitrary depth"). Empirically re-verified 2026-06-27: nested
+  instance dicts build==run==correct through 4+ levels, polymorphic forwarding, and multi-module.
+  The old (now-false) description of this residual was: *"the EMITTER's `dictWordOfRoute (RKey key _)
+  = hashName key` materializes only the head tag — flat i64 can't carry a nested dict."* That `RKey
+  key _` form no longer exists (`dictWordOfRoute (RKey key reqs)` recurses). **(2)** `map`/Map build
+  arg-tag gap — closed separately. **(3)** Selfhost `RHeadKey` fallback — the native dispatch path
+  no longer needs it. *(The 2026-06-27 re-verification sweep that closed this also surfaced four
+  UNRELATED `run≠build` codegen bugs — comparison operators, partial-method closures, String `.[]`
+  index/slice, polymorphic-Unit main — tracked in PLAN.md → Compiler / language; NOT this dict-rep
+  gap.)*
 
 ---
 
