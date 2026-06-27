@@ -446,7 +446,7 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | Per-method-constraint dict conflated w/ dispatch type's own instance — blocked `Traversable` interface | Compiler / language | ✅ DONE (2026-06-25, `104c69a` + `b5ae3a2`) — `Traversable t` shipped; see [Compiler / language](#compiler--language) |
 | `sequence` only dispatches per-impl; default-method form misdispatches | Compiler / language | ✅ DONE (2026-06-26, `f333125`) — `sequence` is now a `Traversable` default via universal default-method specialization; see [Compiler / language](#compiler--language) |
 | Generic prelude free-fn over a typeclass with generic/primitive receiver fails `build` (slice-7) — DEFERRED (zero callers; cross-cutting A+B; = ARGSTAMP-UNIFY irreducible residual) | Compiler / language | [`GAP3-SLICE7-DESIGN.md`](./GAP3-SLICE7-DESIGN.md); this file → [Compiler / language](#compiler--language) |
-| Return-position-only method in a generic body mis-dispatches (`run≠build`, both wrong) — NEW, verified 2026-06-26 | Compiler / language | this file → [Compiler / language](#compiler--language) |
+| Ambiguous return-position interface constraint silently mis-resolved (`run≠build`) | Compiler / language | ✅ DONE (2026-06-26, `d6e59aa`) — typecheck rejects ambiguous constraints; see [Compiler / language](#compiler--language) + [`RETPOS-DISPATCH-DESIGN.md`](./RETPOS-DISPATCH-DESIGN.md) |
 | OCaml oracle removed (2026-06-26) — prelude no longer typechecks under OCaml (`sequence` default body) | ✅ DONE | see top status entry |
 | Phase 149 (proposed) — record rest-capture + construction spread sugar | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | D7 (latent, verified), foldMap RNone emit-site (latent, verified), helper dedup, deferred GC/TRMC seams | Self-host internals | this file → [Self-host … open items](#self-host-typecheck--dispatch--runtime--known-open-items) |
@@ -917,30 +917,29 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
     residual" — schedule it there (with the A+B staging in `GAP3-SLICE7-DESIGN.md` §7) when a real
     generic prelude free-fn forces it. Not a blocker.
 
-- **Return-position-only method in a generic body mis-dispatches (`run ≠ build`, both wrong) —
-  OPEN, NEW (found + verified 2026-06-26).** A constrained polymorphic fn whose body applies a
-  **purely return-position** interface method — one whose result type is the constraint tyvar and
-  that takes NO argument of that tyvar (so arg-tag dispatch can't anchor it) — does not get its
-  per-call instance dict threaded. It collapses to a single static impl: `medaka run` picks the
-  first-registered impl, `medaka build` picks the other → both answers wrong AND the two paths
-  disagree. **Verified minimal repro (single interface, user file — independent of D7):**
-  ```
-  interface Thing a where
-    make : Int -> a          -- return-position: result type is the tyvar a
-    reveal : a -> Int
-  -- impls: Box adds 1000, Cup adds 2000
-  f : Thing a => a -> Int
-  f x = reveal (make (reveal x))
-  main = println (debug (f (MkBox 0), f (MkCup 0)))
-  ```
-  `medaka run` → `(1000, 1000)`; `medaka build` → `(2000, 2000)`; **expected** `(1000, 2000)`.
-  **This is the same return-position dict-threading defect family as Gap 3's hidden "Fix B" /
-  defect 2d** (generic-receiver dispatch broken in codegen), but a CLEANER instance: a single
-  user file, no slice-7 caller, no prelude. Distinct from D7 (reproduces with one interface, so
-  it's not the two-constraint slot-keying). Likely adjacent to D4 (`RHeadKey` missing) / the
-  ARGSTAMP/L2 residual. Found incidentally during the D7 investigation. Disposition TBD — a
-  genuine soundness hole, but an unusual shape; weigh a diagnose-first design pass (à la Gap 3)
-  against the per-impl-specialization escape hatch. Repro: scratchpad `d7single.mdk`.
+- **Ambiguous return-position interface constraint silently mis-resolved (`run ≠ build`) —
+  ✅ DONE (2026-06-26, `d6e59aa`, seed re-minted).** Filed as "return-position-only method
+  mis-dispatches"; the diagnose-first design pass ([`RETPOS-DISPATCH-DESIGN.md`](./RETPOS-DISPATCH-DESIGN.md))
+  **overturned that framing: it was type AMBIGUITY, not dict mis-threading.** In
+  `f x = reveal (make (reveal x))` (`f : Thing a => a -> Int`), `make`'s result tyvar is never
+  tied to `f`'s constraint var — `f` infers as `a -> Int` with the tyvar appearing nowhere (the
+  classic `show . read` ambiguity). The compiler silently resolved the un-anchored `Thing _`
+  obligation and the two backends picked DIFFERENT impls (`run` → first-registered, `build` →
+  other; both wrong). The RDict return-position machinery was already correct — proven by probe G
+  (`g : Thing a => a -> a; g x = make (reveal x)` → `run==build==(1000,2000)`). **Fix
+  (typecheck-only, eval/emit untouched): reject the ambiguous constraint** at every generalization
+  boundary (mirroring `defaultAmbiguousNum`) — a new `registerAmbiguousConstraints` cluster wired
+  at `blockRecLet`/`blockLet`/`inferRecLet`/`inferLetSimple`/`processLetGroup`/`processSCC`
+  (`compiler/types/typecheck.mdk`), routing the genuine dispatch mono through the existing
+  undetermined-obligation path (`ambiguousImplMsg`, impl-count≥2 guard so a sole-impl interface is
+  never over-rejected). Three filters prevent over-rejection (member-type membership keeps probe G
+  green; generalization-level; concrete-head-anchored vars). Now `f` and the no-constraint variant
+  `h k = reveal (make k)` error cleanly (`ambiguous instance for 'Thing a': cannot determine which
+  impl; annotate the type`) on run AND build; probe G unaffected. **Distinct from Gap 3 Fix B**
+  (that's argument-position, dict-in-scope-but-unrouted; this is return-position-ambiguous-tyvar) —
+  one fix does not cover both. Gates (orchestrator-verified independently): fixpoint C3a/C3b YES;
+  `diff_compiler_check` 73/0, `_check_batch` 72/0, `_eval` 23/0, `_build` 36/0, `_typecheck_errors`
+  42/0, stdlib core 9/0. Memory: `project_return_position_only_dispatch_bug`.
 
 - **Unqualified-import name collision — use-time ambiguity error — ✅ DONE (2026-06-23, `421a4bd`,
   both compilers).** Two non-`core` modules exporting the same unqualified standalone (e.g. `map`
