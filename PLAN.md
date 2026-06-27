@@ -937,37 +937,34 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
 
 ### Compiler / language
 
-- **🔴 OPEN — four `run≠build` codegen bugs found 2026-06-27 (L2-verification sweep).** While
+- **✅ DONE — four `run≠build` codegen bugs (found + FIXED 2026-06-27). `main` = `9f83b42`, seed re-minted.** While
   re-checking the (already-DONE) L2 structured-dict task, a reproduce-first sweep surfaced four
   distinct bugs where `medaka run` (interpreter, the oracle) is correct but `medaka build` (native
-  LLVM) miscompiles. `medaka check` accepts all four — pure backend/route bugs. They survive
-  self-compile because the compiler's own source doesn't use these forms. Minimal repros + root
-  causes are in the memory entries linked below; NOT yet fixed.
-  - **Bug 1 — comparison OPERATORS on a bare constraint tyvar.** `f : Eq a => a -> a -> Bool;
-    f x y = x == y` over a non-primitive (`List Int`/`Box Int`) → constant WRONG VALUE on `build`
-    (`==`/`<`→False, `!=`→True); `eq x y` (direct method) works. Root: `compiler/types/typecheck.mdk`
-    `resolveBinopSite` (~5701) leaves the route `RNone` (arg-tag) for a top-level constraint-var
-    operand instead of routing the fn's forwarded `$dict_<m>` — the `inImpl` gate excludes
-    legitimately-constrained top-level operator sites. **High severity: `HashSet`/`HashMap`
-    membership of non-primitive elements silently wrong** (`bucketHas` uses `==`). Lands in the
-    fragile surviving-unify-var-id route-keying area. (memory `project_comparison_operator_forwarded_dict_bug`)
-  - **Bug 2 — partial/escaping typeclass-method closure under a forwarded dict.** `apply1 (eq y) z`
-    / `map (eq y) xs` inside a `Eq a =>` fn → empty output / SIGSEGV on `build`, even for `Int`.
-    Eta-expanding (`w => eq y w`) fixes it ONLY when consumed locally; a bare dict-closure that
-    ESCAPES (`mkEq y = (z => eq y z)` returned + applied outside) still SIGSEGVs (wrapping it in a
-    ctor/record return works). Root: emitter closure free-var/partial-app path doesn't capture the
-    forwarded `$dict`. (memory `project_partial_method_closure_dict_capture_bug`)
-  - **Bug 3 — String `.[]` index/slice sugar.** `"hello".[0]` → wrong/empty Char (`== 'h'` is
-    False on `build`); `"hello".[1..3]` → wrong/empty. String runtime *functions* (`string.slice`,
-    `startsWith`, …, which call the `stringSlice` extern) are FINE — only the `.[]` sugar breaks.
-    Root: `CIndex`/`CSlice` (`compiler/ir/core_ir.mdk`) carry no receiver-type tag; lowering drops
-    the String-vs-Array distinction and the emitter (`emitExpr (CIndex …) = emitArrayIndex …`)
-    unconditionally array-indexes a String. Same "type-lost at emit" class as the float-arith bugs.
-    **High severity: a fundamental, common string op.** (memory `project_string_index_slice_emit_bug`)
-  - **Bug 4 — polymorphic-Unit `main` spurious `0`.** When `main`'s type is a tyvar that resolves
-    to `Unit` via a polymorphic HOF, `build` auto-prints a trailing `0`; explicit `<IO> Unit` fixes
-    it. Root: the native `mainIsUnit` auto-print-suppression gate doesn't zonk main's inferred type.
-    Low severity (cosmetic). (memory `project_polymorphic_unit_main_autoprint_bug`)
+  LLVM) miscompiled. `medaka check` accepted all four — pure backend/route bugs. They survived
+  self-compile because the compiler's own source doesn't use these forms. All four are now fixed,
+  each diagnose-first + fixpoint C3a/C3b YES + `diff_compiler_build` 0-fail + run==build on the repros.
+  - **Bug 1 — comparison OPERATORS on a bare constraint tyvar — ✅ FIXED (`7450cf6`).** Root cause held:
+    `resolveBinopSite` left the route `RNone` for a top-level constraint-var operand. Fix: route via a new
+    `enclDictVarOf` keyed on `funConstraintsRef[encl]` (enclosing fn's OWN declared constraint slots, by
+    fn name — NOT global `activeDictVars`, which is the line vs a stale cross-impl id collision); threaded
+    `currentFn` into `pendingBinopSites`. No D7 re-key (D7 not observably broken). `HashSet`/`HashMap`
+    membership of non-primitives now correct. (memory `project_comparison_operator_forwarded_dict_bug`)
+  - **Bug 2 — partial/escaping typeclass-method closure under a forwarded dict — ✅ FIXED (`95ee25b`).** Filed
+    `freeVars`-miss hypothesis REFUTED — two emitter holes on the RDict/RDictFwd path: (A) `emitMethod`
+    dispatched under-applied dict-routed methods as saturated → new `emitMethodPap`; (B) closure-returning
+    constrained fns eta-saturate to `dict+args+__eta` but call sites under-supply → new define-arity table
+    `defArityOf` (signature arity ≠ define arity; the fnArity shortcut broke self-compile). All 7
+    case-matrix rows incl. the hardest (bare escaping return) build==run. Ledger EMITTER-GAPS.md **E22**.
+    (memory `project_partial_method_closure_dict_capture_bug`)
+  - **Bug 3 — String `.[]` index/slice sugar — ✅ FIXED (`493a5eb`).** Root cause held. Fix: typecheck stamps
+    a receiver-kind discriminator (AST `Ref String`, the `EBinOp` Route idiom) → new `CStringIndex`/
+    `CStringSlice` Core IR nodes (leaves `CIndex`/`CSlice` + the hot array emit arms byte-identical) →
+    UTF-8/codepoint-aware string emit. Residual (separate pre-existing gap): **List**-index on build still
+    on the array path. (memory `project_string_index_slice_emit_bug`)
+  - **Bug 4 — polymorphic-Unit `main` spurious `0` — ✅ FIXED (`9f83b42`).** Root cause held. Main's zonked
+    result type WAS reachable via `mainSchemeRef` (the channel backing `mainTypeIsAsync`); new
+    `mainTypeIsUnit` (normalize scheme → `TCon "Unit"`) threaded to the emitter via `installMainIsUnitHint`,
+    consulted by `mainIsUnit`. Value mains still auto-print. (memory `project_polymorphic_unit_main_autoprint_bug`)
 
 - **Return-position `pure` dispatch gaps (the `Traversable` blockers) — ✅ DONE (2026-06-25,
   `b5ae3a2` + `bf7243c` + `104c69a`, seed re-minted `da2469d`).** The three filed gaps that

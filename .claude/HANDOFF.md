@@ -7,6 +7,65 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
+## RESUME — ✅ four `run≠build` codegen bugs FIXED (2026-06-27). `main` = `9f83b42` (+ seed re-mint)
+
+A reproduce-first sweep (while re-checking the already-DONE L2 structured-dict task) surfaced four
+distinct bugs where `medaka run` (interpreter, the correct oracle) was right but `medaka build`
+(native LLVM) miscompiled — `medaka check` accepted all four. They survived self-compile because the
+compiler's own source never uses these forms. **All four are now fixed**, each diagnose-first,
+independently gated (fixpoint C3a/C3b YES + the relevant `diff_compiler_*` 0-fail), and merged;
+**seed re-minted, cold `bootstrap_from_seed` C3a byte-for-byte PASS.** Per-bug result (run==build on
+every repro now):
+
+- **Bug 3 — String `.[]` index/slice (`493a5eb`):** typecheck stamps a receiver-kind discriminator
+  (AST `Ref String`, the `EBinOp` Route idiom) → new `CStringIndex`/`CStringSlice` Core IR nodes
+  (leaves `CIndex`/`CSlice` + the hot array emit arms byte-identical) → UTF-8/codepoint-aware string
+  emit. Filed root cause HELD. Residual (separate pre-existing gap, untouched): **List**-index on
+  build still on the array path; wasm string-index hits its existing catch-all.
+- **Bug 1 — comparison operators on a bare constraint tyvar (`7450cf6`):** top-level constrained
+  operators now route the enclosing fn's forwarded class dict via a new `enclDictVarOf` keyed on
+  `funConstraintsRef[encl]` (the enclosing fn's OWN declared constraint slots, by fn name — NOT the
+  global `activeDictVars`, which is the line between a legit constrained operand and a stale
+  cross-impl id collision). The `inImpl` gate was too coarse. Filed root cause HELD. No D7 re-key
+  (D7 not observably broken). Real-world: `HashSet`/`HashMap` membership of non-primitives now correct.
+- **Bug 2 — partial/escaping method closure dict capture (`95ee25b`):** filed `freeVars`-miss
+  hypothesis REFUTED — two emitter holes on the RDict/RDictFwd path: (A) `emitMethod` dispatched
+  under-applied dict-routed methods as saturated → new `emitMethodPap`; (B) closure-returning
+  constrained fns eta-saturate to `dict+args+__eta` but call sites under-supply → a new define-arity
+  table `defArityOf` (signature arity ≠ define arity; the fnArity shortcut broke self-compile). All 7
+  case-matrix rows incl. the hardest (bare escaping return) build==run. Ledger: EMITTER-GAPS.md **E22**.
+- **Bug 4 — poly-Unit main spurious `0` (`9f83b42`):** main's zonked result type WAS reachable —
+  `mainSchemeRef` (the channel backing `mainTypeIsAsync`). New `mainTypeIsUnit` (normalize the scheme
+  → `TCon "Unit"`) threaded to the emitter via `installMainIsUnitHint`, consulted by `mainIsUnit`.
+  Value mains still auto-print (no `pp_value` regression). Root cause HELD.
+
+**Common thread:** three of four were "type/dict info known at typecheck but lost or not-threaded at
+emit" — the same class as the historical float-arith bugs (`project_arith_on_typelost_floats_bug`).
+Memory entries: `project_string_index_slice_emit_bug`, `project_comparison_operator_forwarded_dict_bug`,
+`project_partial_method_closure_dict_capture_bug`, `project_polymorphic_unit_main_autoprint_bug`.
+
+**Reproduce/build (read `AGENTS.md` first):** warm build `make -C <worktree-root> medaka` (needs
+`./medaka_emitter`); `./medaka run f.mdk` vs `MEDAKA_ROOT=<root> MEDAKA_EMITTER=<root>/medaka_emitter
+./medaka build f.mdk -o /tmp/out && /tmp/out`. Verification bar for any backend fix: a fixture driving
+the BUILD path with run==build==correct; all `diff_compiler_*` 0-fail; `selfcompile_fixpoint.sh`
+C3a/C3b YES; then re-mint the seed (`sh test/refresh_seed.sh`) + `bootstrap_from_seed.sh` cold PASS.
+`FORCE=1 bash test/build_oracles.sh` before trusting any `test/bin/*` gate.
+
+**What's next (verified current 2026-06-27):**
+- **A live List-index/slice-on-build bug** — the exact sibling of Bug 3 for **List** receivers:
+  `[10,20,30].[1]` → run `20`, build `2153523168` (garbage); `[..].[1..3]` → run correct, build empty.
+  (Index `0` works only by offset coincidence.) Bug 3's fix deliberately left List on the array path;
+  a List is cons-cells, not array-laid-out, so the emitter reads garbage. Same "type-lost at emit"
+  class — likely wants a `CListIndex`/`CListSlice` analog or runtime-tag dispatch.
+- **gap 3 (generic prelude free-fn slice-7)** — genuinely DEFERRED by design (`GAP3-SLICE7-DESIGN.md`,
+  zero current callers, the "irreducible primitive residual" scheduled in `ARGSTAMP-UNIFY-PLAN.md`).
+  Needs cross-cutting Fix A (arg-stamp grounding) + Fix B (generic-receiver dict ABI) shipped together.
+- **broader dogfood/library work.**
+
+The **D2 fn-level cross-module dict-arity collision is CLOSED** (`6e73a15`/`d759765`, on main) — routes
+by import-source module identity. Only a *purely hygienic* AST-origin `EVarFrom` re-key remains (no
+observable bug; just retiring the bare-name fallback for the wildcard/re-export corner). Not a priority.
+
 ## RESUME — 🏁 OCaml reference compiler REMOVED + `selfhost/`→`compiler/` rename (2026-06-26). `main` = `f6ff59d`
 
 **The soak tail is DONE: the OCaml `lib/` is deleted and the compiler source dir is renamed. Medaka is now a single, native, self-hosting compiler with no OCaml anywhere.** Memory: `project_ocaml_removed_selfhost_renamed_compiler`. Design/scoping: `LIB-REMOVAL-DESIGN.md`. Tag `oracle-frozen` preserves the last `lib/`-present commit.
