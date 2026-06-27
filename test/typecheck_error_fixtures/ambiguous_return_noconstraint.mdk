@@ -1,0 +1,21 @@
+-- RETPOS soundness (RETPOS-DISPATCH-DESIGN.md §1d): `h` has NO enclosing
+-- constraint at all — `make`'s result tyvar is undetermined and there is no
+-- in-scope dict to borrow, so only rejection (not "anchor to an enclosing dict")
+-- can close the run≠build hole.  With ≥2 `Thing` impls this is genuinely ambiguous.
+interface Thing a where
+  make : Int -> a
+  reveal : a -> Int
+data One = One Int
+data Two = Two Int
+impl Thing One where
+  make n = One 1000
+  reveal x = match x
+    One v => v
+impl Thing Two where
+  make n = Two 2000
+  reveal x = match x
+    Two v => v
+h : Int -> Int
+h k = reveal (make k)
+main : <IO> Unit
+main = putStrLn (intToString (h 5))

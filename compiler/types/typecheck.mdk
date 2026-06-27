@@ -3312,6 +3312,7 @@ blockRecLet env x e =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1   -- PLAN.md #11
+  let _ = registerAmbiguousConstraints addedObls [t1]   -- RETPOS soundness
   let _ = recordLocalBind x t1   -- LSP hover (block rec-let bypasses inferPat)
   seedAlphaLets (extendVar env x (generalize t1)) x e   -- WS-2: α scope-seed
 
@@ -3323,6 +3324,7 @@ blockLet env isMut (PVar x) e =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
+  let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
   -- WS-2: α scope-seed — stable (non-mut) bindings only; a `let mut` RHS can be
   -- reassigned, so its prefix is not stable.
@@ -4064,6 +4066,7 @@ inferRecLet env x e1 e2 =
   let _ = exitLevel ()
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1   -- PLAN.md #11
+  let _ = registerAmbiguousConstraints addedObls [t1]   -- RETPOS soundness
   let _ = recordLocalBind x t1   -- LSP hover (recursive PVar let bypasses inferPat)
   infer (seedAlphaLets (extendVar env x (generalize t1)) x e1) e2   -- WS-2: α scope-seed
 
@@ -4078,6 +4081,7 @@ inferLetSimple env pat e1 e2 =
   -- never leaks an unbound Num var.  Scoped to this binding's new obligations.
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1
+  let _ = registerAmbiguousConstraints addedObls [t1]   -- RETPOS soundness
   inferLetBody env pat t1 e1 e2
 
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> <Mut> Mono
@@ -4465,6 +4469,7 @@ processLetGroup env binds =
   -- newly added obligations.
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
+  let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
   generalizeGroup env (zipL binds placeholders)
 
 letBindPlaceholder : LetBind -> <Mut> (String, Scheme)
@@ -4565,6 +4570,89 @@ defaultEachMember _ [] = ()
 defaultEachMember obls ((_, m)::rest) =
   let _ = defaultAmbiguousNum obls m
   defaultEachMember obls rest
+
+-- RETPOS soundness — ambiguous interface constraint (run≠build hole).
+-- A method obligation recorded inside a binding whose discriminating tyvar is
+-- UNBOUND, UNANCHORED, and appears NOWHERE in the binding's generalized type is
+-- genuinely ambiguous (`make`'s result var in `f x = reveal (make (reveal x))`,
+-- `f : Thing a => a -> Int`: `make`'s var is tied to neither `a` nor the result).
+-- No annotation determines the instance and, with ≥2 impls, eval vs emit default
+-- to DIFFERENT impls — a silent run≠build miscompile (RETPOS-DISPATCH-DESIGN.md).
+-- We REJECT it by handing the genuine ambiguous DISPATCH mono to the existing
+-- undetermined-obligation path (registering it as a call obligation), which
+-- rejects (ambiguousImplMsg) under the SAME `Num` / active-dict / impl-count≥2
+-- guards an undetermined call site already uses (so a sole-impl interface is never
+-- over-rejected and `Num` stays on its literal-defaulting path).  Three filters
+-- keep this from firing on legitimately-deferred constraints:
+--   • member-type membership (defaultGroupNum's `monoUnboundIds`) — a var IN the
+--     binding's type is determined by a caller/annotation;
+--   • group LEVEL — a DEEPER var belongs to an inner let/where binding that already
+--     generalized + checked it (its obligation merely leaks into our addedObls
+--     window, e.g. `maximum`'s `where step` comparing at step's own element var);
+--   • ANCHORED vars — a var that also appears inside a CONCRETE-HEADED dispatch mono
+--     of this binding (`Set _a` from a `Set {…}` literal's FromEntries/Display) is
+--     ground at emit by head-pinning, so it is sound-but-deferred, NOT ambiguous.
+-- The obligation's record-site loc rides along (currentLoc is stale post-HM).
+registerAmbiguousConstraints : List (String, List String, Ty, Mono, Option Loc) -> List Mono -> <Mut> Unit
+registerAmbiguousConstraints obls monos =
+  -- groupLevel = the level THIS group generalizes at (we run post-exitLevel, so the
+  -- outer currentLevel + 1).  anchoredIds = every unbound var that appears inside a
+  -- concrete-headed dispatch mono across this group's obligations (head-pinnable).
+  let anchoredIds = flatMap concreteHeadVarIds (flatMap oblDispatchMonos obls)
+  registerAmbiguousGo obls (currentLevel.value + 1) (flatMap monoUnboundIds monos) anchoredIds
+
+-- the dispatch monos this obligation discriminates on (empty for Num, whose
+-- ambiguity is handled by literal defaulting).
+oblDispatchMonos : (String, List String, Ty, Mono, Option Loc) -> List Mono
+oblDispatchMonos (iface, typarams, mty, occ, _)
+  | iface == "Num" = []
+  | otherwise = dispatchMonosOf typarams mty occ
+
+-- the unbound var ids carried by a dispatch mono WITH a concrete head (`Set _a` →
+-- [_a]); a bare-var dispatch (`t0`) anchors nothing.
+concreteHeadVarIds : Mono -> List Int
+concreteHeadVarIds dm = match headTyconMono dm
+  Some _ => monoUnboundIds dm
+  None => []
+
+registerAmbiguousGo : List (String, List String, Ty, Mono, Option Loc) -> Int -> List Int -> List Int -> <Mut> Unit
+registerAmbiguousGo [] _ _ _ = ()
+registerAmbiguousGo ((iface, typarams, mty, occ, loc)::rest) groupLevel memberIds anchoredIds =
+  let _ = registerOneAmbiguous iface typarams mty occ loc groupLevel memberIds anchoredIds
+  registerAmbiguousGo rest groupLevel memberIds anchoredIds
+
+-- For each of this obligation's DISPATCH monos (the interface-param positions, via
+-- dispatchMonosOf — NOT the whole method type), register it as a call obligation
+-- when it carries an escaped, unanchored this-group var.  Pushing the dispatch mono
+-- (not the method type) is essential: checkUndeterminedObligation's guards
+-- (`headTyconMono`, `activeDictVarOf`, `allConcreteHeads`) inspect a bare dispatch
+-- mono and do NOT traverse `TFun`, so a concrete-headed dispatch and a forwarded-
+-- dict element var are correctly NOT flagged, while a bare-var dispatch with ≥2
+-- impls and no anchor (`Thing t0` from `make`) IS rejected.
+registerOneAmbiguous : String -> List String -> Ty -> Mono -> Option Loc -> Int -> List Int -> List Int -> <Mut> Unit
+registerOneAmbiguous iface typarams mty occ loc groupLevel memberIds anchoredIds
+  | iface == "Num" = ()
+  | otherwise = registerDispatchMonos iface (dispatchMonosOf typarams mty occ) loc groupLevel memberIds anchoredIds
+
+registerDispatchMonos : String -> List Mono -> Option Loc -> Int -> List Int -> List Int -> <Mut> Unit
+registerDispatchMonos _ [] _ _ _ _ = ()
+registerDispatchMonos iface (dm::rest) loc groupLevel memberIds anchoredIds =
+  let ambig = filterList (p => snd p <= groupLevel && not (containsI (fst p) memberIds) && not (containsI (fst p) anchoredIds)) (monoUnboundVarLevels dm)
+  let _ = if isEmptyL ambig then ()
+    else set_ref pendingCallObligations ((iface, dm, loc) :: pendingCallObligations.value)
+  registerDispatchMonos iface rest loc groupLevel memberIds anchoredIds
+
+-- the (id, level) of every UNBOUND tyvar in [t] (sibling of monoUnboundIds, but
+-- carrying the level so registerOneAmbiguous can tell a this-group constraint var
+-- from a deeper inner-generalized one that merely leaked into the obligation list).
+monoUnboundVarLevels : Mono -> List (Int, Int)
+monoUnboundVarLevels t = match normalize t
+  TVar cell => [(tyvarId cell, tyvarLevel cell)]
+  TCon _ => []
+  TApp a b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
+  TFun a _ b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
+  TTuple ts => flatMap monoUnboundVarLevels ts
+  TEff _ => []
 
 -- ground each id to Int by unifying the live var carrying it (found among [obls]'
 -- Num operand monos — refs alias post-unify, grounding any grounds all)
@@ -8343,6 +8431,7 @@ processSCC env sigs grouped members =
   let addedObls = takeFirst (listLen pendingImplObligations.value - oblN0) pendingImplObligations.value
   let _ = defaultGroupNum addedObls (map snd placeholders)
   let _ = defaultEachMember addedObls placeholders
+  let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
   let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
   let _ = registerSchemeObligations addedObls schemes
   let _ = registerInferredConstraints sigs schemes

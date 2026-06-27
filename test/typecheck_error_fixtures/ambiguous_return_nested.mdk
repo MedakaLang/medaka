@@ -1,0 +1,22 @@
+-- RETPOS soundness (RETPOS-DISPATCH-DESIGN.md §1): `make`'s result tyvar is tied
+-- to neither `f`'s constraint var `a` nor the result `Int`, so `f` infers as
+-- `a -> Int` with the dispatch var appearing NOWHERE.  Genuinely ambiguous (the
+-- Haskell `show . read` shape): with ≥2 impls, eval and emit silently default to
+-- DIFFERENT impls (a run≠build miscompile).  Must REJECT.
+interface Thing a where
+  make : Int -> a
+  reveal : a -> Int
+data One = One Int
+data Two = Two Int
+impl Thing One where
+  make n = One 1000
+  reveal x = match x
+    One v => v
+impl Thing Two where
+  make n = Two 2000
+  reveal x = match x
+    Two v => v
+f : Thing a => a -> Int
+f x = reveal (make (reveal x))
+main : <IO> Unit
+main = putStrLn (intToString (f (One 7)))

@@ -1,0 +1,1 @@
+TYPE ERROR: ambiguous instance for 'Thing a': cannot determine which impl; annotate the type
