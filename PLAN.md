@@ -445,7 +445,7 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | Point-free constrained binding (`f = g identity`) mis-dispatches return-pos `pure` | Compiler / language | ✅ DONE (2026-06-25, `bf7243c`) — CDict-spine eta-saturation; see [Compiler / language](#compiler--language) |
 | Per-method-constraint dict conflated w/ dispatch type's own instance — blocked `Traversable` interface | Compiler / language | ✅ DONE (2026-06-25, `104c69a` + `b5ae3a2`) — `Traversable t` shipped; see [Compiler / language](#compiler--language) |
 | `sequence` only dispatches per-impl; default-method form misdispatches | Compiler / language | ✅ DONE (2026-06-26, `f333125`) — `sequence` is now a `Traversable` default via universal default-method specialization; see [Compiler / language](#compiler--language) |
-| Generic prelude free-fn over a typeclass with generic/primitive receiver fails `build` (slice-7) | Compiler / language | this file → [Compiler / language](#compiler--language) |
+| Generic prelude free-fn over a typeclass with generic/primitive receiver fails `build` (slice-7) — DEFERRED (zero callers; cross-cutting A+B; = ARGSTAMP-UNIFY irreducible residual) | Compiler / language | [`GAP3-SLICE7-DESIGN.md`](./GAP3-SLICE7-DESIGN.md); this file → [Compiler / language](#compiler--language) |
 | OCaml oracle removed (2026-06-26) — prelude no longer typechecks under OCaml (`sequence` default body) | ✅ DONE | see top status entry |
 | Phase 149 (proposed) — record rest-capture + construction spread sugar | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | D7 (latent, verified), foldMap RNone emit-site (latent, verified), helper dedup, deferred GC/TRMC seams | Self-host internals | this file → [Self-host … open items](#self-host-typecheck--dispatch--runtime--known-open-items) |
@@ -877,14 +877,33 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
   top status entry + `TRAVERSABLE-DEFAULT-METHOD-DESIGN.md` + memory `project_generic_monadic_dispatch_gaps`.
 
 - **Generic prelude free-function over a typeclass with a generic/primitive receiver fails `build`
-  (slice-7) — OPEN (filed 2026-06-26).** A truly generic *prelude* free function (e.g. `sequence` as a
-  free fn rather than a method) typechecks and RUNS correctly but fails `medaka build` with `arg-tag
-  dispatch on impl type that owns no constructors (slice 7: primitive receiver carries no cell tag)` —
-  the generically-emitted prelude copy can't arg-tag-dispatch a method on a type-variable receiver.
-  A user-file free fn with the same signature builds fine (it monomorphizes at the call). The
-  `sequence` work DODGED this by specializing to concrete receivers; it only bites a future generic
-  prelude free-fn over a typeclass with a generic receiver. Fix would land in the emitter slice-7
-  dispatch path (`compiler/backend/llvm_emit.mdk`). Not a blocker. See `TRAVERSABLE-DEFAULT-METHOD-DESIGN.md` §9.
+  (slice-7) — OPEN, DEFERRED (filed 2026-06-26; diagnose-first design pass 2026-06-26, `cc18724`).**
+  A truly generic *prelude* free function (e.g. `sequence` as a free fn rather than a method)
+  typechecks and RUNS correctly but fails `medaka build` with `arg-tag dispatch on impl type that
+  owns no constructors (slice 7: primitive receiver carries no cell tag)`. The `sequence` work
+  DODGED this by specializing to concrete receivers; it only bites a future generic prelude free-fn
+  over a typeclass with a generic/primitive receiver — **no such stdlib helper exists today (zero
+  current callers).** Authoritative design + reproduction: [`GAP3-SLICE7-DESIGN.md`](./GAP3-SLICE7-DESIGN.md).
+  - **The filed framing was partly wrong (corrected by the design pass).** Slice-7 fires on the
+    **caller's arg-position `debug`**, NOT the inner `traverse`: `debug`'s result mono is an unsolved
+    tyvar so its route stays `RNone`, and the emitter arg-tag-dispatches over `debug`'s primitive impl
+    groups (Int/String/Char/Bool/Float), which own no cell tag (`typecheck.mdk:1857` `resolveArgStamp`
+    `None` arm → `llvm_emit.mdk:3518` `emitTagMatch … [] = gapStr`).
+  - **There is a second, hidden defect behind it:** even when slice-7 is dodged (caller pattern-matches
+    instead of `debug`), the generic prelude body is **mis-emitted at runtime** — wrong answer (`0` vs
+    `3`) or segfault — i.e. the inner generic-receiver dispatch is also broken in codegen.
+  - **The real fix is cross-cutting, NOT emitter-only, and is two changes that must ship together:**
+    **Fix A** (typecheck arg-stamp grounding, so the site never reaches arg-tag) + **Fix B** (a
+    generic-receiver dict-threading ABI change through typecheck/dict_pass/core_ir_lower/llvm_emit, so
+    the inner method routes `RDict`). **Fix A alone is a silent miscompile** (turns a clean compile
+    error into a wrong-answer/segfault), so A-without-B is forbidden. High blast radius (Fix A perturbs
+    arg-position route stamping, the highest-traffic dispatch decision) + a seed re-mint (all four files
+    are in the self-compile graph).
+  - **Disposition (decided 2026-06-26): DEFER.** Per-impl specialization already delivers a working
+    `sequence`; zero current callers; the cost is unjustified now. This is the SAME residual
+    [`ARGSTAMP-UNIFY-PLAN.md`](./compiler/ARGSTAMP-UNIFY-PLAN.md) designates "the irreducible primitive
+    residual" — schedule it there (with the A+B staging in `GAP3-SLICE7-DESIGN.md` §7) when a real
+    generic prelude free-fn forces it. Not a blocker.
 
 - **Unqualified-import name collision — use-time ambiguity error — ✅ DONE (2026-06-23, `421a4bd`,
   both compilers).** Two non-`core` modules exporting the same unqualified standalone (e.g. `map`

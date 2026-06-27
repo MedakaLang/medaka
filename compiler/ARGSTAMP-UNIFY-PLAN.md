@@ -39,6 +39,18 @@ residual.
   stay structural (`valueEq`/`valueCompare`) — the SAME irreducible residual the
   native backend leaves (`AUDIT §route-taxonomy 1a`). "eval == emit" holds for the
   dict-threadable user-ADT universe; primitives stay structural in BOTH. Not a fork.
+  - **Deferred residual filed here — "Gap 3" (the generic prelude free-fn slice-7
+    build failure).** A generic *prelude* free fn over a typeclass with a
+    generic/primitive receiver (`sequence : (Traversable t, Thenable m) => …` as a
+    free fn) fails `medaka build`: the caller's arg-position `debug` stays `RNone` →
+    arg-tag-dispatches over primitive impl groups (no cell tag). The real fix is the
+    cross-cutting **A+B** in [`../GAP3-SLICE7-DESIGN.md`](../GAP3-SLICE7-DESIGN.md)
+    (typecheck arg-stamp grounding so the site never reaches arg-tag, + a
+    generic-receiver dict-threading ABI). DEFERRED (2026-06-26): zero current callers
+    (per-impl specialization covers `sequence`); schedule with the A+B staging
+    (`GAP3-SLICE7-DESIGN.md` §7) when a real generic prelude free-fn forces it. This is
+    the concrete instance of "the site never reaches arg-tag" for a non-primitive
+    generic receiver — adjacent to, but distinct from, the primitive `Eq Int` residual above.
 - **Fixpoint is HELPED**: the compiler already self-compiles under `emitArgStampPasses=True`
   (emit), so flipping eval converges it TOWARD the existing self-compile mode.
 
