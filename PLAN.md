@@ -446,6 +446,7 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 | Per-method-constraint dict conflated w/ dispatch type's own instance — blocked `Traversable` interface | Compiler / language | ✅ DONE (2026-06-25, `104c69a` + `b5ae3a2`) — `Traversable t` shipped; see [Compiler / language](#compiler--language) |
 | `sequence` only dispatches per-impl; default-method form misdispatches | Compiler / language | ✅ DONE (2026-06-26, `f333125`) — `sequence` is now a `Traversable` default via universal default-method specialization; see [Compiler / language](#compiler--language) |
 | Generic prelude free-fn over a typeclass with generic/primitive receiver fails `build` (slice-7) — DEFERRED (zero callers; cross-cutting A+B; = ARGSTAMP-UNIFY irreducible residual) | Compiler / language | [`GAP3-SLICE7-DESIGN.md`](./GAP3-SLICE7-DESIGN.md); this file → [Compiler / language](#compiler--language) |
+| Return-position-only method in a generic body mis-dispatches (`run≠build`, both wrong) — NEW, verified 2026-06-26 | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | OCaml oracle removed (2026-06-26) — prelude no longer typechecks under OCaml (`sequence` default body) | ✅ DONE | see top status entry |
 | Phase 149 (proposed) — record rest-capture + construction spread sugar | Compiler / language | this file → [Compiler / language](#compiler--language) |
 | D7 (latent, verified), foldMap RNone emit-site (latent, verified), helper dedup, deferred GC/TRMC seams | Self-host internals | this file → [Self-host … open items](#self-host-typecheck--dispatch--runtime--known-open-items) |
@@ -711,9 +712,20 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
 
 - **D7 — `activeDictVars` interface-blind.** Keyed by tyvar id only, not `(iface, id)`,
   so two constraints on one tyvar (`Eq a, Hash a`) could forward the wrong dict slot
-  once structured `requires` routes land. **Confirmed LATENT (2026-06-23):** two
-  constraints on one tyvar (`(Tagger a, Sizer a) => a`) dispatch correctly on native
-  run/build AND oracle — not observable today. Owner: [`compiler/TYPECHECK-AUDIT.md`](./compiler/TYPECHECK-AUDIT.md) §D7.
+  once structured `requires` routes land. **Confirmed LATENT — re-verified mechanistically
+  2026-06-26.** The runtime dict word is **head-tag-only**: two constraints on one tyvar
+  instantiated at the same type `T` carry the *same* head tag, and at a dispatch site the
+  emitter (`llvm_emit.mdk emitMethodDispatchChain`) / eval (`narrowMethod`) load that head
+  tag and switch over *the call-site method name's* impls — so even if D7 forwarded the
+  wrong slot, `eq` vs `hash` still select the right impl. D7 only becomes OBSERVABLE once a
+  dict cell carries something finer than the head tag for one tyvar — i.e. the **L2
+  richer-dict-rep / structured-`requires`** direction (not landed). **Decision (2026-06-26):
+  DEFER the `(iface, id)` re-keying until L2 lands, then do it together so it can be tested
+  observably — a standalone robustness-only change trips the documented surviving-unify-var-id
+  route-keying fragility (audit §Architecture #2) for zero behavioral gain.** Concrete keying
+  plan (type `(Int,String)`→`(Int,String,String)`; writers `:7756/7867/7954/8493/8838`;
+  readers need a `methodName→iface` registry threaded to `:1841/5309/5506/6510`) is recorded
+  in the D7 investigation report. Owner: [`compiler/TYPECHECK-AUDIT.md`](./compiler/TYPECHECK-AUDIT.md) §D7.
 - **D8 — `annotate.mdk` `DoLet` ignores `rec`.** The `DoLet` arm annotates the RHS
   before pushing the binding, so a `let rec` inside a `do`-block can't see its own name
   during annotation. **Confirmed DORMANT (2026-06-23):** `annotate.mdk` is the reverted
@@ -904,6 +916,31 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
     [`ARGSTAMP-UNIFY-PLAN.md`](./compiler/ARGSTAMP-UNIFY-PLAN.md) designates "the irreducible primitive
     residual" — schedule it there (with the A+B staging in `GAP3-SLICE7-DESIGN.md` §7) when a real
     generic prelude free-fn forces it. Not a blocker.
+
+- **Return-position-only method in a generic body mis-dispatches (`run ≠ build`, both wrong) —
+  OPEN, NEW (found + verified 2026-06-26).** A constrained polymorphic fn whose body applies a
+  **purely return-position** interface method — one whose result type is the constraint tyvar and
+  that takes NO argument of that tyvar (so arg-tag dispatch can't anchor it) — does not get its
+  per-call instance dict threaded. It collapses to a single static impl: `medaka run` picks the
+  first-registered impl, `medaka build` picks the other → both answers wrong AND the two paths
+  disagree. **Verified minimal repro (single interface, user file — independent of D7):**
+  ```
+  interface Thing a where
+    make : Int -> a          -- return-position: result type is the tyvar a
+    reveal : a -> Int
+  -- impls: Box adds 1000, Cup adds 2000
+  f : Thing a => a -> Int
+  f x = reveal (make (reveal x))
+  main = println (debug (f (MkBox 0), f (MkCup 0)))
+  ```
+  `medaka run` → `(1000, 1000)`; `medaka build` → `(2000, 2000)`; **expected** `(1000, 2000)`.
+  **This is the same return-position dict-threading defect family as Gap 3's hidden "Fix B" /
+  defect 2d** (generic-receiver dispatch broken in codegen), but a CLEANER instance: a single
+  user file, no slice-7 caller, no prelude. Distinct from D7 (reproduces with one interface, so
+  it's not the two-constraint slot-keying). Likely adjacent to D4 (`RHeadKey` missing) / the
+  ARGSTAMP/L2 residual. Found incidentally during the D7 investigation. Disposition TBD — a
+  genuine soundness hole, but an unusual shape; weigh a diagnose-first design pass (à la Gap 3)
+  against the per-impl-specialization escape hatch. Repro: scratchpad `d7single.mdk`.
 
 - **Unqualified-import name collision — use-time ambiguity error — ✅ DONE (2026-06-23, `421a4bd`,
   both compilers).** Two non-`core` modules exporting the same unqualified standalone (e.g. `map`

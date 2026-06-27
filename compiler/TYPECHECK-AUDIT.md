@@ -677,7 +677,15 @@ All bootstrap/check/eval/core_ir/llvm_modules/selfcompile_fixpoint gates green.
   `(Eq a, Hash a) =>` (two constraints, one tyvar) can forward the wrong slot's dict;
   benign while dicts are consumed head-tag-only, mis-threads once L2 lands structured
   reqs. [NEW; UNCERTAIN impact today — corpus has only single-constraint sites.]
-  **Fix:** key by `(iface, id)`.
+  **Fix:** key by `(iface, id)`. **— CONFIRMED LATENT, re-verified 2026-06-26 (defer to L2).**
+  Mechanistic: the dict word is head-tag-only, so two constraints on one tyvar at the same type
+  share a head tag and the call-site method name still selects the right impl; observable only
+  under L2's richer dict rep. Defer the re-keying until L2 so it's testable observably (a
+  standalone change trips the §Architecture-#2 unify-var-id route-keying fragility for no gain).
+  Keying plan + reader `methodName→iface` registry recorded in PLAN.md → Self-host open items §D7.
+  *(That investigation also surfaced a SEPARATE, observable bug — a return-position-only method
+  in a generic body mis-dispatches `run≠build`, both wrong; filed in PLAN.md → Compiler/language.
+  Not D7, reproduces with one interface.)*
 - **D8. annotate.mdk DoLet arm ignores `rec`** — RHS annotated one frame shallow vs
   `blockRecLet`'s push (`annotate.mdk:199-200` vs `eval.mdk:930-936`). Dormant
   (no driver runs annotate); loud when activated. [NEW]
