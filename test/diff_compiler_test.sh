@@ -66,6 +66,8 @@ else
          $ROOT/stdlib/list.mdk \
          $ROOT/stdlib/set.mdk \
          $ROOT/stdlib/async.mdk \
+         $ROOT/stdlib/byteparser.mdk \
+         $ROOT/stdlib/bytebuilder.mdk \
          $ROOT/test/compiler_test_fixtures/mixed.mdk \
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
          $ROOT/test/compiler_test_fixtures/mappable_not_foldable.mdk \

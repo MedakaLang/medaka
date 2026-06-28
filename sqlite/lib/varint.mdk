@@ -15,7 +15,7 @@
 -- The encoder (`sqVarintBytes`) is the exact inverse of the decoder
 -- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
 
-import byteparser.lib.byteparser.{ByteParser, BResult, BOk, BErr, runByteParser}
+import byteparser.{ByteParser, BResult, BOk, BErr, runByteParser}
 
 -- ---------------------------------------------------------------------------
 -- Named constants (STYLE §12 — name the meaning, fold makes shifts free)

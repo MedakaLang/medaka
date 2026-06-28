@@ -94,11 +94,15 @@ Support files:
 | `compiler/support/util.mdk` + siblings | Compiler private mini-stdlib (no `stdlib/` imports allowed) |
 
 `stdlib/`: `runtime.mdk` (extern primitive catalog, read from disk at runtime), `core.mdk`
-(implicit prelude — `Eq`/`Ord`/`Debug`/`Num`/…), `list.mdk`/`string.mdk`/`array.mdk`/`map.mdk`/`set.mdk`/`io.mdk`/`hash_map.mdk`/`hash_set.mdk`/`mut_array.mdk`/`json.mdk`
+(implicit prelude — `Eq`/`Ord`/`Debug`/`Num`/…), `list.mdk`/`string.mdk`/`array.mdk`/`map.mdk`/`set.mdk`/`io.mdk`/`hash_map.mdk`/`hash_set.mdk`/`mut_array.mdk`/`json.mdk`/`byteparser.mdk`/`bytebuilder.mdk`
 (written in Medaka; `map.mdk`/`set.mdk` are weight-balanced ordered `Map`/`Set`;
 `hash_map.mdk`/`hash_set.mdk` are mutable hash tables; `mut_array.mdk` is a
 growable mutable vector (amortized-O(1) `push` over a doubling `Array`); `json.mdk`
 is a recursive-descent JSON parser/serializer with an `Array`-backed `Json` ADT;
+`byteparser.mdk` is a generic binary parser-combinator library (`ByteParser`,
+big-endian `beUint`/`beSint`/`beFloat64`) and `bytebuilder.mdk` its symmetric
+byte-output builder (`emit*`/`buildArray`); neither is auto-prelude — import them
+by bare name like `import map`;
 `io.mdk` is the ergonomic layer over the `runtime.mdk` IO externs).
 
 ## Build & test

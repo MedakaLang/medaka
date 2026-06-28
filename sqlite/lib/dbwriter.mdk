@@ -61,16 +61,10 @@
 -- ## Byte emission via the shared SQLite varint codec
 --
 -- The varint codec is shared with `recordenc` via the sibling module
--- `sqlite.lib.varint` (`sqVarintBytes`).  This used to be a per-module copy
--- because of an F1 loader bug — a module could not import BOTH
--- `byteparser.lib.bytebuilder` AND (transitively) `byteparser.lib.byteparser`,
--- since `bytebuilder` spelled its sibling import the intra-package way
--- (`lib.byteparser`) while `recordenc` used the cross-package
--- `byteparser.lib.byteparser`, aliasing one physical file under two module
--- identities (`conflicting impl Alternative`).  F1b (loader module-identity,
--- closed 2026-06-25) canonicalises module identity, and `varint` lives in the
--- `sqlite` package using the single cross-package byteparser spelling, so the
--- shared import now resolves cleanly.  The remaining non-varint big-endian
+-- `sqlite.lib.varint` (`sqVarintBytes`).  Since `byteparser`/`bytebuilder` are
+-- now stdlib modules (imported by the single bare-name spelling `import
+-- byteparser`), there is just one module identity for them and the shared
+-- import resolves cleanly.  The remaining non-varint big-endian
 -- emitters (`beBytes`) stay local — they are trivial and SQLite-specific here.
 
 import array.{set, blit}

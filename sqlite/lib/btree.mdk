@@ -26,7 +26,7 @@
 -- in key order: left-child of cell[0], left-child of cell[1], ...,
 -- left-child of cell[n-1], rightmost-child.
 
-import byteparser.lib.byteparser.{
+import byteparser.{
   BOk,
   BErr,
   runBP,

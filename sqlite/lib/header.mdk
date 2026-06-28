@@ -14,12 +14,12 @@
 --   40  4  schema cookie
 --   56  4  text encoding (1=UTF-8)
 
-import byteparser.lib.byteparser.{
+import byteparser.{
   ByteParser,
   runByteParser,
   beUint,
   takeBytes,
-  bFailWith,
+  failWith,
   anyByte,
 }
 
@@ -65,7 +65,7 @@ checkMagic : List Int -> ByteParser Unit
 checkMagic got =
   if listIntEq got magicBytes
   then pure ()
-  else bFailWith "not a SQLite database (bad magic string)"
+  else failWith "not a SQLite database (bad magic string)"
 
 -- Structural equality on List Int (avoids importing list/core derive here).
 listIntEq : List Int -> List Int -> Bool

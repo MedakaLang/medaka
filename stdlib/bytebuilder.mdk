@@ -9,8 +9,8 @@
 -- matching decoder expects, so a round-trip `encode → decode` reproduces the
 -- original value exactly.
 
-import lib.byteparser.{runByteParser, beUint, beSint, takeBytes}
-import mut_array.{new, push, toArray}
+import byteparser.{runByteParser, beUint, beSint, takeBytes}
+import mut_array.{MutArray, new, push, toArray}
 
 -- ---------------------------------------------------------------------------
 -- Builder type

@@ -940,6 +940,38 @@ the tests that follow — the crash becomes `Fail "message"`.
 
 ---
 
+## Module 11 — `byteparser` ✅ implemented
+
+`stdlib/byteparser.mdk` — a generic **binary parser-combinator** library.  A
+`ByteParser a` wraps `(Array Int -> Int -> BResult a)` with explicit position
+threading; `Mappable`/`Applicative`/`Thenable` instances let `do`-notation
+sequence parsers, and a left-biased, full-backtracking `Alternative`
+(`orElse`).  Not auto-prelude — `import byteparser` by bare name.
+
+**Exports:** types `ByteParser`/`BResult` (`BOk`/`BErr`) + `onOk`/`runBP`;
+primitives `satisfy`, `anyByte`, `byte`, `eof`, `peek`, `failWith`; combinators
+`many`, `some`, `many1`, `sepBy`, `sepBy1`, `optional`, `between`, `choice`,
+`chainl1`, `takeBytes`, `takeSlice`; big-endian binary readers `beUint`,
+`beSint`, `beFloat64`; entry point `runByteParser`.  24 doctests.  (The `be`
+prefix = big-endian and is semantic; the old `b`-prefixed combinator names were
+dropped on promotion.)
+
+---
+
+## Module 12 — `bytebuilder` ✅ implemented
+
+`stdlib/bytebuilder.mdk` — the symmetric **byte-output builder**, inverse of
+`byteparser`.  A `Builder` backed by a growable `MutArray Int` accumulates bytes
+in amortised-O(1) `push`; `buildArray` freezes the emission-order range into a
+fixed `Array Int` (no reverse pass).  Each `emit*` writes in the byte order its
+matching `byteparser` decoder expects, so `encode → decode` round-trips exactly.
+Not auto-prelude — `import bytebuilder`.
+
+**Exports:** type `Builder`; `newBuilder`; `emitU8`, `emitU16BE`, `emitU24BE`,
+`emitU32BE`, `emitBytes`, `emitBeSint`; `buildArray`.  26 round-trip doctests.
+
+---
+
 ## Capability stratification audit (Phase 146, 2026-06-06)
 
 *Companion to [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §3a and

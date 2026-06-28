@@ -124,7 +124,7 @@ parentGo path i =
 -- A project's `medaka.toml` may carry a `[dependencies]` section of the form
 --
 --     [dependencies]
---     byteparser = "../byteparser"
+--     parsec = "../parsec"
 --
 -- where each value is a path string relative to the project root (the directory
 -- containing the medaka.toml).  `readDeps root` reads that file, finds the
@@ -135,7 +135,7 @@ parentGo path i =
 --
 -- Threading: an import whose FIRST dotted segment equals a declared dep name is
 -- resolved by stripping that segment and resolving the REMAINDER under the dep's
--- root (`byteparser.lib.byteparser` → `<depRoot>/lib/byteparser.mdk`).  A dep's
+-- root (`parsec.lib.parser` → `<depRoot>/lib/parser.mdk`).  A dep's
 -- OWN imports (stdlib `array`/`list`/… or its sibling modules) still flow through
 -- the normal `roots` list, so this is purely additive on top of single-root.
 
@@ -213,8 +213,8 @@ readDeps root =
 -- caller falls through to the normal `roots` search.  Returns (path, depRoot) so
 -- the caller can REMEMBER which package the resolved module belongs to: that
 -- dep's OWN intra-package (relative/bare) imports must rebase to its `depRoot`,
--- not the entry project's root (else `byteparser.lib.bytebuilder`'s sibling
--- `import lib.byteparser` would be looked up under the entry project and fail).
+-- not the entry project's root (else `parsec.lib.toml`'s sibling
+-- `import lib.parser` would be looked up under the entry project and fail).
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 resolveDepFile deps modId = match splitOnChar "." modId
   [] => None
@@ -302,8 +302,8 @@ readModuleProgF parseFn read deps roots modId = match findModuleFile deps roots 
 -- ── canonical module-id rewrite (F1b loader module identity) ─────────────────
 --
 -- A physical file reachable under two import SPELLINGS — e.g. the entry's
--- dep-prefixed `byteparser.lib.byteparser` and a sibling module's intra-package
--- `lib.byteparser` — is otherwise loaded TWICE under two distinct modIds, so any
+-- dep-prefixed `parsec.lib.parser` and a sibling module's intra-package
+-- `lib.parser` — is otherwise loaded TWICE under two distinct modIds, so any
 -- `export impl` it declares is double-counted → a spurious `conflicting impl`.
 -- Fix: canonicalize every import to a single dep-name-prefixed modId derived from
 -- WHERE the import resolves, and rewrite each `DUse` so resolve / typecheck / eval
@@ -319,8 +319,8 @@ readModuleProgF parseFn read deps roots modId = match findModuleFile deps roots 
 -- a dep root, so every canonical id equals the original and no DUse is touched.
 -- (Same-spelling identity needs no realpath: the same dep root string threads as
 -- `owningRoot` to both spellings.  The remaining two-NAMES corner — one physical
--- dir declared under two dep names, e.g. entry `bp = "../byteparser"` + a transitive
--- dep `byteparser = "../byteparser"`, whose `..`-joined roots are different literal
+-- dir declared under two dep names, e.g. entry `pc = "../parsec"` + a transitive
+-- dep `parsec = "../parsec"`, whose `..`-joined roots are different literal
 -- strings — is closed by realpath-canonicalizing the owning root + file path before
 -- the dep-name reverse-lookup and the rel-segment computation: one physical file →
 -- one canonical id regardless of the dep-name spelling.  See revLookupRoot/canonicalModId.)
@@ -330,7 +330,7 @@ splitDot s = splitOnChar "." s
 
 -- reverse-lookup a declared dependency NAME by its resolved root path, comparing
 -- REALPATH-canonicalized roots.  Two spellings of one physical directory — the
--- entry's `bp = "../byteparser"` and a transitive dep's `byteparser = "../byteparser"`,
+-- entry's `pc = "../parsec"` and a transitive dep's `parsec = "../parsec"`,
 -- which `joinPathL` produces as DIFFERENT literal `..`-bearing strings — realpath to
 -- the SAME absolute path, so the SAME dep name is chosen for both.  First match wins,
 -- so the canonical name is deterministic: the entry's deps lead the list (childDeps
@@ -413,7 +413,7 @@ joinArrow (x::xs) = stringConcat [x, " → ", joinArrow xs]
 -- When a module is loaded from a dependency package (`owningRoot` ≠ the entry
 -- root), its OWN imports must resolve against THAT package, not the entry
 -- project:
---   * its intra-package (relative/bare) imports — `import lib.byteparser`,
+--   * its intra-package (relative/bare) imports — `import lib.parser`,
 --     `import foo` — rebase to `owningRoot` (prepended to `roots` so the dep's
 --     copy is preferred over a same-named entry-project module);
 --   * its OWN `[dependencies]` (a transitive dep — a dep importing ITS dep by

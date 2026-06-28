@@ -1,11 +1,11 @@
 -- | byteparser example: exercises the core combinators and binary parsers.
 --
 -- Run with:
---   _build/default/bin/main.exe run byteparser/main.mdk
+--   ./medaka run byteparser/main.mdk
 
-import lib.byteparser.{
-  runByteParser, byte, anyByte, bSatisfy, bEof, bMany, bSome,
-  bOptional, bBetween, bSepBy, bChoice, takeBytes,
+import byteparser.{
+  runByteParser, byte, anyByte, satisfy, eof, many, some,
+  optional, between, sepBy, choice, takeBytes,
   beUint, beSint, beFloat64
 }
 
@@ -24,15 +24,15 @@ main =
   println (showResult "anyByte [65,66,67]"         (runByteParser anyByte (arrayFromList [65, 66, 67])))
   println (showResult "byte 65 [65,66,67]"         (runByteParser (byte 65) (arrayFromList [65, 66, 67])))
   println (showResult "byte 66 [65,66,67] (fail)"  (runByteParser (byte 66) (arrayFromList [65, 66, 67])))
-  println (showResult "bSatisfy (>64)"             (runByteParser (bSatisfy (b => b > 64)) (arrayFromList [65, 66, 67])))
+  println (showResult "satisfy (>64)"             (runByteParser (satisfy (b => b > 64)) (arrayFromList [65, 66, 67])))
   println ""
-  println "=== bMany / bSome ==="
-  println (showResult "bMany (byte 1) [1,2,3]"     (runByteParser (bMany (byte 1)) (arrayFromList [1, 2, 3])))
-  println (showResult "bSome (byte 65) [65,65,66]" (runByteParser (bSome (byte 65)) (arrayFromList [65, 65, 66])))
+  println "=== many / some ==="
+  println (showResult "many (byte 1) [1,2,3]"     (runByteParser (many (byte 1)) (arrayFromList [1, 2, 3])))
+  println (showResult "some (byte 65) [65,65,66]" (runByteParser (some (byte 65)) (arrayFromList [65, 65, 66])))
   println ""
-  println "=== bOptional ==="
-  println (showResult "bOptional (byte 65) [65,66]" (runByteParser (bOptional (byte 65)) (arrayFromList [65, 66])))
-  println (showResult "bOptional (byte 90) [65,66]" (runByteParser (bOptional (byte 90)) (arrayFromList [65, 66])))
+  println "=== optional ==="
+  println (showResult "optional (byte 65) [65,66]" (runByteParser (optional (byte 65)) (arrayFromList [65, 66])))
+  println (showResult "optional (byte 90) [65,66]" (runByteParser (optional (byte 90)) (arrayFromList [65, 66])))
   println ""
   println "=== takeBytes ==="
   println (showResult "takeBytes 2 [65,66,67]" (runByteParser (takeBytes 2) (arrayFromList [65, 66, 67])))
@@ -51,14 +51,14 @@ main =
   println "=== beFloat64 (stub) ==="
   println (showResult "beFloat64 [8 zeros]" (runByteParser beFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 0])))
   println ""
-  println "=== bSepBy ==="
-  println (showResult "bSepBy (byte 1) (byte 2) [1,2,1,2,1]"
-    (runByteParser (bSepBy (byte 1) (byte 2)) (arrayFromList [1, 2, 1, 2, 1])))
+  println "=== sepBy ==="
+  println (showResult "sepBy (byte 1) (byte 2) [1,2,1,2,1]"
+    (runByteParser (sepBy (byte 1) (byte 2)) (arrayFromList [1, 2, 1, 2, 1])))
   println ""
-  println "=== bChoice ==="
-  println (showResult "bChoice [byte 65, byte 66] [66]"
-    (runByteParser (bChoice [byte 65, byte 66]) (arrayFromList [66, 65])))
+  println "=== choice ==="
+  println (showResult "choice [byte 65, byte 66] [66]"
+    (runByteParser (choice [byte 65, byte 66]) (arrayFromList [66, 65])))
   println ""
-  println "=== bBetween ==="
-  println (showResult "bBetween (byte 40) (byte 41) (beUint 1) [40,99,41]"
-    (runByteParser (bBetween (byte 40) (byte 41) (beUint 1)) (arrayFromList [40, 99, 41])))
+  println "=== between ==="
+  println (showResult "between (byte 40) (byte 41) (beUint 1) [40,99,41]"
+    (runByteParser (between (byte 40) (byte 41) (beUint 1)) (arrayFromList [40, 99, 41])))

@@ -348,6 +348,8 @@ stdlib/
   list.mdk        List operations
   string.mdk      String operations
   array.mdk       Array operations
+  byteparser.mdk  Generic binary parser-combinator library (big-endian decoders)
+  bytebuilder.mdk Symmetric byte-output builder (emit*/buildArray)
 runtime/
   medaka_rt.c     C runtime + Boehm GC
 test/

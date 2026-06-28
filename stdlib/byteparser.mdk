@@ -99,21 +99,21 @@ export impl Alternative ByteParser where
 
 -- | Fail unconditionally with a message.
 export
-bFailWith : String -> ByteParser a
-bFailWith msg = ByteParser (_ pos => BErr msg pos)
+failWith : String -> ByteParser a
+failWith msg = ByteParser (_ pos => BErr msg pos)
 
 -- | Consume one byte if it satisfies the predicate.
 --
--- > runByteParser (bSatisfy (b => b == 65)) (arrayFromList [65, 66, 67])
+-- > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
 -- Ok 65
--- > runByteParser (bSatisfy (b => b == 65)) (arrayFromList [99])
+-- > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
 -- Err "unexpected byte at byte 0"
 export
-bSatisfy : (Int -> Bool) -> ByteParser Int
-bSatisfy pred = ByteParser (bSatisfyStep pred)
+satisfy : (Int -> Bool) -> ByteParser Int
+satisfy pred = ByteParser (satisfyStep pred)
 
-bSatisfyStep : (Int -> Bool) -> Array Int -> Int -> BResult Int
-bSatisfyStep pred input pos
+satisfyStep : (Int -> Bool) -> Array Int -> Int -> BResult Int
+satisfyStep pred input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
   | pred (input.[pos]) = BOk (input.[pos]) (pos + 1)
   | otherwise = BErr "unexpected byte" pos
@@ -124,7 +124,7 @@ bSatisfyStep pred input pos
 -- Ok 42
 export
 anyByte : ByteParser Int
-anyByte = bSatisfy (_ => True)
+anyByte = satisfy (_ => True)
 
 -- | Consume exactly the given byte value.
 --
@@ -134,20 +134,20 @@ anyByte = bSatisfy (_ => True)
 -- Err "unexpected byte at byte 0"
 export
 byte : Int -> ByteParser Int
-byte b = bSatisfy (x => x == b)
+byte b = satisfy (x => x == b)
 
 -- | Match the end of input.  Yields Unit; consumes nothing.
 --
--- > runByteParser bEof (arrayFromList [])
+-- > runByteParser eof (arrayFromList [])
 -- Ok ()
--- > runByteParser bEof (arrayFromList [1])
+-- > runByteParser eof (arrayFromList [1])
 -- Err "expected end of input at byte 0"
 export
-bEof : ByteParser Unit
-bEof = ByteParser bEofStep
+eof : ByteParser Unit
+eof = ByteParser eofStep
 
-bEofStep : Array Int -> Int -> BResult Unit
-bEofStep input pos
+eofStep : Array Int -> Int -> BResult Unit
+eofStep input pos
   | pos >= arrayLength input = BOk () pos
   | otherwise = BErr "expected end of input" pos
 
@@ -163,71 +163,71 @@ peek = ByteParser (input pos =>
 -- Combinators
 -- ---------------------------------------------------------------------------
 
--- | Zero-or-more.  Uses explicit position threading (a loop), since `bMany`
+-- | Zero-or-more.  Uses explicit position threading (a loop), since `many`
 --   of a parser that consumes nothing must terminate.
 --
--- > runByteParser (bMany (byte 1)) (arrayFromList [1, 1, 1, 2])
+-- > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
 -- Ok [1, 1, 1]
 export
-bMany : ByteParser a -> ByteParser (List a)
-bMany p = ByteParser (input pos => bManyGo p input pos [])
+many : ByteParser a -> ByteParser (List a)
+many p = ByteParser (input pos => manyGo p input pos [])
 
-bManyGo : ByteParser a -> Array Int -> Int -> List a -> BResult (List a)
-bManyGo p input pos acc = match runBP p input pos
+manyGo : ByteParser a -> Array Int -> Int -> List a -> BResult (List a)
+manyGo p input pos acc = match runBP p input pos
   BErr _ _ => BOk (reverse acc) pos
   BOk a pos2 =>
     if pos2 == pos then
       BOk (reverse acc) pos2  -- no progress: stop to avoid infinite loop
     else
-      bManyGo p input pos2 (a::acc)
+      manyGo p input pos2 (a::acc)
 
 -- | One-or-more.
 --
--- > runByteParser (bSome (byte 2)) (arrayFromList [2, 2, 3])
+-- > runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
 -- Ok [2, 2]
--- > runByteParser (bSome (byte 2)) (arrayFromList [3])
+-- > runByteParser (some (byte 2)) (arrayFromList [3])
 -- Err "unexpected byte at byte 0"
 export
-bSome : ByteParser a -> ByteParser (List a)
-bSome p = do
+some : ByteParser a -> ByteParser (List a)
+some p = do
   x  <- p
-  xs <- bMany p
+  xs <- many p
   pure (x::xs)
 
--- | Alias for `bSome`.
+-- | Alias for `some`.
 export
-bMany1 : ByteParser a -> ByteParser (List a)
-bMany1 p = bSome p
+many1 : ByteParser a -> ByteParser (List a)
+many1 p = some p
 
 -- | One-or-more `p` separated by `sep`.
 export
-bSepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
-bSepBy1 p sep = do
+sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy1 p sep = do
   x  <- p
-  xs <- bMany (do
+  xs <- many (do
     _ <- sep
     p)
   pure (x::xs)
 
 -- | Zero-or-more `p` separated by `sep`.
 export
-bSepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
-bSepBy p sep = orElse (bSepBy1 p sep) (pure [])
+sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy p sep = orElse (sepBy1 p sep) (pure [])
 
 -- | Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
 --
--- > runByteParser (bOptional (byte 5)) (arrayFromList [5])
+-- > runByteParser (optional (byte 5)) (arrayFromList [5])
 -- Ok Some 5
--- > runByteParser (bOptional (byte 5)) (arrayFromList [9])
+-- > runByteParser (optional (byte 5)) (arrayFromList [9])
 -- Ok None
 export
-bOptional : ByteParser a -> ByteParser (Option a)
-bOptional p = orElse (map Some p) (pure None)
+optional : ByteParser a -> ByteParser (Option a)
+optional p = orElse (map Some p) (pure None)
 
--- | `bBetween open close p` parses `open`, then `p`, then `close`, yielding `p`.
+-- | `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
 export
-bBetween : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
-bBetween open close p = do
+between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
+between open close p = do
   _ <- open
   x <- p
   _ <- close
@@ -235,25 +235,25 @@ bBetween open close p = do
 
 -- | First successful parser in the list; fails if all fail.
 export
-bChoice : List (ByteParser a) -> ByteParser a
-bChoice [] = bFailWith "bChoice: no alternatives"
-bChoice (q::rest) = orElse q (bChoice rest)
+choice : List (ByteParser a) -> ByteParser a
+choice [] = failWith "choice: no alternatives"
+choice (q::rest) = orElse q (choice rest)
 
 -- | Left-associative chaining of `p` separated by operator parser `op`
 --   whose value is a binary function.
 export
-bChainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
-bChainl1 p op = do
+chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
+chainl1 p op = do
   x <- p
-  bChainl1Rest p op x
+  chainl1Rest p op x
 
-bChainl1Rest : ByteParser a -> ByteParser (a -> a -> a) -> a -> ByteParser a
-bChainl1Rest p op acc =
+chainl1Rest : ByteParser a -> ByteParser (a -> a -> a) -> a -> ByteParser a
+chainl1Rest p op acc =
   orElse
     (do
       f <- op
       y <- p
-      bChainl1Rest p op (f acc y))
+      chainl1Rest p op (f acc y))
     (pure acc)
 
 -- | Read exactly N bytes, returning them as a List Int.

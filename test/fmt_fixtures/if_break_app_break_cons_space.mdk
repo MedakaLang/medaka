@@ -17,7 +17,7 @@ emitVarint v buf =
 -- #2: println of a nested call — break inside the argument, not after the head
 demo =
   println (showResult "anyByte [65,66,67] sample label" (runByteParser anyByte (arrayFromList [65, 66, 67])))
-  println (showResult "bBetween long descriptive label here" (runByteParser (bBetween (byte 40) (byte 41) (beUint 1)) (arrayFromList [40, 99, 41])))
+  println (showResult "between long descriptive label here" (runByteParser (between (byte 40) (byte 41) (beUint 1)) (arrayFromList [40, 99, 41])))
 
 -- #3: `::` spacing by operand atomhood
 consAtoms x acc = x::acc

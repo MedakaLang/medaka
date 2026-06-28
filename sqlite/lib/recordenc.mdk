@@ -51,7 +51,7 @@
 --   - If len(serial_bytes)+1 < 128: header_len = len(serial_bytes)+1 (1-byte varint)
 --   - Else:                         header_len = len(serial_bytes)+2 (2-byte varint)
 
-import byteparser.lib.byteparser.{runByteParser}
+import byteparser.{runByteParser}
 import lib.varint.{sqVarintBytes, sqVarintSize}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, parseRecord, showCells}
 

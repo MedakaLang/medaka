@@ -12,7 +12,7 @@
 -- are supported via `scanTablePage` in btree.mdk.  Overflow pages remain out
 -- of scope (phase 2).
 
-import byteparser.lib.byteparser.{runByteParser}
+import byteparser.{runByteParser}
 import lib.header.{
   DbHeader,
   parseHeader,

@@ -12,7 +12,7 @@
 -- Serial types → `Cell` values.  Float (serial 7) decodes via `beFloat64`
 -- (8-byte big-endian IEEE 754) into a `CFloat Float` cell.
 
-import byteparser.lib.byteparser.{
+import byteparser.{
   ByteParser,
   BResult,
   BOk,
@@ -23,7 +23,7 @@ import byteparser.lib.byteparser.{
   beSint,
   takeSlice,
   takeBytes,
-  bFailWith,
+  failWith,
   beFloat64,
 }
 import lib.varint.{sqVarint}
