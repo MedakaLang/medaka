@@ -27,9 +27,12 @@ command -v clang >/dev/null 2>&1 || { echo "no clang — skipping (W2/W5 oracle 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 
 mkdir -p "$ROOT/test/bin"
-"$MEDAKA" build "$ENTRY" -o "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
+# --allow-internal: the emitter entries pull in the compiler graph, which uses the
+# internal-only array-kernel externs (arrayGetUnsafe, …) — the same flag the LLVM
+# entry oracles pass in test/build_oracles.sh.
+"$MEDAKA" build --allow-internal "$ENTRY" -o "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
 echo "built $ENTRY -> $OUT"
-"$MEDAKA" build "$ENTRY_TYPED" -o "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
+"$MEDAKA" build --allow-internal "$ENTRY_TYPED" -o "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
 echo "built $ENTRY_TYPED -> $OUT_TYPED"
-"$MEDAKA" build "$ENTRY_MODULES" -o "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
+"$MEDAKA" build --allow-internal "$ENTRY_MODULES" -o "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
 echo "built $ENTRY_MODULES -> $OUT_MODULES"

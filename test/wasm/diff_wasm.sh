@@ -57,9 +57,11 @@ for f in "$FIXDIR"/*.mdk; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
 
-  # 1. oracle = native-compiled binary stdout
+  # 1. oracle = native-compiled binary stdout (--allow-internal: the w10 array-kernel
+  # fixtures legitimately use internal-only externs (arrayGetUnsafe/arrayMakeWith/…), the
+  # same flag test/build_oracles.sh passes for the array-kernel entries).
   obin="$WORK/$name.oracle"
-  if ! "$MEDAKA" build "$f" -o "$obin" >"$WORK/build.err" 2>&1; then
+  if ! "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORK/build.err" 2>&1; then
     fail=$((fail+1)); printf 'FAIL %s (oracle build)\n%s\n' "$name" "$(cat "$WORK/build.err")"; continue
   fi
   ref="$("$obin" 2>/dev/null)"

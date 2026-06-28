@@ -2654,6 +2654,75 @@ emitDictRef prog env d name routes args =
     dictWords ++ argInstrs ++ ["call $" ++ gname name]
   else gapL ("wasm W5: CDict over unknown function '" ++ name ++ "'")
 
+-- ── EMITTER-GAPS E23 (wasm peer): CMethod / CDict in VALUE position ───────────
+-- A typeclass METHOD (`map negate xs`, `filter isEv xs`) or a `=>`-constrained NAMED
+-- function (`filter myParity xs`) passed UNAPPLIED to a higher-order combinator lowers
+-- to a bare CMethod/CDict in OPERAND position.  The emitRefExpr arms previously routed
+-- these to emitMethodRef/emitDictRef with `[]` args → a TRUNCATED saturated dispatch
+-- (`call $mdk_impl_*` / `call $fn`) carrying ONLY the dict words, no value args and no
+-- closure capture → wasm stack underflow at validate (`not enough arguments on the
+-- stack for call`).  (This is the wasm peer of the LLVM emitDictValue/emitMethodValue
+-- fix — EMITTER-GAPS E23; distinct from #18/E18, the shadowed-local case that stays a
+-- plain EVar.)
+--
+-- FIX: ETA-EXPAND the occurrence to a synthetic lambda `\a0..a(k-1) -> head a0..a(k-1)`
+-- and lower it through emitClosure — the universal W4 closure path.  emitClosure (a)
+-- captures the route's forwarded dict params (freeVarsExpr surfaces RDict/RDictFwd via
+-- freeVarsRoute) into the closure $env, and (b) re-emits the SATURATED dispatch in the
+-- lifted body via the CALL-position emitMethodRef/emitDictRef (correct: dicts ++ args ++
+-- call).  The result is a `$clos` struct (code_ptr, arity, $env captures) with the exact
+-- ABI W4 HOFs expect — the working lambda path IS the reference.
+
+-- CMethod value: arity k = the method's declared USER arity; a nullary method (k <= 0)
+-- is a plain value — keep the immediate saturated dispatch.
+emitMethodValueRef : Prog -> List String -> Int -> String -> Route -> List Route -> List Route -> <Mut> List String
+emitMethodValueRef prog env d name route implRoutes methRoutes =
+  let arity = methodValArity prog name
+  if arity <= 0 then emitMethodRef prog env d name route implRoutes methRoutes []
+  else
+    let names = etaValNames arity
+    let ps = map (n => PVar n) names
+    let body = applyArgsC (CMethod name route implRoutes methRoutes) (map (n => CVar n AGlobal) names)
+    emitClosure prog env d ps body
+
+-- the method's USER arity for an eta-value closure.  Prefer the installed iface table
+-- (methodArityOf, the modules path); when absent (the prelude-free W5/typed path never
+-- installs it → methodArityOf 0) fall back to the method's impl clause arity (these
+-- prelude-free fixtures define simple `requires`-free impls, so the clause arity IS the
+-- user arity — no leading requires-dict params to subtract).
+methodValArity : Prog -> String -> <Mut> Int
+methodValArity prog name =
+  let viaTable = methodArityOf name
+  if viaTable > 0 then viaTable
+  else match methodImpls prog name
+    ((tag, _)::_) => implArityFor prog name tag
+    _ => 0
+
+-- CDict value: value arity v = define arity (progFnArity, which the dict-pass already
+-- widened with the leading dict params) − route count.  A nullary value arity (the
+-- constrained fn takes no value args) degenerates to the saturated dict call.
+emitDictValueRef : Prog -> List String -> Int -> String -> List Route -> <Mut> List String
+emitDictValueRef prog env d name routes =
+  if contains name (progFnNames prog) then
+    let valArity = progFnArity prog name - listLen routes
+    if valArity <= 0 then emitDictRef prog env d name routes []
+    else
+      let names = etaValNames valArity
+      let ps = map (n => PVar n) names
+      let body = applyArgsC (CDict name routes) (map (n => CVar n AGlobal) names)
+      emitClosure prog env d ps body
+  else gapL ("wasm E23: CDict value over unknown function '" ++ name ++ "'")
+
+-- fresh eta param names `$hov0..$hov(n-1)` (the `$`-prefixed convention etaFreshPatsW
+-- uses); each lambda owns its own param scope so fixed names never collide.
+etaValNames : Int -> List String
+etaValNames n = map (i => "$hov" ++ intToString i) (rangeList 0 n)
+
+-- left-fold a head expression over a list of value args into a saturated CApp spine.
+applyArgsC : CExpr -> List CExpr -> CExpr
+applyArgsC hd [] = hd
+applyArgsC hd (a::rest) = applyArgsC (CApp hd a) rest
+
 -- the impl-function symbol: $mdk_impl_<tag>_<method>.  For the minimal slice every
 -- (method, head-tag) pair has a SOLE impl, so the bare head tag is the symbol tag
 -- (no C7 same-head-tycon collision; that canonical-key path is out of scope).
@@ -3081,8 +3150,8 @@ emitRefExpr prog env d e = match e
   CDecision scrut arms tree => emitDecisionRef prog env d scrut arms tree
   CLam pats body => emitClosure prog env d pats body
   CMethod name route implRoutes methRoutes =>
-    emitMethodRef prog env d name route implRoutes methRoutes []
-  CDict name routes => emitDictRef prog env d name routes []
+    emitMethodValueRef prog env d name route implRoutes methRoutes
+  CDict name routes => emitDictValueRef prog env d name routes
   CTuple es => emitTupleRef prog env d es
   CList es => emitListRef prog env d es
   CRangeList lo hi incl => emitRangeListRef prog env d lo hi incl

@@ -1,0 +1,27 @@
+-- W5/E23: a typeclass METHOD and a `=>`-constrained NAMED function used as a
+-- FIRST-CLASS value — passed UNAPPLIED to a user higher-order function (CMethod /
+-- CDict in VALUE position).  Before the E23 wasm fix, emitRefExpr routed a bare
+-- CMethod/CDict to a TRUNCATED saturated `call $mdk_impl_*` / `call $fn` (dict words
+-- only, no value args, no closure capture) → wasm stack underflow at validate.  After:
+-- each is ETA-EXPANDED to a synthetic lambda and lowered via emitClosure, yielding a
+-- `$clos` with the W4 ABI the HOF expects (the lifted body re-emits the saturated
+-- dispatch).  `eqSelf` (CDict value) → applyTo; `myeq` (CMethod value) → apply2.
+interface MyEq a where
+  myeq : a -> a -> Bool
+
+impl MyEq Int where
+  myeq a b = a == b
+
+applyTo : (a -> Bool) -> a -> Bool
+applyTo f x = f x
+
+apply2 : (a -> a -> Bool) -> a -> a -> Bool
+apply2 f x y = f x y
+
+eqSelf : MyEq a => a -> Bool
+eqSelf x = myeq x x
+
+main =
+  let a = applyTo eqSelf 5
+  let b = apply2 myeq 3 3
+  if a then (if b then 7 else 0) else 0
