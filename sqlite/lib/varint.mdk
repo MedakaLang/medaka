@@ -1,0 +1,148 @@
+-- | sqlite.lib.varint — the SQLite variable-length integer codec (1–9 bytes).
+--
+-- This is SQLite-specific (not a generic binary primitive), so it lives in the
+-- `sqlite` package rather than in `byteparser`/`bytebuilder`.  It is built on
+-- byteparser's GENERIC primitives (`ByteParser`, `BResult`, `BOk`, `BErr`); the
+-- generic libs carry no SQLite knowledge.
+--
+-- Format (SQLITE-DESIGN.md §4): bytes 1–8 each carry 7 payload bits with a
+-- continuation flag in the high bit (`0x80` = more bytes follow); byte 9, if
+-- reached, carries all 8 bits.  The decoded value is the big-endian
+-- concatenation of the payload bits.
+--
+--   v = b1[6:0] ++ b2[6:0] ++ ... ++ b8[6:0] ++ b9[7:0]   (big-endian cat)
+--
+-- The encoder (`sqVarintBytes`) is the exact inverse of the decoder
+-- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
+
+import byteparser.lib.byteparser.{ByteParser, BResult, BOk, BErr, runByteParser}
+
+-- ---------------------------------------------------------------------------
+-- Named constants (STYLE §12 — name the meaning, fold makes shifts free)
+-- ---------------------------------------------------------------------------
+
+-- Threshold: 2^56 — values ≥ this need the full 9-byte form (8×7 + 1×8 bits).
+sqVarint9Threshold : Int
+sqVarint9Threshold = shiftLeft 1 56
+
+-- Continuation bit (high bit, 0x80): set on a varint byte iff more bytes follow.
+contBit : Int
+contBit = 128
+
+-- 7-bit payload mask: the low 7 bits carried by bytes 1–8.
+groupMask : Int
+groupMask = 127
+
+-- ---------------------------------------------------------------------------
+-- DECODE — sqVarint : ByteParser Int
+-- ---------------------------------------------------------------------------
+
+-- | Read a SQLite variable-length integer (1–9 bytes) off the input.
+--
+-- > runByteParser sqVarint (arrayFromList [0])
+-- Ok 0
+-- > runByteParser sqVarint (arrayFromList [127])
+-- Ok 127
+-- > runByteParser sqVarint (arrayFromList [129, 0])
+-- Ok 128
+-- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
+-- Ok 16385
+export
+sqVarint : ByteParser Int
+sqVarint = ByteParser sqVarintGo
+
+-- Decode up to 9 bytes.  `byteNum` counts which byte we are on (1-indexed).
+sqVarintGo : Array Int -> Int -> BResult Int
+sqVarintGo input pos = sqVarintLoop input pos 0 1
+
+-- Process one byte of a varint.  `b` is the byte value, already fetched.
+sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
+sqVarintStep input pos acc byteNum b
+  | byteNum == 9   = BOk (acc * 256 + b) (pos + 1)
+  | b >= contBit   = sqVarintLoop input (pos + 1) (shiftLeft acc 7 + bitAnd b groupMask) (byteNum + 1)
+  | otherwise      = BOk (shiftLeft acc 7 + bitAnd b groupMask) (pos + 1)
+
+sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
+sqVarintLoop input pos acc byteNum
+  | pos >= arrayLength input = BErr "unexpected end of input (varint)" pos
+  | otherwise = sqVarintStep input pos acc byteNum (input.[pos])
+
+-- ---------------------------------------------------------------------------
+-- ENCODE — sqVarintBytes : Int -> List Int  (the on-wire byte sequence)
+-- ---------------------------------------------------------------------------
+
+-- | Number of bytes in the varint encoding of `n` (for header-len self-sizing).
+export
+sqVarintSize : Int -> Int
+sqVarintSize n
+  | n < 128         = 1
+  | n < 16384       = 2
+  | n < 2097152     = 3
+  | n < 268435456   = 4
+  | n < 34359738368 = 5
+  | otherwise       = 6
+
+-- Collect the 7-bit groups of `v` in big-endian (most-significant-first) order.
+-- The result is the raw payload bits with no continuation flags; `addContBits`
+-- then sets the flags to produce the on-wire bytes.
+sqVarintGroups : Int -> List Int -> List Int
+sqVarintGroups v acc
+  | v < contBit = v :: acc                                 -- highest group first
+  | otherwise   = sqVarintGroups (shiftRight v 7) (bitAnd v groupMask :: acc)
+
+-- Set the continuation bit on every byte except the last.
+addContBits : List Int -> List Int
+addContBits []        = []
+addContBits [last]    = [last]
+addContBits (x::rest) = (x + contBit) :: addContBits rest
+
+-- Append a single byte to the END of a list (used only for the 9-byte form).
+appendEnd : List Int -> Int -> List Int
+appendEnd [] b     = [b]
+appendEnd (x::r) b = x :: appendEnd r b
+
+-- | The on-wire byte sequence for a SQLite varint (full 1..9-byte range).
+--   Exact inverse of `sqVarint`.
+--
+-- For v < 2^56: 1..8 groups of 7 bits, continuation bit on all but the last.
+-- For v ≥ 2^56: first 8 bytes carry 7 bits each (56 bits, with continuation
+-- bits); the 9th byte carries the low 8 bits (all 8, no continuation bit).
+export
+sqVarintBytes : Int -> List Int
+sqVarintBytes v =
+  if v >= sqVarint9Threshold
+  then
+    let low8 = bitAnd v 255
+    let high = v / 256
+    appendEnd (addContBits (sqVarintGroups high [])) low8
+  else addContBits (sqVarintGroups v [])
+
+-- ---------------------------------------------------------------------------
+-- Round-trip doctests (moved from byteparser/bytebuilder)
+-- ---------------------------------------------------------------------------
+
+-- | Decode a freshly-encoded value: sqVarintBytes → sqVarint == value.
+roundTrip : Int -> Result String Int
+roundTrip v = runByteParser sqVarint (arrayFromList (sqVarintBytes v))
+
+-- 1-byte (0..127)
+-- > roundTrip 0
+-- Ok 0
+-- > roundTrip 127
+-- Ok 127
+
+-- 2-byte (128..16383)
+-- > roundTrip 128
+-- Ok 128
+-- > roundTrip 16383
+-- Ok 16383
+
+-- 3-byte (16384..2097151)
+-- > roundTrip 16384
+-- Ok 16384
+-- > roundTrip 2097151
+-- Ok 2097151
+
+-- large multi-byte
+-- > roundTrip 268435456
+-- Ok 268435456

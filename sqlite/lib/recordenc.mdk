@@ -7,24 +7,13 @@
 --
 -- `header-len` counts itself (i.e. includes its own varint width).
 --
--- ## Note: builder is self-contained here (simple forward-list approach)
---
--- `byteparser/lib/bytebuilder.mdk` is the canonical byte builder, but
--- importing it cross-package fails because `bytebuilder.mdk` uses an
--- intra-package import (`lib.byteparser`) that the loader does not rebase
--- when loading it as a transitive dependency from the `sqlite` package.
--- **COMPILER FINDING (F1)**: the loader does not rebase intra-package import
--- paths of a dependency when loading it transitively from another package.
--- `bytebuilder.mdk`'s `import lib.byteparser.{…}` resolves correctly within
--- the byteparser package but fails as `unknown module: lib.byteparser` when
--- loaded via `byteparser.lib.bytebuilder` from the sqlite package.  Fix:
--- the loader should resolve a dependency module's intra-package imports
--- relative to that dependency's package root.  Tracked; P3/P4 can switch to
--- bytebuilder once fixed.
+-- ## Encoding strategy: forward `List Int` accumulation
 --
 -- We encode using simple forward `List Int` accumulation: sections are built
 -- as plain lists and concatenated (safe for SQLite rows with ≤ hundreds of
--- columns; each section is small).
+-- columns; each section is small).  The SQLite varint codec is shared with the
+-- decoder side via the sibling module `sqlite.lib.varint` (`sqVarintBytes` /
+-- `sqVarintSize`) rather than re-rolled here.
 --
 -- ## Doctest note
 -- `Cell` and `Array Int` have no `Debug` instance; doctest expressions
@@ -63,6 +52,7 @@
 --   - Else:                         header_len = len(serial_bytes)+2 (2-byte varint)
 
 import byteparser.lib.byteparser.{runByteParser}
+import lib.varint.{sqVarintBytes, sqVarintSize}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, parseRecord, showCells}
 
 -- ---------------------------------------------------------------------------
@@ -91,47 +81,6 @@ revList xs = revGo xs []
 revGo : List a -> List a -> List a
 revGo [] acc     = acc
 revGo (x::r) acc = revGo r (x::acc)
-
--- ---------------------------------------------------------------------------
--- SQLite varint encoder (forward list)
--- ---------------------------------------------------------------------------
-
--- | Number of bytes in the varint encoding of v.
-sqVarintSize : Int -> Int
-sqVarintSize n
-  | n < 128         = 1
-  | n < 16384       = 2
-  | n < 2097152     = 3
-  | n < 268435456   = 4
-  | n < 34359738368 = 5
-  | otherwise       = 6
-
--- Collect the 7-bit groups of v (big-endian) into acc.
-sqVarintGroups : Int -> List Int -> List Int
-sqVarintGroups v acc
-  | v < 128   = v :: acc
-  | otherwise = sqVarintGroups (v / 128) (bitAnd v 127 :: acc)
-
--- Set continuation bit (0x80) on all bytes except the last.
-addContBits : List Int -> List Int
-addContBits []        = []
-addContBits [last]    = [last]
-addContBits (x::rest) = (x + 128) :: addContBits rest
-
--- Append a byte to the END of a list (used only for the 9-byte varint).
-appendEnd : List Int -> Int -> List Int
-appendEnd [] b      = [b]
-appendEnd (x::r) b  = x :: appendEnd r b
-
--- | Encode a varint as a forward `List Int`.
-sqVarintBytes : Int -> List Int
-sqVarintBytes v =
-  if v >= 72057594037927936
-  then
-    let low8 = bitAnd v 255
-    let high = v / 256
-    appendEnd (addContBits (sqVarintGroups high [])) low8
-  else addContBits (sqVarintGroups v [])
 
 -- ---------------------------------------------------------------------------
 -- Big-endian signed integer encoder (forward list)

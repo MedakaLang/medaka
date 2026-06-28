@@ -19,13 +19,13 @@ import byteparser.lib.byteparser.{
   BErr,
   runBP,
   runByteParser,
-  sqVarint,
   beSint,
   takeSlice,
   takeBytes,
   bFailWith,
   beFloat64,
 }
+import lib.varint.{sqVarint}
 import list.{reverse}
 
 -- | One decoded column value.

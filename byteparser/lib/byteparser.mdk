@@ -19,7 +19,6 @@
 -- Binary-specific primitives:
 --   `beUint n`  — big-endian unsigned n-byte integer
 --   `beSint n`  — big-endian signed n-byte integer (two's-complement)
---   `sqVarint`  — SQLite variable-length integer (1–9 bytes)
 --   `beFloat64` — 64-bit IEEE 754 float
 
 import list.{reverse}
@@ -310,40 +309,6 @@ beSint n = do
 -- | 2^n implemented with left-shift (works for n in 0..62 on 63-bit Int).
 pow2 : Int -> Int
 pow2 n = shiftLeft 1 n
-
--- | Read a SQLite variable-length integer (1–9 bytes).
---
--- Format: bytes 1–8 have a continuation flag in the high bit (1 = more bytes
--- follow), with 7 payload bits each.  Byte 9 (if reached) uses all 8 bits.
--- The decoded value is the big-endian concatenation of payload bits.
---
--- > runByteParser sqVarint (arrayFromList [0])
--- Ok 0
--- > runByteParser sqVarint (arrayFromList [127])
--- Ok 127
--- > runByteParser sqVarint (arrayFromList [129, 0])
--- Ok 128
--- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
--- Ok 16385
-export
-sqVarint : ByteParser Int
-sqVarint = ByteParser sqVarintGo
-
--- Decode up to 9 bytes.  `byteNum` counts which byte we are on (1-indexed).
-sqVarintGo : Array Int -> Int -> BResult Int
-sqVarintGo input pos = sqVarintLoop input pos 0 1
-
--- Process one byte of a varint.  `b` is the byte value, already fetched.
-sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
-sqVarintStep input pos acc byteNum b
-  | byteNum == 9 = BOk (acc * 256 + b) (pos + 1)
-  | b >= 128     = sqVarintLoop input (pos + 1) (acc * 128 + b - (b / 128 * 128)) (byteNum + 1)
-  | otherwise    = BOk (acc * 128 + b - (b / 128 * 128)) (pos + 1)
-
-sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
-sqVarintLoop input pos acc byteNum
-  | pos >= arrayLength input = BErr "unexpected end of input (varint)" pos
-  | otherwise = sqVarintStep input pos acc byteNum (input.[pos])
 
 -- | Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
 -- Consumes exactly 8 bytes in big-endian order and reinterprets their bit

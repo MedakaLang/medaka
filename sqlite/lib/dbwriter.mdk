@@ -58,27 +58,23 @@
 -- If the cells + pointer array do not fit in the available page space the
 -- writer returns a clean `Err` — it never silently overflows.
 
--- ## Self-contained byte emission (NOT bytebuilder — see COMPILER FINDING)
+-- ## Byte emission via the shared SQLite varint codec
 --
--- This module emits the per-cell / per-header byte strings using plain
--- `List Int` accumulation + `arrayFromList`, mirroring `recordenc.mdk`.  It
--- deliberately does NOT import `byteparser.lib.bytebuilder`.
---
--- COMPILER FINDING (F1, incomplete): a module cannot import BOTH
--- `byteparser.lib.bytebuilder` AND (transitively) `byteparser.lib.byteparser`.
--- `bytebuilder` imports its sibling via the intra-package path `lib.byteparser`,
--- while `recordenc` (a transitive dep here) imports it as the cross-package
--- `byteparser.lib.byteparser`.  The loader instantiates the SAME physical file
--- twice under the two path spellings, so its `impl Alternative` collides
--- (`conflicting impl Alternative: defined in byteparser.lib.byteparser and
--- lib.byteparser`).  `bytebuilder` alone and `recordenc` alone each load fine;
--- only the combination conflicts.  The F1 fix resolved bytebuilder's import for
--- standalone use but did not CANONICALISE the module identity, so a relative
--- intra-package import still aliases a cross-package one.  Until that lands,
--- `dbwriter` stays bytebuilder-free (single byteparser path spelling, via
--- recordenc).
+-- The varint codec is shared with `recordenc` via the sibling module
+-- `sqlite.lib.varint` (`sqVarintBytes`).  This used to be a per-module copy
+-- because of an F1 loader bug — a module could not import BOTH
+-- `byteparser.lib.bytebuilder` AND (transitively) `byteparser.lib.byteparser`,
+-- since `bytebuilder` spelled its sibling import the intra-package way
+-- (`lib.byteparser`) while `recordenc` used the cross-package
+-- `byteparser.lib.byteparser`, aliasing one physical file under two module
+-- identities (`conflicting impl Alternative`).  F1b (loader module-identity,
+-- closed 2026-06-25) canonicalises module identity, and `varint` lives in the
+-- `sqlite` package using the single cross-package byteparser spelling, so the
+-- shared import now resolves cleanly.  The remaining non-varint big-endian
+-- emitters (`beBytes`) stay local — they are trivial and SQLite-specific here.
 
 import array.{set, blit}
+import lib.varint.{sqVarintBytes}
 import lib.recordenc.{encodeRecord}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
 
@@ -142,31 +138,6 @@ beBytes nbytes v = revList (beGo nbytes v)
 beGo : Int -> Int -> List Int
 beGo 0 _ = []
 beGo n v = bitAnd v 255 :: beGo (n - 1) (v / 256)
-
--- A SQLite varint (1..9 bytes) as a forward List Int.  Mirrors recordenc's
--- sqVarintBytes (covers the full 1..9-byte range).
-sqVarintBytes : Int -> List Int
-sqVarintBytes v =
-  if v >= 72057594037927936
-  then
-    let low8 = bitAnd v 255
-    let high = v / 256
-    appendList (sqContBytes high) [low8]
-  else sqContBytes v
-
--- Collect 7-bit groups (big-endian) and set continuation bits on all but last.
-sqContBytes : Int -> List Int
-sqContBytes v = sqAddCont (sqGroups v [])
-
-sqGroups : Int -> List Int -> List Int
-sqGroups v acc
-  | v < 128   = v :: acc
-  | otherwise = sqGroups (v / 128) (bitAnd v 127 :: acc)
-
-sqAddCont : List Int -> List Int
-sqAddCont []        = []
-sqAddCont [last]    = [last]
-sqAddCont (x::rest) = (x + 128) :: sqAddCont rest
 
 -- ---------------------------------------------------------------------------
 -- Leaf-cell encoding: [payload-len varint][rowid varint][record bytes]

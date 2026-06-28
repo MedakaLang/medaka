@@ -6,7 +6,7 @@
 import lib.byteparser.{
   runByteParser, byte, anyByte, bSatisfy, bEof, bMany, bSome,
   bOptional, bBetween, bSepBy, bChoice, takeBytes,
-  beUint, beSint, sqVarint, beFloat64
+  beUint, beSint, beFloat64
 }
 
 -- ─── helpers ───────────────────────────────────────────────────────────────
@@ -47,12 +47,6 @@ main =
   println (showResult "beSint 1 [0x80] -> -128"       (runByteParser (beSint 1) (arrayFromList [128])))
   println (showResult "beSint 1 [0x7F] -> 127"        (runByteParser (beSint 1) (arrayFromList [127])))
   println (showResult "beSint 4 [0,0,1,0] -> 256"     (runByteParser (beSint 4) (arrayFromList [0, 0, 1, 0])))
-  println ""
-  println "=== sqVarint ==="
-  println (showResult "sqVarint [0x00] -> 0"                (runByteParser sqVarint (arrayFromList [0])))
-  println (showResult "sqVarint [0x7F] -> 127"              (runByteParser sqVarint (arrayFromList [127])))
-  println (showResult "sqVarint [0x81,0x00] -> 128"         (runByteParser sqVarint (arrayFromList [129, 0])))
-  println (showResult "sqVarint [0x81,0x80,0x01] -> 16385"  (runByteParser sqVarint (arrayFromList [129, 128, 1])))
   println ""
   println "=== beFloat64 (stub) ==="
   println (showResult "beFloat64 [8 zeros]" (runByteParser beFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 0])))
