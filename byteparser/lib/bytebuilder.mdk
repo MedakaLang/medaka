@@ -2,27 +2,30 @@
 --
 -- Symmetric inverse of `byteparser`: where `byteparser` DECODES byte arrays
 -- into values, `bytebuilder` ENCODES values INTO byte arrays.  Backed by a
--- reversed accumulator list (prepend is O(1); `buildArray` reverses once at the
--- end via `arrayFromList`).
+-- `MutArray Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
+-- live range into a fixed-size `Array Int` in emission order — no reverse pass.
 --
 -- All `emit*` functions write bytes in the byte order that `byteparser`'s
 -- matching decoder expects, so a round-trip `encode → decode` reproduces the
 -- original value exactly.
 
 import lib.byteparser.{runByteParser, beUint, beSint, takeBytes}
+import mut_array.{new, push, toArray}
 
 -- ---------------------------------------------------------------------------
 -- Builder type
 -- ---------------------------------------------------------------------------
 
--- | A byte output buffer backed by a reversed accumulator list.
---   Bytes are prepended in O(1); `buildArray` reverses once at the end.
-public export data Builder = Builder (Ref (List Int))
+-- | A byte output buffer backed by a growable `MutArray Int`.
+--   Bytes are appended in O(1) (amortised); `buildArray` snapshots to a
+--   fixed-size `Array Int` in emission order.
+--   The constructor is not exported — use `newBuilder`/`emit*`/`buildArray`.
+export data Builder = Builder (MutArray Int)
 
 -- | Create a new, empty builder.
 export
 newBuilder : Unit -> Builder
-newBuilder _ = Builder (Ref [])
+newBuilder _ = Builder (new ())
 
 -- ---------------------------------------------------------------------------
 -- Emit primitives
@@ -31,14 +34,14 @@ newBuilder _ = Builder (Ref [])
 -- | Emit one byte (masked to low 8 bits).
 export
 emitU8 : Int -> Builder -> <Mut> Unit
-emitU8 b (Builder r) = setRef r (bitAnd b 255 :: r.value)
+emitU8 b (Builder a) = push (bitAnd b 255) a
 
 -- | Emit a big-endian 2-byte unsigned integer.
 --   Inverse of `beUint 2`.
 export
 emitU16BE : Int -> Builder -> <Mut> Unit
 emitU16BE v buf =
-  emitU8 (bitAnd (v / 256) 255) buf
+  emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
 -- | Emit a big-endian 3-byte unsigned integer.
@@ -46,8 +49,8 @@ emitU16BE v buf =
 export
 emitU24BE : Int -> Builder -> <Mut> Unit
 emitU24BE v buf =
-  emitU8 (bitAnd (v / 65536) 255) buf
-  emitU8 (bitAnd (v / 256) 255) buf
+  emitU8 (bitAnd (shiftRight v 16) 255) buf
+  emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
 -- | Emit a big-endian 4-byte unsigned integer.
@@ -55,9 +58,9 @@ emitU24BE v buf =
 export
 emitU32BE : Int -> Builder -> <Mut> Unit
 emitU32BE v buf =
-  emitU8 (bitAnd (v / 16777216) 255) buf
-  emitU8 (bitAnd (v / 65536) 255) buf
-  emitU8 (bitAnd (v / 256) 255) buf
+  emitU8 (bitAnd (shiftRight v 24) 255) buf
+  emitU8 (bitAnd (shiftRight v 16) 255) buf
+  emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
 -- | Emit a list of byte values, each masked to low 8 bits.
@@ -93,7 +96,7 @@ emitBeSint nbytes v buf =
 emitBEUnsignedN : Int -> Int -> Builder -> <Mut> Unit
 emitBEUnsignedN 0 _ _ = ()
 emitBEUnsignedN n v buf =
-  emitBEUnsignedN (n - 1) (v / 256) buf
+  emitBEUnsignedN (n - 1) (shiftRight v 8) buf
   emitU8 (bitAnd v 255) buf
 
 -- ---------------------------------------------------------------------------
@@ -101,19 +104,10 @@ emitBEUnsignedN n v buf =
 -- ---------------------------------------------------------------------------
 
 -- | Extract the accumulated bytes as a fixed-size `Array Int`.
---   The internal accumulator is reversed (bytes were prepended), so this
---   function reverses it back to emission order.
+--   Bytes are already in emission order (no reverse pass needed).
 export
 buildArray : Builder -> Array Int
-buildArray (Builder r) = arrayFromList (reverseList r.value)
-
--- Reverse a list (standard; not importing list.mdk to keep the module lightweight).
-reverseList : List a -> List a
-reverseList xs = reverseGo xs []
-
-reverseGo : List a -> List a -> List a
-reverseGo [] acc = acc
-reverseGo (x::rest) acc = reverseGo rest (x::acc)
+buildArray (Builder a) = toArray a
 
 -- ---------------------------------------------------------------------------
 -- Doctest helpers
