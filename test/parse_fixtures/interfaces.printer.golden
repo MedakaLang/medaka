@@ -16,5 +16,5 @@ combine = f << g
 deleteAt x count =
   if has x then
     remove x
-    set_ref count (count.value - 1)
+    setRef count (count.value - 1)
 divides a b = a `mod` b == 0

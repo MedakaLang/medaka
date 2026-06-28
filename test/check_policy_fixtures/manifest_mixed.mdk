@@ -14,7 +14,7 @@ writeOut s = putStr s
 mutate : <Mut> Unit
 mutate =
   let r = ref 0
-  set_ref r 1
+  setRef r 1
 
 entry : String -> <Mut, Stdout> Unit
 entry s =

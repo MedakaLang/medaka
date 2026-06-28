@@ -13,7 +13,7 @@
 extern putStr : String -> <Stdout> Unit
 extern putStrLn : String -> <Stdout> Unit
 extern Ref : a -> Ref a
-extern set_ref : Ref a -> a -> <Mut> Unit
+extern setRef : Ref a -> a -> <Mut> Unit
 -- Per-type Hashable hashers — SPECIFIED deterministic algorithms, byte-identical
 -- in lib/eval.ml (oracle) and runtime/medaka_rt.c (native): hashInt/hashChar/
 -- hashFloat = SplitMix64-finalizer mix, hashString = FNV-1a, hashBool = 0/1; all
@@ -108,7 +108,7 @@ extern intToString : Int -> String
 extern floatToString : Float -> String
 extern debugStringLit : String -> String
 extern debugCharLit : Char -> String
-extern assert_snapshot : String -> String -> <IO> Unit
+extern assertSnapshot : String -> String -> <IO> Unit
 
 -- Array primitives.  These are the minimal kernel; stdlib/array.mdk is
 -- built on top.  *Unsafe variants skip the bounds check — they're used by

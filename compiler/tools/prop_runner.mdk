@@ -45,7 +45,7 @@ import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
 rngNextLocal : Unit -> <Mut> Int
 rngNextLocal _ =
   let s = (rngStateRef.value * 1103515245 + 12345) % 2147483648
-  let _ = set_ref rngStateRef s
+  let _ = setRef rngStateRef s
   s
 
 randIntRange : Int -> Int -> <Mut> Int

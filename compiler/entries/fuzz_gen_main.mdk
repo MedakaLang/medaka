@@ -138,14 +138,14 @@ ctxScope : Ctx -> List (String, Gty)
 ctxScope (Ctx _ _ _ s _) = s.value
 
 setAdts : Ctx -> List Gadt -> <Mut> Unit
-setAdts (Ctx _ _ a _ _) v = set_ref a v
+setAdts (Ctx _ _ a _ _) v = setRef a v
 setScope : Ctx -> List (String, Gty) -> <Mut> Unit
-setScope (Ctx _ _ _ s _) v = set_ref s v
+setScope (Ctx _ _ _ s _) v = setRef s v
 
 freshName : Ctx -> String -> <Mut> String
 freshName (Ctx _ _ _ _ fr) prefix =
   let n = fr.value
-  let _ = set_ref fr (n + 1)
+  let _ = setRef fr (n + 1)
   prefix ++ intToString n
 
 baseGtys : List Gty
@@ -528,7 +528,7 @@ genValDecl ctx i =
 hoistOut : Ctx -> Ref (List Out) -> Bool -> Expr -> <Mut> Unit
 hoistOut ctx outsRef isInv e =
   let name = freshName ctx "o"
-  set_ref outsRef (outsRef.value ++ [Out name (DFunDef False name [] e) isInv])
+  setRef outsRef (outsRef.value ++ [Out name (DFunDef False name [] e) isInv])
 
 -- emit Eq + Ord invariants for one derived ADT (no-op for non-derived)
 hoistAdtInvs : Ctx -> Ref (List Out) -> Gadt -> <Rand, Mut> Unit
@@ -592,9 +592,9 @@ genBlock ctx =
 appendBlock : Ctx -> Ref (List Decl) -> Ref (List DoStmt) -> Int -> <Rand, Mut> Unit
 appendBlock ctx allDeclsRef allBodyRef i = match genBlock ctx
   (decls, body) =>
-    let _ = set_ref allDeclsRef (allDeclsRef.value ++ decls)
+    let _ = setRef allDeclsRef (allDeclsRef.value ++ decls)
     let sep = if i > 0 then [DoExpr (EApp (EVar "println") (ELit (LString "--BLOCK--")))] else []
-    set_ref allBodyRef (allBodyRef.value ++ sep ++ body)
+    setRef allBodyRef (allBodyRef.value ++ sep ++ body)
 
 genProgram : Ctx -> Int -> <Rand, Mut> List Decl
 genProgram ctx nblocks =

@@ -161,7 +161,7 @@ effectDomains = Ref []
 
 seedEffectDomains : Unit -> <Mut> Unit
 seedEffectDomains _ =
-  set_ref effectDomains
+  setRef effectDomains
     [ ("Net", PPrefix None)
     , ("FileRead", PPrefix None)
     , ("FileWrite", PPrefix None)
@@ -172,7 +172,7 @@ seedEffectDomains _ =
 -- None/internal ⇒ atomic.  Internal labels are never parameterized (forced PUnit).
 registerEffectDomain : String -> Option String -> Bool -> <Mut> Unit
 registerEffectDomain name domain isInternal =
-  set_ref effectDomains ((name, domainParam domain isInternal) :: effectDomains.value)
+  setRef effectDomains ((name, domainParam domain isInternal) :: effectDomains.value)
 
 -- the ⊤-param a declared label carries: internal/atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
 domainParam : Option String -> Bool -> Param
@@ -688,7 +688,7 @@ currentLevel = Ref 0
 newTyvarId : Unit -> <Mut> Int
 newTyvarId _ =
   let n = tyvarCounter.value
-  let _ = set_ref tyvarCounter (n + 1)
+  let _ = setRef tyvarCounter (n + 1)
   n
 
 freshVar : Unit -> <Mut> Mono
@@ -701,7 +701,7 @@ effvarCounter = Ref 0
 newEffvarId : Unit -> <Mut> Int
 newEffvarId _ =
   let n = effvarCounter.value
-  let _ = set_ref effvarCounter (n + 1)
+  let _ = setRef effvarCounter (n + 1)
   n
 
 -- the empty closed row — a pure arrow
@@ -789,10 +789,10 @@ effvarLevel cell = match cell.value
 -- sortUniqS / sortUniqSGo / sortInsertS moved to support/util.mdk (imported above).
 
 enterLevel : Unit -> <Mut> Unit
-enterLevel _ = set_ref currentLevel (currentLevel.value + 1)
+enterLevel _ = setRef currentLevel (currentLevel.value + 1)
 
 exitLevel : Unit -> <Mut> Unit
-exitLevel _ = set_ref currentLevel (currentLevel.value - 1)
+exitLevel _ = setRef currentLevel (currentLevel.value - 1)
 
 -- ── effect propagation (Phase 79) ─────────────────────────────────────────
 -- the latent effect of the function body currently being inferred: application
@@ -818,7 +818,7 @@ performEffect cur eff = match effrowNorm cur.value
   EffRow _ None => ()
   EffRow curLabels (Some ct) => match effrowNorm eff
     EffRow effLabels effTail =>
-      let _ = set_ref cur (EffRow (atomsUnion curLabels effLabels) (Some ct))
+      let _ = setRef cur (EffRow (atomsUnion curLabels effLabels) (Some ct))
       match effTail
         Some et => if effvarId et == effvarId ct then () else performLink ct et
         None => ()
@@ -826,8 +826,8 @@ performEffect cur eff = match effrowNorm cur.value
 performLink : Ref Effvar -> Ref Effvar -> <Mut> Unit
 performLink ct et =
   let v3 = freshEffvarAt (minI (effvarLevel ct) (effvarLevel et))
-  let _ = set_ref ct (ELink (EffRow [] (Some v3)))
-  set_ref et (ELink (EffRow [] (Some v3)))
+  let _ = setRef ct (ELink (EffRow [] (Some v3)))
+  setRef et (ELink (EffRow [] (Some v3)))
 
 -- unify two effect rows.  PERMISSIVE (Phase 79): an open row absorbs the other
 -- side's labels by binding its tail; two open rows route through one shared fresh
@@ -841,14 +841,14 @@ unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 = ()
   | otherwise =
     let v3 = freshEffvarAt (minI (effvarLevel v1) (effvarLevel v2))
-    let _ = set_ref v1 (ELink (EffRow (atomsDiff l2 l1) (Some v3)))
-    set_ref v2 (ELink (EffRow (atomsDiff l1 l2) (Some v3)))
+    let _ = setRef v1 (ELink (EffRow (atomsDiff l2 l1) (Some v3)))
+    setRef v2 (ELink (EffRow (atomsDiff l1 l2) (Some v3)))
 unifyRowN (EffRow l1 (Some v1)) (EffRow l2 None) =
   let _ = effectLeakCheck (atomsEscape l1 l2) l2
-  set_ref v1 (ELink (EffRow (atomsDiff l2 l1) None))
+  setRef v1 (ELink (EffRow (atomsDiff l2 l1) None))
 unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
   let _ = effectLeakCheck (atomsEscape l2 l1) l1
-  set_ref v2 (ELink (EffRow (atomsDiff l1 l2) None))
+  setRef v2 (ELink (EffRow (atomsDiff l1 l2) None))
 unifyRowN (EffRow _ None) (EffRow _ None) = ()
 
 -- SOUNDNESS (Phase 146): an open row (an inference-synthesized arrow, i.e. a
@@ -1198,7 +1198,7 @@ substRow esub r = match effrowNorm r
 lowerRowLevels : Int -> EffRow -> <Mut> Unit
 lowerRowLevels level r = match effrowNorm r
   EffRow _ (Some v) => match v.value
-    EUnbound id lvl => if lvl > level then set_ref v (EUnbound id level) else ()
+    EUnbound id lvl => if lvl > level then setRef v (EUnbound id level) else ()
     ELink _ => ()
   EffRow _ None => ()
 
@@ -1288,7 +1288,7 @@ collectAbstractRecordTypes (_::rest) = collectAbstractRecordTypes rest
 -- the prelude/core decls), once, before checking begins.
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> <Mut> Unit
 seedAbstractRecordTypes coreDecls modules =
-  set_ref abstractRecordTypesRef
+  setRef abstractRecordTypesRef
     (collectAbstractRecordTypes coreDecls
       ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules)
 
@@ -1462,7 +1462,7 @@ currentSeedSchemes : Unit -> <Mut> List (String, Scheme)
 currentSeedSchemes _ = seedSchemesOut.value
 
 recordLocalBind : String -> Mono -> <Mut> Unit
-recordLocalBind name v = set_ref localBindRefs ((name, v) :: localBindRefs.value)
+recordLocalBind name v = setRef localBindRefs ((name, v) :: localBindRefs.value)
 
 -- dict-passing state (the typed pipeline's `=>`-constraint layer):
 --   activeDictVars   : constraint tyvar id → the dict parameter name a method
@@ -1777,7 +1777,7 @@ emitArgStampPasses = Ref False
 -- this before elaborateDict; the golden/oracle drivers leave it off).
 export
 enableEmitArgStampPasses : Unit -> <Mut> Unit
-enableEmitArgStampPasses _ = set_ref emitArgStampPasses True
+enableEmitArgStampPasses _ = setRef emitArgStampPasses True
 
 -- #55 EVAL residual: active on the multi-module EVAL path (elaborateModules with
 -- emitArgStampPasses OFF) when there is a RETURN-position constrained fn to dict-pass
@@ -1851,7 +1851,7 @@ nthArgMono n m = match normalize m
 -- element dict for a parametric `requires` impl.
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Option String -> <Mut> Unit
 recordArgStamp name tagRef implRef idx mono hint = match nthArgMono idx mono
-  Some am => set_ref pendingArgStamps ((name, tagRef, implRef, am, currentFn.value, hint) :: pendingArgStamps.value)
+  Some am => setRef pendingArgStamps ((name, tagRef, implRef, am, currentFn.value, hint) :: pendingArgStamps.value)
   None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -1863,7 +1863,7 @@ recordArgStamp name tagRef implRef idx mono hint = match nthArgMono idx mono
 -- (constraint) tyvar must be discovered.
 recordArgSiteFn : String -> Int -> Mono -> <Mut> Unit
 recordArgSiteFn _ idx mono = match nthArgMono idx mono
-  Some am => set_ref methodSiteFns ((currentFn.value, am) :: methodSiteFns.value)
+  Some am => setRef methodSiteFns ((currentFn.value, am) :: methodSiteFns.value)
   None => ()
 
 -- D3a/D3b-1: stamp each queued arg-position route from its now-resolved
@@ -1884,7 +1884,7 @@ resolveArgStamps implTable keyTable ((name, tagRef, implRef, am, encl, hint)::re
 
 resolveArgStamp : List ImplEntry -> List KeyEntry -> String -> Ref Route -> Ref (List Route) -> Mono -> String -> Option String -> <Mut> Unit
 resolveArgStamp implTable keyTable name tagRef implRef am encl hint = match activeDictVarOfEncl am encl
-  Some dname => set_ref tagRef (RDict dname)
+  Some dname => setRef tagRef (RDict dname)
   None => match headTyconMono am
     Some tag =>
       -- TYPECHECK-AUDIT C7 (arg-position): when ≥2 impls of this method share head
@@ -1896,9 +1896,9 @@ resolveArgStamp implTable keyTable name tagRef implRef am encl hint = match acti
       -- @Impl: a named hint overrides BOTH (head and keyForSite) with the NAMED key
       -- so eval's hasTag picks the impl the user named.  Mirrors resolveSite.
       let routeKey = fromOption (fromOption tag (keyForSite keyTable name am)) (namedImplKey keyTable name tag hint)
-      let _ = set_ref tagRef (RKey routeKey [])
+      let _ = setRef tagRef (RKey routeKey [])
       let dictName = if implDefinesMethodAt implTable name tag then name else innerDefaultMethod name
-      set_ref implRef (argImplDictRoutesForEncl implTable encl dictName tag am)
+      setRef implRef (argImplDictRoutesForEncl implTable encl dictName tag am)
     None => ()
 
 -- Native Gap C (parametric default-method dict-synthesis, 2026-06-12): a BY-NAME
@@ -1934,7 +1934,7 @@ typeErrorsSticky = Ref False
 -- Clear the sticky accumulator.  Call once at the start of a build/run pipeline.
 export
 resetTypeErrorsSticky : Unit -> <Mut> Unit
-resetTypeErrorsSticky _ = set_ref typeErrorsSticky False
+resetTypeErrorsSticky _ = setRef typeErrorsSticky False
 
 -- True iff any type error was pushed since the last resetTypeErrorsSticky.
 export
@@ -1944,8 +1944,8 @@ hadTypeErrors _ = typeErrorsSticky.value
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
 pushTypeError : String -> <Mut> Unit
 pushTypeError msg =
-  let _ = set_ref typeErrorsSticky True
-  set_ref typeErrors ((msg, currentLoc.value) :: typeErrors.value)
+  let _ = setRef typeErrorsSticky True
+  setRef typeErrors ((msg, currentLoc.value) :: typeErrors.value)
 
 -- #11 soundness: push an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
@@ -1966,8 +1966,8 @@ pushTypeErrorOnceAt : Option Loc -> String -> <Mut> Unit
 pushTypeErrorOnceAt loc msg =
   if anyList (e => fst e == msg) typeErrors.value then ()
   else
-    let _ = set_ref typeErrorsSticky True
-    set_ref typeErrors ((msg, orElseLoc loc currentLoc.value) :: typeErrors.value)
+    let _ = setRef typeErrorsSticky True
+    setRef typeErrors ((msg, orElseLoc loc currentLoc.value) :: typeErrors.value)
 
 -- the first `Some` loc, else the second (so a captured record-site span wins,
 -- and a `None` capture still degrades to the live currentLoc).
@@ -2060,47 +2060,47 @@ matchOracle = Ref (buildOracle [])
 
 resetState : Unit -> <Mut> Unit
 resetState _ =
-  let _ = set_ref tyvarCounter 0
+  let _ = setRef tyvarCounter 0
   let _ = seedEffectDomains ()
-  let _ = set_ref effvarCounter 0
-  let _ = set_ref curEffect (EffRow [] None)
-  let _ = set_ref recordsRef []
-  let _ = set_ref dataParamKindsRef []
-  let _ = set_ref pendingSites []
-  let _ = set_ref pendingRLocalSites []
-  let _ = set_ref shadowStandaloneSchemesRef []
-  let _ = set_ref definerShadowNamesRef []
-  let _ = set_ref shadowKeyTableRef []
-  let _ = set_ref pendingBinopSites []
-  let _ = set_ref methodIfaceParamsRef []
-  let _ = set_ref pendingImplObligations []
-  let _ = set_ref numlitRefs []   -- PLAN.md #11
-  let _ = set_ref localBindRefs []
-  let _ = set_ref localSchemesOut []
-  let _ = set_ref seedSchemesOut []
-  let _ = set_ref pendingArgStamps []
-  let _ = set_ref activeDictVars []
-  let _ = set_ref funConstraintsRef []
-  let _ = set_ref funConstraintIfacesRef []
-  let _ = set_ref currentImportDefinersRef []
-  let _ = set_ref pendingDictApps []
-  let _ = set_ref pendingCallObligations []
-  let _ = set_ref schemeObligationsRef []
-  let _ = set_ref methodConstraintsRef []
-  let _ = set_ref methodConstraintPositionsRef []
-  let _ = set_ref pendingMethodDicts []
-  let _ = set_ref pendingRecDictApps []
-  let _ = set_ref currentFn ""
-  let _ = set_ref currentImplBody False
-  let _ = set_ref currentImplHintRef None
-  let _ = set_ref pendingHints []
-  let _ = set_ref methodSiteFns []
-  let _ = set_ref dictAppFns []
-  let _ = set_ref promotedRef []
-  let _ = set_ref methodShadowNamesRef []
-  let _ = set_ref typeErrors []
-  let _ = set_ref occursCheckFailed False
-  set_ref currentLevel 0
+  let _ = setRef effvarCounter 0
+  let _ = setRef curEffect (EffRow [] None)
+  let _ = setRef recordsRef []
+  let _ = setRef dataParamKindsRef []
+  let _ = setRef pendingSites []
+  let _ = setRef pendingRLocalSites []
+  let _ = setRef shadowStandaloneSchemesRef []
+  let _ = setRef definerShadowNamesRef []
+  let _ = setRef shadowKeyTableRef []
+  let _ = setRef pendingBinopSites []
+  let _ = setRef methodIfaceParamsRef []
+  let _ = setRef pendingImplObligations []
+  let _ = setRef numlitRefs []   -- PLAN.md #11
+  let _ = setRef localBindRefs []
+  let _ = setRef localSchemesOut []
+  let _ = setRef seedSchemesOut []
+  let _ = setRef pendingArgStamps []
+  let _ = setRef activeDictVars []
+  let _ = setRef funConstraintsRef []
+  let _ = setRef funConstraintIfacesRef []
+  let _ = setRef currentImportDefinersRef []
+  let _ = setRef pendingDictApps []
+  let _ = setRef pendingCallObligations []
+  let _ = setRef schemeObligationsRef []
+  let _ = setRef methodConstraintsRef []
+  let _ = setRef methodConstraintPositionsRef []
+  let _ = setRef pendingMethodDicts []
+  let _ = setRef pendingRecDictApps []
+  let _ = setRef currentFn ""
+  let _ = setRef currentImplBody False
+  let _ = setRef currentImplHintRef None
+  let _ = setRef pendingHints []
+  let _ = setRef methodSiteFns []
+  let _ = setRef dictAppFns []
+  let _ = setRef promotedRef []
+  let _ = setRef methodShadowNamesRef []
+  let _ = setRef typeErrors []
+  let _ = setRef occursCheckFailed False
+  setRef currentLevel 0
 
 -- ── small helpers ─────────────────────────────────────────────────────────
 lookupAssocI : Int -> List (Int, b) -> Option b
@@ -2154,10 +2154,10 @@ occursAdjustVar id level cell = match cell.value
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> <Mut> Unit
 occursAdjustUnbound id level cell id2 lvl2
   | id2 == id =
-    let _ = set_ref occursCheckFailed True
+    let _ = setRef occursCheckFailed True
     pushTypeError
       ("Cannot construct infinite type involving " ++ ppMono (TVar cell))
-  | lvl2 > level = set_ref cell (Unbound id2 level)
+  | lvl2 > level = setRef cell (Unbound id2 level)
   | otherwise = ()
 
 occursAdjustList : Int -> Int -> List Mono -> <Mut> Unit
@@ -2192,9 +2192,9 @@ unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
 
 bindVar : Ref Tyvar -> Mono -> <Mut> Unit
 bindVar cell t =
-  let _ = set_ref occursCheckFailed False
+  let _ = setRef occursCheckFailed False
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) t
-  if occursCheckFailed.value then () else set_ref cell (Link t)
+  if occursCheckFailed.value then () else setRef cell (Link t)
 
 unifyList : List Mono -> List Mono -> <Mut> Unit
 unifyList [] [] = ()
@@ -2220,9 +2220,9 @@ typeMismatchInDo a b doLoc
 
 recordDoMonadError : Loc -> <Mut> Unit
 recordDoMonadError doLoc =
-  let _ = set_ref currentDoOrigin None
-  let _ = set_ref typeErrorsSticky True
-  set_ref typeErrors ((doRequiresMonadMsg, Some doLoc) :: typeErrors.value)
+  let _ = setRef currentDoOrigin None
+  let _ = setRef typeErrorsSticky True
+  setRef typeErrors ((doRequiresMonadMsg, Some doLoc) :: typeErrors.value)
 
 monoIsApp : Mono -> Bool
 monoIsApp (TApp _ _) = True
@@ -2275,7 +2275,7 @@ lowerToCurrent t = match normalize t
   TVar cell => match cell.value
     Unbound id lvl =>
       if lvl > currentLevel.value then
-        set_ref cell (Unbound id currentLevel.value)
+        setRef cell (Unbound id currentLevel.value)
       else
         ()
     Link t2 => lowerToCurrent t2
@@ -2395,9 +2395,9 @@ nameOf ctx cnt id = match lookupAssocI id ctx.value
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> <Mut> String
 assignName ctx cnt id =
   let n = cnt.value
-  let _ = set_ref cnt (n + 1)
+  let _ = setRef cnt (n + 1)
   let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  let _ = set_ref ctx ((id, s) :: ctx.value)
+  let _ = setRef ctx ((id, s) :: ctx.value)
   s
 
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> <Mut> String
@@ -2899,15 +2899,15 @@ infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- recorded while inferring the wrapped expr is attributable to this position,
 -- mirror of lib/typecheck.ml's ELoc arm), then infer the inner expr.
 infer env (ELoc l e) =
-  let _ = set_ref currentLoc (Some l)
+  let _ = setRef currentLoc (Some l)
   infer env e
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
 -- error (see typeMismatch); clear it afterwards so sibling code isn't mis-blamed.
 infer env (EDoOrigin l e) =
-  let _ = set_ref currentDoOrigin (Some l)
+  let _ = setRef currentDoOrigin (Some l)
   let t = infer env e
-  let _ = set_ref currentDoOrigin None
+  let _ = setRef currentDoOrigin None
   t
 infer _ _ = panic "typecheck: unsupported expression (slice 1)"
 
@@ -2934,7 +2934,7 @@ inferIndex env arr idx r =
   let _ = unify (infer env idx) (TCon "Int")
   let at = infer env arr
   let nat = normalize at
-  let _ = set_ref r (indexKind nat)
+  let _ = setRef r (indexKind nat)
   inferIndexElem at nat
 
 -- receiver-kind discriminator stamped onto the EIndex/ESlice Ref: lowering routes
@@ -2965,7 +2965,7 @@ inferSlice env arr lo hi r =
   let _ = unify (infer env lo) (TCon "Int")
   let _ = unify (infer env hi) (TCon "Int")
   let at = infer env arr
-  let _ = set_ref r (indexKind (normalize at))
+  let _ = setRef r (indexKind (normalize at))
   at
 
 -- a method occurrence.  Return-position: record (routeRef, result mono) so
@@ -3015,7 +3015,7 @@ recordRLocalSite _ name tagRef inst
   | otherwise = match methodDispatchIdx name
     None => ()
     Some idx => match nthArgMono idx inst
-      Some am => set_ref pendingRLocalSites ((name, tagRef, am) :: pendingRLocalSites.value)
+      Some am => setRef pendingRLocalSites ((name, tagRef, am) :: pendingRLocalSites.value)
       None => ()
 
 -- C5: the dispatch-arg index of an interface method, from the graph-wide map
@@ -3037,7 +3037,7 @@ argDispatchOf name = lookupAssoc name argDispatchIdxRef.value
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> <Mut> Unit
 recordMethodDicts name methodRef subst = match alignedMethodConstraintIds name subst
   None => ()
-  Some ids => set_ref pendingMethodDicts ((methodRef, constraintMonosOf ids subst) :: pendingMethodDicts.value)
+  Some ids => setRef pendingMethodDicts ((methodRef, constraintMonosOf ids subst) :: pendingMethodDicts.value)
 
 -- D2: the constraint-slot ids of method [name] that line up with THIS occurrence's
 -- instantiation [subst].  methodConstraintsRef can hold MULTIPLE entries for one
@@ -3117,8 +3117,8 @@ recordSite name tagRef implRef methodType = recordSiteHinted name tagRef implRef
 recordSiteHinted : String -> Ref Route -> Ref (List Route) -> Mono -> Option String -> <Mut> Mono
 recordSiteHinted name tagRef implRef methodType hint =
   let stripped = stripArrows methodType
-  let _ = set_ref pendingSites ((name, tagRef, implRef, stripped, methodType, currentFn.value, hint) :: pendingSites.value)
-  let _ = set_ref methodSiteFns ((currentFn.value, stripped) :: methodSiteFns.value)
+  let _ = setRef pendingSites ((name, tagRef, implRef, stripped, methodType, currentFn.value, hint) :: pendingSites.value)
+  let _ = setRef methodSiteFns ((currentFn.value, stripped) :: methodSiteFns.value)
   methodType
 
 -- @Impl: read-and-clear the pending impl hint at a method occurrence of [name].
@@ -3133,8 +3133,8 @@ captureImplHint name occ = match currentImplHintRef.value
   Some hintName => match lookupAssoc name methodIfaceParamsRef.value
     None => None   -- not an interface method; leave the hint for the real occurrence
     Some (iface, typarams, mty) =>
-      let _ = set_ref currentImplHintRef None
-      let _ = set_ref pendingHints ((iface, hintName, dispatchMonosOf typarams mty occ, currentLoc.value) :: pendingHints.value)
+      let _ = setRef currentImplHintRef None
+      let _ = setRef pendingHints ((iface, hintName, dispatchMonosOf typarams mty occ, currentLoc.value) :: pendingHints.value)
       Some hintName
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's
@@ -3217,8 +3217,8 @@ inferDictAtFound name routesRef inst =
     let ids = map snd expanded
     let monos = constraintMonosOf ids (snd inst)
     let ifaces = map fst expanded
-    let _ = set_ref pendingDictApps ((routesRef, monos, ifaces) :: pendingDictApps.value)
-    let _ = set_ref dictAppFns ((currentFn.value, monos) :: dictAppFns.value)
+    let _ = setRef pendingDictApps ((routesRef, monos, ifaces) :: pendingDictApps.value)
+    let _ = setRef dictAppFns ((currentFn.value, monos) :: dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
     -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
@@ -3226,7 +3226,7 @@ inferDictAtFound name routesRef inst =
     let _ = recordCallObligations ifaces monos
     fst inst
   else
-    let _ = set_ref pendingRecDictApps (RecDictApp routesRef name currentFn.value (fst inst) :: pendingRecDictApps.value)
+    let _ = setRef pendingRecDictApps (RecDictApp routesRef name currentFn.value (fst inst) :: pendingRecDictApps.value)
     fst inst
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
@@ -3249,7 +3249,7 @@ recordCallObligations _ [] = ()
 recordCallObligations (iface::ifs) (mono::ms)
   | iface == "" = recordCallObligations ifs ms
   | otherwise =
-    let _ = set_ref pendingCallObligations ((iface, mono, currentLoc.value) :: pendingCallObligations.value)
+    let _ = setRef pendingCallObligations ((iface, mono, currentLoc.value) :: pendingCallObligations.value)
     recordCallObligations ifs ms
 
 -- String-keyed assoc lookup over funConstraintIfacesRef (returns the iface name list).
@@ -3304,9 +3304,9 @@ lookupAssocSL2 k ((k2, v)::rest)
 -- it terminate), so `Top` reaches `Base` through `Mid` (chain3b).
 expandSupersTable : List Decl -> <Mut> Unit
 expandSupersTable allDecls =
-  let _ = set_ref funConstraintsRef
+  let _ = setRef funConstraintsRef
             (map (expandSupersEntry allDecls funConstraintIfacesRef.value) funConstraintsRef.value)
-  let _ = set_ref funConstraintIfacesRef
+  let _ = setRef funConstraintIfacesRef
             (map (expandSupersIfaceEntry allDecls) funConstraintIfacesRef.value)
   ()
 
@@ -3748,7 +3748,7 @@ inferBinopE env op l r dref =
 -- in-impl-body sites (a top-level operand may collide with stale activeDictVars ids).
 recordBinopSite : String -> Ref Route -> Mono -> <Mut> Unit
 recordBinopSite op dref m = match binopMethod op
-  Some method => set_ref pendingBinopSites ((method, dref, m, currentImplBody.value, currentFn.value) :: pendingBinopSites.value)
+  Some method => setRef pendingBinopSites ((method, dref, m, currentImplBody.value, currentFn.value) :: pendingBinopSites.value)
   None => ()
 
 binopMethod : String -> Option String
@@ -3813,7 +3813,7 @@ numArithOp lt rt =
 -- constraint on `+`, so gating here keeps the no-prelude drivers byte-identical.
 recordNumObligation : Mono -> <Mut> Unit
 recordNumObligation lt
-  | numIfaceRegistered () = set_ref pendingImplObligations (("Num", ["a"], TyVar "a", lt, currentLoc.value) :: pendingImplObligations.value)
+  | numIfaceRegistered () = setRef pendingImplObligations (("Num", ["a"], TyVar "a", lt, currentLoc.value) :: pendingImplObligations.value)
   | otherwise = ()
 
 -- True iff a `Num` interface is registered (its methods are in methodIfaceParamsRef,
@@ -3839,7 +3839,7 @@ inferNumLit env n fref dref
       let fromIntTy = inferMethodAt env "fromInt" dref (Ref []) (Ref [])
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (TCon "Int") (openRow ()) a)
-      let _ = set_ref numlitRefs ((a, fref, n, dref) :: numlitRefs.value)
+      let _ = setRef numlitRefs ((a, fref, n, dref) :: numlitRefs.value)
       a
   | otherwise = inferNumLitBare n fref
 
@@ -3857,8 +3857,8 @@ inferNumLit env n fref dref
 inferNumLitBare : Int -> Ref (Option Float) -> <Mut> Mono
 inferNumLitBare n fref =
   let a = freshVar ()
-  let _ = set_ref pendingImplObligations (("Num", ["a"], TyVar "a", a, currentLoc.value) :: pendingImplObligations.value)
-  let _ = set_ref numlitRefs ((a, fref, n, Ref RNone) :: numlitRefs.value)
+  let _ = setRef pendingImplObligations (("Num", ["a"], TyVar "a", a, currentLoc.value) :: pendingImplObligations.value)
+  let _ = setRef numlitRefs ((a, fref, n, Ref RNone) :: numlitRefs.value)
   a
 
 compareOp : Mono -> Mono -> <Mut> Mono
@@ -3955,7 +3955,7 @@ recordSchemeCallObligations : List (String, Int) -> List (Int, Mono) -> <Mut> Un
 recordSchemeCallObligations [] _ = ()
 recordSchemeCallObligations ((iface, id)::rest) subst = match lookupAssocI id subst
   Some mono =>
-    let _ = set_ref pendingCallObligations ((iface, mono, currentLoc.value) :: pendingCallObligations.value)
+    let _ = setRef pendingCallObligations ((iface, mono, currentLoc.value) :: pendingCallObligations.value)
     recordSchemeCallObligations rest subst
   None => recordSchemeCallObligations rest subst
 
@@ -3975,7 +3975,7 @@ recordImplObligation : String -> Mono -> <Mut> Mono
 recordImplObligation x mono = match lookupAssoc x methodIfaceParamsRef.value
   None => mono
   Some (iface, typarams, mty) =>
-    let _ = set_ref pendingImplObligations ((iface, typarams, mty, mono, currentLoc.value) :: pendingImplObligations.value)
+    let _ = setRef pendingImplObligations ((iface, typarams, mty, mono, currentLoc.value) :: pendingImplObligations.value)
     mono
 
 -- Expected-type propagation for an application whose argument is a lambda.
@@ -3998,9 +3998,9 @@ inferAppExpr env f x = match hintArgName x
     -- name so the next method occurrence (inferVar / inferMethodAt) records it,
     -- infer `f` with the hint arg DROPPED (it is not a real argument — exactly the
     -- oracle's lib/typecheck.ml:2271-2282), then clear.
-    let _ = set_ref currentImplHintRef (Some hintName)
+    let _ = setRef currentImplHintRef (Some hintName)
     let t = infer env f
-    let _ = set_ref currentImplHintRef None   -- clear if f was not a method call
+    let _ = setRef currentImplHintRef None   -- clear if f was not a method call
     t
   None => match lamUnderLoc x
     Some (loc, pats, body) =>
@@ -4091,14 +4091,14 @@ inferShadowApp env mname tagRefs f x =
 stampRoutes : List (Ref Route) -> <Mut> Unit
 stampRoutes [] = ()
 stampRoutes (r::rest) =
-  let _ = set_ref r RLocal
+  let _ = setRef r RLocal
   stampRoutes rest
 
 -- set currentLoc only when the lambda carried a span (mirror the ELoc arm), so
 -- a bare unlocated lambda doesn't blank out an enclosing position.
 setLocIfSome : Option Loc -> <Mut> Unit
 setLocIfSome None = ()
-setLocIfSome (Some l) = set_ref currentLoc (Some l)
+setLocIfSome (Some l) = setRef currentLoc (Some l)
 
 -- peek through an ELoc wrapper to a lambda; returns its loc, params and body.
 -- Non-lambda arguments (the common case) take the ordinary inference path.
@@ -4131,10 +4131,10 @@ inferLamChecked env expected pats body =
   let pr = inferPats env pats
   let _ = unifyParamsExpected (fst pr) expected
   let saved = curEffect.value
-  let _ = set_ref curEffect (openRow ())
+  let _ = setRef curEffect (openRow ())
   let bodyTy = infer (extendVars env (snd pr)) body
   let bodyEff = curEffect.value
-  let _ = set_ref curEffect saved
+  let _ = setRef curEffect saved
   arrowsWithLastEffect (fst pr) bodyEff bodyTy
 
 -- unify each param type with its expected type, for the prefix both lists cover.
@@ -4161,10 +4161,10 @@ inferLam : TcEnv -> List Pat -> Expr -> <Mut> Mono
 inferLam env pats body =
   let pr = inferPats env pats
   let saved = curEffect.value
-  let _ = set_ref curEffect (openRow ())
+  let _ = setRef curEffect (openRow ())
   let bodyTy = infer (extendVars env (snd pr)) body
   let bodyEff = curEffect.value
-  let _ = set_ref curEffect saved
+  let _ = setRef curEffect saved
   arrowsWithLastEffect (fst pr) bodyEff bodyTy
 
 inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> <Mut> Mono
@@ -4322,8 +4322,8 @@ checkMatchExhaustive : Mono -> List Arm -> <Mut> Unit
 checkMatchExhaustive scrutTy arms =
   let rows = nonGuardedRows arms
   if useful matchOracle.value (matchCol0Type scrutTy) rows [PWild] then
-    let _ = set_ref matchWarnings (nonExhaustiveMatchWarning :: matchWarnings.value)
-    set_ref matchWarningLocs (currentLoc.value :: matchWarningLocs.value)
+    let _ = setRef matchWarnings (nonExhaustiveMatchWarning :: matchWarnings.value)
+    setRef matchWarningLocs (currentLoc.value :: matchWarningLocs.value)
   else ()
 
 -- one single-column matrix row per non-guarded arm (its desugared pattern)
@@ -4398,7 +4398,7 @@ registerRecordInfoKeyed key typeName params fields =
   let tvs = zipL params paramVars
   let result = applyParams (TCon typeName) paramVars
   let fieldMonos = map (recFieldMono tvs) fields
-  set_ref
+  setRef
     recordsRef
     ((key, RecordInfo (map monoTyvarId paramVars) result fieldMonos) :: recordsRef.value)
 
@@ -4423,7 +4423,7 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 registerVariants : TcEnv -> String -> List String -> List Variant -> <Mut> TcEnv
 registerVariants env name params variants =
   let kinds = inferParamKinds params variants
-  let _ = set_ref dataParamKindsRef ((name, kinds) :: dataParamKindsRef.value)
+  let _ = setRef dataParamKindsRef ((name, kinds) :: dataParamKindsRef.value)
   let paramReprs = mintParamReprs kinds
   let tvs = ktypeTvs params kinds paramReprs
   let etbl = krowEtbl params kinds paramReprs
@@ -4775,7 +4775,7 @@ registerDispatchMonos _ [] _ _ _ _ = ()
 registerDispatchMonos iface (dm::rest) loc groupLevel memberIds anchoredIds =
   let ambig = filterList (p => snd p <= groupLevel && not (containsI (fst p) memberIds) && not (containsI (fst p) anchoredIds)) (monoUnboundVarLevels dm)
   let _ = if isEmptyL ambig then ()
-    else set_ref pendingCallObligations ((iface, dm, loc) :: pendingCallObligations.value)
+    else setRef pendingCallObligations ((iface, dm, loc) :: pendingCallObligations.value)
   registerDispatchMonos iface rest loc groupLevel memberIds anchoredIds
 
 -- the (id, level) of every UNBOUND tyvar in [t] (sibling of monoUnboundIds, but
@@ -4905,12 +4905,12 @@ elaborateOne runtimeDecls coreDecls (rootId, prog) =
 export
 elaborateDict : List Decl -> List String -> List String -> List Decl -> <Mut> List Decl
 elaborateDict runtimeDecls dictNames eligibleNames prog =
-  let _ = set_ref superDeclsRef prog
-  let _ = set_ref dictEligibleRef eligibleNames
-  let _ = set_ref dictEligibleSetRef (namesToSet eligibleNames OTip)
-  let _ = set_ref implInferEnabled True
+  let _ = setRef superDeclsRef prog
+  let _ = setRef dictEligibleRef eligibleNames
+  let _ = setRef dictEligibleSetRef (namesToSet eligibleNames OTip)
+  let _ = setRef implInferEnabled True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
-  let _ = set_ref argDispatchIdxRef (argDispatchIndices prog)
+  let _ = setRef argDispatchIdxRef (argDispatchIndices prog)
   let argNames = map fst argDispatchIdxRef.value
   let prog2 = prePassDictArg (returnPosMethodNames prog ++ methodConstraintNames prog) allNames argNames prog
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog2
@@ -4980,10 +4980,10 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let snapshotE = fst expandedPair
   let snapshotIfacesE = snd expandedPair
   let _ = resetState ()
-  let _ = set_ref typeErrorsSticky savedSticky
-  let _ = set_ref typeErrors savedErrors
-  let _ = set_ref crossModuleFunConstraintsRef snapshotE
-  let _ = set_ref crossModuleFunConstraintIfacesRef snapshotIfacesE
+  let _ = setRef typeErrorsSticky savedSticky
+  let _ = setRef typeErrors savedErrors
+  let _ = setRef crossModuleFunConstraintsRef snapshotE
+  let _ = setRef crossModuleFunConstraintIfacesRef snapshotIfacesE
   promoted
 -- DRIVER-COLLAPSE Phase 2: discovery is a SCRATCH joint typecheck (see below); its
 -- type-error side effects must NOT leak into the STICKY accumulator that gates the
@@ -5532,16 +5532,16 @@ resolveSites implTable keyTable rpNames ((name, tagRef, implRef, resultMono, ful
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
 resolveSite : List ImplEntry -> List KeyEntry -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option String -> <Mut> Unit
 resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl hint = match activeDictVarOfEncl resultMono encl
-  Some dname => set_ref tagRef (if contains name rpNames then RDictFwd dname else RDict dname)
+  Some dname => setRef tagRef (if contains name rpNames then RDictFwd dname else RDict dname)
   None => match headTyconMono resultMono
     Some tag =>
       -- @Impl: a named hint overrides keyForSite's head-tag/most-specific pick with
       -- the matching NAMED impl key (`Combine|Int|Additive`).  No matching named
       -- impl → keyForSite's ordinary key (resolveImplHints reports UnknownImplName).
       let routeKey = fromOption (fromOption tag (keyForSite keyTable name resultMono)) (namedImplKey keyTable name tag hint)
-      let _ = set_ref tagRef (RKey routeKey [])
+      let _ = setRef tagRef (RKey routeKey [])
       let paramMonos = fromOption [resultMono] (ifaceParamMonos name fullMono)
-      set_ref
+      setRef
         implRef
         (implDictRoutesForFull implTable name tag resultMono paramMonos)
     None => ()
@@ -5625,7 +5625,7 @@ resolveRLocalSite keyTable name tagRef am
   -- receiver's head has an impl of the interface (`eq [1] [2]` → the user's `eq`,
   -- NOT the `Eq (List a)` impl).  This overrides resolveArgStamps' RKey<head> stamp,
   -- bringing the eval path into agreement with the emit path + the oracle (run==build).
-  | contains name definerShadowNamesRef.value = set_ref tagRef RLocal
+  | contains name definerShadowNamesRef.value = setRef tagRef RLocal
   | otherwise = match headTyconMono am
     Some tag => stampRLocalOrFallback (implExistsForHead keyTable name tag) tagRef
     None => ()
@@ -5635,7 +5635,7 @@ resolveRLocalSite keyTable name tagRef am
 -- no impl ⇒ standalone shadow ⇒ RLocal.
 stampRLocalOrFallback : Bool -> Ref Route -> <Mut> Unit
 stampRLocalOrFallback True _ = ()
-stampRLocalOrFallback False tagRef = set_ref tagRef RLocal
+stampRLocalOrFallback False tagRef = setRef tagRef RLocal
 
 -- if [m] normalizes to a registered constraint variable, the dict parameter name
 -- a method at that type reads.  A return-position method at a HIGHER-KINDED
@@ -5739,7 +5739,7 @@ resolveBinopSites implTable keyTable ((method, tagRef, operandMono, inImpl, encl
 resolveBinopSite : List ImplEntry -> List KeyEntry -> String -> Ref Route -> Mono -> Bool -> String -> <Mut> Unit
 resolveBinopSite implTable keyTable method tagRef operandMono inImpl encl =
   match if inImpl then activeDictVarOf operandMono else enclDictVarOf operandMono encl
-    Some dname => set_ref tagRef (RDict dname)
+    Some dname => setRef tagRef (RDict dname)
     None => match headTyconMono operandMono
       Some tag => stampBinopRoute implTable keyTable method tagRef operandMono tag
       None => ()
@@ -5772,7 +5772,7 @@ stampBinopRoute implTable keyTable method tagRef operandMono tag
     let key = fromOption tag (keyForSite keyTable method operandMono)
     let dictMethod = if implDefinesMethodAt implTable method tag then method else innerDefaultMethod method
     let reqs = argImplDictRoutesFor implTable dictMethod tag operandMono
-    set_ref tagRef (RKey key reqs)
+    setRef tagRef (RKey key reqs)
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
 -- (resolveArgStamps runs on both paths); emitter applies them; eval's methodAtNarrow
@@ -5888,7 +5888,7 @@ cohGoR _ _ _ = False
 -- bind id := m in the wildcard subst and return True
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> <Mut> Bool
 cohBind subst id m =
-  let _ = set_ref subst ((id, m) :: subst.value)
+  let _ = setRef subst ((id, m) :: subst.value)
   True
 
 -- subsumes ~general ~specific: is [specific] an instance of [general]?  Only the
@@ -6132,11 +6132,11 @@ ifaceDfsCycle : List Decl -> Ref (List String) -> List String -> String -> <Mut>
 ifaceDfsCycle allDecls done path current =
   match ifaceSupersOf allDecls current
     None =>
-      let _ = set_ref done (current :: done.value)
+      let _ = setRef done (current :: done.value)
       []
     Some (_, supers) =>
       let msgs = ifaceDfsCycleSupers allDecls done path supers
-      let _ = set_ref done (current :: done.value)
+      let _ = setRef done (current :: done.value)
       msgs
 
 ifaceDfsCycleSupers : List Decl -> Ref (List String) -> List String -> List Super -> <Mut> List String
@@ -6300,7 +6300,7 @@ coherenceUserDecls = Ref []
 -- exported so the single-file front-end drivers set the user boundary before check
 export
 setCoherenceUserDecls : List Decl -> <Mut> Unit
-setCoherenceUserDecls ds = set_ref coherenceUserDecls ds
+setCoherenceUserDecls ds = setRef coherenceUserDecls ds
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- One parametric impl that carries a `requires`: its head tag (the tycon eval
@@ -6717,7 +6717,7 @@ resolveDictApps : List Decl -> List ImplEntry -> List (Ref (List Route), List Mo
 resolveDictApps _ _ [] = ()
 resolveDictApps prog implTable ((routesRef, monos, ifaces)::rest) =
   let routes = routesOfMonosTop prog implTable monos ifaces
-  let _ = set_ref routesRef routes
+  let _ = setRef routesRef routes
   resolveDictApps prog implTable rest
 
 
@@ -6935,7 +6935,7 @@ argReqRoute implTable encl subst (arg::_) =
 resolveMethodDicts : List ImplEntry -> List (Ref (List Route), List Mono) -> <Mut> Unit
 resolveMethodDicts _ [] = ()
 resolveMethodDicts implTable ((methodRef, monos)::rest) =
-  let _ = set_ref methodRef (routesOfMonos implTable monos)
+  let _ = setRef methodRef (routesOfMonos implTable monos)
   resolveMethodDicts implTable rest
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -6948,7 +6948,7 @@ realizeRecDictApps [] = ()
 realizeRecDictApps ((RecDictApp routesRef callee encl mono)::rest) =
   let ids = fromOption [] (lookupAssocSL2 callee funConstraintsRef.value)
   let routes = recRoutes encl mono ids
-  let _ = set_ref routesRef routes
+  let _ = setRef routesRef routes
   realizeRecDictApps rest
 
 recRoutes : String -> Mono -> List Int -> <Mut> List Route
@@ -7394,7 +7394,7 @@ tupleHeadTagTc n = "__tuple" ++ intToString n ++ "__"
 export
 checkProgramSchemes : List Decl -> <Mut> List (String, Scheme)
 checkProgramSchemes prog =
-  let _ = set_ref implInferEnabled False
+  let _ = setRef implInferEnabled False
   checkProgramSeeded [] prog
 
 -- Like checkProgramSchemes but ALSO seeds runtime.mdk's externs (putStrLn,
@@ -7406,7 +7406,7 @@ checkProgramSchemes prog =
 export
 checkProgramSchemesWithRuntime : List Decl -> List Decl -> <Mut> List (String, Scheme)
 checkProgramSchemesWithRuntime runtimeDecls prog =
-  let _ = set_ref implInferEnabled False
+  let _ = setRef implInferEnabled False
   checkProgramSeeded (externSchemes runtimeDecls) prog
 
 -- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
@@ -7429,7 +7429,7 @@ checkProgramSeeded seed prog =
   -- prelude binding like `neq x y = not (eq x y)` resolves `eq` to the METHOD, not
   -- the user's `eq`).  See methodShadowNamesRef.  Empty on the multi-module path.
   let methodNames = map fst (ifaceMethodSchemes prog)
-  let _ = set_ref methodShadowNamesRef methodNames
+  let _ = setRef methodShadowNamesRef methodNames
   let topSchemes = processTopGroups env1 sigs defs (groupNames defs OTip)
   -- FLAT-PATH SHADOW FIX (cont.): when a USER top-level fn shares a name with an
   -- interface method (e.g. user `eq : List Int -> List Int -> Bool` vs core's
@@ -7451,8 +7451,8 @@ checkProgramSeeded seed prog =
   let _ = checkCallObligations prog pendingCallObligations.value
   let _ = resolveImplHints prog pendingHints.value
   let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals
-  let _ = set_ref localSchemesOut (mapLocalSchemes localBindRefs.value)
-  let _ = set_ref seedSchemesOut seed
+  let _ = setRef localSchemesOut (mapLocalSchemes localBindRefs.value)
+  let _ = setRef seedSchemesOut seed
   globalS ++ topSchemes
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
@@ -7502,7 +7502,7 @@ inferPropBodies : TcEnv -> List Decl -> <Mut> Unit
 inferPropBodies env prog =
   let savedBinop = pendingBinopSites.value
   let _ = inferPropBodiesGo env prog
-  set_ref pendingBinopSites savedBinop
+  setRef pendingBinopSites savedBinop
 
 inferPropBodiesGo : TcEnv -> List Decl -> <Mut> Unit
 inferPropBodiesGo _ [] = ()
@@ -7597,7 +7597,7 @@ inferDefaultMethod : TcEnv -> List String -> IfaceMethod -> <Mut> Unit
 inferDefaultMethod env typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
   let st = sigToSchemeTvs mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
-  let _ = set_ref currentFn ""
+  let _ = setRef currentFn ""
   let inst = instantiateTracked (fst st)
   let _ = inferDefaultMethodBody mname env (fst inst) pats body
   -- register AFTER body inference, so each constraint var's id in [snd inst] is
@@ -7633,12 +7633,12 @@ inferDefaultMethodBody mname env expectedTy pats body =
   if errsAfter != errsBefore then ()
   else
     let errsPreUnify = listLen typeErrors.value
-    let _ = set_ref currentMethodMismatch (Some mname)
+    let _ = setRef currentMethodMismatch (Some mname)
     let _ = unify expectedTy actualTy
-    let _ = set_ref currentMethodMismatch None
+    let _ = setRef currentMethodMismatch None
     -- mismatch reported ⇒ restore the pre-body obligation list (drop the body's
     -- own added `Num <wrong-type>` cascade, prepended at the front)
-    if listLen typeErrors.value != errsPreUnify then set_ref pendingImplObligations oblSnapshot else ()
+    if listLen typeErrors.value != errsPreUnify then setRef pendingImplObligations oblSnapshot else ()
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
 -- Mirror lib/typecheck.ml's check_method_usages (the `No impl of … for …` reject,
@@ -7739,9 +7739,9 @@ setNumlitFloatsGo [] = ()
 setNumlitFloatsGo ((var, fref, n, dref)::rest) =
   let _ = match normalize var
     TCon "Float" =>
-      let _ = set_ref fref (Some (intToFloat n))
-      set_ref dref RNone
-    TCon "Int" => set_ref dref RNone
+      let _ = setRef fref (Some (intToFloat n))
+      setRef dref RNone
+    TCon "Int" => setRef dref RNone
     _ => ()
   setNumlitFloatsGo rest
 
@@ -7988,7 +7988,7 @@ registerOneMethodDict mname slot id subst = match lookupAssocI id subst
   None => ()
   Some m => match normalize m
     TVar cell =>
-      set_ref activeDictVars ((tyvarId cell, dictParamName mname slot) :: activeDictVars.value)
+      setRef activeDictVars ((tyvarId cell, dictParamName mname slot) :: activeDictVars.value)
     _ => ()
 
 -- infer each impl-with-`requires`' return-position method bodies; the interface
@@ -8050,8 +8050,8 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- encl = mname, activeDictVarOfEncl/argImplDictRoutesForEncl prefer THIS method's
     -- own `$dict_<mname>_<slot>`.  Pre-specialization each Ord impl defined only
     -- compare so there was no collision; universal default specialization exposes it.
-    let _ = set_ref currentFn mname
-    let _ = set_ref currentImplBody True
+    let _ = setRef currentFn mname
+    let _ = setRef currentImplBody True
     -- build the method type's tv map explicitly (instead of expectedMethodType,
     -- which hides it) so the impl method's OWN method-level constraint vars
     -- (`Thenable m => …`) can be registered into activeDictVars below.
@@ -8072,8 +8072,8 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the route, so register the var → dict-param mapping here (AFTER body inference,
     -- so each var is its surviving union-find root, mirroring registerMethodDictSlots).
     let _ = registerImplMethodDicts mname ifaceParams mty extraMap
-    let _ = set_ref currentImplBody False
-    set_ref currentFn ""
+    let _ = setRef currentImplBody False
+    setRef currentFn ""
 -- G4: mark binop sites recorded while inferring this impl body so resolveBinopSite
 -- routes their element dict (RDict) — and ONLY theirs, not top-level operators.
 
@@ -8099,7 +8099,7 @@ registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> <M
 registerImplMethodDictOne mname slot vname tvMap = match lookupAssoc vname tvMap
   None => ()
   Some m => match normalize m
-    TVar cell => set_ref activeDictVars ((tyvarId cell, dictParamName mname slot) :: activeDictVars.value)
+    TVar cell => setRef activeDictVars ((tyvarId cell, dictParamName mname slot) :: activeDictVars.value)
     _ => ()
 
 -- the non-interface-param dispatch var name of each method-level constraint, in
@@ -8186,7 +8186,7 @@ registerReqSlots mname implTvMap slot ((Require _ rargs)::rest) =
 registerEachActive : List Int -> String -> <Mut> Unit
 registerEachActive [] _ = ()
 registerEachActive (id::rest) dname =
-  let _ = set_ref activeDictVars ((id, dname) :: activeDictVars.value)
+  let _ = setRef activeDictVars ((id, dname) :: activeDictVars.value)
   registerEachActive rest dname
 
 -- the tyvar ids in a (normalized) mono — single var for a bare constraint arg
@@ -8237,7 +8237,7 @@ registerMethodIfaceParamsDecl _ = ()
 registerMethodIfaceParamsMethods : String -> List String -> List IfaceMethod -> <Mut> Unit
 registerMethodIfaceParamsMethods _ _ [] = ()
 registerMethodIfaceParamsMethods iface typarams ((IfaceMethod mname mty _)::rest) =
-  let _ = set_ref methodIfaceParamsRef ((mname, (iface, typarams, mty)) :: methodIfaceParamsRef.value)
+  let _ = setRef methodIfaceParamsRef ((mname, (iface, typarams, mty)) :: methodIfaceParamsRef.value)
   registerMethodIfaceParamsMethods iface typarams rest
 
 -- build each method's scheme AND register its method-level constraints (foldMap's
@@ -8267,8 +8267,8 @@ registerMethodConstraints typarams mname mty tvs fullIds =
   let ids = methodConstraintSlotIds typarams mty tvs
   if isEmptyL ids || hasAssocSL2 mname methodConstraintsRef.value then ()
   else
-    let _ = set_ref methodConstraintsRef ((mname, ids) :: methodConstraintsRef.value)
-    set_ref methodConstraintPositionsRef ((mname, map (id => indexOfInt id fullIds) ids) :: methodConstraintPositionsRef.value)
+    let _ = setRef methodConstraintsRef ((mname, ids) :: methodConstraintsRef.value)
+    setRef methodConstraintPositionsRef ((mname, map (id => indexOfInt id fullIds) ids) :: methodConstraintPositionsRef.value)
 
 -- index of [x] in [xs] (0-based; -1 if absent — absent shouldn't happen, slot ids
 -- are always quantified ids of the same scheme).
@@ -8463,12 +8463,12 @@ tjOnStack x = fromOption False (omLookup x tjOn.value)
 
 tarjanSCCs : List String -> OrdMap (List String) -> <Mut> List (List String)
 tarjanSCCs names adj =
-  let _ = set_ref tjCounter 0
-  let _ = set_ref tjStack []
-  let _ = set_ref tjIndex OTip
-  let _ = set_ref tjLow OTip
-  let _ = set_ref tjOn OTip
-  let _ = set_ref tjOut []
+  let _ = setRef tjCounter 0
+  let _ = setRef tjStack []
+  let _ = setRef tjIndex OTip
+  let _ = setRef tjLow OTip
+  let _ = setRef tjOn OTip
+  let _ = setRef tjOut []
   let _ = tarjanAll names adj
   reverseL tjOut.value
 
@@ -8486,11 +8486,11 @@ tjVisit v adj = match omLookup v tjIndex.value
 strongconnect : String -> OrdMap (List String) -> <Mut> Unit
 strongconnect v adj =
   let idx = tjCounter.value
-  let _ = set_ref tjIndex (omInsert v idx tjIndex.value)
-  let _ = set_ref tjLow (omInsert v idx tjLow.value)
-  let _ = set_ref tjCounter (idx + 1)
-  let _ = set_ref tjStack (v :: tjStack.value)
-  let _ = set_ref tjOn (omInsert v True tjOn.value)
+  let _ = setRef tjIndex (omInsert v idx tjIndex.value)
+  let _ = setRef tjLow (omInsert v idx tjLow.value)
+  let _ = setRef tjCounter (idx + 1)
+  let _ = setRef tjStack (v :: tjStack.value)
+  let _ = setRef tjOn (omInsert v True tjOn.value)
   let _ = scEdges v (fromOption [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v [] else ()
 
@@ -8504,20 +8504,20 @@ scEdge : String -> String -> OrdMap (List String) -> <Mut> Unit
 scEdge v w adj = match omLookup w tjIndex.value
   None =>
     let _ = strongconnect w adj
-    set_ref tjLow (omInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value)
+    setRef tjLow (omInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value)
   Some iw =>
     if tjOnStack w then
-      set_ref tjLow (omInsert v (minI (tjLowOf v) iw) tjLow.value)
+      setRef tjLow (omInsert v (minI (tjLowOf v) iw) tjLow.value)
     else
       ()
 
 tjPop : String -> List String -> <Mut> Unit
 tjPop v acc = match tjStack.value
-  [] => set_ref tjOut (acc :: tjOut.value)
+  [] => setRef tjOut (acc :: tjOut.value)
   w::rest =>
-    let _ = set_ref tjStack rest
-    let _ = set_ref tjOn (omInsert w False tjOn.value)
-    if w == v then set_ref tjOut ((w :: acc) :: tjOut.value) else tjPop v (w :: acc)
+    let _ = setRef tjStack rest
+    let _ = setRef tjOn (omInsert w False tjOn.value)
+    if w == v then setRef tjOut ((w :: acc) :: tjOut.value) else tjPop v (w :: acc)
 
 -- sig-name presence set (which top-level names carry a type signature), set once
 -- per module in `processTopGroups` so `memberPeelSource`/`memberSigIsFun` do an
@@ -8533,7 +8533,7 @@ sigNamesToSet ((n, _)::rest) m = sigNamesToSet rest (omInsert n () m)
 
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> <Mut> List (String, Scheme)
 processTopGroups env sigs defs names =
-  let _ = set_ref sigNameSetRef (sigNamesToSet sigs OTip)
+  let _ = setRef sigNameSetRef (sigNamesToSet sigs OTip)
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   processSCCs env sigs grouped ordered
@@ -8718,8 +8718,8 @@ registerMember _ [] = ()
 registerMember m ifaceMonos =
   let ids = registerMemberSlots m 0 (map snd ifaceMonos)
   let keptIfaces = keptConstraintIfaces ifaceMonos
-  let _ = set_ref funConstraintsRef ((m, ids) :: funConstraintsRef.value)
-  set_ref funConstraintIfacesRef ((m, keptIfaces) :: funConstraintIfacesRef.value)
+  let _ = setRef funConstraintsRef ((m, ids) :: funConstraintsRef.value)
+  setRef funConstraintIfacesRef ((m, keptIfaces) :: funConstraintIfacesRef.value)
 
 -- the iface names of the constraints registerMemberSlots KEEPS (mono still a TVar),
 -- in the same slot order — parallel to registerMember's id list.
@@ -8737,7 +8737,7 @@ registerMemberSlots _ _ [] = []
 registerMemberSlots m kept (mono::rest) = match normalize mono
   TVar cell =>
     let id = tyvarId cell
-    let _ = set_ref activeDictVars ((id, dictParamName m kept) :: activeDictVars.value)
+    let _ = setRef activeDictVars ((id, dictParamName m kept) :: activeDictVars.value)
     id :: registerMemberSlots m (kept + 1) rest
   _ => registerMemberSlots m kept rest
 
@@ -8754,10 +8754,10 @@ registerMemberSlots m kept (mono::rest) = match normalize mono
 inferMembers : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> List (String, Mono) -> <Mut> Unit
 inferMembers _ _ _ [] = ()
 inferMembers env sigs grouped ((m, v)::rest) =
-  let _ = set_ref currentFn m
+  let _ = setRef currentFn m
   let peel = memberPeelSource sigs m v
   let effs = inferMemberClauses env peel v (clausesOf m grouped)
-  let _ = set_ref currentFn ""
+  let _ = setRef currentFn ""
   let _ = checkEffectEscape sigs m effs
   inferMembers env sigs grouped rest
 
@@ -8807,10 +8807,10 @@ inferClauseEff env peel (pats, body) =
   let pr = inferPats env pats
   let _ = peelOntoParams peel (fst pr) pats
   let saved = curEffect.value
-  let _ = set_ref curEffect (openRow ())
+  let _ = setRef curEffect (openRow ())
   let bodyTy = infer (extendVars env (snd pr)) body
   let bodyEff = curEffect.value
-  let _ = set_ref curEffect saved
+  let _ = setRef curEffect saved
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, effrowLabels bodyEff)
 
 -- Phase 73 peel: for a signed clause with params, zip-unify the peeled sig
@@ -8996,7 +8996,7 @@ registerSchemeObligations : List (String, List String, Ty, Mono, Option Loc) -> 
 registerSchemeObligations _ [] = ()
 registerSchemeObligations addedObls ((m, sch)::rest) =
   let obs = schemeObligationsOf (schemeIds sch) addedObls
-  let _ = if isEmptyL obs then () else set_ref schemeObligationsRef ((m, obs) :: schemeObligationsRef.value)
+  let _ = if isEmptyL obs then () else setRef schemeObligationsRef ((m, obs) :: schemeObligationsRef.value)
   registerSchemeObligations addedObls rest
 
 -- the (iface, var-id) pairs of the obligations whose discriminating mono is one of
@@ -9057,10 +9057,10 @@ boundTvarId boundIds mono = match normalize mono
 registerInferredFor : String -> List Int -> <Mut> Unit
 registerInferredFor _ [] = ()
 registerInferredFor m ids =
-  let _ = set_ref funConstraintsRef ((m, ids) :: funConstraintsRef.value)
-  let _ = set_ref funConstraintIfacesRef ((m, map ifaceForConstraintId ids) :: funConstraintIfacesRef.value)
+  let _ = setRef funConstraintsRef ((m, ids) :: funConstraintsRef.value)
+  let _ = setRef funConstraintIfacesRef ((m, map ifaceForConstraintId ids) :: funConstraintIfacesRef.value)
   let _ = registerActiveDictVars m 0 ids
-  set_ref promotedRef (m :: promotedRef.value)
+  setRef promotedRef (m :: promotedRef.value)
 
 -- recover the interface name of an INFERRED constraint var (unsignatured fn like
 -- `f x = x + 1`): the var was recorded in a pendingImplObligation by the method
@@ -9082,7 +9082,7 @@ ifaceForConstraintIdGo id ((iface, _, _, occ, _)::rest) = match normalize occ
 registerActiveDictVars : String -> Int -> List Int -> <Mut> Unit
 registerActiveDictVars _ _ [] = ()
 registerActiveDictVars m slot (id::rest) =
-  let _ = set_ref activeDictVars ((id, dictParamName m slot) :: activeDictVars.value)
+  let _ = setRef activeDictVars ((id, dictParamName m slot) :: activeDictVars.value)
   registerActiveDictVars m (slot + 1) rest
 
 -- Render accumulated type errors as `TYPE ERROR: <msg>` lines (in order of
@@ -9111,9 +9111,9 @@ checkToLines prog =
 export
 checkToLinesWithRuntime : List Decl -> List Decl -> <Mut> String
 checkToLinesWithRuntime runtimeDecls prog =
-  let _ = set_ref implInferEnabled False
-  let _ = set_ref matchWarnings []
-  let _ = set_ref matchOracle (buildOracle prog)
+  let _ = setRef implInferEnabled False
+  let _ = setRef matchWarnings []
+  let _ = setRef matchOracle (buildOracle prog)
   let schemes = checkProgramSeeded (externSchemes runtimeDecls) prog
   let _ = checkCoherence coherenceUserDecls.value
   let _ = checkInterfaceCycles prog
@@ -9140,9 +9140,9 @@ checkToLinesWithRuntime runtimeDecls prog =
 export
 checkErrorsWithRuntime : List Decl -> List Decl -> <Mut> Bool
 checkErrorsWithRuntime runtimeDecls prog =
-  let _ = set_ref implInferEnabled False
-  let _ = set_ref matchWarnings []
-  let _ = set_ref matchOracle (buildOracle prog)
+  let _ = setRef implInferEnabled False
+  let _ = setRef matchWarnings []
+  let _ = setRef matchOracle (buildOracle prog)
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog
   let _ = checkCoherence coherenceUserDecls.value
   let _ = checkInterfaceCycles prog
@@ -9162,8 +9162,8 @@ checkErrorsWithRuntime runtimeDecls prog =
 export
 checkMatchToLines : List Decl -> List Decl -> <Mut> String
 checkMatchToLines runtimeDecls prog =
-  let _ = set_ref matchWarnings []
-  let _ = set_ref matchOracle (buildOracle prog)
+  let _ = setRef matchWarnings []
+  let _ = setRef matchOracle (buildOracle prog)
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog
   joinNl (reverseL matchWarnings.value)
 
@@ -9175,10 +9175,10 @@ checkMatchToLines runtimeDecls prog =
 export
 checkProgramDiags : List Decl -> List Decl -> <Mut> (List (String, Option Loc), List (String, Option Loc))
 checkProgramDiags runtimeDecls prog =
-  let _ = set_ref implInferEnabled False
-  let _ = set_ref matchWarnings []
-  let _ = set_ref matchWarningLocs []
-  let _ = set_ref matchOracle (buildOracle prog)
+  let _ = setRef implInferEnabled False
+  let _ = setRef matchWarnings []
+  let _ = setRef matchWarningLocs []
+  let _ = setRef matchOracle (buildOracle prog)
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog
   let _ = checkCoherence coherenceUserDecls.value
   let _ = checkInterfaceCycles prog
@@ -9218,8 +9218,8 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   let _ = resetState ()
   let importerShadows = buildStandaloneShadows implDecls prog
   let definerShadows = buildDefinerShadows implDecls prog
-  let _ = set_ref standaloneValuesRef (dedup (importerShadows ++ definerShadows))
-  let _ = set_ref definerShadowNamesRef definerShadows
+  let _ = setRef standaloneValuesRef (dedup (importerShadows ++ definerShadows))
+  let _ = setRef definerShadowNamesRef definerShadows
   -- Bug C: stash each importer shadow's IMPORTED STANDALONE scheme (e.g. `toList` →
   -- `Map k v -> List (k, v)`) BEFORE env1 rebinds the name to the interface-method
   -- scheme, so inferAppExpr can recover the standalone result type for a no-impl
@@ -9228,15 +9228,15 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   -- domain) has a CONCRETE head tycon (the standalone), never the polymorphic method
   -- scheme (which would unify `t a ~ Map String Int` → `a ↦ Int`, giving the wrong
   -- `List Int` result element type).
-  let _ = set_ref shadowStandaloneSchemesRef (pickStandaloneSchemes importerShadows seedVars)
-  let _ = set_ref shadowKeyTableRef (buildKeyTable implDecls)
-  let _ = set_ref methodDispatchIdxRef (argDispatchIndices implDecls)
-  let _ = set_ref funConstraintsRef crossModuleFunConstraintsRef.value
-  let _ = set_ref funConstraintIfacesRef crossModuleFunConstraintIfacesRef.value
+  let _ = setRef shadowStandaloneSchemesRef (pickStandaloneSchemes importerShadows seedVars)
+  let _ = setRef shadowKeyTableRef (buildKeyTable implDecls)
+  let _ = setRef methodDispatchIdxRef (argDispatchIndices implDecls)
+  let _ = setRef funConstraintsRef crossModuleFunConstraintsRef.value
+  let _ = setRef funConstraintIfacesRef crossModuleFunConstraintIfacesRef.value
   -- WS-2/D2: map THIS module's imported value names to their import-source module id,
   -- so inferDictAtFound can route a cross-module constrained callee's dict arity by
   -- module identity (the qual tables) rather than the collision-prone bare first-match.
-  let _ = set_ref currentImportDefinersRef (importDefinersOf prog)
+  let _ = setRef currentImportDefinersRef (importDefinersOf prog)
   -- #11 soundness: register the interface method→iface-param map over the FULL
   -- visible universe (accData carries core's + earlier modules' PUBLIC interfaces,
   -- implDecls the emit-path impl universe, prog this module).  The check path passes
@@ -9248,7 +9248,7 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   let dataEnv = registerAllData initialEnv (accData ++ prog)
   let globalS = ifaceMethodSchemes prog ++ externSchemes prog
   let shadowMethodSchemes = pickSchemes importerShadows (ifaceMethodSchemes implDecls)
-  let _ = set_ref methodConstraintsRef (methodConstraintsRef.value ++ crossModuleMethodConstraintsRef.value)
+  let _ = setRef methodConstraintsRef (methodConstraintsRef.value ++ crossModuleMethodConstraintsRef.value)
   let env1 = extendVars (extendVars (extendVars dataEnv seedVars) globalS) shadowMethodSchemes
   let defs = funDefs prog
   let sigs = sigsOf prog
@@ -9262,30 +9262,30 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   -- seed, dictArityOf (define side), and elabModuleStamp's route resolution (call side)
   -- — sees identical expanded entries.  superDeclsRef carries the in-scope interfaces.
   let _ = expandSupersTable superDeclsRef.value
-  let _ = set_ref crossModuleFunConstraintsRef funConstraintsRef.value
+  let _ = setRef crossModuleFunConstraintsRef funConstraintsRef.value
   -- WS-2/D2: attribute THIS module's constrained-fn arities to mid in the qualified
   -- mirror.  Every fn DEFINED in [prog] that carries an entry in the (now this-module-
   -- accumulated) funConstraintsRef is owned by [mid]; record ((mid,name),ids) so the
   -- final scopeAritiesQual keeps only the in-scope module's arity (dissolves the
   -- bare-name cross-module collision).  PREPEND so the per-module-current entry wins
   -- the first-match if a name recurs across the graph.
-  let _ = set_ref crossModuleFunConstraintsQualRef
+  let _ = setRef crossModuleFunConstraintsQualRef
             (attributeModuleArities mid prog funConstraintsRef.value ++ crossModuleFunConstraintsQualRef.value)
   -- WS-2/D2: the slot-parallel ifaces analog of the qual arity snapshot above, keyed by
   -- the same (mid,name), so inferDictAtFound reads a cross-module callee's ids AND ifaces
   -- from one definer-aligned source.  funConstraintIfacesRef here is this module's
   -- super-EXPANDED ifaces (expandSupersTable ran above), matching the expanded ids.
-  let _ = set_ref crossModuleFunConstraintIfacesQualRef
+  let _ = setRef crossModuleFunConstraintIfacesQualRef
             (attributeModuleArrIfaces mid prog funConstraintIfacesRef.value ++ crossModuleFunConstraintIfacesQualRef.value)
-  let _ = set_ref crossModuleFunConstraintIfacesRef funConstraintIfacesRef.value
-  let _ = set_ref crossModuleMethodConstraintsRef methodConstraintsRef.value
+  let _ = setRef crossModuleFunConstraintIfacesRef funConstraintIfacesRef.value
+  let _ = setRef crossModuleMethodConstraintsRef methodConstraintsRef.value
   -- WS-2/D2 (method analog of the qual snapshot above): attribute each method whose
   -- INTERFACE is declared in [prog] to [mid], so scopeMethodArities can keep only the
   -- in-scope module's arity for a bare method name shared across modules.  PREPEND so
   -- the per-module-current entry wins first-match.  The prog-filter is essential: an
   -- IMPORTING module's methodConstraintsRef carries the cross seed (line above), so
   -- without it the method would be re-attributed to every importer's mid → false twins.
-  let _ = set_ref crossModuleMethodConstraintsQualRef
+  let _ = setRef crossModuleMethodConstraintsQualRef
             (attributeMethodModuleArities mid prog methodConstraintsRef.value ++ crossModuleMethodConstraintsQualRef.value)
   let _ = groundMultiParamObligations implDecls pendingImplObligations.value
   -- #11 soundness: on the TYPECHECK path (implInferEnabled OFF — `medaka check`,
@@ -9307,8 +9307,8 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   -- side-channels, mirroring checkProgramSeeded.  The entry module is checked
   -- LAST in the multi-module path, so the channels end holding ITS values, which
   -- is what project-aware hover reads (imported names live in seedVars).
-  let _ = set_ref localSchemesOut (mapLocalSchemes localBindRefs.value)
-  let _ = set_ref seedSchemesOut seedVars
+  let _ = setRef localSchemesOut (mapLocalSchemes localBindRefs.value)
+  let _ = setRef seedSchemesOut seedVars
   globalS ++ topSchemes
 -- C5: compute this module's standalone-shadow set BEFORE inference, so the
 -- inferMethodAt arg-position record can gate on it (resetState cleared it via
@@ -9691,9 +9691,9 @@ checkModules runtimeDecls coreDecls modules =
 export
 checkModuleFullDiags : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
 checkModuleFullDiags seedVars accData accAll prog =
-  let _ = set_ref implInferEnabled False
-  let _ = set_ref matchWarnings []
-  let _ = set_ref matchOracle (buildOracle (accData ++ prog))
+  let _ = setRef implInferEnabled False
+  let _ = setRef matchWarnings []
+  let _ = setRef matchOracle (buildOracle (accData ++ prog))
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `toList`
@@ -9891,21 +9891,21 @@ elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (
 -- elaborateModules), so their goldens are unaffected; the emit-path diff gates run
 -- with emitArgStampPasses True, where impl inference was already ON — also unchanged.
 elaborateModules runtimeDecls coreDecls modules =
-  let _ = set_ref implInferEnabled True
-  let _ = set_ref mainSchemeRef None
-  let _ = set_ref crossModuleFunConstraintsRef []
-  let _ = set_ref crossModuleFunConstraintsQualRef []
-  let _ = set_ref crossModuleFunConstraintIfacesQualRef []
-  let _ = set_ref crossModuleMethodConstraintsRef []
-  let _ = set_ref crossModuleMethodConstraintsQualRef []
+  let _ = setRef implInferEnabled True
+  let _ = setRef mainSchemeRef None
+  let _ = setRef crossModuleFunConstraintsRef []
+  let _ = setRef crossModuleFunConstraintsQualRef []
+  let _ = setRef crossModuleFunConstraintIfacesQualRef []
+  let _ = setRef crossModuleMethodConstraintsRef []
+  let _ = setRef crossModuleMethodConstraintsQualRef []
   let allDecls = coreDecls ++ flatMap snd modules
-  let _ = set_ref superDeclsRef allDecls   -- WS-1b: interfaces in scope for the discovery scratch typecheck
-  let _ = set_ref userIfaceNamesRef (collectIfaceNames (flatMap snd modules))   -- WS-1b: gate super-expansion to user interfaces
+  let _ = setRef superDeclsRef allDecls   -- WS-1b: interfaces in scope for the discovery scratch typecheck
+  let _ = setRef userIfaceNamesRef (collectIfaceNames (flatMap snd modules))   -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
-  let _ = set_ref argDispatchIdxRef (argDispatchIndices allDecls)
+  let _ = setRef argDispatchIdxRef (argDispatchIndices allDecls)
   let argNames = map fst argDispatchIdxRef.value
-  let _ = set_ref dictEligibleRef (moduleUserFnNames modules)
-  let _ = set_ref dictEligibleSetRef (namesToSet (moduleUserFnNames modules) OTip)
+  let _ = setRef dictEligibleRef (moduleUserFnNames modules)
+  let _ = setRef dictEligibleSetRef (namesToSet (moduleUserFnNames modules) OTip)
   let promoted = discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames
   let dictNames = dedup (moduleDictNames coreDecls allDecls modules ++ promoted)
   let markRpNames = dedup (rpNames ++ methodConstraintNames allDecls ++ buildStandaloneShadowsGraph allDecls (flatMap snd modules))
@@ -10019,8 +10019,8 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   let allModDecls = flatMap snd modules2
   let promotedQ = crossModuleFunConstraintsQualRef.value
   let allMods = namesToSet (map fst modules2) OTip
-  let _ = set_ref funConstraintsRef (scopeArities promotedQ allMods (core2 ++ allModDecls))
-  let _ = set_ref methodConstraintsRef (scopeMethodArities crossModuleMethodConstraintsQualRef.value allMods)
+  let _ = setRef funConstraintsRef (scopeArities promotedQ allMods (core2 ++ allModDecls))
+  let _ = setRef methodConstraintsRef (scopeMethodArities crossModuleMethodConstraintsQualRef.value allMods)
   let core2' = dictPass dictNames core2
   let modules2' = dictPassModulesScoped dictNames promotedQ core2 modules2 modules2
   (core2', modules2')
@@ -10045,8 +10045,8 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog)::rest) =
   let importerDecls = transitiveImporterDecls mid allModules
   let scope = core2 ++ prog ++ importerDecls
   let scopeMods = namesToSet (mid :: transitiveImporterIds mid allModules) OTip
-  let _ = set_ref funConstraintsRef (scopeArities promotedQ scopeMods scope)
-  let _ = set_ref methodConstraintsRef (scopeMethodArities crossModuleMethodConstraintsQualRef.value scopeMods)
+  let _ = setRef funConstraintsRef (scopeArities promotedQ scopeMods scope)
+  let _ = setRef methodConstraintsRef (scopeMethodArities crossModuleMethodConstraintsQualRef.value scopeMods)
   (mid, dictPass dictNames prog) :: dictPassModulesScoped dictNames promotedQ core2 allModules rest
 
 -- the arity table for a scope: every `=>`-constrained signature in [scope]
@@ -10235,7 +10235,7 @@ moduleDictNames coreDecls allDecls modules =
 seedDictAritiesFromSigs : List Decl -> <Mut> Unit
 seedDictAritiesFromSigs decls =
   let entries = flatMap constrainedSigArity decls
-  set_ref funConstraintsRef (entries ++ funConstraintsRef.value)
+  setRef funConstraintsRef (entries ++ funConstraintsRef.value)
 
 constrainedSigArity : Decl -> List (String, List Int)
 constrainedSigArity (DTypeSig _ n ty)
@@ -10288,7 +10288,7 @@ markModules coreDecls modules =
 -- is also still bound, so a tyvar receiver routes RDict.
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> List (String, Scheme)
 elabModuleStamp mid seedVars accData implDecls prog =
-  let _ = set_ref superDeclsRef implDecls   -- WS-1b: interfaces in scope for super expansion
+  let _ = setRef superDeclsRef implDecls   -- WS-1b: interfaces in scope for super expansion
   let schemes = checkModuleFullImpl mid seedVars accData implDecls prog
   let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals (per module, before dictPass)
   let stampImplTable = buildImplTable implDecls
@@ -10356,7 +10356,7 @@ elabModulesGo baseSeed depEnv accData accAll ((mid, prog)::rest) =
   let seed = baseSeed ++ importSeed prog depEnv
   let schemes = elabModuleStamp mid seed accData (accAll ++ prog) prog
   let _ = match lookupAssoc "main" schemes
-    Some s => set_ref mainSchemeRef (Some s)
+    Some s => setRef mainSchemeRef (Some s)
     None => ()
   let pubV = pickSchemes (publicValNames prog) schemes ++ reexportSeed prog depEnv
   elabModulesGo

@@ -397,7 +397,7 @@ runPlugin : String -> String -> List Decl -> List Decl -> List Decl -> <Mut> Str
 runPlugin fnName rtD coreD userD =
   let stubD = desugar (parse stubSource)
   let prelude = coreD ++ stubD
-  let _ = set_ref outputRef ""
+  let _ = setRef outputRef ""
   let rootEnv = evalModulesRootEnv prelude [("__plugin__", userD)]
   match lookupValue fnName rootEnv
     None => "   (no '" ++ fnName ++ "' binding in output)\n"

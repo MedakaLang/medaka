@@ -1,6 +1,6 @@
--- slice 5a: mutable ref — create, read (.value), write (set_ref).
+-- slice 5a: mutable ref — create, read (.value), write (setRef).
 main =
   let r = Ref 0
-  let _ = set_ref r (r.value + 1)
-  let _ = set_ref r (r.value + 1)
+  let _ = setRef r (r.value + 1)
+  let _ = setRef r (r.value + 1)
   r.value

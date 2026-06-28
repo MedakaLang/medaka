@@ -403,7 +403,7 @@ IDENT "backing"
 DOT
 IDENT "value"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "len"
 LPAREN
 IDENT "len"
@@ -461,11 +461,11 @@ IDENT "newArr"
 INT 0
 IDENT "oldLen"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "backing"
 IDENT "newArr"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "len"
 LPAREN
 IDENT "oldLen"
@@ -528,7 +528,7 @@ IDENT "backing"
 DOT
 IDENT "value"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "len"
 IDENT "i"
 NEWLINE
@@ -668,7 +668,7 @@ UNDERSCORE
 IDENT "len"
 RPAREN
 EQUAL
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "len"
 INT 0
 NEWLINE

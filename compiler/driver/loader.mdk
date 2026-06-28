@@ -577,7 +577,7 @@ parseCachedLocated cacheRef src = match lookupAssoc src cacheRef.value
   Some decls => decls
   None =>
     let decls = parseLocated src
-    let _ = set_ref cacheRef (takeFirst parseCacheLimit ((src, decls) :: dropKey src cacheRef.value))
+    let _ = setRef cacheRef (takeFirst parseCacheLimit ((src, decls) :: dropKey src cacheRef.value))
     decls
 
 -- drop any existing entry with this key (so a re-parse refreshes its position).

@@ -133,8 +133,8 @@ locOffsRef = Ref (arrayFromList [])
 
 setLocState : String -> Array (Int, Int) -> <Mut> Unit
 setLocState src offs =
-  let _ = set_ref locSrcRef src
-  set_ref locOffsRef offs
+  let _ = setRef locSrcRef src
+  setRef locOffsRef offs
 
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
@@ -3103,7 +3103,7 @@ parse src =
 
 -- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
 -- (src + token offsets) so the ELoc wrappers carry REAL line/col, then parses.
--- Separate from `parse` (which stays pure / placeholder-loc) because `set_ref`
+-- Separate from `parse` (which stays pure / placeholder-loc) because `setRef`
 -- is <Mut> and `parse` is called from pure contexts across the pipeline; the
 -- token stream is byte-identical (`tokenizeWithOffsets` vs `tokenize`).
 export

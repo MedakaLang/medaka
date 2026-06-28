@@ -655,7 +655,7 @@ IDENT "arr"
 RPAREN
 IDENT "arr"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "count"
 LPAREN
 IDENT "count"
@@ -790,11 +790,11 @@ RPAREN
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "buckets"
 IDENT "newArr"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "count"
 INT 0
 NEWLINE
@@ -1041,7 +1041,7 @@ IDENT "arr"
 RPAREN
 IDENT "arr"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "count"
 LPAREN
 IDENT "count"
@@ -1275,7 +1275,7 @@ RPAREN
 RPAREN
 IDENT "arr"
 NEWLINE
-IDENT "set_ref"
+IDENT "setRef"
 IDENT "count"
 LPAREN
 IDENT "count"

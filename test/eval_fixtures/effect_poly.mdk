@@ -10,7 +10,7 @@ runTwice : (a -> <e> a) -> a -> <e> a
 runTwice f x = f (f x)
 
 bump r u =
-  let _ = set_ref r (r.value + 1)
+  let _ = setRef r (r.value + 1)
   r.value
 
 square x = x * x

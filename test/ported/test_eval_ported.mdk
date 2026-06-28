@@ -371,7 +371,7 @@ test "do custom Thenable" = expectEqual 2 doCustomUnwrap
 
 refResult =
   let mut count = Ref 0
-  set_ref count 42
+  setRef count 42
   count.value
 test "ref set and read" = expectEqual 42 refResult
 

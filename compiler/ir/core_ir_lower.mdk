@@ -444,7 +444,7 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgram : List Decl -> <Mut> CProgram
 lowerProgram prog =
-  let _ = set_ref ctorFieldOrdersRef (buildCtorFieldOrders prog)
+  let _ = setRef ctorFieldOrdersRef (buildCtorFieldOrders prog)
   CProgram
     (lowerGroups prog)
     (ctorArities prog)

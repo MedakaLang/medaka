@@ -62,14 +62,14 @@ preludeNamesRef = Ref []
 export
 initSession : List Decl -> List Decl -> <Mut> Unit
 initSession runtimeDecls preludeDecls =
-  let _ = set_ref runtimeDeclsRef runtimeDecls
-  let _ = set_ref preludeDeclsRef preludeDecls
+  let _ = setRef runtimeDeclsRef runtimeDecls
+  let _ = setRef preludeDeclsRef preludeDecls
   let prelSchemes = checkProgramSchemes preludeDecls
   let prelNames = map fst prelSchemes
-  let _ = set_ref preludeNamesRef prelNames
-  let _ = set_ref knownNamesRef prelNames
-  let _ = set_ref accumulatedRef []
-  set_ref userBindingsRef []
+  let _ = setRef preludeNamesRef prelNames
+  let _ = setRef knownNamesRef prelNames
+  let _ = setRef accumulatedRef []
+  setRef userBindingsRef []
 
 -- ── Input classification ──────────────────────────────────────────────────
 isDeclStartToken : Token -> Bool
@@ -267,10 +267,10 @@ processDeclInput src =
       let typeAnns = declTypeAnnotations newDecls
       let _ = mapIO_ printTypeAnn typeAnns
       let newNames = map fst newSchemes ++ map snd typeAnns
-      let _ = set_ref accumulatedRef (accumulatedRef.value ++ newDecls)
-      let _ = set_ref knownNamesRef (known ++ newNames)
+      let _ = setRef accumulatedRef (accumulatedRef.value ++ newDecls)
+      let _ = setRef knownNamesRef (known ++ newNames)
       let newUserBindings = mapMut schemeToBinding newSchemes
-      set_ref userBindingsRef (userBindingsRef.value ++ newUserBindings)
+      setRef userBindingsRef (userBindingsRef.value ++ newUserBindings)
 
 printNewScheme : (String, Scheme) -> <IO, Mut> Unit
 printNewScheme (n, s) = putStrLn ("val " ++ n ++ " : " ++ ppScheme s)
@@ -345,9 +345,9 @@ insertSorted (k, v) ((k2, v2)::rest)
 -- ── Process :reset command ────────────────────────────────────────────────
 processReset : Unit -> <IO, Mut> Unit
 processReset _ =
-  let _ = set_ref accumulatedRef []
-  let _ = set_ref userBindingsRef []
-  let _ = set_ref knownNamesRef preludeNamesRef.value
+  let _ = setRef accumulatedRef []
+  let _ = setRef userBindingsRef []
+  let _ = setRef knownNamesRef preludeNamesRef.value
   putStrLn "Session reset."
 
 -- ── Meta-command dispatch ─────────────────────────────────────────────────

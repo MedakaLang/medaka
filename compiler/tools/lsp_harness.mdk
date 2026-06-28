@@ -482,7 +482,7 @@ check : String -> Bool -> <IO, Mut> Unit
 check name ok =
   if ok then println (stringConcat ["PASS ", name])
   else
-    let _ = set_ref failCount (failCount.value + 1)
+    let _ = setRef failCount (failCount.value + 1)
     println (stringConcat ["FAIL ", name])
 
 -- Print the run summary; (passed, failed) counts derived from `total`.

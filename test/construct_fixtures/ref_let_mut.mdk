@@ -1,5 +1,5 @@
 main : <IO, Mut> Unit
 main =
   let mut r = Ref 0
-  set_ref r 42
+  setRef r 42
   println (debug r.value)

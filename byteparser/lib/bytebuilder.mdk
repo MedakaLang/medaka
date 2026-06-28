@@ -31,7 +31,7 @@ newBuilder _ = Builder (Ref [])
 -- | Emit one byte (masked to low 8 bits).
 export
 emitU8 : Int -> Builder -> <Mut> Unit
-emitU8 b (Builder r) = set_ref r (bitAnd b 255 :: r.value)
+emitU8 b (Builder r) = setRef r (bitAnd b 255 :: r.value)
 
 -- | Emit a big-endian 2-byte unsigned integer.
 --   Inverse of `beUint 2`.
