@@ -1,0 +1,16 @@
+# integrity_check
+ok
+# schema
+table|t|2
+# page layout
+pages=5 interior=1 leaves=3 rootpage_type=5
+# count
+700
+# first 3 rows
+1|item_1
+2|item_2
+3|item_3
+# last 3 rows
+698|item_698
+699|item_699
+700|item_700
