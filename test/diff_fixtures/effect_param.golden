@@ -333,6 +333,6 @@ traverse : (a -> b c) -> d a -> b (d c)
 unless : Bool -> a Unit -> a Unit
 when : Bool -> a Unit -> a Unit
 xor : Bool -> Bool -> Bool
-yld : Async <IO | a> Unit
+yld : Async a Unit
 === EVAL ===
 effect param ok
