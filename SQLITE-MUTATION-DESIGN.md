@@ -309,3 +309,15 @@ Mirror the existing `sqlite/test/*_oracle.sh` pattern (e.g.
 3. **UPDATE** — `update : path -> table -> List Assign -> Expr Bool -> Result Int` (map matching rows applying literal Assigns). **Sonnet.** Gate: `sqlite3` oracle.
 
 Each stage independently `sqlite3`-verified + merged before the next. No compiler changes expected (pure-library); if a stage surfaces a compiler run≠build bug, STOP + report (soak win).
+
+---
+
+## AS-BUILT (shipped 2026-06-30, main `a0fb00d`)
+
+All 3 stages landed as designed (full rowid-faithful, read-transform-rewrite), each `sqlite3`-CLI gated + merged; pure-library (no seed/fixpoint). No compiler bug surfaced.
+
+- **Stage 1 — rowid-faithful writer (`d8cebbd`):** additive explicit-rowid path in `dbwriter.mdk`/`writer.mdk` — `writeTablesExplicit`/`buildDatabaseMultiExplicit`/`encodeRowsExplicit` over `List (Int, List Cell)`; IPK + auto paths byte-identical. Gate: a non-IPK rowid GAP (1,3,4) now survives a round-trip (was collapsing to 1,2,3). `rowid_roundtrip_oracle.sh`.
+- **Stage 2 — DELETE + refusal guard (`a76ed3a`):** new `sqlite/lib/mutate.mdk` `delete : String -> String -> Expr Bool -> Result Int`. `refuseIfUnsupported` returns a clean `Err` for any secondary index (silently dropped + `integrity_check` still ok → the guard is the only protection) or WITHOUT-ROWID table. Reuses `select.compilePred` for WHERE; rewrites via the explicit-rowid writer preserving survivors' rowids. `delete_oracle.sh` + `delete_negative_oracle.sh`.
+- **Stage 3 — UPDATE (`a0fb00d`):** `update : String -> String -> List Assign -> Expr Bool -> Result Int` (`Assign = Assign String Literal`, literals only). Maps matching rows; refuses SET on the IPK column (`"cannot UPDATE the INTEGER PRIMARY KEY column"`). All rowids preserved. `update_oracle.sh`.
+
+**Residuals (deferred, inherited from the write path):** in-place mutation (current is read-rewrite-all); indexes (refused, not maintained); WITHOUT-ROWID; SET expressions (literals only); the write path's own limits (overflow pages, multi-interior trees, full balancing, durability/WAL).
