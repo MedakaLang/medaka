@@ -1,0 +1,74 @@
+-- Rowid-faithful round-trip probe (stage 1 of SQLite row-mutation).
+--
+-- Usage: medaka build sqlite/rowid_roundtrip_demo.mdk
+--        ./rowid_roundtrip_demo <in.db> <out.db>
+--
+-- Reads EVERY user table of `in.db` via the read path (capturing each row's
+-- ORIGINAL rowid via `rowRowid`), then rewrites the whole file with the new
+-- explicit-rowid writer path (`buildDatabaseMultiExplicit`), reusing each
+-- table's stored CREATE text + IPK column index.  This is the read→rewrite-all
+-- mutation pipeline with the transform = identity, so it proves rowid
+-- faithfulness: a non-IPK table with a rowid GAP (e.g. 1,3,4) must survive the
+-- round-trip with the gap intact (the OLD auto-rowid writer collapsed it to
+-- 1,2,3).
+--
+-- This deliberately drives the LOW-LEVEL `buildDatabaseMultiExplicit` so it
+-- reuses the original `schemaSql` (byte-identical CREATE text) — exactly what
+-- the eventual `lib/mutate.mdk` will do.
+
+import lib.sqlite.{
+  Db,
+  openDb,
+  readSchema,
+  scanTableRowsIpk,
+  schemaSql,
+  schemaName,
+  schemaType,
+  SchemaEntry,
+  pkColumnIndex,
+  rowCellsWithIpk,
+}
+import lib.btree.{Row, rowRowid}
+import lib.dbwriter.{buildDatabaseMultiExplicit}
+import lib.recordfmt.{Cell}
+import list.{reverse}
+
+-- One low-level explicit-rowid spec: (name, createSql, ipkColIdx, rows).
+-- `rows` are (rowid, cells) in rowid-ascending order.
+specOf : Db -> SchemaEntry -> Result String (String, String, Option Int, List (Int, List Cell))
+specOf db entry = do
+  let name = schemaName entry
+  (pkIdx, rows) <- scanTableRowsIpk db name
+  let explicitRows = map (r => (rowRowid r, rowCellsWithIpk pkIdx r)) rows
+  Ok (name, schemaSql entry, pkIdx, explicitRows)
+
+-- Build an explicit-rowid spec for every `type='table'` schema entry.
+specsOf : Db -> List SchemaEntry -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
+specsOf _  []           acc = Ok (reverse acc)
+specsOf db (e::rest)    acc =
+  if schemaType e == "table"
+  then do
+    spec <- specOf db e
+    specsOf db rest (spec :: acc)
+  else specsOf db rest acc
+
+roundtrip : String -> String -> <IO, FileRead, FileWrite, Mut> Unit
+roundtrip inPath outPath = match openDb inPath
+  Err e  => println "Error opening \{inPath}: \{e}"
+  Ok db  => match readSchema db
+    Err e     => println "Error reading schema: \{e}"
+    Ok schema => match specsOf db schema []
+      Err e    => println "Error scanning tables: \{e}"
+      Ok specs => writeOut outPath specs
+
+writeOut : String -> List (String, String, Option Int, List (Int, List Cell)) -> <IO, FileWrite, Mut> Unit
+writeOut outPath specs = match buildDatabaseMultiExplicit specs
+  Err e   => println "Error building: \{e}"
+  Ok img  => match writeFileBytes outPath img
+    Err e => println "Error writing \{outPath}: \{e}"
+    Ok _  => println "wrote \{outPath}"
+
+main : <IO, FileRead, FileWrite, Mut> Unit
+main = match args ()
+  [inPath, outPath] => roundtrip inPath outPath
+  _ => println "usage: rowid_roundtrip_demo <in.db> <out.db>"

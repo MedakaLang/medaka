@@ -364,6 +364,22 @@ encodeRows ipk autoRowid (row::rest)  acc = do
   pair <- encodeRow ipk autoRowid row
   encodeRows ipk (autoRowid + 1) rest (pair::acc)
 
+-- Encode every user row using an EXPLICIT rowid supplied per row (instead of
+-- auto-incrementing 1..N).  Each input is `(rowid, cells)`.
+--   * For an IPK table the explicit rowid is IGNORED — `encodeRow`/`rowidFor`
+--     still take the rowid from the IPK column value, so the emitted bytes are
+--     byte-identical to the auto path for IPK tables.
+--   * For a non-IPK table the supplied rowid is used VERBATIM as the cell key,
+--     so a read→rewrite preserves the original rowids (gaps included) instead of
+--     renumbering survivors to 1..N.
+-- Rows must still be supplied in rowid-ascending order (the writer's existing
+-- single/multi-leaf + interior-key machinery assumes ascending rowids).
+encodeRowsExplicit : Option Int -> List (Int, List Cell) -> List (Int, Array Int) -> <Mut> Result String (List (Int, Array Int))
+encodeRowsExplicit _   []                 acc = Ok (reverse acc)
+encodeRowsExplicit ipk ((rid, row)::rest) acc = do
+  pair <- encodeRow ipk rid row
+  encodeRowsExplicit ipk rest (pair::acc)
+
 -- ---------------------------------------------------------------------------
 -- sqlite_master row (page 1)
 -- ---------------------------------------------------------------------------
@@ -510,6 +526,45 @@ planTables ((name, sql, ipk, rows)::rest)  acc = do
   dataPairs <- encodeRows ipk 1 rows []
   batches   <- packLeaves dataPairs [] [] 0
   planTables rest ((name, sql, batches) :: acc)
+
+-- ---------------------------------------------------------------------------
+-- Explicit-rowid multi-table build (rowid-faithful rewrite)
+-- ---------------------------------------------------------------------------
+--
+-- Identical page-allocation + b-tree machinery to `buildDatabaseMulti`, but
+-- each table's rows carry an EXPLICIT rowid (`List (Int, List Cell)`).  Used by
+-- the read→transform→rewrite mutation path so non-IPK tables keep their
+-- original rowids (gaps included) instead of being renumbered 1..N.  IPK tables
+-- are byte-identical to the auto path (the explicit rowid is ignored — the
+-- rowid is still the IPK column value).
+
+-- | Build the byte image of a single-table SQLite database with explicit
+--   per-row rowids (`(rowid, cells)`).  See `buildDatabase`.
+export
+buildDatabaseExplicit : String -> String -> Int -> Option Int -> List (Int, List Cell) -> <Mut> Result String (Array Int)
+buildDatabaseExplicit name createSql colCount ipkColIdx rows =
+  buildDatabaseMultiExplicit [(name, createSql, ipkColIdx, rows)]
+
+-- | Like `buildDatabaseMulti` but every table's rows carry an explicit rowid.
+export
+buildDatabaseMultiExplicit : List (String, String, Option Int, List (Int, List Cell)) -> <Mut> Result String (Array Int)
+buildDatabaseMultiExplicit specs = do
+  plans <- planTablesExplicit specs []
+  (masterCellList, tablePages) <- buildAllTables plans 2 1 [] []
+  page1 <- mapErr (e => "sqlite_master overflow: \{e}") (buildLeafPage fileHeaderSize masterCellList)
+  let fileHdr = buildFileHeader (totalPageCount plans 1)
+  let _ = blit fileHdr 0 page1 0 fileHeaderSize
+  Ok (concatPageList (page1::tablePages))
+
+-- Encode each table's rows using their explicit rowids and partition them into
+-- leaf batches.  Mirrors `planTables` (which assigns 1..N), differing only in
+-- the rowid source.
+planTablesExplicit : List (String, String, Option Int, List (Int, List Cell)) -> List (String, String, List (List (Int, Array Int))) -> <Mut> Result String (List (String, String, List (List (Int, Array Int))))
+planTablesExplicit []                              acc = Ok (reverse acc)
+planTablesExplicit ((name, sql, ipk, rows)::rest)  acc = do
+  dataPairs <- encodeRowsExplicit ipk rows []
+  batches   <- packLeaves dataPairs [] [] 0
+  planTablesExplicit rest ((name, sql, batches) :: acc)
 
 -- Walk the plans assigning each a contiguous page range from `base` upward;
 -- build its pages (rooted at `base`) and its sqlite_master record (rowid `rid`,

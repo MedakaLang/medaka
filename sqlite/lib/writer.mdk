@@ -22,7 +22,7 @@
 -- emitter if no CRecord literal for that type appears locally.  We use pattern
 -- destructuring throughout to stay emitter-compatible.
 
-import lib.dbwriter.{buildDatabase, writeDatabase, buildDatabaseMulti}
+import lib.dbwriter.{buildDatabase, writeDatabase, buildDatabaseMulti, buildDatabaseMultiExplicit}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob}
 import string.{join}
 import list.{findIndex, reverse}
@@ -210,4 +210,56 @@ export
 writeTables : String -> List (TableSchema, List (List Cell)) -> <FileWrite, Mut> Result String Unit
 writeTables path tables = do
   img <- buildTables tables
+  writeFileBytes path img
+
+-- ---------------------------------------------------------------------------
+-- Explicit-rowid multi-table write API (rowid-faithful rewrite)
+-- ---------------------------------------------------------------------------
+--
+-- Same as `buildTables`/`writeTables`, but each table's rows carry an EXPLICIT
+-- rowid (`(rowid, cells)`).  This is what a read→transform→rewrite mutation
+-- uses to preserve the ORIGINAL rowids of a non-IPK table (gaps included)
+-- instead of renumbering survivors to 1..N.  For an IPK table the explicit
+-- rowid is ignored (the rowid is the IPK column value), so IPK output stays
+-- byte-identical to the auto-rowid path.  Rows must be in rowid-ascending order.
+
+-- | Validate that every explicit-rowid row has exactly `expected` cells.
+validateRowsExplicit : Int -> List (Int, List Cell) -> Result String Unit
+validateRowsExplicit _        []                = Ok ()
+validateRowsExplicit expected ((_, r)::rest) =
+  let got = length r
+  if got == expected
+  then validateRowsExplicit expected rest
+  else Err "row has \{intToString got} cells, expected \{intToString expected}"
+
+-- | Convert one explicit-rowid `(schema, rows)` entry into the low-level
+-- dbwriter spec, validating row width and deriving CREATE text + IPK index.
+tableSpecExplicit : (TableSchema, List (Int, List Cell)) -> Result String (String, String, Option Int, List (Int, List Cell))
+tableSpecExplicit (schema, rows) =
+  match schema
+    TableSchema { schemaTableName = name, columns } => do
+      let colCount = length columns
+      _ <- validateRowsExplicit colCount rows
+      let sql = createTableSql schema
+      let ipk = schemaIpkIndex schema
+      Ok (name, sql, ipk, rows)
+
+collectSpecsExplicit : List (TableSchema, List (Int, List Cell)) -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
+collectSpecsExplicit []        acc = Ok (reverse acc)
+collectSpecsExplicit (t::rest) acc = do
+  spec <- tableSpecExplicit t
+  collectSpecsExplicit rest (spec :: acc)
+
+-- | Build the byte image of a multi-table database from explicit-rowid entries.
+export
+buildTablesExplicit : List (TableSchema, List (Int, List Cell)) -> <Mut> Result String (Array Int)
+buildTablesExplicit tables = do
+  specs <- collectSpecsExplicit tables []
+  buildDatabaseMultiExplicit specs
+
+-- | Build an explicit-rowid multi-table database and `writeFileBytes` it.
+export
+writeTablesExplicit : String -> List (TableSchema, List (Int, List Cell)) -> <FileWrite, Mut> Result String Unit
+writeTablesExplicit path tables = do
+  img <- buildTablesExplicit tables
   writeFileBytes path img
