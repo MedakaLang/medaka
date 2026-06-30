@@ -396,7 +396,10 @@ fmtOne mode file = match readFile file
     let formatted = formatSource src
     match mode
       FmtStdout => putStr formatted
-      FmtCheck => ()
+      FmtCheck => if formatted == src then ()
+      else
+        let _ = ePutStrLn (file ++ ": not formatted")
+        exit 1
       FmtWrite => if formatted == src then ()
       else
         match writeFile file formatted

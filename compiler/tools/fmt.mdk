@@ -24,8 +24,8 @@
 -- explicit `FmtState pieces cs vlines cursor started` and the output pieces are
 -- accumulated reversed, then concatenated once at the end.
 
-import frontend.ast.{DataVis(..), Variant(..), Decl(..)}
-import tools.printer.{render, printDecl, printDataDeclCommented, Doc}
+import frontend.ast.{DataVis(..), Variant(..), ConPayload(..), Decl(..)}
+import tools.printer.{render, printDecl, printDataDeclCommented, printNamedFieldData, Doc}
 import frontend.lexer.{Comment, commentLine, commentText, collectComments}
 import frontend.parser.{
   parseWithPositions,
@@ -221,6 +221,28 @@ isDataDeclF (DData _ _ _ _ _) = True
 isDataDeclF (DAttrib _ inner) = isDataDeclF inner
 isDataDeclF _ = False
 
+-- A single-variant record-style data decl (`data X = X { f : T, ... }`).  Its
+-- per-field trailing comments cannot be carried by the per-VARIANT vcommentsFor
+-- machinery (one variant, many field comments), and the flat one-line render
+-- gives them no line to attach to — so when such a decl carries field comments
+-- we render it one-field-per-line (printNamedFieldData) and route the comments
+-- through the generic interior splice instead (see stepDecl).  Only the bare
+-- (non-attribute-wrapped) shape, to avoid dropping `@attr` annotations.
+isSingleNamedFieldData : Decl -> Bool
+isSingleNamedFieldData (DData _ _ _ [Variant _ (ConNamed _)] _) = True
+isSingleNamedFieldData _ = False
+
+-- Render a single-variant named-field data decl one-field-per-line, consuming its
+-- one variant line (to keep vlines aligned, exactly as declDoc's DData arm does).
+renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started) (DData vis n params variants derives) =
+  match takeNVariantLines vlines 1
+    (vlinesRest, _) => (
+      render (printNamedFieldData vis n params variants derives),
+      FmtState pieces cs vlinesRest cursor started,
+    )
+renderNamedFieldMulti st decl = declDoc st decl
+
 -- Splice interior comments into the rendered decl string by output-line index.
 -- Returns (newDeclStr, consumedComments) — consumed ones are removed from the
 -- pending stream; any whose index fell out of range are NOT consumed.
@@ -272,12 +294,19 @@ stepDecl st decl dp =
   match st1
     FmtState pieces1 cs1 vlines1 cursor1 started1 =>
       let pieces2 = blankLineIfNeeded pieces1 line cursor1 started1
-      match declDoc (FmtState pieces2 cs1 vlines1 cursor1 started1) decl
+      -- A single-variant named-field data decl that carries field comments is
+      -- rendered one-field-per-line and routed through the generic interior
+      -- splice (the per-variant vcommentsFor path cannot attach per-field
+      -- comments).  Other data decls keep the vcommentsFor path.
+      let nfMulti = isSingleNamedFieldData decl && not (isEmptyL (filterList (isInterior line endLine) cs1))
+      let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1
+      match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
         (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>
           -- DData has its own interior-comment machinery (vcommentsFor); leave
-          -- its comments to that path.  Every other decl interleaves inner-block
-          -- trailing comments inline.
-          let interior = if isDataDeclF decl then [] else filterList (isInterior line endLine) cs3
+          -- its comments to that path.  Every other decl (and a commented
+          -- named-field data decl, nfMulti) interleaves inner-block trailing
+          -- comments inline.
+          let interior = if isDataDeclF decl && not nfMulti then [] else filterList (isInterior line endLine) cs3
           match spliceInterior declStr0 line interior
             (declStr, consumed) =>
               let cs3b = dropConsumed cs3 consumed

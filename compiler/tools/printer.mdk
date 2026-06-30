@@ -257,6 +257,19 @@ printLit (LChar c) = text ("'" ++ escapeCharLit c ++ "'")
 printLit (LBool b) = text (if b then "True" else "False")
 printLit LUnit = text "()"
 
+-- A negative numeric literal renders starting with `-`.  In argument position
+-- (after an app head) such an arg must be parenthesized: when fmt wraps a wide
+-- application across lines, a bare `-1` at the start of a continuation line is
+-- re-lexed as the infix `-` operator (subtraction), corrupting the parse.  Used
+-- by exprPrec to give negative literals unary precedence so the printExpr
+-- precedence guard parenthesizes them in postfix/app position.
+isNegLit : Lit -> Bool
+isNegLit (LInt n) = n < 0
+isNegLit (LFloat f) =
+  let s = floatToString f
+  stringLength s > 0 && stringSlice 0 1 s == "-"
+isNegLit _ = False
+
 -- ── Types ─────────────────────────────────────────
 
 printType : Ty -> Doc
@@ -450,8 +463,8 @@ binopSpace : String -> Expr -> Expr -> Doc
 binopSpace op l r = if consTight op l r then Nil else text " "
 
 exprPrec : Expr -> Int
-exprPrec (ELit _) = precAtom
-exprPrec (ENumLit _ _ _) = precAtom
+exprPrec (ELit l) = if isNegLit l then precUnary else precAtom
+exprPrec (ENumLit n _ _) = if n < 0 then precUnary else precAtom
 exprPrec (EVar _) = precAtom
 exprPrec (EMethodRef _) = precAtom
 exprPrec (EDictApp _) = precAtom
@@ -1057,6 +1070,28 @@ printVariant (Variant name (ConNamed fields)) =
 fieldTyDoc : Field -> Doc
 fieldTyDoc (Field fn ft) = Cat (text fn) (Cat (text " : ") (printType ft))
 
+-- A single-variant record-style data decl (`data X = X { f : T, ... }`) rendered
+-- ONE FIELD PER LINE in leading-comma brace style:
+--   data X = X
+--     { f0 : T0
+--     , f1 : T1
+--     }
+-- The flat one-liner form (`printDecl`) collapses every field onto one line, so a
+-- per-field trailing comment has no line to attach to and the comment-aware fmt
+-- layer (fmt.mdk) orphans it below the decl.  fmt routes a *commented* such decl
+-- through here instead: header on line 0, field i on line i+1, `}` last — output
+-- lines align 1:1 with the source field lines, so fmt's generic interior-comment
+-- splice re-attaches each field's trailing comment by source-line index.  Falls
+-- back to the plain renderer for any non-single-ConNamed shape.
+export
+printNamedFieldData : DataVis -> String -> List String -> List Variant -> List String -> Doc
+printNamedFieldData vis n params [Variant cname (ConNamed fields)] derives =
+  let head = Cat (text "data ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) (Cat (text " = ") (text cname))))
+  let body = indentBlock (Cat (text "{ ") (Cat (sepBy (Cat Hardline (text ", ")) (map fieldTyDoc fields)) (Cat Hardline (text "}"))))
+  let deriveDoc = if isEmptyL derives then Nil else Cat Hardline (printDerives derives)
+  Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
+printNamedFieldData vis n params variants derives = printDecl (DData vis n params variants derives)
+
 printDerives : List String -> Doc
 printDerives [] = Nil
 printDerives derives =
@@ -1135,7 +1170,7 @@ export
 printDecl : Decl -> Doc
 printDecl (DTypeSig pub n t) =
   Cat
-    (if pub then text "export\n" else Nil)
+    (if pub then text "export " else Nil)
     (Cat (text n) (Cat (text " : ") (printType t)))
 printDecl (DExtern pub n t) =
   Cat
