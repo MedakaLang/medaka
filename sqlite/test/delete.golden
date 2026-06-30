@@ -1,0 +1,14 @@
+# integrity_check
+ok
+# delete users result
+deleted 2 rows
+# delete kv result
+deleted 2 rows
+# users after (rowid,id,name,age)
+1|1|alice|25
+# kv after (rowid,k,v)
+1|a|10
+# reader: users
+1|alice|25
+# reader: kv
+a|10

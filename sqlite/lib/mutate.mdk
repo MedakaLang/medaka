@@ -1,0 +1,183 @@
+-- | sqlite.lib.mutate — DELETE via read-transform-rewrite.
+--
+-- Pipeline (DELETE):
+--   1. Open the database; read the schema.
+--   2. Refusal guard: if ANY schema entry is a secondary index (`type='index'`)
+--      or any table's CREATE SQL contains "WITHOUT ROWID", return a clean `Err`.
+--      Indexes are silently dropped by the rewrite (and `integrity_check` still
+--      says ok — the only protection is this guard).
+--   3. Read ALL tables' rows with their original rowids via `scanTableRowsIpk`.
+--   4. For the TARGET table, compile the `Expr Bool` WHERE predicate via
+--      `compilePred` (reusing `lib.select`) and FILTER OUT matching rows.
+--      Keep track of how many rows were removed.
+--   5. Rewrite the WHOLE file via the EXPLICIT-ROWID writer
+--      (`buildDatabaseMultiExplicit`) — preserving every surviving row's original
+--      rowid (gaps included) and every non-target table byte-for-byte-equivalently.
+--   6. Return `Ok deletedCount`.
+--
+-- Refusal cases (clean `Err`, never silent corruption):
+--   * Any schema entry with `type='index'` (secondary index would be silently
+--     dropped; `integrity_check` can't detect the loss).
+--   * Any table CREATE SQL containing "WITHOUT ROWID" (rowid-free tables are
+--     outside the write path's rowid model).
+--   * Unknown target table name.
+--   * `compilePred` error (unknown column in WHERE).
+--   * Write-path errors (row too large, sqlite_master overflow, etc.) propagate.
+
+import lib.sqlite.{Db, openDb, readSchema, scanTableRowsIpk, schemaSql, schemaName, schemaType, SchemaEntry, pkColumnIndex, rowCellsWithIpk, columnIndex}
+import lib.btree.{Row, rowRowid}
+import lib.dbwriter.{buildDatabaseMultiExplicit}
+import lib.recordfmt.{Cell}
+import lib.select.{Expr, SqlExpr, unExpr, compilePred}
+import list.{reverse}
+
+-- ---------------------------------------------------------------------------
+-- Refusal guard
+-- ---------------------------------------------------------------------------
+
+-- | Scan every schema entry; return `Err` if any entry is a secondary index
+--   or a WITHOUT ROWID table.
+refuseIfUnsupported : List SchemaEntry -> Result String Unit
+refuseIfUnsupported []        = Ok ()
+refuseIfUnsupported (e::rest) =
+  if schemaType e == "index"
+  then Err "cannot mutate: database has indexes (would be silently dropped)"
+  else if schemaType e == "table" && containsWithoutRowid (schemaSql e)
+  then Err "cannot mutate: database has WITHOUT ROWID table (not supported)"
+  else refuseIfUnsupported rest
+
+containsWithoutRowid : String -> Bool
+containsWithoutRowid sql = stringContains (upperString sql) "WITHOUT ROWID"
+
+upperString : String -> String
+upperString s =
+  let chars = stringToChars s
+  let n     = arrayLength chars
+  stringFromChars (arrayFromList (upperCharsGo chars 0 n []))
+
+upperCharsGo : Array Char -> Int -> Int -> List Char -> List Char
+upperCharsGo arr i n acc =
+  if i >= n then reverse acc
+  else
+    let c  = charCode (arr.[i])
+    let uc = if c >= 97 && c <= 122 then c - 32 else c
+    let ch = match charFromCode uc
+               Some x => x
+               None   => arr.[i]
+    upperCharsGo arr (i + 1) n (ch :: acc)
+
+stringContains : String -> String -> Bool
+stringContains haystack needle =
+  let h  = stringToChars haystack
+  let nd = stringToChars needle
+  let hl = arrayLength h
+  let nl = arrayLength nd
+  if nl == 0 then True
+  else stringContainsGo h hl nd nl 0
+
+stringContainsGo : Array Char -> Int -> Array Char -> Int -> Int -> Bool
+stringContainsGo h hl nd nl i =
+  if i + nl > hl then False
+  else if charsMatchAt h nd i 0 nl then True
+  else stringContainsGo h hl nd nl (i + 1)
+
+charsMatchAt : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+charsMatchAt h nd hi ni nl =
+  if ni >= nl then True
+  else if charCode (h.[hi + ni]) == charCode (nd.[ni])
+       then charsMatchAt h nd hi (ni + 1) nl
+       else False
+
+-- ---------------------------------------------------------------------------
+-- Spec helpers
+-- ---------------------------------------------------------------------------
+
+-- Collect an explicit-rowid spec for every `type='table'` schema entry.
+collectTableSpecs : Db -> List SchemaEntry -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
+collectTableSpecs _  []        acc = Ok (reverse acc)
+collectTableSpecs db (e::rest) acc =
+  if schemaType e != "table"
+  then collectTableSpecs db rest acc
+  else
+    let name = schemaName e
+    let sql  = schemaSql e
+    match scanTableRowsIpk db name
+      Err err          => Err err
+      Ok (pkIdx, rows) =>
+        let explicitRows = map (r => (rowRowid r, rowCellsWithIpk pkIdx r)) rows
+        collectTableSpecs db rest ((name, sql, pkIdx, explicitRows) :: acc)
+
+findSpecByName : List (String, String, Option Int, List (Int, List Cell)) -> String -> Option (String, String, Option Int, List (Int, List Cell))
+findSpecByName []                 _   = None
+findSpecByName ((n,s,p,rs)::rest) tbl =
+  if n == tbl then Some (n, s, p, rs)
+  else findSpecByName rest tbl
+
+replaceSpec : List (String, String, Option Int, List (Int, List Cell)) -> String -> (String, String, Option Int, List (Int, List Cell)) -> List (String, String, Option Int, List (Int, List Cell))
+replaceSpec []                 _   _   = []
+replaceSpec ((n,s,p,rs)::rest) tbl new =
+  if n == tbl then (new :: rest)
+  else (n, s, p, rs) :: replaceSpec rest tbl new
+
+requireSome : String -> Option a -> Result String a
+requireSome _   (Some x) = Ok x
+requireSome msg None     = Err msg
+
+-- ---------------------------------------------------------------------------
+-- Row partition helpers
+-- ---------------------------------------------------------------------------
+
+partitionRows : (List Cell -> Bool) -> List (Int, List Cell) -> (List (Int, List Cell), Int)
+partitionRows pred rows = partitionGo pred rows [] 0
+
+partitionGo : (List Cell -> Bool) -> List (Int, List Cell) -> List (Int, List Cell) -> Int -> (List (Int, List Cell), Int)
+partitionGo _    []                    acc n = (reverse acc, n)
+partitionGo pred ((rowid, cells)::rest) acc n =
+  if pred cells
+  then partitionGo pred rest acc (n + 1)
+  else partitionGo pred rest ((rowid, cells) :: acc) n
+
+-- ---------------------------------------------------------------------------
+-- DELETE — read-transform-rewrite
+-- ---------------------------------------------------------------------------
+
+-- | Delete all rows of `table` in the SQLite file at `path` where `where_`
+--   evaluates to true.  Returns `Ok n` where `n` is the count of rows deleted.
+export
+delete : String -> String -> Expr Bool -> <FileRead, FileWrite, Mut> Result String Int
+delete path table where_ =
+  match openDb path
+    Err e  => Err e
+    Ok db  =>
+      match buildImage db table (unExpr where_)
+        Err e         => Err e
+        Ok (img, cnt) =>
+          match writeFileBytes path img
+            Err e => Err e
+            Ok _  => Ok cnt
+
+-- Build the new database image after filtering the target table.
+-- Pure-ish: only `buildDatabaseMultiExplicit` carries `<Mut>`.
+buildImage : Db -> String -> SqlExpr -> <Mut> Result String (Array Int, Int)
+buildImage db table whereExpr =
+  match readSchema db
+    Err e     => Err e
+    Ok schema =>
+      match refuseIfUnsupported schema
+        Err e  => Err e
+        Ok _   =>
+          match collectTableSpecs db schema []
+            Err e    => Err e
+            Ok specs =>
+              match requireSome "delete: table not found: \{table}" (findSpecByName specs table)
+                Err e                    => Err e
+                Ok (_, sql, pkIdx, rows) =>
+                  let lookup = columnIndex sql
+                  match compilePred lookup whereExpr
+                    Err e   => Err e
+                    Ok pred =>
+                      let (survivors, cnt) = partitionRows pred rows
+                      let newSpecs = replaceSpec specs table (table, sql, pkIdx, survivors)
+                      match buildDatabaseMultiExplicit newSpecs
+                        Err e  => Err e
+                        Ok img => Ok (img, cnt)

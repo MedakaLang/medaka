@@ -1,0 +1,9 @@
+# delete result
+Error: cannot mutate: database has indexes (would be silently dropped)
+# db unchanged (0 = identical)
+0
+# sqlite3 still readable (integrity_check)
+ok
+# rows still present
+1|1|alice|25
+2|2|bob|30

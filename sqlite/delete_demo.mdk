@@ -1,0 +1,38 @@
+-- DELETE probe for the sqlite/test/delete_oracle.sh gate.
+--
+-- Usage: medaka build sqlite/delete_demo.mdk
+--        ./delete_demo <path> <table> <col> <op> <int-value>
+--
+-- Performs a single-column integer comparison DELETE:
+--   DELETE FROM <table> WHERE <col> <op> <int-value>
+--
+-- <op> is one of: eq ne lt le gt ge
+--
+-- Prints "deleted N rows" on success or an error string on failure.
+
+import lib.mutate.{delete}
+import lib.select.{eColInt, eLitI, eEq, eNe, eLt, eLe, eGt, eGe}
+import string.{toInt}
+
+runDelete : String -> String -> String -> String -> Int -> <IO, FileRead, FileWrite, Mut> Unit
+runDelete path table col op val =
+  let expr = match op
+               "eq" => eEq (eColInt col) (eLitI val)
+               "ne" => eNe (eColInt col) (eLitI val)
+               "lt" => eLt (eColInt col) (eLitI val)
+               "le" => eLe (eColInt col) (eLitI val)
+               "gt" => eGt (eColInt col) (eLitI val)
+               "ge" => eGe (eColInt col) (eLitI val)
+               _    => eEq (eColInt col) (eLitI val)
+  match delete path table expr
+    Err e => println "Error: \{e}"
+    Ok n  => println "deleted \{n} rows"
+
+main : <IO, FileRead, FileWrite, Mut> Unit
+main = match args ()
+  [path, table, col, op, val] =>
+    match toInt val
+      None   => println "Error: invalid integer: \{val}"
+      Some n => runDelete path table col op n
+
+  _ => println "usage: delete_demo <path> <table> <col> <op:eq|ne|lt|le|gt|ge> <int-value>"
