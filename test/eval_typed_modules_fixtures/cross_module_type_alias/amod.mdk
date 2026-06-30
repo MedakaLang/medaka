@@ -1,0 +1,6 @@
+export type Foo = Int
+export type Pair a = (a, a)
+export bump : Foo -> Foo
+bump x = x + 1
+export dup : Int -> Pair Int
+dup x = (x, x)

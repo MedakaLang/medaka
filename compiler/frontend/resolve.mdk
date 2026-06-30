@@ -1445,6 +1445,7 @@ expTypesDirect ((DData VisPublic n _ _ _)::rest) = n :: expTypesDirect rest
 expTypesDirect ((DData VisAbstract n _ _ _)::rest) = n :: expTypesDirect rest
 expTypesDirect ((DRecord VisPublic n _ _ _)::rest) = n :: expTypesDirect rest
 expTypesDirect ((DRecord VisAbstract n _ _ _)::rest) = n :: expTypesDirect rest
+expTypesDirect ((DTypeAlias True n _ _)::rest) = n :: expTypesDirect rest
 expTypesDirect (_::rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)

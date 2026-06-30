@@ -1,0 +1,9 @@
+import amod.{Foo, Pair, bump, dup}
+useFoo : Foo -> Int
+useFoo x = x * 10
+fstP : Pair Int -> Int
+fstP p = match p
+  (a, _) => a
+main =
+  println (useFoo (bump 4))
+  println (fstP (dup 7))

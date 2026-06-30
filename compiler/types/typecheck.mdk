@@ -9772,6 +9772,8 @@ publicDataDecls ((d@DInterface { pub = True, ... })::rest) =
   d :: publicDataDecls rest
 publicDataDecls ((d@DImpl { pub = True, ... })::rest) =
   d :: publicDataDecls rest
+publicDataDecls ((d@DTypeAlias True _ _ _)::rest) =
+  d :: publicDataDecls rest
 publicDataDecls (_::rest) = publicDataDecls rest
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
