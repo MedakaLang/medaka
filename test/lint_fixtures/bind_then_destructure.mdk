@@ -1,0 +1,22 @@
+-- Positive + negative fixtures for rule-bind-then-destructure.
+
+-- POSITIVE: bind then final irrefutable tuple-destructure → fires.
+splitUp : Thing
+splitUp = do
+  p <- compute
+  match p
+    (a, b) => use a b
+
+-- NEGATIVE: the bound var is still used in the arm body → does NOT fire.
+keepWhole : Thing
+keepWhole = do
+  q <- compute
+  match q
+    (a, b) => use q a
+
+-- NEGATIVE: a constructor arm is refutable → skipped entirely.
+ctorCase : Thing
+ctorCase = do
+  r <- compute
+  match r
+    Some v => use v

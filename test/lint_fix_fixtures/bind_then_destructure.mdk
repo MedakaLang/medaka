@@ -1,0 +1,11 @@
+-- Fixable: bind then final irrefutable tuple-destructure, arm body is a do-block
+-- whose statements flatten into the outer block (rule-bind-then-destructure).
+process : Result String Int
+process = do
+  pair <- compute
+  match pair
+    (a, b) => do
+      let s = a + b
+      Ok s
+
+main = println "x"

@@ -18,9 +18,17 @@ import frontend.ast.{
   Loc(..),
   Ty(..),
   Pat(..),
+  RecPatField(..),
   Guard(..),
   Arm(..),
   ImplMethod(..),
+  DoStmt(..),
+  Section(..),
+  InterpPart(..),
+  GuardArm(..),
+  FieldAssign(..),
+  LetBind(..),
+  FunClause(..),
   Expr(..),
   Decl(..),
 }
@@ -82,6 +90,9 @@ ruleNameStdlibReimpl = "rule-stdlib-reimpl"
 ruleNameDuplicateBody : String
 ruleNameDuplicateBody = "rule-duplicate-body"
 
+ruleNameBindThenDestructure : String
+ruleNameBindThenDestructure = "rule-bind-then-destructure"
+
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
 -- `allRules` list literal) so the LLVM emitter's record-field scanner — which
@@ -118,9 +129,19 @@ stdlibReimplRule = Rule {
   fix = None,
 }
 
+bindThenDestructureRule : Rule
+bindThenDestructureRule = Rule {
+  name = ruleNameBindThenDestructure,
+  descr = "do-bind then immediately destructures the bound var with an irrefutable single-arm `match` — inline the pattern into the bind",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleBindThenDestructure,
+  fix = Some bindThenDestructureFix,
+}
+
 export
 allRules : List Rule
-allRules = [matchParamRule, derivableRule, stdlibReimplRule]
+allRules = [matchParamRule, derivableRule, stdlibReimplRule, bindThenDestructureRule]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
 -- Each CrossFileRule is its own top-level binding (same field-scanner reason as
@@ -508,6 +529,281 @@ stdlibFinding (name, loc) = Finding {
   severity = SevWarning,
   loc = loc,
 }
+
+-- ── rule: bind-then-destructure ───────────────────────────────────────────────
+-- Inside any do/bare block, a `v <- e` bind immediately followed by a FINAL
+-- statement `match v { pat => body }` (exactly one arm, no guards) where `pat` is
+-- syntactically IRREFUTABLE (tuple/record/var/wildcard, recursively — constructor
+-- patterns are skipped entirely since lint is pre-typecheck and can't prove a
+-- single-ctor type) and `v` does NOT appear free in `body`.  Such a pair is just
+-- `pat <- e` with `body` inlined.  Detection recurses into every nested do/bare
+-- block in the decl body; the autofix is a pure AST rewrite (the framework
+-- re-renders the returned Decl via the printer).
+--
+-- `v`-not-free-in-`body` uses the same conservative printed whole-word scan the
+-- §8 fixer relies on (`wholeWordIn`): it can only over-bail (suppress a real
+-- finding), never produce an unsound fix.
+
+-- a pattern is irrefutable iff it is a var/wildcard, or a tuple/record whose
+-- sub-patterns are all themselves irrefutable.  Everything else (ctor, cons,
+-- list, literal, range, as-pattern) is refutable for this rule's purposes.
+irrefutablePat : Pat -> Bool
+irrefutablePat (PVar _) = True
+irrefutablePat PWild = True
+irrefutablePat (PTuple ps) = not (anyList refutablePat ps)
+irrefutablePat (PRec _ fields _) = not (anyList refutableField fields)
+irrefutablePat _ = False
+
+refutablePat : Pat -> Bool
+refutablePat p = not (irrefutablePat p)
+
+refutableField : RecPatField -> Bool
+refutableField (RecPatField _ None) = False
+refutableField (RecPatField _ (Some p)) = refutablePat p
+
+-- the bound-var/pattern/expr/body of a collapsible bind-then-match tail, plus the
+-- statements preceding it.  Returns None when the last two statements don't form
+-- the irrefutable single-arm shape.
+bindMatchTail : List DoStmt -> Option (List DoStmt, String, Pat, Expr, Expr)
+bindMatchTail stmts = match splitTail2 stmts
+  Some (prefix, DoBind (PVar v) boundE, DoExpr matchE) =>
+    bindMatchArm prefix v boundE (unwrapLoc matchE)
+  _ => None
+
+bindMatchArm : List DoStmt -> String -> Expr -> Expr -> Option (List DoStmt, String, Pat, Expr, Expr)
+bindMatchArm prefix v boundE (EMatch scrut [Arm pat [] body])
+  | scrutIsVar v (unwrapLoc scrut)
+    && irrefutablePat pat
+    && not (wholeWordIn v (exprToString body)) = Some (prefix, v, pat, boundE, body)
+  | otherwise = None
+bindMatchArm _ _ _ _ = None
+
+scrutIsVar : String -> Expr -> Bool
+scrutIsVar v (EVar w) = v == w
+scrutIsVar _ _ = False
+
+-- last two statements (prefix, second-to-last, last), or None if fewer than 2.
+splitTail2 : List DoStmt -> Option (List DoStmt, DoStmt, DoStmt)
+splitTail2 stmts = match reverseL stmts
+  lst::scd::restRev => Some (reverseL restRev, scd, lst)
+  _ => None
+
+-- ── check ────────────────────────────────────────────────────────────────────
+ruleBindThenDestructure : Positions -> List Decl -> List Finding
+ruleBindThenDestructure pos prog = flatMap bindDestructureDeclL (declLocList pos prog)
+
+bindDestructureDeclL : (Decl, Option Loc) -> List Finding
+bindDestructureDeclL (d, loc) = map (bindDestructureFinding loc) (declBindHits d)
+
+declBindHits : Decl -> List String
+declBindHits (DFunDef _ _ _ body) = collectBindHits body
+declBindHits (DAttrib _ d) = declBindHits d
+declBindHits _ = []
+
+bindDestructureFinding : Option Loc -> String -> Finding
+bindDestructureFinding loc v = Finding {
+  rule = ruleNameBindThenDestructure,
+  message = "binds '" ++ v
+    ++ "' then immediately destructures it in a final `match` — inline the pattern into the bind",
+  severity = SevWarning,
+  loc = loc,
+}
+
+-- collect every collapsible tail's bound-var name, recursing into all sub-exprs.
+collectBindHits : Expr -> List String
+collectBindHits e = tailHitOf e ++ flatMap collectBindHits (childExprs e)
+
+tailHitOf : Expr -> List String
+tailHitOf (EDo stmts) = hitNameOf stmts
+tailHitOf (EBlock stmts) = hitNameOf stmts
+tailHitOf _ = []
+
+hitNameOf : List DoStmt -> List String
+hitNameOf stmts = match bindMatchTail stmts
+  Some (_, v, _, _, _) => [v]
+  None => []
+
+-- immediate sub-expressions of an expr (order irrelevant; used to recurse).
+childExprs : Expr -> List Expr
+childExprs (ELoc _ e) = [e]
+childExprs (EDoOrigin _ e) = [e]
+childExprs (EApp f x) = [f, x]
+childExprs (ELam _ b) = [b]
+childExprs (ELet _ _ _ e1 e2) = [e1, e2]
+childExprs (EMatch s arms) = s :: flatMap armExprs arms
+childExprs (EIf c t el) = [c, t, el]
+childExprs (EBinOp _ a b _) = [a, b]
+childExprs (EUnOp _ a) = [a]
+childExprs (EInfix _ a b) = [a, b]
+childExprs (EFieldAccess e _ _) = [e]
+childExprs (ETuple es) = es
+childExprs (EListLit es) = es
+childExprs (EArrayLit es) = es
+childExprs (ERangeList lo hi _) = [lo, hi]
+childExprs (ERangeArray lo hi _) = [lo, hi]
+childExprs (ESlice e lo hi _ _) = [e, lo, hi]
+childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
+childExprs (ESection s) = sectionExprs s
+childExprs (EFunction arms) = flatMap armExprs arms
+childExprs (EIndex a i _) = [a, i]
+childExprs (EAnnot e _) = [e]
+childExprs (EHeadAnnot e _) = [e]
+childExprs (EBlock stmts) = flatMap stmtExprs stmts
+childExprs (EDo stmts) = flatMap stmtExprs stmts
+childExprs (EStringInterp parts) = flatMap interpPartExprs parts
+childExprs (EGuards arms) = flatMap guardArmExprs arms
+childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
+childExprs (ERecordUpdate e fs) = e :: map fieldAssignExpr fs
+childExprs (EVariantUpdate _ e fs) = e :: map fieldAssignExpr fs
+childExprs (EMapLit _ kvs) = flatMap kvExprs kvs
+childExprs (ESetLit _ es) = es
+childExprs (EAsPat _ e) = [e]
+childExprs _ = []
+
+armExprs : Arm -> List Expr
+armExprs (Arm _ gs body) = flatMap guardExprs gs ++ [body]
+
+guardExprs : Guard -> List Expr
+guardExprs (GBool e) = [e]
+guardExprs (GBind _ e) = [e]
+
+stmtExprs : DoStmt -> List Expr
+stmtExprs (DoExpr e) = [e]
+stmtExprs (DoBind _ e) = [e]
+stmtExprs (DoLet _ _ _ e) = [e]
+stmtExprs (DoAssign _ e) = [e]
+stmtExprs (DoFieldAssign _ _ e) = [e]
+stmtExprs (DoLetElse _ e alt) = [e, alt]
+
+letBindExprs : LetBind -> List Expr
+letBindExprs (LetBind _ clauses) = flatMap funClauseExprs clauses
+
+funClauseExprs : FunClause -> List Expr
+funClauseExprs (FunClause _ body) = [body]
+
+sectionExprs : Section -> List Expr
+sectionExprs (SecBare _) = []
+sectionExprs (SecRight _ e) = [e]
+sectionExprs (SecLeft e _) = [e]
+
+interpPartExprs : InterpPart -> List Expr
+interpPartExprs (InterpStr _) = []
+interpPartExprs (InterpExpr e) = [e]
+
+guardArmExprs : GuardArm -> List Expr
+guardArmExprs (GuardArm gs body) = flatMap guardExprs gs ++ [body]
+
+fieldAssignExpr : FieldAssign -> Expr
+fieldAssignExpr (FieldAssign _ e) = e
+
+kvExprs : (Expr, Expr) -> List Expr
+kvExprs (k, v) = [k, v]
+
+-- ── autofix ──────────────────────────────────────────────────────────────────
+-- Rebuild the decl body with every collapsible bind-then-match tail inlined.
+-- The rewrite is structural (rebuilds every node), so we detect "did anything
+-- change" by comparing the location-stripped sexp of the old vs new body — only
+-- then do we return `Some [newDecl]` (the printer re-renders it).
+bindThenDestructureFix : Decl -> Option (List Decl)
+bindThenDestructureFix (DFunDef vis name pats body) =
+  let body2 = rewriteBindExpr body
+  if exprSexp body2 == exprSexp body then None else Some [DFunDef vis name pats body2]
+bindThenDestructureFix (DAttrib a d) = match bindThenDestructureFix d
+  Some [d2] => Some [DAttrib a d2]
+  _ => None
+bindThenDestructureFix _ = None
+
+-- recursively rewrite, then collapse the tail of each do/bare block.
+rewriteBindExpr : Expr -> Expr
+rewriteBindExpr (ELoc l e) = ELoc l (rewriteBindExpr e)
+rewriteBindExpr (EDoOrigin l e) = EDoOrigin l (rewriteBindExpr e)
+rewriteBindExpr (EApp f x) = EApp (rewriteBindExpr f) (rewriteBindExpr x)
+rewriteBindExpr (ELam ps b) = ELam ps (rewriteBindExpr b)
+rewriteBindExpr (ELet m isf p e1 e2) = ELet m isf p (rewriteBindExpr e1) (rewriteBindExpr e2)
+rewriteBindExpr (EMatch s arms) = EMatch (rewriteBindExpr s) (map rewriteBindArm arms)
+rewriteBindExpr (EIf c t el) = EIf (rewriteBindExpr c) (rewriteBindExpr t) (rewriteBindExpr el)
+rewriteBindExpr (EBinOp op a b r) = EBinOp op (rewriteBindExpr a) (rewriteBindExpr b) r
+rewriteBindExpr (EUnOp op a) = EUnOp op (rewriteBindExpr a)
+rewriteBindExpr (EInfix op a b) = EInfix op (rewriteBindExpr a) (rewriteBindExpr b)
+rewriteBindExpr (EFieldAccess e f r) = EFieldAccess (rewriteBindExpr e) f r
+rewriteBindExpr (ETuple es) = ETuple (map rewriteBindExpr es)
+rewriteBindExpr (EListLit es) = EListLit (map rewriteBindExpr es)
+rewriteBindExpr (EArrayLit es) = EArrayLit (map rewriteBindExpr es)
+rewriteBindExpr (ERangeList lo hi i) = ERangeList (rewriteBindExpr lo) (rewriteBindExpr hi) i
+rewriteBindExpr (ERangeArray lo hi i) = ERangeArray (rewriteBindExpr lo) (rewriteBindExpr hi) i
+rewriteBindExpr (ESlice e lo hi i r) = ESlice (rewriteBindExpr e) (rewriteBindExpr lo) (rewriteBindExpr hi) i r
+rewriteBindExpr (ELetGroup binds body) = ELetGroup (map rewriteBindLet binds) (rewriteBindExpr body)
+rewriteBindExpr (ESection s) = ESection (rewriteBindSection s)
+rewriteBindExpr (EFunction arms) = EFunction (map rewriteBindArm arms)
+rewriteBindExpr (EIndex a i r) = EIndex (rewriteBindExpr a) (rewriteBindExpr i) r
+rewriteBindExpr (EAnnot e t) = EAnnot (rewriteBindExpr e) t
+rewriteBindExpr (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr e) t
+rewriteBindExpr (EBlock stmts) = EBlock (collapseBindTail (map rewriteBindStmt stmts))
+rewriteBindExpr (EDo stmts) = EDo (collapseBindTail (map rewriteBindStmt stmts))
+rewriteBindExpr (EStringInterp parts) = EStringInterp (map rewriteBindInterp parts)
+rewriteBindExpr (EGuards arms) = EGuards (map rewriteBindGuardArm arms)
+rewriteBindExpr (ERecordCreate n fs) = ERecordCreate n (map rewriteBindField fs)
+rewriteBindExpr (ERecordUpdate e fs) = ERecordUpdate (rewriteBindExpr e) (map rewriteBindField fs)
+rewriteBindExpr (EVariantUpdate c e fs) = EVariantUpdate c (rewriteBindExpr e) (map rewriteBindField fs)
+rewriteBindExpr (EMapLit n kvs) = EMapLit n (map rewriteBindKv kvs)
+rewriteBindExpr (ESetLit n es) = ESetLit n (map rewriteBindExpr es)
+rewriteBindExpr (EAsPat x e) = EAsPat x (rewriteBindExpr e)
+rewriteBindExpr e = e
+
+-- collapse a (already child-rewritten) statement list: if its last two statements
+-- are the irrefutable bind-then-match shape, replace them with `pat <- e` plus the
+-- arm body's statements spliced inline.
+collapseBindTail : List DoStmt -> List DoStmt
+collapseBindTail stmts = match bindMatchTail stmts
+  Some (prefix, _, pat, boundE, body) => prefix ++ (DoBind pat boundE :: bodyToStmts body)
+  None => stmts
+
+-- the arm body as statements: a do/bare block contributes its own statements
+-- (flattened into the outer block); anything else becomes a final expr-statement.
+bodyToStmts : Expr -> List DoStmt
+bodyToStmts e = match unwrapLoc e
+  EDo stmts => stmts
+  EBlock stmts => stmts
+  _ => [DoExpr e]
+
+rewriteBindStmt : DoStmt -> DoStmt
+rewriteBindStmt (DoExpr e) = DoExpr (rewriteBindExpr e)
+rewriteBindStmt (DoBind p e) = DoBind p (rewriteBindExpr e)
+rewriteBindStmt (DoLet m r p e) = DoLet m r p (rewriteBindExpr e)
+rewriteBindStmt (DoAssign x e) = DoAssign x (rewriteBindExpr e)
+rewriteBindStmt (DoFieldAssign x fs e) = DoFieldAssign x fs (rewriteBindExpr e)
+rewriteBindStmt (DoLetElse p e alt) = DoLetElse p (rewriteBindExpr e) (rewriteBindExpr alt)
+
+rewriteBindArm : Arm -> Arm
+rewriteBindArm (Arm p gs body) = Arm p (map rewriteBindGuard gs) (rewriteBindExpr body)
+
+rewriteBindGuard : Guard -> Guard
+rewriteBindGuard (GBool e) = GBool (rewriteBindExpr e)
+rewriteBindGuard (GBind p e) = GBind p (rewriteBindExpr e)
+
+rewriteBindLet : LetBind -> LetBind
+rewriteBindLet (LetBind n clauses) = LetBind n (map rewriteBindClause clauses)
+
+rewriteBindClause : FunClause -> FunClause
+rewriteBindClause (FunClause ps body) = FunClause ps (rewriteBindExpr body)
+
+rewriteBindSection : Section -> Section
+rewriteBindSection (SecBare op) = SecBare op
+rewriteBindSection (SecRight op e) = SecRight op (rewriteBindExpr e)
+rewriteBindSection (SecLeft e op) = SecLeft (rewriteBindExpr e) op
+
+rewriteBindInterp : InterpPart -> InterpPart
+rewriteBindInterp (InterpStr s) = InterpStr s
+rewriteBindInterp (InterpExpr e) = InterpExpr (rewriteBindExpr e)
+
+rewriteBindGuardArm : GuardArm -> GuardArm
+rewriteBindGuardArm (GuardArm gs body) = GuardArm (map rewriteBindGuard gs) (rewriteBindExpr body)
+
+rewriteBindField : FieldAssign -> FieldAssign
+rewriteBindField (FieldAssign n e) = FieldAssign n (rewriteBindExpr e)
+
+rewriteBindKv : (Expr, Expr) -> (Expr, Expr)
+rewriteBindKv (k, v) = (rewriteBindExpr k, rewriteBindExpr v)
 
 -- ── cross-file runner ─────────────────────────────────────────────────────────
 -- Run the enabled cross-file rules over every target file, honoring the same
