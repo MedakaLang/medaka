@@ -160,8 +160,11 @@ a pass/fail result from those gates.
   - **Gotchas when migrating a `support/` structure to stdlib** (learned on ordmap):
     a polymorphic empty must be a **nullary constructor** (a constructor
     *application* like `OMap Tip` is NOT generalized by this typechecker → it
-    monomorphises to `…Unit` → "Scheme vs Unit" cascades); **type aliases are not
-    expanded** (`type X = Y` → "X vs Y" mismatch) so you must `data`-wrap; and any
+    monomorphises to `…Unit` → "Scheme vs Unit" cascades); **type aliases NOW
+    expand transparently** (`type X = Y`, parameterized `type Pair a = (a,a)`, and
+    `export type` across modules — landed 2026-06-30, `compiler/TYPE-ALIAS-EXPANSION-DESIGN.md`;
+    cyclic/recursive aliases are rejected) so a `data`-wrap is **no longer required**
+    just to alias a type (it WAS, hence the original `data OrdMap` wrapper); and any
     **test harness that runs the emitter/probes over compiler source with only the
     compiler root must also pass `$STDLIB`** (already fixed: `selfcompile_fixpoint`,
     `diff_compiler_{selfproc,check_modules,check_modules_batch,resolve_modules}`,

@@ -310,3 +310,16 @@ v1 = **full feature through cross-module — all of stages 1–5.** The fork ans
 6. **Cross-module** → **IN** (stage 5 `publicDataDecls` propagation). Required for the OrdMap payoff (`support/ordmap` is imported across compiler modules).
 
 **Execution:** stages 1–5 run **sequentially** (all touch `typecheck.mdk` → same hottest file, no parallelism), each independently gated + merged before the next branches. Seed re-mint + `selfcompile_fixpoint` C3a/C3b at the **completed-feature checkpoint** (after stage 5), not per stage — defer the ~10 MB seed churn. **Stage 6 (migrate `support/ordmap.mdk`) is a separate follow-up task**, gated on the feature being in + re-minted.
+
+---
+
+## 10. AS-BUILT (shipped 2026-06-30, main `aa57e3c`)
+
+All 5 stages landed as designed (locus B), each independently fixpoint-gated + merged; seed re-minted once at the checkpoint (cold `bootstrap_from_seed` C3a PASS byte-for-byte).
+
+- **Stages 1+2 (`29efddf`):** `aliasTableRef : Ref (List (String, (List String, Ty)))` populated in `registerData`, reset in `resetState`; non-parameterized + transitive expansion at `fromAstTypeE`'s `TyCon` arm.
+- **Stage 3 (`d4f4f41`):** parameterized expansion at `fromAstTypeApp` (param→arg `Ty` substitution, re-expanded); arity error (`aliasArityMsg`) for wrong-arity + unapplied parameterized aliases. NOTE: error reporting made the `Ty→Mono` conversion chain perform `<Mut>` → 11 conversion fns annotated `<Mut>` (propagates cleanly through effect-polymorphic `map`).
+- **Stage 4 (`0517cfd`):** `rejectCyclicAliases` pre-pass after `registerAllData` — DFS over alias→alias edges (`tyConNamesInTy` ∩ table keys), each alias on a cycle gets a deduped error AND is removed from the table (so the expansion seam can't recurse). Previously cyclic aliases *crashed* (exit 138, stack overflow); now exit 1 with a clear error.
+- **Stage 5 (`6d9eaec`):** cross-module — TWO layers (my repro refined the design, which named only layer 2): (1) `resolve.mdk expTypesDirect` gained a `DTypeAlias True` arm (else the importer rejected the name as private); (2) `typecheck.mdk publicDataDecls` gained a `DTypeAlias True` arm so the full decl (incl. RHS) flows into the importer's `accData` → its `registerData` populates the importer's alias table.
+
+**Known v1 wart (deferred per §5):** alias-error source locations render at the alias decl / `<unknown location>`, not the use site — needs `Mono` provenance, deferred. **Value-restriction interaction:** does NOT reintroduce — an alias-based `OrdMap` uses `omEmpty = Map.empty` (an already-generalized nullary value), no `OMap` wrapper to apply.
