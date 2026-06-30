@@ -1,54 +1,33 @@
--- Shared ordered-map for the self-hosted compiler, backed by the STANDARD
--- LIBRARY `map` (stdlib/map.mdk) rather than a hand-rolled tree.  This is the
--- first piece of the "compiler may use stdlib" migration: it retires the
--- duplicate weight-balanced tree that used to live here in favour of the
--- canonical stdlib `Map`, so a fix/improvement to `stdlib/map.mdk` can no longer
--- silently diverge from the compiler's copy.
---
--- The `om*` String-keyed API is preserved verbatim so the consumers
--- (types/typecheck.mdk, backend/llvm_emit.mdk, support/util.mdk) only had to swap
--- `OTip` -> `omEmpty`.  `OrdMap a` wraps `Map String a` (a `type OrdMap a =
--- Map String a` alias would be cleaner, but this typechecker does not expand type
--- aliases — confirmed — so a wrapper is required).
---
--- NOTE the two constructors: `OEmpty` is a NULLARY value so `omEmpty` generalizes
--- over `a` (see the comment there); real entries live in a `Map String a` under
--- `OMap`.  Importing `map` deliberately pulls its instance surface (Eq/Ord/Debug/
--- Display/Mappable/Monoid for `Map`) into the compiler — measured cost ~+34 KB.
+-- `OrdMap a` is a transparent alias for `Map String a` (stdlib/map.mdk).
+-- Type-alias expansion now works end-to-end (see
+-- `compiler/TYPE-ALIAS-EXPANSION-DESIGN.md` §10 AS-BUILT), so the old
+-- `data OrdMap a = OEmpty | OMap (Map String a)` wrapper is no longer needed.
+-- The `om*` helpers below are thin String-keyed wrappers kept for the existing
+-- call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk.
 
 import map.{Map(..), insert, lookup, member, size}
 
--- `OEmpty` is a NULLARY constructor — a syntactic value — so `omEmpty = OEmpty`
--- generalizes over `a` exactly as the old `OTip` did.  (A `Map`-application empty
--- like `OMap Tip` / `OMap (fromList [])` is a constructor application, which this
--- typechecker does NOT generalize → it monomorphises to `OrdMap Unit` and every
--- `OrdMap Scheme` use then fails with "Scheme vs Unit".)  Real entries live in a
--- stdlib `Map String a` under `OMap`.
-public export data OrdMap a = OEmpty | OMap (Map String a)
+export type OrdMap a = Map String a
 
 export
 omEmpty : OrdMap a
-omEmpty = OEmpty
+omEmpty = Tip
 
 export
 omSize : OrdMap a -> Int
-omSize OEmpty = 0
-omSize (OMap m) = size m
+omSize m = size m
 
 export
 omInsert : String -> a -> OrdMap a -> OrdMap a
-omInsert k v OEmpty = OMap (insert k v Tip)
-omInsert k v (OMap m) = OMap (insert k v m)
+omInsert k v m = insert k v m
 
 export
 omLookup : String -> OrdMap a -> Option a
-omLookup k OEmpty = None
-omLookup k (OMap m) = lookup k m
+omLookup k m = lookup k m
 
 export
 omHasKey : String -> OrdMap a -> Bool
-omHasKey k OEmpty = False
-omHasKey k (OMap m) = member k m
+omHasKey k m = member k m
 
 -- Build a membership set from a name list.
 export
