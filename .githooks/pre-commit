@@ -1,0 +1,53 @@
+#!/bin/sh
+# Medaka pre-commit hook — reject commits containing unformatted .mdk source.
+#
+# Checks every staged .mdk file (added/copied/modified) with `medaka fmt --check`
+# and aborts the commit if any differ from their formatted form. `test/` fixtures
+# are deliberately excluded — they are golden inputs kept intentionally unformatted.
+#
+# Install (from the repo root):
+#     cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"
+#     chmod +x "$(git rev-parse --git-common-dir)/hooks/pre-commit"
+#
+# Binary lookup order: $MEDAKA, then <repo-root>/medaka, then `medaka` on PATH.
+# If none is found the hook WARNS and allows the commit (so a fresh clone without
+# a built compiler is not blocked). Emergency bypass: `git commit --no-verify`.
+#
+# Note: this checks the WORKING-TREE copy of each staged file (the normal
+# full-staging case). Partially-staged files are checked as they exist on disk.
+set -u
+
+ROOT="$(git rev-parse --show-toplevel)"
+MEDAKA="${MEDAKA:-$ROOT/medaka}"
+if [ ! -x "$MEDAKA" ]; then
+  if command -v medaka >/dev/null 2>&1; then
+    MEDAKA="$(command -v medaka)"
+  else
+    echo "pre-commit: medaka binary not found (build '$ROOT/medaka', set \$MEDAKA, or add to PATH)." >&2
+    echo "pre-commit: skipping formatter check — commit allowed." >&2
+    exit 0
+  fi
+fi
+
+# Staged .mdk files, excluding test/ fixtures.
+files="$(git diff --cached --name-only --diff-filter=ACM -- '*.mdk' ':(exclude)test/**')"
+[ -z "$files" ] && exit 0
+
+bad=""
+for f in $files; do
+  [ -f "$f" ] || continue
+  "$MEDAKA" fmt --check "$f" >/dev/null 2>&1 || bad="$bad $f"
+done
+
+if [ -n "$bad" ]; then
+  echo "" >&2
+  echo "✗ pre-commit: unformatted (or unparseable) .mdk staged for commit:" >&2
+  for f in $bad; do echo "      $f" >&2; done
+  echo "" >&2
+  echo "  Format them:  medaka fmt --write$bad" >&2
+  echo "  Re-stage:     git add$bad" >&2
+  echo "  Bypass once:  git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+exit 0
