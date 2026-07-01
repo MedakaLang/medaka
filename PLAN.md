@@ -8,6 +8,14 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`compiler/README.md`](./compiler/README.md).
 
+## Current status (2026-06-30) — SQLite UPDATE/DELETE + WasmGC port (`66a8403`)
+
+**Full rowid-faithful CRUD + SQLite running on WasmGC == native.** Both pure-library/wasm-backend → NO seed re-mint / LLVM fixpoint. Designs: `SQLITE-MUTATION-DESIGN.md`, `SQLITE-WASM-DESIGN.md`. Memory: `project_sqlite_mutation_and_wasm`.
+
+- **UPDATE/DELETE (`a0fb00d`):** read-transform-rewrite (filter/map via `select.compilePred`, rewrite whole db); new `sqlite/lib/mutate.mdk`. Rowid-faithful (new explicit-rowid writer path, `d8cebbd`; IPK+auto byte-identical). Refuses index / WITHOUT-ROWID / IPK-column-SET with a clean `Err` (never silent corruption — indexes are silently dropped on rewrite AND `integrity_check` still passes). `sqlite3`-CLI oracles.
+- **WasmGC port (stages A–D, `8cff4f3`→`3a633d7`):** in-memory + file CRUD under `--target wasm`, byte-identical to native. **ZERO emitter construct gaps** — the whole blocker was 9 missing externs (5 pure-compute → WAT, 2 float-reinterpret, 2 host I/O via the run.js seam). Lib UNCHANGED. **Soak win: 3 GENERAL wasm-emitter gaps closed** (EMITTER-GAPS.md W-SQLITE-1/2/3: point-free array extern, tuple-pattern lambda in freeVars, `maxIndexAt` scratch-local undercount — none sqlite-specific; the ref-mode census missed all three). **Tandem workflow live:** `test/wasm/diff_sqlite.sh` builds a probe under both targets + diffs → every future in-memory SQL feature gets a wasm test for free. Gates: `diff_wasm` 141/0, `diff_sqlite` 2/0 (node v24 via nvm).
+- **Residual (deferred):** SQLite — in-place mutation, indexes (read/maintain/use), WITHOUT-ROWID, SET expressions, overflow pages, full b-tree balancing, durability/WAL; JOINs/aggregates/GROUP BY (query engine is single-table). Next: add SQL features to native + wasm in tandem via the shared oracle.
+
 ## Current status (2026-06-30) — compiler↔stdlib unification step 2: util.mdk → stdlib `list`/`string` (`09e0154`)
 
 Second measured step (after OrdMap→Map). `support/util.mdk` now delegates `reverseL`→`list.reverse`, `zipL`→`list.zip`, `joinWith`(+`joinNl`/`joinDot`)→`string.join` (`import list`/`import string` added; dead `intersperseStr`/`interspGo` removed). API + signatures unchanged → consumers untouched. Seed re-minted, cold `bootstrap_from_seed` PASS, fixpoint C3a/C3b YES, all self/user gates green (selfproc 3/0, check_modules 2/0, resolve_modules 13/0, check 73/0, typecheck_golden 57/0, eval 23/0). Memory: `project_compiler_stdlib_unification` (updated).
