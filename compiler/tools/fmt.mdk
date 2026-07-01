@@ -283,46 +283,92 @@ anyLineEq : Int -> List Comment -> Bool
 anyLineEq _ [] = False
 anyLineEq l (c::cs) = if commentLine c == l then True else anyLineEq l cs
 
+-- ── Verbatim safety-net (Option C) ────────────────────────────────────────
+-- When a declaration carries an INTERIOR trailing comment (a single-line
+-- comment strictly between its start and end line — see `isInterior`), the
+-- comment-free Doc engine (printer.mdk) may REFLOW the body by width, so the
+-- source-line→output-line index map that `spliceInterior` relies on no longer
+-- holds and comments drift to the wrong operand (finding "L").  Rather than
+-- risk misplacement, we emit that decl's ORIGINAL source lines verbatim, so a
+-- hand-laid-out commented body keeps its exact layout and no comment is ever
+-- moved or merged.  Data decls are EXCLUDED — their interior comments are
+-- placed per-variant/per-field by `printDataDeclCommented`/`printNamedFieldData`
+-- (a path that IS reflow-safe), so they keep formatting normally.
+-- Conservative by design: any non-data decl with >=1 interior comment goes
+-- verbatim, even in cases the old splice happened to get right.
+
+-- Extract source lines [startLine .. endLine] (1-based, inclusive) and rejoin
+-- them exactly — the decl's original text, comments and all.
+verbatimSpan : List String -> Int -> Int -> String
+verbatimSpan srcLines startLine endLine = joinNl (spanLines srcLines 1 startLine endLine)
+
+spanLines : List String -> Int -> Int -> Int -> List String
+spanLines [] _ _ _ = []
+spanLines (l::ls) idx startLine endLine
+  | idx > endLine = []
+  | idx >= startLine = l :: spanLines ls (idx + 1) startLine endLine
+  | otherwise = spanLines ls (idx + 1) startLine endLine
+
 -- ── Main walk ─────────────────────────────────────
 
 -- Process one (decl, declPos) pair.  Mirror of one OCaml `List.iter2` body.
-stepDecl : FmtState -> Decl -> DeclPos -> FmtState
-stepDecl st decl dp =
+stepDecl : FmtState -> List String -> Decl -> DeclPos -> FmtState
+stepDecl st srcLines decl dp =
   let line = declPosLine dp
   let endLine = declPosEndLine dp
   let st1 = flushBefore st line
   match st1
     FmtState pieces1 cs1 vlines1 cursor1 started1 =>
       let pieces2 = blankLineIfNeeded pieces1 line cursor1 started1
-      -- A single-variant named-field data decl that carries field comments is
-      -- rendered one-field-per-line and routed through the generic interior
-      -- splice (the per-variant vcommentsFor path cannot attach per-field
-      -- comments).  Other data decls keep the vcommentsFor path.
-      let nfMulti = isSingleNamedFieldData decl && not (isEmptyL (filterList (isInterior line endLine) cs1))
+      -- Verbatim safety-net: a non-data decl with an interior trailing comment
+      -- keeps its original source text (reflow would misplace the comment).
+      let hasInterior = not (isEmptyL (filterList (isInterior line endLine) cs1))
+      let useVerbatim = hasInterior && not (isDataDeclF decl)
       let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1
-      match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
-        (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>
-          -- DData has its own interior-comment machinery (vcommentsFor); leave
-          -- its comments to that path.  Every other decl (and a commented
-          -- named-field data decl, nfMulti) interleaves inner-block trailing
-          -- comments inline.
-          let interior = if isDataDeclF decl && not nfMulti then [] else filterList (isInterior line endLine) cs3
-          match spliceInterior declStr0 line interior
-            (declStr, consumed) =>
-              let cs3b = dropConsumed cs3 consumed
-              match takeTrailing cs3b endLine
-                (trailing, csRest) =>
-                  let pieces4 = appendTrailing (declStr :: pieces3) trailing
-                  FmtState ("\n" :: pieces4) csRest vlines3 endLine True
+      if useVerbatim then
+        -- The verbatim span [line .. endLine] already contains every comment on
+        -- those lines, so consume the whole decl's pending comment prefix
+        -- (flushBefore already drained everything strictly before `line`).
+        let csRest = filterList (c => commentLine c > endLine) cs1
+        let pieces3 = "\n" :: verbatimSpan srcLines line endLine :: pieces2
+        FmtState pieces3 csRest vlines1 endLine True
+      else
+        stepDeclNormal st2 decl line endLine
+
+-- The normal (reflowing) path: render the decl's Doc, splice interior comments
+-- by output-line index, and append end-line trailing comments inline.  Used for
+-- every decl WITHOUT an interior trailing comment (see stepDecl's safety-net).
+stepDeclNormal : FmtState -> Decl -> Int -> Int -> FmtState
+stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) decl line endLine =
+  -- A single-variant named-field data decl that carries field comments is
+  -- rendered one-field-per-line and routed through the generic interior
+  -- splice (the per-variant vcommentsFor path cannot attach per-field
+  -- comments).  Other data decls keep the vcommentsFor path.
+  let nfMulti = isSingleNamedFieldData decl && not (isEmptyL (filterList (isInterior line endLine) cs1))
+  let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1
+  match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
+    (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>
+      -- DData has its own interior-comment machinery (vcommentsFor); leave
+      -- its comments to that path.  Every other decl (and a commented
+      -- named-field data decl, nfMulti) interleaves inner-block trailing
+      -- comments inline.
+      let interior = if isDataDeclF decl && not nfMulti then [] else filterList (isInterior line endLine) cs3
+      match spliceInterior declStr0 line interior
+        (declStr, consumed) =>
+          let cs3b = dropConsumed cs3 consumed
+          match takeTrailing cs3b endLine
+            (trailing, csRest) =>
+              let pieces4 = appendTrailing (declStr :: pieces3) trailing
+              FmtState ("\n" :: pieces4) csRest vlines3 endLine True
 -- (1) flush_before loc.line, (2) blank-line gate, (3) render decl (consumes
 -- variant lines + interior comments), (4) splice inner-block trailing comments
 -- back inline, (5) end-line inline trailing comment(s),
 -- (6) newline + advance cursor to end_line + started := true.
 
-walkDecls : FmtState -> List Decl -> List DeclPos -> FmtState
-walkDecls st [] _ = st
-walkDecls st _ [] = st
-walkDecls st (d::ds) (p::ps) = walkDecls (stepDecl st d p) ds ps
+walkDecls : FmtState -> List String -> List Decl -> List DeclPos -> FmtState
+walkDecls st _ [] _ = st
+walkDecls st _ _ [] = st
+walkDecls st srcLines (d::ds) (p::ps) = walkDecls (stepDecl st srcLines d p) srcLines ds ps
 
 -- ── Public entry ──────────────────────────────────
 
@@ -331,12 +377,12 @@ walkDecls st (d::ds) (p::ps) = walkDecls (stepDecl st d p) ds ps
 -- comment-free `programToString`-equivalent (render each decl + "\n").  Mirror
 -- of lib/printer.ml's length guard.
 export
-formatProgram : List Decl -> List DeclPos -> List Int -> List Comment -> Int -> String
-formatProgram decls declPositions variantLines comments _lastContentLine =
+formatProgram : List Decl -> List DeclPos -> List Int -> List Comment -> Int -> String -> String
+formatProgram decls declPositions variantLines comments _lastContentLine src =
   if listLen declPositions != listLen decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
   else
     let st0 = FmtState [] comments variantLines 0 False
-    match drainAll (walkDecls st0 decls declPositions)
+    match drainAll (walkDecls st0 (splitNl src) decls declPositions)
       FmtState finalPieces _ _ _ _ => stringConcat (reverseL finalPieces)
 -- After the walk, the final `flush_before max_int` drains EVERY remaining
 -- comment; `drainAll` does that unconditionally (no max_int literal needed).
@@ -352,4 +398,4 @@ drainAll (FmtState pieces (c::rest) vlines cursor started) =
 export
 formatSource : String -> String
 formatSource src = match parseWithPositions src
-  (decls, pos) => formatProgram decls (positionsDecls pos) (positionsVariantLines pos) (collectComments src) (positionsLastContentLine pos)
+  (decls, pos) => formatProgram decls (positionsDecls pos) (positionsVariantLines pos) (collectComments src) (positionsLastContentLine pos) src
