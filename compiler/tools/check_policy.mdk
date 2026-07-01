@@ -55,6 +55,7 @@ import types.typecheck.{
   dsub,
   drender,
   decodeProductParam,
+  decodeSetParam,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{sortUniqS, joinWith, reverseL, escStr}
@@ -128,6 +129,8 @@ parsePolicyTok tok = match splitOnFirstEq (stringToChars tok) (arrayLength (stri
     -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
     if rhsIsProduct rhs
     then (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
+    else if rhsIsSet rhs
+    then (label, PSet (Some (decodeSetParam rhs)))
     else (label, PPrefix (Some rhs))
 
 -- a policy rhs is a product when it contains an axis assignment `=` (after the
@@ -137,6 +140,15 @@ rhsIsProduct : String -> Bool
 rhsIsProduct rhs = match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
   None => False
   Some _ => True
+
+-- a policy rhs is a top-level Set-domain literal when it is brace-delimited
+-- (`Env={HOME,PATH}`) with no axis `=` inside (that's the product case, already
+-- routed above) — mirrors the written-annotation carrier `decodeSetParam` decodes
+-- (`atomOfWritten`/`decodeAxisVal` in types.typecheck).
+rhsIsSet : String -> Bool
+rhsIsSet rhs =
+  let n = stringLength rhs
+  n >= 2 && stringSlice 0 1 rhs == "{" && stringSlice (n - 1) n rhs == "}"
 
 -- Index of the first '=' in the char array, or None.
 splitOnFirstEq : Array Char -> Int -> Int -> Option Int
@@ -505,6 +517,7 @@ atomToToml a =
   let label = atomLabel a
   match atomParam a
     PPrefix (Some s) => label ++ " = \"" ++ s ++ "\""
+    PSet (Some xs) => label ++ " = [" ++ joinWith ", " (map quoteTok xs) ++ "]"
     PProduct ax => label ++ " = { " ++ productTomlInline ax ++ " }"   -- WS-4 inline table
     _ => label ++ " = true"
 
@@ -607,6 +620,7 @@ atomToAllowTok a =
   let label = atomLabel a
   match atomParam a
     PPrefix (Some s) => label ++ "=" ++ s
+    PSet (Some xs) => label ++ "={" ++ joinWith "," xs ++ "}"
     PProduct ax => label ++ "=" ++ productAllowRhs ax   -- WS-4 round-trip form
     _ => label
 

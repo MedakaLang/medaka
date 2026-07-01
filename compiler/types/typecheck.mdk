@@ -494,6 +494,7 @@ atomOfWritten (l, Some pat) =
 -- brace-delimited, comma-separated literal `{a,b,c}` (the parser's `effParamFor`
 -- TLBrace clause builds exactly this).  Decode it back to the element list.
 -- (Keeps the carrier type `Option String`, so no AST `TyEffect` ripple.)
+export
 decodeSetParam : String -> List String
 decodeSetParam s =
   let n = stringLength s
