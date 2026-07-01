@@ -81,6 +81,15 @@ public export data Join = Join { table : String, kind : JoinKind, on : SqlExpr }
 --   *execution* dedups on the DECODED projected values, which needs `Eq a`,
 --   so it lives in the separate `queryDistinct` entry point below. Plain
 --   `query` MUST stay unconstrained — don't add `Eq a` here.
+--   `columns` is the PROJECTION expression list (SELECT a+b, name FROM t).
+--   The default `[]` means `SELECT *` — the raw cells pass through decode
+--   unchanged, so every existing query stays byte-identical. A non-empty list
+--   transforms each RAW row (after WHERE + ORDER BY, which reference ORIGINAL
+--   columns) into a projected `List Cell` — `[ eval e1 row, eval e2 row, … ]` —
+--   BEFORE decode. The `RowType` passed to `query` then decodes the PROJECTED
+--   row positionally, so it must match the projection's cell order/types.
+--   v1 limitation: WHERE/ORDER BY run on the raw row, so ORDER BY cannot
+--   reference a computed column.
 public export data Select = Select
   { from     : String
   , joins    : List Join
@@ -89,6 +98,7 @@ public export data Select = Select
   , limit    : Option Int
   , offset   : Option Int
   , distinct : Bool
+  , columns  : List SqlExpr
   }
 
 -- ---------------------------------------------------------------------------
@@ -221,7 +231,7 @@ eNotNull e = MkExpr (ENotNull (unExpr e))
 -- | A bare SELECT over a table: no WHERE, no ORDER BY, no limit/offset.
 export
 selectFrom : String -> Select
-selectFrom tbl = Select { from = tbl, joins = [], where_ = None, orderBy = [], limit = None, offset = None, distinct = False }
+selectFrom tbl = Select { from = tbl, joins = [], where_ = None, orderBy = [], limit = None, offset = None, distinct = False, columns = [] }
 
 -- | Append an INNER JOIN of `tbl` with the type-safe `on` predicate.  Joins are
 --   applied in call order (each appends), so the combined row lays out the
@@ -274,6 +284,19 @@ export
 withDistinct : Select -> Select
 withDistinct sel = { sel | distinct = True }
 
+-- | Set the PROJECTION column list (`SELECT <e1>, <e2>, … FROM …`).  The list is
+--   heterogeneous (a projection may mix `Expr Int`, `Expr String`, …), so it
+--   takes UNTYPED `SqlExpr`s rather than `List (Expr a)` — the caller erases the
+--   phantom with `unExpr` (or the `col`-style helpers). The `RowType` passed to
+--   `query` is the type-safe decode boundary and MUST match this list
+--   positionally (same count, same cell types, same order). An empty list keeps
+--   the default `SELECT *` behaviour (raw cells pass through unchanged).
+--
+--   Example: `withColumns [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]`.
+export
+withColumns : List SqlExpr -> Select -> Select
+withColumns cols sel = { sel | columns = cols }
+
 -- ---------------------------------------------------------------------------
 -- render : injection-safe SQL projection
 -- ---------------------------------------------------------------------------
@@ -285,17 +308,32 @@ withDistinct sel = { sel | distinct = True }
 --   an illegal identifier yields `Err`.
 export
 render : Select -> Result String (String, List Literal)
-render (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_, distinct = dst }) =
+render (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_, distinct = dst, columns = cols }) =
   if not (validIdent tbl)
   then Err "render: invalid table name: \{tbl}"
   else do
     (joinSql, joinBinds) <- renderJoins js
+    (colSql, colBinds) <- renderColumns cols
     (whereSql, binds) <- renderWhere w
     ordSql <- renderOrderBy ob
     let limOff = renderLimitOffset lm of_
-    let selectSql = if dst then "SELECT DISTINCT *" else "SELECT *"
+    let distPfx = if dst then "SELECT DISTINCT " else "SELECT "
+    let selectSql = "\{distPfx}\{colSql}"
     let sql = "\{selectSql} FROM \{tbl}\{joinSql}\{whereSql}\{ordSql}\{limOffSql limOff}"
-    Ok (sql, joinBinds ++ binds ++ limOffBinds limOff lm of_)
+    Ok (sql, colBinds ++ joinBinds ++ binds ++ limOffBinds limOff lm of_)
+
+-- Render the projection column list.  Empty ⇒ `*` (SELECT *); non-empty ⇒ each
+-- expr rendered via `renderExpr`, comma-joined, binds accumulated left-to-right.
+renderColumns : List SqlExpr -> Result String (String, List Literal)
+renderColumns [] = Ok ("*", [])
+renderColumns cols = map ((parts, binds) => (join ", " parts, binds)) (renderColumnParts cols)
+
+renderColumnParts : List SqlExpr -> Result String (List String, List Literal)
+renderColumnParts [] = Ok ([], [])
+renderColumnParts (e :: rest) = do
+  (sql, binds) <- renderExpr e
+  (restParts, restBinds) <- renderColumnParts rest
+  Ok (sql :: restParts, binds ++ restBinds)
 
 -- Render the JOIN clauses (in order), each " INNER JOIN <table> ON <expr>" or
 -- " LEFT JOIN <table> ON <expr>" per its `kind`, accumulating their
@@ -670,7 +708,7 @@ applyCmp op o = match (op, o)
 --   SQL semantics: ORDER BY is applied BEFORE LIMIT/OFFSET.
 export
 query : Db -> Select -> RowType a -> Result String (List a)
-query db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_ }) rt =
+query db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_, columns = cols }) rt =
   match js
     [] => do
       -- Single-table path: materialize IPK-substituted cells and run the shared
@@ -679,7 +717,7 @@ query db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm,
       let lookup = mkLookup (schemaSql entry)
       (pkIdx, rows) <- scanTableRowsIpk db tbl
       let rowsCells = map (rowCellsWithIpk pkIdx) rows
-      runOverCells lookup w ob lm of_ rt rowsCells
+      runOverCells lookup w ob lm of_ cols rt rowsCells
     _  => do
       -- Join path: gather every table (from :: joins) as materialized cell rows
       -- with its base offset, build a combined lookup, nested-loop join on each
@@ -687,7 +725,7 @@ query db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm,
       infos <- gatherJoinInfos db (tbl :: map joinTable js) 0 []
       let lookup = mkJoinLookup (map infoLookup infos)
       joined <- runJoins lookup infos js
-      runOverCells lookup w ob lm of_ rt joined
+      runOverCells lookup w ob lm of_ cols rt joined
 
 -- | Execute a `Select` with DISTINCT semantics: same resolve/scan/join/WHERE/
 --   ORDER BY as `query`, but dedups on the DECODED, PROJECTED rows (via `rt`)
@@ -698,19 +736,19 @@ query db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm,
 --   DISTINCT execution needs (see the `Select.distinct` doc comment).
 export
 queryDistinct : Eq a => Db -> Select -> RowType a -> Result String (List a)
-queryDistinct db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_ }) rt =
+queryDistinct db (Select { from = tbl, joins = js, where_ = w, orderBy = ob, limit = lm, offset = of_, columns = cols }) rt =
   match js
     [] => do
       entry <- findTable db tbl
       let lookup = mkLookup (schemaSql entry)
       (pkIdx, rows) <- scanTableRowsIpk db tbl
       let rowsCells = map (rowCellsWithIpk pkIdx) rows
-      runOverCellsDistinct lookup w ob lm of_ rt rowsCells
+      runOverCellsDistinct lookup w ob lm of_ cols rt rowsCells
     _  => do
       infos <- gatherJoinInfos db (tbl :: map joinTable js) 0 []
       let lookup = mkJoinLookup (map infoLookup infos)
       joined <- runJoins lookup infos js
-      runOverCellsDistinct lookup w ob lm of_ rt joined
+      runOverCellsDistinct lookup w ob lm of_ cols rt joined
 
 joinTable : Join -> String
 joinTable (Join { table = t }) = t
@@ -723,13 +761,14 @@ joinKind (Join { kind = k }) = k
 
 -- Shared post-scan pipeline over already-materialized cell rows: compile WHERE,
 -- filter, sort by ORDER BY, offset/limit, decode.
-runOverCells : (String -> Option Int) -> Option SqlExpr -> List (String, Bool) -> Option Int -> Option Int -> RowType a -> List (List Cell) -> Result String (List a)
-runOverCells lookup w ob lm of_ rt rowsCells = do
+runOverCells : (String -> Option Int) -> Option SqlExpr -> List (String, Bool) -> Option Int -> Option Int -> List SqlExpr -> RowType a -> List (List Cell) -> Result String (List a)
+runOverCells lookup w ob lm of_ cols rt rowsCells = do
   pred <- compileWhere lookup w
   let kept = filter pred rowsCells
   let sorted = sortCells lookup ob kept
   let sliced = applyOffsetLimit of_ lm sorted
-  decodeCells rt sliced []
+  projected <- projectCells lookup cols sliced
+  decodeCells rt projected []
 
 -- DISTINCT sibling of `runOverCells`: filter, sort (on cells, same as
 -- `query`), decode ALL survivors, `nub` (dedup on the decoded, projected
@@ -737,14 +776,36 @@ runOverCells lookup w ob lm of_ rt rowsCells = do
 -- THEN offset/limit over the deduped `List a`. Decode-then-dedup-then-slice
 -- (vs. `query`'s slice-then-decode) is the entire distinct-vs-plain
 -- difference; everything upstream (WHERE compile/filter/sort) is identical.
-runOverCellsDistinct : Eq a => (String -> Option Int) -> Option SqlExpr -> List (String, Bool) -> Option Int -> Option Int -> RowType a -> List (List Cell) -> Result String (List a)
-runOverCellsDistinct lookup w ob lm of_ rt rowsCells = do
+runOverCellsDistinct : Eq a => (String -> Option Int) -> Option SqlExpr -> List (String, Bool) -> Option Int -> Option Int -> List SqlExpr -> RowType a -> List (List Cell) -> Result String (List a)
+runOverCellsDistinct lookup w ob lm of_ cols rt rowsCells = do
   pred <- compileWhere lookup w
   let kept = filter pred rowsCells
   let sorted = sortCells lookup ob kept
-  decoded <- decodeCells rt sorted []
+  projected <- projectCells lookup cols sorted
+  decoded <- decodeCells rt projected []
   let deduped = nub decoded
   Ok (dropTakeList of_ lm deduped)
+
+-- Apply the projection column list to each raw row, in order.  Empty `cols` ⇒
+-- rows pass through UNCHANGED (SELECT *, byte-identical to the pre-projection
+-- path — no compile, no map).  Non-empty ⇒ compile each projection `SqlExpr` to
+-- a per-row `List Cell -> Cell` accessor (via the shared `compileValue`
+-- evaluator, against the SAME `lookup` — so it works for joins too), then map
+-- each row → `[ eval_1 row, eval_2 row, … ]`.  A compile error (unknown column /
+-- bad operand) aborts the whole query, matching WHERE's fail-fast.
+projectCells : (String -> Option Int) -> List SqlExpr -> List (List Cell) -> Result String (List (List Cell))
+projectCells _      []   rows = Ok rows
+projectCells lookup cols rows = do
+  evals <- compileProjections lookup cols
+  Ok (map (row => map (g => g row) evals) rows)
+
+-- Compile each projection expr to a per-row accessor (left-to-right, fail-fast).
+compileProjections : (String -> Option Int) -> List SqlExpr -> Result String (List (List Cell -> Cell))
+compileProjections _      []          = Ok []
+compileProjections lookup (e :: rest) = do
+  g <- compileValue lookup e
+  gs <- compileProjections lookup rest
+  Ok (g :: gs)
 
 -- Drop `offset` elements then keep at most `limit`, over a generic list —
 -- the DISTINCT-path sibling of `applyOffsetLimit`, which is specialized to
@@ -1021,6 +1082,13 @@ decodeCells rt (cells :: rest) acc = do
 --
 -- > renderShow (render (withOrderBy "age" True (withDistinct (selectFrom "users"))))
 -- "SELECT DISTINCT * FROM users ORDER BY age ASC ## []"
+--
+-- A non-empty `withColumns` list renders `SELECT <e1>, <e2>, …` (comma-joined,
+-- each via the expr renderer) instead of `SELECT *`; column binds precede WHERE
+-- binds. Empty (`SELECT *`) is unchanged (all doctests above).
+--
+-- > renderShow (render (withColumns [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")] (selectFrom "t")))
+-- "SELECT (a + b), name FROM t ## []"
 export
 renderShow : Result String (String, List Literal) -> String
 renderShow (Err e) = "ERR \{e}"

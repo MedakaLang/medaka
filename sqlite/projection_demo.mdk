@@ -1,0 +1,96 @@
+-- | Computed-SELECT-column differential demo.
+--
+-- Reads a real sqlite3-created DB and runs several projection queries through
+-- `lib.select.query`/`queryDistinct` with a non-empty `withColumns` list, so the
+-- executor projects each raw row → a computed cell row BEFORE decode.  Prints one
+-- line per typed row, prefixed by a label, for diffing against `sqlite3` in
+-- sqlite/test/projection_oracle.sh.
+--
+-- Usage: medaka build sqlite/projection_demo.mdk -o /tmp/pdemo && /tmp/pdemo <db>
+
+import lib.sqlite.{Db, openDb}
+import lib.select.{
+  Select, SqlExpr,
+  selectFrom, withOrderBy, withColumns, innerJoin, query, queryDistinct,
+  eEq, eAdd, eMul,
+  eColInt, eColText, eLitI,
+  unExpr,
+}
+import lib.rowtype.{RowType, tInt, tText, t2}
+
+-- (Int, String) row, printed "i|s".
+rowIS : RowType (Int, String)
+rowIS = t2 tInt tText
+
+showIS : (Int, String) -> String
+showIS t = match t
+  (i, s) => "\{i}|\{s}"
+
+-- (String, Int) row, printed "s|i".
+rowSI : RowType (String, Int)
+rowSI = t2 tText tInt
+
+showSI : (String, Int) -> String
+showSI t = match t
+  (s, i) => "\{s}|\{i}"
+
+-- single Int row, printed "i".
+showI : Int -> String
+showI i = "\{i}"
+
+printLines : (a -> String) -> List a -> <IO> Unit
+printLines _ []          = ()
+printLines f (x :: rest) =
+  let _ = println (f x)
+  printLines f rest
+
+runIS : Db -> String -> Select -> <IO> Unit
+runIS db label sel =
+  let _ = println label
+  match query db sel rowIS
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines showIS rows
+
+runSI : Db -> String -> Select -> <IO> Unit
+runSI db label sel =
+  let _ = println label
+  match query db sel rowSI
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines showSI rows
+
+runIDistinct : Db -> String -> Select -> <IO> Unit
+runIDistinct db label sel =
+  let _ = println label
+  match queryDistinct db sel tInt
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines showI rows
+
+main : <IO> Unit
+main = match args ()
+  [] => println "usage: pdemo <db-path>"
+  path :: _ => match openDb path
+    Err e => println "open error: \{e}"
+    Ok db =>
+      -- (a) computed arithmetic column (a+b) plus a plain column (name).
+      let _ = runIS db "-- SELECT a+b, name ORDER BY name --"
+                (withOrderBy "name" True
+                  (withColumns [ unExpr (eAdd (eColInt "a") (eColInt "b"))
+                               , unExpr (eColText "name") ]
+                    (selectFrom "nums")))
+      -- (b) projection reordering/subsetting: table is (id, a, b, name); project name, id.
+      let _ = runSI db "-- SELECT name, id ORDER BY id --"
+                (withOrderBy "id" True
+                  (withColumns [ unExpr (eColText "name")
+                               , unExpr (eColInt "id") ]
+                    (selectFrom "nums")))
+      -- (c) computed column over a JOIN: users.name, orders.total + 10.
+      let _ = runSI db "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --"
+                (withOrderBy "orders.total" True
+                  (withColumns [ unExpr (eColText "users.name")
+                               , unExpr (eAdd (eColInt "orders.total") (eLitI 10)) ]
+                    (innerJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid"))
+                      (selectFrom "users"))))
+      -- (d) computed projection + DISTINCT: a*0 collapses every row to one 0.
+      runIDistinct db "-- SELECT DISTINCT a*0 --"
+        (withColumns [ unExpr (eMul (eColInt "a") (eLitI 0)) ]
+          (selectFrom "nums"))

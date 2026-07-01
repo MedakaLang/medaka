@@ -35,6 +35,7 @@ CORPUS=(
   "$ROOT/sqlite/inmem_join_probe.mdk"
   "$ROOT/sqlite/inmem_leftjoin_probe.mdk"
   "$ROOT/sqlite/inmem_distinct_probe.mdk"
+  "$ROOT/sqlite/inmem_proj_probe.mdk"
 )
 
 # The FILE-backed probe corpus (stage D) — probes that exercise the host-I/O externs

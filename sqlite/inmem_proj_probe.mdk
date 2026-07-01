@@ -1,0 +1,100 @@
+-- | In-memory computed-SELECT-column probe — the stage-C WasmGC tandem oracle
+-- for the projection path (`lib.select.withColumns` → `projectCells` over the raw
+-- row, before decode).
+--
+-- Builds a `nums` table entirely in memory (`Array Int` image, no file I/O) and
+-- runs `SELECT`s with a non-empty projection list (a computed arithmetic column,
+-- a reordered/subsetted plain column, and a DISTINCT computed column) through
+-- `lib.select.query`/`queryDistinct`, printing one line per row.  Because it is
+-- bytes-first (buildDatabase → fromBytes → query) it emits + runs IDENTICALLY
+-- under the native LLVM backend and the WasmGC backend; `test/wasm/diff_sqlite.sh`
+-- builds it for both targets and diffs stdout.
+
+import lib.dbwriter.{buildDatabase}
+import lib.sqlite.{Db, fromBytes}
+import lib.recordfmt.{Cell, CInt, CText}
+import lib.select.{
+  Select, selectFrom, withOrderBy, withColumns, query, queryDistinct,
+  eAdd, eMul, eColInt, eColText, eLitI, unExpr,
+}
+import lib.rowtype.{RowType, tInt, tText, t2}
+
+numsSql : String
+numsSql = "CREATE TABLE nums(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, name TEXT)"
+
+numsRows : List (List Cell)
+numsRows =
+  [ [ CInt 1, CInt 10, CInt 5, CText "Carol" ]
+  , [ CInt 2, CInt 3,  CInt 7, CText "Alice" ]
+  , [ CInt 3, CInt 20, CInt 0, CText "Bob"   ]
+  , [ CInt 4, CInt 1,  CInt 1, CText "Dave"  ]
+  ]
+
+ipk : Option Int
+ipk = Some 0
+
+rowIS : RowType (Int, String)
+rowIS = t2 tInt tText
+
+showIS : (Int, String) -> String
+showIS t = match t
+  (i, s) => "\{i}|\{s}"
+
+rowSI : RowType (String, Int)
+rowSI = t2 tText tInt
+
+showSI : (String, Int) -> String
+showSI t = match t
+  (s, i) => "\{s}|\{i}"
+
+printLines : (a -> String) -> List a -> <IO> Unit
+printLines _ []          = ()
+printLines f (x :: rest) =
+  let _ = println (f x)
+  printLines f rest
+
+runIS : Db -> String -> Select -> <IO> Unit
+runIS db label sel =
+  let _ = println label
+  match query db sel rowIS
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines showIS rows
+
+runSI : Db -> String -> Select -> <IO> Unit
+runSI db label sel =
+  let _ = println label
+  match query db sel rowSI
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines showSI rows
+
+runIDistinct : Db -> String -> Select -> <IO> Unit
+runIDistinct db label sel =
+  let _ = println label
+  match queryDistinct db sel tInt
+    Err e   => println "query error: \{e}"
+    Ok rows => printLines (i => "\{i}") rows
+
+runAll : Db -> <IO> Unit
+runAll db =
+  let _ = runIS db "-- SELECT a+b, name ORDER BY name --"
+            (withOrderBy "name" True
+              (withColumns [ unExpr (eAdd (eColInt "a") (eColInt "b"))
+                           , unExpr (eColText "name") ]
+                (selectFrom "nums")))
+  let _ = runSI db "-- SELECT name, id ORDER BY id --"
+            (withOrderBy "id" True
+              (withColumns [ unExpr (eColText "name")
+                           , unExpr (eColInt "id") ]
+                (selectFrom "nums")))
+  runIDistinct db "-- SELECT DISTINCT a*0 --"
+    (withColumns [ unExpr (eMul (eColInt "a") (eLitI 0)) ]
+      (selectFrom "nums"))
+
+main : <IO, Mut> Unit
+main =
+  let _ = println "-- CREATE nums (in-memory) --"
+  match buildDatabase "nums" numsSql 4 ipk numsRows
+    Err e    => println "build error: \{e}"
+    Ok bytes => match fromBytes bytes
+      Err e => println "fromBytes error: \{e}"
+      Ok db => runAll db
