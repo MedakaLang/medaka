@@ -1,0 +1,71 @@
+-- | File-backed SQLite round-trip probe — the stage-D WasmGC milestone.
+--
+-- Exercises the two HOST-I/O externs (`writeFileBytes` / `readFileBytes`) end to
+-- end: WRITE a real `.sqlite` file, READ it back, then a `delete` + `update` (which
+-- both READ the file, mutate, and WRITE it back).  Because the lib is bytes-first and
+-- target-agnostic, this emits + runs IDENTICALLY under the native LLVM backend and
+-- the WasmGC backend (`medaka build --target wasm`) — the wasm side does a real
+-- Node `fs.writeFileSync`/`readFileSync` via the run.js host seam.
+--
+-- The output (printed rows + counts) is path-independent, so the tandem oracle
+-- (`test/wasm/diff_sqlite.sh`) can give native and wasm DISTINCT temp paths (no
+-- clobber) and diff stdout byte-for-byte.
+--
+-- Usage: file_roundtrip_probe <path>
+--   native — ./probe /tmp/x.native.sqlite
+--   wasm   — MDK_ARGS=/tmp/x.wasm.sqlite node run.js probe.wasm
+
+import lib.dbwriter.{writeDatabase}
+import lib.sqlite.{Db, openDb, scanTableRows}
+import lib.mutate.{delete, update, Assign}
+import lib.select.{eColInt, eLitI, eEq, eGt, Literal, LInt}
+import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.btree.{Row}
+
+usersSql : String
+usersSql = "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+
+baseRows : List (List Cell)
+baseRows =
+  [ [ CInt 1, CText "Alice", CInt 30 ]
+  , [ CInt 2, CText "Bob",   CNull ]
+  , [ CInt 3, CText "Carol", CInt (-5) ]
+  , [ CInt 7, CText "Dave",  CInt 1000000 ]
+  ]
+
+printRows : List Row -> <IO> Unit
+printRows [] = ()
+printRows (r :: rest) =
+  let _ = println (display r)
+  printRows rest
+
+-- openDb the file, scan `users`, print the rows.
+readUsers : String -> <IO, FileRead> Unit
+readUsers path = match openDb path
+  Err e => println "open error: \{e}"
+  Ok db => match scanTableRows db "users"
+    Err e    => println "scan error: \{e}"
+    Ok found => printRows found
+
+runProbe : String -> <IO, FileRead, FileWrite, Mut> Unit
+runProbe path =
+  let _ = println "-- WRITE users, READ back --"
+  match writeDatabase path "users" usersSql 3 (Some 0) baseRows
+    Err e => println "write error: \{e}"
+    Ok _ =>
+      let _ = readUsers path
+      -- DELETE age > 100 (removes Dave, id=7) — reads + rewrites the file.
+      let _ = println "-- DELETE users WHERE age > 100, READ back --"
+      let _ = match delete path "users" (eGt (eColInt "age") (eLitI 100))
+                Err e => println "delete error: \{e}"
+                Ok n  => let _ = println "deleted \{n} rows" in readUsers path
+      -- UPDATE age := 99 WHERE id = 3 (Carol) — reads + rewrites the file.
+      let _ = println "-- UPDATE users SET age=99 WHERE id=3, READ back --"
+      match update path "users" [Assign "age" (LInt 99)] (eEq (eColInt "id") (eLitI 3))
+        Err e => println "update error: \{e}"
+        Ok n  => let _ = println "updated \{n} rows" in readUsers path
+
+main : <IO, FileRead, FileWrite, Mut> Unit
+main = match args ()
+  [path] => runProbe path
+  _ => println "usage: file_roundtrip_probe <path>"

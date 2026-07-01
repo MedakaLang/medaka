@@ -31,6 +31,15 @@ CORPUS=(
   "$ROOT/sqlite/inmem_crud_probe.mdk"
 )
 
+# The FILE-backed probe corpus (stage D) — probes that exercise the host-I/O externs
+# `writeFileBytes` / `readFileBytes` (WRITE a real .sqlite, READ it back, delete/update).
+# Each takes ONE path arg; native gets it from argv, wasm from MDK_ARGS (run.js).  Native
+# and wasm write to DISTINCT temp paths (no clobber); the printed output is
+# path-independent, so stdout is diffed byte-for-byte just like the in-memory arm.
+FILE_CORPUS=(
+  "$ROOT/sqlite/file_roundtrip_probe.mdk"
+)
+
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping sqlite tandem gate"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) — skipping sqlite tandem gate"; exit 2; }
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka (missing $MEDAKA)"; exit 2; }
@@ -83,6 +92,35 @@ for f in "${CORPUS[@]}"; do
   else
     fail=$((fail+1))
     printf 'FAIL %s\n  --- native ---\n%s\n  --- wasm ---\n%s\n  (%s)\n' \
+      "$name" "$ref" "$got" "$(cat "$WORK/run.err")"
+  fi
+done
+
+# ── FILE-backed arm (stage D: writeFileBytes / readFileBytes over Node fs) ─────
+for f in "${FILE_CORPUS[@]}"; do
+  [ -f "$f" ] || { fail=$((fail+1)); printf 'FAIL %s (missing probe)\n' "$f"; continue; }
+  name="$(basename "$f")"
+
+  # 1. native oracle: build + run against a native-only temp .sqlite (arg via argv).
+  obin="$WORK/$name.native"
+  if ! "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORK/nbuild.err" 2>&1; then
+    fail=$((fail+1)); printf 'FAIL %s (native build)\n%s\n' "$name" "$(cat "$WORK/nbuild.err")"; continue
+  fi
+  ref="$("$obin" "$WORK/$name.native.sqlite" 2>/dev/null)"
+
+  # 2. wasm: build to a validated .wasm.
+  wasm="$WORK/$name.wasm"
+  if ! "$MEDAKA" build --allow-internal --target wasm "$f" -o "$wasm" >"$WORK/wbuild.err" 2>&1; then
+    fail=$((fail+1)); printf 'FAIL %s (wasm build)\n%s\n' "$name" "$(cat "$WORK/wbuild.err")"; continue
+  fi
+
+  # 3. run under Node with a DISTINCT wasm-only temp .sqlite (arg via MDK_ARGS), diff stdout.
+  got="$(MDK_ARGS="$WORK/$name.wasm.sqlite" "$NODE" "$RUNJS" "$wasm" 2>"$WORK/run.err")"
+  if [ "$ref" = "$got" ]; then
+    pass=$((pass+1)); printf 'ok   %s (file: native == wasm)\n' "$name"
+  else
+    fail=$((fail+1))
+    printf 'FAIL %s (file)\n  --- native ---\n%s\n  --- wasm ---\n%s\n  (%s)\n' \
       "$name" "$ref" "$got" "$(cat "$WORK/run.err")"
   fi
 done

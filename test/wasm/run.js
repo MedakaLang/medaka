@@ -62,10 +62,12 @@ let floatFmtBuf = [];   // the most-recently-formatted Float's UTF-8 bytes (ASCI
 const vfs = {
   readFile: (p) => fs.readFileSync(p),   // -> Buffer; throws on missing/unreadable
   exists: (p) => fs.existsSync(p),
+  writeFile: (p, buf) => fs.writeFileSync(p, buf),   // throws on unwritable path
 };
 const argv = (process.env.MDK_ARGS ? process.env.MDK_ARGS.split(' ') : []);
 let pathBuf = [];          // bytes the guest pushed for the current path/name
 let resultBuf = Buffer.alloc(0);   // bytes of the most recent readFile/getEnv result
+let writeBuf = [];         // stage-D: bytes the guest streamed for writeFileBytes
 const takePath = () => { const s = Buffer.from(pathBuf).toString('utf8'); pathBuf = []; return s; };
 
 const imports = { env: {
@@ -100,6 +102,16 @@ const imports = { env: {
   mdk_arg_byte: (i, j) => Buffer.from(argv[i], 'utf8')[j] & 0xff,
   mdk_result_len: () => resultBuf.length,
   mdk_result_byte: (i) => resultBuf[i] & 0xff,
+  // stage-D: byte-clean file WRITE seam (writeFileBytes).  The path arrives via the
+  // existing mdk_path_push channel; bytes stream into writeBuf; commit does an
+  // fs.writeFileSync (via the swappable vfs).  Ok -> 1; on error cache the message in
+  // resultBuf (so the guest rebuilds an Err $str) and return 0.  Mirrors readFile.
+  mdk_write_file_reset: () => { writeBuf = []; },
+  mdk_write_file_push: (b) => { writeBuf.push(b & 0xff); },
+  mdk_write_file_commit: () => {
+    try { vfs.writeFile(takePath(), Buffer.from(writeBuf)); writeBuf = []; return 1; }
+    catch (e) { resultBuf = Buffer.from(String(e.message || e), 'utf8'); writeBuf = []; return 0; }
+  },
   mdk_exit: (code) => { process.stdout.write(Buffer.from(acc).toString('utf8')); process.exit(code | 0); },
 } };
 WebAssembly.instantiate(bytes, imports)

@@ -1089,6 +1089,65 @@ ioArgsRuntimeLines = [
   "    (local.get $acc))",
 ]
 
+-- ── stage-D: byte-clean file I/O host surface (readFileBytes / writeFileBytes) ─
+-- The FILE seam for the bytes-first sqlite lib.  readFileBytes reuses the existing
+-- read byte-channel ($mdk_read_file + $mdk_result_len/$mdk_result_byte) but rebuilds
+-- an $arr of i31 Int bytes (NOT a UTF-8 $str), so it needs no new host import — only
+-- the runtime body ($mdk_read_file_bytes_io).  writeFileBytes is the genuinely NEW
+-- direction: three new host imports stream the path (reuse $mdk_push_path) + the byte
+-- array OUT to a JS write buffer, then commit a Node `fs.writeFileSync`.  Both return
+-- a Result String (…) byte-identical to the native runtime (medaka_rt.c
+-- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on useFileBytesRef (which also
+-- forces useIORef so $mdk_push_path / $mdk_io_result_to_str are in scope, useArrayRef
+-- so $arr is declared, and useStrRef for the Err $str).
+export
+fileBytesHostImportLines : List String
+fileBytesHostImportLines = [
+  "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",
+  "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))",
+  "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))",
+  "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))",
+]
+
+export
+fileBytesRuntimeLines : List String
+fileBytesRuntimeLines = [
+  "  ;; -- stage-D byte-clean file I/O runtime --",
+  "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
+  "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
+  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))",
+  "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (local.set $st (call $mdk_read_file))",
+  "    (if (result (ref eq)) (local.get $st)",
+  "      (then",
+  "        (local.set $n (call $mdk_result_len))",
+  "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))",
+  "        (local.set $i (i32.const 0))",
+  "        (block $d (loop $l",
+  "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
+  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))",
+  "    (local $st i32) (local $n i32) (local $i i32)",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $n (array.len (local.get $ba)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.set $st (call $mdk_write_file_commit))",
+  "    (if (result (ref eq)) (local.get $st)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+]
+
 -- ── W8b string index-of / compare ($str-dependent) ───────────────────────────
 -- $mdk_str_index_of(needle, hay) -> Option Int (ref eq): the first BYTE-level match's
 -- codepoint index as `Some idx`, or `None` if absent (empty needle -> Some 0).  Builds

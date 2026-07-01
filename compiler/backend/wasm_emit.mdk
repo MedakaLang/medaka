@@ -183,7 +183,8 @@ import backend.wasm_preamble.{
   strSearchRuntimeLines,
   strCodecRuntimeLines, charFromCodeRuntimeLines,
   charClassRuntimeLines,
-  ioHostImportLines, ioHostRuntimeLines, ioArgsRuntimeLines
+  ioHostImportLines, ioHostRuntimeLines, ioArgsRuntimeLines,
+  fileBytesHostImportLines, fileBytesRuntimeLines
 }
 
 -- ── static value kind (scalar-mode only; for the auto-print routing) ─────────
@@ -498,6 +499,13 @@ useIORef = Ref False
 useArgsRef : Ref Bool
 useArgsRef = Ref False
 
+-- stage-D: the program uses readFileBytes / writeFileBytes (byte-clean file I/O).
+-- Gates the write host imports (fileBytesHostImportLines) + the two runtime bodies
+-- (fileBytesRuntimeLines).  Co-forces useIORef ($mdk_push_path / $mdk_io_result_to_str),
+-- useArrayRef ($arr rep), and useStrRef (the Err $str + the path $str).
+useFileBytesRef : Ref Bool
+useFileBytesRef = Ref False
+
 -- W8b: the names KNOWN to hold a Float in the CURRENT function/impl body — set while
 -- emitting an `impl Num Float` (etc.) method, whose params are Float but appear as bare
 -- CVars the structural detector can't otherwise see.  `cexprIsFloat` consults this so
@@ -576,6 +584,7 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
+  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = setRef recFieldsRef (collectRecFields groups)
   let _ = scanProgW7 groups
@@ -640,6 +649,7 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
+  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = setRef recFieldsRef (collectRecFields groups)
   let _ = scanProgW7 groups
@@ -756,6 +766,10 @@ isLeafExternW name = contains name [
   -- emitLeafExternRef into the byte-channel host-import runtime.  ($str is forced by
   -- noteW8Extern, not by listing them under isStrExternW.)
   "readFile", "fileExists", "args", "getEnv", "exit",
+  -- stage-D: byte-clean file I/O.  readFileBytes builds a Result String (Array Int)
+  -- (an $arr of i31 bytes); writeFileBytes streams an Array Int OUT + fs.writeFileSync.
+  -- Both route through emitLeafExternRef into the fileBytesRuntime host seam.
+  "readFileBytes", "writeFileBytes",
   -- W10: `panic : String -> a` lowers to a `unreachable` trap (stack-polymorphic,
   -- validates as any result type — matches the native @mdk_panic abort).  The message
   -- arg is emitted-then-dropped; printing it to stderr is a nice-to-have not done here.
@@ -791,6 +805,8 @@ externArityW name =
     -- W12: readFile/fileExists/getEnv/exit take 1 arg; args takes a Unit arg
     -- (emitted + dropped, like randomFloat).
     "readFile", "fileExists", "getEnv", "exit", "args",
+    -- stage-D: readFileBytes : String -> Result String (Array Int) (1-arg).
+    "readFileBytes",
     -- layer-6: stringToFloat : String -> Option Float (1-arg).
     "stringToFloat"] then 1
   else if contains name ["randomInt", "stringIndexOf", "stringCompare",
@@ -799,7 +815,9 @@ externArityW name =
     -- stage-A: 2-arg bitwise (Int->Int->Int) and arrayFill (val->arr->Unit).
     "bitAnd", "shiftLeft", "shiftRight", "arrayFill",
     -- stage-B: bytesToFloat64 : Array Int -> Int -> Float (2-arg).
-    "bytesToFloat64"] then 2
+    "bytesToFloat64",
+    -- stage-D: writeFileBytes : String -> Array Int -> Result String Unit (2-arg).
+    "writeFileBytes"] then 2
   else if contains name ["stringSlice", "arraySetUnsafe"] then 3
   -- stage-A: arrayBlit src srcOff dst dstOff len (5 args).
   else if name == "arrayBlit" then 5
@@ -1048,6 +1066,12 @@ noteW8Extern name =
   let _ = if name == "args" then setRef useArgsRef True else ()
   let _ = if contains name ["readFile", "fileExists", "args", "getEnv", "exit"]
           then setRef useIORef True else ()
+  -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
+  -- useIORef), the $arr rep (useArrayRef), the $str rep (path/Err message), and the
+  -- fileBytes runtime + write host imports (useFileBytesRef).
+  let _ = if contains name ["readFileBytes", "writeFileBytes"]
+          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef useFileBytesRef True
+          else ()
   if contains name ["ePutStr", "ePutStrLn"] then setRef useEPutRef True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
@@ -1605,6 +1629,8 @@ emitRefProgram prog groups =
     ++ (if useFloatStrRef.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
     ++ (if useIORef.value then ioHostImportLines else [])
+    -- stage-D: writeFileBytes's write host imports (reset/push/commit).
+    ++ (if useFileBytesRef.value then fileBytesHostImportLines else [])
   let valNames = progValNames prog
   -- Stage-2 (b′) WASMGC-TRMC: detect dispatch-into-single-target TMC groups (the lexer's
   -- `scan` token spine) BEFORE emitting fns, so emitRefFnBind can route a group member to
@@ -1675,12 +1701,15 @@ emitRefProgram prog groups =
   -- list types) gated on useArgsRef.
   let ioHostRt = if useIORef.value then ioHostRuntimeLines else []
   let ioArgsRt = if useArgsRef.value then ioArgsRuntimeLines else []
+  -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
+  -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
+  let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs ()
   joinNl (header ++ typeSection ++ imports ++ elemDecl ++ globals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
-            ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ floatStrRt
+            ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt
             ++ dataSegs ++ initLines ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
@@ -3990,6 +4019,16 @@ emitLeafExternRef prog env d "args" args = match args
 emitLeafExternRef prog env d "exit" args = match args
   [code] => emitRefExpr prog env d code ++ ["ref.cast (ref i31)", "i31.get_s", "call $mdk_exit", "unreachable"]
   _ => gapL "wasm W12: exit takes exactly one argument"
+-- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
+-- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
+-- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
+emitLeafExternRef prog env d "readFileBytes" args = match args
+  [p] => emitRefExpr prog env d p ++ ["ref.cast (ref $str)", "call $mdk_read_file_bytes_io"]
+  _ => gapL "wasm stage-D: readFileBytes takes exactly one argument"
+emitLeafExternRef prog env d "writeFileBytes" args = match args
+  [p, arr] => emitRefExpr prog env d p ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d arr ++ ["ref.cast (ref $arr)", "call $mdk_write_file_bytes_io"]
+  _ => gapL "wasm stage-D: writeFileBytes takes exactly two arguments"
 -- W10: `panic msg` → emit the message (a $str (ref eq)), drop it, then `unreachable`.
 -- `unreachable` is a trap and is stack-polymorphic, so it validates as any result
 -- type (mirroring native @mdk_panic, which aborts with empty stdout).
@@ -6425,13 +6464,20 @@ maxIndexAt e d = match e
   CList es => foldMaxI (map (x => maxIndexAt x d) es)
   CArray es => foldMaxI (map (x => maxIndexAt x d) es)
   CRecord _ fields => foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)
-  CRecordUpdate b fields => maxI (maxIndexAt b d) (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields))
-  CVariantUpdate _ b fields => maxI (maxIndexAt b d) (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields))
+  -- CRecordUpdate/CVariantUpdate stash the base in $__rub<d> at their own emit site.
+  CRecordUpdate b fields => maxI d (maxI (maxIndexAt b d) (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
+  CVariantUpdate _ b fields => maxI d (maxI (maxIndexAt b d) (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
   CFieldAccess e1 _ _ => maxIndexAt e1 d
-  CRangeList lo hi _ => maxI (maxIndexAt lo d) (maxIndexAt hi d)
-  CRangeArray lo hi _ => maxI (maxIndexAt lo d) (maxIndexAt hi d)
-  CIndex a i => maxI (maxIndexAt a d) (maxIndexAt i d)
-  CSlice a lo hi _ => maxI (maxIndexAt a d) (maxI (maxIndexAt lo d) (maxIndexAt hi d))
+  -- These four nodes each allocate depth-`d` scratch locals ($__rl*/$__ra*/$__ix*/
+  -- $__sl* at suffix `d`) at their OWN emit site, so they must contribute `d` even
+  -- when their subexpressions are leaves (which report d-1).  Omitting the `maxI d`
+  -- undercounts by one — masked at depths 0/1 by the `maxI maxDepth 1` floor in
+  -- w7LocalDecls, but at depth >= 2 (e.g. an `arr[i]` nested inside two matches, as in
+  -- the sqlite lib) it left `$__ixarr2` undeclared → wasm-tools "unknown local".
+  CRangeList lo hi _ => maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
+  CRangeArray lo hi _ => maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
+  CIndex a i => maxI d (maxI (maxIndexAt a d) (maxIndexAt i d))
+  CSlice a lo hi _ => maxI d (maxI (maxIndexAt a d) (maxI (maxIndexAt lo d) (maxIndexAt hi d)))
   _ => d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
