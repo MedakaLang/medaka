@@ -3406,14 +3406,33 @@ emitExternEtaClosure prog name =
   ["ref.func " ++ lamName, "i32.const " ++ intToString arity,
    "array.new_fixed $argarr 0", "struct.new $clos"]
 
+-- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (a flat copy of the
+-- useArrayRef block in w7LocalsAtDepth at depth 0) that an ARRAY-extern eta (func …)
+-- must declare to host emitArrayExternRef's loop counter / size / result $arr / list
+-- cursor / closure-init-value cells / i64 reinterpret accumulator.
+arrayEtaScratchLocals : List String
+arrayEtaScratchLocals =
+  ["(local $__aexi0 i32)", "(local $__aexn0 i32)", "(local $__aexarr0 (ref null $arr))",
+   "(local $__aexlst0 (ref eq))", "(local $__aexf0 (ref eq))", "(local $__aexv0 (ref eq))",
+   "(local $__aexbits0 i64)", "(local $__raarr0 (ref null $arr))"]
+
 emitExternEtaDefine : Prog -> String -> String -> Int -> <Mut> List String
 emitExternEtaDefine prog lamName name arity =
   let params = synthParams arity
   let argPrologue = flatMap (argLoadAt) (zipIdx params 0)
   let argVars = map (p => CVar p AGlobal) params
+  -- An ARRAY extern referenced point-free (e.g. `arrayFromList` passed to the byteparser
+  -- parse path) must route to emitArrayExternRef — mirroring the DIRECT-call arm at
+  -- emitRefApp (isArrayExternW f → emitArrayExternRef).  Without this it fell to
+  -- emitLeafExternRef → "unsupported leaf extern".  The array externs use the depth-0
+  -- `$__aex*`/`$__raarr*` scratch locals (loop counter, size, result $arr, list cursor,
+  -- closure/init/value cells, i64 reinterpret accumulator), which the synthesized eta
+  -- (func …) must declare itself (its localLines otherwise only cover the param locals).
   let call = if isStrExternW name then emitStrExternRef prog params 0 name argVars
+             else if isArrayExternW name then emitArrayExternRef prog params 0 name argVars
              else emitLeafExternRef prog params 0 name argVars
-  let localLines = map (l => localDeclRef l) params
+  let arrayScratch = if isArrayExternW name then arrayEtaScratchLocals else []
+  let localLines = map (l => localDeclRef l) params ++ arrayScratch
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map (l => "  " ++ l) localLines
     ++ indent (argPrologue ++ call ++ ["return"])
@@ -5450,7 +5469,12 @@ freeVarsExpr : List String -> CExpr -> <Mut> List String
 freeVarsExpr bound e = match e
   CVar x _ => if contains x bound then [] else [x]
   CApp f a => freeVarsExpr bound f ++ freeVarsExpr bound a
-  CLam pats b => freeVarsExpr (map patName pats ++ bound) b
+  -- A lambda param may be a DESTRUCTURING pattern (tuple/ctor) — e.g. a `do`-bind
+  -- with a tuple LHS `(a, b) <- m` desugars to `andThen m (\(a, b) => …)`.  Subtract
+  -- ALL its bound vars (patVars, like the CLet case), not `map patName` which only
+  -- accepts PVar/PWild and gaps on any real pattern.  (emitClosure/emitLamDefine
+  -- already destructure such params via bindPatRef; only this free-var walk lagged.)
+  CLam pats b => freeVarsExpr (flatMap patVars pats ++ bound) b
   CLit _ => []
   CBinPrim _ l r => freeVarsExpr bound l ++ freeVarsExpr bound r
   CUnOp _ x => freeVarsExpr bound x
@@ -6058,7 +6082,7 @@ collectBindLocals _ = []
 patName : Pat -> <Mut> String
 patName (PVar x) = x
 patName PWild = "_"
-patName _ = gapS "only PVar/PWild parameters (pattern params are inner-match material)"
+patName _ = gapS ("only PVar/PWild parameters (pattern params are inner-match material) [in " ++ curBindRef.value ++ "]")
 
 -- ── local collection ─────────────────────────────────────────────────────────
 -- Wasm requires every local declared in the function header.  Walk the body for
