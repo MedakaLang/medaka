@@ -18,3 +18,7 @@ _build/
 
 # Playground deployable site folder (built by playground/build_site.sh; not committed)
 /playground/site/
+
+# SQLite demo/probe build artifacts (built to repo root by demos/oracles)
+/sqlite_*
+/writer_api_demo
