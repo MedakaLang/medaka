@@ -1,0 +1,6 @@
+-- CONTROL: a polymorphic Num operator (`add a b = a + b`, inferred `Num a =>`) must
+-- STAY dict-routed — its operand never grounds to a concrete primitive, so
+-- resolveArithSite leaves the route RNone (no Float stamp).  Instantiated at Int
+-- here: if it were mis-stamped Float, `add 2 3` would emit float arith → wrong.
+add a b = a + b
+main = add 2 3

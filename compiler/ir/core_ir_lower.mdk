@@ -31,6 +31,7 @@ import frontend.ast.{
   IfaceMethod(..),
   MethodDefault(..),
   ImplMethod(..),
+  Route(..),
 }
 import ir.core_ir.{
   CExpr(..),
@@ -100,7 +101,7 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
-lower (EBinOp op l r _) = lowerBinop op l r
+lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute route.value)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
 lower (EUnOp op e) = CUnOp op (lower e)
 lower (ETuple es) = CTuple (map lower es)
@@ -123,6 +124,11 @@ lower (ERecordUpdate base fields) =
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (map lowerStmt stmts)
+-- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged arithmetic binop in
+-- `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell route does not survive to here, a
+-- node does).  Read the tag into CBinPrim's scalar field so the emitter picks the
+-- Float primitive.  Must precede the transparent `EAnnot e _` strip below.
+lower (EAnnot (EBinOp op l r _) (TyCon tag)) = lowerBinop op l r tag
 lower (EAnnot e _) = lower e
 lower (EHeadAnnot e _) = lower e
 -- dispatch: read the typechecker-filled route out of the mutable cell, making it
@@ -141,13 +147,20 @@ lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
 
 -- surface binops that are really sugar are lowered to primitive control flow /
 -- application here; only the genuinely-primitive ops survive as CBinPrim.
-lowerBinop : String -> Expr -> Expr -> CExpr
-lowerBinop "&&" l r = CIf (lower l) (lower r) (CLit (LBool False))
-lowerBinop "||" l r = CIf (lower l) (CLit (LBool True)) (lower r)
-lowerBinop "|>" l r = CApp (lower r) (lower l)
-lowerBinop ">>" l r = composeLam (lower l) (lower r)
-lowerBinop "<<" l r = composeLam (lower r) (lower l)
-lowerBinop op l r = CBinPrim op (lower l) (lower r)
+-- the scalar-type tag carried on an EBinOp's route ("Float"/"Int" for a stamped
+-- monomorphic concrete-primitive arithmetic operand; "" otherwise).  Only
+-- RScalar carries it; every dispatch route (RKey/RDict/…) means "unstamped".
+scalarTagOfRoute : Route -> String
+scalarTagOfRoute (RScalar s) = s
+scalarTagOfRoute _ = ""
+
+lowerBinop : String -> Expr -> Expr -> String -> CExpr
+lowerBinop "&&" l r _ = CIf (lower l) (lower r) (CLit (LBool False))
+lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)
+lowerBinop "|>" l r _ = CApp (lower r) (lower l)
+lowerBinop ">>" l r _ = composeLam (lower l) (lower r)
+lowerBinop "<<" l r _ = composeLam (lower r) (lower l)
+lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag
 
 -- (f >> g) ≡ \x -> g (f x).  composeLam first second ≡ \x -> second (first x).
 composeLam : CExpr -> CExpr -> CExpr
@@ -610,8 +623,8 @@ rewriteExprRP fo (CDecision scrut arms _) =
   CDecision (rewriteExprRP fo scrut) arms2 (compileArmsC arms2)
 rewriteExprRP fo (CIf c t e) =
   CIf (rewriteExprRP fo c) (rewriteExprRP fo t) (rewriteExprRP fo e)
-rewriteExprRP fo (CBinPrim op l r) =
-  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r)
+rewriteExprRP fo (CBinPrim op l r tag) =
+  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r) tag
 rewriteExprRP fo (CUnOp op x) = CUnOp op (rewriteExprRP fo x)
 rewriteExprRP fo (CTuple es) = CTuple (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CList es) = CList (map (rewriteExprRP fo) es)

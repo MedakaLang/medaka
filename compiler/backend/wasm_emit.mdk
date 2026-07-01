@@ -936,7 +936,7 @@ exprUsesStr e = match e
     let (hd, args) = flattenApp (CApp f a) []
     headUsesStr hd || anyList exprUsesStr args
   CLam _ b => exprUsesStr b
-  CBinPrim _ l r => exprUsesStr l || exprUsesStr r
+  CBinPrim _ l r _ => exprUsesStr l || exprUsesStr r
   CUnOp _ x => exprUsesStr x
   CIf c t f => exprUsesStr c || exprUsesStr t || exprUsesStr f
   CLet _ _ a b => exprUsesStr a || exprUsesStr b
@@ -1013,7 +1013,7 @@ scanExprW7 e = match e
   -- extern, OR a Float-kinded main, post-scan in emitProgram.)
   CLit (LFloat _) => setRef useFloatRef True
   CLam _ b => scanExprW7 b
-  CBinPrim op l r => let _ = noteW8Binop op in let _ = scanExprW7 l in scanExprW7 r
+  CBinPrim op l r _ => let _ = noteW8Binop op in let _ = scanExprW7 l in scanExprW7 r
   CUnOp _ x => scanExprW7 x
   CIf c t f => let _ = scanExprW7 c in let _ = scanExprW7 t in scanExprW7 f
   CLet _ pat a b => let _ = scanPatW7 pat in let _ = scanExprW7 a in scanExprW7 b
@@ -1199,7 +1199,7 @@ scanRecFields e = match e
   CArray es => flatMap scanRecFields es
   CApp f a => scanRecFields f ++ scanRecFields a
   CLam _ b => scanRecFields b
-  CBinPrim _ l r => scanRecFields l ++ scanRecFields r
+  CBinPrim _ l r _ => scanRecFields l ++ scanRecFields r
   CUnOp _ x => scanRecFields x
   CIf c t f => scanRecFields c ++ scanRecFields t ++ scanRecFields f
   CLet _ _ a b => scanRecFields a ++ scanRecFields b
@@ -1288,7 +1288,7 @@ scanExprValueUses fnNames fnArs ctorArs e = match e
       _ => scanExprValueUses fnNames fnArs ctorArs hd
     here ++ flatMap (scanExprValueUses fnNames fnArs ctorArs) args
   CLam _ b => scanExprValueUses fnNames fnArs ctorArs b
-  CBinPrim _ l r => scanExprValueUses fnNames fnArs ctorArs l ++ scanExprValueUses fnNames fnArs ctorArs r
+  CBinPrim _ l r _ => scanExprValueUses fnNames fnArs ctorArs l ++ scanExprValueUses fnNames fnArs ctorArs r
   CUnOp _ x => scanExprValueUses fnNames fnArs ctorArs x
   CIf c t f => scanExprValueUses fnNames fnArs ctorArs c ++ scanExprValueUses fnNames fnArs ctorArs t ++ scanExprValueUses fnNames fnArs ctorArs f
   CLet _ _ a b => scanExprValueUses fnNames fnArs ctorArs a ++ scanExprValueUses fnNames fnArs ctorArs b
@@ -1348,7 +1348,7 @@ exprUsesClosures fnNames fnArs ctorArs locals e = match e
   CApp f a => appUsesClosures fnNames fnArs ctorArs locals (CApp f a)
   CVar x _ => not (contains x locals) && contains x fnNames
   CLit _ => False
-  CBinPrim _ l r => exprUsesClosures fnNames fnArs ctorArs locals l || exprUsesClosures fnNames fnArs ctorArs locals r
+  CBinPrim _ l r _ => exprUsesClosures fnNames fnArs ctorArs locals l || exprUsesClosures fnNames fnArs ctorArs locals r
   CUnOp _ x => exprUsesClosures fnNames fnArs ctorArs locals x
   CIf c t f => exprUsesClosures fnNames fnArs ctorArs locals c || exprUsesClosures fnNames fnArs ctorArs locals t || exprUsesClosures fnNames fnArs ctorArs locals f
   CLet _ pat a b => exprUsesClosures fnNames fnArs ctorArs locals a || exprUsesClosures fnNames fnArs ctorArs (patVars pat ++ locals) b
@@ -1415,7 +1415,7 @@ exprHasDecision e = match e
   CMatch _ _ => True
   CIf c t f => exprHasDecision c || exprHasDecision t || exprHasDecision f
   CLet _ _ a b => exprHasDecision a || exprHasDecision b
-  CBinPrim _ a b => exprHasDecision a || exprHasDecision b
+  CBinPrim _ a b _ => exprHasDecision a || exprHasDecision b
   CUnOp _ a => exprHasDecision a
   CApp f a => exprHasDecision f || exprHasDecision a
   CBlock stmts => anyList stmtHasDecision stmts
@@ -1558,7 +1558,7 @@ emitScalarExpr : List String -> List String -> List String -> CExpr -> <Mut> (Li
 emitScalarExpr fnNames valNames env e = match e
   CLit l => emitLitI32 l
   CVar x _ => emitVarI32 fnNames valNames env x
-  CBinPrim op l r => emitBinI32 fnNames valNames env op l r
+  CBinPrim op l r _ => emitBinI32 fnNames valNames env op l r
   CUnOp op x => emitUnI32 fnNames valNames env op x
   CIf c t f => emitIfI32 fnNames valNames env c t f
   CLet recF pat e1 e2 => emitLetI32 fnNames valNames env recF pat e1 e2
@@ -1991,7 +1991,7 @@ eagerVars b (CLetGroup binds body) =
   flatMap (eagerVarsClause b2) binds ++ eagerVars b2 body
 eagerVars b (CBlock stmts) = eagerVarsStmts b stmts
 eagerVars b (CIf c t f) = eagerVars b c ++ eagerVars b t ++ eagerVars b f
-eagerVars b (CBinPrim _ l r) = eagerVars b l ++ eagerVars b r
+eagerVars b (CBinPrim _ l r _) = eagerVars b l ++ eagerVars b r
 eagerVars b (CUnOp _ x) = eagerVars b x
 eagerVars b (CMatch scrut arms) = eagerVars b scrut ++ flatMap (eagerVarsArm b) arms
 eagerVars b (CDecision scrut arms _) = eagerVars b scrut ++ flatMap (eagerVarsArm b) arms
@@ -2166,7 +2166,7 @@ refMainKind prog e = match e
   CVar "e" _ => WFloat
   -- W8b: a Float arith binop (recovered structurally) auto-prints as a Float; otherwise
   -- the op's kind (arith→Int, compare→Bool, ++→Str).
-  CBinPrim op l r =>
+  CBinPrim op l r _ =>
     if isArithOp op && (cexprIsFloat prog [] l || cexprIsFloat prog [] r) then WFloat
     else binOpTy op
   CUnOp "!" _ => WBool
@@ -3314,7 +3314,7 @@ emitRefExpr : Prog -> List String -> Int -> CExpr -> <Mut> List String
 emitRefExpr prog env d e = match e
   CLit l => emitLitRef l
   CVar x _ => emitVarRef prog env d x
-  CBinPrim op l r => emitBinRef prog env d op l r
+  CBinPrim op l r _ => emitBinRef prog env d op l r
   CUnOp op x => emitUnRef prog env d op x
   CIf c t f => emitIfRef prog env d c t f
   CLet recF pat e1 e2 => emitLetRef prog env d recF pat e1 e2
@@ -3671,7 +3671,7 @@ cexprIsFloat prog env e = match e
   CVar "e" _ => not (contains "e" env)
   -- W8b: a name known to be Float in the current body (an `impl Num Float` param).
   CVar x _ => contains x floatLocalsRef.value
-  CBinPrim op l r => isArithOp op && (cexprIsFloat prog env l || cexprIsFloat prog env r)
+  CBinPrim op l r _ => isArithOp op && (cexprIsFloat prog env l || cexprIsFloat prog env r)
   CUnOp "-" x => cexprIsFloat prog env x
   CLet _ (PVar x) _ b => cexprIsFloat prog (x :: env) b
   CLet _ _ _ b => cexprIsFloat prog env b
@@ -4436,7 +4436,7 @@ emitRefTail prog env arity e = match wTrmcCtxRef.value
 -- $g_tmc_head.
 emitWDispLeaf : Prog -> List String -> String -> String -> Int -> CExpr -> <Mut> List String
 emitWDispLeaf prog env root loopLbl rootArity e = match e
-  CBinPrim "::" head tail =>
+  CBinPrim "::" head tail _ =>
     if wDispIsSatRootCall prog root rootArity tail && not (wDispCallsRoot prog root head) then
       emitWDispSpineCons prog env loopLbl head tail
     else
@@ -4922,7 +4922,7 @@ wDispExprHasSpineCons prog root arity e = match e
 -- `e` is a spine cons `<head> :: root <saturated>` (head is root-call-free; the tail is
 -- a saturated direct call to `root`).
 wDispIsSpineCons : Prog -> String -> Int -> CExpr -> Bool
-wDispIsSpineCons prog root arity (CBinPrim "::" head tail) =
+wDispIsSpineCons prog root arity (CBinPrim "::" head tail _) =
   not (wDispCallsRoot prog root head) && wDispIsSatRootCall prog root arity tail
 wDispIsSpineCons _ _ _ _ = False
 
@@ -4947,7 +4947,7 @@ allCallHeads prog e = match e
   CLetGroup _ b => allCallHeads prog b
   CBlock stmts => flatMap (allCallHeadsStmt prog) stmts
   CIf c t f => allCallHeads prog c ++ allCallHeads prog t ++ allCallHeads prog f
-  CBinPrim _ l r => allCallHeads prog l ++ allCallHeads prog r
+  CBinPrim _ l r _ => allCallHeads prog l ++ allCallHeads prog r
   CUnOp _ x => allCallHeads prog x
   CMatch s arms => allCallHeads prog s ++ flatMap (a => allCallHeads prog (armBody a)) arms
   CDecision s arms _ => allCallHeads prog s ++ flatMap (a => allCallHeads prog (armBody a)) arms
@@ -5628,7 +5628,7 @@ freeVarsExpr bound e = match e
   -- already destructure such params via bindPatRef; only this free-var walk lagged.)
   CLam pats b => freeVarsExpr (flatMap patVars pats ++ bound) b
   CLit _ => []
-  CBinPrim _ l r => freeVarsExpr bound l ++ freeVarsExpr bound r
+  CBinPrim _ l r _ => freeVarsExpr bound l ++ freeVarsExpr bound r
   CUnOp _ x => freeVarsExpr bound x
   CIf c t f => freeVarsExpr bound c ++ freeVarsExpr bound t ++ freeVarsExpr bound f
   CLet _ pat e1 e2 => freeVarsExpr bound e1 ++ freeVarsExpr (patVars pat ++ bound) e2
@@ -6257,7 +6257,7 @@ collectExprLocals : CExpr -> List String
 collectExprLocals e = match e
   CLet _ (PVar x) e1 e2 => x :: (collectExprLocals e1 ++ collectExprLocals e2)
   CLet _ pat e1 e2 => patVars pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
-  CBinPrim _ l r => collectExprLocals l ++ collectExprLocals r
+  CBinPrim _ l r _ => collectExprLocals l ++ collectExprLocals r
   CUnOp _ x => collectExprLocals x
   CIf c t f => collectExprLocals c ++ collectExprLocals t ++ collectExprLocals f
   CApp f a => collectExprLocals f ++ collectExprLocals a
@@ -6576,7 +6576,7 @@ maxIndexAt e d = match e
     maxI d (maxI scrutI armsI)
   CIf c t f => maxI (maxIndexAt c d) (maxI (maxIndexAt t d) (maxIndexAt f d))
   CLet _ pat a b => maxI (letStashIndex pat a d) (maxI (maxIndexAt a d) (maxIndexAt b d))
-  CBinPrim _ a b => maxI (maxIndexAt a d) (maxIndexAt b d)
+  CBinPrim _ a b _ => maxI (maxIndexAt a d) (maxIndexAt b d)
   CUnOp _ a => maxIndexAt a d
   CApp f a => maxI (maxIndexAt f d) (maxIndexAt a d)
   CBlock stmts => foldMaxI (map (s => maxIndexAtStmt s d) stmts)

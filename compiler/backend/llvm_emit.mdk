@@ -1153,7 +1153,7 @@ unboxFloat e v =
 emitExpr : Emit -> List (String, (String, LTy)) -> CExpr -> <Mut> (String, LTy)
 emitExpr e _ (CLit l) = emitLit e l
 emitExpr e env (CVar x _) = emitVar e env x
-emitExpr e env (CBinPrim op l r) = emitBin e env op l r
+emitExpr e env (CBinPrim op l r tag) = emitBin e env op l r tag
 emitExpr e env (CUnOp op x) = emitUn e env op x
 emitExpr e env (CIf c t f) = emitIf e env c t f
 emitExpr e env (CLet recF pat e1 e2) = emitLet e env recF pat e1 e2
@@ -2066,10 +2066,10 @@ emitExternApplied e env fname args =
   else
     if isNumExtern fname then emitNumExtern e env fname args else if isIoExtern fname then emitIoExtern e env fname args else if isAbortExtern fname then emitAbortExtern e env fname args else if isArrIntrinsic fname then emitArrIntrinsic e env fname args else if fname == "arrayMakeWith" then emitArrayMakeWith e env args else if isArrLeafExtern fname then emitArrLeafExtern e env fname args else if isCharExtern fname then emitCharExtern e env fname args else if isStrCharExtern fname then emitStrCharExtern e env fname args else if isUnicodeExtern fname then emitUnicodeExtern e env fname args else if isAdtExtern fname then emitAdtExtern e env fname args else if isEnvExtern fname then emitEnvExtern e env fname args else if isFileExtern fname then emitFileExtern e env fname args else if isRngExtern fname then emitRngExtern e env fname args else if isHashExtern fname then emitHashExtern e env fname args else if isBitExtern fname then emitBitExtern e env fname args else if isPerfExtern fname then emitPerfExtern e env fname args else emitDebugLitExtern e env fname args
 
-emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
-emitBin e env op l r
+emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> <Mut> (String, LTy)
+emitBin e env op l r tag
   | isCmpOp op = emitCmp e env op l r
-  | isArithOp op = emitArith e env op l r
+  | isArithOp op = emitArith e env op l r tag
   | op == "::" =
     let (lv, _) = emitExpr e env l
     let (rv, _) = emitExpr e env r
@@ -2140,7 +2140,7 @@ staticIsFloat env ex = match ex
     Some (_, LTFloat) => True
     Some (_, LTFloatU) => True
     _ => False
-  CBinPrim op l _ => isArithOp op && staticIsFloat env l
+  CBinPrim op l _ _ => isArithOp op && staticIsFloat env l
   _ => False
 
 -- CONSERVATIVE "does this expression evidently evaluate to a Float?" check, used to
@@ -2156,7 +2156,7 @@ bodyFloatRet env ex = match ex
     Some (_, LTFloat) => True
     Some (_, LTFloatU) => True
     _ => False
-  CBinPrim op l r => isArithOp op && (bodyFloatRet env l || bodyFloatRet env r)
+  CBinPrim op l r _ => isArithOp op && (bodyFloatRet env l || bodyFloatRet env r)
   CIf _ t f => bodyFloatRet env t || bodyFloatRet env f
   CLet _ _ _ b => bodyFloatRet env b
   CBlock stmts => blockFloatRet env stmts
@@ -2185,7 +2185,7 @@ recordFloatRet e env w body =
 emitFloatD : Emit -> List (String, (String, LTy)) -> CExpr -> <Mut> String
 emitFloatD e env ex = match ex
   CLit (LFloat f) => ensureFloatDot (floatToString f)
-  CBinPrim op l r =>
+  CBinPrim op l r _ =>
     if isArithOp op then
       let ld = emitFloatD e env l
       let rd = emitFloatD e env r
@@ -2258,9 +2258,20 @@ floatVarReg env (CVar x _) = match lookupAssoc x env
 floatVarReg _ _ = None
 
 -- arithmetic preserves operand type (well-typed: both operands share a type).
-emitArith : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> <Mut> (String, LTy)
-emitArith e env op l r =
-  if staticIsFloat env l || isFloatFieldAccess e l || isFloatFieldAccess e r then
+-- SHARED-FLOAT-RESIDUAL §3(C): [tag] is the typecheck-stamped scalar type of this
+-- arithmetic node ("Float"/"Int"/""; from CBinPrim's RScalar route).  When it is
+-- "Float" (fieldNameToLTy → LTFloat) route to the float path even when the
+-- structural staticIsFloat can't see through a type-lost operand (e.g. a value
+-- bound from a polymorphic HOF, #9) — additive: an absent/non-Float tag falls back
+-- to today's structural detection, so the tag only ever ADDS Float knowledge.
+scalarTagIsFloat : String -> Bool
+scalarTagIsFloat tag = match fieldNameToLTy tag
+  Some LTFloat => True
+  _ => False
+
+emitArith : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> <Mut> (String, LTy)
+emitArith e env op l r tag =
+  if scalarTagIsFloat tag || staticIsFloat env l || isFloatFieldAccess e l || isFloatFieldAccess e r then
     emitFloatArith e env op l r
   else
     emitArithW e env op l r
@@ -4168,11 +4179,12 @@ restampIfaceDicts tbl iface tag rr (CIf c t el) =
     (restampIfaceDicts tbl iface tag rr c)
     (restampIfaceDicts tbl iface tag rr t)
     (restampIfaceDicts tbl iface tag rr el)
-restampIfaceDicts tbl iface tag rr (CBinPrim op a b) =
+restampIfaceDicts tbl iface tag rr (CBinPrim op a b stag) =
   CBinPrim
     op
     (restampIfaceDicts tbl iface tag rr a)
     (restampIfaceDicts tbl iface tag rr b)
+    stag
 restampIfaceDicts tbl iface tag rr (CUnOp op a) =
   CUnOp op (restampIfaceDicts tbl iface tag rr a)
 restampIfaceDicts tbl iface tag rr (CTuple xs) =
@@ -4246,11 +4258,12 @@ restampCrossIface tbl method difs (CIf c t el) =
     (restampCrossIface tbl method difs c)
     (restampCrossIface tbl method difs t)
     (restampCrossIface tbl method difs el)
-restampCrossIface tbl method difs (CBinPrim op a b) =
+restampCrossIface tbl method difs (CBinPrim op a b stag) =
   CBinPrim
     op
     (restampCrossIface tbl method difs a)
     (restampCrossIface tbl method difs b)
+    stag
 restampCrossIface tbl method difs (CUnOp op a) =
   CUnOp op (restampCrossIface tbl method difs a)
 restampCrossIface tbl method difs (CTuple xs) =
@@ -6455,7 +6468,7 @@ hasFloatPty (_::rest) = hasFloatPty rest
 -- is value-equality (emitCmp routes Int/Char/Bool/String), matching match semantics.
 decisionToIf : CExpr -> List CArm -> Option CExpr
 decisionToIf scrut (CArm (PLit l) [] a :: CArm PWild [] b :: []) =
-  Some (CIf (CBinPrim "==" scrut (CLit l)) a b)
+  Some (CIf (CBinPrim "==" scrut (CLit l) "") a b)
 decisionToIf _ _ = None
 
 -- `self` does not occur free in `ex` (so the leaf is an ordinary value, safe to
@@ -6894,7 +6907,7 @@ eagerVars b (CLetGroup binds body) =
   eagerVarsBinds b2 binds ++ eagerVars b2 body
 eagerVars b (CBlock stmts) = eagerVarsStmts b stmts
 eagerVars b (CIf c t f) = eagerVars b c ++ eagerVars b t ++ eagerVars b f
-eagerVars b (CBinPrim _ l r) = eagerVars b l ++ eagerVars b r
+eagerVars b (CBinPrim _ l r _) = eagerVars b l ++ eagerVars b r
 eagerVars b (CUnOp _ x) = eagerVars b x
 eagerVars b (CMatch scrut arms) = eagerVars b scrut ++ eagerVarsArms b arms
 eagerVars b (CDecision scrut arms _) = eagerVars b scrut ++ eagerVarsArms b arms
@@ -7031,7 +7044,7 @@ typeOf _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => LTFloat
   Some t => t
   None => LTInt
-typeOf sigs env (CBinPrim op l r)
+typeOf sigs env (CBinPrim op l r _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
   | otherwise = typeOf sigs env l
@@ -7152,7 +7165,7 @@ concreteNumTy _ env (CVar x _) = match lookupAssoc x env
   Some LTFloatU => Some LTFloat
   Some t => Some t
   None => None
-concreteNumTy sigs env (CBinPrim op l r) =
+concreteNumTy sigs env (CBinPrim op l r _) =
   if isArithOp op then firstSome (concreteNumTy sigs env l) (concreteNumTy sigs env r) else None
 concreteNumTy _ _ _ = None
 
@@ -7170,12 +7183,12 @@ paramUseTy sigs env p (CUnOp _ x) = paramUseTy sigs env p x
 -- LTCon (e.g. `acc :: …` in splitLines), routing its OTHER `++` use to
 -- mdk_list_append on a String → crash.  Skip the element side; a var on the
 -- right of `::` is a list (LTCon).
-paramUseTy sigs env p (CBinPrim "::" l r) =
+paramUseTy sigs env p (CBinPrim "::" l r _) =
   if isVarNamed p r then
     Some LTCon
   else
     firstSome (paramUseTy sigs env p l) (paramUseTy sigs env p r)
-paramUseTy sigs env p (CBinPrim op l r) =
+paramUseTy sigs env p (CBinPrim op l r _) =
   if isVarNamed p l then
     Some (binOperandTy sigs env op r)
   else
@@ -7365,7 +7378,7 @@ inferParamTys sigs (_::rest) body = LTInt :: inferParamTys sigs rest body
 -- an arith op over the two params in order, so only the genuine section lambda is
 -- affected — a lambda doing other work keeps its per-param inference.
 isArithSectionLam : List Pat -> CExpr -> Bool
-isArithSectionLam [(PVar a), (PVar b)] (CBinPrim op (CVar la _) (CVar rb _)) = isArithOp op
+isArithSectionLam [(PVar a), (PVar b)] (CBinPrim op (CVar la _) (CVar rb _) _) = isArithOp op
   && la == a
   && rb == b
 isArithSectionLam _ _ = False
@@ -7454,7 +7467,7 @@ isLowerCode c = c >= 97 && c <= 122
 
 -- G3: True when `p` is an operand of an arithmetic binop anywhere in the body.
 paramUsedInArith : String -> CExpr -> Bool
-paramUsedInArith p (CBinPrim op l r) =
+paramUsedInArith p (CBinPrim op l r _) =
   if isArithOp op && (isVarNamed p l || isVarNamed p r) then
     True
   else
@@ -7708,7 +7721,7 @@ scanExprRecords (CLam _ body) = scanExprRecords body
 scanExprRecords (CIf c t f) = scanExprRecords c
   ++ scanExprRecords t
   ++ scanExprRecords f
-scanExprRecords (CBinPrim _ l r) = scanExprRecords l ++ scanExprRecords r
+scanExprRecords (CBinPrim _ l r _) = scanExprRecords l ++ scanExprRecords r
 scanExprRecords (CUnOp _ x) = scanExprRecords x
 scanExprRecords (CLet _ _ e1 e2) = scanExprRecords e1 ++ scanExprRecords e2
 scanExprRecords (CLetGroup binds body) = collectRecords binds

@@ -107,7 +107,7 @@ ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
 ceval env (CDecision scrut arms tree) =
   cevalDecision env (ceval env scrut) arms tree
 ceval env (CIf c t e) = cevalIf env (ceval env c) t e
-ceval env (CBinPrim op l r) = cevalBinPrim op (ceval env l) (ceval env r)
+ceval env (CBinPrim op l r _) = cevalBinPrim op (ceval env l) (ceval env r)
 ceval env (CUnOp op e) = evalUnop op (ceval env e)
 ceval env (CTuple es) = VTuple (map (ceval env) es)
 ceval env (CList es) = VList (map (ceval env) es)

@@ -51,12 +51,19 @@ public export data Constraint = Constraint String (List Ty)
 --   imported/local standalone function shadows the method name, so eval ignores
 --   VMulti dispatch and evaluates the bound name as the plain standalone (no
 --   narrowing, no dicts).  Mirrors lib/ast.ml's RLocal.
+-- RScalar = NOT a typeclass dispatch route.  Stamped by typecheck's
+-- resolveBinopSites onto an ARITHMETIC EBinOp whose operand grounds to a concrete
+-- primitive ("Float"/"Int"), so lowering can carry the scalar type into CBinPrim's
+-- tag field and the native emitter picks the Float primitive without re-deriving
+-- the operand LTy structurally (SHARED-FLOAT-RESIDUAL-DESIGN §3(C), the type-lost
+-- monomorphic-Float residual).  Absent → RNone → today's structural/dict path.
 public export data Route
   = RNone
   | RKey String (List Route)
   | RDict String
   | RDictFwd String
   | RLocal
+  | RScalar String
 
 -- a resolved lexical address for a variable reference (STAGE2-DESIGN §2.0, the
 -- de-risked first half: resolve EMITS the slot; eval does NOT yet consume it —

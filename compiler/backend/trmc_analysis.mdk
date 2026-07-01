@@ -57,7 +57,7 @@ freeVars b (CLetGroup binds body) =
   freeVarsBinds b2 binds ++ freeVars b2 body
 freeVars b (CBlock stmts) = freeVarsStmts b stmts
 freeVars b (CIf c t f) = freeVars b c ++ freeVars b t ++ freeVars b f
-freeVars b (CBinPrim _ l r) = freeVars b l ++ freeVars b r
+freeVars b (CBinPrim _ l r _) = freeVars b l ++ freeVars b r
 freeVars b (CUnOp _ x) = freeVars b x
 freeVars b (CMatch scrut arms) = freeVars b scrut ++ freeVarsArms b arms
 freeVars b (CDecision scrut arms _) = freeVars b scrut ++ freeVarsArms b arms
@@ -276,7 +276,7 @@ trmcArmsHaveCons ic ar self arity ((CArm _ _ body)::rest) = trmcBodyHasCons ic a
 -- `CVar self`; SelfByMethod (Phase 2 B-dispatch) → `CMethod method (RKey tag) …`.
 export
 isCtorTail : (String -> <Mut> Bool) -> (String -> <Mut> Int) -> SelfRef -> Int -> CExpr -> <Mut> Bool
-isCtorTail _ _ self arity (CBinPrim "::" head tail) = selfFree self head
+isCtorTail _ _ self arity (CBinPrim "::" head tail _) = selfFree self head
   && isSelfSatApp self arity tail
 isCtorTail ic ar self arity ex = match flattenApp ex []
   ((CVar ctor _), fields) =>
@@ -362,7 +362,7 @@ mentionsSelfMethod method tag (CBlock stmts) =
 mentionsSelfMethod method tag (CIf c t f) = mentionsSelfMethod method tag c
   || mentionsSelfMethod method tag t
   || mentionsSelfMethod method tag f
-mentionsSelfMethod method tag (CBinPrim _ l r) = mentionsSelfMethod method tag l
+mentionsSelfMethod method tag (CBinPrim _ l r _) = mentionsSelfMethod method tag l
   || mentionsSelfMethod method tag r
 mentionsSelfMethod method tag (CUnOp _ x) = mentionsSelfMethod method tag x
 mentionsSelfMethod method tag (CMatch s arms) = mentionsSelfMethod method tag s
@@ -479,7 +479,7 @@ selfRefersToBindClauses self ((CClause _ body)::rest) = not (selfFree self body)
 -- ctor app: the last field is always the self-call.
 export
 consTailArgs : CExpr -> List CExpr
-consTailArgs (CBinPrim "::" _ tail) = match flattenApp tail []
+consTailArgs (CBinPrim "::" _ tail _) = match flattenApp tail []
   (_, args) => args
 consTailArgs ex = match flattenApp ex []
   (_, fields) => match splitLastF fields
@@ -490,7 +490,7 @@ consTailArgs ex = match flattenApp ex []
 -- the ctor NAME of an eligible ctor-tail leaf (`Cons` for the `::` form).
 export
 ctorTailName : CExpr -> String
-ctorTailName (CBinPrim "::" _ _) = "Cons"
+ctorTailName (CBinPrim "::" _ _ _) = "Cons"
 ctorTailName ex = match flattenApp ex []
   ((CVar ctor _), _) => ctor
   _ => ""
@@ -500,7 +500,7 @@ ctorTailName ex = match flattenApp ex []
 -- stored).  For `::` this is `[head]`.
 export
 ctorTailLeadFields : CExpr -> List CExpr
-ctorTailLeadFields (CBinPrim "::" head _) = [head]
+ctorTailLeadFields (CBinPrim "::" head _ _) = [head]
 ctorTailLeadFields ex = match flattenApp ex []
   (_, fields) => match splitLastF fields
     Some (lead, _) => lead
@@ -512,6 +512,6 @@ ctorTailLeadFields ex = match flattenApp ex []
 -- detection patch — the emit already offsets by this index (TRMC-DESIGN F1(b) seam).
 export
 ctorTailSelfIdx : CExpr -> Int
-ctorTailSelfIdx (CBinPrim "::" _ _) = 1
+ctorTailSelfIdx (CBinPrim "::" _ _ _) = 1
 ctorTailSelfIdx ex = match flattenApp ex []
   (_, fields) => lengthS fields - 1

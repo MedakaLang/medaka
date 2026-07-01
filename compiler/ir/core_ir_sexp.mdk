@@ -43,6 +43,7 @@ routeSexp (RKey k _) = node "RKey" [escStr k]
 routeSexp (RDict d) = node "RDict" [escStr d]
 routeSexp (RDictFwd d) = node "RDictFwd" [escStr d]
 routeSexp RLocal = "RLocal"
+routeSexp (RScalar s) = node "RScalar" [escStr s]
 
 -- ── CExpr ─────────────────────────────────────────────────────────────────────
 
@@ -62,8 +63,10 @@ cexprSexp (CMatch scrut arms) =
 cexprSexp (CDecision scrut arms tree) =
   node "CDecision" [cexprSexp scrut, slist (map carmSexp arms), ctreeSexp tree]
 cexprSexp (CIf c t e) = node "CIf" [cexprSexp c, cexprSexp t, cexprSexp e]
-cexprSexp (CBinPrim op l r) =
-  node "CBinPrim" [escStr op, cexprSexp l, cexprSexp r]
+cexprSexp (CBinPrim op l r tag) =
+  if tag == ""
+  then node "CBinPrim" [escStr op, cexprSexp l, cexprSexp r]
+  else node "CBinPrim" [escStr op, cexprSexp l, cexprSexp r, escStr tag]
 cexprSexp (CUnOp op e) = node "CUnOp" [escStr op, cexprSexp e]
 cexprSexp (CTuple es) = node "CTuple" (map cexprSexp es)
 cexprSexp (CList es) = node "CList" (map cexprSexp es)

@@ -77,8 +77,12 @@ public export data CExpr
   | CIf CExpr CExpr CExpr
   -- a primitive binary operator that survives lowering: arithmetic (`+`…),
   -- comparison (`==`,`<`…), `::`, `++`.  (`&&`/`||`/`|>`/`>>`/`<<` are lowered
-  -- to CIf/CApp/CLam and never appear here.)
-  | CBinPrim String CExpr CExpr
+  -- to CIf/CApp/CLam and never appear here.)  The 4th field is the scalar-type
+  -- tag stamped by typecheck for a MONOMORPHIC concrete-primitive arithmetic
+  -- operand ("Float"/"Int"; "" = unstamped → today's structural/dict path).  The
+  -- native emitter reads it (emitBin → fieldNameToLTy → LTFloat) to bypass the
+  -- type-lost `staticIsFloat` blind spot (SHARED-FLOAT-RESIDUAL-DESIGN §3(C)).
+  | CBinPrim String CExpr CExpr String
   | CUnOp String CExpr
   | CTuple (List CExpr)
   | CList (List CExpr)

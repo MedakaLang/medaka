@@ -1,0 +1,7 @@
+-- SHARED-FLOAT-RESIDUAL #6: tuple-destructured Float operands.  `a`/`b` bind to
+-- ground Float via the tuple pattern; `a + b` is a monomorphic concrete-Float binop.
+fid : Float -> Float
+fid x = x
+addPair p = match p
+  (a, b) => a + b
+main = fid (addPair (1.5, 2.5))

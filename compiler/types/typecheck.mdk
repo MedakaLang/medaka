@@ -1327,6 +1327,19 @@ pendingSites = Ref []
 pendingBinopSites : Ref (List (String, Ref Route, Mono, Bool, String))
 pendingBinopSites = Ref []
 
+-- SHARED-FLOAT-RESIDUAL §3(C): arithmetic EBinOp sites whose operand type may
+-- ground to a concrete primitive.  Recorded during inference (operand Mono + the
+-- node's route ref); resolveArithSites zonks each Mono after the whole module is
+-- inferred and, ONLY when it grounds to concrete Float, stamps RScalar "Float" so
+-- lowering carries the scalar type into CBinPrim and the native emitter picks the
+-- Float primitive without re-deriving the operand LTy structurally.  A still-
+-- polymorphic (Num a) operand never grounds → stays RNone → today's dict path
+-- (mirrors resolveBinopSite's grounded-only guard, so dict-routed arithmetic is
+-- untouched).  Int operands are left unstamped (RNone ⇒ the Int primitive is the
+-- default anyway) to avoid perturbing every integer binop's IR.
+pendingArithSites : Ref (List (Ref Route, Mono))
+pendingArithSites = Ref []
+
 -- Error-path BLOCKER B4 (audit finding D3): missing-impl dispatch obligations.
 -- methodIfaceParamsRef maps each interface method NAME → (iface name, the iface's
 -- typarams, the method's declared AST type).  Built once per checkProgramSeeded
@@ -2084,6 +2097,7 @@ resetState _ =
   let _ = setRef definerShadowNamesRef []
   let _ = setRef shadowKeyTableRef []
   let _ = setRef pendingBinopSites []
+  let _ = setRef pendingArithSites []
   let _ = setRef methodIfaceParamsRef []
   let _ = setRef pendingImplObligations []
   let _ = setRef numlitRefs []   -- PLAN.md #11
@@ -3945,6 +3959,7 @@ inferBinopE env op l r dref =
   let lt = infer env l
   let rt = infer env r
   let _ = recordBinopSite op dref lt
+  let _ = recordArithSite op dref lt
   inferBinop op lt rt
 -- Phase 151 / Gap G: record a binop site for the comparison/equality operators
 -- so resolveBinopSites can stamp [dref] once the operand type grounds.  The
@@ -3958,6 +3973,18 @@ recordBinopSite : String -> Ref Route -> Mono -> <Mut> Unit
 recordBinopSite op dref m = match binopMethod op
   Some method => setRef pendingBinopSites ((method, dref, m, currentImplBody.value, currentFn.value) :: pendingBinopSites.value)
   None => ()
+
+-- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
+-- ref for the deferred scalar-type stamp.  Non-arithmetic operators record
+-- nothing (their route is handled by recordBinopSite or left RNone).  The operand
+-- mono is [lt] (unified with [rt] by inferBinop).
+isArithBinop : String -> Bool
+isArithBinop op = contains op ["+", "-", "*", "/", "%"]
+
+recordArithSite : String -> Ref Route -> Mono -> <Mut> Unit
+recordArithSite op dref m
+  | isArithBinop op = setRef pendingArithSites ((dref, m) :: pendingArithSites.value)
+  | otherwise = ()
 
 binopMethod : String -> Option String
 binopMethod "==" = Some "eq"
@@ -5130,6 +5157,7 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let keyTable = buildKeyTable prog2
   let _ = resolveSites implTable keyTable (returnPosMethodNames prog2) pendingSites.value
   let _ = resolveBinopSites implTable keyTable pendingBinopSites.value
+  let _ = resolveArithSites pendingArithSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value
   let _ = resolveDictApps prog2 implTable pendingDictApps.value
   let _ = resolveMethodDicts implTable pendingMethodDicts.value
@@ -5945,6 +5973,31 @@ enclDictVarOf m encl
 -- is arg-position, so it narrows by arg tag and needs no forwarded element dict.
 binopPrimitiveHead : String -> Bool
 binopPrimitiveHead h = contains h ["Int", "Float", "String", "Bool", "Char"]
+
+-- SHARED-FLOAT-RESIDUAL §3(C): after the module is inferred, zonk each recorded
+-- arithmetic operand mono; when it grounds to concrete Float, stamp RScalar
+-- "Float" on the node's route so lowering carries it into CBinPrim and the native
+-- emitter picks the Float primitive (bypassing the type-lost structural
+-- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
+-- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
+-- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  Only
+-- Float is stamped (Int is the primitive default already; leaving Int operands
+-- RNone avoids perturbing every integer binop's emitted IR).  Never overwrites a
+-- route another pass already set (a comparison op has a different node/ref; an
+-- arithmetic route starts RNone) — the guard is: stamp only if the site is still
+-- RNone AND grounds to Float.
+resolveArithSites : List (Ref Route, Mono) -> <Mut> Unit
+resolveArithSites [] = ()
+resolveArithSites ((dref, m)::rest) =
+  let _ = resolveArithSite dref m
+  resolveArithSites rest
+
+resolveArithSite : Ref Route -> Mono -> <Mut> Unit
+resolveArithSite dref m = match dref.value
+  RNone => match headTyconMono m
+    Some "Float" => setRef dref (RScalar "Float")
+    _ => ()
+  _ => ()
 
 resolveBinopSites : List ImplEntry -> List KeyEntry -> List (String, Ref Route, Mono, Bool, String) -> <Mut> Unit
 resolveBinopSites _ _ [] = ()
@@ -7274,6 +7327,18 @@ dictPass names prog =
 rewriteBinopExpr : Expr -> Expr
 rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
   RNone => EBinOp op l r routeRef
+  -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
+  -- is the scalar-type tag typecheck stamped on a monomorphic arithmetic binop
+  -- (resolveArithSite, "Float").  The EBinOp's own route ref does NOT survive the
+  -- dict-pass→lower boundary (only NODE values do — verified: an op-string change in
+  -- this arm reaches lower but a setRef on routeRef does not), so we carry the scalar
+  -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
+  -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
+  -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
+  -- the native emitter picks the Float primitive (bypassing the type-lost
+  -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
+  -- from the (lost) ref cell to a (surviving) node.
+  RScalar tag => EAnnot (EBinOp op l r routeRef) (TyCon tag)
   _ => binopMethodApp op l r routeRef
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
 -- decision mirroring lib/dict_pass.ml's e7031e6 ENumLit arm.  setNumlitFloats already
@@ -7740,7 +7805,9 @@ checkProgramSeeded seed prog =
 inferPropBodies : TcEnv -> List Decl -> <Mut> Unit
 inferPropBodies env prog =
   let savedBinop = pendingBinopSites.value
+  let savedArith = pendingArithSites.value
   let _ = inferPropBodiesGo env prog
+  let _ = setRef pendingArithSites savedArith
   setRef pendingBinopSites savedBinop
 
 inferPropBodiesGo : TcEnv -> List Decl -> <Mut> Unit
@@ -10621,6 +10688,7 @@ elabModuleStamp mid seedVars accData implDecls prog =
   let stampImplTable = buildImplTable implDecls
   let _ = resolveSites stampImplTable (buildKeyTable implDecls) (returnPosMethodNames implDecls) pendingSites.value
   let _ = resolveBinopSites stampImplTable (buildKeyTable implDecls) pendingBinopSites.value
+  let _ = resolveArithSites pendingArithSites.value
   let _ = resolveArgStamps stampImplTable (buildKeyTable implDecls) pendingArgStamps.value
   let _ = resolveRLocalSites (buildKeyTable implDecls) pendingRLocalSites.value
   let _ = realizeRecDictApps pendingRecDictApps.value

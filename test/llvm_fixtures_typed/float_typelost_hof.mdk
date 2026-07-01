@@ -1,0 +1,14 @@
+-- SHARED-FLOAT-RESIDUAL #9: a monomorphic concrete-Float binop whose operands
+-- trace only to a polymorphic-HOF-bound let-binder (no literal/sig/field anchor).
+-- `identity 2.5` gives `y` a ground Float type, so `y + y` is a direct primitive;
+-- the emitter used to default the operand LTy to Int → integer op on a boxed-Float
+-- word → garbage.  Now typecheck stamps the arith site Float (RScalar → EAnnot)
+-- and the emitter emits fadd.  Anchored through `fid : Float -> Float` for print.
+identity x = x
+fid : Float -> Float
+fid x = x
+compute : Float
+compute =
+  let y = identity 2.5
+  y + y
+main = fid compute
