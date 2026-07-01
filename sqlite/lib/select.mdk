@@ -21,6 +21,7 @@ import lib.sqlite.{Db, scanTableRowsIpk, rowCellsWithIpk, columnIndex, findTable
 import lib.btree.{Row}
 import lib.rowtype.{RowType, rtDecode}
 import list.{reverse, take, drop, sortBy}
+import string.{join}
 
 -- ---------------------------------------------------------------------------
 -- Untyped core
@@ -57,7 +58,7 @@ public export data SqlExpr
 public export data Select = Select
   { from    : String
   , where_  : Option SqlExpr
-  , orderBy : Option (String, Bool)
+  , orderBy : List (String, Bool)
   , limit   : Option Int
   , offset  : Option Int
   }
@@ -170,7 +171,7 @@ eNotNull e = MkExpr (ENotNull (unExpr e))
 -- | A bare SELECT over a table: no WHERE, no ORDER BY, no limit/offset.
 export
 selectFrom : String -> Select
-selectFrom tbl = Select { from = tbl, where_ = None, orderBy = None, limit = None, offset = None }
+selectFrom tbl = Select { from = tbl, where_ = None, orderBy = [], limit = None, offset = None }
 
 -- | Attach a typed `Expr Bool` predicate as the WHERE clause.  The phantom
 --   wrapper is stripped here — this is the type-safe boundary at which an
@@ -189,10 +190,12 @@ withOffset n sel = { sel | offset = Some n }
 
 -- | Order the results by `col`, ascending when `asc = True`, descending when
 --   `asc = False`.  Sorting applies BEFORE offset/limit, matching SQL semantics.
---   Single-column ORDER BY only; multi-column is a clean future extension.
+--   Multi-column ORDER BY: each call APPENDS a key, so the first call is the
+--   primary sort key, the second breaks ties on the first, etc. — matching
+--   `ORDER BY a ASC, b DESC` when chained `withOrderBy "a" True |> withOrderBy "b" False`.
 export
 withOrderBy : String -> Bool -> Select -> Select
-withOrderBy col asc sel = { sel | orderBy = Some (col, asc) }
+withOrderBy col asc sel = { sel | orderBy = sel.orderBy ++ [(col, asc)] }
 
 -- ---------------------------------------------------------------------------
 -- render : injection-safe SQL projection
@@ -228,16 +231,22 @@ renderLimitOffset lm of_ =
             None   => ""
   "\{l}\{o}"
 
--- Render the ORDER BY clause (no bind params — column name is a validated
--- identifier, not a parameter).  Returns `Err` if the column name is illegal.
-renderOrderBy : Option (String, Bool) -> Result String String
-renderOrderBy None = Ok ""
-renderOrderBy (Some (col, asc)) =
+-- Render the ORDER BY clause (no bind params — column names are validated
+-- identifiers, not parameters).  Returns `Err` on the first illegal column
+-- name.  Empty key list ⇒ no clause at all.
+renderOrderBy : List (String, Bool) -> Result String String
+renderOrderBy [] = Ok ""
+renderOrderBy keys = map (parts => " ORDER BY " ++ join ", " parts) (renderOrderByParts keys)
+
+renderOrderByParts : List (String, Bool) -> Result String (List String)
+renderOrderByParts [] = Ok []
+renderOrderByParts ((col, asc) :: rest) =
   if not (validIdent col)
   then Err "render: invalid ORDER BY column: \{col}"
-  else
+  else do
     let dir = if asc then "ASC" else "DESC"
-    Ok " ORDER BY \{col} \{dir}"
+    restParts <- renderOrderByParts rest
+    Ok (("\{col} \{dir}") :: restParts)
 
 limOffSql : String -> String
 limOffSql s = s
@@ -467,20 +476,39 @@ compileWhere lookup (Some e) = compilePred lookup e
 filterRows : Option Int -> (List Cell -> Bool) -> List Row -> List Row
 filterRows pkIdx pred rows = filter (row => pred (rowCellsWithIpk pkIdx row)) rows
 
--- Sort rows by the ORDER BY column (if specified).  Resolves the column name to
--- an index via `lookup`; if the column is unknown, rows are returned unsorted.
--- Sorting uses SQLite value ordering: NULL < Int/Float (numeric) < Text < Blob.
--- ASC puts NULLs first; DESC reverses the comparator (NULLs become last).
-sortRows : Option Int -> (String -> Option Int) -> Option (String, Bool) -> List Row -> List Row
-sortRows _     _      None              rows = rows
-sortRows pkIdx lookup (Some (col, asc)) rows =
+-- Sort rows by the ORDER BY key list (if any).  Each key's column name is
+-- resolved to an index via `lookup`; an unknown column DROPS just that key
+-- (mirroring the old single-column "unknown column ⇒ unsorted" leniency) and
+-- the remaining keys still apply.  An empty resolved key list leaves rows
+-- unchanged.  Comparison folds left-to-right over the resolved (idx, asc)
+-- keys: the first key that doesn't compare `Eq` decides, flipping the
+-- operand order per-key when `asc = False`.  Sorting uses SQLite value
+-- ordering: NULL < Int/Float (numeric) < Text < Blob.
+sortRows : Option Int -> (String -> Option Int) -> List (String, Bool) -> List Row -> List Row
+sortRows pkIdx lookup keys rows =
+  let resolved = resolveOrderKeys lookup keys
+  match resolved
+    [] => rows
+    _  =>
+      let getCell = (row idx => nthCell (rowCellsWithIpk pkIdx row) idx)
+      sortBy (a b => compareByKeys getCell resolved a b) rows
+
+resolveOrderKeys : (String -> Option Int) -> List (String, Bool) -> List (Int, Bool)
+resolveOrderKeys _      []                = []
+resolveOrderKeys lookup ((col, asc) :: rest) =
   match lookup col
-    None     => rows
-    Some idx =>
-      let getCell = (row => nthCell (rowCellsWithIpk pkIdx row) idx)
-      if asc
-      then sortBy (a b => cellOrder (getCell a) (getCell b)) rows
-      else sortBy (a b => cellOrder (getCell b) (getCell a)) rows
+    None     => resolveOrderKeys lookup rest
+    Some idx => (idx, asc) :: resolveOrderKeys lookup rest
+
+compareByKeys : (Row -> Int -> Cell) -> List (Int, Bool) -> Row -> Row -> Ordering
+compareByKeys _       []                    _ _ = Eq
+compareByKeys getCell ((idx, asc) :: rest) a b =
+  let o = if asc
+          then cellOrder (getCell a idx) (getCell b idx)
+          else cellOrder (getCell b idx) (getCell a idx)
+  match o
+    Eq => compareByKeys getCell rest a b
+    _  => o
 
 -- | Three-way ordering of two Cell values following SQLite's type ordering:
 --   NULL < Int/Float (numeric, interleaved) < Text (lexicographic) < Blob.
@@ -571,6 +599,13 @@ decodeAll rt pkIdx (row :: rest) acc = do
 --
 -- > renderShow (render (withOrderBy "age" True (withLimit 5 (selectFrom "users"))))
 -- "SELECT * FROM users ORDER BY age ASC LIMIT ? ## [LInt 5]"
+--
+-- Multi-column ORDER BY: each `withOrderBy` call appends a key, so chaining
+-- `withOrderBy "age" True` then `withOrderBy "name" False` renders "age ASC,
+-- name DESC" — primary key first, comma-separated.
+--
+-- > renderShow (render (withOrderBy "name" False (withOrderBy "age" True (selectFrom "users"))))
+-- "SELECT * FROM users ORDER BY age ASC, name DESC ## []"
 export
 renderShow : Result String (String, List Literal) -> String
 renderShow (Err e) = "ERR \{e}"

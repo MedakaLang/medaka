@@ -23,7 +23,7 @@ DB="$TMP/users.db"
 BIN="$TMP/sdemo"
 
 sqlite3 "$DB" "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER); \
-  INSERT INTO users VALUES (1,'Alice',30),(2,'Bob',NULL),(3,'Carol',25),(4,'Dave',40),(5,'Eve',22);"
+  INSERT INTO users VALUES (1,'Alice',30),(2,'Bob',NULL),(3,'Carol',25),(4,'Dave',40),(5,'Eve',22),(6,'Frank',30);"
 
 "$MEDAKA" build sqlite/select_demo.mdk -o "$BIN" >/dev/null 2>&1 || { echo "FAIL: build"; exit 1; }
 
@@ -56,6 +56,9 @@ add  "-- order by name asc --";             addq x "SELECT id,name,age FROM user
 # ORDER BY combined with LIMIT/OFFSET: sort first, then slice.
 # ASC age: NULL,22,25,30,40 → offset 1 → 22,25 → limit 2 → Eve(22),Carol(25).
 add  "-- order by age asc limit 2 offset 1 --"; addq x "SELECT id,name,age FROM users ORDER BY age ASC LIMIT 2 OFFSET 1;"
+# Multi-column ORDER BY: Alice(30) and Frank(30) tie on age; name DESC breaks
+# the tie (Frank before Alice).  Proves per-key direction folding.
+add  "-- order by age asc, name desc --"; addq x "SELECT id,name,age FROM users ORDER BY age ASC, name DESC;"
 exp="${exp%$'\n'}"
 
 if [ "$got" = "$exp" ]; then

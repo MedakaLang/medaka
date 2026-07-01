@@ -80,5 +80,7 @@ main = match args ()
                 (withOrderBy "age" False (selectFrom "users"))
       let _ = runQ db "-- order by name asc --"
                 (withOrderBy "name" True (selectFrom "users"))
-      runQ db "-- order by age asc limit 2 offset 1 --"
-        (withOffset 1 (withLimit 2 (withOrderBy "age" True (selectFrom "users"))))
+      let _ = runQ db "-- order by age asc limit 2 offset 1 --"
+                (withOffset 1 (withLimit 2 (withOrderBy "age" True (selectFrom "users"))))
+      runQ db "-- order by age asc, name desc --"
+        (withOrderBy "name" False (withOrderBy "age" True (selectFrom "users")))
