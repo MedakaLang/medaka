@@ -167,9 +167,9 @@ that often violate style rules on purpose):
   (`rule-hand-rolled-derivable`, `rule-stdlib-reimpl`, `rule-match-on-param`) run
   `medaka lint --only=<rules> --deny=<rules>` on each staged `.mdk`. The cross-file rule
   `rule-duplicate-body` compares a body against OTHER files, so it can't be checked per-staged-file
-  — the hook runs a **whole-project scan per source root** (`compiler`/`stdlib`/`sqlite`) when any
-  `.mdk` is staged. (`medaka lint` mishandles the exit code when passed several roots at once → the
-  hook loops one root at a time.) **So: `medaka lint` must stay clean — run it on files you touch.**
+  — the hook runs **one whole-project scan over all source roots** (`medaka lint compiler stdlib
+  sqlite`) when any `.mdk` is staged, so cross-ROOT duplicates are caught too. **So: `medaka lint`
+  must stay clean — run it on files you touch.**
   A genuine intentional exception is silenced inline with an ESLint-style directive comment (these
   work for per-file AND cross-file rules): `-- lint-disable-next-line <rule>` (also
   `-- lint-disable-line <rule>` trailing, and `-- lint-disable-file <rule>` for the whole file;
