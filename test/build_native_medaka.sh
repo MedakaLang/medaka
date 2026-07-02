@@ -148,8 +148,16 @@ fi
 trim_unit "$CLI_LL"
 [ -s "$CLI_LL" ] || { echo "FAIL: empty IR for medaka_cli.mdk"; cat "$WORK/emit.err"; exit 1; }
 
-echo "stage B: clang(medaka_cli.ll) -> $OUT ..."
-if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS -o "$OUT" 2>"$WORK/cc.err"; then
+# The medaka CLI is built at -O0 by DEFAULT: make medaka is the hot compiler-dev
+# loop and does NOT reuse the CLI (the diff gates run compiled test/bin oracles,
+# not the CLI interpreter), so -O2 here would be a straight +~4s clang cost on the
+# most frequent command. But `medaka run`/`test`/`check` DO run the CLI's tree-walk
+# interpreter, which is ~2× faster at -O2 (medaka test 1.3s→0.65s). So for
+# interpreter/doctest-heavy workflows, opt in with CLI_OPT=-O2. (The EMITTER, by
+# contrast, is always -O2 — it's the reused workhorse; see stage A.)
+CLI_OPT="${CLI_OPT:--O0}"
+echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
+if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" "$CLI_OPT" $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS -o "$OUT" 2>"$WORK/cc.err"; then
   echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
 fi
 
