@@ -122,19 +122,17 @@ export decode : String -> Result String (Array Int)
 decode s =
   let chars = toChars s
   let n = arrayLength chars
-  if isOdd n then Err "hex.decode: odd-length input"
-  else match decodeGo chars 0 n []
-    Ok bytes => Ok (arrayFromList bytes)
-    Err e => Err e
+  if isOdd n then
+    Err "hex.decode: odd-length input"
+  else
+    map arrayFromList (decodeGo chars 0 n [])
 
 {- | Hex string → UTF-8-decoded String.
 
    > decodeString "48656c6c6f"
    Ok "Hello" -}
 export decodeString : String -> Result String String
-decodeString s = match decode s
-  Ok bytes => Ok (fromUtf8 bytes)
-  Err e => Err e
+decodeString s = map fromUtf8 (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 

@@ -284,9 +284,8 @@ findInRoots (r::rs) modId =
 readModuleProg : List (String, String) -> List String -> String -> <IO> Result String (String, List Decl)
 readModuleProg deps roots modId = match findModuleFile deps roots modId
   None => Err (stringConcat ["unknown module: ", modId])
-  Some (path, owningRoot) => match readFile path
-    Err e => Err e
-    Ok src => Ok (owningRoot, parse src)
+  Some (path, owningRoot) =>
+    map (src => (owningRoot, parse src)) (readFile path)
 
 -- ── read-callback variant (B.10.5: unsaved-editor-buffer overrides) ──
 --
@@ -309,9 +308,7 @@ readModuleProgF parseFn read deps roots modId = match findModuleFile deps roots 
   None => Err (stringConcat ["unknown module: ", modId])
   Some (path, owningRoot) => match read path
     Some src => Ok (owningRoot, path, parseFn src)
-    None => match readFile path
-      Err e => Err e
-      Ok src => Ok (owningRoot, path, parseFn src)
+    None => map (src => (owningRoot, path, parseFn src)) (readFile path)
 -- unsaved editor buffer shadows disk
 
 -- ── canonical module-id rewrite (F1b loader module identity) ─────────────────
@@ -470,9 +467,15 @@ visitMod deps roots stack visited acc modId =
         let croots = childRoots owningRoot roots
         let cdeps = childDeps deps owningRoot roots
         let prog2 = rewriteDecls cdeps croots prog
-        match visitMods cdeps croots (modId::stack) visited acc (directImports prog2)
-          Err e => Err e
-          Ok (visited2, acc2) => Ok (modId::visited2, acc2 ++ [(modId, prog2)])
+        map
+          ((visited2, acc2) => (modId::visited2, acc2 ++ [(modId, prog2)]))
+          (visitMods
+            cdeps
+            croots
+            (modId::stack)
+            visited
+            acc
+            (directImports prog2))
 
 visitMods : List (String, String) -> List String -> List String -> List String -> List (String, List Decl) -> List String -> <IO> Result String (List String, List (String, List Decl))
 visitMods _ _ _ visited acc [] = Ok (visited, acc)
@@ -512,9 +515,9 @@ trustedModsGo deps roots stdlibRoot (m::ms) = match findModuleFile deps roots m
 export loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
 loadProgram entry roots =
   let deps = readDeps (findProjectRoot (parentDir entry))
-  match visitMod deps roots [] [] [] (moduleIdOfPath roots entry)
-    Err e => Err e
-    Ok (_, acc) => Ok acc
+  map
+    ((_, acc) => acc)
+    (visitMod deps roots [] [] [] (moduleIdOfPath roots entry))
 
 -- ── path-carrying read-callback topo-sort (B.10.5) ──
 --
@@ -536,10 +539,17 @@ visitModF parseFn read deps roots stack visited acc modId =
         let croots = childRoots owningRoot roots
         let cdeps = childDeps deps owningRoot roots
         let prog2 = rewriteDecls cdeps croots prog
-        match visitModsF parseFn read cdeps croots (modId::stack) visited acc (directImports prog2)
-          Err e => Err e
-          Ok (visited2, acc2) =>
-            Ok (modId::visited2, acc2 ++ [(modId, path, prog2)])
+        map
+          ((visited2, acc2) => (modId::visited2, acc2 ++ [(modId, path, prog2)]))
+          (visitModsF
+            parseFn
+            read
+            cdeps
+            croots
+            (modId::stack)
+            visited
+            acc
+            (directImports prog2))
 
 visitModsF : (String -> <Mut> List Decl) -> (String -> <Mut> Option String) -> List (String, String) -> List String -> List String -> List String -> List (String, String, List Decl) -> List String -> <IO, Mut> Result String (List String, List (String, String, List Decl))
 visitModsF _ _ _ _ _ visited acc [] = Ok (visited, acc)
@@ -555,9 +565,9 @@ visitModsF parseFn read deps roots stack visited acc (d::ds) = match visitModF p
 export loadProgramFiles : (String -> <Mut> Option String) -> String -> List String -> <IO, Mut> Result String (List (String, String, List Decl))
 loadProgramFiles read entry roots =
   let deps = readDeps (findProjectRoot (parentDir entry))
-  match visitModF parse read deps roots [] [] [] (moduleIdOfPath roots entry)
-    Err e => Err e
-    Ok (_, acc) => Ok acc
+  map
+    ((_, acc) => acc)
+    (visitModF parse read deps roots [] [] [] (moduleIdOfPath roots entry))
 
 -- Like loadProgramFiles but parses every module with `parseLocated`, so the
 -- resulting decls carry REAL ELoc spans (B.10.2b) — the LSP project path uses
@@ -566,9 +576,17 @@ loadProgramFiles read entry roots =
 export loadProgramFilesLocated : (String -> <Mut> Option String) -> String -> List String -> <IO, Mut> Result String (List (String, String, List Decl))
 loadProgramFilesLocated read entry roots =
   let deps = readDeps (findProjectRoot (parentDir entry))
-  match visitModF parseLocated read deps roots [] [] [] (moduleIdOfPath roots entry)
-    Err e => Err e
-    Ok (_, acc) => Ok acc
+  map
+    ((_, acc) => acc)
+    (visitModF
+      parseLocated
+      read
+      deps
+      roots
+      []
+      []
+      []
+      (moduleIdOfPath roots entry))
 
 -- ── LSP latency: source-keyed parse memoization (per-keystroke dep reuse) ────
 --
@@ -621,6 +639,14 @@ takeFirst n (x::xs)
 export loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> <Mut> Option String) -> String -> List String -> <IO, Mut> Result String (List (String, String, List Decl))
 loadProgramFilesLocatedCached parseCacheRef read entry roots =
   let deps = readDeps (findProjectRoot (parentDir entry))
-  match visitModF (s => parseCachedLocated parseCacheRef s) read deps roots [] [] [] (moduleIdOfPath roots entry)
-    Err e => Err e
-    Ok (_, acc) => Ok acc
+  map
+    ((_, acc) => acc)
+    (visitModF
+      (s => parseCachedLocated parseCacheRef s)
+      read
+      deps
+      roots
+      []
+      []
+      []
+      (moduleIdOfPath roots entry))

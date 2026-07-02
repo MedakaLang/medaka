@@ -177,9 +177,7 @@ delete path table where_ = match openDb path
   Err e => Err e
   Ok db => match buildImage db table (unExpr where_)
     Err e => Err e
-    Ok (img, cnt) => match writeFileBytes path img
-      Err e => Err e
-      Ok _ => Ok cnt
+    Ok (img, cnt) => map (_ => cnt) (writeFileBytes path img)
 
 -- Build the new database image after filtering the target table.
 -- Pure-ish: only `buildDatabaseMultiExplicit` carries `<Mut>`.
@@ -199,9 +197,7 @@ buildImage db table whereExpr = match readSchema db
             Ok pred =>
               let (survivors, cnt) = partitionRows pred rows
               let newSpecs = replaceSpec specs table (table, sql, pkIdx, survivors)
-              match buildDatabaseMultiExplicit newSpecs
-                Err e => Err e
-                Ok img => Ok (img, cnt)
+              map (img => (img, cnt)) (buildDatabaseMultiExplicit newSpecs)
 
 -- ---------------------------------------------------------------------------
 -- Assign — a SET assignment for UPDATE
@@ -237,9 +233,7 @@ update path table assigns where_ = match openDb path
   Err e => Err e
   Ok db => match buildUpdateImage db table assigns (unExpr where_)
     Err e => Err e
-    Ok (img, cnt) => match writeFileBytes path img
-      Err e => Err e
-      Ok _ => Ok cnt
+    Ok (img, cnt) => map (_ => cnt) (writeFileBytes path img)
 
 -- Build the new database image after applying the SET assignments to matching rows.
 buildUpdateImage : Db -> String -> List Assign -> SqlExpr -> <Mut> Result String (Array Int, Int)
@@ -262,9 +256,7 @@ buildUpdateImage db table assigns whereExpr = match readSchema db
                 Ok pred =>
                   let (updatedRows, cnt) = applyUpdate pred idxedAssign rows
                   let newSpecs = replaceSpec specs table (table, sql, pkIdx, updatedRows)
-                  match buildDatabaseMultiExplicit newSpecs
-                    Err e => Err e
-                    Ok img => Ok (img, cnt)
+                  map (img => (img, cnt)) (buildDatabaseMultiExplicit newSpecs)
 
 -- Refuse if any Assign targets the IPK column.
 --

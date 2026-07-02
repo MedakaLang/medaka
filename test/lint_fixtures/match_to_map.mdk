@@ -1,0 +1,70 @@
+-- Fixture for rule-match-to-map: a 2-arm `match` on Option/Result that IS a
+-- functor `map` over the success side → rewrite to `map f o` (hlint "use fmap").
+-- Only the two `map` shapes fire (Option None/Some, Result Err/Ok); the failure
+-- arm reconstructs VERBATIM and the success arm re-wraps the SAME ctor.
+
+-- POSITIVE: Option, eta-reduces to `map g o`.
+posOptEta o = match o
+  None => None
+  Some x => Some (g x)
+
+-- POSITIVE: Option, general expr → `map (x => x + 1) o`.
+posOptExpr o = match o
+  None => None
+  Some x => Some (x + 1)
+
+-- POSITIVE: Result, eta-reduces to `map g r`.
+posResEta r = match r
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- POSITIVE: Result, general expr (binary op, no eta) → `map (x => x + delta) r`.
+posResExpr r = match r
+  Err e => Err e
+  Ok x => Ok (x + delta)
+
+-- POSITIVE: tuple destructure binder → `map ((a, b) => a + b) r`.
+posTuple r = match r
+  Ok (a, b) => Ok (a + b)
+  Err e => Err e
+
+-- POSITIVE: wildcard binder → `map (_ => 42) o`.
+posWild o = match o
+  None => None
+  Some _ => Some 42
+
+-- POSITIVE: Some-first arm order still fires.
+posOrder o = match o
+  Some x => Some (g x)
+  None => None
+
+-- NEGATIVE: bind chain — the Ok arm UNWRAPS (no `Ok` re-wrap) → andThen, not map.
+negBind r = match r
+  Err e => Err e
+  Ok x => f x
+
+-- NEGATIVE: the Err arm REBUILDS (`Err (wrap e)`), not a verbatim passthrough.
+negErrRebuild r = match r
+  Err e => Err (wrap e)
+  Ok x => Ok (g x)
+
+-- NEGATIVE: failure arm returns a default value → getOrElse/option, not map.
+negDefault o = match o
+  None => []
+  Some x => Some x
+
+-- NEGATIVE: more than 2 arms.
+negThreeArms o = match o
+  None => None
+  Some 0 => Some 1
+  Some x => Some x
+
+-- NEGATIVE: an arm has a guard.
+negGuard o = match o
+  None => None
+  Some x if x > 0 => Some x
+
+-- NEGATIVE: the Some arm UNWRAPS instead of re-wrapping.
+negUnwrap o = match o
+  None => None
+  Some x => x

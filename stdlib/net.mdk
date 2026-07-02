@@ -57,9 +57,7 @@ resolve host = netResolve host
    `withConnection` over a bare `connect` unless you need to hold the
    connection across a larger scope than one bracketed call. -}
 export connect : String -> Int -> <Net "_"> Result String Connection
-connect host port = match netTcpConnect host port
-  Ok fd => Ok (Connection fd)
-  Err e => Err e
+connect host port = map Connection (netTcpConnect host port)
 
 -- ── Server ───────────────────────────────────────────────────────────────
 
@@ -67,9 +65,7 @@ connect host port = match netTcpConnect host port
    port — pair with `listenPort` to discover it; this is what makes a
    single-process loopback self-test hermetic). -}
 export listen : String -> Int -> <Net "_"> Result String Listener
-listen addr port = match netTcpListen addr port
-  Ok fd => Ok (Listener fd)
-  Err e => Err e
+listen addr port = map Listener (netTcpListen addr port)
 
 {- | The actual bound port of a `Listener` (useful after `listen addr 0`). -}
 export listenPort : Listener -> <Net "_"> Result String Int
@@ -77,9 +73,7 @@ listenPort (Listener fd) = netListenPort fd
 
 {- | Block until a peer connects, then return the accepted `Connection`. -}
 export accept : Listener -> <Net "_"> Result String Connection
-accept (Listener fd) = match netTcpAccept fd
-  Ok cfd => Ok (Connection cfd)
-  Err e => Err e
+accept (Listener fd) = map Connection (netTcpAccept fd)
 
 -- ── Transfer (single call — may be short, see sendAll/recvAll) ────────────
 
@@ -156,9 +150,7 @@ sendString conn s = sendAll conn (toUtf8 s)
    one-shot request/response); for a persistent connection, size a `recv`/
    `recvN` read explicitly instead. -}
 export recvString : Connection -> <Net "_", Mut> Result String String
-recvString conn = match recvAll conn
-  Ok bs => Ok (fromUtf8 bs)
-  Err e => Err e
+recvString conn = map fromUtf8 (recvAll conn)
 
 {- | Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`). -}
 export sendLine : Connection -> String -> <Net "_"> Result String Unit

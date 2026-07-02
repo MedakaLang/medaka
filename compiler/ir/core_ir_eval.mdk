@@ -281,9 +281,7 @@ headExtract HUnit v = extractWith (PLit LUnit) v
 headExtract (HLit l) v = extractWith (PLit l) v
 
 extractWith : Pat -> Value -> Option (List Value)
-extractWith p v = match matchPat p v
-  Some binds => Some (map snd binds)
-  None => None
+extractWith p v = map (map snd) (matchPat p v)
 
 -- `a` fresh binder patterns ($d0, $d1, …); matchPats binds them left-to-right,
 -- so `map snd` recovers the constructor's fields in order.  The names are

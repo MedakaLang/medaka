@@ -31,9 +31,7 @@ readModules : List String -> <IO> Result String (List (String, List Decl))
 readModules [] = Ok []
 readModules (f::rest) = match readFile f
   Err e => Err e
-  Ok src => match readModules rest
-    Err e => Err e
-    Ok ms => Ok ((modIdOf f, desugar (parse src))::ms)
+  Ok src => map ((modIdOf f, desugar (parse src)) :: _) (readModules rest)
 
 run : String -> String -> List String -> <IO, Mut> Unit
 run runtimeP coreP files = match readFile runtimeP

@@ -138,9 +138,9 @@ runSession medakaBin msgs =
   let req = stringConcat (map frame msgs)
   let tmp = "/tmp/medaka_lsp_harness_req.txt"
   let _ = writeFile tmp req
-  match runCommand "sh" ["-c", stringConcat [medakaBin, " lsp < ", tmp]]
-    Err e => Err e
-    Ok (code, out, errOut) => Ok out
+  map
+    ((code, out, errOut) => out)
+    (runCommand "sh" ["-c", stringConcat [medakaBin, " lsp < ", tmp]])
 
 -- ── byte-accurate frame parser (this IS the integrity check) ────────────────
 -- Frame declaredLen body byteValid.  byteValid = exactly `declaredLen` bytes were

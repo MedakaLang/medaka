@@ -290,18 +290,14 @@ maxView (Bin _ k v l r) = match maxView r
    > lookupMin (fromList [(3, 0), (1, 0), (2, 0)])
    Some (1, 0) -}
 export lookupMin : Map k v -> Option (k, v)
-lookupMin m = match minView m
-  None => None
-  Some (k, v, _) => Some (k, v)
+lookupMin m = map ((k, v, _) => (k, v)) (minView m)
 
 {- | Largest key/value, or `None`.
 
    > lookupMax (fromList [(3, 0), (1, 0), (2, 0)])
    Some (3, 0) -}
 export lookupMax : Map k v -> Option (k, v)
-lookupMax m = match maxView m
-  None => None
-  Some (k, v, _) => Some (k, v)
+lookupMax m = map ((k, v, _) => (k, v)) (maxView m)
 
 {- | Drop the smallest entry (a no-op on the empty map).
 

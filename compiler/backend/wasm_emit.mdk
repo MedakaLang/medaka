@@ -5338,9 +5338,7 @@ wasmTrmcTry prog name arity clauses =
   if arity > 0
      && wTrmcNonDict clauses
      && trmcEligible (c => isCtor prog c) (c => ctorArity prog c) self arity pairs then
-    match wTrmcUniformCtor prog self arity pairs
-      Some ctorName => Some (emitWasmTrmcFn prog name arity clauses ctorName)
-      None => None
+    map (emitWasmTrmcFn prog name arity clauses) (wTrmcUniformCtor prog self arity pairs)
   else None
 
 clauseToPair : CClause -> (List Pat, CExpr)
@@ -5367,10 +5365,10 @@ wTrmcImplTry : Prog -> String -> String -> Int -> List CClause -> <Mut> Option (
 wTrmcImplTry prog method tag arity clauses =
   let self = SelfByMethod method tag
   let pairs = map clauseToPair clauses
-  if arity > 0 && wTrmcNonDict clauses && trmcEligible (c => isCtor prog c) (c => ctorArity prog c) self arity pairs then match wTrmcUniformCtor prog self arity pairs
-    Some ctorName => Some (emitWasmTrmcCore prog (implFnSym tag method) self (implFnSym tag method) arity clauses ctorName)
-    None => None
-  else None  -- a non-dict define: no clause has a leading `$dict_…`/`$dict…` param (dict-passed
+  if arity > 0 && wTrmcNonDict clauses && trmcEligible (c => isCtor prog c) (c => ctorArity prog c) self arity pairs then
+    map (emitWasmTrmcCore prog (implFnSym tag method) self (implFnSym tag method) arity clauses) (wTrmcUniformCtor prog self arity pairs)
+  else
+    None  -- a non-dict define: no clause has a leading `$dict_…`/`$dict…` param (dict-passed
 -- methods / lifted lambdas are out of scope for Stage 1).
 wTrmcNonDict : List CClause -> Bool
 wTrmcNonDict clauses = not (anyList clauseHasLeadingDict clauses)

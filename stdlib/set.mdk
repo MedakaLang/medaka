@@ -223,18 +223,14 @@ maxView (Bin _ x l r) = match maxView r
    > lookupMin (fromList [3, 1, 2])
    Some 1 -}
 export lookupMin : Set a -> Option a
-lookupMin s = match minView s
-  None => None
-  Some (x, _) => Some x
+lookupMin s = map ((x, _) => x) (minView s)
 
 {- | Largest element, or `None`.
 
    > lookupMax (fromList [3, 1, 2])
    Some 3 -}
 export lookupMax : Set a -> Option a
-lookupMax s = match maxView s
-  None => None
-  Some (x, _) => Some x
+lookupMax s = map ((x, _) => x) (maxView s)
 
 {- | Drop the smallest element (a no-op on the empty set).
 

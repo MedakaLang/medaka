@@ -62,9 +62,7 @@ splitLines s = match stringIndexOf "\n" s
 {- | Read a file and split it into lines, or `Err` with the host message on a
    read failure. The trailing newline does not produce a final empty line. -}
 export readLines : String -> <IO> Result String (List String)
-readLines path = match readFile path
-  Err e => Err e
-  Ok contents => Ok (splitLines contents)
+readLines path = map splitLines (readFile path)
 
 -- ── Environment ──────────────────────────────────────────────────────────
 

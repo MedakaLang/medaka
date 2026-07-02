@@ -153,6 +153,9 @@ ruleNameWhenUnless = "rule-when-unless"
 ruleNameComplementPredicate : String
 ruleNameComplementPredicate = "rule-complement-predicate"
 
+ruleNameMatchToMap : String
+ruleNameMatchToMap = "rule-match-to-map"
+
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
 -- `allRules` list literal) so the LLVM emitter's record-field scanner — which
@@ -309,6 +312,16 @@ complementPredicateRule = Rule {
   fix = Some complementPredicateFix,
 }
 
+matchToMapRule : Rule
+matchToMapRule = Rule {
+  name = ruleNameMatchToMap,
+  descr = "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor — that IS a functor `map` (hlint 'use fmap')",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleMatchToMap,
+  fix = Some matchToMapFix,
+}
+
 export allRules : List Rule
 allRules = [
   matchParamRule,
@@ -326,6 +339,7 @@ allRules = [
   doubleReverseRule,
   whenUnlessRule,
   complementPredicateRule,
+  matchToMapRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -589,9 +603,7 @@ parseDirectiveBody line s = match matchKeyword "lint-disable-next-line" s
   Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
   None => match matchKeyword "lint-disable-line" s
     Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
-    None => match matchKeyword "lint-disable-file" s
-      Some names => Some (Directive DScopeFile (parseRuleNames names))
-      None => None
+    None => map (names => Directive DScopeFile (parseRuleNames names)) (matchKeyword "lint-disable-file" s)
 
 -- If `s` starts with keyword `kw` AND the keyword is followed by end-of-string
 -- or whitespace (so `lint-disable-lineXYZ` does NOT match), return the trimmed
@@ -627,9 +639,7 @@ scopeMatches (Some line) (DScopeLine l) = line == l
 scopeMatches None (DScopeLine _) = False
 
 findingLineNo : Finding -> Option Int
-findingLineNo f = match f.loc
-  Some (Loc _ l _ _ _) => Some l
-  None => None
+findingLineNo f = map ((Loc _ l _ _ _) => l) f.loc
 
 -- trim ASCII whitespace from both ends
 trimWs : String -> String
@@ -768,9 +778,7 @@ matchParamFixArms vis name pats p k arms
 matchBodyOnBareParam : List Pat -> Expr -> Option (String, Int, List Arm)
 matchBodyOnBareParam pats body = match unwrapLoc body
   EMatch scrut arms => match unwrapLoc scrut
-    EVar p => match paramIndex p pats
-      Some k => Some (p, k, arms)
-      None => None
+    EVar p => map (k => (p, k, arms)) (paramIndex p pats)
     _ => None
   _ => None
 
@@ -2525,9 +2533,7 @@ boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
 boolSimplifyOf (EBinOp op a b _)
   | op == "==" || op == "!=" = boolSimplifyEq op a b
 boolSimplifyOf e = match notArgOf e
-  Some inner => match notArgOf (unwrapLoc inner)
-    Some y => Some y
-    None => None
+  Some inner => map (y => y) (notArgOf (unwrapLoc inner))
   None => None
 
 boolSimplifyIf : Expr -> Expr -> Expr -> Option Expr
@@ -2715,9 +2721,8 @@ renameSpineHead newName e = match unwrapLoc e
 complementPredOf : Expr -> Option Expr
 complementPredOf e = match notArgOf e
   Some inner => match appSpineHead (unwrapLoc inner)
-    Some name => match complementOf name
-      Some comp => Some (renameSpineHead comp (unwrapLoc inner))
-      None => None
+    Some name =>
+      map (comp => renameSpineHead comp (unwrapLoc inner)) (complementOf name)
     None => None
   None => None
 
@@ -2741,6 +2746,106 @@ complementPredicateFinding loc rewritten = Finding {
 complementPredicateFix : Oracle -> Decl -> Option (List Decl)
 complementPredicateFix _ d =
   exprRuleFix complementExcl (detApply complementPredOf) d
+
+-- ── rule: match-to-map ────────────────────────────────────────────────────────
+-- A 2-arm `match` on an Option or Result that structurally IS a functor `map`
+-- over the success side — rewrite to `map f o` (hlint "use fmap").  Fires on
+-- EXACTLY these two shapes (the mapError/bimap variants fire nowhere in-tree):
+--   Option: `match o { None => None; Some p => Some <expr> }` → `map (p => <expr>) o`
+--   Result: `match r { Err v => Err v; Ok  p => Ok  <expr> }` → `map (p => <expr>) r`
+-- Arm order is either way.  ETA-REDUCE to `map f o` when `<expr>` is exactly
+-- `f p` (p the plain binder used once as the sole/last argument, `f` not
+-- mentioning p).  Firing conditions (census-precision ~100%):
+--   (1) EXACTLY 2 arms, NO guards, flat single-expression bodies.
+--   (2) ONE Option ctor-pair (None+Some) or ONE Result ctor-pair (Err+Ok); these
+--       ctor names belong only to the prelude Option/Result types, so keying off
+--       the arm patterns is sound with no type inference.
+--   (3) the PASSTHROUGH arm reconstructs VERBATIM: `None => None`, or `Err v =>
+--       Err v` with the SAME identifier v (rejects `Err e => Err (…e…)` rebuilds
+--       and `None => Some …`).
+--   (4) LINCHPIN — the transform arm's body HEAD is literally the SAME ctor
+--       wrapping an expression (`Some <expr>` / `Ok <expr>`).  This excludes the
+--       `Ok x => f x` / `Ok x => andThen …` BIND chains (they UNWRAP, no re-wrap)
+--       which are `andThen`/monadic, NOT map.
+-- No self-reference risk: the prelude `map` impls are multi-clause function
+-- clauses, not a scrutinee `EMatch`, so `map`'s own definition never fires.
+
+-- pattern is a nullary `PCon name` (e.g. `None`)
+isNilPCon : String -> Pat -> Bool
+isNilPCon name (PCon n []) = n == name
+isNilPCon _ _ = False
+
+-- transform arm: `PCon ctor [binder] => <ctor> <expr>` — the body head is
+-- LITERALLY `ctor` (condition 4).  Returns `(binder, <expr>)`.
+matchToMapTransform : String -> Pat -> Expr -> Option (Pat, Expr)
+matchToMapTransform ctor (PCon c [binder]) body
+  | c == ctor = match unwrapLoc body
+    EApp hd inner => if isEVarNamed ctor hd then Some (binder, inner) else None
+    _ => None
+matchToMapTransform _ _ _ = None
+
+-- Result passthrough arm: `Err v => Err v` with the SAME identifier v (condition 3).
+matchToMapErrPassthru : Pat -> Expr -> Bool
+matchToMapErrPassthru (PCon "Err" [PVar v]) body = match unwrapLoc body
+  EApp hd arg => isEVarNamed "Err" hd && isEVarNamed v arg
+  _ => False
+matchToMapErrPassthru _ _ = False
+
+-- build the map function: eta-reduce `p => f p` to `f` (reusing `andThenEtaFn`),
+-- else a lambda over the (possibly non-simple) binder pattern.
+matchToMapFn : Pat -> Expr -> Expr
+matchToMapFn (PVar x) expr = match andThenEtaFn x expr
+  Some f => f
+  None => ELam [PVar x] expr
+matchToMapFn binder expr = ELam [binder] expr
+
+matchToMapCall : Pat -> Expr -> Expr -> Expr
+matchToMapCall binder expr scrut =
+  EApp (EApp (EVar "map") (matchToMapFn binder expr)) scrut
+
+-- Option map: (noneArm, someArm) in this order.
+matchToMapOption : Expr -> Arm -> Arm -> Option Expr
+matchToMapOption scrut (Arm pn gn bn) (Arm ps gs bs)
+  | isEmptyL gn && isEmptyL gs && isNilPCon "None" pn && isEVarNamed "None" bn = map ((binder, expr) => matchToMapCall binder expr scrut) (matchToMapTransform "Some" ps bs)
+  | otherwise = None
+
+-- Result map: (errArm, okArm) in this order.
+matchToMapResult : Expr -> Arm -> Arm -> Option Expr
+matchToMapResult scrut (Arm pe ge be) (Arm po go bo)
+  | isEmptyL ge && isEmptyL go && matchToMapErrPassthru pe be = map ((binder, expr) => matchToMapCall binder expr scrut) (matchToMapTransform "Ok" po bo)
+  | otherwise = None
+
+-- try both ctor-pairs in both arm orders.
+matchToMapPair : Expr -> Arm -> Arm -> Option Expr
+matchToMapPair scrut a1 a2 = match matchToMapOption scrut a1 a2
+  Some e => Some e
+  None => match matchToMapOption scrut a2 a1
+    Some e => Some e
+    None => match matchToMapResult scrut a1 a2
+      Some e => Some e
+      None => matchToMapResult scrut a2 a1
+
+-- detector (matches the RAW `EMatch`, never its `ELoc` wrapper).
+matchToMapOf : Expr -> Option Expr
+matchToMapOf (EMatch scrut arms) = match arms
+  [a1, a2] => matchToMapPair scrut a1 a2
+  _ => None
+matchToMapOf _ = None
+
+ruleMatchToMap : String -> Positions -> List Decl -> List Finding
+ruleMatchToMap _ pos prog =
+  exprRuleFindings noExcl matchToMapOf matchToMapFinding pos prog
+
+matchToMapFinding : Option Loc -> Expr -> Finding
+matchToMapFinding loc rewritten = Finding {
+  rule = ruleNameMatchToMap,
+  message = "2-arm match maps over an Option/Result — rewrite as '" ++ exprToString rewritten ++ "' (functor map)",
+  severity = SevWarning,
+  loc = loc,
+}
+
+matchToMapFix : Oracle -> Decl -> Option (List Decl)
+matchToMapFix _ d = exprRuleFix noExcl (detApply matchToMapOf) d
 
 -- ── cross-file runner ─────────────────────────────────────────────────────────
 -- Run the enabled cross-file rules over every target file, honoring the same

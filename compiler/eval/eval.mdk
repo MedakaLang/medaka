@@ -653,34 +653,25 @@ zipFieldOrder _ [] = []
 zipFieldOrder (f::fs) (v::vs) = (f, v) :: zipFieldOrder fs vs
 
 matchRecField : String -> Option Pat -> Value -> List RecPatField -> List (String, Value) -> Option (List (String, Value))
-matchRecField fname None v rest recFields = match matchRecFields rest recFields
-  None => None
-  Some bs => Some ((fname, v)::bs)
+matchRecField fname None v rest recFields =
+  map ((fname, v) :: _) (matchRecFields rest recFields)
 matchRecField _ (Some q) v rest recFields = match matchPat q v
   None => None
-  Some b => match matchRecFields rest recFields
-    None => None
-    Some bs => Some (b ++ bs)
+  Some b => map (b ++ _) (matchRecFields rest recFields)
 
 matchCons : Pat -> Pat -> Value -> List Value -> Option (List (String, Value))
 matchCons h t x xs = match matchPat h x
   None => None
-  Some b1 => match matchPat t (VList xs)
-    None => None
-    Some b2 => Some (b1 ++ b2)
+  Some b1 => map (b1 ++ _) (matchPat t (VList xs))
 
 matchAs : String -> Pat -> Value -> Option (List (String, Value))
-matchAs x p v = match matchPat p v
-  None => None
-  Some binds => Some ((x, v)::binds)
+matchAs x p v = map ((x, v) :: _) (matchPat p v)
 
 matchPats : List Pat -> List Value -> Option (List (String, Value))
 matchPats [] [] = Some []
 matchPats (p::ps) (v::vs) = match matchPat p v
   None => None
-  Some b => match matchPats ps vs
-    None => None
-    Some bs => Some (b ++ bs)
+  Some b => map (b ++ _) (matchPats ps vs)
 matchPats _ _ = None
 
 -- ── constructor builders ──────────────────────────────────────────────────
@@ -717,9 +708,8 @@ applyOpt other _ = panic ("applied non-function: " ++ ppValue other)
 -- pass the arg to the impl's inner value, preserving the dispatch tag across
 -- partial applications (so later args still route to the same impl)
 applyTyped : String -> String -> List Int -> Int -> Value -> Value -> <Mut> Option Value
-applyTyped t key pos seen inner arg = match applyOpt inner arg
-  None => None
-  Some r => Some (reTag t key pos (seen + 1) r)
+applyTyped t key pos seen inner arg =
+  map (reTag t key pos (seen + 1)) (applyOpt inner arg)
 
 reTag : String -> String -> List Int -> Int -> Value -> Value
 reTag t key pos seen r
@@ -932,9 +922,8 @@ applyClosure _ [] _ _ = panic "applied closure with no parameters"
 applyClosure env [p] body arg = match matchPat p arg
   None => None
   Some binds => fallthroughToNone (eval (extendEnv env binds) body)
-applyClosure env (p::ps) body arg = match matchPat p arg
-  None => None
-  Some binds => Some (VClosure (extendEnv env binds) ps body)
+applyClosure env (p::ps) body arg =
+  map (binds => VClosure (extendEnv env binds) ps body) (matchPat p arg)
 
 -- VClosureF analog of applyClosure: the body is a host fn run on the fully-
 -- extended env once the last param binds; partial application keeps the same
@@ -944,9 +933,8 @@ applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [p] f arg = match matchPat p arg
   None => None
   Some binds => fallthroughToNone (f (extendEnv env binds))
-applyClosureF env (p::ps) f arg = match matchPat p arg
-  None => None
-  Some binds => Some (VClosureF (extendEnv env binds) ps f)
+applyClosureF env (p::ps) f arg =
+  map (binds => VClosureF (extendEnv env binds) ps f) (matchPat p arg)
 
 -- a guard chain that fell through (VFallthrough) means this clause didn't match
 fallthroughToNone : Value -> Option Value

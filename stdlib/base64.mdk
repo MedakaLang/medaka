@@ -170,10 +170,10 @@ decodeWith : String -> Bool -> Result String (Array Int)
 decodeWith s urlSafe =
   let chars = toChars s
   let n = arrayLength chars
-  if n % 4 != 0 then Err "base64.decode: length not a multiple of 4"
-  else match decodeGo chars 0 n urlSafe []
-    Ok bytes => Ok (arrayFromList bytes)
-    Err e => Err e
+  if n % 4 != 0 then
+    Err "base64.decode: length not a multiple of 4"
+  else
+    map arrayFromList (decodeGo chars 0 n urlSafe [])
 
 {- | Standard base64 → bytes.  Strict: `Err` on bad length, invalid
    character, or misplaced padding.
@@ -216,9 +216,7 @@ encodeString s = encode (toUtf8 s)
    > decodeString "Zm9v"
    Ok "foo" -}
 export decodeString : String -> Result String String
-decodeString s = match decode s
-  Ok bytes => Ok (fromUtf8 bytes)
-  Err e => Err e
+decodeString s = map fromUtf8 (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 

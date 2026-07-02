@@ -232,9 +232,7 @@ hex4From2 arr i acc = match hexVal (arrayGetUnsafe (i + 2) arr)
   Some h2 => hex4From3 arr i (acc * 16 + h2)
 
 hex4From3 : Array Char -> Int -> Int -> Option Int
-hex4From3 arr i acc = match hexVal (arrayGetUnsafe (i + 3) arr)
-  None => None
-  Some h3 => Some (acc * 16 + h3)
+hex4From3 arr i acc = map (acc * 16 + _) (hexVal (arrayGetUnsafe (i + 3) arr))
 
 parseUnicode : Array Char -> Int -> List Char -> Result String (String, Int)
 parseUnicode arr i acc

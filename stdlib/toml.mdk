@@ -143,14 +143,10 @@ parseKvValue arr n i key
   | otherwise = Err (stringConcat ["expected '\"' or '[' for key: ", key])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = match parseQuotedStr arr i
-  Err e => Err e
-  Ok (s, _) => Ok (key, TStr s)
+parseKvStr arr i key = map ((s, _) => (key, TStr s)) (parseQuotedStr arr i)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = match parseArrayValue arr i
-  Err e => Err e
-  Ok (xs, _) => Ok (key, TArr xs)
+parseKvArr arr i key = map ((xs, _) => (key, TArr xs)) (parseArrayValue arr i)
 
 -- ── Document parser ──────────────────────────────────────────────────────────
 
@@ -205,9 +201,7 @@ parseLinesAcc (l::ls) section acc =
    > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
    True -}
 export parse : String -> Result String Toml
-parse s = match parseLinesAcc (lines s) "" []
-  Err e => Err e
-  Ok kvs => Ok (Toml kvs)
+parse s = map Toml (parseLinesAcc (lines s) "" [])
 
 -- Parse-error cases: a line with no `=` and a missing value both produce Err.
 

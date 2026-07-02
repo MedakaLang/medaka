@@ -8046,10 +8046,10 @@ findRecordByLabel ((name, labels)::rest) label =
 indexOfStr : String -> List String -> Option Int
 indexOfStr _ [] = None
 indexOfStr x (y::rest) =
-  if x == y then Some 0
-  else match indexOfStr x rest
-    Some i => Some (i + 1)
-    None => None
+  if x == y then
+    Some 0
+  else
+    map (+ 1) (indexOfStr x rest)
 
 collectRecords : List CBind -> List (String, List String)
 collectRecords [] = []

@@ -714,9 +714,7 @@ completionFor runtimeSrc coreSrc uri src params docs = match (positionLine param
 -- the seed/locals there would change the single-file completion golden.
 completionEnvFor : String -> String -> String -> String -> Docs -> <IO, Mut> Option (List (String, Scheme))
 completionEnvFor runtimeSrc coreSrc uri src docs
-  | bufferHasImports src = match projectEntryEnv runtimeSrc coreSrc uri docs
-    None => None
-    Some own => Some (own ++ currentLocalSchemes () ++ currentSeedSchemes ())
+  | bufferHasImports src = map (own => own ++ currentLocalSchemes () ++ currentSeedSchemes ()) (projectEntryEnv runtimeSrc coreSrc uri docs)
   | otherwise = docSchemes runtimeSrc coreSrc src
 
 handleCompletion : String -> String -> Json -> Json -> Docs -> <IO, Mut> Unit

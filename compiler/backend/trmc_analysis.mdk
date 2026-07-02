@@ -286,9 +286,7 @@ allSelfFreeF self (x::rest) = selfFree self x && allSelfFreeF self rest
 export splitLastF : List a -> Option (List a, a)
 splitLastF [] = None
 splitLastF [x] = Some ([], x)
-splitLastF (x::rest) = match splitLastF rest
-  Some (lead, last) => Some (x::lead, last)
-  None => None
+splitLastF (x::rest) = map ((lead, last) => (x::lead, last)) (splitLastF rest)
 
 -- `ex` is a SATURATED self-call to exactly `arity` value args.  SelfByVar: a
 -- `CVar self`-headed spine.  SelfByMethod: a `CMethod method (RKey tag) …`-headed

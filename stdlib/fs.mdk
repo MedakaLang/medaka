@@ -31,10 +31,9 @@ public export data FileStat =
 {- | `stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
      `Err` (strerror) if the path cannot be stat'd (e.g. does not exist). -}
 export stat : String -> <FileRead "_"> Result String FileStat
-stat p = match statFile p
-  Ok (sz, d, f, m) =>
-    Ok FileStat { size = sz, isDir = d, isFile = f, mtime = m }
-  Err e => Err e
+stat p = map
+  ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
+  (statFile p)
 
 -- ── Composed helpers ─────────────────────────────────────────────────────────
 
@@ -83,18 +82,12 @@ walkEntries root (name::rest) acc =
 
 {- | `isDir path` — `Ok True` if `path` exists and is a directory. -}
 export isDir : String -> <FileRead "_"> Result String Bool
-isDir p = match stat p
-  Ok st => Ok st.isDir
-  Err e => Err e
+isDir p = map (st => st.isDir) (stat p)
 
 {- | `isFile path` — `Ok True` if `path` exists and is a regular file. -}
 export isFile : String -> <FileRead "_"> Result String Bool
-isFile p = match stat p
-  Ok st => Ok st.isFile
-  Err e => Err e
+isFile p = map (st => st.isFile) (stat p)
 
 {- | `fileSize path` — the size of `path` in bytes. -}
 export fileSize : String -> <FileRead "_"> Result String Int
-fileSize p = match stat p
-  Ok st => Ok st.size
-  Err e => Err e
+fileSize p = map (st => st.size) (stat p)

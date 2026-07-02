@@ -25,9 +25,7 @@ export readAllDecls : List String -> <IO> Result String (List Decl)
 readAllDecls [] = Ok []
 readAllDecls (p::rest) = match readFile p
   Err msg => Err msg
-  Ok src => match readAllDecls rest
-    Err msg => Err msg
-    Ok more => Ok (desugar (parse src) ++ more)
+  Ok src => map (desugar (parse src) ++ _) (readAllDecls rest)
 
 -- read each target file, keeping (path, source) pairs in order (for batch harnesses
 -- that need the path to prefix each section's sentinel).
@@ -35,9 +33,7 @@ export readAllSources : List String -> <IO> Result String (List (String, String)
 readAllSources [] = Ok []
 readAllSources (p::rest) = match readFile p
   Err msg => Err msg
-  Ok src => match readAllSources rest
-    Err msg => Err msg
-    Ok more => Ok ((p, src)::more)
+  Ok src => map ((p, src) :: _) (readAllSources rest)
 
 -- ── single-target drivers ────────────────────────────────────────────────────
 

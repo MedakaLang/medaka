@@ -1,0 +1,38 @@
+-- Autofix fixture for rule-match-to-map.  Positives are rewritten to `map …`;
+-- negatives (bind chain, default arm) are left byte-identical.  Scrutinees are
+-- non-bare-param applications so rule-match-on-param does not claim them first.
+
+-- Option, eta-reduces to `map g (lookup k m)`.
+posOptEta k m = match lookup k m
+  None => None
+  Some x => Some (g x)
+
+-- Result, eta-reduces to `map g (parse s)`.
+posResEta s = match parse s
+  Err e => Err e
+  Ok x => Ok (g x)
+
+-- General transform (application, not a section) → `map (x => f x x) (get i)`.
+posOptExpr i = match get i
+  None => None
+  Some x => Some (f x x)
+
+-- Tuple destructure binder → `map ((a, b) => h a b) (split r)`.
+posTuple r = match split r
+  Ok (a, b) => Ok (h a b)
+  Err e => Err e
+
+-- Wildcard binder → `map (_ => sentinel) (peek o)`.
+posWild o = match peek o
+  None => None
+  Some _ => Some sentinel
+
+-- NEGATIVE: bind chain (Ok unwraps) — left untouched.
+negBind r = match parse r
+  Err e => Err e
+  Ok x => f x
+
+-- NEGATIVE: default failure arm — left untouched.
+negDefault o = match peek o
+  None => []
+  Some x => Some x

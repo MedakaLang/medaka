@@ -3437,12 +3437,10 @@ inferDictAt env name routesRef = match lookupVar env name
 qualConstraintFor : String -> Option (List Int, List String)
 qualConstraintFor name = match lookupAssoc name currentImportDefinersRef.value
   None => None
-  Some src => match lookupQualArity src name crossModuleFunConstraintsQualRef.value
-    None => None
-    Some ids => Some (
-      ids,
-      fromOption [] (lookupQualIfaces src name crossModuleFunConstraintIfacesQualRef.value),
-    )
+  Some src => map (ids => (
+    ids,
+    fromOption [] (lookupQualIfaces src name crossModuleFunConstraintIfacesQualRef.value),
+  )) (lookupQualArity src name crossModuleFunConstraintsQualRef.value)
 
 lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
 lookupQualArity _ _ [] = None
@@ -3897,9 +3895,7 @@ resolveFieldAmbiguous te fname owners = match normalize te
   _ => pairRecordByName (headL owners)
 
 pairRecordByName : String -> <Mut> Option (String, RecordInfo)
-pairRecordByName r = match lookupRecordByName r
-  Some ri => Some (r, ri)
-  None => None
+pairRecordByName r = map (ri => (r, ri)) (lookupRecordByName r)
 
 headL : List String -> String
 headL [] = ""
@@ -4646,9 +4642,7 @@ nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 -- TCon/TApp head gives the type name; a tuple has no TCon head, so it maps to a
 -- synthetic per-arity tuple type (mirrors the reference's col0_type).
 matchCol0Type : Mono -> Option String
-matchCol0Type ty = match headTyconMono ty
-  Some n => Some n
-  None => None
+matchCol0Type ty = map (n => n) (headTyconMono ty)
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> <Mut> Unit
 inferArms _ _ _ [] = ()
@@ -5935,9 +5929,8 @@ lastSegmentAfterPipe cs key i lastPipe
 ifaceParamMonos : String -> Mono -> <Mut> Option (List Mono)
 ifaceParamMonos name fullMono = match lookupAssoc name methodIfaceParamsRef.value
   None => None
-  Some (_, typarams, mty) => match matchTyMono mty fullMono
-    None => None
-    Some subst => Some (map (paramMonoOf subst) typarams)
+  Some (_, typarams, mty) =>
+    map (subst => map (paramMonoOf subst) typarams) (matchTyMono mty fullMono)
 
 paramMonoOf : List (String, Mono) -> String -> Mono
 paramMonoOf subst tp = fromOption (TCon tp) (lookupAssoc tp subst)
@@ -6045,9 +6038,7 @@ enclDictVarOf : Mono -> String -> <Mut> Option String
 enclDictVarOf m encl
   | encl == "" = None
   | otherwise = match normalize m
-    TVar cell => match indexOfId (tyvarId cell) (fromOption [] (lookupAssocSL2 encl funConstraintsRef.value))
-      Some slot => Some (dictParamName encl slot)
-      None => None
+    TVar cell => map (dictParamName encl) (indexOfId (tyvarId cell) (fromOption [] (lookupAssocSL2 encl funConstraintsRef.value)))
     TApp a _ => enclDictVarOf a encl
     _ => None
 
@@ -6944,9 +6935,9 @@ implDictRoutesIn fullTable ((ImplEntry tag2 methodNames headTy reqs implTys _)::
 -- (`a ↦ Int`) the head-only match lost.  When the param monos don't line up (a plain
 -- result-only call, or a shape mismatch) the head match alone stands.
 headSubstWithParams : Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
-headSubstWithParams headTy implTys resultMono paramMonos = match matchTyMono headTy resultMono
-  None => None
-  Some headSub => Some (augmentWithParams headSub implTys paramMonos)
+headSubstWithParams headTy implTys resultMono paramMonos = map
+  (headSub => augmentWithParams headSub implTys paramMonos)
+  (matchTyMono headTy resultMono)
 
 -- When the impl's full type-arg patterns line up with the interface's full param
 -- monos (a multi-param interface), fold the trailing element groundings into the
@@ -8423,9 +8414,7 @@ collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 collectByParamGo [] _ = Some []
 collectByParamGo (p::rest) pairs = match lookupAssoc p pairs
   None => None
-  Some m => match collectByParamGo rest pairs
-    None => None
-    Some ms => Some (m::ms)
+  Some m => map (m :: _) (collectByParamGo rest pairs)
 
 -- every dispatch mono has a resolved concrete head tycon (no remaining bare
 -- TVar at the head) — the oracle's is_concrete gate, restricted to the head (a
@@ -9298,9 +9287,7 @@ inferMembers env sigs grouped ((m, v)::rest) =
 -- the peel source for a member: Some placeholder if it has a signature (peel the
 -- declared arrow domains onto the clause params), None otherwise
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
-memberPeelSource sigs m v = match omLookup m sigNameSetRef.value
-  Some _ => Some v
-  None => None
+memberPeelSource sigs m v = map (_ => v) (omLookup m sigNameSetRef.value)
 
 -- peel up to [n] arrow domains off [t], normalizing at each level.  A signature
 -- with fewer arrows than the clause has params stops early and returns fewer

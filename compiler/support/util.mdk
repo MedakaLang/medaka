@@ -101,9 +101,7 @@ dedupGo (x::xs) seen = match omLookup x seen
 export splitLast : List a -> Option (List a, a)
 splitLast [] = None
 splitLast [x] = Some ([], x)
-splitLast (x::rest) = match splitLast rest
-  Some (init, lst) => Some (x::init, lst)
-  None => None
+splitLast (x::rest) = map ((init, lst) => (x::init, lst)) (splitLast rest)
 
 -- minimal string escaping for the structural / diagnostic dumps (matches
 -- dev/astdump.ml's esc_str and dev/diagdump.ml): backslash, quote, \n \t \r.
