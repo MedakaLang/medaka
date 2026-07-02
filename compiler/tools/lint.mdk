@@ -229,7 +229,8 @@ export applyFixes : List String -> List String -> String -> List Decl -> Positio
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let splices = collectSplices orc rules (zipDeclPos prog (positionsDecls pos))
+  let cmtLines = map commentLine (collectComments src)
+  let splices = collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
   (applySplices src splices, listLen splices)
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
@@ -251,11 +252,28 @@ zipDeclPos _ [] = []
 zipDeclPos (d::ds) (p::ps) = (d, p) :: zipDeclPos ds ps
 
 -- one (startLine, endLine, replacementText) per fixed decl, in source order.
-collectSplices : Oracle -> List Rule -> List (Decl, DeclPos) -> List (Int, Int, String)
-collectSplices _ _ [] = []
-collectSplices orc rules ((d, dp)::rest) = match firstFix orc rules d
-  Some newDecls => (declPosLine dp, declPosEndLine dp, renderDecls newDecls) :: collectSplices orc rules rest
-  None => collectSplices orc rules rest
+--
+-- COMMENT-LOSS SAFETY-NET (mirrors `medaka fmt`'s verbatim bail).  The printer
+-- carries NO comments, so splicing printer output over a decl's `[startLine,
+-- endLine]` span would silently DELETE any comment inside that span.  So before
+-- emitting a splice we check `spanHasComment`: if the decl's span contains an
+-- interior comment line we SKIP the fix (the rule still WARNS; the source is
+-- left untouched).  A leading doc-comment ABOVE the decl is on a line
+-- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
+collectSplices : List Int -> Oracle -> List Rule -> List (Decl, DeclPos) -> List (Int, Int, String)
+collectSplices _ _ _ [] = []
+collectSplices cmtLines orc rules ((d, dp)::rest) = match firstFix orc rules d
+  Some newDecls =>
+    if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
+      collectSplices cmtLines orc rules rest
+    else
+      (declPosLine dp, declPosEndLine dp, renderDecls newDecls) :: collectSplices cmtLines orc rules rest
+  None => collectSplices cmtLines orc rules rest
+
+-- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
+spanHasComment : List Int -> Int -> Int -> Bool
+spanHasComment cmtLines startLine endLine =
+  anyList (l => startLine <= l && l <= endLine) cmtLines
 
 firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
 firstFix _ [] _ = None
