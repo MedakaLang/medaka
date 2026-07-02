@@ -132,16 +132,29 @@ or `cd` to the worktree root. The `./medaka` binary is written to the worktree d
 stale-prone. Always force-rebuild (`FORCE=1 bash test/build_oracles.sh`) before trusting
 a pass/fail result from those gates.
 
-**Formatter pre-commit hook (ACTIVE, 2026-07-01).** The whole tree is `medaka fmt`-clean
-and a pre-commit hook (`.githooks/pre-commit`, installed at `$(git rev-parse
---git-common-dir)/hooks/pre-commit`) **rejects any commit that stages an unformatted
-`.mdk`** (runs `medaka fmt --check`; `test/` fixtures excluded — they are intentionally
-unformatted golden inputs). **So: run `medaka fmt --write <changed.mdk>` and re-`git add`
-before committing any `.mdk` edit** (source only — never format `test/` fixtures). Emergency
-bypass: `git commit --no-verify`. If `medaka` isn't built the hook warns-and-allows. `medaka
-fmt` is safe (verified: 0 corruptions / 0 non-idempotent across the repo) and idempotent, so
-`fmt --write` on already-clean files is a no-op. Re-install after a fresh clone by copying
-`.githooks/pre-commit` into the hooks dir.
+**Fmt + lint pre-commit hook (ACTIVE, 2026-07-01).** A pre-commit hook (`.githooks/pre-commit`,
+installed at `$(git rev-parse --git-common-dir)/hooks/pre-commit`) runs TWO checks over each
+staged `.mdk` (`test/` fixtures excluded from both — intentionally unformatted golden inputs
+that often violate style rules on purpose):
+- **Format** — `medaka fmt --check` **rejects any staged unformatted `.mdk`**. The whole tree is
+  `medaka fmt`-clean. **Run `medaka fmt --write <changed.mdk>` and re-`git add` before committing
+  any `.mdk` edit.** `medaka fmt` is safe (0 corruptions / 0 non-idempotent repo-wide) and
+  idempotent, so `fmt --write` on a clean file is a no-op.
+- **Lint** — `medaka lint --only=<gated rules> --deny=<gated rules>` **rejects a staged `.mdk` that
+  trips a GATED lint rule.** Only rules with ZERO false positives on the tree are gated:
+  `rule-hand-rolled-derivable` + `rule-stdlib-reimpl` (they fire only on genuinely-wrong code).
+  Advisory/style rules (`rule-match-on-param`, `rule-duplicate-body`) still surface under a plain
+  `medaka lint` but do NOT block a commit. A genuine intentional exception to a gated rule is
+  silenced inline with an ESLint-style directive comment above the site:
+  `-- lint-disable-next-line <rule>` (also `-- lint-disable-line <rule>` for a trailing comment,
+  and `-- lint-disable-file <rule>` for the whole file; omit the rule name to disable all rules).
+  ⚠️ `medaka lint --fix` autofixes `rule-match-on-param`/`rule-bind-then-destructure` but **bails
+  on any decl containing an interior comment** (it would otherwise drop them) — safe, but it
+  leaves comment-bearing sites unfixed.
+
+Emergency bypass for either check: `git commit --no-verify`. If `medaka` isn't built the hook
+warns-and-allows. Re-install after a fresh clone by copying `.githooks/pre-commit` into the hooks
+dir (`cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"`).
 
 ## Gotchas
 
