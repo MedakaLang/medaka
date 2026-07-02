@@ -27,6 +27,41 @@ FIXDIR="$ROOT/test/wasm/fixtures"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
+# ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
+# Re-invoked as `sh "$0" --one <fixture>` under an xargs -P pool. All shared state
+# (MEDAKA/EMITBIN/NODE-abs-path/RUNJS/WORKDIR/RESULTDIR/MEDAKA_EMITTER) arrives via
+# env, so the worker skips the one-time tool + Node-version setup below.
+# Per-fixture .err files (no shared scratch) so N run concurrently.
+# NOTE: the oracle is built at -O2 (WASM_ORACLE_OPT), NOT -O0: the deep TCO
+# fixtures (clos_deep_tco, clos_reftco_indirect) rely on clang's tail-call
+# optimization to not stack-overflow — at -O0 the native oracle crashes on deep
+# recursion and its (empty) output mismatches the return_call'd wasm. -O2 matches
+# the pre-parallelization behavior exactly.
+if [ "${1:-}" = "--one" ]; then
+  f="$2"; name="$(basename "$f")"
+  obin="$WORKDIR/$name.oracle"; wat="$WORKDIR/$name.wat"; wasm="$WORKDIR/$name.wasm"
+  st=0; msg=""
+  if ! MEDAKA_CLANG_OPT="${WASM_ORACLE_OPT:--O2}" "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
+    msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
+  else
+    ref="$("$obin" 2>/dev/null)"
+    if ! "$EMITBIN" "$f" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
+      msg="$(printf 'FAIL %s (wasm emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
+    elif ! wasm-tools parse "$wat" -o "$wasm" 2>"$WORKDIR/$name.parse.err"; then
+      msg="$(printf 'FAIL %s (wasm-tools parse)\n%s' "$name" "$(cat "$WORKDIR/$name.parse.err")")"; st=1
+    elif ! wasm-tools validate --features=all "$wasm" 2>"$WORKDIR/$name.val.err"; then
+      msg="$(printf 'FAIL %s (wasm-tools validate)\n%s' "$name" "$(cat "$WORKDIR/$name.val.err")")"; st=1
+    else
+      got="$("$NODE" "$RUNJS" "$wasm" 2>"$WORKDIR/$name.run.err")"
+      if [ "$ref" = "$got" ]; then msg="ok   $name"
+      else msg="$(printf 'FAIL %s\n  oracle: %s\n  wasm  : %s\n  (%s)' "$name" "$ref" "$got" "$(cat "$WORKDIR/$name.run.err")")"; st=1; fi
+    fi
+  fi
+  echo "$st" > "$RESULTDIR/$name.status"
+  printf '%s\n' "$msg"
+  exit 0
+fi
+
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping W2 gate"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) — skipping W2 gate"; exit 2; }
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka (missing $MEDAKA)"; exit 2; }
@@ -50,44 +85,26 @@ fi
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+RESULTS="$(mktemp -d)"
+trap 'rm -rf "$WORK" "$RESULTS"' EXIT
+
+# Fan the 154 fixtures across an xargs -P pool of --one workers (see top of file).
+# Each worker does: medaka build oracle (-O0) + run, wasm emit, wasm-tools
+# parse/validate, node run, diff. NODE is resolved to its absolute path here (post
+# nvm selection) so the fresh worker shells don't re-run the Node-version dance.
+# --allow-internal: the w10 array-kernel fixtures use internal-only externs.
+JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
+ls "$FIXDIR"/*.mdk 2>/dev/null \
+  | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" NODE="$NODE_ABS" RUNJS="$RUNJS" \
+    MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" WASM_ORACLE_OPT="${WASM_ORACLE_OPT:-}" \
+    WORKDIR="$WORK" RESULTDIR="$RESULTS" \
+    xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
 
 pass=0; fail=0
-for f in "$FIXDIR"/*.mdk; do
-  [ -f "$f" ] || continue
-  name="$(basename "$f")"
-
-  # 1. oracle = native-compiled binary stdout (--allow-internal: the w10 array-kernel
-  # fixtures legitimately use internal-only externs (arrayGetUnsafe/arrayMakeWith/…), the
-  # same flag test/build_oracles.sh passes for the array-kernel entries).
-  obin="$WORK/$name.oracle"
-  if ! "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORK/build.err" 2>&1; then
-    fail=$((fail+1)); printf 'FAIL %s (oracle build)\n%s\n' "$name" "$(cat "$WORK/build.err")"; continue
-  fi
-  ref="$("$obin" 2>/dev/null)"
-
-  # 2. emit WAT
-  wat="$WORK/$name.wat"
-  if ! "$EMITBIN" "$f" > "$wat" 2>"$WORK/emit.err"; then
-    fail=$((fail+1)); printf 'FAIL %s (wasm emit)\n%s\n' "$name" "$(cat "$WORK/emit.err")"; continue
-  fi
-
-  # 3. assemble + validate (the clang analogue)
-  wasm="$WORK/$name.wasm"
-  if ! wasm-tools parse "$wat" -o "$wasm" 2>"$WORK/parse.err"; then
-    fail=$((fail+1)); printf 'FAIL %s (wasm-tools parse)\n%s\n' "$name" "$(cat "$WORK/parse.err")"; continue
-  fi
-  if ! wasm-tools validate --features=all "$wasm" 2>"$WORK/val.err"; then
-    fail=$((fail+1)); printf 'FAIL %s (wasm-tools validate)\n%s\n' "$name" "$(cat "$WORK/val.err")"; continue
-  fi
-
-  # 4. run under Node, diff stdout
-  got="$("$NODE" "$RUNJS" "$wasm" 2>"$WORK/run.err")"
-  if [ "$ref" = "$got" ]; then
-    pass=$((pass+1)); printf 'ok   %s\n' "$name"
-  else
-    fail=$((fail+1)); printf 'FAIL %s\n  oracle: %s\n  wasm  : %s\n  (%s)\n' "$name" "$ref" "$got" "$(cat "$WORK/run.err")"
-  fi
+for s in "$RESULTS"/*.status; do
+  [ -f "$s" ] || continue
+  if [ "$(cat "$s")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
