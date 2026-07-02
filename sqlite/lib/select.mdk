@@ -124,8 +124,7 @@ public export data Expr a = MkExpr SqlExpr
 
 -- | Recover the untyped expression (e.g. to put it in `where_`).
 export unExpr : Expr a -> SqlExpr
-unExpr e = match e
-  MkExpr x => x
+unExpr (MkExpr x) = x
 
 -- | Wrap an untyped expression at an arbitrary phantom type (internal).
 export mkE : SqlExpr -> Expr a

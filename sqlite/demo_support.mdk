@@ -33,8 +33,7 @@ printInts (n::rest) =
 
 -- | Render `(a, b)` as `"a|b"`.
 export showPair : (Int, Int) -> String
-showPair p = match p
-  (a, b) => "\{a}|\{b}"
+showPair (a, b) = "\{a}|\{b}"
 
 -- | Print one `(Int, Int)` pair per line, `"a|b"`-formatted.
 export printPairs : List (Int, Int) -> <IO> Unit

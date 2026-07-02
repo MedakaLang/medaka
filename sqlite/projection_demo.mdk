@@ -37,16 +37,14 @@ rowIS : RowType (Int, String)
 rowIS = t2 tInt tText
 
 showIS : (Int, String) -> String
-showIS t = match t
-  (i, s) => "\{i}|\{s}"
+showIS (i, s) = "\{i}|\{s}"
 
 -- (String, Int) row, printed "s|i".
 rowSI : RowType (String, Int)
 rowSI = t2 tText tInt
 
 showSI : (String, Int) -> String
-showSI t = match t
-  (s, i) => "\{s}|\{i}"
+showSI (s, i) = "\{s}|\{i}"
 
 -- single Int row, printed "i".
 showI : Int -> String

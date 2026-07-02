@@ -1,0 +1,52 @@
+-- Fixture for rule-destructure-in-param: the single-arm sibling of
+-- rule-match-on-param.  A function body that is a ONE-arm, guard-free `match` on
+-- a bare parameter with an IRREFUTABLE pattern (tuple / single-ctor record /
+-- single-ctor constructor) whose body does not otherwise mention the parameter
+-- → destructure directly in the parameter position.
+
+data Box a = Box a
+
+record Point
+  x : Int
+  y : Int
+
+data Color = Red | Green | Blue
+
+-- POSITIVE: tuple pattern (always irrefutable).
+fst2 p = match p
+  (a, b) => a
+
+-- POSITIVE: single-payload constructor of a SINGLE-ctor type (Box).
+unBox b = match b
+  Box v => v
+
+-- POSITIVE: record pattern of a single-ctor record type.
+sumPt pt = match pt
+  Point { x = xx, y = yy } => xx + yy
+
+-- NEGATIVE: >= 2 arms — that's rule-match-on-param, not this rule.
+colorName c = match c
+  Red => "red"
+  Green => "green"
+  Blue => "blue"
+
+-- NEGATIVE: single-arm but a MULTI-ctor type (Color) → pattern is refutable → skip.
+firstColor c = match c
+  Red => 0
+
+-- NEGATIVE: the arm body still references the scrutinee `p` — hoisting would drop
+-- its binding (Medaka has no as-patterns) → skip.
+dup p = match p
+  (a, b) => usePair p a
+
+-- NEGATIVE: bare-var arm — pointless to hoist.
+idv v = match v
+  w => w
+
+-- NEGATIVE: list-cons pattern is refutable → skip.
+headOf xs = match xs
+  h :: _ => h
+
+-- NEGATIVE: guarded arm → skip.
+guarded p = match p
+  (a, b) if a > b => a

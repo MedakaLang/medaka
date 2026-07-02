@@ -53,15 +53,13 @@ import lib.rowtype.{RowType, tInt, tText, tOption, t3, tCustom}
 data User = User { id : Int, name : String, age : Option Int }
 
 mkUser : (Int, String, Option Int) -> Result String User
-mkUser t = match t
-  (i, n, a) => Ok User { id = i, name = n, age = a }
+mkUser (i, n, a) = Ok User { id = i, name = n, age = a }
 
 userRow : RowType User
 userRow = tCustom mkUser (t3 tInt tText (tOption tInt))
 
 showUser : User -> String
-showUser u = match u
-  User { id = i, name = n, age = a } => "\{i}|\{n}|\{showOpt a}"
+showUser (User { id = i, name = n, age = a }) = "\{i}|\{n}|\{showOpt a}"
 
 showOpt : Option Int -> String
 showOpt None = ""

@@ -1,0 +1,4 @@
+warning: [rule-destructure-in-param] function 'fst2' destructures parameter 'p' via a single-arm irrefutable `match` — destructure it directly in the parameter position
+warning: [rule-destructure-in-param] function 'sumPt' destructures parameter 'pt' via a single-arm irrefutable `match` — destructure it directly in the parameter position
+warning: [rule-destructure-in-param] function 'unBox' destructures parameter 'b' via a single-arm irrefutable `match` — destructure it directly in the parameter position
+warning: [rule-match-on-param] function 'colorName' matches on parameter 'c' — consider a multi-clause function definition

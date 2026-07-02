@@ -2647,10 +2647,9 @@ takeUntilInclusiveS target (x::xs) =
 -- Build the alias-dependency entry for one table entry: alias name → list of
 -- other alias keys mentioned in its RHS (the dependency edges).
 buildAliasGraphEntry : List String -> (String, (List String, Ty)) -> (String, List String)
-buildAliasGraphEntry aliasKeys entry = match entry
-  (name, paramsRhs) =>
-    let rhs = snd paramsRhs
-    (name, filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)))
+buildAliasGraphEntry aliasKeys (name, paramsRhs) =
+  let rhs = snd paramsRhs
+  (name, filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)))
 
 -- DFS over the alias dependency graph.  Detects back-edges (a node is reached
 -- while it is already on the current path) → cycle.  On a back-edge to `target`,

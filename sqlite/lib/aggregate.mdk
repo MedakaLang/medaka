@@ -142,20 +142,19 @@ eMax c = mkE (ECol (aggName (AggMax c)))
 --   ordered by their group-by key ascending (SQLite value ordering), matching
 --   `sqlite3 ... GROUP BY k ORDER BY k`.
 export queryAgg : Db -> AggQuery -> RowType a -> Result String (List a)
-queryAgg db q rt = match q
-  AggQuery { from = tbl, where_ = w, groupBy = gcols, aggs = aggs, having = h } => do
-    entry <- findTable db tbl
-    let createSql = schemaSql entry
-    let lookup = name => columnIndex createSql name
-    pred <- compileMaybe lookup w
-    (pkIdx, rows) <- scanTableRowsIpk db tbl
-    let keptCells = keepCells pkIdx pred rows
-    gIdxs <- resolveCols lookup gcols
-    let groups = groupRows gcols gIdxs keptCells
-    outRows <- reduceGroups aggs lookup groups
-    hpred <- compileMaybe (havingLookup gcols aggs) h
-    let finalRows = filter (cells => hpred cells) outRows
-    decodeAll rt finalRows []
+queryAgg db (AggQuery { from = tbl, where_ = w, groupBy = gcols, aggs = aggs, having = h }) rt = do
+  entry <- findTable db tbl
+  let createSql = schemaSql entry
+  let lookup = name => columnIndex createSql name
+  pred <- compileMaybe lookup w
+  (pkIdx, rows) <- scanTableRowsIpk db tbl
+  let keptCells = keepCells pkIdx pred rows
+  gIdxs <- resolveCols lookup gcols
+  let groups = groupRows gcols gIdxs keptCells
+  outRows <- reduceGroups aggs lookup groups
+  hpred <- compileMaybe (havingLookup gcols aggs) h
+  let finalRows = filter (cells => hpred cells) outRows
+  decodeAll rt finalRows []
 
 -- Compile an optional predicate; None → always true.
 compileMaybe : (String -> Option Int) -> Option SqlExpr -> Result String (List Cell -> Bool)
@@ -227,8 +226,8 @@ reduceGroups aggs lookup (g::rest) = do
   Ok (row::rows)
 
 reduceGroup : List Agg -> (String -> Option Int) -> (List Cell, List (List Cell)) -> Result String (List Cell)
-reduceGroup aggs lookup g = match g
-  (key, rows) => map (key ++ _) (reduceAggs aggs lookup rows)
+reduceGroup aggs lookup (key, rows) =
+  map (key ++ _) (reduceAggs aggs lookup rows)
 
 reduceAggs : List Agg -> (String -> Option Int) -> List (List Cell) -> Result String (List Cell)
 reduceAggs [] _ _ = Ok []

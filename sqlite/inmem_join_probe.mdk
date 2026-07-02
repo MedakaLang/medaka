@@ -54,17 +54,15 @@ ordersRows = [
 data UO = UO { uid : Int, uname : String, oid : Int, oUser : Int, amount : Int }
 
 mkUO : ((Int, String), (Int, Int, Int)) -> Result String UO
-mkUO t = match t
-  ((i, n), (o, u, a)) =>
-    Ok UO { uid = i, uname = n, oid = o, oUser = u, amount = a }
+mkUO ((i, n), (o, u, a)) =
+  Ok UO { uid = i, uname = n, oid = o, oUser = u, amount = a }
 
 uoRow : RowType UO
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (t3 tInt tInt tInt))
 
 showUO : UO -> String
-showUO r = match r
-  UO { uid = i, uname = n, oid = o, oUser = u, amount = a } =>
-    "\{i}|\{n}|\{o}|\{u}|\{a}"
+showUO (UO { uid = i, uname = n, oid = o, oUser = u, amount = a }) =
+  "\{i}|\{n}|\{o}|\{u}|\{a}"
 
 printUO : List UO -> <IO> Unit
 printUO [] = ()

@@ -1,0 +1,32 @@
+-- Autofix fixture for rule-destructure-in-param.  The positives are hoisted into
+-- the parameter position; the negatives are left byte-identical (the fixer's
+-- irrefutability / param-reference / arm-count guards decline them).
+
+data Box a = Box a
+
+record Point
+  x : Int
+  y : Int
+
+data Color = Red | Green | Blue
+
+-- POSITIVE: tuple pattern hoisted.
+fst2 (a, b) = a
+
+-- POSITIVE: single-ctor constructor hoisted.
+unBox (Box v) = v
+
+-- POSITIVE: single-ctor record hoisted.
+sumPt (Point { x = xx, y = yy }) = xx + yy
+
+-- NEGATIVE (unchanged): multi-ctor type → refutable → declined.
+firstColor c = match c
+  Red => 0
+
+-- NEGATIVE (unchanged): body references the scrutinee → declined.
+dup p = match p
+  (a, b) => usePair p a
+
+-- NEGATIVE (unchanged): guarded arm → declined.
+guarded p = match p
+  (a, b) if a > b => a

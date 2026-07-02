@@ -41,8 +41,7 @@ import lib.rowtype.{RowType, tInt, tText, tOption, t2, t3, tCustom}
 data UO = UO { uid : Int, uname : String, orow : Option (Int, Int, Int) }
 
 mkUO : ((Int, String), Option (Int, Int, Int)) -> Result String UO
-mkUO t = match t
-  ((i, n), orow) => Ok UO { uid = i, uname = n, orow = orow }
+mkUO ((i, n), orow) = Ok UO { uid = i, uname = n, orow = orow }
 
 uoRow : RowType UO
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (tOption (t3 tInt tInt tInt)))
@@ -74,9 +73,8 @@ data ABC =
   | ABC { aid : Int, av : Int, bid : Int, aref : Int, crow : Option (Int, Int) }
 
 mkABC : ((Int, Int), (Int, Int), Option (Int, Int)) -> Result String ABC
-mkABC t = match t
-  ((a1, a2), (b1, b2), crow) =>
-    Ok ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = crow }
+mkABC ((a1, a2), (b1, b2), crow) =
+  Ok ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = crow }
 
 abcRow : RowType ABC
 abcRow =

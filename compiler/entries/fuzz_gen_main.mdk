@@ -398,15 +398,14 @@ freshPVars ctx (_::rest) = freshName ctx "p" :: freshPVars ctx rest
 
 -- ── match: exhaustive arms over one ADT scrutinee, body of type t ───────────
 genArm : Ctx -> Gty -> Int -> (String, List Gty) -> <Rand, Mut> Arm
-genArm ctx t depth cf = match cf
-  (con, ftys) =>
-    let vars = freshPVars ctx ftys
-    let pat = PCon con (map pvarOf vars)
-    let saved = ctxScope ctx
-    let _ = setScope ctx (zipScope vars ftys ++ saved)
-    let body = genExpr ctx t (depth - 1)
-    let _ = setScope ctx saved
-    Arm pat [] body
+genArm ctx t depth (con, ftys) =
+  let vars = freshPVars ctx ftys
+  let pat = PCon con (map pvarOf vars)
+  let saved = ctxScope ctx
+  let _ = setScope ctx (zipScope vars ftys ++ saved)
+  let body = genExpr ctx t (depth - 1)
+  let _ = setScope ctx saved
+  Arm pat [] body
 
 genMatch : Ctx -> Gadt -> Gty -> Int -> <Rand, Mut> Expr
 genMatch ctx scrutAdt t depth =
@@ -634,15 +633,14 @@ data Opts = Opts Int Int Int Bool
 
 parseOpts : List String -> Opts -> Opts
 parseOpts [] o = o
-parseOpts ("--seed"::v::rest) o = match o
-  Opts _ t b nt => parseOpts rest (Opts (intOr v 0) t b nt)
-parseOpts ("--tier"::v::rest) o = match o
-  Opts s _ b nt => parseOpts rest (Opts s (intOr v 2) b nt)
-parseOpts ("--batch"::v::rest) o = match o
-  Opts s t _ nt => parseOpts rest (Opts s t (intOr v 1) nt)
+parseOpts ("--seed"::v::rest) (Opts _ t b nt) =
+  parseOpts rest (Opts (intOr v 0) t b nt)
+parseOpts ("--tier"::v::rest) (Opts s _ b nt) =
+  parseOpts rest (Opts s (intOr v 2) b nt)
+parseOpts ("--batch"::v::rest) (Opts s t _ nt) =
+  parseOpts rest (Opts s t (intOr v 1) nt)
 parseOpts ("--width"::_::rest) o = parseOpts rest o
-parseOpts ("--no-tuple"::rest) o = match o
-  Opts s t b _ => parseOpts rest (Opts s t b True)
+parseOpts ("--no-tuple"::rest) (Opts s t b _) = parseOpts rest (Opts s t b True)
 parseOpts (_::rest) o = parseOpts rest o
 
 intOr : String -> Int -> Int

@@ -54,15 +54,13 @@ ipk = Some 0
 data User = User { id : Int, name : String, age : Int, bal : Float }
 
 mkUser : (Int, String, Int, Float) -> Result String User
-mkUser t = match t
-  (i, n, a, b) => Ok User { id = i, name = n, age = a, bal = b }
+mkUser (i, n, a, b) = Ok User { id = i, name = n, age = a, bal = b }
 
 userRow : RowType User
 userRow = tCustom mkUser (t4 tInt tText tInt tFloat)
 
 showUser : User -> String
-showUser u = match u
-  User { id = i, name = n, age = a, bal = b } => "\{i}|\{n}|\{a}|\{b}"
+showUser (User { id = i, name = n, age = a, bal = b }) = "\{i}|\{n}|\{a}|\{b}"
 
 printRows : List User -> <IO> Unit
 printRows [] = ()

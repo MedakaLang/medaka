@@ -36,17 +36,15 @@ import lib.rowtype.{RowType, tInt, tText, t2, t3, tCustom}
 data UO = UO { uid : Int, uname : String, oid : Int, oUser : Int, amount : Int }
 
 mkUO : ((Int, String), (Int, Int, Int)) -> Result String UO
-mkUO t = match t
-  ((i, n), (o, u, a)) =>
-    Ok UO { uid = i, uname = n, oid = o, oUser = u, amount = a }
+mkUO ((i, n), (o, u, a)) =
+  Ok UO { uid = i, uname = n, oid = o, oUser = u, amount = a }
 
 uoRow : RowType UO
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (t3 tInt tInt tInt))
 
 showUO : UO -> String
-showUO r = match r
-  UO { uid = i, uname = n, oid = o, oUser = u, amount = a } =>
-    "\{i}|\{n}|\{o}|\{u}|\{a}"
+showUO (UO { uid = i, uname = n, oid = o, oUser = u, amount = a }) =
+  "\{i}|\{n}|\{o}|\{u}|\{a}"
 
 printUO : List UO -> <IO> Unit
 printUO [] = ()
@@ -68,17 +66,15 @@ data ABC =
   | ABC { aid : Int, av : Int, bid : Int, aref : Int, cid : Int, bref : Int }
 
 mkABC : ((Int, Int), (Int, Int), (Int, Int)) -> Result String ABC
-mkABC t = match t
-  ((a1, a2), (b1, b2), (c1, c2)) =>
-    Ok ABC { aid = a1, av = a2, bid = b1, aref = b2, cid = c1, bref = c2 }
+mkABC ((a1, a2), (b1, b2), (c1, c2)) =
+  Ok ABC { aid = a1, av = a2, bid = b1, aref = b2, cid = c1, bref = c2 }
 
 abcRow : RowType ABC
 abcRow = tCustom mkABC (t3 (t2 tInt tInt) (t2 tInt tInt) (t2 tInt tInt))
 
 showABC : ABC -> String
-showABC r = match r
-  ABC { aid = a1, av = a2, bid = b1, aref = b2, cid = c1, bref = c2 } =>
-    "\{a1}|\{a2}|\{b1}|\{b2}|\{c1}|\{c2}"
+showABC (ABC { aid = a1, av = a2, bid = b1, aref = b2, cid = c1, bref = c2 }) =
+  "\{a1}|\{a2}|\{b1}|\{b2}|\{c1}|\{c2}"
 
 printABC : List ABC -> <IO> Unit
 printABC [] = ()

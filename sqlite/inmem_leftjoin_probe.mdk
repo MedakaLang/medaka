@@ -58,8 +58,7 @@ ordersRows = [
 data UO = UO { uid : Int, uname : String, orow : Option (Int, Int, Int) }
 
 mkUO : ((Int, String), Option (Int, Int, Int)) -> Result String UO
-mkUO t = match t
-  ((i, n), orow) => Ok UO { uid = i, uname = n, orow = orow }
+mkUO ((i, n), orow) = Ok UO { uid = i, uname = n, orow = orow }
 
 uoRow : RowType UO
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (tOption (t3 tInt tInt tInt)))
