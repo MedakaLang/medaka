@@ -150,7 +150,7 @@
 (DImpl true true "Thenable" ((TyApp (TyCon "Result") (TyVar "e"))) None () ((im "andThen" ((PCon "Err" (PVar "e")) PWild) (EApp (EVar "Err") (EVar "e"))) (im "andThen" ((PCon "Ok" (PVar "a")) (PVar "f")) (EApp (EVar "f") (EVar "a")))))
 (DInterface true false "Alternative" ("f") ((super "Applicative" ("f"))) ((imethod "noMatch" (TyApp (TyVar "f") (TyVar "a")) None) (imethod "orElse" (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))) None)))
 (DImpl true false "Alternative" ((TyCon "List")) None () ((im "noMatch" () (EListLit)) (im "orElse" ((PVar "xs") (PVar "ys")) (EBinOp "++" (EVar "xs") (EVar "ys")))))
-(DImpl true false "Alternative" ((TyCon "Option")) None () ((im "noMatch" () (EVar "None")) (im "orElse" ((PVar "a") (PVar "b")) (EMatch (EVar "a") (arm (PCon "Some" PWild) () (EVar "a")) (arm (PCon "None") () (EVar "b"))))))
+(DImpl true false "Alternative" ((TyCon "Option")) None () ((im "noMatch" () (EVar "None")) (im "orElse" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x"))) (im "orElse" ((PCon "None") (PVar "b")) (EVar "b"))))
 (DTypeSig true "guard" (TyConstrained ((cstr "Alternative" (TyVar "f"))) (TyFun (TyCon "Bool") (TyApp (TyVar "f") (TyCon "Unit")))))
 (DFunDef false "guard" ((PCon "True")) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "guard" ((PCon "False")) (EMethodRef "noMatch"))
