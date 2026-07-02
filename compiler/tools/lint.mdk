@@ -49,13 +49,16 @@ import support.util.{
   isEmptyL,
   reverseL,
   splitNl,
+  splitOnChar,
   joinWith,
   sortUniqS,
+  startsWith,
 }
 import tools.printer.{declToString, exprToString}
 import support.char.{isAlnum}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
+import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 
 -- ── public types ───────────────────────────────────────────────────────────
 
@@ -67,8 +70,9 @@ public export record Finding
   severity : Severity
   loc : Option Loc
 
--- A registered rule.  `check` is the whole pass for that rule: Positions (for
--- per-decl source locations) + raw decls → hits.  `fix`, when `Some f`, is a
+-- A registered rule.  `check` is the whole pass for that rule: the target file
+-- PATH (so a rule may scope itself, e.g. skip stdlib-owned files) + Positions
+-- (for per-decl source locations) + raw decls → hits.  `fix`, when `Some f`, is a
 -- per-decl autofixer: given the syntactic constructor
 -- `Oracle` (built once from the whole target file's decls — used by the
 -- irrefutability logic to recognise single-constructor patterns) and a single
@@ -80,7 +84,7 @@ public export record Rule
   descr : String
   severity : Severity
   enabled : Bool
-  check : Positions -> List Decl -> List Finding
+  check : String -> Positions -> List Decl -> List Finding
   fix : Option (Oracle -> Decl -> Option (List Decl))
 
 -- A registered CROSS-FILE rule.  Unlike `Rule` (one file at a time), `check`
@@ -186,17 +190,28 @@ allCrossFileRules = [duplicateBodyRule]
 -- location.  Each rule's findings are re-stamped with the rule's (possibly
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
-export lintProgram : List Rule -> Positions -> List Decl -> List Finding
-lintProgram rules pos prog = flatMap (runRuleOn pos prog) rules
+export lintProgram : List Rule -> String -> Positions -> List Decl -> List Finding
+lintProgram rules path pos prog = flatMap (runRuleOn path pos prog) rules
 
-runRuleOn : Positions -> List Decl -> Rule -> List Finding
-runRuleOn pos prog r
-  | r.enabled = map (restampSeverity r.severity) (r.check pos prog)
+runRuleOn : String -> Positions -> List Decl -> Rule -> List Finding
+runRuleOn path pos prog r
+  | r.enabled = map (restampSeverity r.severity) (r.check path pos prog)
   | otherwise = []
 
 restampSeverity : Severity -> Finding -> Finding
 restampSeverity sev f =
   Finding { rule = f.rule, message = f.message, severity = sev, loc = f.loc }
+
+-- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
+-- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
+-- but `test/lint_fixtures/foo.mdk` does not).  Style rules that flag USER code
+-- reimplementing / hand-rolling what the stdlib canonically provides
+-- (`rule-stdlib-reimpl`, `rule-hand-rolled-derivable`) must skip stdlib-owned
+-- files: those definitions ARE the canonical stdlib, or are hand-written for a
+-- deliberate reason (bootstrap ordering, ctor/class name clash, or a non-
+-- structural instance whose `deriving` would be semantically WRONG).
+isStdlibPath : String -> Bool
+isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
 
 -- ── autofix driver (Task A3) ───────────────────────────────────────────────────
 -- The CLI calls this for `--fix`.  It is the ONLY place that touches the new
@@ -214,7 +229,8 @@ export applyFixes : List String -> List String -> String -> List Decl -> Positio
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
-  let splices = collectSplices orc rules (zipDeclPos prog (positionsDecls pos))
+  let cmtLines = map commentLine (collectComments src)
+  let splices = collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
   (applySplices src splices, listLen splices)
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
@@ -236,11 +252,28 @@ zipDeclPos _ [] = []
 zipDeclPos (d::ds) (p::ps) = (d, p) :: zipDeclPos ds ps
 
 -- one (startLine, endLine, replacementText) per fixed decl, in source order.
-collectSplices : Oracle -> List Rule -> List (Decl, DeclPos) -> List (Int, Int, String)
-collectSplices _ _ [] = []
-collectSplices orc rules ((d, dp)::rest) = match firstFix orc rules d
-  Some newDecls => (declPosLine dp, declPosEndLine dp, renderDecls newDecls) :: collectSplices orc rules rest
-  None => collectSplices orc rules rest
+--
+-- COMMENT-LOSS SAFETY-NET (mirrors `medaka fmt`'s verbatim bail).  The printer
+-- carries NO comments, so splicing printer output over a decl's `[startLine,
+-- endLine]` span would silently DELETE any comment inside that span.  So before
+-- emitting a splice we check `spanHasComment`: if the decl's span contains an
+-- interior comment line we SKIP the fix (the rule still WARNS; the source is
+-- left untouched).  A leading doc-comment ABOVE the decl is on a line
+-- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
+collectSplices : List Int -> Oracle -> List Rule -> List (Decl, DeclPos) -> List (Int, Int, String)
+collectSplices _ _ _ [] = []
+collectSplices cmtLines orc rules ((d, dp)::rest) = match firstFix orc rules d
+  Some newDecls =>
+    if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
+      collectSplices cmtLines orc rules rest
+    else
+      (declPosLine dp, declPosEndLine dp, renderDecls newDecls) :: collectSplices cmtLines orc rules rest
+  None => collectSplices cmtLines orc rules rest
+
+-- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
+spanHasComment : List Int -> Int -> Int -> Bool
+spanHasComment cmtLines startLine endLine =
+  anyList (l => startLine <= l && l <= endLine) cmtLines
 
 firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
 firstFix _ [] _ = None
@@ -289,12 +322,146 @@ export findingToDiag : Finding -> Diag
 findingToDiag f = Diag f.severity ("[" ++ f.rule ++ "] " ++ f.message) f.loc
 
 -- One finding per line: `<severity>: [<rule>] <message>` (location-stripped, the
--- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.
-export lintToLines : Positions -> List Decl -> String
-lintToLines pos prog = joinNl (map findingLine (lintProgram allRules pos prog))
+-- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.  `src` is the
+-- raw source text: findings are produced by `lintProgram`, then filtered through
+-- the inline-suppression directives (`-- lint-disable-*`) recovered from `src`'s
+-- comment side channel (see `applySuppressions`).
+export lintToLines : String -> String -> Positions -> List Decl -> String
+lintToLines src path pos prog =
+  joinNl (map
+    findingLine
+    (applySuppressions src (lintProgram allRules path pos prog)))
 
 findingLine : Finding -> String
 findingLine f = ppSeverity f.severity ++ ": [" ++ f.rule ++ "] " ++ f.message
+
+-- ── inline suppression directives (ESLint-style) ──────────────────────────────
+-- A finding can be silenced by a `--` line comment whose trimmed body starts
+-- with one of these directive keywords (chosen to MIRROR ESLint's
+-- `eslint-disable-*` family; keep them exactly unless there's a strong reason):
+--
+--   `-- lint-disable-next-line [rules]`  suppress findings on the NEXT source line
+--   `-- lint-disable-line      [rules]`  suppress findings on THIS comment's line
+--   `-- lint-disable-file      [rules]`  suppress the rules ANYWHERE in the file
+--
+-- With NO rule names the directive applies to ALL rules; otherwise it lists rule
+-- ids (comma- and/or space-separated, e.g. `rule-match-on-param, rule-stdlib-reimpl`)
+-- matched against a Finding's `rule` field.  Unknown rule names are harmless
+-- no-ops.  A finding at line L with rule R is suppressed iff SOME directive both
+-- covers R (its rule set is empty or contains R) and whose scope includes L.
+--
+-- SEAM.  Comments are stripped by the lexer before layout, so the parser never
+-- sees them and no rule can observe a directive.  Instead findings are produced
+-- FIRST by `lintProgram`, then FILTERED here using the lexer's out-of-band
+-- comment side channel (`collectComments src`).  The two lint entry points
+-- (`compiler/driver/medaka_cli.mdk` report arm + this module's `lintToLines`,
+-- used by `compiler/entries/lint_main.mdk`) call `applySuppressions src findings`
+-- right after `lintProgram`.  A finding's line comes from its `loc` (the decl's
+-- start line, stamped by `declLocList`); a finding without a `loc` can only be
+-- silenced by a whole-file directive.
+
+data DirScope = DScopeLine Int | DScopeFile
+
+-- one parsed directive: which source lines it covers + which rule ids it names
+-- (empty list = all rules).
+data Directive = Directive DirScope (List String)
+
+-- Filter out every finding covered by an inline-suppression directive found in
+-- the source's comment side channel.
+export applySuppressions : String -> List Finding -> List Finding
+applySuppressions src findings =
+  let dirs = collectDirectives src
+  filterList (f => not (isSuppressed dirs f)) findings
+
+collectDirectives : String -> List Directive
+collectDirectives src =
+  flatMap (c => dirToList (parseDirective c)) (collectComments src)
+
+dirToList : Option Directive -> List Directive
+dirToList None = []
+dirToList (Some d) = [d]
+
+-- A comment becomes a directive iff it is a `--` line comment whose trimmed body
+-- (after the `--`) starts with a directive keyword.  `commentText` includes the
+-- delimiters, so we strip a leading `--` then re-trim.
+parseDirective : Comment -> Option Directive
+parseDirective c =
+  let body = trimWs (commentText c)
+  if startsWith "--" body then
+    parseDirectiveBody (commentLine c) (trimWs (stringSlice 2 (stringLength body) body))
+  else
+    None
+
+parseDirectiveBody : Int -> String -> Option Directive
+parseDirectiveBody line s = match matchKeyword "lint-disable-next-line" s
+  Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
+  None => match matchKeyword "lint-disable-line" s
+    Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
+    None => match matchKeyword "lint-disable-file" s
+      Some names => Some (Directive DScopeFile (parseRuleNames names))
+      None => None
+
+-- If `s` starts with keyword `kw` AND the keyword is followed by end-of-string
+-- or whitespace (so `lint-disable-lineXYZ` does NOT match), return the trimmed
+-- remainder (the rule-name list); else None.
+matchKeyword : String -> String -> Option String
+matchKeyword kw s
+  | startsWith kw s =
+    let rest = stringSlice (stringLength kw) (stringLength s) s
+    if rest == "" || startsWith " " rest || startsWith "\t" rest then
+      Some (trimWs rest)
+    else
+      None
+  | otherwise = None
+
+-- Split a rule-name list on commas and/or spaces, dropping empty fragments.
+parseRuleNames : String -> List String
+parseRuleNames s =
+  filterList nonEmptyStr (flatMap (splitOnChar ' ') (splitOnChar ',' s))
+
+nonEmptyStr : String -> Bool
+nonEmptyStr n = not (n == "")
+
+isSuppressed : List Directive -> Finding -> Bool
+isSuppressed dirs f = anyList (dirCoversFinding f) dirs
+
+dirCoversFinding : Finding -> Directive -> Bool
+dirCoversFinding f (Directive scope names) = (isEmptyL names || contains f.rule names)
+  && scopeMatches (findingLineNo f) scope
+
+scopeMatches : Option Int -> DirScope -> Bool
+scopeMatches _ DScopeFile = True
+scopeMatches (Some line) (DScopeLine l) = line == l
+scopeMatches None (DScopeLine _) = False
+
+findingLineNo : Finding -> Option Int
+findingLineNo f = match f.loc
+  Some (Loc _ l _ _ _) => Some l
+  None => None
+
+-- trim ASCII whitespace from both ends
+trimWs : String -> String
+trimWs s =
+  let cs = stringToChars s
+  let n = arrayLength cs
+  let a = trimWsStart cs n 0
+  let b = trimWsEnd cs a n
+  stringSlice a b s
+
+trimWsStart : Array Char -> Int -> Int -> Int
+trimWsStart cs n i
+  | i >= n = i
+  | isWsChar (arrayGetUnsafe i cs) = trimWsStart cs n (i + 1)
+  | otherwise = i
+
+trimWsEnd : Array Char -> Int -> Int -> Int
+trimWsEnd cs a n
+  | n <= a = a
+  | isWsChar (arrayGetUnsafe (n - 1) cs) = trimWsEnd cs a (n - 1)
+  | otherwise = n
+
+isWsChar : Char -> Bool
+isWsChar c = c == ' ' || c == '\t' || c == '\r' || c == '\n'
 
 -- ── small AST helpers ─────────────────────────────────────────────────────────
 
@@ -324,8 +491,8 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 -- A `DFunDef _ name pats body` (or an impl method) whose body is a `match` with
 -- ≥2 arms over an `EVar p` where `p` is a bare `PVar p` parameter.  Single-arm
 -- matches are skipped (STYLE's "when not to convert").
-ruleMatchOnParam : Positions -> List Decl -> List Finding
-ruleMatchOnParam pos prog = flatMap matchParamDeclL (declLocList pos prog)
+ruleMatchOnParam : String -> Positions -> List Decl -> List Finding
+ruleMatchOnParam _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
@@ -494,30 +661,54 @@ boundaryAt cs j
 derivableIfaces : List String
 derivableIfaces = ["Eq", "Ord", "Debug"]
 
-ruleDerivable : Positions -> List Decl -> List Finding
-ruleDerivable pos prog = flatMap derivableDeclL (declLocList pos prog)
+-- Skip stdlib-owned files entirely: every hand-written `impl Eq/Ord/Debug` in
+-- the stdlib is legitimate (a primitive with no `data` decl to derive from, the
+-- `Ordering` Eq-ctor/Eq-class clash, a non-structural container instance whose
+-- `deriving` would be semantically WRONG, or a bootstrap-prelude type).  For
+-- USER code we additionally require the type to have a `data`/`record`
+-- declaration whose constructors are visible in the linted file (`oGetCtors`
+-- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
+ruleDerivable : String -> Positions -> List Decl -> List Finding
+ruleDerivable path pos prog
+  | isStdlibPath path = []
+  | otherwise =
+    let orc = buildOracle prog
+    flatMap (derivableDeclL orc) (declLocList pos prog)
 
-derivableDeclL : (Decl, Option Loc) -> List Finding
-derivableDeclL (d, loc) = derivableDecl loc d
+derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
+derivableDeclL orc (d, loc) = derivableDecl orc loc d
 
-derivableDecl : Option Loc -> Decl -> List Finding
-derivableDecl loc (DImpl { iface, tys, ... }) = derivableHit loc iface tys
-derivableDecl loc (DAttrib _ d) = derivableDecl loc d
-derivableDecl _ _ = []
+derivableDecl : Oracle -> Option Loc -> Decl -> List Finding
+derivableDecl orc loc (DImpl { iface, tys, ... }) =
+  derivableHit orc loc iface tys
+derivableDecl orc loc (DAttrib _ d) = derivableDecl orc loc d
+derivableDecl _ _ _ = []
 
-derivableHit : Option Loc -> String -> List Ty -> List Finding
-derivableHit loc iface tys
+derivableHit : Oracle -> Option Loc -> String -> List Ty -> List Finding
+derivableHit orc loc iface tys
   | contains iface derivableIfaces = match singleNamedType tys
-    Some tyName => [
-      Finding {
-        rule = ruleNameDerivable,
-        message = "hand-written `impl " ++ iface ++ "` for '" ++ tyName ++ "' — consider `deriving (" ++ iface ++ ")` instead",
-        severity = SevWarning,
-        loc = loc,
-      }
-    ]
+    Some tyName =>
+      if hasUserDataDecl orc tyName then
+        [
+          Finding {
+            rule = ruleNameDerivable,
+            message = "hand-written `impl " ++ iface ++ "` for '" ++ tyName ++ "' — consider `deriving (" ++ iface ++ ")` instead",
+            severity = SevWarning,
+            loc = loc,
+          }
+        ]
+      else
+        []
     None => []
   | otherwise = []
+
+-- the type has a `data`/`record` declaration (with constructors) visible in the
+-- linted file — so `deriving` is actually available for it.  Primitive types
+-- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
+hasUserDataDecl : Oracle -> String -> Bool
+hasUserDataDecl orc tyName = match oGetCtors orc tyName
+  Some _ => True
+  None => False
 
 -- the head type name iff `tys` is exactly one TyCon-headed type
 singleNamedType : List Ty -> Option String
@@ -551,12 +742,17 @@ stdlibNames = [
   "zipWith",
 ]
 
-ruleStdlibReimpl : Positions -> List Decl -> List Finding
-ruleStdlibReimpl pos prog =
-  -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
-  -- keeping the FIRST clause's location.
-  map stdlibFinding
-    (dedupeNamesLoc (filterList inStdlibPair (flatMap topDefNameL (declLocList pos prog))))
+-- Skip stdlib-owned files: inside the stdlib these top-level names ARE the
+-- canonical definitions the rule points USER code at, so flagging them is a pure
+-- false positive.  Off the stdlib root the rule fires as before.
+ruleStdlibReimpl : String -> Positions -> List Decl -> List Finding
+ruleStdlibReimpl path pos prog
+  | isStdlibPath path = []
+  | otherwise =
+    -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
+    -- keeping the FIRST clause's location.
+    map stdlibFinding
+      (dedupeNamesLoc (filterList inStdlibPair (flatMap topDefNameL (declLocList pos prog))))
 
 topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 topDefNameL (DFunDef _ name _ _, loc) = [(name, loc)]
@@ -663,8 +859,8 @@ splitTail2 stmts = match reverseL stmts
   _ => None
 
 -- ── check ────────────────────────────────────────────────────────────────────
-ruleBindThenDestructure : Positions -> List Decl -> List Finding
-ruleBindThenDestructure pos prog =
+ruleBindThenDestructure : String -> Positions -> List Decl -> List Finding
+ruleBindThenDestructure _ pos prog =
   let orc = buildOracle prog
   flatMap (bindDestructureDeclL orc) (declLocList pos prog)
 

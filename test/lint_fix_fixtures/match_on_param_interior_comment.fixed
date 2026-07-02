@@ -1,0 +1,18 @@
+-- Comment-loss safety-net (mirrors fmt's verbatim bail): a fixable
+-- `rule-match-on-param` fn whose body carries an INTERIOR comment must be left
+-- BYTE-IDENTICAL by --fix (the printer would delete the comment).  A comment-FREE
+-- flagged fn in the same file still gets fixed (proves no over-bail).
+
+-- interior comment inside a match arm → --fix must BAIL (leave untouched)
+classify : Int -> String
+classify n = match n
+  0 => "zero"
+  -- negatives are lumped together here
+  _ => "other"
+
+-- no interior comment → --fix still rewrites to multi-clause form
+greet : String -> String
+greet "Alice" = "Hello Alice!"
+greet _ = "Hi there!"
+
+main = println (greet "Alice")

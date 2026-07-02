@@ -1,0 +1,13 @@
+-- Comment-loss safety-net for the OTHER fixer (rule-bind-then-destructure): a
+-- fixable decl carrying an INTERIOR comment must be left BYTE-IDENTICAL by --fix.
+-- Proves the bail lives in the shared splice path, not per-rule.
+process : Result String Int
+process = do
+  pair <- compute
+  match pair
+    (a, b) => do
+      -- keep this arithmetic explanation attached
+      let s = a + b
+      Ok s
+
+main = println "x"
