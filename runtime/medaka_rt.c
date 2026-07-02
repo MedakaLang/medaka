@@ -906,6 +906,28 @@ long long mdk_make_dir(long long path) {
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
+/* removeFile : String -> Result String Unit — unlink(2). */
+long long mdk_remove_file(long long path) {
+  const char *p = (const char *)path + 24;
+  if (unlink(p) == 0) return mdk_ok(1);  /* Ok () */
+  return mdk_err(mdk_str_cstr(strerror(errno)));
+}
+
+/* rename : String -> String -> Result String Unit — rename(2) old new. */
+long long mdk_rename(long long oldp, long long newp) {
+  const char *o = (const char *)oldp + 24;
+  const char *n = (const char *)newp + 24;
+  if (rename(o, n) == 0) return mdk_ok(1);  /* Ok () */
+  return mdk_err(mdk_str_cstr(strerror(errno)));
+}
+
+/* removeDir : String -> Result String Unit — rmdir(2); empty dir only. */
+long long mdk_remove_dir(long long path) {
+  const char *p = (const char *)path + 24;
+  if (rmdir(p) == 0) return mdk_ok(1);  /* Ok () */
+  return mdk_err(mdk_str_cstr(strerror(errno)));
+}
+
 /* runCommand : String -> List String -> Result (Int, String, String) String.
  * Spawns prog with args, captures stdout+stderr via temp files.
  * Ok (exitCode, stdout, stderr) on spawn success; Err osError on fork/exec fail.
@@ -1002,6 +1024,23 @@ long long mdk_run_command(long long prog_w, long long args_w) {
   tup[1] = ((long long)code << 1) | 1;  /* tagged int */
   tup[2] = stdout_s;
   tup[3] = stderr_s;
+  return mdk_ok((long long)tup);
+}
+
+/* statFile : String -> Result String (Int, Bool, Bool, Float).
+ * stat(2) the path; Ok (sizeBytes, isDir, isFile, mtimeSeconds) or Err strerror.
+ * 4-tuple cell layout mirrors mdk_run_command's 3-tuple: [TUPLE_TAG, e0..e3].
+ * Bool uses the native tagged encoding (True=3, False=1); Float is boxed. */
+long long mdk_stat_file(long long path) {
+  const char *p = (const char *)path + 24;
+  struct stat st;
+  if (stat(p, &st) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  long long *tup = (long long *)mdk_alloc(5 * 8);
+  tup[0] = MDK_TUPLE_TAG;
+  tup[1] = (((long long)st.st_size) << 1) | 1;   /* tagged Int size */
+  tup[2] = S_ISDIR(st.st_mode) ? 3 : 1;          /* Bool isDir */
+  tup[3] = S_ISREG(st.st_mode) ? 3 : 1;          /* Bool isFile */
+  tup[4] = mdk_box_float((double)st.st_mtime);   /* Float mtimeSeconds */
   return mdk_ok((long long)tup);
 }
 

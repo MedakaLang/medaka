@@ -1,0 +1,8 @@
+-- write a, rename a→b, remove b → all Ok
+main = match writeFile "/tmp/mdk_s13_ren_a.txt" "x"
+  Ok _ => match rename "/tmp/mdk_s13_ren_a.txt" "/tmp/mdk_s13_ren_b.txt"
+    Ok _ => match removeFile "/tmp/mdk_s13_ren_b.txt"
+      Ok _ => 1
+      Err _ => 0 - 3
+    Err _ => 0 - 1
+  Err _ => 0 - 2

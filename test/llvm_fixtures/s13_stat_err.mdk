@@ -1,0 +1,4 @@
+-- statFile on a nonexistent path → Err (deterministic)
+main = match statFile "/tmp/mdk_s13_nonexistent_stat_zzz"
+  Ok _ => 0
+  Err _ => 1

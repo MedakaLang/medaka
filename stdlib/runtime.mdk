@@ -65,6 +65,12 @@ extern canonicalizePath : String -> <FileRead "_"> String  -- realpath(3): resol
 extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
 extern listDir : String -> <FileRead "_"> Result String (List String)  -- directory entries (names)
 extern makeDir : String -> <FileWrite "_"> Result String Unit  -- create directory (mkdir 0o755)
+extern removeFile : String -> <FileWrite "_"> Result String Unit  -- unlink(2): delete a file.  Err (strerror) on failure
+extern rename : String -> String -> <FileWrite "_"> Result String Unit  -- rename(2) old new: move/rename a path.  Err (strerror) on failure
+extern removeDir : String -> <FileWrite "_"> Result String Unit  -- rmdir(2): remove an EMPTY directory only.  Err (strerror) on failure
+-- stat(2): (sizeBytes, isDir, isFile, mtimeSeconds).  Err (strerror) if the path
+-- does not exist / cannot be stat'd.  Mirrors runCommand's tuple-return shape.
+extern statFile : String -> <FileRead "_"> Result String (Int, Bool, Bool, Float)
 extern ePutStr : String -> <Stderr> Unit  -- raw stderr output
 extern ePutStrLn : String -> <Stderr> Unit
 extern readLineOpt : Unit -> <Stdin> Option String  -- one stdin line, None at EOF

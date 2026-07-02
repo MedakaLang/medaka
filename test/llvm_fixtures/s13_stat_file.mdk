@@ -1,0 +1,6 @@
+-- stat a 3-byte file: destructure the (size, isDir, isFile, mtime) tuple
+main = match writeFileBytes "/tmp/mdk_s13_stat.bin" (arrayFromList [1, 2, 3])
+  Ok _ => match statFile "/tmp/mdk_s13_stat.bin"
+    Ok (sz, isD, isF, mt) => if isF then sz else 0 - 3
+    Err _ => 0 - 1
+  Err _ => 0 - 2

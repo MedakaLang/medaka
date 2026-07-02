@@ -1,0 +1,6 @@
+-- removeFile on a freshly-written file → Ok (then it's gone)
+main = match writeFile "/tmp/mdk_s13_rm.txt" "x"
+  Ok _ => match removeFile "/tmp/mdk_s13_rm.txt"
+    Ok _ => 1
+    Err _ => 0 - 1
+  Err _ => 0 - 2

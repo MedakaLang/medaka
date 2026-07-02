@@ -1888,6 +1888,10 @@ isFileExtern name = contains
     "readAll",
     "readExactly",
     "makeDir",
+    "removeFile",
+    "rename",
+    "removeDir",
+    "statFile",
     "runCommand",
   ]
 
@@ -1970,6 +1974,30 @@ emitFileExtern e env "makeDir" args = match emitArgs e env args
     let _ = emit e ("  " ++ r ++ " = call i64 @mdk_make_dir(i64 " ++ p ++ ")")
     (r, LTCon)
   _ => panic "llvm spike: makeDir takes one argument (slice 13)"
+emitFileExtern e env "removeFile" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_remove_file(i64 " ++ p ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: removeFile takes one argument"
+emitFileExtern e env "rename" args = match emitArgs e env args
+  [old, new] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_rename(i64 " ++ old ++ ", i64 " ++ new ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: rename takes two arguments"
+emitFileExtern e env "removeDir" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_remove_dir(i64 " ++ p ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: removeDir takes one argument"
+emitFileExtern e env "statFile" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e ("  " ++ r ++ " = call i64 @mdk_stat_file(i64 " ++ p ++ ")")
+    (r, LTCon)
+  _ => panic "llvm spike: statFile takes one argument"
 emitFileExtern e env "runCommand" args = match emitArgs e env args
   [prog, argv] =>
     let r = freshReg e

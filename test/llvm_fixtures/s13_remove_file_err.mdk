@@ -1,0 +1,4 @@
+-- removeFile on a nonexistent path → Err (deterministic)
+main = match removeFile "/tmp/mdk_s13_nonexistent_file_zzz"
+  Ok _ => 0
+  Err _ => 1

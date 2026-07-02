@@ -1,0 +1,4 @@
+-- removeDir on a nonexistent directory → Err (deterministic)
+main = match removeDir "/tmp/mdk_s13_nonexistent_dir_zzz"
+  Ok _ => 0
+  Err _ => 1
