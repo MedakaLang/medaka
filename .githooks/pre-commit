@@ -1,9 +1,18 @@
 #!/bin/sh
-# Medaka pre-commit hook — reject commits containing unformatted .mdk source.
+# Medaka pre-commit hook — reject commits containing unformatted or lint-failing .mdk source.
 #
-# Checks every staged .mdk file (added/copied/modified) with `medaka fmt --check`
-# and aborts the commit if any differ from their formatted form. `test/` fixtures
-# are deliberately excluded — they are golden inputs kept intentionally unformatted.
+# Two checks over every staged .mdk file (added/copied/modified); `test/` fixtures
+# are deliberately excluded from both — they are golden inputs kept intentionally
+# unformatted and often intentionally violate style rules.
+#
+#   1. FORMAT: `medaka fmt --check` — aborts if any file differs from its formatted form.
+#   2. LINT:   `medaka lint --only=<gated rules> --deny=<gated rules>` — aborts if any
+#      file trips a GATED lint rule. Only rules that fire exclusively on genuinely
+#      wrong code are gated (see GATED_LINT_RULES below); advisory/style rules
+#      (rule-match-on-param, rule-duplicate-body, …) still warn under a plain
+#      `medaka lint` but do NOT block a commit. A genuine intentional exception to a
+#      gated rule can be silenced inline with an ESLint-style directive comment, e.g.
+#      `-- lint-disable-next-line rule-hand-rolled-derivable` (also -line / -file forms).
 #
 # Install (from the repo root):
 #     cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"
@@ -17,6 +26,11 @@
 # full-staging case). Partially-staged files are checked as they exist on disk.
 set -u
 
+# Lint rules that BLOCK a commit. Keep this to rules with zero false positives on
+# the current tree (they fire only on genuinely-wrong code). Style/advisory rules
+# stay out so the hook is not noisy.
+GATED_LINT_RULES="rule-hand-rolled-derivable,rule-stdlib-reimpl"
+
 ROOT="$(git rev-parse --show-toplevel)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
 if [ ! -x "$MEDAKA" ]; then
@@ -24,7 +38,7 @@ if [ ! -x "$MEDAKA" ]; then
     MEDAKA="$(command -v medaka)"
   else
     echo "pre-commit: medaka binary not found (build '$ROOT/medaka', set \$MEDAKA, or add to PATH)." >&2
-    echo "pre-commit: skipping formatter check — commit allowed." >&2
+    echo "pre-commit: skipping fmt + lint checks — commit allowed." >&2
     exit 0
   fi
 fi
@@ -33,6 +47,7 @@ fi
 files="$(git diff --cached --name-only --diff-filter=ACM -- '*.mdk' ':(exclude)test/**')"
 [ -z "$files" ] && exit 0
 
+# ── 1. formatter check ───────────────────────────────────────────────────────
 bad=""
 for f in $files; do
   [ -f "$f" ] || continue
@@ -50,4 +65,25 @@ if [ -n "$bad" ]; then
   echo "" >&2
   exit 1
 fi
+
+# ── 2. lint check (gated rules only) ──────────────────────────────────────────
+badlint=""
+for f in $files; do
+  [ -f "$f" ] || continue
+  "$MEDAKA" lint --only="$GATED_LINT_RULES" --deny="$GATED_LINT_RULES" "$f" >/dev/null 2>&1 || badlint="$badlint $f"
+done
+
+if [ -n "$badlint" ]; then
+  echo "" >&2
+  echo "✗ pre-commit: gated lint rule(s) violated in staged .mdk ($GATED_LINT_RULES):" >&2
+  for f in $badlint; do echo "      $f" >&2; done
+  echo "" >&2
+  echo "  See findings:  medaka lint --only=$GATED_LINT_RULES$badlint" >&2
+  echo "  If intentional, silence inline with a directive comment above the site:" >&2
+  echo "                 -- lint-disable-next-line <rule>" >&2
+  echo "  Bypass once:   git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
 exit 0
