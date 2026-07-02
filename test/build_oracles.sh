@@ -30,6 +30,25 @@ MEDAKA="$ROOT/medaka"
 EMITTER="$ROOT/medaka_emitter"
 CC="${CC:-clang}"
 
+# ── Parallel worker mode ───────────────────────────────────────────────────────
+# The script re-invokes itself as `sh "$0" --build-one <entry>` under an xargs -P
+# pool (see the main loop). Each build is collision-free: the emitter reads shared
+# source read-only; the per-entry .ll temp is keyed by the entry's unique basename;
+# GC detection here uses `brew --prefix` (no shared temp file). So N builds run
+# concurrently with no interference. Worker exits 0 on success, 1 on failure.
+if [ "${1:-}" = "--build-one" ]; then
+  e="$2"
+  src="$ROOT/compiler/entries/$e.mdk"
+  out="$BINDIR/$e"
+  printf 'building    %s ...\n' "$e"
+  if ! ( cd "$ROOT" && MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" "$MEDAKA" build --allow-internal "$src" -o "$out" ) >"$BINDIR/$e.buildlog" 2>&1; then
+    echo "FAIL: could not native-compile $e:" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1
+  fi
+  [ -x "$out" ] || { echo "FAIL: $e build produced no binary" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1; }
+  rm -f "$BINDIR/$e.buildlog"
+  exit 0
+fi
+
 # ── Entries the step-1 OCaml-free gates need (one per line; no extension) ──────
 #   eval_run_main     — diff_compiler_eval_run.sh        (=== EVAL === goldens)
 #   eval_run_batch    — diff_compiler_eval_run_batch.sh  (=== EVAL === goldens)
@@ -133,7 +152,12 @@ for f in $(find "$ROOT/compiler" -name '*.mdk'); do
   [ "$m" -gt "$newest_src" ] && newest_src=$m
 done
 
-built=0; uptodate=0
+# ── Worklist: which entries actually need (re)building ─────────────────────────
+# The probe entries are COMPILER internals (compiler/entries/*) whose graphs use
+# the internal-only array-kernel externs (arrayGetUnsafe, …); the worker passes
+# --allow-internal so the resolve-phase guard trusts them (part of this project).
+worklist=""
+uptodate=0
 for e in $ENTRIES; do
   src="$ROOT/compiler/entries/$e.mdk"
   out="$BINDIR/$e"
@@ -144,16 +168,21 @@ for e in $ENTRIES; do
       uptodate=$((uptodate+1)); printf 'up-to-date  %s\n' "$e"; continue
     fi
   fi
-  printf 'building    %s ...\n' "$e"
-  # The probe entries are COMPILER internals (compiler/entries/*) whose graphs use
-  # the internal-only array-kernel externs (arrayGetUnsafe, …); pass --allow-internal
-  # so the resolve-phase guard trusts them (they are part of this project).
-  if ! ( cd "$ROOT" && MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" "$MEDAKA" build --allow-internal "$src" -o "$out" ) >"$BINDIR/$e.buildlog" 2>&1; then
-    echo "FAIL: could not native-compile $e:"; tail -8 "$BINDIR/$e.buildlog"; exit 1
-  fi
-  [ -x "$out" ] || { echo "FAIL: $e build produced no binary"; tail -8 "$BINDIR/$e.buildlog"; exit 1; }
-  rm -f "$BINDIR/$e.buildlog"
-  built=$((built+1))
+  worklist="$worklist $e"
 done
 
-printf '\noracles ready in %s (%d built, %d up-to-date)\n' "$BINDIR" "$built" "$uptodate"
+# ── Parallel build via an xargs -P job pool ────────────────────────────────────
+# Default concurrency = logical CPU count (override with JOBS=n). Each build is a
+# self-reinvocation (`sh "$0" --build-one <e>`); xargs exits non-zero if any fails.
+JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+built=0
+rc=0
+if [ -n "$worklist" ]; then
+  built=$(printf '%s\n' $worklist | wc -l | tr -d ' ')
+  printf '%s\n' $worklist \
+    | xargs -P "$JOBS" -n 1 sh "$0" --build-one \
+    || rc=$?
+fi
+[ "$rc" = 0 ] || { echo "FAIL: one or more oracle builds failed (see FAIL lines above)"; exit 1; }
+
+printf '\noracles ready in %s (%d built, %d up-to-date, JOBS=%s)\n' "$BINDIR" "$built" "$uptodate" "$JOBS"
