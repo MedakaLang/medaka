@@ -1038,10 +1038,13 @@ props.
 ## Module 17 — `fs` ✅ implemented (P1, 2026-07-01) — build-path only
 
 `stdlib/fs.mdk` — a filesystem convenience layer over the host file externs.
-`import fs`. **Build-path (native/LLVM) only** — like ALL file externs, these are
-unimplemented in the tree-walking interpreter, so a file-touching program must be
-`medaka build`+run, not `medaka run` (a pre-existing interpreter limitation, not
-specific to `fs`).
+`import fs`. **Build-path (native/LLVM) only, BY DESIGN** — the tree-walking
+interpreter (`medaka run`) is a deliberately pure, FFI-free, deterministic oracle
+(it also *fakes* the clock/random externs with canned values, which is what keeps
+the `diff_compiler_eval_*` gates deterministic). File externs are simply unbound
+under `medaka run`; a file-touching program uses `medaka build`+run. This is not a
+TODO — making `run` do real file IO would require widening the interpreter's
+effect boundary (a decided non-goal, 2026-07-01).
 
 **New externs (in `runtime.mdk`):** `removeFile` (unlink), `rename`, `removeDir`
 (rmdir, empty only) — all `<FileWrite "_"> Result String Unit`; `statFile :
