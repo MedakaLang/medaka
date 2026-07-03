@@ -1496,6 +1496,15 @@ pendingImplObligations = Ref []
 numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route))
 numlitRefs = Ref []
 
+-- Chunk A (error framing): the union-find root ids of every type var that took
+-- part in a unification failure (`typeMismatch`).  Consulted ONLY by
+-- `checkUndeterminedObligation` to SUPPRESS a secondary `ambiguous instance`
+-- cascade on a var the primary mismatch already explained — never read on the
+-- inference path, so a well-typed program (no mismatch) never poisons anything
+-- and behaves identically.
+poisonedVars : Ref (List Int)
+poisonedVars = Ref []
+
 -- LSP hover: every local binding (let-bound name, lambda param, function-clause
 -- param, match-arm binder) flows through inferPat's PVar/PAs arms.  Capture
 -- (name, mono var) here so hover can render a *local* variable's inferred type:
@@ -2156,6 +2165,7 @@ resetState _ =
   let _ = setRef methodIfaceParamsRef []
   let _ = setRef pendingImplObligations []
   let _ = setRef numlitRefs []  -- PLAN.md #11
+  let _ = setRef poisonedVars []  -- Chunk A: reset error-path cascade suppression
   let _ = setRef localBindRefs []
   let _ = setRef localSchemesOut []
   let _ = setRef seedSchemesOut []
@@ -2275,8 +2285,22 @@ bindVar cell t =
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) t
   if occursCheckFailed.value then () else setRef cell (Link t)
 
+-- Chunk A: record the union-find roots of every free var on either side of a
+-- unification failure so a later obligation check can suppress a secondary
+-- `ambiguous instance` cascade on the same (already-errored) var.
+poisonMismatchVars : Mono -> Mono -> <Mut> Unit
+poisonMismatchVars a b =
+  setRef
+    poisonedVars
+    (monoUnboundIds a ++ monoUnboundIds b ++ poisonedVars.value)
+
 typeMismatch : Mono -> Mono -> <Mut> Unit
-typeMismatch a b = match currentMethodMismatch.value
+typeMismatch a b =
+  let _ = poisonMismatchVars a b
+  typeMismatchReport a b
+
+typeMismatchReport : Mono -> Mono -> <Mut> Unit
+typeMismatchReport a b = match currentMethodMismatch.value
   Some mname => pushTypeError "T-METHOD-MISMATCH" "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
   None => match currentDoOrigin.value
     Some doLoc => typeMismatchInDo a b doLoc
@@ -3879,7 +3903,12 @@ pushUnknownField fname rname =
 unknownFieldFresh : String -> String -> <Mut> Mono
 unknownFieldFresh fname rname =
   let _ = pushUnknownField fname rname
-  freshVar ()
+  let v = freshVar ()
+  -- Chunk A: the field error already explained this access; poison its result
+  -- var so a downstream `debug`/method use doesn't pile on a secondary
+  -- `ambiguous instance` cascade (record_wrong_field).
+  let _ = poisonMismatchVars v v
+  v
 
 -- byte-for-byte with lib/typecheck.ml UnknownField / AmbiguousField / MissingField messages.
 unknownFieldMsg : String -> String -> String
@@ -8168,6 +8197,7 @@ checkUndeterminedObligation : List (String, List Ty) -> String -> Mono -> Option
 checkUndeterminedObligation heads iface occ loc
   | iface == "Num" = ()
   | isSome (activeDictVarOf occ) = ()
+  | anyIn (monoUnboundIds occ) poisonedVars.value = ()  -- Chunk A: primary mismatch already explained this var
   | implCountForIface heads iface >= 2 =
     pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface)
   | otherwise = ()
