@@ -1,0 +1,9 @@
+interface Greet a where
+  greet : a -> String
+impl Greet Int where
+  greet n = "int"
+sayHi : a -> String
+sayHi x = greet x
+useIt : b -> String
+useIt y = sayHi y
+main = println (useIt "hello")

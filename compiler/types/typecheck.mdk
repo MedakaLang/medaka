@@ -7756,6 +7756,10 @@ checkProgramSchemesWithRuntime runtimeDecls prog =
 checkProgramSeeded : List (String, Scheme) -> List Decl -> <Mut> List (String, Scheme)
 checkProgramSeeded seed prog =
   let _ = resetState ()
+  -- seed the interface decls for super-closure (the flat path skips elaborateDict/
+  -- elabModuleStamp which set this elsewhere); read-only during inference, so the
+  -- signature-constraint check's superclass closure works single-file too.
+  let _ = setRef superDeclsRef prog
   let _ = populateEffectDomains prog
   let _ = checkEffectParams prog
   let _ = checkLetRecDecls prog
@@ -8976,6 +8980,12 @@ processSCC env sigs grouped members =
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
   let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
   let _ = registerSchemeObligations addedObls schemes
+  -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
+  -- interface constraint on one of its own quantified vars that its declared `=>`
+  -- context (superclass-closed) does NOT cover severs the constraint for callers
+  -- → wrong-dictionary dispatch (a silent wrong answer).  Reject at the def-site.
+  -- Runs on every path; the census over compiler+stdlib+sqlite was 0 new failures.
+  let _ = checkSigConstraintCoverage regs sigs sigTvMaps addedObls schemes
   let _ = registerInferredConstraints sigs schemes
   -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
   -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
@@ -9371,6 +9381,118 @@ schemeObligationOne boundIds iface typarams mty occ = match dispatchMonosOf typa
 
 schemeIds : Scheme -> List Int
 schemeIds (Forall ids _ _) = ids
+
+-- ── signature-constraint soundness check ─────────────────────────────────────
+-- For each SIGNED member, the interface constraints its body INFERS on the
+-- member's own quantified vars must be covered by the DECLARED `=>` context,
+-- closed under the interface `requires` (superclass) graph.  An uncovered
+-- inferred constraint ⇒ def-site type_error (the constraint analogue of
+-- checkEffectEscape).  Single-param `C a` shape only (skips multi-param); the
+-- inferred obligations are the UNION of the flat-path (schemeObligationsOf over
+-- addedObls) and the marked-path (inferredConstraintIds + ifaceForInferredId)
+-- sources — a return-position-method constraint lands only in the latter.
+checkSigConstraintCoverage : List (String, List (String, Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, Scheme) -> <Mut> Unit
+checkSigConstraintCoverage _ _ _ _ [] = ()
+checkSigConstraintCoverage regs sigs sigTvMaps addedObls ((m, sch)::rest) =
+  let _ = checkSigConstraintOne regs sigs sigTvMaps addedObls m sch
+  checkSigConstraintCoverage regs sigs sigTvMaps addedObls rest
+
+checkSigConstraintOne : List (String, List (String, Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (String, List String, Ty, Mono, Option Loc) -> String -> Scheme -> <Mut> Unit
+checkSigConstraintOne regs sigs sigTvMaps addedObls m sch = match lookupAssoc m sigs
+  None => ()   -- unsigned member: its inferred constraints are promoted, not checked
+  Some _ =>
+    let declared = censusSuperClose superDeclsRef.value (declaredPairsFor m regs)
+    let inferredA = schemeObligationsOf (schemeIds sch) addedObls
+    let inferredB = inferredIfacePairs m (schemeIds sch)
+    let inferred = dedupPairs (inferredA ++ inferredB)
+    reportUncovered m sigTvMaps declared inferred
+
+-- inferred (iface, id) pairs from the marked path: each inferred constraint var id
+-- paired with its recovered iface (skip an id whose iface can't be recovered).
+inferredIfacePairs : String -> List Int -> <Mut> List (String, Int)
+inferredIfacePairs m boundIds =
+  flatMap (pairIface m) (inferredConstraintIds m boundIds)
+
+pairIface : String -> Int -> <Mut> List (String, Int)
+pairIface m id = match ifaceForInferredId m id
+  "" => []
+  iface => [(iface, id)]
+
+-- the declared (iface, id) constraint pairs of member m: each declared constraint
+-- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
+-- constraints — no tyvar — carry no dict slot and are skipped).
+declaredPairsFor : String -> List (String, List (String, Mono)) -> <Mut> List (String, Int)
+declaredPairsFor m regs = match lookupAssoc m regs
+  None => []
+  Some ifaceMonos => flatMap declaredPairOne ifaceMonos
+
+declaredPairOne : (String, Mono) -> <Mut> List (String, Int)
+declaredPairOne (iface, mono) = match normalize mono
+  TVar cell => [(iface, tyvarId cell)]
+  _ => []
+
+-- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
+-- expandSupersPairs but WITHOUT the userIfaceNamesRef gate, so prelude super chains
+-- (Applicative requires Mappable, Thenable requires Applicative, …) are included.
+-- (The gated expandSupersPairs stays user-only because its slots drive dict arity;
+-- this closure only feeds the read-only subset test, so gating is not needed here.)
+censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
+censusSuperClose allDecls declared =
+  censusSuperCloseFix allDecls declared declared
+
+censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
+censusSuperCloseFix allDecls acc frontier =
+  let next = dedupPairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
+  if listLen next == listLen acc then
+    acc
+  else
+    censusSuperCloseFix allDecls next (dropPairs (listLen acc) next)
+
+censusSuperSlotsOf : List Decl -> (String, Int) -> List (String, Int)
+censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface
+  None => []
+  Some (typarams, supers) =>
+    let subst = zipL typarams (replicate (listLen typarams) id)
+    flatMap (superSlotOf subst) supers
+
+-- one type_error per inferred (iface, id) not covered by the declared-closed set.
+reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> <Mut> Unit
+reportUncovered _ _ _ [] = ()
+reportUncovered m sigTvMaps declared ((iface, id)::rest) =
+  let _ = if containsPair (iface, id) declared then
+    ()
+  else
+    pushTypeError (missingConstraintMsg m iface (varNameForId sigTvMaps m id))
+  reportUncovered m sigTvMaps declared rest
+
+containsPair : (String, Int) -> List (String, Int) -> Bool
+containsPair _ [] = False
+containsPair (i, d) ((i2, d2)::rest) = i == i2 && d == d2
+  || containsPair (i, d) rest
+
+-- recover the sig-tyvar NAME for a constraint var id (for a readable message);
+-- falls back to "a" if the id isn't found among the member's sig tyvars.
+varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> <Mut> String
+varNameForId sigTvMaps m id = match findSigTvMap m sigTvMaps
+  None => "a"
+  Some tvMap => match findTvName id tvMap
+    None => "a"
+    Some n => n
+
+findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
+findSigTvMap _ [] = None
+findSigTvMap m ((n, _, tvMap)::rest)
+  | n == m = Some tvMap
+  | otherwise = findSigTvMap m rest
+
+findTvName : Int -> List (String, Mono) -> <Mut> Option String
+findTvName _ [] = None
+findTvName id ((n, mono)::rest) = match normalize mono
+  TVar cell => if tyvarId cell == id then Some n else findTvName id rest
+  _ => findTvName id rest
+
+missingConstraintMsg : String -> String -> String -> String
+missingConstraintMsg name iface varName = "Could not deduce '\{iface} \{varName}' from the signature of '\{name}' — its body requires it; add '\{iface} \{varName} =>' to the declared type"
 
 -- the member's own quantified tyvar ids that a body method site / propagated
 -- constrained-call sits at (deduped, slot order = discovery order)
