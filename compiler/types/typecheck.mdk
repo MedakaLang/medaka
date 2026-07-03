@@ -8985,6 +8985,27 @@ numDictObls [] = []
 numDictObls ((_, monos, ifaces)::rest) = flatMap (p => if fst p == "Num" then [("Num", ["a"], TyVar "a", snd p, currentLoc.value)] else []) (zipL ifaces monos)
   ++ numDictObls rest
 
+-- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
+-- just Num) a group's constrained-callee instantiations recorded on the call/dict
+-- deltas.  Unlike numCallObls/numDictObls (which feed only Num-defaulting), these
+-- feed registerSchemeObligations so a constraint FORWARDED from a constrained callee
+-- (`useApp g = app2 g`, whose Num lives on the call/dict deltas, never on
+-- pendingImplObligations) is recorded in schemeObligationsRef — so a caller of the
+-- forwarder (`main = println (useApp (==))`) re-instantiates it (instantiateVarTracked),
+-- surfacing the constraint on the caller's own delta where group Num-defaulting can
+-- ground the shared ambiguous var.  Without this the forwarded var never grounds on
+-- the check path and a downstream Eq/Ord obligation on it is falsely ambiguous.
+allCallObls : List (String, Mono, Option Loc) -> List (String, List String, Ty, Mono, Option Loc)
+allCallObls [] = []
+allCallObls ((iface, mono, loc)::rest)
+  | iface == "" = allCallObls rest
+  | otherwise = (iface, ["a"], TyVar "a", mono, loc) :: allCallObls rest
+
+allDictObls : List (Ref (List Route), List Mono, List String) -> List (String, List String, Ty, Mono, Option Loc)
+allDictObls [] = []
+allDictObls ((_, monos, ifaces)::rest) = flatMap (p => if fst p == "" then [] else [(fst p, ["a"], TyVar "a", snd p, currentLoc.value)]) (zipL ifaces monos)
+  ++ allDictObls rest
+
 processSCC : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> List String -> <Mut> (TcEnv, List (String, Scheme))
 processSCC env sigs grouped members =
   let _ = enterLevel ()
@@ -9021,7 +9042,14 @@ processSCC env sigs grouped members =
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
   let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
-  let _ = registerSchemeObligations addedObls schemes
+  -- #23 two-hop forward: also record constraints FORWARDED from a constrained
+  -- callee (living on the call/dict deltas, never in addedObls) into
+  -- schemeObligationsRef, so a caller of this group re-instantiates them and its
+  -- own group can ground the shared ambiguous var.  See allCallObls/allDictObls.
+  let forwardedObls =
+        allCallObls (takeFirst (listLen pendingCallObligations.value - callN0) pendingCallObligations.value)
+        ++ allDictObls (takeFirst (listLen pendingDictApps.value - dictN0) pendingDictApps.value)
+  let _ = registerSchemeObligations (addedObls ++ forwardedObls) schemes
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
   -- context (superclass-closed) does NOT cover severs the constraint for callers

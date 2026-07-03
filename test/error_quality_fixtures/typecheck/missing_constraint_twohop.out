@@ -5,3 +5,7 @@ test/error_quality_fixtures/typecheck/missing_constraint_twohop.mdk:6:16: Could 
   |
 6 | sayHi x = greet x
   |                 ^
+test/error_quality_fixtures/typecheck/missing_constraint_twohop.mdk:9:16: No impl of Greet for String
+  |
+9 | main = println (useIt "hello")
+  |                 ^
