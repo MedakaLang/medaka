@@ -539,7 +539,8 @@ dropN n (_::xs) = dropN (n - 1) xs
 -- ── rendering ─────────────────────────────────────────────────────────────────
 
 export findingToDiag : Finding -> Diag
-findingToDiag f = Diag f.severity f.rule "[\{f.rule}] \{f.message}" f.loc
+findingToDiag f =
+  Diag f.severity f.rule "[\{f.rule}] \{f.message}" f.loc None None
 
 -- One finding per line: `<severity>: [<rule>] <message>` (location-stripped, the
 -- golden harness sorts).  Mirror of exhaust.mdk's `exhaustToLines`.  `src` is the

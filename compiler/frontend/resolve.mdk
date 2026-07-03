@@ -102,6 +102,14 @@ public export data ResError =
   -- `--allow-internal` (see internalExterns / Env.internalGuard)
   | InternalExternAccess String (Option Loc)
 
+-- The did-you-mean pair (misspelled name, suggested name) for a resolve error,
+-- or None.  Only an UnboundVariable that carries a suggestion qualifies today.
+-- Consumed by diagnostics.mdk (Stage 2) to build the structured `help`/`fix`
+-- JSON fields — the fix span is the misspelled name's own loc-start + its length.
+export resErrorDidYouMean : ResError -> Option (String, String)
+resErrorDidYouMean (UnboundVariable n _ (Some sug)) = Some (n, sug)
+resErrorDidYouMean _ = None
+
 -- The source span carried by a ResError (Stage B): consumed by diagnostics.mdk
 -- to position the Diag (was uniformly `None` pre-Stage-B).
 export resErrorLoc : ResError -> Option Loc

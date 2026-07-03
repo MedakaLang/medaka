@@ -109,7 +109,7 @@ run runtimeP coreP entry roots = match readFile runtimeP
       Ok tsrc => match parseResult tsrc
         Err pe => emitParseError entry pe
         Ok _ => match loadProgram entry roots
-          Err lmsg => emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg None])])
+          Err lmsg => emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg None None None])])
           Ok mods => match mods
             [_] => analyzeSingle rsrc csrc tsrc entry runtimeP coreP roots
             _ => analyzeMulti rsrc csrc tsrc entry runtimeP coreP roots mods
@@ -139,7 +139,7 @@ analyzeMulti rsrc csrc tsrc entry runtimeP coreP roots _mods =
 -- analyze guarantees this load + emit cannot hit the diagnostic/panic path.
 doEmit : String -> String -> String -> List String -> <IO, Mut, Panic> Unit
 doEmit rsrc csrc entry roots = match loadProgram entry roots
-  Err e => emitDiagnostics (cjAllToJson [(entry, "", [Diag SevError "R-MODULE-LOAD" e None])])
+  Err e => emitDiagnostics (cjAllToJson [(entry, "", [Diag SevError "R-MODULE-LOAD" e None None None])])
   Ok mods =>
     let _ = putStr "__MEDAKA_WAT__\n"
     runEmit (desugar (parse rsrc)) (desugar (parse csrc)) (map desugarPair mods)
@@ -189,11 +189,11 @@ emitParseError entry pe =
 -- A failed stdlib read becomes a single diagnostic too (never a trap).
 emitLoadFail : String -> String -> <IO> Unit
 emitLoadFail entry msg = emitDiagnostics (cjAllToJson
-  [(entry, "", [Diag SevError "R-MODULE-LOAD" msg None])])
+  [(entry, "", [Diag SevError "R-MODULE-LOAD" msg None None None])])
 
 cjHasErr : (String, List Diag) -> Bool
 cjHasErr (_, diags) = any isDiagError diags
 
 isDiagError : Diag -> Bool
-isDiagError (Diag SevError _ _ _) = True
+isDiagError (Diag SevError _ _ _ _ _) = True
 isDiagError _ = False

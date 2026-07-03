@@ -29,12 +29,14 @@ import frontend.parser.{
 }
 import frontend.desugar.{desugar}
 import frontend.resolve.{
+  ResError,
   resolveProgram,
   resolveProgramG2,
   internalGuardFor,
   ppResError,
   resErrorLoc,
   resErrorCode,
+  resErrorDidYouMean,
   resolveModule,
   ModuleExports,
 }
@@ -65,7 +67,38 @@ public export data Severity = SevError | SevWarning
 -- authors supply exactly one token.  The CLI text renderers (`ppDiag`/
 -- `ppDiagCliSrc`) deliberately ignore the code (JSON-only for Stage 1), keeping the
 -- human-facing CLI output byte-identical.
-public export data Diag = Diag Severity String String (Option Loc)
+-- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
+-- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
+-- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
+-- today only did-you-mean (resolve UnboundVariable with a suggestion) populates
+-- them.  A `Fix` replaces its `Loc` span with the replacement string.
+public export data Fix = Fix Loc String
+
+public export data Diag =
+  | Diag Severity String String (Option Loc) (Option String) (Option Fix)
+
+-- Smart constructor for a diagnostic with no structured help/fix (the common
+-- case) — keeps the ~15 plain construction sites terse.
+export mkDiag : Severity -> String -> String -> Option Loc -> Diag
+mkDiag sev code msg loc = Diag sev code msg loc None None
+
+-- Build the (help, fix) pair for a resolve error's structured suggestion.  Only
+-- did-you-mean yields both today: `help` is prose; `fix` replaces the misspelled
+-- identifier's OWN span (its loc start, end = start + name length) with the
+-- suggested name — an exact, single-span, agent-applicable edit.
+export resErrorHelpFix : ResError -> (Option String, Option Fix)
+resErrorHelpFix e = match resErrorDidYouMean e
+  Some (bad, sug) =>
+    let help = Some "did you mean '\{sug}'?"
+    let fix = map ((Loc f sl sc _ _) => Fix (Loc f sl sc sl (sc + stringLength bad)) sug) (resErrorLoc e)
+    (help, fix)
+  None => (None, None)
+
+-- Convert a resolve error to a Diag, attaching structured help/fix (did-you-mean).
+export diagOfResError : ResError -> Diag
+diagOfResError e =
+  let (help, fix) = resErrorHelpFix e
+  Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e) help fix
 
 -- Derive the JSON `kind` from a code's per-stage prefix (DIAGNOSTIC-CODES-DESIGN
 -- §2): L→lex, P→parse, R→resolve, T→type, W→warning.  An unrecognized prefix
@@ -103,7 +136,7 @@ ppSeverity SevWarning = "warning"
 -- the location-stripped oracle — the loc is consumed by the LSP, not this text
 -- form, so the diff gate stays byte-identical).
 export ppDiag : Diag -> String
-ppDiag (Diag sev _ msg _) = "\{ppSeverity sev}: \{msg}"
+ppDiag (Diag sev _ msg _ _ _) = "\{ppSeverity sev}: \{msg}"
 
 -- Plain-text CLI renderer (Stage-A positioned output, Stage-C carat block).
 -- line is 1-based (matches the oracle's plain-text convention); col is 0-based.
@@ -124,13 +157,13 @@ ppDiagCli file diag = ppDiagCliSrc "" file diag
 
 -- Stage-C: carat-aware renderer.  `src` carries the file's source text.
 export ppDiagCliSrc : String -> String -> Diag -> String
-ppDiagCliSrc src file (Diag _ _ msg (Some (Loc _ sl sc _ _))) =
+ppDiagCliSrc src file (Diag _ _ msg (Some (Loc _ sl sc _ _)) _ _) =
   let header = "\{file}:\{intToString sl}:\{intToString sc}: \{msg}"
   match nthLine src sl
     None => header
     Some lineText =>
       "\{header}\n  |\n\{intToString sl} | \{lineText}\n  | \{spaces sc}^"
-ppDiagCliSrc _ _ (Diag _ _ msg None) = "<unknown location>: " ++ msg
+ppDiagCliSrc _ _ (Diag _ _ msg None _ _) = "<unknown location>: " ++ msg
 
 -- `spaces n` = a string of n space characters (the oracle's `String.make col ' '`).
 spaces : Int -> String
@@ -198,15 +231,15 @@ analyzeFrom runtimeSrc coreSrc raw internalGuard =
   let runtimeP = desugar (parse runtimeSrc)
   let coreP = desugar (parse coreSrc)
   let resErrs = resolveProgramG2 internalGuard runtimeP coreP desugared
-  let resDiags = map (e => Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e)) resErrs
+  let resDiags = map diagOfResError resErrs
   let _ = setCoherenceUserDecls desugared
   let tcDiags = match resErrs
     [] =>
       let (tcErrs, tcWarns) = checkProgramDiags runtimeP (coreP ++ desugared)
-      map ((code, msg, loc) => Diag SevError code msg loc) tcErrs
-        ++ map ((w, loc) => Diag SevWarning "W-NONEXHAUSTIVE" (stripWarnPrefix w) loc) tcWarns
+      map ((code, msg, loc) => mkDiag SevError code msg loc) tcErrs
+        ++ map ((w, loc) => mkDiag SevWarning "W-NONEXHAUSTIVE" (stripWarnPrefix w) loc) tcWarns
     _ => []
-  let guardDiags = map (w => Diag SevWarning "W-GUARD-INEXHAUSTIVE" (stripWarnPrefix w) None) guardWarns
+  let guardDiags = map (w => mkDiag SevWarning "W-GUARD-INEXHAUSTIVE" (stripWarnPrefix w) None) guardWarns
   guardDiags ++ resDiags ++ tcDiags
 -- resolve over runtime + core (prelude) + target
 
@@ -326,7 +359,7 @@ wrappedRead cacheRef staleRef read path = match read path
       let _ = setRef cacheRef (cachePut path src cacheRef.value)
       Some src
     Err e =>
-      let diag = Diag SevError (parseErrCode (parseErrorMessage e)) (parseErrorMessage e) (Some (parseErrLoc path e))
+      let diag = mkDiag SevError (parseErrCode (parseErrorMessage e)) (parseErrorMessage e) (Some (parseErrLoc path e))
       let _ = setRef staleRef ((path, diag)::staleRef.value)
       match lookupAssoc path cacheRef.value
         Some good => Some good
@@ -374,7 +407,7 @@ analyzeProject cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let coreP = preludeDesugared parseCacheRef coreSrc
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err e =>
-      appendStale staleRef [(entry, [Diag SevError "R-MODULE-LOAD" e None])]
+      appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])]
     Ok mods =>
       let seeded = seedAll (map midPath mods) []
       let afterRes = resolvePass runtimeP coreP [] mods seeded
@@ -439,7 +472,7 @@ resolvePass _ _ _ [] buckets = buckets
 resolvePass rt core known ((mid, path, prog)::rest) buckets =
   let desugared = desugar prog
   let (exp, errs) = resolveModule rt core known mid desugared
-  let diags = map (e => Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e)) errs
+  let diags = map diagOfResError errs
   resolvePass rt core (exp::known) rest (pushDiags path diags buckets)
 
 -- ── typecheck pass (per module, ISOLATED) ───────────────────────────────────
@@ -469,10 +502,10 @@ foldModuleTc : List (String, String, List Decl) -> List (String, (List (String, 
 foldModuleTc [] _ buckets = buckets
 foldModuleTc ((mid, path, prog)::rest) tcByMid buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
-  let errDiags = map ((code, msg, loc) => Diag SevError code msg loc) tcErrs
-  let warnDiags = map ((w, loc) => Diag SevWarning "W-NONEXHAUSTIVE" (stripWarnPrefix w) loc) tcWarns
+  let errDiags = map ((code, msg, loc) => mkDiag SevError code msg loc) tcErrs
+  let warnDiags = map ((w, loc) => mkDiag SevWarning "W-NONEXHAUSTIVE" (stripWarnPrefix w) loc) tcWarns
   let guardWarns = checkGuardExhaustiveness prog
-  let guardDiags = map (w => Diag SevWarning "W-GUARD-INEXHAUSTIVE" (stripWarnPrefix w) None) guardWarns
+  let guardDiags = map (w => mkDiag SevWarning "W-GUARD-INEXHAUSTIVE" (stripWarnPrefix w) None) guardWarns
   let buckets2 = pushDiags path (guardDiags ++ errDiags ++ warnDiags) buckets
   foldModuleTc rest tcByMid buckets2
 
@@ -511,8 +544,8 @@ projectLines ((file, ds)::rest) =
 --   "<severity>: <message>"                when the diag carries no loc (None →
 --   whole-document range in the LSP; positionless here).
 ppDiagLoc : Diag -> String
-ppDiagLoc (Diag sev _ msg None) = "\{ppSeverity sev}: \{msg}"
-ppDiagLoc (Diag sev _ msg (Some (Loc _ sl sc _ _))) =
+ppDiagLoc (Diag sev _ msg None _ _) = "\{ppSeverity sev}: \{msg}"
+ppDiagLoc (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
   "\{ppSeverity sev}@\{intToString (sl - 1)}:\{intToString sc}: \{msg}"
 
 -- ── check --json JSON shaping ────────────────────────────────────────────────
@@ -558,16 +591,22 @@ cjSevCode _ = 2
 -- into the message and emitted a {0,0} dummy range) is gone, so a non-exhaustive
 -- match warning now reports a real span.  `path` is unused (kept for the caller's
 -- uniform call shape).
+-- Stage 2: a single optional JSON field — `[]` when absent so the key is omitted
+-- entirely (keeps every non-suggestion diagnostic's JSON byte-identical to Stage 1).
+optField : String -> Option Json -> List (String, Json)
+optField k (Some v) = [(k, v)]
+optField _ None = []
+
+-- Render a machine-applicable Fix as { "range": {...}, "replacement": "..." },
+-- the range covering exactly the span to overwrite (mirrors the LSP text edit).
+cjFixJson : Fix -> Json
+cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject
+  [("range", cjRange (sl - 1) sc (el - 1) ec), ("replacement", JString repl)]
+
 export cjDiagnostic : String -> String -> Diag -> Json
-cjDiagnostic _ src (Diag sev code msg loc) = jObject
-  [
-    ("code", JString code),
-    ("kind", JString (codeKind code)),
-    ("message", JString msg),
-    ("range", cjRangeOfLoc src loc),
-    ("severity", JInt (cjSevCode sev)),
-    ("source", JString "medaka"),
-  ]
+cjDiagnostic _ src (Diag sev code msg loc help fix) =
+  jObject
+    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (codeKind code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
 -- `src` is the file's source text (for whole-doc range fallback).

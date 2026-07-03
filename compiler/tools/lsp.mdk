@@ -183,7 +183,7 @@ rangeOfLoc src None = wholeDocRange src
 -- (B.10.2b) for an expr-level range, falling back to whole-document for
 -- loc-less diagnostics.
 diagToJson : String -> Diag -> Json
-diagToJson src (Diag sev _ msg loc) =
+diagToJson src (Diag sev _ msg loc _ _) =
   jDiagnostic (severityCode sev) (rangeOfLoc src loc) msg
 
 -- Produce the LSP diagnostics array for a source.  A parse failure short-

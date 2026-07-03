@@ -305,7 +305,7 @@ runCheckJsonCmd allowInternal rsrc csrc target roots =
       match loadProgram target roots
         Err lmsg =>
           -- Load error (missing import etc.): report as single diagnostic.
-          let triples = [(target, src, [Diag SevError "R-MODULE-LOAD" lmsg None])]
+          let triples = [(target, src, [Diag SevError "R-MODULE-LOAD" lmsg None None None])]
           let _ = println (cjAllToJson triples)
           exit 1
         Ok mods => match mods
@@ -334,7 +334,7 @@ cjHasErr : (String, List Diag) -> Bool
 cjHasErr (_, diags) = any isDiagError diags
 
 isDiagError : Diag -> Bool
-isDiagError (Diag SevError _ _ _) = True
+isDiagError (Diag SevError _ _ _ _ _) = True
 isDiagError _ = False
 
 -- Mirrors lib/fmt.ml's single-file dispatch: default --write (in place),
