@@ -1,0 +1,5 @@
+f : Option Int -> Int
+f x = match x
+  Some y => y
+
+main = f (Some 3)

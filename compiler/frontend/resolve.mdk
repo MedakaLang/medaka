@@ -1099,6 +1099,31 @@ ppResError (InternalExternAccess n _) = "'"
   ++ n
   ++ "' is an internal-only primitive and cannot be used outside the standard library (pass --allow-internal to override)"
 
+-- Stable diagnostic code (DIAGNOSTIC-CODES-DESIGN §2) for a resolve error — one
+-- `R-*` code per ResError constructor.  Authored here (a single chokepoint), so
+-- the two ResError→Diag conversion sites need no per-call-site change.  Codes are
+-- append-only; never renumber.
+export resErrorCode : ResError -> String
+resErrorCode (UnboundVariable _ _ _) = "R-UNBOUND"
+resErrorCode (UnknownConstructor _ _) = "R-UNKNOWN-CTOR"
+resErrorCode (UnknownType _ _) = "R-UNKNOWN-TYPE"
+resErrorCode (UnknownEffect _ _) = "R-UNKNOWN-EFFECT"
+resErrorCode (UnknownField _ _) = "R-UNKNOWN-FIELD"
+resErrorCode (FieldNotInRecord _ _ _) = "R-FIELD-NOT-IN-RECORD"
+resErrorCode (DuplicateDefinition _ _ _) = "R-DUPLICATE-DEF"
+resErrorCode (UnknownInterface _ _) = "R-UNKNOWN-INTERFACE"
+resErrorCode (MethodNotInInterface _ _ _) = "R-METHOD-NOT-IN-INTERFACE"
+resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
+resErrorCode (PrivateNameAccess _ _ _) = "R-PRIVATE-NAME"
+resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
+resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
+resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
+resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
+resErrorCode (DuplicateBinding _ _) = "R-DUPLICATE-BINDING"
+resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
+resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
+resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
+
 -- Mirror lib/resolve.ml's mod_phrase: two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.
 ambigModPhrase : List String -> String

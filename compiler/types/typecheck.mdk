@@ -903,7 +903,8 @@ unifyRowN (EffRow _ None) (EffRow _ None) = ()
 -- not exceed the bound, else they escape.  [escaping] = open labels \ bound.
 effectLeakCheck : List Atom -> List Atom -> <Mut> Unit
 effectLeakCheck [] bound = ()
-effectLeakCheck escaping bound = pushTypeError (effectLeakMsg bound escaping)
+effectLeakCheck escaping bound =
+  pushTypeError "T-EFFECT-LEAK" (effectLeakMsg bound escaping)
 
 effectLeakMsg : List Atom -> List Atom -> String
 effectLeakMsg bound extras = "Effectful value used where <\{renderAtoms bound}> is allowed, but it performs <\{renderAtoms extras}>"
@@ -962,14 +963,14 @@ checkOneEffectParam l pat = match dtopFor l
     -- v2 Stage 2b: the inferred hole "_" carries no written pattern to validate.
     if isHoleStr pat then ()
     else if prefixPatternOk pat then ()
-    else pushTypeError (effectParamMsg l
+    else pushTypeError "T-EFFECT-PARAM" (effectParamMsg l
       ("pattern \"" ++ pat ++ "\" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)"))
   PSet None =>
     -- Set-domain param is a brace-set literal `{a,b}` (parser-encoded); always well-formed.
     ()
   PProduct _ =>
     checkProductAxes l (decodeProductParam pat)
-  _ => pushTypeError (effectParamMsg l
+  _ => pushTypeError "T-EFFECT-PARAM" (effectParamMsg l
     "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)")
 
 -- WS-4: validate a decoded product's axes: a Host (Prefix) axis must pass
@@ -990,12 +991,14 @@ checkOneAxis l "Host" (PPrefix (Some pat)) =
   if prefixPatternOk pat then
     ()
   else
-    pushTypeError (effectParamMsg l ("Host pattern \"" ++ pat ++ "\" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)"))
+    pushTypeError "T-EFFECT-PARAM" (effectParamMsg l ("Host pattern \"" ++ pat ++ "\" must end in '*' or contain a '/' delimiter (a bare prefix would admit a sibling host/path)"))
 checkOneAxis _ "Method" _ = ()
 checkOneAxis l name _ =
-  pushTypeError (effectParamMsg
-    l
-    ("unknown product axis '" ++ name ++ "' (known axes: Host, Method)"))
+  pushTypeError
+    "T-EFFECT-PARAM"
+    (effectParamMsg
+      l
+      ("unknown product axis '" ++ name ++ "' (known axes: Host, Method)"))
 
 -- T2: oracle `MutLetRequiresBlock` message (lib/typecheck.ml:788-789) — must be
 -- byte-identical so the typecheck-error gate matches.
@@ -1978,7 +1981,7 @@ resolveArgStamp implTable keyTable name tagRef implRef am encl hint = match acti
 -- `!current_loc` into `Type_error (e, !current_loc)` at the RAISE site rather
 -- than reading the global last-entered loc afterwards.  `pushTypeError` captures
 -- `currentLoc.value` so locs don't drift as inference continues past the error.
-typeErrors : Ref (List (String, Option Loc))
+typeErrors : Ref (List (String, String, Option Loc))
 typeErrors = Ref []
 
 -- G1 (SOUNDNESS): a STICKY mirror of typeErrors that resetState does NOT clear.
@@ -2000,22 +2003,26 @@ export hadTypeErrors : Unit -> <Mut> Bool
 hadTypeErrors _ = typeErrorsSticky.value
 
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
-pushTypeError : String -> <Mut> Unit
-pushTypeError msg =
+pushTypeError : String -> String -> <Mut> Unit
+pushTypeError code msg =
   let _ = setRef typeErrorsSticky True
-  setRef typeErrors ((msg, currentLoc.value)::typeErrors.value)
+  setRef typeErrors ((code, msg, currentLoc.value)::typeErrors.value)
+
+-- The message field of an accumulated (code, msg, loc) type-error entry.
+teErrMsg : (String, String, Option Loc) -> String
+teErrMsg (_, m, _) = m
 
 -- #11 soundness: push an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
 -- (the original deferred obligation, once it grounds) and checkCallObligations (the
 -- call-site instantiation) — the oracle raises ONE error per missing impl, so dedup
 -- by message to keep native == oracle (one TYPE ERROR line).
-pushTypeErrorOnce : String -> <Mut> Unit
-pushTypeErrorOnce msg =
-  if anyList (e => fst e == msg) typeErrors.value then
+pushTypeErrorOnce : String -> String -> <Mut> Unit
+pushTypeErrorOnce code msg =
+  if anyList (e => teErrMsg e == msg) typeErrors.value then
     ()
   else
-    pushTypeError msg
+    pushTypeError code msg
 
 -- B.10.2c: push a deduped type error attributing it to the supplied loc rather
 -- than the live `currentLoc` (which is stale during the post-HM obligation
@@ -2023,12 +2030,14 @@ pushTypeErrorOnce msg =
 -- snapshotted into the obligation tuple at the record site.  `None` falls back
 -- to the live `currentLoc` (the old behaviour) so an obligation that never
 -- captured a span is unchanged.
-pushTypeErrorOnceAt : Option Loc -> String -> <Mut> Unit
-pushTypeErrorOnceAt loc msg =
-  if anyList (e => fst e == msg) typeErrors.value then ()
+pushTypeErrorOnceAt : String -> Option Loc -> String -> <Mut> Unit
+pushTypeErrorOnceAt code loc msg =
+  if anyList (e => teErrMsg e == msg) typeErrors.value then ()
   else
     let _ = setRef typeErrorsSticky True
-    setRef typeErrors ((msg, orElseLoc loc currentLoc.value)::typeErrors.value)
+    setRef
+      typeErrors
+      ((code, msg, orElseLoc loc currentLoc.value)::typeErrors.value)
 
 -- the first `Some` loc, else the second (so a captured record-site span wins,
 -- and a `None` capture still degrades to the live currentLoc).
@@ -2226,6 +2235,7 @@ occursAdjustUnbound id level cell id2 lvl2
   | id2 == id =
     let _ = setRef occursCheckFailed True
     pushTypeError
+      "T-INFINITE-TYPE"
       ("Cannot construct infinite type involving " ++ ppMono (TVar cell))
   | lvl2 > level = setRef cell (Unbound id2 level)
   | otherwise = ()
@@ -2267,10 +2277,10 @@ bindVar cell t =
 
 typeMismatch : Mono -> Mono -> <Mut> Unit
 typeMismatch a b = match currentMethodMismatch.value
-  Some mname => pushTypeError "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
+  Some mname => pushTypeError "T-METHOD-MISMATCH" "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
   None => match currentDoOrigin.value
     Some doLoc => typeMismatchInDo a b doLoc
-    None => pushTypeError "Type mismatch: \{ppMono a} vs \{ppMono b}"
+    None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
@@ -2279,13 +2289,16 @@ typeMismatchInDo : Mono -> Mono -> Loc -> <Mut> Unit
 typeMismatchInDo a b doLoc
   | monoIsApp (normalize a) != monoIsApp (normalize b) =
     recordDoMonadError doLoc
-  | otherwise = pushTypeError "Type mismatch: \{ppMono a} vs \{ppMono b}"
+  | otherwise =
+    pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
 
 recordDoMonadError : Loc -> <Mut> Unit
 recordDoMonadError doLoc =
   let _ = setRef currentDoOrigin None
   let _ = setRef typeErrorsSticky True
-  setRef typeErrors ((doRequiresMonadMsg, Some doLoc)::typeErrors.value)
+  setRef
+    typeErrors
+    (("T-DO-NOT-MONAD", doRequiresMonadMsg, Some doLoc)::typeErrors.value)
 
 monoIsApp : Mono -> Bool
 monoIsApp (TApp _ _) = True
@@ -2658,7 +2671,7 @@ aliasDfsVisitAll graph visitedRef onStackRef cyclicOut (k::ks) =
 emitCyclicAliasErrors : List String -> <Mut> Unit
 emitCyclicAliasErrors [] = ()
 emitCyclicAliasErrors (name::rest) =
-  let _ = pushTypeErrorOnce ("Recursive type alias `" ++ name ++ "` — type aliases cannot be recursive or cyclic")
+  let _ = pushTypeErrorOnce "T-RECURSIVE-ALIAS" ("Recursive type alias `" ++ name ++ "` — type aliases cannot be recursive or cyclic")
   emitCyclicAliasErrors rest
 
 -- Cycle-detection pre-pass over aliasTableRef.  MUST run immediately after
@@ -2768,7 +2781,7 @@ fromAstTypeE etbl tvs (TyCon n) = match lookupAssoc n aliasTableRef.value
   -- first-class type constructor (DESIGN §3/§9 fork 2), so it must be saturated.
   -- Reject with an arity error and keep the bare TCon so inference continues.
   Some (params, _) =>
-    let _ = pushTypeErrorOnce (aliasArityMsg n (listLen params) 0)
+    let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) 0)
     TCon n
   _ => TCon n
 fromAstTypeE etbl tvs (TyVar n) = fromOption (TCon n) (lookupAssoc n tvs)
@@ -2822,7 +2835,7 @@ fromAstTypeApp etbl tvs n args = match lookupAssoc n aliasTableRef.value
     fromAstTypeE etbl (zipL params (map (fromAstTypeE etbl tvs) args) ++ tvs) rhs
   -- Alias applied to the wrong arity: reject, keep the opaque fallback.
   Some (params, _) =>
-    let _ = pushTypeErrorOnce (aliasArityMsg n (listLen params) (listLen args))
+    let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) (listLen args))
     appFallback etbl tvs n args
   _ => match lookupAssoc n dataParamKindsRef.value
     Some kinds if listLen kinds == listLen args =>
@@ -2949,13 +2962,13 @@ inferPatRng : Lit -> Lit -> <Mut> (Mono, List (String, Scheme))
 inferPatRng (LInt _) (LInt _) = (TCon "Int", [])
 inferPatRng (LChar _) (LChar _) = (TCon "Char", [])
 inferPatRng lo hi =
-  let _ = pushTypeError "Type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
+  let _ = pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
   (TCon "Int", [])
 
 inferPatRec : TcEnv -> String -> List RecPatField -> <Mut> (Mono, List (String, Scheme))
 inferPatRec env name fields = match lookupRecordByName name
   None =>
-    let _ = pushTypeError (unknownRecordMsg name)
+    let _ = pushTypeError "T-UNKNOWN-RECORD" (unknownRecordMsg name)
     (freshVar (), bindRecPatFieldsFresh env fields)
   Some ri => inferPatRecWith env name ri fields
 -- bind the field pattern vars with fresh types (no field-type info) so the
@@ -2982,7 +2995,7 @@ inferRecPatFields env rname fieldTypes ((RecPatField fname mp)::rest) = inferRec
 inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> Option Pat -> <Mut> List (String, Scheme)
 inferRecPatField env rname fieldTypes fname mp = match lookupAssoc fname fieldTypes
   None =>
-    let _ = pushTypeError (unknownFieldMsg fname rname)
+    let _ = pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
     inferRecPatFieldWith env (freshVar ()) fname mp
   Some ft => inferRecPatFieldWith env ft fname mp
 -- bind the field's pattern vars against a fresh type so the arm body still
@@ -3007,7 +3020,7 @@ litType LUnit = TCon "Unit"
 inferPatCon : TcEnv -> String -> List Pat -> <Mut> (Mono, List (String, Scheme))
 inferPatCon env name pats = match lookupCtor env name
   None =>
-    let _ = pushTypeError (unknownCtorMsg name)
+    let _ = pushTypeError "T-UNKNOWN-CTOR" (unknownCtorMsg name)
     let pr = inferPats env pats
     (freshVar (), snd pr)
   Some scheme => inferPatConWith env scheme pats
@@ -3717,7 +3730,7 @@ unifyFieldAssigns env rname fieldTypes ((FieldAssign fn val)::rest) =
 
 unifyFieldAssign : TcEnv -> String -> List (String, Mono) -> String -> Expr -> <Mut> Unit
 unifyFieldAssign env rname fieldTypes fn val = match lookupAssoc fn fieldTypes
-  None => pushTypeError (unknownFieldMsg fn rname)
+  None => pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fn rname)
   Some ft => unify (infer env val) ft
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
@@ -3729,7 +3742,7 @@ checkMissingFields _ [] _ = ()
 checkMissingFields rname ((fname, _)::rest) supplied
   | fieldAssignContains fname supplied = checkMissingFields rname rest supplied
   | otherwise =
-    let _ = pushTypeError (missingFieldMsg fname rname)
+    let _ = pushTypeError "T-MISSING-FIELD" (missingFieldMsg fname rname)
     checkMissingFields rname rest supplied
 
 fieldAssignContains : String -> List FieldAssign -> Bool
@@ -3809,7 +3822,7 @@ resolveFieldRecord te fname = match headTyconMono te
     None => match lookupRecordByMangledHead r fname
       Some pair => Some pair
       None => if contains r abstractRecordTypesRef.value then
-        let _ = pushTypeError (abstractFieldMsg r fname)
+        let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
         None
       else resolveFieldByOwners te fname
   None => resolveFieldByOwners te fname
@@ -3848,7 +3861,7 @@ resolveFieldByOwners te fname = match fieldOwnerNames fname
 resolveFieldAmbiguous : Mono -> String -> List String -> <Mut> Option (String, RecordInfo)
 resolveFieldAmbiguous te fname owners = match normalize te
   TVar _ =>
-    let _ = pushTypeError (ambiguousFieldMsg fname owners)
+    let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
     None
   _ => pairRecordByName (headL owners)
 
@@ -3860,7 +3873,8 @@ headL [] = ""
 headL (x::_) = x
 
 pushUnknownField : String -> String -> <Mut> Unit
-pushUnknownField fname rname = pushTypeError (unknownFieldMsg fname rname)
+pushUnknownField fname rname =
+  pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
 
 unknownFieldFresh : String -> String -> <Mut> Mono
 unknownFieldFresh fname rname =
@@ -3903,12 +3917,12 @@ unboundVarMsg name = "Unbound variable: " ++ name
 -- in a valid state (the oracle accumulate-and-continue analog for these shapes).
 unknownRecordFresh : String -> <Mut> Mono
 unknownRecordFresh name =
-  let _ = pushTypeError (unknownRecordMsg name)
+  let _ = pushTypeError "T-UNKNOWN-RECORD" (unknownRecordMsg name)
   freshVar ()
 
 unboundVarFresh : String -> <Mut> Mono
 unboundVarFresh name =
-  let _ = pushTypeError (unboundVarMsg name)
+  let _ = pushTypeError "T-UNBOUND" (unboundVarMsg name)
   freshVar ()
 
 inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> <Mut> Mono
@@ -4481,7 +4495,7 @@ inferLet env isMut isFun pat e1 e2
     let nm = match pat
       PVar x => x
       _ => "_"
-    let _ = pushTypeError (mutLetRequiresBlockMsg nm)
+    let _ = pushTypeError "T-MUT-LET-BLOCK" (mutLetRequiresBlockMsg nm)
     inferLetSimple env pat e1 e2
   | isFun = match pat
     PVar x => inferRecLet env x e1 e2
@@ -4612,7 +4626,7 @@ checkAnnotTooGeneral : Ty -> List Mono -> <Mut> Unit
 checkAnnotTooGeneral ty resolved =
   let ids = sigTvarIds resolved
   if listLen ids < listLen resolved || hasDupI ids then
-    pushTypeError (annotTooGeneralMsg ty)
+    pushTypeError "T-TYPE-TOO-GENERAL" (annotTooGeneralMsg ty)
   else
     ()
 
@@ -4910,7 +4924,7 @@ checkLetBinds ((LetBind name clauses)::rest) =
 checkLetBind : String -> List FunClause -> <Mut> Unit
 checkLetBind name clauses
   | allList clauseIsNonFunction clauses =
-    pushTypeError (letRecNonFunctionMsg name)
+    pushTypeError "T-NONREC-VALUE-LET" (letRecNonFunctionMsg name)
   | otherwise = ()
 
 clauseIsNonFunction : FunClause -> Bool
@@ -6383,7 +6397,7 @@ cohImplIface (CohImpl i _ _ _ _) = i
 -- conflict message names the later-declared impl as the first head, byte-identical.
 checkCoherence : List Decl -> <Mut> Unit
 checkCoherence userDecls = match cohFirstConflict (reverseL (cohCollectImpls userDecls))
-  Some msg => pushTypeError msg
+  Some msg => pushTypeError "T-CONFLICTING-IMPL" msg
   None => ()
 
 -- ── D1 WS-1a: superinterface-existence gate ────────────────────────────────
@@ -6401,7 +6415,9 @@ checkCoherence userDecls = match cohFirstConflict (reverseL (cohCollectImpls use
 -- interface-supers lookup AND super-impl existence.
 checkSuperImpls : List Decl -> List Decl -> <Mut> Unit
 checkSuperImpls userDecls allDecls =
-  foreachUnit pushTypeError (flatMap (superImplMsgsOf allDecls) userDecls)
+  foreachUnit
+    (pushTypeError "T-MISSING-SUPER-IMPL")
+    (flatMap (superImplMsgsOf allDecls) userDecls)
 
 foreachUnit : (a -> <Mut> Unit) -> List a -> <Mut> Unit
 foreachUnit _ [] = ()
@@ -6429,7 +6445,9 @@ foreachUnit f (x::xs) =
 
 checkPhantomMethods : List Decl -> <Mut> Unit
 checkPhantomMethods decls =
-  foreachUnit pushTypeError (flatMap phantomMethodMsgs decls)
+  foreachUnit
+    (pushTypeError "T-PHANTOM-METHOD")
+    (flatMap phantomMethodMsgs decls)
 
 phantomMethodMsgs : Decl -> List String
 phantomMethodMsgs (DAttrib _ d) = phantomMethodMsgs d
@@ -6470,7 +6488,7 @@ checkInterfaceCycles allDecls =
 checkOneIfaceCycle : List Decl -> Ref (List String) -> String -> <Mut> Unit
 checkOneIfaceCycle allDecls done ifaceName =
   if not (contains ifaceName done.value) then
-    foreachUnit pushTypeError (ifaceDfsCycle allDecls done [ifaceName] ifaceName)
+    foreachUnit (pushTypeError "T-CYCLIC-SUPERINTERFACE") (ifaceDfsCycle allDecls done [ifaceName] ifaceName)
   else
     ()
 
@@ -7114,7 +7132,7 @@ routeUndeterminedTop prog implTable iface
 
 reportAmbiguousImpl : String -> <Mut> Route
 reportAmbiguousImpl iface =
-  let _ = pushTypeError (ambiguousImplMsg iface)
+  let _ = pushTypeError "T-AMBIGUOUS-INSTANCE" (ambiguousImplMsg iface)
   RNone
 
 -- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
@@ -7169,7 +7187,7 @@ resolveImplHints prog ((iface, hintName, args, loc)::rest) =
 resolveOneImplHint : List Decl -> String -> String -> List Mono -> Option Loc -> <Mut> Unit
 resolveOneImplHint prog iface hintName args loc
   | contains hintName (implNamesForIface prog iface) = ()
-  | otherwise = pushTypeErrorOnceAt loc (unknownImplNameMsg iface hintName args)
+  | otherwise = pushTypeErrorOnceAt "T-NO-IMPL-NAMED" loc (unknownImplNameMsg iface hintName args)
 
 -- the names of every NAMED impl of [iface] declared in [prog].
 implNamesForIface : List Decl -> String -> List String
@@ -8128,13 +8146,13 @@ checkOneCallObligation : List (String, List Ty) -> String -> Mono -> Option Loc 
 checkOneCallObligation heads iface occ loc =
   let args = [normalize occ]
   if iface == "Num" && anyList numUnimplementableHead args then
-    pushTypeErrorOnceAt loc (noImplFoundMsg iface args)
+    pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args)
   else if not (allConcreteHeads args) then
     checkUndeterminedObligation heads iface occ loc
   else if implMatches heads iface args then
     ()
   else
-    pushTypeErrorOnceAt loc (noImplFoundMsg iface args)
+    pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args)
 
 -- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
 -- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).
@@ -8151,7 +8169,7 @@ checkUndeterminedObligation heads iface occ loc
   | iface == "Num" = ()
   | isSome (activeDictVarOf occ) = ()
   | implCountForIface heads iface >= 2 =
-    pushTypeErrorOnceAt loc (ambiguousImplMsg iface)
+    pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface)
   | otherwise = ()
 
 -- the number of DISTINCT-head impls of [iface] in [heads] (one (iface, tys) per
@@ -8296,7 +8314,7 @@ checkOneImplObligation heads iface typarams mty occ loc =
   -- without a spurious `No impl of Num for Int`.  The unimplementable-head reject
   -- (function/unbound `m`) stays even no-prelude — it is a structural unification
   -- error, not a missing-impl one.
-  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt loc (noImplFoundMsg iface args) else if iface == "Eq" && anyList eqUnimplementableHead args then pushTypeErrorOnceAt loc (noImplFoundMsg iface args) else if iface == "Ord" && anyList ordUnimplementableHead args then pushTypeErrorOnceAt loc (noImplFoundMsg iface args) else if iface == "Num" && not (numIfaceRegistered ()) then () else if isEmptyL args then () else if not (allConcreteHeads args) then () else if implMatches heads iface args then () else pushTypeErrorOnceAt loc (noImplFoundMsg iface args)
+  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Eq" && anyList eqUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Ord" && anyList ordUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Num" && not (numIfaceRegistered ()) then () else if isEmptyL args then () else if not (allConcreteHeads args) then () else if implMatches heads iface args then () else pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args)
 
 -- a mono no `Ord` impl can ever match: a function type (`<` on functions).  Like
 -- Eq (and unlike Num) an unbound spine head DEFERS — a downstream `Ord a =>`
@@ -9326,7 +9344,7 @@ checkEffectEscape sigs m effs = match lookupAssoc m sigs
   None => ()
   Some ty => match atomsEscape effs (declaredEffects ty)
     [] => ()
-    extras => pushTypeError (effectEscapeMsg m (declaredEffects ty) extras)
+    extras => pushTypeError "T-EFFECT-LEAK" (effectEscapeMsg m (declaredEffects ty) extras)
 
 effectEscapeMsg : String -> List Atom -> List Atom -> String
 effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{renderAtoms declared}> but also performs <\{renderAtoms extras}>"
@@ -9382,7 +9400,10 @@ checkSigsTooGeneral ((m, ty, tvs)::rest) =
 checkSigTooGeneral : String -> Ty -> List (String, Mono) -> <Mut> Unit
 checkSigTooGeneral name ty tvs =
   let tvarIds = sigTvarIds (map snd tvs)
-  if hasDupI tvarIds then pushTypeError (sigTooGeneralMsg name ty) else ()
+  if hasDupI tvarIds then
+    pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+  else
+    ()
 
 -- collect the TVar ids of those entries in tvs that normalize to a TVar
 -- (concrete-grounded entries are skipped — only same-TVar collapses are an error)
@@ -9595,7 +9616,7 @@ reportUncovered m sigTvMaps declared ((iface, id)::rest) =
   let _ = if containsPair (iface, id) declared then
     ()
   else
-    pushTypeError (missingConstraintMsg m iface (varNameForId sigTvMaps m id))
+    pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintMsg m iface (varNameForId sigTvMaps m id))
   reportUncovered m sigTvMaps declared rest
 
 containsPair : (String, Int) -> List (String, Int) -> Bool
@@ -9762,7 +9783,7 @@ checkToLines prog =
   let errs = reverseL typeErrors.value
   match errs
     [] => joinNl (schemeLines schemes)
-    _ => joinNl (typeErrorLines (map fst errs))
+    _ => joinNl (typeErrorLines (map teErrMsg errs))
 -- coherence over the WHOLE prog: this path (typecheck_main single-arg) is
 -- prelude-free, so every impl is a user impl (mirrors check_program_no_prelude).
 
@@ -9782,7 +9803,7 @@ checkToLinesWithRuntime runtimeDecls prog =
   let warns = reverseL matchWarnings.value
   match errs
     [] => joinNl (schemeLines schemes ++ warns)
-    _ => joinNl (typeErrorLines (map fst errs))
+    _ => joinNl (typeErrorLines (map teErrMsg errs))
 -- B5: seed the exhaustiveness oracle and clear any stale match warnings so the
 -- composed check.mdk path surfaces non-exhaustive-match warnings, mirroring the
 -- OCaml oracle's `medaka check` output.
@@ -9829,7 +9850,7 @@ checkMatchToLines runtimeDecls prog =
 -- error strings — each paired with its captured `Option Loc` (B.10.2b) — plus
 -- the warning strings (each paired with its captured `Option Loc`, S4), so
 -- diagnostics.mdk can wrap them in structured Diag values carrying the span.
-export checkProgramDiags : List Decl -> List Decl -> <Mut> (List (String, Option Loc), List (String, Option Loc))
+export checkProgramDiags : List Decl -> List Decl -> <Mut> (List (String, String, Option Loc), List (String, Option Loc))
 checkProgramDiags runtimeDecls prog =
   let _ = setRef implInferEnabled False
   let _ = setRef matchWarnings []
@@ -10348,10 +10369,11 @@ checkModules runtimeDecls coreDecls modules =
 -- exactly THIS module's contribution; matchWarnings is cleared here explicitly
 -- (resetState does NOT clear it).  Returns (own value schemes, errs, warns) so the
 -- driver can thread accV/accData exactly as checkModulesGo does.
-export checkModuleFullDiags : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
+export checkModuleFullDiags : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> <Mut> (List (String, Scheme), List (String, String, Option Loc), List (String, Option Loc))
 checkModuleFullDiags seedVars accData accAll prog =
   let _ = setRef implInferEnabled False
   let _ = setRef matchWarnings []
+  let _ = setRef matchWarningLocs []
   let _ = setRef matchOracle (buildOracle (accData ++ prog))
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
@@ -10366,7 +10388,11 @@ checkModuleFullDiags seedVars accData accAll prog =
   let _ = checkInterfaceCycles (accAll ++ accData ++ prog)
   let _ = checkPhantomMethods prog
   let _ = checkSuperImpls prog (accAll ++ accData ++ prog)
-  (schemes, reverseL typeErrors.value, reverseL matchWarnings.value)
+  (
+    schemes,
+    reverseL typeErrors.value,
+    zipL (reverseL matchWarnings.value) (reverseL matchWarningLocs.value),
+  )
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
 -- module via accData, plus this module's own prog), NOT just `prog`.  The
 -- single-file path (checkProgramDiags:5826) sees a flat prelude+user dump, so
@@ -10392,14 +10418,14 @@ checkModuleFullDiags seedVars accData accAll prog =
 -- checkModulesGo — NOT a flat union of every earlier module's publics, which let
 -- a same-named function from a non-imported module win by load order (e.g.
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
-checkModulesDiagsGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
+checkModulesDiagsGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, String, Option Loc), List (String, Option Loc)))
 checkModulesDiagsGo _ _ _ _ [] = []
 checkModulesDiagsGo baseSeed depEnv accData accAll ((mid, prog)::rest) =
   let (schemes, errs, warns) = checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accAll prog
   let pubV = pickSchemes (publicValNames prog) schemes ++ reexportSeed prog depEnv
   (mid, (errs, warns)) :: checkModulesDiagsGo baseSeed ((mid, pubV)::depEnv) (accData ++ publicDataDecls prog) (accAll ++ prog) rest
 
-export checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, Option Loc), List String))
+export checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> <Mut> List (String, (List (String, String, Option Loc), List (String, Option Loc)))
 checkModulesDiags runtimeDecls coreDecls modules =
   let runtimeSeed = externSchemes runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
@@ -10409,11 +10435,11 @@ checkModulesDiags runtimeDecls coreDecls modules =
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
   match globalCoherenceConflict modules
-    Some msg => attachEntryDiag (msg, None) perMod
+    Some msg => attachEntryDiag ("T-CONFLICTING-IMPL", msg, None) perMod
     None => perMod
 
 -- prepend an error to the LAST module's (errs, warns) in a per-module diag list.
-attachEntryDiag : (String, Option Loc) -> List (String, (List (String, Option Loc), List String)) -> List (String, (List (String, Option Loc), List String))
+attachEntryDiag : (String, String, Option Loc) -> List (String, (List (String, String, Option Loc), List (String, Option Loc))) -> List (String, (List (String, String, Option Loc), List (String, Option Loc)))
 attachEntryDiag _ [] = []
 attachEntryDiag e [(mid, (errs, warns))] = [(mid, (e::errs, warns))]
 attachEntryDiag e (m::rest) = m :: attachEntryDiag e rest
@@ -10435,7 +10461,7 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- order.  No-import (1-module) files still route through runCheck (full prelude+
 -- user dump, byte-identical); this path is reached ONLY when the load returned
 -- more than one module.
-checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
+checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, String, Option Loc), List (String, Option Loc))
 checkModulesEntryFull runtimeDecls coreDecls modules =
   let runtimeSeed = externSchemes runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
@@ -10445,7 +10471,7 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
   -- excluded — it is checked separately and a user impl may override a prelude one).
   -- Prepend any conflict (dependency-first, ahead of the entry's own errors).
   match globalCoherenceConflict modules
-    Some msg => (schemes, (msg, None) :: errs, warns)
+    Some msg => (schemes, ("T-CONFLICTING-IMPL", msg, None) :: errs, warns)
     None => (schemes, errs, warns)
 
 -- thread the public accumulators exactly as checkModulesGo.  The returned
@@ -10463,7 +10489,7 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
 -- baseSeed (runtime + core) is always in scope; depEnv keys earlier modules' public
 -- schemes by module id for importSeed to pick from.  accData stays a flat union
 -- (data/type collisions aren't the issue here; mirrors checkModulesGo).
-checkModulesEntryFullGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, Option Loc), List String)
+checkModulesEntryFullGo : List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> <Mut> (List (String, Scheme), List (String, String, Option Loc), List (String, Option Loc))
 checkModulesEntryFullGo _ _ _ _ [] = ([], [], [])
 checkModulesEntryFullGo baseSeed depEnv accData accAll [(_, prog)] =
   checkModuleFullDiags (baseSeed ++ importSeed prog depEnv) accData accAll prog
@@ -10481,8 +10507,8 @@ export checkModulesEntryReport : List Decl -> List Decl -> List (String, List De
 checkModulesEntryReport runtimeDecls coreDecls modules =
   let (schemes, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls modules
   match errs
-    [] => joinNl (schemeLines schemes ++ warns)
-    _ => joinNl (typeErrorLines (map fst errs))
+    [] => joinNl (schemeLines schemes ++ map fst warns)
+    _ => joinNl (typeErrorLines (map teErrMsg errs))
 
 -- exit-code predicate analog of checkHasErrors: any type error in ANY module of
 -- the resolved graph (entry or imported — see checkModulesEntryFullGo).

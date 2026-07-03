@@ -211,7 +211,7 @@ runPipeline combined =
     [] =>
       let (tcErrs, _) = checkProgramDiags runtimeDecls (preludeDecls ++ combined)
       match tcErrs
-        e::_ => (map fst tcErrs, [], [])
+        e::_ => (map ((_, m, _) => m) tcErrs, [], [])
         [] =>
           let allSchemes = checkProgramSchemes (preludeDecls ++ combined)
           let bindings = evalOneRootEnv preludeDecls ("__repl__", combined)
