@@ -223,3 +223,126 @@ error-quality defects — `ambiguous_return` (Num-defaulting) and `missing_insta
 (a signature missing its `Eq a =>` constraint going unrejected) is a genuine
 latent soundness gap and belongs on a **typechecker-soundness** backlog, not the
 error-quality workstream.
+
+---
+
+## Re-grade (post-fixes, base d2442e6b)
+
+Re-scored against the same §3 rubric, same 0/1/2 anchors, same scoring
+conventions (so the delta is meaningful). The current `.out` goldens are the
+source of truth; the six highest-impact flips were re-verified on a freshly
+built binary. **Corpus size grew from 55 → 60** (five new `typecheck/` fixtures
+this session: `missing_constraint_twohop`, `eq_on_function`, `eq_undesugared_adt`,
+`lt_on_function`, `lt_undesugared_adt`).
+
+### Headline
+
+- **Overall average: 541 / 60 = 9.02 / 14** — **up from 8.00 (+1.02).**
+- **F (Actionable-fix): 0.15 → 0.33** (sum 8 → 20). Still the weakest axis; the
+  did-you-mean + missing-constraint + missing-case machinery moved it, but most
+  of the corpus still has no `fix`.
+- **A (Agent-parseable): 0.58 → 0.65** (sum 32 → 39) — moved *only* because five
+  new located `check` diagnostics landed at A=1 and two silent-accepts flipped to
+  A=1. **No fixture reaches A=2**: no `code`/`kind`/`fix` exists yet (Tier 4
+  un-started), so A stays capped at 1 for errors and 0 for warnings/eval/lex/build.
+- **17 fixtures improved** (12 pre-existing + all 5 new scored above the 8.00
+  baseline floor), for an aggregate **+45** on the pre-existing set and **+56**
+  from the new fixtures. **No regressions.**
+
+### Per-dimension averages (60 fixtures)
+
+| dim | baseline sum | baseline avg | new sum | new avg /2 | Δ |
+|---|---|---|---|---|---|
+| **F** Actionable-fix | 8 | 0.15 | 20 | **0.33** | +0.18 |
+| **A** Agent-parseable | 32 | 0.58 | 39 | **0.65** | +0.07 |
+| L Located | 58 | 1.05 | 74 | 1.23 | +0.18 |
+| C Correct | 74 | 1.35 | 96 | 1.60 | +0.25 |
+| R Root-cause | 71 | 1.29 | 93 | 1.55 | +0.26 |
+| X Cascade-free | 98 | 1.78 | 107 | 1.78 | +0.00 |
+| J Jargon-free | 99 | 1.80 | 112 | 1.87 | +0.07 |
+
+C and R moved most (the silent/false/wrong-error holes became correct located
+diagnostics). F moved from a near-zero base but remains the single weakest axis.
+
+### Per-stage averages
+
+| stage | fixtures | baseline avg | new avg | Δ |
+|---|---|---|---|---|
+| effect | 3 | 11.00 | 11.00 | — |
+| resolve | 8 | 8.88 | **10.13** | +1.25 |
+| typecheck | 24 (was 19) | 8.37 | **9.63** | +1.26 |
+| parse | 7 | 8.29 | 8.29 | — |
+| build | 3 | 5.67 | **8.00** | +2.33 |
+| eval | 6 | 6.67 | **8.00** | +1.33 |
+| exhaust | 5 | 7.20 | **8.00** | +0.80 |
+| lex | 4 | 6.50 | 6.50 | — |
+
+Every baseline low point (build 5.67, eval 6.67, exhaust 7.20) rose to exactly
+8.00; lex (6.50) is the only stage untouched this session and is now the weakest.
+
+### Per-fixture delta table (changed fixtures only)
+
+Fixtures not listed here are unchanged from §1 and keep their baseline score.
+
+| fixture | stage | old→new | dims that moved | why |
+|---|---|---|---|---|
+| missing_constraint | typecheck | 4 → **13** | L 0→2, C 0→2, R 0→2, F 0→2, A 0→1 | was a silent exit-0 accept; now a located diagnostic that **names the exact fix** ("add 'Eq a =>'"), else_let_block-tier |
+| missing_instance | typecheck | 4 → **11** | L 0→2, C 0→2, R 0→2, A 0→1 | silent accept → located `No impl of Eq for Color` |
+| type_error_at_build | build | 3 → **10** | L 0→2, C 0→2, R 0→2, J 1→2 | `build` now surfaces the real located type error instead of `emitter failed / No such file` (A stays 0 — build emits no JSON, per convention) |
+| import_unknown_name | resolve | 2 → **8** | C 0→2, R 0→2, J 0→2 | silent exit 1 → real message (`module 'list' has no exported name 'flatten'`); still `<unknown location>` so L stays 0 |
+| explicit_panic | eval | 4 → **8** | C 0→2, R 0→2 | false `unbound identifier: panic` → the user's message (`user not found`); still no location (L 0) |
+| let_else_fail | eval | 4 → **8** | C 0→2, R 0→2 | same panic fix via let-else (`empty list`) |
+| typo_println | resolve | 11 → **13** | F 0→2 | now `— did you mean 'println'?` |
+| typo_local_var | resolve | 11 → **13** | F 0→2 | now `— did you mean 'count'?` |
+| nonexhaustive_option | exhaust | 8 → **9** | F 0→1 | now names the missing case `'None'` |
+| nonexhaustive_bool | exhaust | 8 → **9** | F 0→1 | names `'False'` |
+| nonexhaustive_list | exhaust | 8 → **9** | F 0→1 | names `'[]'` |
+| nonexhaustive_custom | exhaust | 8 → **9** | F 0→1 | names `'Triangle _'` |
+
+New fixtures (no baseline; scored fresh):
+
+| fixture | stage | L | C | R | F | J | X | A | total | note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| missing_constraint_twohop | typecheck | 2 | 2 | 2 | 2 | 2 | 1 | 1 | **12** | names the fix ("add 'Greet a =>'"); a second `No impl of Greet` follows at the call site (X=1) |
+| eq_on_function | typecheck | 2 | 2 | 2 | 0 | 2 | 2 | 1 | **11** | clean located `No impl of Eq for (Int -> Int)` |
+| eq_undesugared_adt | typecheck | 2 | 2 | 2 | 0 | 2 | 2 | 1 | **11** | located `No impl of Eq for Color` |
+| lt_on_function | typecheck | 2 | 2 | 2 | 0 | 2 | 2 | 1 | **11** | located `No impl of Ord for (Int -> Int)` |
+| lt_undesugared_adt | typecheck | 2 | 2 | 2 | 0 | 2 | 2 | 1 | **11** | located `No impl of Ord for Color` |
+
+**Scoring notes / honesty checks:**
+- The four `nonexhaustive_*` fixtures are scored **F=1**, not 2: naming the
+  missing constructor is actionable but there is still **no source location**
+  (L stays 0 — warning carries the dummy `{0,0}` range → A stays 0) and no
+  literal arm text, matching the `record_missing_field` F=1 anchor. A generous
+  reading could argue F=2; F=1 is the conservative, baseline-consistent call.
+- **`main_takes_unit` did NOT improve** (stays **3**). The B2 build fix only
+  covers the type-error path (`type_error_at_build`); the Unit-`main` shape still
+  prints `emitter failed / No such file`. B2 landed *partially*.
+- **`unbound_constructor` did NOT improve** (stays **10**). M1's did-you-mean
+  machinery covers constructors, but `Yellow` has no near-match in scope, so no
+  suggestion appears and the wording is still `Unbound variable:` (not
+  "constructor"). The constructor-vs-variable wording theme is untouched.
+- `unbound_variable` / `forgot_import` are unchanged (11 each): their names have
+  no in-scope near-match, so no suggestion fires — correct behavior.
+- `redundant_arm` unchanged (**4**): M2 added missing-case naming but **not**
+  redundant-arm detection; it still emits no diagnostic (exit 0).
+
+### Remaining worst-offenders (lowest-scoring now) → not-yet-done themes
+
+| fixture | total | stage | theme (not yet done) |
+|---|---|---|---|
+| bad_escape | 2 | lex | Missing location on lexer errors + internal-state leak (`lexing: empty token`); needs loc + escape-naming |
+| main_takes_unit | 3 | build | B2 partial — Unit-`main` still hits `emitter failed`; needs the build typecheck-guard extended to this shape (or the polymorphic-Unit-main gate) |
+| redundant_arm | 4 | exhaust | Redundant-arm warning still unimplemented (M2 covered only non-exhaustive naming) |
+| ambiguous_return | 4 | typecheck | By-design Num-defaulting accept — **not an error-quality defect** (belongs on the soundness backlog, not this workstream) |
+| wrong_arg_type_in_map | 5 | typecheck | Tier-3 leaked raw tyvars (`a b`) + a three-diagnostic ambiguity storm (X) |
+
+(Next band at 6–7: `lambda_missing_arrow` 6 — parse mis-blames unbound `x`
+instead of the missing `=>`; `missing_comma_list`/`too_many_args`/
+`apply_non_function`/`unbound_type_in_sig` at 7 — Tier-3 Num-mis-framing /
+leaked-tyvar / no-location themes.)
+
+**Axis ceiling:** **A remains capped at ≤ 1 corpus-wide** — no fixture carries a
+`code`/`kind`/`fix`, and warnings/eval/lex/build still emit no JSON diagnostic.
+A will not reach 2 anywhere until the Tier-4 error-codes + JSON `help`/`fix`
+machinery lands in `compiler/driver/diagnostics.mdk`.
