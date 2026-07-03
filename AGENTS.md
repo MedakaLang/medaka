@@ -162,14 +162,17 @@ that often violate style rules on purpose):
   `medaka fmt`-clean. **Run `medaka fmt --write <changed.mdk>` and re-`git add` before committing
   any `.mdk` edit.** `medaka fmt` is safe (0 corruptions / 0 non-idempotent repo-wide) and
   idempotent, so `fmt --write` on a clean file is a no-op.
-- **Lint** — **the whole tree is at 0 `medaka lint` findings, and the hook is a RATCHET: any NEW
-  warning fails the commit.** All four rules are gated. Three per-file rules
-  (`rule-hand-rolled-derivable`, `rule-stdlib-reimpl`, `rule-match-on-param`) run
-  `medaka lint --only=<rules> --deny=<rules>` on each staged `.mdk`. The cross-file rule
-  `rule-duplicate-body` compares a body against OTHER files, so it can't be checked per-staged-file
-  — the hook runs **one whole-project scan over all source roots** (`medaka lint compiler stdlib
-  sqlite`) when any `.mdk` is staged, so cross-ROOT duplicates are caught too. **So: `medaka lint`
-  must stay clean — run it on files you touch.**
+- **Lint** — **the whole tree is at 0 `medaka lint` findings, and the hook is a MAX RATCHET: ALL
+  ~20 rules are gated, so any NEW finding of any rule (style OR correctness) fails the commit.** The
+  19 per-file rules (`GATED_LINT_RULES` in `.githooks/pre-commit`: match-on-param, lambda-section,
+  if-max-min, match-to-map, not-eq, missing-signature, dead-code, concat-to-interp, … — the full
+  `allRules` set) run `medaka lint --only=<rules> --deny=<rules>` on each staged `.mdk`. The
+  cross-file rule `rule-duplicate-body` compares a body against OTHER files, so it can't be checked
+  per-staged-file — the hook runs **one whole-project scan over all source roots** (`medaka lint
+  compiler stdlib sqlite`) when any `.mdk` is staged, so cross-ROOT duplicates are caught too.
+  **So: `medaka lint` must stay clean on ALL rules — run it on files you touch and fix or
+  `-- lint-disable` any finding before committing.** (A gated rule that proves too noisy can be
+  dropped from `GATED_LINT_RULES`; it then still warns under plain `medaka lint`.)
   A genuine intentional exception is silenced inline with an ESLint-style directive comment (these
   work for per-file AND cross-file rules): `-- lint-disable-next-line <rule>` (also
   `-- lint-disable-line <rule>` trailing, and `-- lint-disable-file <rule>` for the whole file;
