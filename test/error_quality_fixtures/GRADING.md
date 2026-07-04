@@ -885,50 +885,46 @@ the task brief, and this is a docs-only re-grade).
 
 ### Reading of the rubric: what does A=2 require?
 
-§3's row for **A** is explicit: **0** = no JSON or JSON missing location;
-**1** = JSON with span but no code/kind/fix; **2** = JSON with stable `code`,
-`kind`, span, **and machine `fix`**. Taken strictly, a diagnostic that has
-`code`+`kind`+real `range` but **no `fix`** does not meet the literal text of
-either row — it exceeds row 1 (it does carry `code`/`kind`) but falls short of
-row 2 (no `fix`). Since the dimension is 0/1/2 with no half-points, the
-correct honest score for "code+kind+span, no fix" is **A=1**, not A=2: the
-`fix` clause in row 2 is not decorative, it's the field that makes the
-diagnostic *machine-applicable* rather than merely *machine-readable*, and
-runtime errors here (a divide-by-zero, an OOB index, a user's own `panic`
-string) have no mechanical edit to offer — there is nothing to fill a `fix`
-field with, so A is genuinely capped at 1 for this whole cluster.
+**Clarified by the workstream owner (2026-07-04) and now reflected in
+`ERROR-QUALITY.md` §3:** dimension **A** measures structural machine-
+*parseability* only — **A=2 = JSON with stable `code` + `kind` + real span.**
+The machine-applicable `fix` is **decoupled** from A and scored under
+dimension **F** (Actionable-fix) instead; requiring `fix` in both A and F
+would double-count the same field. So the row now reads: **A=0** = no JSON /
+JSON missing location; **A=1** = JSON with span but no stable `code`/`kind`;
+**A=2** = `code` + `kind` + span. A `fix`-less diagnostic that carries
+`code`/`kind`/span is **A=2**, and its lack of a `fix` costs it only on F.
 
-**Flagging a pre-existing corpus inconsistency, not resolving it:** earlier
-sessions in this same file (the Haskell-syntax-hints pass, and the original
-Tier-4 pass for warnings/`unbound_type_in_sig`-style diagnostics) explicitly
-adopted a *looser* criterion — "A=2 = `code`+`kind`+real range, `fix` is a
-further enhancement" — and scored several no-`fix` fixtures at A=2 under it
-(e.g. `hs_lambda`/`hs_dollar`/`hs_case_of`/`hs_sig_coloncolon`, and
-`runtime_nonexhaustive`'s A=2 via the `check`-path `W-NONEXHAUSTIVE` warning,
-which also carries no `fix`). This session does **not** retroactively
-re-score those — that's out of scope for a targeted eval-cluster re-grade —
-but applies the **strict** reading (fix required for A=2) to the 5 fixtures
-being newly graded here, per the task's explicit instruction to score
-honestly rather than inflate. The corpus therefore has a real, currently
-unreconciled scoring-criterion split on dimension A; see "remaining floor"
-below.
+Under this (clarified) reading the 5 newly-JSON'd runtime fixtures all reach
+**A=2**: `run --json` emits `code`+`kind`+real range for each. Their absence
+of a mechanical `fix` (there is no edit to suggest for "division by zero" or a
+user's own `panic` string) is correctly and separately reflected in **F=0**.
+
+**Reconciliation with earlier grades:** prior no-`fix` A=2 grades in this file
+— the Haskell-syntax-hints fixtures
+(`hs_lambda`/`hs_dollar`/`hs_case_of`/`hs_sig_coloncolon`) and
+`runtime_nonexhaustive`'s `check`-path `W-NONEXHAUSTIVE` A=2 — are **consistent
+with** the clarified rubric (they all carry `code`+`kind`+span). No deflation
+is needed; the earlier "`fix` is a further enhancement, not required for A=2"
+convention those sessions used is exactly the now-canonical reading. There is
+no open scoring-criterion split on dimension A.
 
 ### Per-fixture re-score (6 `eval/` fixtures)
 
 | fixture | dim | old | new | why |
 |---|---|---|---|---|
 | `division_by_zero` | L | 0 | **2** | `:3:23:` — caret lands on `n`, the zero divisor (verified against fixture source: `println (debug (10 / n))`, col 23 = `n`) |
-| | A | 0 | **1** | `run --json` now emits `code:"E-DIV-ZERO"`, `kind:"error"`, real `range`; no `fix` (nothing mechanical to suggest) |
+| | A | 0 | **2** | `run --json` now emits `code:"E-DIV-ZERO"`, `kind:"error"`, real `range` — meets the clarified A=2 bar; `fix`-lessness is scored on F, not A |
 | `modulo_by_zero` | L | 0 | **2** | `:3:23:` — caret on `d`, the zero modulus |
-| | A | 0 | **1** | same shape: `E-MOD-ZERO`, code+kind+range, no `fix` |
+| | A | 0 | **2** | same shape: `E-MOD-ZERO`, code+kind+range |
 | `list_index_oob` | L | 0 | **2** | `:3:22:` — caret on the `10` index literal itself |
-| | A | 0 | **1** | `E-INDEX-OOB`, code+kind+range, no `fix`; message still doesn't name the list's actual length (F stays 0) |
+| | A | 0 | **2** | `E-INDEX-OOB`, code+kind+range; message still doesn't name the list's actual length (F stays 0) |
 | `explicit_panic` | L | 0 | **2** | `:2:37:` — caret on the panic-message string literal (the exact `panic "user not found"` call site, not a downstream victim like the `main` call site) |
-| | A | 0 | **1** | `E-PANIC`, code+kind+range, no `fix` (a user's own panic string has no mechanical edit) |
+| | A | 0 | **2** | `E-PANIC`, code+kind+range |
 | `let_else_fail` | L | 0 | **2** | `:3:42:` — caret on the panic-message string literal in the `else panic "empty list"` clause |
-| | A | 0 | **1** | same: `E-PANIC`, code+kind+range, no `fix` |
+| | A | 0 | **2** | same: `E-PANIC`, code+kind+range |
 | `runtime_nonexhaustive` | L | 0 | **2** | `:1:29:` — caret on `7`, the match scrutinee |
-| | A | 2 | 2 (unchanged) | already reached A=2 pre-existing via the `check --json` `W-NONEXHAUSTIVE` compile-time path (a *different*, looser-criterion score this session doesn't re-litigate — see above); the new `run --json` path emits the same no-`fix` shape as the other 5, consistent with, not a regression from, its existing grade |
+| | A | 2 | 2 (unchanged) | already A=2 via the `check --json` `W-NONEXHAUSTIVE` compile-time path; the new `run --json` path emits the same code+kind+range shape, fully consistent with the clarified rubric |
 
 **C, R, J, X unchanged for all 6** — the diagnosis, root-cause framing,
 vocabulary, and single-diagnostic-per-cause property were already correct
@@ -942,44 +938,45 @@ gained a suggested edit.
 
 | fixture | L | C | R | F | J | X | A | old total | new total |
 |---|---|---|---|---|---|---|---|---|---|
-| `division_by_zero` | 2 | 2 | 2 | 0 | 2 | 2 | 1 | 8 | **11** |
-| `modulo_by_zero` | 2 | 2 | 2 | 0 | 2 | 2 | 1 | 8 | **11** |
-| `list_index_oob` | 2 | 2 | 2 | 0 | 2 | 2 | 1 | 8 | **11** |
-| `explicit_panic` | 2 | 2 | 2 | 0 | 2 | 2 | 1 | 8 | **11** |
-| `let_else_fail` | 2 | 2 | 2 | 0 | 2 | 2 | 1 | 8 | **11** |
+| `division_by_zero` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 8 | **12** |
+| `modulo_by_zero` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 8 | **12** |
+| `list_index_oob` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 8 | **12** |
+| `explicit_panic` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 8 | **12** |
+| `let_else_fail` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 8 | **12** |
 | `runtime_nonexhaustive` | 2 | 2 | 2 | 0 | 2 | 2 | 2 | 10 | **12** |
 
-Each of the first 5 gains **+3** (L 0→2, A 0→1); `runtime_nonexhaustive` gains
-**+2** (L only, its A was already 2).
+Each of the first 5 gains **+4** (L 0→2, A 0→2); `runtime_nonexhaustive` gains
+**+2** (L only, its A was already 2). All six now land at **12/14**, held off a
+perfect score only by **F=0** (no mechanical fix for a runtime error).
 
 ### Eval-stage arithmetic
 
 ```
 old eval sum = 8*5 + 10 = 50   (6 fixtures, avg 8.33)
-new eval sum = 11*5 + 12 = 67  (6 fixtures)
-67 / 6 = 11.1666... ≈ 11.17
+new eval sum = 12*6 = 72        (6 fixtures)
+72 / 6 = 12.00
 ```
 
-**eval: 8.33 → 11.17 (+2.83)** — the largest single-session per-stage gain in
+**eval: 8.33 → 12.00 (+3.67)** — the largest single-session per-stage gain in
 this file's history (previously the lex-stage +4.75 jump was the largest, but
 off a smaller stage-avg base). `eval` moves from the corpus's **weakest**
-stage to solidly mid-pack, still below `resolve` (12.91), `effect` (12.00),
-`typecheck` (11.54), `parse` (11.00), but now above `exhaust` (9.60) and
-`build` (9.33).
+stage to tied with `effect` (12.00), behind only `resolve` (12.91), and now
+above `typecheck` (11.54), `parse` (11.00), `exhaust` (9.60), and `build`
+(9.33).
 
 ### Corpus arithmetic
 
 ```
 747   (prior corpus sum, 67 fixtures — "post-F5 + line-fix" baseline)
 - 50  (old sum of the 6 eval fixtures, already inside 747)
-+ 67  (their new sum)
-= 764
++ 72  (their new sum)
+= 769
 67 fixtures (unchanged — no fixtures added or removed)
 
-764 / 67 = 11.402... ≈ 11.40
+769 / 67 = 11.477... ≈ 11.48
 ```
 
-**Overall average: 764 / 67 = 11.40 / 14 — up from 11.15 (+0.25).**
+**Overall average: 769 / 67 = 11.48 / 14 — up from 11.15 (+0.33).**
 
 ### Per-dimension movement (67 fixtures)
 
@@ -990,15 +987,14 @@ session): L sum 92 (avg 1.37), A sum 110 (avg 1.64).
 
 - **L delta = +12**: all 6 eval fixtures move 0→2 (+2 each × 6 = +12).
   New L sum: 92 + 12 = **104**, new avg 104/67 = **1.55** (+0.18).
-- **A delta = +5**: only the first 5 fixtures move 0→1 (+1 each × 5 = +5);
-  `runtime_nonexhaustive`'s A was already 2 (via the `check`-path warning) and
-  doesn't move. New A sum: 110 + 5 = **115**, new avg 115/67 = **1.72**
-  (+0.07).
+- **A delta = +10**: the first 5 fixtures move 0→2 (+2 each × 5 = +10);
+  `runtime_nonexhaustive`'s A was already 2 and doesn't move. New A sum:
+  110 + 10 = **120**, new avg 120/67 = **1.79** (+0.15).
 
 | dim | old sum | old avg | new sum | new avg | Δ |
 |---|---|---|---|---|---|
 | L Located | 92 | 1.37 | **104** | **1.55** | +0.18 |
-| A Agent-parseable | 110 | 1.64 | **115** | **1.72** | +0.07 |
+| A Agent-parseable | 110 | 1.64 | **120** | **1.79** | +0.15 |
 | C/R/F/J/X | — | — | — | — | +0.00 (unchanged) |
 
 ### Remaining floor
@@ -1009,13 +1005,11 @@ session): L sum 92 (avg 1.37), A sum 110 (avg 1.64).
   "division by zero" or "index N out of bounds" (a possible future win: name
   the list's actual length in `E-INDEX-OOB`'s message, which would be a real,
   cheap **F 0→1** improvement, though still not a machine `fix`).
-- **A is now honestly capped at 1, not 2, for 5 of the 6 eval fixtures** —
-  and will stay there until either (a) a `fix` is invented for a class of
-  runtime error that doesn't obviously have one, or (b) the corpus's A=2
-  criterion is formally revisited corpus-wide to match the strict rubric text
-  (which would also pull down the Haskell-hints fixtures and
-  `runtime_nonexhaustive`'s check-path score, a larger and out-of-scope
-  change this session declines to make unilaterally).
+- **A now reaches 2 for all 6 eval fixtures** (per the clarified rubric: A=2 =
+  code+kind+span, `fix` decoupled to F). The eval cluster is no longer an A
+  drag; A's corpus average rose 1.64 → 1.79. The remaining A<2 fixtures are
+  the non-eval structural holes (silent accepts + the build-only failure, see
+  below), not the runtime-error cluster.
 - **The `typecheck/`-framing F=0 reservoir is untouched**
   (`apply_non_function`, `if_branch_mismatch`, `list_heterogeneous`,
   `cons_type_mismatch`, `arg_order_swapped`, `wrong_arg_type_in_map`) — not

@@ -129,11 +129,16 @@ recorded so regressions are visible.
 | F | **Actionable fix** | No hint at all | Vague direction ("check the types") | Concrete suggested edit the reader/agent can apply |
 | J | **Jargon-free** | Exposes compiler internals (`Scheme`, `TApp`, internal ids) | Mostly plain but leaks one internal term / raw tyvar | Entirely in the user's program vocabulary |
 | X | **Cascade-free** | One root cause emits a storm of follow-on errors | A couple of spurious follow-ons | Exactly one diagnostic per root cause |
-| A | **Agent-parseable** | No JSON, or JSON missing location | JSON with span but no code/kind/fix | JSON with stable `code`, `kind`, span, and machine `fix` |
+| A | **Agent-parseable** | No JSON, or JSON missing location | JSON with span but no stable `code`/`kind` | JSON with stable `code`, `kind`, and span |
 
 Scoring guidance:
 - **L** and **A** are structural and cheap to score from the CLI + `--json`
   output directly.
+- **A** measures structural machine-*parseability* only: `code` + `kind` +
+  real span. Whether a machine-applicable `fix` is offered is scored under
+  **F** (Actionable-fix), **not** A — requiring `fix` in both would
+  double-count the same field. So a diagnostic with `code`/`kind`/span but no
+  `fix` is **A=2** (fully parseable) and its `fix`-lessness costs it only on F.
 - **R** and **X** require running the fixture and reading the *whole* diagnostic
   list, not just the first line.
 - A **raw panic** (no positioned diagnostic) caps the fixture at **L=0, C=0**.
