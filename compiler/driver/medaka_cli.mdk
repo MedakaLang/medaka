@@ -209,7 +209,7 @@ runCheckCmd argv =
               exit 1
             Ok tsrc => match parseResult tsrc
               Err e =>
-                let loc = "\{target}:\{intToString (parseErrorLine e + 1)}:\{intToString (parseErrorCol e)}"
+                let loc = "\{target}:\{intToString (parseErrorLine e)}:\{intToString (parseErrorCol e)}"
                 let _ = ePutStrLn "\{loc}: \{parseErrorMessage e}"
                 exit 1
               Ok _ => match loadProgram target roots
@@ -317,7 +317,7 @@ runCheckJsonCmd allowInternal rsrc csrc target roots =
   match parseResult src
     Err e =>
       -- Parse error: emit a single located diagnostic, matching LSP format.
-      let ln = parseErrorLine e
+      let ln = parseErrorLine e - 1
       let col = parseErrorCol e
       let r = cjRange ln col ln (col + 1)
       let pcode = parseErrCode (parseErrorMessage e)
