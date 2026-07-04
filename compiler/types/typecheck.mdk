@@ -4727,6 +4727,44 @@ notAFunctionHint None = " — this is a value, not a function; remove the argume
 overAppliedMsg : String -> Int -> Int -> String
 overAppliedMsg name takes applied = "'\{name}' takes \{intToString takes} argument(s) but is applied to \{intToString applied}."
 
+-- Batch B #6 reframe (2026-07-04): a container-consuming HOF whose next declared
+-- parameter is a higher-kinded container `f a` (an unresolved tyvar head applied
+-- to an element, i.e. `TApp (TVar …) elem`) is being handed a SCALAR argument —
+-- a bare arity-0 type (`String`/`Int`/…) that has no element slot for `f` to
+-- bind.  Left to the generic `unify (f a) String` sink it leaks a raw
+-- tyvar-application `Type mismatch: a b vs String`.  This detector recognises the
+-- shape UPSTREAM (in inferApp, where the callee name + arg loc are still in
+-- scope) so the diagnostic can be reframed as container-vs-scalar.  SOUND: a
+-- `TApp _ _ ~ TCon n` unification can only ever FAIL — a genuine container arg is
+-- itself a `TApp` (`List a`, `Maybe a`, …) and would UNIFY the element, never
+-- reaching a mismatch; the reframe therefore never hijacks a legitimate
+-- higher-kinded mismatch.  Returns the scalar type's name when it fires.
+containerParamScalarArg : Mono -> Mono -> <Mut> Option String
+containerParamScalarArg ft xt = match normalize ft
+  TFun dom _ _ => match normalize dom
+    TApp _ _ => match monoHeadCon dom
+      None => match normalize xt
+        TCon n => Some n
+        _ => None
+      Some _ => None
+    _ => None
+  _ => None
+
+containerArgMsg : Option String -> String -> String
+containerArgMsg fn argTy =
+  let who = match fn
+    Some n => "'\{n}'"
+    None => "This function"
+  "\{who} expects a container (like List or Array) here, but got \{argTy}\{containerArgHint argTy}"
+
+-- Actionable-fix hint appended to `containerArgMsg`.  Special-cases `String`
+-- (the most common scalar handed to `map`): a String's characters are reachable
+-- via `string.toChars`, so name that conversion rather than a generic one.
+containerArgHint : String -> String
+containerArgHint "String" = " — pass a List or Array; to work over a string's characters, convert it with `string.toChars` first."
+containerArgHint argTy =
+  " — pass a List or Array, or convert the \{argTy} to one first."
+
 inferApp : List (String, Expr) -> Expr -> Mono -> Mono -> <Mut> Mono
 inferApp lets appExpr ft xt =
   let r = freshVar ()
@@ -4739,16 +4777,30 @@ inferApp lets appExpr ft xt =
   -- function (`TFun`) or an as-yet-unresolved var (`TVar`) is unaffected.
   match monoHeadCon ft
     Some _ => inferAppNotFunction appExpr ft r
-    None =>
-      let eff = openRow ()
-      let _ = unify ft (TFun xt eff r)
-      -- v2 Stage 2b: if f resolves to a leaf extern carrying an inferred-hole
-      -- Prefix atom (`<Net _>`), fill it by α of the application spine's FIRST
-      -- argument before the row propagates / is checked against any bound.  `lets`
-      -- seeds α with the enclosing body's let scope (EFFECTS WS-2).
-      let eff2 = fillHolesInRow lets eff (spineFirstArg appExpr)
-      let _ = performEffect curEffect eff2
-      r
+    None => match containerParamScalarArg ft xt
+      Some scalarTy =>
+        -- Batch B #6: container-consuming HOF handed a scalar.  Reframe here
+        -- (callee name + arg loc in scope) instead of letting the generic sink
+        -- leak `a b vs String`.  Skip the unify (it would push the leaked
+        -- mismatch as a SECOND diagnostic) and poison `r` to suppress cascade.
+        let hint = containerArgHint scalarTy
+        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value (containerArgMsg (appSpineName appExpr) scalarTy) hint None
+        -- Poison the container tyvar + element vars (in ft) exactly as the generic
+        -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
+        -- obligation sees a poisoned var and suppresses its own cascade.
+        let _ = poisonMismatchVars ft xt
+        let _ = poisonMismatchVars r r
+        r
+      None =>
+        let eff = openRow ()
+        let _ = unify ft (TFun xt eff r)
+        -- v2 Stage 2b: if f resolves to a leaf extern carrying an inferred-hole
+        -- Prefix atom (`<Net _>`), fill it by α of the application spine's FIRST
+        -- argument before the row propagates / is checked against any bound.  `lets`
+        -- seeds α with the enclosing body's let scope (EFFECTS WS-2).
+        let eff2 = fillHolesInRow lets eff (spineFirstArg appExpr)
+        let _ = performEffect curEffect eff2
+        r
 
 -- Chunk C: the applied head is a ground non-function.  If the spine over-applies
 -- a named function (callee name known AND at least one arg was consumed before
