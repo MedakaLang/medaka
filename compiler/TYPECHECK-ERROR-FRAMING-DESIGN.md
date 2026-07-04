@@ -135,3 +135,39 @@ re-capturable. Error-path only → no re-mint.
 - `ambiguous_return` — by-design Num-defaulting (emits no diagnostic). Untouched.
 - `record_missing_field`/`record_wrong_field` *primary* messages already good.
 - Removing the `numUnimplementableHead` rejects (soundness).
+
+## AS-BUILT (all landed on main; fixpoint C3a/C3b YES throughout, ZERO seed re-mint)
+
+- **A — `f1705a7f`.** Poisoned-var set (`poisonedVars : Ref (List Int)`,
+  `poisonMismatchVars`/`monoUnboundIds`) marked at `typeMismatch` + a poisoned
+  field-error fresh var; consulted in `checkUndeterminedObligation` to skip the
+  secondary `ambiguous <C> a` on an already-errored free var. Killed the
+  `Debug`/`Mappable` cascades on `too_many_args`, `apply_non_function`,
+  `record_wrong_field`, `wrong_arg_type_in_map`. No over-suppression (genuine
+  standalone `ambiguous_impl` still errors).
+- **B — DROPPED (`bdff283f`).** See the Chunk-B note above: the target's
+  secondary is a genuine independent error, not a cascade.
+- **C — `29d1644a`.** `monoHeadCon` guard in `inferApp` before the arrow-unify →
+  `T-NOT-A-FUNCTION` (added to `DIAGNOSTIC-CODES-DESIGN.md`). Context-aware:
+  over-applied named callee → `'inc' takes 1 argument(s) but is applied to 2.`;
+  else `This expression has type Int, which is not a function, …`. Reuses A's
+  poison. HOF programs unaffected (guard returns None for `TFun`/unresolved `TVar`).
+- **D — `00ca0bfa`.** Literal-provenance Num reframe at `checkOneImplObligation`.
+  The hard part was provenance: `numlitVarLocs` (literal (var,loc)) vs
+  `numlitOpLocs` (operator operands, tainted *before* the unify grounds them via
+  `normalize`-to-root, so `x+1`/`1+x`/`1+"x"` are all recognized operator-sourced
+  regardless of unify direction) → reframe fires on `litLocs \ opLocs`. Context
+  tags threaded from `inferIf`/`inferListLit`/`consOp`: `if branches have
+  different types`, `list elements have different types`, `cons (::) type
+  mismatch: head is Int but the list holds T`, else `Type mismatch: Int literal
+  vs T` (distinct so `arg_order_swapped` keeps BOTH genuine errors). Code reused:
+  `T-TYPE-MISMATCH`. **`int_vs_string`/`value_restriction`/`mut_generalization`
+  UNCHANGED** (operator-sourced → correctly not reframed) — the provenance gate
+  is narrow, so golden churn was tiny (4 `.out` + `capture_goldens.sh` stale-
+  header fix + `check_cli_modules` wording-agnostic assertion). Refreshed the
+  stale "OCaml TRUSTED" header in `capture_goldens.sh`.
+- **Pre-existing (NOT this work):** `diff_compiler_lex_files` (13/13 stale lex
+  goldens), `diff_compiler_lsp_b4` (1 completion golden), `diff_compiler_test`
+  (doctest summary drift) fail on main independent of these chunks — verified
+  0 reframe-string hits + fixpoint-identical + D's diff touches none of their
+  goldens. A stale-golden recapture pass is owed (separate tech-debt).
