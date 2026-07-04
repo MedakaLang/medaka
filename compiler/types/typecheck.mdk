@@ -4539,6 +4539,178 @@ recordImplObligation x mono
 -- USE, and recordLocalBind captures the right hover type.  Purely additive: the
 -- final `unify ft (TFun xt …)` in inferApp imposes the same equality regardless,
 -- so the solution is unchanged — we only make it available earlier.
+-- ── Batch B #5: swapped-argument detection (2-arg transposition) ───────────
+-- A 2-arg application whose in-order arg/param types clash but whose
+-- TRANSPOSITION type-checks is almost always a caller who wrote the arguments
+-- in the wrong order (`greet 3 "Alice"` for `greet : String -> Int -> …`).
+-- Detect that shape UPSTREAM in inferAppExpr — where the callee name + BOTH
+-- args are still in scope — and emit ONE actionable diagnostic naming the
+-- swapped call, instead of letting the two per-arg `inferApp` mismatches leak
+-- (`Int vs String` + `Int literal vs String`) with no hint that a swap fixes it.
+--
+-- SOUNDNESS (a wrong "swap" suggestion is worse than the status quo): fire ONLY
+-- when the transposition GENUINELY type-checks.  Two guards make the structural
+-- test exact — never a wildcard-var approximation:
+--   (1) both callee params must be fully CONCRETE (no free tyvars).  A
+--       polymorphic param accepts any argument, so a "swap" past it is
+--       meaningless AND its fit can't be decided structurally.
+--   (2) both arguments must be LITERALS.  A literal's type is known exactly
+--       from its syntax (WITHOUT re-inference side effects), so `argLitFits`
+--       decides the transposition's type-fit structurally.  A numeric literal
+--       (`ENumLit`/`LInt`) fits any `Int`/`Float` param (it is `Num`-poly); a
+--       float literal fits only `Float`; other literals fit their exact type.
+-- Under both guards, `(not in-order) && swapped` holds only for a real
+-- transposition, so the suggested swap always type-checks.  We further require
+-- the two params to DIFFER (same-type params ⇒ order is irrelevant, no swap).
+-- Anything outside this scope (>2 args, non-literal args, polymorphic params,
+-- same-type params) falls through to the normal per-arg path unchanged.
+
+unlocExpr : Expr -> Expr
+unlocExpr (ELoc _ e) = unlocExpr e
+unlocExpr (EDoOrigin _ e) = unlocExpr e
+unlocExpr e = e
+
+exprLoc : Expr -> Option Loc
+exprLoc (ELoc l _) = Some l
+exprLoc (EDoOrigin l _) = Some l
+exprLoc _ = None
+
+-- True iff [m] has NO unbound tyvar anywhere (a fully concrete type).
+monoConcrete : Mono -> <Mut> Bool
+monoConcrete m = match normalize m
+  TVar _ => False
+  TCon _ => True
+  TApp a b => monoConcrete a && monoConcrete b
+  TFun a _ b => monoConcrete a && monoConcrete b
+  TEff _ => True
+
+-- structural equality of two concrete monos (both guaranteed var-free here)
+monoSameShape : Mono -> Mono -> <Mut> Bool
+monoSameShape a b = match normalize a
+  TCon x => match normalize b
+    TCon y => x == y
+    _ => False
+  TApp a1 b1 => match normalize b
+    TApp a2 b2 => monoSameShape a1 a2 && monoSameShape b1 b2
+    _ => False
+  TFun a1 _ b1 => match normalize b
+    TFun a2 _ b2 => monoSameShape a1 a2 && monoSameShape b1 b2
+    _ => False
+  _ => False
+
+monoIsNumeric : Mono -> <Mut> Bool
+monoIsNumeric m = match normalize m
+  TCon "Int" => True
+  TCon "Float" => True
+  _ => False
+
+monoIsFloat : Mono -> <Mut> Bool
+monoIsFloat m = match normalize m
+  TCon "Float" => True
+  _ => False
+
+isLitArg : Expr -> Bool
+isLitArg e = match unlocExpr e
+  ENumLit _ _ _ => True
+  ELit _ => True
+  _ => False
+
+-- does the LITERAL argument [e] fit the CONCRETE param type [pt]?
+argLitFits : Expr -> Mono -> <Mut> Bool
+argLitFits e pt = match unlocExpr e
+  ENumLit _ _ _ => monoIsNumeric pt
+  ELit (LInt _) => monoIsNumeric pt
+  ELit (LFloat _) => monoIsFloat pt
+  ELit l => monoSameShape (litType l) pt
+  _ => False
+
+-- render a literal argument back to its source text (for the swapped-call hint)
+renderLitArg : Expr -> Option String
+renderLitArg e = match unlocExpr e
+  ENumLit n _ _ => Some (intToString n)
+  ELit (LInt n) => Some (intToString n)
+  ELit (LFloat f) => Some (floatToString f)
+  ELit (LString s) => Some ("\"" ++ s ++ "\"")
+  ELit (LChar c) => Some ("'" ++ c ++ "'")
+  ELit (LBool b) => Some (if b then "True" else "False")
+  ELit LUnit => Some "()"
+  _ => None
+
+-- the two param types of a function of arity EXACTLY 2 (result NOT an arrow).
+-- Requiring exact arity 2 keeps the detector off a >2-arg call's inner 2-arg
+-- SUB-spine: currying makes `g 3 "Alice"` a real inferAppExpr node inside
+-- `g 3 "Alice" True`, and firing there would suggest `g "Alice" 3`, silently
+-- dropping the third argument.  A 3-param `g` has a `Bool -> String` result
+-- after two params, so it bails here; only a genuinely 2-param callee matches.
+funParams2 : Mono -> <Mut> Option (Mono, Mono)
+funParams2 m = match normalize m
+  TFun p1 _ rest => match normalize rest
+    TFun p2 _ result => match normalize result
+      TFun _ _ _ => None
+      _ => Some (p1, p2)
+    _ => None
+  _ => None
+
+-- Machine fix: replace the span from arg1's start to arg2's end with the
+-- swapped source text.  Requires both args to carry real source spans.
+swapArgFix : Expr -> Expr -> String -> Option (Loc, String)
+swapArgFix a1 a2 repl = match (exprLoc a1, exprLoc a2)
+  (Some (Loc f sl sc _ _), Some (Loc _ _ _ el ec)) =>
+    Some (Loc f sl sc el ec, repl)
+  _ => None
+
+-- If [f] is exactly `<callee> arg1` (a 2-arg call's function part — the callee
+-- applied to just its first argument, NOT itself a nested application), resolve
+-- the callee to its NAME and its two concrete param types.  `None` for any
+-- other shape (nested spine, unbound callee, non-arity-2 type).
+twoArgCallee : TcEnv -> Expr -> <Mut> Option (String, Expr, Mono, Mono)
+twoArgCallee env f = match unlocExpr f
+  EApp g a1 => match unlocExpr g
+    EApp _ _ => None                           -- 3+ args: out of scope
+    gHead =>
+      do
+        name <- appSpineName gHead
+        scheme <- lookupVar env name
+        (p1, p2) <- funParams2 (instantiate scheme)
+        Some (name, a1, p1, p2)
+  _ => None
+
+-- Detect a 2-argument transposition on `f x` (`f` = callee applied to arg1, `x`
+-- = arg2).  Returns `Some resultVar` (poisoned, so no cascade) when it fires and
+-- has emitted the diagnostic; `None` to fall through to the normal path.
+detectSwappedArgs2 : TcEnv -> Expr -> Expr -> <Mut> Option Mono
+detectSwappedArgs2 env f a2
+  | not (isLitArg a2) = None
+  | otherwise = match twoArgCallee env f
+    None => None
+    Some (name, a1, p1, p2) =>
+      if not (isLitArg a1) then
+        None
+      else
+        trySwapReport name a1 a2 p1 p2
+
+trySwapReport : String -> Expr -> Expr -> Mono -> Mono -> <Mut> Option Mono
+trySwapReport name a1 a2 p1 p2
+  | not (monoConcrete p1 && monoConcrete p2) = None
+  | monoSameShape p1 p2 = None                 -- same-type params: order is moot
+  | otherwise =
+    let inOrder = argLitFits a1 p1 && argLitFits a2 p2
+    let swapped = argLitFits a2 p1 && argLitFits a1 p2
+    if (not inOrder) && swapped then emitSwapDiag name a1 a2 else None
+
+emitSwapDiag : String -> Expr -> Expr -> <Mut> Option Mono
+emitSwapDiag name a1 a2 = match (renderLitArg a1, renderLitArg a2)
+  (Some s1, Some s2) =>
+    let swappedCall = "\{name} \{s2} \{s1}"
+    let msg = "arguments to '\{name}' look swapped — try '\{swappedCall}'."
+    let help = "swap the arguments: \{swappedCall}"
+    let fix = swapArgFix a1 a2 "\{s2} \{s1}"
+    let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" (orElseLoc (exprLoc a1) currentLoc.value) msg help fix
+    let v = freshVar ()
+    let _ = poisonMismatchVars v v
+    Some v
+  _ => None
+
 inferAppExpr : TcEnv -> Expr -> Expr -> <Mut> Mono
 inferAppExpr env f x = match hintArgName x
   Some hintName =>
@@ -4561,7 +4733,9 @@ inferAppExpr env f x = match hintArgName x
       inferApp (envAlphaLets env) (EApp f x) ft xt
     None => match shadowStandaloneHead env f
       Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
-      None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
+      None => match detectSwappedArgs2 env f x
+        Some swapResult => swapResult
+        None => inferApp (envAlphaLets env) (EApp f x) (infer env f) (infer env x)
 
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
