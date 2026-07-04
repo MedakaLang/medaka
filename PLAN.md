@@ -8,6 +8,26 @@ write-up to the archive and leave only what remains. For how to build/test and
 the codebase's non-obvious gotchas, see [`AGENTS.md`](./AGENTS.md). The detailed,
 living record of the self-host port is [`compiler/README.md`](./compiler/README.md).
 
+## Current status (2026-07-04) — NEW NORTH STAR: 0.1.0 public preview release
+
+**The current-phase north star is a public 0.1.0 preview** — the point where Medaka
+goes in front of strangers. The compiler is mature; the distance is almost entirely
+**outward-facing surface** (distribution, a front door, human docs, release hygiene).
+Owning doc: **[`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md)**; the meatiest
+technical workstream (native binary distribution) has its own design +
+blocker-map doc **[`DISTRIBUTION-DESIGN.md`](./DISTRIBUTION-DESIGN.md)**. See the new
+[North star (current phase) — 0.1.0 public preview](#north-star-current-phase--010-public-preview)
+section and the 0.1.0 rows in the [Workstreams table](#workstreams--where-each-roadmap-lives).
+
+Testable statement: *a stranger goes from a link to a working, formatted,
+type-checked, running Medaka program in under ten minutes, and every hole they hit
+is one we already told them about.* Structure = **funnel** (playground front door →
+downloadable native binary for real work) with a **floor** (playground polish, human
+quickstart, stdlib docs, public repo, LICENSE, KNOWN-GAPS, `--version`) and a
+**ceiling** (native `medaka build` binaries for mac/linux — Val wants it in; the one
+unknown is the Linux deep-recursion stack, spiked first per `DISTRIBUTION-DESIGN.md`
+§D0). The prior north star (self-hosting → LLVM) is ✅ COMPLETE.
+
 ## Current status (2026-07-04) — error-message quality workstream: runtime diagnostics + typecheck actionable-fix cluster + mechanical cleanup sweep DONE, corpus 11.15→11.78/14 (`d9589c39`)
 
 **Mechanical cleanup sweep — DONE (`7b085897` + `edbf6a6f` + `7900b7fc`; re-grade `d9589c39`; all error-path → fixpoint YES, ZERO re-mint).** Three small actionable-fix items, scoped first (a read-only pass that DISPROVED the framing on two of three — the parse F5 carveouts already graded 14/14, no `/=` fixture existed):
@@ -550,6 +570,8 @@ enumerated in the [Open issues index](#open-issues-index) below.**
 
 | Workstream | Owning roadmap | Status | Near-term items |
 |------------|----------------|--------|-----------------|
+| **⭐ 0.1.0 public preview (CURRENT NORTH STAR)** | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) | 🔴 **NEW — kicking off** | Funnel: playground front door (built, needs polish) → native download (ceiling). **Floor:** playground polish · Val-authored quickstart · stdlib docs · public repo · LICENSE · KNOWN-GAPS · `--version`. **Ceiling:** native `medaka build` binaries mac/linux + release CI + `.vsix`. **First task:** Linux build spike (`DISTRIBUTION-DESIGN.md` §D0 — the one unknown). Side quest: fs/net in interpreter. |
+| **Native binary distribution (0.1.0 §W1)** | [`DISTRIBUTION-DESIGN.md`](./DISTRIBUTION-DESIGN.md) | 🔴 **design done, not started** | Dependency audit done (codegen/runtime already portable; work is packaging seam). Blockers: exe-relative stdlib discovery (no exe-path extern), Mach-O-only stack-size link flag, two-binary `MEDAKA_EMITTER` ritual, libgc system dep. Decision: lean on package manager (Homebrew `depends_on bdw-gc`), not a static binary. **D0 Linux stack spike gates whether native is in 0.1.0.** |
 | **Self-hosting (Stage 1)** | [`compiler/README.md`](./compiler/README.md) §Roadmap | ✅ complete | perf-lever tail only (all closed) |
 | **Native backend (Stage 2)** | [`compiler/STAGE2-DESIGN.md`](./compiler/STAGE2-DESIGN.md) + [`compiler/BOOTSTRAP.md`](./compiler/BOOTSTRAP.md) | ✅ **complete** | Core IR + bytecode VM (§2.1–2.2) done (bytecode VM removed 2026-06-10 — off canonical path); LLVM backend promoted from spike to a **native self-hosting compiler** — all 7 stages native==interpreter (141 fixtures), self-compile **fixpoint reached** (C1 emitter-IR reproduction · C2 native compiles the real lexer · C3 `IR1==IR2`). Runtime dict-passing dispatch (D3a/D3b done); Boehm GC; CTGuard lowered. Residual: `max`/`min` over primitive `Ord` (dead code). |
 | **Make LLVM canonical (Stage 3)** | **this file** → [Stage 3](#stage-3--make-the-llvm-backend-canonical-retire-ocaml) | 🏁 **COMPLETE** | Native canonical (2026-06-12 flip); TYPECHECK-AUDIT (16 findings) + all 4 dispatch gaps (#54/#55/#50/#21) + perf bar-4 + Phase-C CLI capstone + gate re-rooting + the driver collapse all ✅ DONE. **OCaml compiler (`lib/`+`bin/`) REMOVED 2026-06-26** (tag `oracle-frozen`). |
@@ -564,7 +586,50 @@ enumerated in the [Open issues index](#open-issues-index) below.**
 
 ---
 
-## North star — self-hosting, then LLVM
+## North star (current phase) — 0.1.0 public preview
+
+The goal that orders the current phase: **ship a very preliminary public 0.1.0
+preview** — the point where Medaka goes in front of strangers (HN/Reddit-scale).
+The compiler is mature; the remaining distance is **outward-facing surface**.
+Owning doc: **[`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md)** (hub for all
+release workstreams); native-distribution technical design + blocker map:
+**[`DISTRIBUTION-DESIGN.md`](./DISTRIBUTION-DESIGN.md)**.
+
+**Testable statement:** a stranger goes from a link to a **working, formatted,
+type-checked, running** Medaka program in **under ten minutes**, and **every hole
+they hit is one we already told them about.**
+
+**Shape — a distribution funnel** (the two front-runners were resolved *together*,
+not either/or):
+1. **Playground = front door** — zero-install, sandboxed (WasmGC in-browser),
+   pure + console IO. Already built (`playground/`, Stages 0–4 done); needs polish.
+   Ships regardless — the risk buffer if the download slips.
+2. **Native binary = "do something real"** — downloadable `medaka` + `build` for
+   macOS + Linux with full fs/net IO. **In-scope for 0.1.0** (Val's call). The
+   playground *cannot* do practical IO (browser sandbox), so this is not optional
+   if the preview is to read as a real language.
+
+**Floor (blocks 0.1.0)** vs **ceiling (ship if tractable)** — full breakdown in
+`RELEASE-0.1.0-PLAN.md`:
+- **Floor:** playground polished into a front door · Val-authored quickstart/overview ·
+  stdlib reference docs · curated public repo · **LICENSE** (leaning MIT / dual
+  MIT-OR-Apache-2.0, final pick pending) · `KNOWN-GAPS.md` · `medaka --version`.
+- **Ceiling:** native `medaka build` binaries (mac/linux) + release CI matrix +
+  editor extension (`.vsix`). The one genuine unknown gating the native binary is
+  the **Linux deep-recursion stack** (macOS uses a 512MB stack via a flag GNU ld
+  rejects) — spiked first (`DISTRIBUTION-DESIGN.md` §D0) before any mechanical work.
+- **Freeze:** error-message quality is at a defensible preview bar (~11.9/14) —
+  ongoing-not-blocking, except the one cheap located-nonexhaustive-warning win.
+- **Side quest (not a blocker):** implement fs/net in the tree-walk interpreter
+  (`eval.mdk`, `add-primitive`) — makes `medaka run` practical without clang;
+  strict improvement, opportunistic.
+
+**Open framing question (does not block starting):** confirm the audience bar —
+"strangers who'll try to break it" (assumed) vs "a dozen personally-invited people."
+
+---
+
+## North star (prior, ✅ COMPLETE) — self-hosting, then LLVM
 
 The long-term goal that orders everything below: **rewrite the Medaka compiler
 in Medaka, then compile it to native code via LLVM.** Chosen path: **bootstrap on
@@ -646,6 +711,14 @@ the linked location holds live detail. (Keep this table in sync when an item ope
 
 | Open item | Area | Tracked in |
 |-----------|------|-----------|
+| **0.1.0 — native binary distribution (mac/linux `medaka build`)** | 0.1.0 release | [`DISTRIBUTION-DESIGN.md`](./DISTRIBUTION-DESIGN.md) (D0 Linux spike first) |
+| **0.1.0 — playground polished into a front door** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W2; [`PLAYGROUND-DESIGN.md`](./PLAYGROUND-DESIGN.md) |
+| **0.1.0 — Val-authored quickstart / language overview** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W3 (serialization bottleneck — start early) |
+| **0.1.0 — stdlib reference docs (agent-generated via `medaka doc`)** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W4 |
+| **0.1.0 — curated public repo (downstream export) + LICENSE + KNOWN-GAPS** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W5/W6/W7 |
+| **0.1.0 — release hygiene (`--version`, release CI matrix, crash→report)** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W8 |
+| **0.1.0 — editor extension published (`.vsix`)** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §W9 |
+| **0.1.0 — fs/net in the tree-walk interpreter (side quest, non-blocking)** | 0.1.0 release | [`RELEASE-0.1.0-PLAN.md`](./RELEASE-0.1.0-PLAN.md) §4 |
 | Confidence-gated `lib/` (OCaml) removal — the soak tail | ✅ DONE 2026-06-26 | see top status entry |
 | Manifest emission (`[package.capabilities]` from a verified entry's effect row) | Capability-effects | this file → [wedge sequence](#capability-effects-wedge--near-term-sequence); [`CAPABILITY-EFFECTS.md`](./CAPABILITY-EFFECTS.md) §5a |
 | WS-3b builtin-extern label flip (`getEnv`/`runCommand`, plus FileRead/FileWrite path refinement) | Capability-effects | ✅ DONE 2026-07-01 (`2d010b2`) — see [`EFFECTS-CONFORMANCE-ROADMAP.md`](./EFFECTS-CONFORMANCE-ROADMAP.md) |
