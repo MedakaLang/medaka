@@ -619,3 +619,146 @@ an artifact cascading from the first error. `record_missing_field`'s score is
 among the 23-of-24 typecheck fixtures whose A moved 1→2 in the Tier-4 pass,
 same as the 8 fixtures graded above; this session leaves it untouched since
 Chunk B was not implemented).
+
+---
+
+## Re-grade (post-F-axis-did-you-mean + F3-locations, base 9d6398ad)
+
+**Baseline correction, checked first.** The task brief for this session named
+`## Re-grade (post-Tier-4, base 761516e6)` (615/60 = 10.25) as "the last
+re-grade." That is stale by one session: `## Re-grade (post-Tier-3-framing,
+base 00ca0bfa)` (commit `b421e264`, confirmed an ancestor of `HEAD` via
+`git merge-base --is-ancestor`) already advanced the corpus to **636/60 =
+10.60** by re-framing 8 `typecheck/` fixtures (cascade suppression + reframed
+messages), including `typecheck/record_wrong_field` — one of this session's
+four moved fixtures — from 10 to **12** (J 1→2, X 1→2, cascade `Debug a`
+diagnostic suppressed). Starting this session's arithmetic from 615 would
+silently re-lose that already-landed +2. **This re-grade uses 636/60 = 10.60
+as the accurate pre-session baseline** and shows the corrected per-fixture
+deltas below (each "old" value is the fixture's true current value in this
+file, not its stale post-Tier-4 value).
+
+Every fixture below was reproduced on the freshly built binary (`./medaka
+check` text + `./medaka check --json`), confirmed byte-identical to its
+captured `.out` golden, before scoring.
+
+### What landed, confirmed on the binary
+
+1. **F3 resolver locations** (`compiler/RESOLVER-DIAG-LOCATION-DESIGN.md`
+   Chunk A/B): `R-UNKNOWN-TYPE`/`R-PRIVATE-NAME`/`R-MODULE-LOAD` now carry a
+   real `file:L:C:` location instead of `<unknown location>`, both in CLI text
+   and `check --json`'s `range`. `unbound_type_in_sig`'s previous **duplicate
+   identical diagnostic** (`Unknown type: Strng` emitted twice at the same
+   `<unknown location>` — a real bug) is gone; the two diagnostics now shown
+   are two *genuinely distinct* source occurrences (the param position `:1:4`
+   and the return position `:1:13`), each independently located.
+2. **F-axis did-you-mean expansion**: `record_wrong_field` (field name),
+   `unbound_type_in_sig` (type name), and three new Haskell-alias fixtures
+   (`fmap`→`map`, `Just`/`Nothing`→`Some`/`None`, `Monad`→`Thenable`) all now
+   carry a `help` string and a machine-applicable JSON `fix{range,
+   replacement}`.
+
+### Per-fixture delta table — the 4 moved fixtures
+
+| fixture | true old → new | dims that moved | why |
+|---|---|---|---|
+| `typecheck/record_wrong_field` | 12 → **14** | F 0→2 | now `— did you mean 'age'?` + JSON `fix{replacement:"age"}`; single JSON diagnostic (cascade already suppressed pre-session) — reaches the perfect score |
+| `resolve/unbound_type_in_sig` | 8 → **13** | L 0→2, F 0→2, A 1→2 | real `file:1:4:`/`file:1:13:` locations (was `<unknown location>` ×2, a literal duplicate-emission bug); `— did you mean 'String'?` + JSON `fix{replacement:"String"}`; real JSON `range` (was `{0,0}`). X held at **1** (conservative: both diagnostics trace to the *same* underlying typo appearing twice in one signature, not two independent mistakes, so not scored as fully cascade-free) |
+| `resolve/import_unknown_name` | 9 → **12** | L 0→2, A 1→2 | `file:1:0:` real location (was `<unknown location>`); JSON `range` now real. No `fix` — this is a private-name-access error, not a did-you-mean case, so F stays 0 |
+| `resolve/unknown_module` | 9 → **12** | L 0→2, A 1→2 | `file:1:0:` real location + caret (was unlocated); JSON `range` now real. No `fix` (no nearby module name to suggest), F stays 0 |
+
+Sum for these 4: **38 → 51 (+13)**.
+
+### New fixtures — scored fresh
+
+| fixture | stage | L | C | R | F | J | X | A | total | rationale |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `resolve/haskell_fmap` | resolve | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **14** | `Unbound variable: fmap — did you mean 'map'? ('fmap' is Haskell; Medaka uses 'map')`, located+caret at `:1:16`; JSON `R-UNBOUND` + real range + `fix{replacement:"map"}`; single diagnostic, no compiler-internal jargon |
+| `resolve/haskell_monad` | resolve | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **14** | `Unknown type: Monad — did you mean 'Thenable'? (...)`, located at `:1:4`; JSON `R-UNKNOWN-TYPE` + real range + `fix{replacement:"Thenable"}` — this is the newly-landed F3 case (type-alias hints previously lacked a location/fix) |
+| `resolve/haskell_just` | resolve | 2 | 2 | 2 | 2 | 2 | 2 | 2 | **14** | Two diagnostics (`Just`→`Some`, `Nothing`→`None`), each located+captioned, each with its own JSON `fix`; scored cascade-free (X=2) because the two are independent facts — two distinct unmatched constructors in one `match`, not one root cause echoing twice |
+
+Sum for these 3: **42**.
+
+### New corpus arithmetic
+
+```
+636  (post-Tier-3-framing sum, 60 fixtures — the accurate pre-session baseline)
+- 38  (old values of the 4 moved fixtures, already inside 636)
++ 51  (their new values)
+= 649
++ 42  (3 new fixtures, added fresh — corpus grows 60 → 63)
+= 691
+
+691 / 63 = 10.968... ≈ 10.97
+```
+
+**Overall average: 691 / 63 = 10.97 / 14 — up from 10.60 (+0.37).**
+
+(For reference, applying the task brief's literal instruction — starting from
+615 instead of the true 636 — would understate the result: 615 − 30(stale-old
+moved values, using the post-Tier-4 figures 10/8/9/9) + 51 + 42 = 678/63 =
+10.76. The 10.97 figure above is correct; 10.76 double-loses the already-landed
+Tier-3 record_wrong_field delta and should not be used.)
+
+### Per-dimension movement (63 fixtures)
+
+| dim | pre-session sum (60) | pre-session avg | new sum (63) | new avg /2 | Δ |
+|---|---|---|---|---|---|
+| J Jargon-free | 117 | 1.95 | **123** | **1.95** | +0.00 |
+| C Correct | 104 | 1.73 | **110** | **1.75** | +0.02 |
+| R Root-cause | 101 | 1.68 | **107** | **1.70** | +0.02 |
+| X Cascade-free | 112 | 1.87 | **118** | **1.87** | +0.00 |
+| A Agent-parseable | 101 | 1.68 | **110** | **1.75** | +0.07 |
+| L Located | 80 | 1.33 | **92** | **1.46** | **+0.13** |
+| **F** Actionable-fix | 21 | 0.35 | **31** | **0.49** | **+0.14** |
+
+**F moves the most** (0.35 → 0.49, still the corpus floor by a wide margin,
+but the largest single-session F lift since Tier-4): the did-you-mean +
+machine-`fix` treatment now covers `record_wrong_field`, `unbound_type_in_sig`,
+and all 3 new Haskell-alias fixtures. **L is 2nd** (1.33 → 1.46): the F3
+location work closed the three remaining `{0,0}`/`<unknown location>` resolver
+holes. A also ticks up (+0.07) purely as a side effect of the same location
+fixes (real span is required for A=2).
+
+### Resolve-stage average
+
+The `resolve` stage grows from 8 → 11 fixtures (the 3 new Haskell fixtures are
+all `resolve/`). Its 8 pre-existing fixtures were untouched by Tier-3-framing
+(that pass only touched `typecheck/`), so their pre-session sum is the
+post-Tier-4 value: **89** (avg 11.12: `unbound_variable` 12, `typo_println` 14,
+`typo_local_var` 14, `unbound_constructor` 11, `forgot_import` 12,
+`unbound_type_in_sig` 8, `unknown_module` 9, `import_unknown_name` 9).
+
+```
+89 + 5 (unbound_type_in_sig 8→13) + 3 (import_unknown_name 9→12)
+   + 3 (unknown_module 9→12)
+= 100
++ 42 (3 new Haskell fixtures, 14 each)
+= 142
+142 / 11 = 12.91
+```
+
+**resolve: 11.12 → 12.91 (+1.79)** — resolve overtakes `effect` (12.00,
+unchanged) as the corpus's **strongest stage**. `typecheck` also ticks up
+slightly from `record_wrong_field`'s move: 275 + 2 = 277 / 24 = **11.54** (was
+11.46). All other stages (`effect` 12.00, `lex` 11.25, `exhaust` 9.60, `build`
+9.33, `parse` 9.29, `eval` 8.33) are untouched this session.
+
+### What's still weakest
+
+- **F (0.49/2) remains the single weakest axis**, even after this session's
+  gain — the did-you-mean/F3 work is real but mechanical-suggestion coverage
+  is still a minority of the corpus; the Tier-3 typecheck-framing residual
+  (`apply_non_function`, `if_branch_mismatch`, `list_heterogeneous`,
+  `cons_type_mismatch`, `arg_order_swapped`, `wrong_arg_type_in_map`, all F=0)
+  is still the next-largest reservoir, unchanged by this session (it never
+  touched `typecheck/` framing, only `record_wrong_field`'s pre-existing
+  did-you-mean spot-fix).
+- **The A=0 cluster is unchanged (8 fixtures)**: the 5 `run`-path runtime
+  errors with no structured diagnostic (`division_by_zero`, `modulo_by_zero`,
+  `list_index_oob`, `explicit_panic`, `let_else_fail` — `check --json` emits
+  nothing for these since they only fail under `medaka run`), the 2 by-design/
+  unimplemented silent accepts (`ambiguous_return`, `redundant_arm`), and the 1
+  build-only failure (`main_takes_unit`, `check` never sees it). None of these
+  are resolve/F3-reservoir fixtures, so this session could not and did not
+  touch them — they remain the corpus's honest floor for both A and F.
