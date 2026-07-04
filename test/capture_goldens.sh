@@ -1,11 +1,13 @@
 #!/bin/sh
 # capture_goldens.sh — REROOT-PLAN §3a / Phase 1.
 #
-# Capture OCaml-oracle output into committed `.golden` siblings while the OCaml
-# oracle (dev/eval_probe.exe, etc.) is still TRUSTED.  These goldens are the
-# OCaml-free reference the re-rooted gates (Phase 2+) will diff the native stage
-# against.  This script is the ONLY place the OCaml oracle is invoked at capture
-# time; it is run MANUALLY at soak checkpoints, never in the gate loop.
+# Capture reference output into committed `.golden` siblings.  (Historical note:
+# this originally captured the OCaml oracle while it was TRUSTED.  The OCaml
+# compiler was REMOVED 2026-06-26 — the goldens are now checked-in NATIVE output,
+# re-captured from the native `test/bin/*` stage binaries; there is no external
+# oracle to disagree with.)  These goldens are the reference the re-rooted gates
+# diff the native stage against.  Run MANUALLY at soak checkpoints, never in the
+# gate loop.
 #
 # PURELY ADDITIVE: writes `.golden` files next to each fixture; touches no gate.
 #

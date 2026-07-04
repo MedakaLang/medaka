@@ -1505,6 +1505,30 @@ numlitRefs = Ref []
 poisonedVars : Ref (List Int)
 poisonedVars = Ref []
 
+-- Chunk D (Num mis-framing): (litVar, loc) for every numeric literal whose var
+-- carried a Num obligation — captured at inferNumLit/inferNumLitBare record time
+-- while the var is still unbound.  Lets checkOneImplObligation reframe a purely
+-- literal Num obligation forced to a concrete non-Num type (`Type mismatch: Int vs
+-- T`) while an OPERATOR-sourced one (`x + 1`) keeps `No impl of Num for T`.  Storing
+-- the VAR (not just the loc) lets the operator-taint pass below share a root through
+-- `normalize`, so `1 + x` and `x + 1` are both recognised as operator-sourced
+-- regardless of unify direction.  Error-path only; reset per run.
+numlitVarLocs : Ref (List (Mono, Loc))
+numlitVarLocs = Ref []
+
+-- Chunk D: locs of literals whose var was ALSO an operand of an arithmetic op
+-- (recordNumObligation).  Such a literal keeps the Num message — the operator is the
+-- real culprit — so the reframe skips it (it reframes `litLocs \ opLocs`).
+numlitOpLocs : Ref (List Loc)
+numlitOpLocs = Ref []
+
+-- Chunk D: (literalLoc, contextKind) recorded when inferIf / inferListLit / consOp
+-- is about to force a still-unbound literal var against a concrete sibling type —
+-- lets the reframe pick site-specific wording (if-branches / list elements / cons
+-- head-vs-element) over the bare `Type mismatch: Int vs T`.
+numlitCtxTags : Ref (List (Loc, String))
+numlitCtxTags = Ref []
+
 -- LSP hover: every local binding (let-bound name, lambda param, function-clause
 -- param, match-arm binder) flows through inferPat's PVar/PAs arms.  Capture
 -- (name, mono var) here so hover can render a *local* variable's inferred type:
@@ -2166,6 +2190,9 @@ resetState _ =
   let _ = setRef pendingImplObligations []
   let _ = setRef numlitRefs []  -- PLAN.md #11
   let _ = setRef poisonedVars []  -- Chunk A: reset error-path cascade suppression
+  let _ = setRef numlitVarLocs []  -- Chunk D: reset Num-mis-framing provenance
+  let _ = setRef numlitOpLocs []  -- Chunk D
+  let _ = setRef numlitCtxTags []  -- Chunk D
   let _ = setRef localBindRefs []
   let _ = setRef localSchemesOut []
   let _ = setRef seedSchemesOut []
@@ -4087,6 +4114,11 @@ arithOp lt rt =
 -- check`.
 numArithOp : Mono -> Mono -> <Mut> Mono
 numArithOp lt rt =
+  -- Chunk D: taint any literal operand BEFORE the unify grounds it — so a literal
+  -- fed to an arithmetic op (`1 + "x"`, `x + 1`, `1 + x`) keeps `No impl of Num for
+  -- T` (the `+` is the culprit) rather than being reframed as a bare mismatch.
+  let _ = markNumlitOpTaint lt
+  let _ = markNumlitOpTaint rt
   let _ = unify lt rt
   let _ = recordNumObligation lt
   lt
@@ -4123,6 +4155,7 @@ inferNumLit env n fref dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (TCon "Int") (openRow ()) a)
       let _ = setRef numlitRefs ((a, fref, n, dref) :: numlitRefs.value)
+      let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
 
@@ -4142,7 +4175,72 @@ inferNumLitBare n fref =
   let a = freshVar ()
   let _ = setRef pendingImplObligations (("Num", ["a"], TyVar "a", a, currentLoc.value)::pendingImplObligations.value)
   let _ = setRef numlitRefs ((a, fref, n, Ref RNone)::numlitRefs.value)
+  let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
+
+-- ── Chunk D: Num mis-framing provenance (error-path only) ──────────────────
+-- Record a literal's (var, loc) so a later Num-obligation reframe can tell a bare
+-- literal from an arithmetic-operator operand.  [currentLoc] is the ENumLit span.
+recordNumlitLoc : Mono -> <Mut> Unit
+recordNumlitLoc a = match currentLoc.value
+  Some l => setRef numlitVarLocs ((a, l)::numlitVarLocs.value)
+  None => ()
+
+-- Called from recordNumObligation (arithmetic `+`/`-`/`*`/`/`/`%`): any recorded
+-- literal whose var shares a union-find root with [m] was an operand of an op, so
+-- mark its loc — the reframe then keeps `No impl of Num for T` for it.  Runs during
+-- inference (vars still unbound), so `normalize` reveals the shared root regardless
+-- of which operand became the root at unify time.
+markNumlitOpTaint : Mono -> <Mut> Unit
+markNumlitOpTaint m = match normalize m
+  TVar cell => markOpTaintId (tyvarId cell) numlitVarLocs.value
+  _ => ()
+
+markOpTaintId : Int -> List (Mono, Loc) -> <Mut> Unit
+markOpTaintId _ [] = ()
+markOpTaintId id ((v, l)::rest) =
+  let _ = if sameRootId id v then
+    setRef numlitOpLocs (l::numlitOpLocs.value)
+  else
+    ()
+  markOpTaintId id rest
+
+-- True iff [v] normalizes to the unbound var [id] (same union-find root).
+sameRootId : Int -> Mono -> Bool
+sameRootId id v = match normalize v
+  TVar cell => tyvarId cell == id
+  _ => False
+
+-- Chunk D: if one of [a]/[b] is a still-unbound literal var and the other is
+-- concrete-headed, tag that literal's loc with [kind] so the reframe can use
+-- site-specific wording.  Pure state capture — never alters unification.
+noteNumlitCtx : Mono -> Mono -> String -> <Mut> Unit
+noteNumlitCtx a b kind =
+  let _ = tagNumlitCtxIf a b kind
+  tagNumlitCtxIf b a kind
+
+-- Tag EVERY literal whose var shares [v]'s root (not just the first) when [other]
+-- has a concrete head — so a heterogeneous list forcing several literals to one
+-- type tags them all with the same [kind], letting their reframed messages dedup to
+-- a single "list elements have different types" line.
+tagNumlitCtxIf : Mono -> Mono -> String -> <Mut> Unit
+tagNumlitCtxIf v other kind
+  | isSome (monoHeadCon other) = tagAllLitLocs v kind
+  | otherwise = ()
+
+tagAllLitLocs : Mono -> String -> <Mut> Unit
+tagAllLitLocs v kind = match normalize v
+  TVar cell => tagLitLocsWithRoot (tyvarId cell) kind numlitVarLocs.value
+  _ => ()
+
+tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> <Mut> Unit
+tagLitLocsWithRoot _ _ [] = ()
+tagLitLocsWithRoot id kind ((mv, l)::rest) =
+  let _ = if sameRootId id mv then
+    setRef numlitCtxTags ((l, kind)::numlitCtxTags.value)
+  else
+    ()
+  tagLitLocsWithRoot id kind rest
 
 -- Stage-1 Eq dispatch (EQ-DISPATCH-DESIGN.md §2.1): `==`/`!=` carry an `Eq`
 -- obligation on their (unified) operand type — a verbatim mirror of
@@ -4218,6 +4316,7 @@ boolOp lt rt =
 consOp : Mono -> Mono -> <Mut> Mono
 consOp lt rt =
   let listTy = TApp (TCon "List") lt
+  let _ = noteNumlitCtx lt rt "cons"  -- Chunk D: tag cons head-vs-list Num mismatch
   let _ = unify rt listTy
   listTy
 
@@ -4646,7 +4745,9 @@ inferIf : TcEnv -> Expr -> Expr -> Expr -> <Mut> Mono
 inferIf env c t e =
   let _ = unify (infer env c) (TCon "Bool")
   let tt = infer env t
-  let _ = unify tt (infer env e)
+  let ee = infer env e
+  let _ = noteNumlitCtx tt ee "if"  -- Chunk D: site-specific Num mis-framing wording
+  let _ = unify tt ee
   tt
 
 inferEach : TcEnv -> List Expr -> <Mut> List Mono
@@ -4658,8 +4759,17 @@ inferEach env (e::es) =
 inferListLit : TcEnv -> List Expr -> <Mut> Mono
 inferListLit env es =
   let elem = freshVar ()
-  let _ = unifyAll elem (inferEach env es)
+  let _ = unifyAllNumlit elem (inferEach env es)  -- Chunk D: tag list-element Num mismatch
   TApp (TCon "List") elem
+
+-- Chunk D: like unifyAll but tags each element that is a still-unbound literal var
+-- being forced against a concrete accumulator (or vice-versa) with the "list" ctx.
+unifyAllNumlit : Mono -> List Mono -> <Mut> Unit
+unifyAllNumlit _ [] = ()
+unifyAllNumlit t (x::xs) =
+  let _ = noteNumlitCtx t x "list"
+  let _ = unify t x
+  unifyAllNumlit t xs
 
 inferAnnot : TcEnv -> Expr -> Ty -> <Mut> Mono
 inferAnnot env e ty =
@@ -8401,7 +8511,7 @@ checkOneImplObligation heads iface typarams mty occ loc =
   -- without a spurious `No impl of Num for Int`.  The unimplementable-head reject
   -- (function/unbound `m`) stays even no-prelude — it is a structural unification
   -- error, not a missing-impl one.
-  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Eq" && anyList eqUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Ord" && anyList ordUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Num" && not (numIfaceRegistered ()) then () else if isEmptyL args then () else if not (allConcreteHeads args) then () else if implMatches heads iface args then () else pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args)
+  if iface == "Num" && anyList numUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Eq" && anyList eqUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Ord" && anyList ordUnimplementableHead args then pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args) else if iface == "Num" && not (numIfaceRegistered ()) then () else if isEmptyL args then () else if not (allConcreteHeads args) then () else if implMatches heads iface args then () else reportNumOrNoImpl iface args loc
 
 -- a mono no `Ord` impl can ever match: a function type (`<` on functions).  Like
 -- Eq (and unlike Num) an unbound spine head DEFERS — a downstream `Ord a =>`
@@ -8441,6 +8551,54 @@ spineHeadMono t = match normalize t
 
 noImplFoundMsg : String -> List Mono -> <Mut> String
 noImplFoundMsg iface args = "No impl of \{iface} for \{ppMonosShared args}"
+
+-- Chunk D (Num mis-framing reframe): at the final no-impl branch, a `Num`
+-- obligation forced to a fully-ground concrete non-Num head (`args` already passed
+-- allConcreteHeads + failed implMatches) is reframed to a structural type mismatch
+-- WHEN it traces to a bare numeric LITERAL (`numlitReframeLoc`: recorded at this
+-- loc, and NOT an arithmetic operand).  An operator-sourced `Num` failure
+-- (`x + 1`, `1 + x`) keeps `No impl of Num for T` — the `+` is the real culprit.
+reportNumOrNoImpl : String -> List Mono -> Option Loc -> <Mut> Unit
+reportNumOrNoImpl iface args loc
+  | iface == "Num" && numlitReframeLoc loc =
+    pushTypeErrorOnceAt "T-TYPE-MISMATCH" loc (numlitMismatchMsg loc args)
+  | otherwise = pushTypeErrorOnceAt "T-NO-IMPL" loc (noImplFoundMsg iface args)
+
+-- True iff [loc] is a literal-sourced Num obligation eligible for reframe: some
+-- literal was recorded at [loc] and that loc was NOT operator-tainted.
+numlitReframeLoc : Option Loc -> <Mut> Bool
+numlitReframeLoc (Some l) = anyList (p => locEq (snd p) l) numlitVarLocs.value
+  && not (anyList (ol => locEq ol l) numlitOpLocs.value)
+numlitReframeLoc None = False
+
+-- site-specific reframe wording (if / list / cons) when the context is known, else
+-- a bare literal-vs-type mismatch.  `Int` is the numeric default the literal takes.
+numlitMismatchMsg : Option Loc -> List Mono -> <Mut> String
+numlitMismatchMsg loc args = match numlitCtxKind loc
+  Some "if" => "if branches have different types: Int vs \{ppMonosShared args}"
+  Some "list" =>
+    "list elements have different types: Int vs \{ppMonosShared args}"
+  Some "cons" => "cons (::) type mismatch: head is Int but the list holds \{ppMonosShared args}"
+  _ => "Type mismatch: Int literal vs \{ppMonosShared args}"
+
+numlitCtxKind : Option Loc -> <Mut> Option String
+numlitCtxKind (Some l) = lookupCtxKind l numlitCtxTags.value
+numlitCtxKind None = None
+
+lookupCtxKind : Loc -> List (Loc, String) -> Option String
+lookupCtxKind _ [] = None
+lookupCtxKind l ((l2, k)::rest) =
+  if locEq l l2 then
+    Some k
+  else
+    lookupCtxKind l rest
+
+locEq : Loc -> Loc -> Bool
+locEq (Loc f1 a1 b1 c1 d1) (Loc f2 a2 b2 c2 d2) = f1 == f2
+  && a1 == a2
+  && b1 == b2
+  && c1 == c2
+  && d1 == d2
 
 -- the (iface, head-arg types) of every USER/prelude impl declared in [prog].
 implHeadsOf : List Decl -> List (String, List Ty)

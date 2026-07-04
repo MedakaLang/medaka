@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-test/error_quality_fixtures/typecheck/cons_type_mismatch.mdk:1:23: No impl of Num for String
+test/error_quality_fixtures/typecheck/cons_type_mismatch.mdk:1:23: cons (::) type mismatch: head is Int but the list holds String
   |
 1 | main = println (debug (1 :: ["a", "b"]))
   |                        ^
