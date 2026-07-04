@@ -52,6 +52,11 @@ import support.util.{
   joinDot,
   dedup,
 }
+-- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
+-- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
+-- pipeline and does not import eval.mdk (no cycle) — verified by grep before
+-- adding this import.
+import driver.diagnostics.{Diag(..), Severity(..), cjAllToJson}
 
 -- ── values & environment (mutually recursive) ─────────────────────────────
 public export data Value =
@@ -1616,6 +1621,14 @@ currentEvalLoc = Ref (Loc "" 0 0 0 0)
 export currentEvalFile : Ref String
 currentEvalFile = Ref ""
 
+-- Stage 4 (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md Fork C): when set, `runtimePanic`
+-- emits the `Diag`-shaped JSON envelope (same shape as `medaka check --json`)
+-- instead of located text. Set once by the `run --json` CLI arm; read only at
+-- the panic chokepoint, so it is inert (default False) on every other path —
+-- including every valid-program eval gate.
+export runJsonMode : Ref Bool
+runJsonMode = Ref False
+
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -1632,12 +1645,20 @@ updateEvalLoc (Loc f sl sc el ec)
 -- that never returns to Medaka, so the located, coded diagnostic must be
 -- formatted INTO the panic string here (Fork B option iii).  The text prefix
 -- mirrors resolve.mdk's ppResErrorLocatedF: `file:L:C:` with a 0-based column.
+-- Stage 4: when `runJsonMode` is set, format the SAME `Diag` through the
+-- exact `cjAllToJson` serializer `medaka check --json` uses (driver.diagnostics),
+-- so the envelope ({"files":[{"file":...,"diagnostics":[{code,kind,message,
+-- range,severity,source}]}]}) is byte-shape-identical to a compile-time
+-- diagnostic. `cjRangeOfLoc` ignores its `src` argument (range comes purely
+-- from the Loc), so passing "" needs no source-text threading.
 export runtimePanic : String -> String -> a
 runtimePanic code msg = match currentEvalLoc.value
-  Loc f sl sc _ _ =>
+  Loc f sl sc el ec =>
     let ff = if f == "" then currentEvalFile.value else f
-    panic
-      "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
+    if runJsonMode.value then
+      let diag = Diag SevError code msg (Some (Loc ff sl sc el ec)) None None
+      panic (cjAllToJson [(ff, "", [diag])])
+    else panic "\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 appendOutput : String -> <Mut> Value
 appendOutput s =

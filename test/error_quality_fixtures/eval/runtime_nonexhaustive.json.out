@@ -1,0 +1,1 @@
+{"files":[{"file":"test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk","diagnostics":[{"code":"E-NONEXHAUSTIVE-MATCH","kind":"error","message":"non-exhaustive match","range":{"end":{"character":30,"line":0},"start":{"character":29,"line":0}},"severity":1,"source":"medaka"}]}]}

@@ -1,0 +1,1 @@
+{"files":[{"file":"test/error_quality_fixtures/eval/modulo_by_zero.mdk","diagnostics":[{"code":"E-MOD-ZERO","kind":"error","message":"modulo by zero","range":{"end":{"character":24,"line":2},"start":{"character":23,"line":2}},"severity":1,"source":"medaka"}]}]}

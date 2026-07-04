@@ -352,3 +352,65 @@ passed / 0 failed / 1 skip). `diff_compiler_eval_errors` goldens were updated
 (its `eval_main` probe sets no filename, so it honestly prints `:0:0:` — the
 located CLI path is validated by the 6 `error_quality_fixtures/eval` goldens
 instead).
+
+## 8. AS-BUILT — Stage 4, `medaka run --json` (A→2, 2026-07-04)
+
+Shipped `medaka run --json`. `runtimePanic` (`compiler/eval/eval.mdk`) now
+branches on a new `runJsonMode : Ref Bool` (default `False`, so every other
+path — including all valid-program eval gates — is untouched):
+
+- **Text mode** (default): unchanged `file:L:C: runtime error [E-*]: <message>`.
+- **JSON mode** (`--json`): builds `Diag SevError code msg (Some (Loc ff sl sc
+  el ec)) None None` (full loc, not collapsed to zero-width) and serializes it
+  through `cjAllToJson [(ff, "", [diag])]` — the **exact same function**
+  `medaka check --json` uses — then hands the resulting JSON string to the bare
+  `panic` (which still writes it to **stderr**, same channel as text mode; exit
+  code stays 1). `cjRangeOfLoc` ignores its `src` argument, so passing `""`
+  needs no source-text threading.
+
+**Import reused cleanly, no cycle.** `eval.mdk` now `import driver.diagnostics.
+{Diag(..), Severity(..), cjAllToJson}`. Verified before adding: nothing upstream
+of eval (frontend/, types/, driver/loader.mdk, driver/diagnostics.mdk itself)
+imports `eval.eval` — only `tools/`, `entries/`, and `ir/core_ir_{lower,eval}.mdk`
+do, all of which are downstream consumers, same or later than eval in the
+pipeline. So no split/inline fallback was needed — `cjDiagnostic`/`cjRangeOfLoc`/
+`cjAllToJson` are reused as-is.
+
+**Envelope shape verified against `check --json` by eye** (not just by
+construction): the object is `{"files":[{"file":...,"diagnostics":[{"code":...,
+"kind":...,"message":...,"range":{"end":{...},"start":{...}},"severity":1,
+"source":"medaka"}]}]}` — same top-level `"files"` wrapper, same per-diagnostic
+key set/order, same 0-based LSP range shaping, `kind` derived from the `E-*`
+code prefix via `codeKind` (falls through to `"error"`, the same as an
+unrecognized prefix would — `E-*` isn't special-cased in `codeKind`, which is
+fine: the rubric only requires a *derived*, not a *distinct*, kind). Example
+(`division_by_zero`):
+```json
+{"files":[{"file":"test/error_quality_fixtures/eval/division_by_zero.mdk","diagnostics":[{"code":"E-DIV-ZERO","kind":"error","message":"division by zero","range":{"end":{"character":24,"line":2},"start":{"character":23,"line":2}},"severity":1,"source":"medaka"}]}]}
+```
+
+**CLI wiring** (`compiler/driver/medaka_cli.mdk`): `runRunCmd` now reads
+`hasFlag "--json" argv` before `dropFlags` strips it (mirrors the `check` arm),
+and `setRef runJsonMode jsonMode` right before the eval call (alongside the
+existing `setRef currentEvalFile target`). Usage line updated to `medaka run
+[--release] [--json] <file.mdk>`.
+
+**New gate:** `test/diff_compiler_eval_json.sh` — drives the freshly-built
+`./medaka run --json <fixture>` directly (the flag lives in the CLI layer, not
+behind any `test/bin/*` probe oracle) over the same 6
+`test/error_quality_fixtures/eval/*.mdk` fixtures, comparing stderr against a
+new `<fixture>.json.out` golden per fixture (path-stripped, same convention as
+`capture.sh`). `CAPTURE=1` (re)writes the goldens. All 6 captured and verified:
+6 ok, 0 failing. Not yet wired into `run_gates.sh`'s matrix (kept standalone,
+matching how `error_quality_fixtures/` itself is intentionally ungated) — a
+future session can add it if the reservoir wants it in the ratchet.
+
+**Regression gates (post-Stage-4, all fresh oracles via `FORCE=1 bash
+test/build_oracles.sh`):** `diff_compiler_eval_run` 50 ok / 0 failing,
+`diff_compiler_eval_modules` 4 ok / 0 failing, `diff_compiler_eval_errors` 9 ok
+/ 0 failing (unchanged from Stage 3), `selfcompile_fixpoint` C3a YES / C3b YES
+(no re-mint — eval.mdk/medaka_cli.mdk are outside the emitter graph), full
+`run_gates.sh` 73 passed / 0 failed / 1 skipped (one `diff_compiler_
+internal_extern` flake on the first parallel run reproduced the documented
+temp-collision class in AGENTS.md — verified green standalone and on a clean
+re-run of the full suite).

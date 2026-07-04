@@ -1,0 +1,1 @@
+{"files":[{"file":"test/error_quality_fixtures/eval/division_by_zero.mdk","diagnostics":[{"code":"E-DIV-ZERO","kind":"error","message":"division by zero","range":{"end":{"character":24,"line":2},"start":{"character":23,"line":2}},"severity":1,"source":"medaka"}]}]}
