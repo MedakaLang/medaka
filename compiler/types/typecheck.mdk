@@ -3982,7 +3982,7 @@ unknownFieldFresh fname rname declared =
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> <Mut> Unit
 pushUnknownFieldMaybeSuggest fname rname declared = match suggestField fname declared
   None => pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
-  Some sug => pushTypeErrorHelpFixAt "T-UNKNOWN-FIELD" currentLoc.value (unknownFieldMsg fname rname) "did you mean '\{sug}'?" (fieldFixFrom currentLoc.value sug)
+  Some sug => pushTypeErrorHelpFixAt "T-UNKNOWN-FIELD" currentLoc.value (unknownFieldMsg fname rname ++ " — did you mean '\{sug}'?") "did you mean '\{sug}'?" (fieldFixFrom currentLoc.value sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
