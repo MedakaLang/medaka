@@ -124,11 +124,23 @@ The playground already runs the compiler fully client-side (WasmGC, server-free;
 `playground/`, Stages 0–4 done per [`PLAYGROUND-DESIGN.md`](./PLAYGROUND-DESIGN.md)).
 For 0.1.0 it must become a *nice* front door, not just a tech demo. Polish
 backlog (detail → `PLAYGROUND-DESIGN.md` / `PLAYGROUND-EDITOR-DESIGN.md`):
+- ✅ **Real editor — CodeMirror 6 (S1 highlighting + S2 inline squiggles) DONE 2026-07-04**
+  (`d5306c81`); Playwright e2e harness `playground/e2e/` (`d4dca8da`). *(Deferred: S3 hover /
+  S4 autocomplete — the two stateless wasm entries.)*
+- **Visual / layout polish (Val flagged 2026-07-04, NOT urgent)** — the editor works but the
+  overall look & layout needs a design pass to feel like a product front door, not a dev demo.
+  **Taste-driven → do it mockup-first** (build a static HTML mockup as an Artifact for Val to
+  approve, THEN an agent applies it; verify with the `playground/e2e/` Playwright harness +
+  screenshots). Current palette: bg `#0d1117`, accents `#e2b96f`/`#58a6ff`.
 - Shareable permalinks (encode program in URL) — table stakes for a "try this" link.
 - An examples/presets dropdown (reuse the §W-showcase programs).
-- First-class error rendering (surface `check --json` diagnostics with carets, not raw text).
+- ✅ First-class error rendering — DONE as CM6 inline squiggles + gutter markers (S2); the
+  problems pane is kept as a list alongside.
 - Mandatory browser-support feature-detect + banner (**needs current Chrome/Firefox** —
   Safari + older engines lag the finalized WasmGC encoding; empirically verified).
+- Nice-to-have: friendlier worker/asset load-failure message (currently a bare
+  `compiler-worker error: undefined` when the server is gone — should say "is the server
+  running? try reloading").
 - Hosting: static assets, no server eval (sandboxed by construction — a real advantage).
 
 ### W3 — Quickstart / language overview docs — 🔴 FLOOR, **Val-authored**
