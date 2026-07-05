@@ -32,6 +32,13 @@ quickstart, stdlib docs, public repo, LICENSE, KNOWN-GAPS, `--version`) and a
 unknown is the Linux deep-recursion stack, spiked first per `DISTRIBUTION-DESIGN.md`
 §D0). The prior north star (self-hosting → LLVM) is ✅ COMPLETE.
 
+## Current status (2026-07-04) — playground W2: CodeMirror 6 editor (S1 highlighting + S2 squiggles) + Playwright e2e harness DONE (`d4dca8da`)
+
+**The playground front door got a real editor.** Per `PLAYGROUND-EDITOR-DESIGN.md` (CM6 + stateless-wasm-entries decided with Val; S1+S2 v1 scope), each designed→delegated→browser-verified→merged:
+- **CM6 editor S1+S2 (`d5306c81`, Opus):** `<textarea>`→**CodeMirror 6** (vendored 384KB zero-build ESM bundle + import-map, `build_editor.sh` re-rolls; preserves the static-site property). **S1** syntax highlighting via a `StreamLanguage` tokenizer derived from the lexer token census (28 keywords, TUpper-vs-TIdent, nested `{- -}`, string `\{interp}`, hex/bin/oct, operators) + dark theme. **S2** live inline squiggles via a dedicated `language-worker.js` that reuses the existing `__MEDAKA_DIAGNOSTICS__` analyze path — **zero compiler work** (the diagnostics were already emitted in `check --json` shape). NO `.mdk`/emitter change → no fixpoint/seed. Tokenizer 35 tests, squiggle-map 10 tests, existing node integ 8/8+4/4.
+- **Playwright e2e harness (`d4dca8da`, Sonnet):** committed `playground/e2e/` (`./run.sh`, `channel:'chrome'` system Chrome, node v24) — 4 browser tests (CM6 mounts, highlighting spans+colors, sample run→stdout, type-error→inline squiggle+gutter+problems) + screenshots. Documented in AGENTS.md. **This is the standing browser-verification path for frontend changes — agents run it, not just the human.** ([[reference_playwright_playground_e2e]]) Browser download is TLS-blocked here → drive system Chrome.
+- **Deferred (S3/S4 = the two stateless wasm entries):** hover-types (`hover_main.mdk` wrapping LSP `hoverFor`) + autocomplete (`complete_main.mdk` wrapping `completionFor`) — the CM6 bundle already ships `hoverTooltip`/`autocompletion`, so wiring them later needs no re-vendor. Other W2: permalinks, examples dropdown.
+
 ## Current status (2026-07-04) — distribution: D1 (exe-relative discovery) + D2 Track 1 (big-stack pthread) DONE — native build correctness-complete on mac+Linux (`f5243120`)
 
 **The two native-distribution keystones landed** (each designed→delegated→independently-verified→merged; owning docs `DISTRIBUTION-DESIGN.md` §5 D1/D2, `HANDOFF.md`, memory `project_native_distribution_blockers`):
