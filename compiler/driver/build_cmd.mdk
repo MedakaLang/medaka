@@ -259,7 +259,11 @@ clangLink cc rtC llPath outPath inputAbs = match detectGC cc
     -- runtime on the small gate fixtures they process.
     let optFlagRaw = envOr "MEDAKA_CLANG_OPT" "-O2"
     let optFlag = if optFlagRaw == "" then "-O2" else optFlagRaw
-    let clangArgs = ["-Wl,-stack_size,0x20000000", optFlag] ++ gcCflags ++ [llPath, rtC] ++ gcLibs ++ ["-o", outPath]
+    -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
+    -- worker thread via GC_pthread_create, so it self-provisions its stack: no
+    -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
+    -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
+    let clangArgs = [optFlag, "-pthread"] ++ gcCflags ++ [llPath, rtC] ++ gcLibs ++ ["-lm", "-o", outPath]
     match runCommand cc clangArgs
       Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
       Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"

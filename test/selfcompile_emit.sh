@@ -101,7 +101,7 @@ if ! "$BOOTEMIT" "$RUNTIME" "$CORE" "$EMIT" "$SELFHOST" "$STDLIB" > "$LL" 2>"$WO
   echo "FAIL (emit llvm_emit_modules_main): $(cat "$WORK/emit.err")"; exit 1
 fi
 trim_unit_ll "$LL"
-if ! "$CC" -Wl,-stack_size,0x20000000 $GC_CFLAGS "$LL" "$RT" $GC_LIBS -o "$BIN" 2>"$WORK/cc.err"; then
+if ! "$CC" -pthread $GC_CFLAGS "$LL" "$RT" $GC_LIBS -lm -o "$BIN" 2>"$WORK/cc.err"; then
   echo "FAIL (clang native emitter): $(cat "$WORK/cc.err")"; exit 1
 fi
 

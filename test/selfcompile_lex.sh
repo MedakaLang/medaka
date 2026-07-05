@@ -103,7 +103,7 @@ if ! "$BOOTEMIT" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB" > "$EMITLL" 
 fi
 trim_unit_ll "$EMITLL"
 echo "step 1: clang bootstrap-emit (stack $STACK_SIZE) ..."
-if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$EMITLL" "$RT" $GC_LIBS -o "$EMITBIN" 2>"$WORK/emit-cc.err"; then
+if ! "$CC" -pthread $GC_CFLAGS "$EMITLL" "$RT" $GC_LIBS -lm -o "$EMITBIN" 2>"$WORK/emit-cc.err"; then
   echo "FAIL (clang bootstrap-emit): $(cat "$WORK/emit-cc.err")"; exit 1
 fi
 
@@ -142,7 +142,7 @@ fi
 # ---- STEP 3: build the native lexer + run-diff vs the oracle ---------------
 LEXBIN="$WORK/lex"
 echo "step 3: clang native lexer (stack $STACK_SIZE) ..."
-if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$NATLL" "$RT" $GC_LIBS -o "$LEXBIN" 2>"$WORK/lex-cc.err"; then
+if ! "$CC" -pthread $GC_CFLAGS "$NATLL" "$RT" $GC_LIBS -lm -o "$LEXBIN" 2>"$WORK/lex-cc.err"; then
   echo "FAIL (clang native lexer): $(cat "$WORK/lex-cc.err")"; exit 1
 fi
 

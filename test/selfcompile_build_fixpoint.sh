@@ -60,7 +60,7 @@ trim_unit() {
 }
 
 emit() { "$1" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB"; }
-clang_ir() { "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$1" "$RT" $GC_LIBS -o "$2" 2>"$WORK/$(basename "$2").cc.err"; }
+clang_ir() { "$CC" -pthread $GC_CFLAGS "$1" "$RT" $GC_LIBS -lm -o "$2" 2>"$WORK/$(basename "$2").cc.err"; }
 
 # ── seed bootstrap (replaces the old `$MAIN run` interpreted emission) ──────────
 SEED="$WORK/seed.ll"

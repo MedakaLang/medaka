@@ -132,7 +132,7 @@ else
   # every emit downstream (oracle build's 53 entries, every `medaka build`, make
   # medaka's own stage B), so clang -O2 (~+3s once vs -O0) buys ~30% faster emit
   # each time (self-compile 5.4s→3.7s; oracle build 55s→48s). EMITTER_OPT overrides.
-  if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" "${EMITTER_OPT:--O2}" $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
+  if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
     echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
   fi
   mv "$EMIT_NEW" "$EMITTER"
@@ -157,7 +157,7 @@ trim_unit "$CLI_LL"
 # contrast, is always -O2 — it's the reused workhorse; see stage A.)
 CLI_OPT="${CLI_OPT:--O0}"
 echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
-if ! "$CC" -Wl,-stack_size,"$STACK_SIZE" "$CLI_OPT" $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS -o "$OUT" 2>"$WORK/cc.err"; then
+if ! "$CC" -pthread "$CLI_OPT" $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS -lm -o "$OUT" 2>"$WORK/cc.err"; then
   echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
 fi
 

@@ -17,18 +17,18 @@ echo "############ UNPACK ############"
 tar -x -C /src -f /host/repo.tar
 echo "unpacked $(find /src -name '*.mdk' | wc -l) .mdk files; seed: $(ls -la /src/compiler/seed/emitter.ll.gz | awk '{print $5}') bytes"
 
-echo "############ PATCH: drop Mach-O -Wl,-stack_size (GNU ld rejects it) ############"
-# (1)+(2) build scripts, (3) build_cmd.mdk for the `medaka build` user-link path.
-sed -i 's/-Wl,-stack_size,"\$STACK_SIZE" //g' /src/test/bootstrap_from_seed.sh /src/test/build_native_medaka.sh
-sed -i 's/"-Wl,-stack_size,0x20000000", //' /src/compiler/driver/build_cmd.mdk
-echo "residual stack_size refs (expect 0):"
-grep -rc 'stack_size' /src/test/bootstrap_from_seed.sh /src/test/build_native_medaka.sh /src/compiler/driver/build_cmd.mdk
+# D2 Track 1: the source now self-provisions its stack — runtime/medaka_rt.c owns
+# `int main` and runs the pipeline on a 256MB GC_pthread worker thread, and the
+# build scripts / build_cmd.mdk already DROP the Mach-O-only -Wl,-stack_size and
+# ADD -pthread + -lm on every link.  So NO sed patching is needed anymore.
+echo "############ VERIFY: no residual Mach-O -Wl,-stack_size in build sources (expect 0) ############"
+grep -rc 'stack_size' /src/test/bootstrap_from_seed.sh /src/test/build_native_medaka.sh /src/compiler/driver/build_cmd.mdk || true
 
-echo "############ PATCH: add -lm (Linux needs explicit libm; macOS bundles it in libSystem) ############"
-sed -i 's/\$GC_LIBS -o/$GC_LIBS -lm -o/g' /src/test/bootstrap_from_seed.sh /src/test/build_native_medaka.sh
-sed -i 's/\["-o", outPath\]/["-lm", "-o", outPath]/' /src/compiler/driver/build_cmd.mdk
-echo "libm refs added (expect >0):"
-grep -c 'lm' /src/test/bootstrap_from_seed.sh; grep -c '"-lm"' /src/compiler/driver/build_cmd.mdk
+# DECISIVE self-provisioning check: cap the MAIN-thread stack at the Linux default
+# 8MB (soft). The compiler runs on its own 256MB worker thread, so it must build +
+# run anyway. (run.sh grants a 512MB hard ulimit; we lower the soft limit here.)
+ulimit -S -s 8192 || echo "WARN: could not lower stack ulimit"
+echo "main-thread stack soft-cap now: $(ulimit -s) KB"
 
 cd /src
 
