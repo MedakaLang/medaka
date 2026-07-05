@@ -60,12 +60,23 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
+#include <pthread.h>
+/* GC_THREADS MUST be defined before <gc.h> so Boehm exposes GC_pthread_create /
+ * GC_pthread_join.  The compiler runs its whole pipeline on a large-stack worker
+ * thread (see `int main` at the bottom of this file); a thread created with raw
+ * pthread_create would NOT have its stack registered as a GC root, so Boehm would
+ * collect still-live objects and corrupt the heap.  GC_pthread_create registers
+ * the worker's stack, keeping conservative scanning correct on it. */
+#define GC_THREADS
 #include <gc.h>
 
-/* Initialize Boehm once before main().  The emitted IR owns `main`, so we can't
- * call GC_INIT() from it; a constructor runs first, near the bottom of the stack,
- * which is where GC_INIT wants to capture the stack base (recommended on macOS).
- * GC_malloc would otherwise lazily init on its first call. */
+/* Initialize Boehm once before main().  This runtime owns `int main` (bottom of
+ * this file); the emitted IR's entry is `mdk_program_main`, which we run on a
+ * GC_pthread_create'd large-stack worker thread.  A constructor runs first, near
+ * the bottom of the process stack, which is where GC_INIT wants to capture the
+ * (main-thread) stack base; the worker thread's own stack is registered
+ * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
+ * first call. */
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
   /* Perf tuning (compiler/PERF-RESULTS.md): Medaka workloads are
@@ -1607,4 +1618,60 @@ long long mdk_net_set_timeout(long long fd_tagged, long long ms_tagged) {
   if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0)
     return mdk_err(mdk_str_cstr(strerror(errno)));
   return mdk_ok(1);  /* Ok () */
+}
+
+/* ---------------------------------------------------------------------------
+ * Process entry.  The emitted IR's entry point is `mdk_program_main` (renamed
+ * from `@main` in compiler/backend/llvm_emit.mdk); this runtime owns the real
+ * C `main`.  We run the whole Medaka pipeline on a dedicated worker thread with
+ * a 256 MB stack: Medaka's lexer/parser recurse deeply, and the Linux default
+ * 8 MB thread stack overflows on large inputs (macOS previously baked a 512 MB
+ * stack via the Mach-O-only `-Wl,-stack_size` link flag, which GNU ld rejects).
+ * Self-provisioning the stack here removes the reliance on that link flag on
+ * both platforms.
+ *
+ * The worker MUST be created via GC_pthread_create (GC_THREADS is defined above
+ * <gc.h>) so Boehm registers the worker's stack as a GC root; a raw
+ * pthread_create'd thread would be invisible to the collector and its live
+ * objects would be reclaimed mid-run. */
+extern int mdk_program_main(int argc, char **argv);
+
+struct mdk_main_args {
+  int argc;
+  char **argv;
+  int ret;
+};
+
+static void *mdk_main_thread(void *p) {
+  struct mdk_main_args *a = (struct mdk_main_args *)p;
+  a->ret = mdk_program_main(a->argc, a->argv);
+  return NULL;
+}
+
+int main(int argc, char **argv) {
+  struct mdk_main_args a;
+  a.argc = argc;
+  a.argv = argv;
+  a.ret = 0;
+
+  pthread_attr_t attr;
+  if (pthread_attr_init(&attr) != 0) {
+    fprintf(stderr, "medaka: pthread_attr_init failed\n");
+    return 1;
+  }
+  /* 256 MB: comfortably over the ~32 MB (-O2) / ~128 MB (-O0) measured need. */
+  if (pthread_attr_setstacksize(&attr, (size_t)256 * 1024 * 1024) != 0) {
+    fprintf(stderr, "medaka: pthread_attr_setstacksize failed\n");
+    return 1;
+  }
+
+  pthread_t tid;
+  int rc = GC_pthread_create(&tid, &attr, mdk_main_thread, &a);
+  pthread_attr_destroy(&attr);
+  if (rc != 0) {
+    fprintf(stderr, "medaka: GC_pthread_create failed\n");
+    return 1;
+  }
+  GC_pthread_join(tid, NULL);
+  return a.ret;
 }

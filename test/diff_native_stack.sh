@@ -65,10 +65,8 @@ compile_run_check() {
     fail=$((fail+1)); printf 'FAIL %s (no golden — run sh test/capture_goldens.sh stack)\n' "$cr_name"; return
   fi
   cr_ref="$(cat "$cr_golden")"
-  if ! "$CC" -O2 -Wl,-stack_size,0x20000000 $GC_CFLAGS "$cr_ll" "$RT" $GC_LIBS -o "$cr_bin" 2>"$WORK/cc.err"; then
-    if ! "$CC" -O2 $GC_CFLAGS "$cr_ll" "$RT" $GC_LIBS -o "$cr_bin" 2>"$WORK/cc.err"; then
-      fail=$((fail+1)); printf 'FAIL %s (clang)\n%s\n' "$cr_name" "$(cat "$WORK/cc.err")"; return
-    fi
+  if ! "$CC" -O2 -pthread $GC_CFLAGS "$cr_ll" "$RT" $GC_LIBS -lm -o "$cr_bin" 2>"$WORK/cc.err"; then
+    fail=$((fail+1)); printf 'FAIL %s (clang)\n%s\n' "$cr_name" "$(cat "$WORK/cc.err")"; return
   fi
   # The native runtime auto-prints main's Unit return as a trailing "()" line; the
   # value golden has none — drop a sole trailing "()".

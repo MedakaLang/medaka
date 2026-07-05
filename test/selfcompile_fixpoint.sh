@@ -109,7 +109,7 @@ trim_unit() {
 # emit <binary> -> stdout : run a native emitter over the gap-tolerant driver graph.
 emit() { "$1" "$RUNTIME" "$CORE" "$DRIVER" "$SELFHOST" "$STDLIB"; }
 clang_ir() { # clang_ir <in.ll> <out-bin>  (errfile $WORK/$(basename out).cc.err)
-  "$CC" -Wl,-stack_size,"$STACK_SIZE" $GC_CFLAGS "$1" "$RT" $GC_LIBS -o "$2" 2>"$WORK/$(basename "$2").cc.err"
+  "$CC" -pthread $GC_CFLAGS "$1" "$RT" $GC_LIBS -lm -o "$2" 2>"$WORK/$(basename "$2").cc.err"
 }
 
 # ── seed bootstrap (replaces the old `$MAIN run` interpreted emission) ──────────
