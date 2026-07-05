@@ -58,6 +58,10 @@ function handleStatic(req, res) {
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Content-Length': data.length,
+      // Dev server: never let the browser serve a stale asset (edits to
+      // main.js/editor.js/compile.mjs must take effect on the next reload, and the
+      // e2e harness must never run against a cached build).
+      'Cache-Control': 'no-store, must-revalidate',
     });
     res.end(data);
   });

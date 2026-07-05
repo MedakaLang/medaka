@@ -1,3 +1,9 @@
+-- lint-disable-file rule-duplicate-body
+-- (The hover/completion helpers below are DELIBERATELY reimplemented from the
+--  same logic in compiler/tools/lsp.mdk rather than shared: importing lsp.mdk
+--  into this entry drags in tools.fmt + io and trips a pre-existing multi-module
+--  flat-union type conflation ("Token vs a -> b" at lsp.mdk's nextMode).  The
+--  duplication is the cost of keeping this entry's module graph small + correct.)
 -- playground_main.mdk — COMBINED diagnostics + WasmGC-emit entry for the
 -- server-free in-browser Medaka playground (Stage 2).
 --
@@ -59,8 +65,19 @@ import driver.diagnostics.{
   parseErrCode,
   codeKind,
 }
-import json.{Json, JInt, JString, JArray, JObject, jObject, jArray, stringify}
+import json.{
+  Json,
+  JNull,
+  JInt,
+  JString,
+  JArray,
+  JObject,
+  jObject,
+  jArray,
+  stringify,
+}
 import support.path.{dirOf}
+import support.char.{isIdentChar, isDigit}
 import types.typecheck.{
   elaborateModules,
   constrainedSigNames,
@@ -68,6 +85,9 @@ import types.typecheck.{
   preludeArgPosDictNames,
   enableEmitArgStampPasses,
   mainTypeIsFloat,
+  Scheme,
+  ppScheme,
+  checkProgramSchemesWithRuntime,
 }
 import ir.core_ir_lower.{lowerProgramEmit, methodIfaceTable, declSigTypeNames}
 import backend.private_mangle.{mangleUnits}
@@ -79,11 +99,24 @@ import backend.wasm_emit.{
   installMainIsFloatHint,
 }
 
+-- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
+--   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
+--   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
+--   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
+-- line/col are 0-based (LSP position convention).  hover/complete run a fresh
+-- single-file typecheck (checkProgramSchemesWithRuntime — the same env the LSP's
+-- hoverFor/completionFor use on a no-import buffer) and look up the identifier /
+-- prefix at the cursor.  ONE playground.wasm serves all three (the typecheck deps
+-- are already linked for `compile`).
 main : <IO, Mut, Panic> Unit
 main = match args ()
-  runtimeP::coreP::entry::roots =>
+  "compile"::runtimeP::coreP::entry::roots =>
     run runtimeP coreP entry (rootsOrDefault entry roots)
-  _ => ePutStrLn "usage: playground_main <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
+  "hover"::runtimeP::coreP::entry::rest =>
+    runQuery True runtimeP coreP entry rest
+  "complete"::runtimeP::coreP::entry::rest =>
+    runQuery False runtimeP coreP entry rest
+  _ => ePutStrLn "usage: playground_main <compile|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
 
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
@@ -197,3 +230,177 @@ cjHasErr (_, diags) = any isDiagError diags
 isDiagError : Diag -> Bool
 isDiagError (Diag SevError _ _ _ _ _) = True
 isDiagError _ = False
+
+-- ── hover / completion (stateless single-file language queries) ───────────────
+-- These reuse the LSP's already-pure approach (compiler/tools/lsp.mdk hoverFor /
+-- completionFor on a no-import buffer) WITHOUT importing lsp.mdk: they call the
+-- typecheck env builder (`checkProgramSchemesWithRuntime`, the same function the
+-- LSP's single-file `docSchemes` path calls) and the pure identifier/prefix
+-- helpers below (ported verbatim from lsp.mdk).  The playground buffer is a single
+-- file (prelude only), so no project graph is ever needed.
+
+-- hover=True → __MEDAKA_HOVER__ + a Hover JSON (or null); False → __MEDAKA_COMPLETE__
+-- + a CompletionItem[] (or null).  Reads the three sources; a read/parse failure
+-- degrades to a null result (never a trap), keeping the browser seam happy.
+runQuery : Bool -> String -> String -> String -> List String -> <IO, Mut> Unit
+runQuery isHover runtimeP coreP entry (lineS::colS::_) = match readFile runtimeP
+  Err _ => emitQuery isHover JNull
+  Ok rsrc => match readFile coreP
+    Err _ => emitQuery isHover JNull
+    Ok csrc => match readFile entry
+      Err _ => emitQuery isHover JNull
+      Ok tsrc => emitQuery isHover (queryResult isHover rsrc csrc tsrc (parseNat lineS) (parseNat colS))
+runQuery isHover _ _ _ _ = emitQuery isHover JNull
+
+emitQuery : Bool -> Json -> <IO> Unit
+emitQuery isHover j =
+  let _ = putStr (if isHover then "__MEDAKA_HOVER__\n" else "__MEDAKA_COMPLETE__\n")
+  putStr (stringify j ++ "\n")
+
+-- Build the buffer's typecheck env (core + runtime + this file), then either look
+-- up the identifier under the cursor (hover) or prefix-filter the env (complete).
+queryResult : Bool -> String -> String -> String -> Int -> Int -> <Mut> Json
+queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
+  Err _ => JNull
+  Ok userRaw =>
+    let runtimeDecls = desugar (unwrapDecls (parseResult rsrc))
+    let coreDecls = desugar (unwrapDecls (parseResult csrc))
+    let env = checkProgramSchemesWithRuntime runtimeDecls (coreDecls ++ desugar userRaw)
+    if isHover then
+      hoverResult tsrc line col env
+    else
+      jArray (filterCompletions (prefixBefore tsrc line col) [] env)
+
+hoverResult : String -> Int -> Int -> List (String, Scheme) -> <Mut> Json
+hoverResult src line col env = match identifierAt src line col
+  None => JNull
+  Some name => match lookupSchemeL name env
+    None => JNull
+    Some sch => jHover name (ppScheme sch)
+
+-- core.mdk / runtime.mdk always parse; unwrap defensively (None → []).
+unwrapDecls : Result ParseError (List Decl) -> List Decl
+unwrapDecls (Ok ds) = ds
+unwrapDecls (Err _) = []
+
+-- Parse a non-negative decimal from argv (digits only; non-digits skipped).
+parseNat : String -> Int
+parseNat s = pnGo (stringToChars s) 0 0
+
+pnGo : Array Char -> Int -> Int -> Int
+pnGo arr i acc
+  | i >= arrayLength arr = acc
+  | isDigit (arrayGetUnsafe i arr) =
+    pnGo arr (i + 1) (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
+  | otherwise = pnGo arr (i + 1) acc
+
+-- ── identifier-at-cursor + prefix (pure string ops, ported from lsp.mdk) ──────
+offsetOfLineCol : Array Char -> Int -> Int -> Option Int
+offsetOfLineCol arr line col = offsetGo arr (arrayLength arr) 0 0 0 line col
+
+offsetGo : Array Char -> Int -> Int -> Int -> Int -> Int -> Int -> Option Int
+offsetGo arr len i curLine lineStart line col
+  | curLine == line =
+    let pos = lineStart + col
+    if pos >= 0 && pos < len then Some pos else None
+  | i >= len = None
+  | arrayGetUnsafe i arr == '\n' =
+    offsetGo arr len (i + 1) (curLine + 1) (i + 1) line col
+  | otherwise = offsetGo arr len (i + 1) curLine lineStart line col
+
+identStart : Array Char -> Int -> Int
+identStart arr i
+  | i <= 0 = 0
+  | isIdentChar (arrayGetUnsafe (i - 1) arr) = identStart arr (i - 1)
+  | otherwise = i
+
+identStop : Array Char -> Int -> Int -> Int
+identStop arr len i
+  | i + 1 >= len = i + 1
+  | isIdentChar (arrayGetUnsafe (i + 1) arr) = identStop arr len (i + 1)
+  | otherwise = i + 1
+
+identifierAt : String -> Int -> Int -> Option String
+identifierAt src line col =
+  let arr = stringToChars src
+  let len = arrayLength arr
+  match offsetOfLineCol arr line col
+    None => None
+    Some pos =>
+      if not (isIdentChar (arrayGetUnsafe pos arr)) then
+        None
+      else
+        Some (stringSlice (identStart arr pos) (identStop arr len pos) src)
+
+-- The identifier prefix ending just before the cursor (for completion).
+prefixBefore : String -> Int -> Int -> String
+prefixBefore src line col =
+  let arr = stringToChars src
+  let len = arrayLength arr
+  match offsetOfLineStart arr len line
+    None => ""
+    Some lineStart =>
+      let stop = lineStart + col - 1
+      if stop < lineStart then
+        ""
+      else if stop >= len then
+        ""
+      else if not (isIdentChar (arrayGetUnsafe stop arr)) then
+        ""
+      else
+        stringSlice (prefixStart arr lineStart stop) (stop + 1) src
+
+offsetOfLineStart : Array Char -> Int -> Int -> Option Int
+offsetOfLineStart arr len line = lineStartGo arr len 0 0 0 line
+
+lineStartGo : Array Char -> Int -> Int -> Int -> Int -> Int -> Option Int
+lineStartGo arr len i curLine lineStart line
+  | curLine == line = Some lineStart
+  | i >= len = None
+  | arrayGetUnsafe i arr == '\n' =
+    lineStartGo arr len (i + 1) (curLine + 1) (i + 1) line
+  | otherwise = lineStartGo arr len (i + 1) curLine lineStart line
+
+prefixStart : Array Char -> Int -> Int -> Int
+prefixStart arr lineStart i
+  | i <= lineStart = lineStart
+  | isIdentChar (arrayGetUnsafe (i - 1) arr) = prefixStart arr lineStart (i - 1)
+  | otherwise = i
+
+-- ── env lookup + JSON shaping (ported from lsp.mdk) ───────────────────────────
+lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
+lookupSchemeL _ [] = None
+lookupSchemeL name ((n, s)::rest)
+  | name == n = Some s
+  | otherwise = lookupSchemeL name rest
+
+startsWith : String -> String -> Bool
+startsWith p n =
+  let pl = stringLength p
+  if pl == 0 then True else stringLength n >= pl && stringSlice 0 pl n == p
+
+anyName : List String -> String -> Bool
+anyName [] _ = False
+anyName (x::xs) name = x == name || anyName xs name
+
+filterCompletions : String -> List String -> List (String, Scheme) -> <Mut> List Json
+filterCompletions _ _ [] = []
+filterCompletions prefix seen ((n, s)::rest)
+  | startsWith prefix n && not (anyName seen n) =
+    jCompletionItem n (ppScheme s) :: filterCompletions prefix (n::seen) rest
+  | otherwise = filterCompletions prefix seen rest
+
+jCompletionItem : String -> String -> Json
+jCompletionItem label detail = jObject
+  [("label", JString label), ("kind", JInt 3), ("detail", JString detail)]
+
+jHover : String -> String -> Json
+jHover name ty =
+  let value = stringConcat ["```medaka\n", name, " : ", ty, "\n```"]
+  jObject
+    [
+      (
+        "contents",
+        jObject [("kind", JString "markdown"), ("value", JString value)],
+      )
+    ]

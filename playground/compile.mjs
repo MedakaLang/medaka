@@ -65,6 +65,30 @@ function fmt12g(d) {
 const enc = (s) => new TextEncoder().encode(s);
 const dec = (a) => new TextDecoder('utf8').decode(new Uint8Array(a));
 
+// Compile the wasm bytes to a WebAssembly.Module ONCE and reuse it across every
+// guest run.  This is load-bearing for the deep-recursion paths (a full
+// typecheck of core.mdk recurses thousands of frames in the lexer's layout pass):
+// passing raw BYTES to instantiate recompiles with V8's baseline (Liftoff) tier
+// on every call, whose stack frames are large enough to overflow a Web Worker's
+// small stack.  Reusing one Module lets V8 tier it up to TurboFan (much smaller
+// frames), which fits.  Keyed on the caller's stable wasm object reference (the
+// language worker holds one Uint8Array for its lifetime).
+// A single global slot: the playground only ever runs ONE wasm (playground.wasm),
+// so cache the first compiled Module and reuse it for every call — even when the
+// caller hands us a fresh Uint8Array/ArrayBuffer each time (the run compiler
+// worker clones the bytes per message).  Reusing one Module is what lets V8 keep
+// tiering it up (Liftoff→TurboFan) across calls so the deep-recursion paths fit.
+let _compiledModule = null;
+let _compiledLen = 0;
+function compiledModuleFor(wasmModuleOrBytes) {
+  if (wasmModuleOrBytes instanceof WebAssembly.Module) return Promise.resolve(wasmModuleOrBytes);
+  const len = wasmModuleOrBytes.byteLength;
+  if (_compiledModule && _compiledLen === len) return _compiledModule;
+  _compiledLen = len;
+  _compiledModule = WebAssembly.compile(wasmModuleOrBytes);
+  return _compiledModule;
+}
+
 // Run the compiler guest once over an in-memory vfs.  `vfsMap` = Map<path, Uint8Array>.
 // `argv` = string[].  Returns { out, err, exit } (out/err as strings).
 function runGuest(wasmModuleOrBytes, vfsMap, argv) {
@@ -105,16 +129,40 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
       mdk_exit: (code) => { finish(code); throw new ExitSignal(); },
     } };
 
-    const bytes = (wasmModuleOrBytes instanceof Uint8Array || wasmModuleOrBytes instanceof ArrayBuffer)
-      ? wasmModuleOrBytes : wasmModuleOrBytes;
-
-    WebAssembly.instantiate(bytes, imports)
+    compiledModuleFor(wasmModuleOrBytes)
+      .then((module) => WebAssembly.instantiate(module, imports))
       .then(() => finish(0))
       .catch((e) => {
         if (e instanceof ExitSignal || exited) { finish(0); return; }
         reject(e);
       });
   });
+}
+
+// True for a stack-overflow thrown out of the guest.  The compiler's front end
+// recurses deeply (the lexer's layout pass is ~one frame per token, thousands
+// deep on core.mdk).  On the FIRST run V8 executes the module with its baseline
+// (Liftoff) tier, whose large frames can overflow; a retry re-runs against the
+// now-tiered-up (TurboFan, small-frame) module and fits.  See runGuestRetry.
+function isStackOverflow(e) {
+  const m = (e && (e.message || String(e))) || '';
+  return /call stack|Maximum call stack|stack (?:size|overflow)/i.test(m);
+}
+
+// Run the guest, transparently retrying a first-call stack overflow (see above).
+// The compiled Module is cached (compiledModuleFor), so each retry runs against a
+// progressively more-optimized tier until it fits.
+async function runGuestRetry(wasm, vfsMap, argv, attempts = 5) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await runGuest(wasm, vfsMap, argv);
+    } catch (e) {
+      last = e;
+      if (!isStackOverflow(e)) throw e;
+    }
+  }
+  throw last;
 }
 
 // Thrown from mdk_exit to unwind the guest after a clean exit (mirrors run.js).
@@ -156,13 +204,14 @@ export async function compile(source, opts = {}) {
     vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
   }
 
-  // argv = <runtime.mdk> <core.mdk> <entry.mdk> <root>.  The loader resolves the
-  // entry's module id "main" against root "." → "./main.mdk" (a registered key).
-  const argv = [RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+  // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <root>.  Mode 'compile'
+  // = today's analyze→emit behavior.  The loader resolves the entry's module id
+  // "main" against root "." → "./main.mdk" (a registered key).
+  const argv = ['compile', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
 
   let res;
   try {
-    res = await runGuest(wasm, vfsMap, argv);
+    res = await runGuestRetry(wasm, vfsMap, argv);
   } catch (e) {
     return { ok: false, diagnostics: synthErr('compiler trap: ' + (e && e.message || e)) };
   }
@@ -185,6 +234,62 @@ export async function compile(source, opts = {}) {
   // No recognized marker — surface stderr/stdout as a synthetic diagnostic so the
   // caller never silently swallows a failure.
   return { ok: false, diagnostics: synthErr('unexpected compiler output: ' + (res.err || out).slice(0, 400)) };
+}
+
+// ── stateless language queries (hover / completion) ──────────────────────────
+// Both wrap the SAME playground.wasm through a cursor-carrying mode arg
+// (compiler/entries/playground_main.mdk dispatches on argv[0]).  The guest runs a
+// fresh parse+typecheck of the single-file buffer, calls the LSP's already-pure
+// hoverFor/completionFor, and prints one marker line + one JSON line.  We demux
+// the marker and return the parsed LSP result Json (or null).
+//
+//   hover(source, line, col, {wasm, stdlib})    -> LSP Hover object | null
+//   complete(source, line, col, {wasm, stdlib}) -> LSP CompletionItem[] | null
+// line/col are 0-based (LSP position convention), matching CM6 line-1 / col.
+async function queryAt(mode, marker, source, line, col, opts) {
+  const { wasm, stdlib } = opts;
+  if (!wasm) throw new Error(mode + ': opts.wasm (playground.wasm bytes) required');
+  if (!stdlib || stdlib.runtime == null || stdlib.core == null)
+    throw new Error(mode + ': opts.stdlib { runtime, core } required');
+
+  const vfsMap = new Map();
+  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
+  vfsMap.set(CORE_PATH, enc(stdlib.core));
+  vfsMap.set(USER_PATH, enc(source));
+  if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
+    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
+  }
+
+  // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <line> <col>.
+  const argv = [mode, RUNTIME_PATH, CORE_PATH, USER_PATH, String(line | 0), String(col | 0)];
+
+  let res;
+  try {
+    res = await runGuestRetry(wasm, vfsMap, argv);
+  } catch {
+    return null;
+  }
+  const out = res.out;
+  const nl = out.indexOf('\n');
+  const gotMarker = nl >= 0 ? out.slice(0, nl) : out;
+  const payload = nl >= 0 ? out.slice(nl + 1) : '';
+  if (gotMarker !== marker) return null;
+  try {
+    return JSON.parse(payload.trim());
+  } catch {
+    return null;
+  }
+}
+
+// hover: returns the LSP Hover { contents:{ kind:'markdown', value } } or null.
+export async function hover(source, line, col, opts = {}) {
+  return queryAt('hover', '__MEDAKA_HOVER__', source, line, col, opts);
+}
+
+// complete: returns an array of LSP CompletionItem { label, kind, detail }, or null.
+export async function complete(source, line, col, opts = {}) {
+  const r = await queryAt('complete', '__MEDAKA_COMPLETE__', source, line, col, opts);
+  return Array.isArray(r) ? r : null;
 }
 
 function synthErr(message) {

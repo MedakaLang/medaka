@@ -13,6 +13,7 @@
 //               | { ok:true, wasm } → worker.js runner posts stdout/stderr/done.
 
 import { createEditor, getValue, setDiagnostics as setSquiggles } from './editor.js';
+import { hover as compileHover, complete as compileComplete } from './compile.mjs';
 
 const RUN_TIMEOUT_MS = 10000; // 10 s wall-clock budget per run
 const ANALYZE_DEBOUNCE_MS = 300;
@@ -46,10 +47,54 @@ const problemPane  = document.getElementById('problems');
 const gcBanner     = document.getElementById('gc-banner');
 const statusLine   = document.getElementById('status');
 
+// ── Language-service (hover + completion) — runs on the MAIN THREAD ───────────
+// Unlike analyze (in the language worker), hover/completion run here: a full
+// single-file typecheck recurses thousands of frames deep in the compiler's lexer
+// and overflows a Web Worker's small stack; the main thread's larger stack fits
+// it (compile.mjs also retries a first-call Liftoff overflow against the tiered-up
+// module).  They're on-demand + infrequent, so the brief main-thread cost is fine.
+// A single stable Uint8Array over the cached wasm bytes lets compile.mjs cache the
+// compiled Module (so the retry runs against tiered-up, small-frame code).
+let mainThreadWasm = null;
+
+async function langAssets() {
+  const a = await loadAssets();
+  if (!mainThreadWasm) mainThreadWasm = new Uint8Array(a.wasm);
+  return { wasm: mainThreadWasm, stdlib: { runtime: a.runtime, core: a.core } };
+}
+
+// Warm the main-thread compiler module once (a throwaway hover) so V8 tiers it up
+// (TurboFan, small frames) before the user's first real hover/completion — which
+// otherwise pays the slow first-call Liftoff-overflow-then-retry cost inline.
+let langWarmed = false;
+async function warmLangService() {
+  if (langWarmed) return;
+  langWarmed = true;
+  try {
+    const { wasm, stdlib } = await langAssets();
+    await compileHover('main = 0\n', 0, 7, { wasm, stdlib });
+  } catch { /* warmup is best-effort */ }
+}
+
+// Passed to the CM6 editor; each returns a Promise the hover/complete providers await.
+const langService = {
+  hover: async (source, line, col) => {
+    try { const { wasm, stdlib } = await langAssets(); return await compileHover(source, line, col, { wasm, stdlib }); }
+    catch { return null; }
+  },
+  complete: async (source, line, col) => {
+    try { const { wasm, stdlib } = await langAssets(); return await compileComplete(source, line, col, { wasm, stdlib }); }
+    catch { return null; }
+  },
+};
+
 // ── Editor ────────────────────────────────────────────────────────────────────
-const view = createEditor(editorEl, DEFAULT_PROGRAM, onEditorChange);
-// Expose the view for browser debugging / automated end-to-end tests (harmless).
+const view = createEditor(editorEl, DEFAULT_PROGRAM, onEditorChange, langService);
+// Expose the view + language service for browser debugging / automated e2e tests
+// (harmless).  __mdkLang lets the e2e assert hover/completion data deterministically,
+// independent of CM6's timing-finicky synthetic-mouse hover trigger.
 window.__mdkView = view;
+window.__mdkLang = langService;
 
 // ── Engine gate ───────────────────────────────────────────────────────────────
 const gcOk = hasWasmGC();
@@ -184,6 +229,8 @@ async function initLanguageService() {
   });
   // Kick an initial analyze once the worker signals ready.
   scheduleAnalyze();
+  // Warm the main-thread hover/completion module in the background.
+  warmLangService();
 }
 
 function onEditorChange() {

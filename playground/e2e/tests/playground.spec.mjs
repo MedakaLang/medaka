@@ -68,11 +68,17 @@ async function main() {
     }, DEFAULT_SAMPLE);
     await page.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
     await page.click('#run-btn');
-    await page.waitForFunction(
-      () => document.getElementById('stdout')?.textContent?.includes('hello'),
-      null,
-      { timeout: 30000 },
-    );
+    // Tolerate a timeout here so a flaky Run does not abort the independent
+    // hover/completion tests below (Run compiles in a Web Worker whose stack can
+    // overflow the compiler's deep recursion — a pre-existing limitation, see the
+    // module-cache note in compile.mjs).
+    try {
+      await page.waitForFunction(
+        () => document.getElementById('stdout')?.textContent?.includes('hello'),
+        null,
+        { timeout: 30000 },
+      );
+    } catch { /* the checks below will record the failure */ }
     const stdout = (await page.$eval('#stdout', (el) => el.textContent)).trim();
     check('stdout contains "hello from Medaka!"', stdout.includes('hello from Medaka!'), stdout);
     check('stdout contains sum result "15"', stdout.includes('15'), stdout);
@@ -84,7 +90,9 @@ async function main() {
       const v = window.__mdkView;
       v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: src } });
     }, TYPE_ERROR_SAMPLE);
-    await page.waitForSelector('.cm-lintRange-error, .cm-lint-marker-error', { timeout: 8000 });
+    // Tolerate a timeout (analyze also runs in the worker — same pre-existing
+    // deep-recursion limitation) so the hover/completion tests still run.
+    try { await page.waitForSelector('.cm-lintRange-error, .cm-lint-marker-error', { timeout: 8000 }); } catch { /* checks below record it */ }
     const hasSquiggle = !!(await page.$('.cm-lintRange-error'));
     const hasGutterMarker = !!(await page.$('.cm-lint-marker-error'));
     const problemsText = (await page.$eval('#problems', (el) => el.textContent).catch(() => ''));
@@ -96,6 +104,73 @@ async function main() {
       problemsText.slice(0, 200),
     );
     await page.screenshot({ path: `${SCREENSHOT_DIR}/04_squiggle.png` });
+
+    // ── Test 5: hover an identifier → its inferred type ──────────────────────
+    // hover/completion run on the MAIN THREAD (a Web Worker's stack is too small
+    // for the compiler's deep recursion; see main.js).  We assert the browser's
+    // language-service DATA path deterministically via window.__mdkLang (the exact
+    // provider the CM6 tooltip calls), then best-effort-trigger the visual tooltip
+    // for the screenshot — CM6's synthetic-mouse hover timing is too flaky to gate.
+    console.log('Test: hover-type');
+    const HOVER_SAMPLE = 'double : Int -> Int\ndouble x = x + x\n\nmain = println (double 21)\n';
+    await page.evaluate((src) => {
+      const v = window.__mdkView;
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: src } });
+    }, HOVER_SAMPLE);
+    await page.waitForTimeout(2000); // let the main-thread module warm up (tier-up)
+    // Deterministic: call the language service the CM6 provider uses (line 1 = the
+    // `double` definition, col 0).
+    const hoverValue = await page.evaluate(async (src) => {
+      const h = await window.__mdkLang.hover(src, 1, 0);
+      return (h && h.contents && h.contents.value) || null;
+    }, HOVER_SAMPLE);
+    check('hover returns `double : Int -> Int`', !!hoverValue && hoverValue.includes('double : Int -> Int'), JSON.stringify(hoverValue));
+
+    // Best-effort: trigger the actual CM6 hover tooltip for the screenshot.
+    const hoverCoords = await page.evaluate(() => {
+      const v = window.__mdkView;
+      const line = v.state.doc.line(2);
+      const c = v.coordsAtPos(line.from + 2);
+      return c ? { x: (c.left + c.right) / 2, y: (c.top + c.bottom) / 2 } : null;
+    });
+    let sawTooltip = false;
+    if (hoverCoords) {
+      for (let attempt = 0; attempt < 5 && !sawTooltip; attempt++) {
+        await page.mouse.move(6, 6);
+        await page.waitForTimeout(200);
+        await page.mouse.move(hoverCoords.x - 3, hoverCoords.y);
+        await page.mouse.move(hoverCoords.x, hoverCoords.y);
+        try { await page.waitForSelector('.cm-mdk-hover', { timeout: 2500 }); sawTooltip = true; } catch { /* retry */ }
+      }
+    }
+    console.log('  (hover tooltip rendered in UI: ' + sawTooltip + ')');
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/05_hover.png` });
+
+    // ── Test 6: prefix → prefix-filtered completion list ─────────────────────
+    console.log('Test: autocomplete');
+    // Deterministic: assert the completion provider's data via __mdkLang.
+    const completionLabels = await page.evaluate(async () => {
+      const items = await window.__mdkLang.complete('main = pr\n', 0, 9); // prefix `pr`
+      return (items || []).map((i) => i.label);
+    });
+    check('completion returns a non-empty list for prefix `pr`', completionLabels.length > 0, JSON.stringify(completionLabels));
+    check('completion lists `println`', completionLabels.includes('println'), JSON.stringify(completionLabels.slice(0, 8)));
+
+    // Best-effort: trigger the actual CM6 autocomplete popup for the screenshot.
+    await page.evaluate(() => {
+      const v = window.__mdkView;
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: 'main = ' } });
+      v.dispatch({ selection: { anchor: v.state.doc.length } });
+      v.focus();
+    });
+    await page.keyboard.type('pri', { delay: 70 });
+    let sawPopup = false;
+    for (let attempt = 0; attempt < 5 && !sawPopup; attempt++) {
+      try { await page.waitForSelector('.cm-tooltip-autocomplete li', { timeout: 2500 }); sawPopup = true; }
+      catch { await page.keyboard.press('Control+Space').catch(() => {}); }
+    }
+    console.log('  (autocomplete popup rendered in UI: ' + sawPopup + ')');
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/06_completion.png` });
 
     if (pageErrors.length) {
       console.log('Uncaught page errors observed during run:', pageErrors);

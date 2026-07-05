@@ -1,3 +1,10 @@
+-- lint-disable-file rule-duplicate-body
+-- (A handful of small pure cursor/env helpers here — identifierAt/offsetOfLineCol/
+--  prefixBefore/lookupSchemeL/jHover/… — are intentionally mirrored in
+--  compiler/entries/playground_main.mdk, which cannot import this module: doing so
+--  drags tools.fmt + io into that entry's graph and trips a pre-existing
+--  multi-module flat-union conflation.  The duplication is deliberate; see the
+--  note atop playground_main.mdk.)
 -- compiler/lsp.mdk — self-hosted Language Server (Stage 4 Phase B.10)
 --
 -- Slices B.10.0 + B.10.1:

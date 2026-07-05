@@ -906,6 +906,12 @@ isLeafExternW name = contains name [
   -- emitLeafExternRef into the byte-channel host-import runtime.  ($str is forced by
   -- noteW8Extern, not by listing them under isStrExternW.)
   "readFile", "fileExists", "args", "getEnv", "exit",
+  -- canonicalizePath : String -> String — realpath(3) natively; the browser wasm vfs
+  -- has no realpath, so it lowers to IDENTITY (matches the extern's "input unchanged on
+  -- failure" contract).  Reachable in the wasm playground because the loader's
+  -- canonicalModId calls it; a single-file (dep-less) buffer never actually exercises
+  -- the cross-package branch, so identity is exact for the playground.
+  "canonicalizePath",
   -- stage-D: byte-clean file I/O.  readFileBytes builds a Result String (Array Int)
   -- (an $arr of i31 bytes); writeFileBytes streams an Array Int OUT + fs.writeFileSync.
   -- Both route through emitLeafExternRef into the fileBytesRuntime host seam.
@@ -4734,6 +4740,11 @@ emitLeafExternRef prog env d "readFile" [p] = emitRefExpr prog env d p
   ++ ["ref.cast (ref $str)", "call $mdk_read_file_io"]
 emitLeafExternRef prog env d "readFile" _ =
   gapL "wasm W12: readFile takes exactly one argument"
+-- canonicalizePath : String -> String — IDENTITY on the wasm host (no realpath in a
+-- browser vfs).  Emit the $str argument and leave it on the stack as the result.
+emitLeafExternRef prog env d "canonicalizePath" [p] = emitRefExpr prog env d p
+emitLeafExternRef prog env d "canonicalizePath" _ =
+  gapL "wasm: canonicalizePath takes exactly one argument"
 emitLeafExternRef prog env d "fileExists" [p] = emitRefExpr prog env d p
   ++ ["ref.cast (ref $str)", "call $mdk_file_exists_io"]
 emitLeafExternRef prog env d "fileExists" _ =

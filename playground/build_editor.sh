@@ -31,7 +31,7 @@ export { EditorState, StateEffect, StateField, Compartment } from '@codemirror/s
 export {
   EditorView, keymap, lineNumbers, highlightActiveLine,
   highlightActiveLineGutter, drawSelection, rectangularSelection,
-  crosshairCursor, highlightSpecialChars, tooltips,
+  crosshairCursor, highlightSpecialChars, tooltips, hoverTooltip,
 } from '@codemirror/view';
 export {
   StreamLanguage, LanguageSupport, HighlightStyle, syntaxHighlighting,

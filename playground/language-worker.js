@@ -16,7 +16,13 @@
 // Cancellation: the worker processes messages sequentially and cannot interrupt
 // a running analyze, so the main thread coalesces (only the latest source is
 // ever queued) and ignores responses whose id is stale.  Re-instantiation per
-// analyze is cheap (runGuest re-instantiates the cached module bytes).
+// analyze is cheap (runGuest re-instantiates the cached module).
+//
+// NOTE (S3/S4): hover + completion do NOT run here.  They run on the MAIN THREAD
+// (see main.js): a full single-file typecheck recurses thousands of frames deep
+// (the lexer's layout pass) and overflows a Web Worker's small stack, whereas the
+// main thread's larger stack fits it.  Keeping analyze here still isolates the
+// per-keystroke work from the UI thread.
 
 import { compile } from './compile.mjs';
 
@@ -51,5 +57,6 @@ self.onmessage = async function (e) {
     } catch (err) {
       self.postMessage({ type: 'error', id, message: (err && err.message) || String(err) });
     }
+    return;
   }
 };
