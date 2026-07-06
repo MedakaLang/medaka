@@ -606,7 +606,7 @@ COMMA
 IDENT "v"
 RPAREN
 FAT_ARROW
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 IDENT "m"
@@ -660,7 +660,7 @@ EQUAL
 UPPER "False"
 NEWLINE
 EXPORT
-IDENT "lookup"
+IDENT "get"
 COLON
 UPPER "Ord"
 IDENT "k"
@@ -674,13 +674,13 @@ ARROW
 UPPER "Option"
 IDENT "v"
 NEWLINE
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 UPPER "Tip"
 EQUAL
 UPPER "None"
 NEWLINE
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 LPAREN
 UPPER "Bin"
@@ -698,13 +698,13 @@ IDENT "k2"
 INDENT
 UPPER "Lt"
 FAT_ARROW
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 IDENT "l"
 NEWLINE
 UPPER "Gt"
 FAT_ARROW
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 IDENT "r"
 NEWLINE
@@ -716,7 +716,7 @@ NEWLINE
 DEDENT
 NEWLINE
 EXPORT
-IDENT "member"
+IDENT "has"
 COLON
 UPPER "Ord"
 IDENT "k"
@@ -729,13 +729,13 @@ IDENT "v"
 ARROW
 UPPER "Bool"
 NEWLINE
-IDENT "member"
+IDENT "has"
 IDENT "k"
 UPPER "Tip"
 EQUAL
 UPPER "False"
 NEWLINE
-IDENT "member"
+IDENT "has"
 IDENT "k"
 LPAREN
 UPPER "Bin"
@@ -753,13 +753,13 @@ IDENT "k2"
 INDENT
 UPPER "Lt"
 FAT_ARROW
-IDENT "member"
+IDENT "has"
 IDENT "k"
 IDENT "l"
 NEWLINE
 UPPER "Gt"
 FAT_ARROW
-IDENT "member"
+IDENT "has"
 IDENT "k"
 IDENT "r"
 NEWLINE
@@ -791,7 +791,7 @@ IDENT "k"
 IDENT "m"
 EQUAL
 MATCH
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 IDENT "m"
 INDENT
@@ -807,7 +807,7 @@ NEWLINE
 DEDENT
 NEWLINE
 EXPORT
-IDENT "insert"
+IDENT "set"
 COLON
 UPPER "Ord"
 IDENT "k"
@@ -824,7 +824,7 @@ UPPER "Map"
 IDENT "k"
 IDENT "v"
 NEWLINE
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 UPPER "Tip"
@@ -833,7 +833,7 @@ IDENT "singleton"
 IDENT "k"
 IDENT "v"
 NEWLINE
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 LPAREN
@@ -856,7 +856,7 @@ IDENT "balance"
 IDENT "k2"
 IDENT "v2"
 LPAREN
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 IDENT "l"
@@ -870,7 +870,7 @@ IDENT "k2"
 IDENT "v2"
 IDENT "l"
 LPAREN
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 IDENT "r"
@@ -1423,7 +1423,7 @@ NEWLINE
 DEDENT
 NEWLINE
 EXPORT
-IDENT "lookupMin"
+IDENT "getMin"
 COLON
 UPPER "Map"
 IDENT "k"
@@ -1436,7 +1436,7 @@ COMMA
 IDENT "v"
 RPAREN
 NEWLINE
-IDENT "lookupMin"
+IDENT "getMin"
 IDENT "m"
 EQUAL
 IDENT "map"
@@ -1461,7 +1461,7 @@ IDENT "m"
 RPAREN
 NEWLINE
 EXPORT
-IDENT "lookupMax"
+IDENT "getMax"
 COLON
 UPPER "Map"
 IDENT "k"
@@ -1474,7 +1474,7 @@ COMMA
 IDENT "v"
 RPAREN
 NEWLINE
-IDENT "lookupMax"
+IDENT "getMax"
 IDENT "m"
 EQUAL
 IDENT "map"
@@ -1922,7 +1922,7 @@ IDENT "p"
 IDENT "k"
 IDENT "v"
 THEN
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 IDENT "acc"
@@ -1957,7 +1957,7 @@ IDENT "k"
 IDENT "v"
 IDENT "acc"
 FAT_ARROW
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 IDENT "acc"
@@ -2123,7 +2123,7 @@ IDENT "v"
 IDENT "acc"
 EQUAL
 MATCH
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 IDENT "b"
 INDENT
@@ -2134,7 +2134,7 @@ NEWLINE
 UPPER "Some"
 IDENT "w"
 FAT_ARROW
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 LPAREN
 IDENT "f"
@@ -2757,10 +2757,10 @@ RPAREN
 EQUAL
 IDENT "eq"
 LPAREN
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 LPAREN
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 LPAREN
@@ -2799,7 +2799,7 @@ RPAREN
 EQUAL
 IDENT "wellFormed"
 LPAREN
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 IDENT "v"
 LPAREN
@@ -2839,7 +2839,7 @@ RPAREN
 NEWLINE
 IDENT "not"
 LPAREN
-IDENT "member"
+IDENT "has"
 IDENT "k"
 IDENT "m"
 RPAREN
@@ -2907,7 +2907,7 @@ INDENT
 LET
 IDENT "l"
 EQUAL
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 INT 1
 LPAREN
@@ -2918,7 +2918,7 @@ NEWLINE
 LET
 IDENT "r"
 EQUAL
-IDENT "insert"
+IDENT "set"
 IDENT "k"
 INT 2
 LPAREN
@@ -2928,7 +2928,7 @@ RPAREN
 NEWLINE
 IDENT "eq"
 LPAREN
-IDENT "lookup"
+IDENT "get"
 IDENT "k"
 LPAREN
 IDENT "union"

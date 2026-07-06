@@ -82,10 +82,10 @@ get key (HashMap buckets _) =
 
 {- | `True` when the key is present.
 
-   > member 2 (fromList [(1, 10), (2, 20)])
+   > has 2 (fromList [(1, 10), (2, 20)])
    True -}
-export member : (Eq k, Hashable k) => k -> HashMap k v -> Bool
-member key m = isSome (get key m)
+export has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
+has key m = isSome (get key m)
 
 {- | Value at a key, or a fallback.
 
@@ -118,8 +118,8 @@ bucketRemove key ((k, v)::rest)
 
 {- | Insert (or overwrite) the value at a key, in place. Resizes (doubling)
    when the load factor passes 0.75. -}
-export insert : (Eq k, Hashable k) => k -> v -> HashMap k v -> <Mut> Unit
-insert key val (HashMap buckets count) =
+export set : (Eq k, Hashable k) => k -> v -> HashMap k v -> <Mut> Unit
+set key val (HashMap buckets count) =
   let arr = buckets.value
   let idx = slotOf key (arrayLength arr)
   insertAt key val arr idx buckets count
@@ -180,7 +180,7 @@ fromList pairs =
 insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> <Mut> Unit
 insertAll [] _ = ()
 insertAll ((k, v)::rest) m =
-  insert k v m
+  set k v m
   insertAll rest m
 
 -- ── Deletion (mutating) ─────────────────────────────────────────────────

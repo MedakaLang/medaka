@@ -34,7 +34,7 @@
 
 import frontend.ast.{Decl(..)}
 import frontend.marker.{declRefs}
-import hash_map.{HashMap, new, insert, member, findWithDefault}
+import hash_map.{HashMap, new, set, has, findWithDefault}
 
 -- ── entry point ────────────────────────────────────────────────────────────
 -- Filter `decls` (the flattened, elaborated whole-program decl list) to retain
@@ -43,11 +43,11 @@ export dceFilter : List Decl -> <Mut> List Decl
 dceFilter decls = filterReachable (reachableNames decls) decls
 
 -- Drop only unreachable DFunDefs; keep everything else verbatim, in order.
--- `reach` is a HashMap-as-set, so `member` is O(1) average and this is O(#decls).
+-- `reach` is a HashMap-as-set, so `has` is O(1) average and this is O(#decls).
 filterReachable : HashMap String Unit -> List Decl -> List Decl
 filterReachable _ [] = []
 filterReachable reach ((DFunDef pub n ps body)::rest)
-  | member n reach = DFunDef pub n ps body :: filterReachable reach rest
+  | has n reach = DFunDef pub n ps body :: filterReachable reach rest
   | otherwise = filterReachable reach rest
 filterReachable reach (d::rest) = d :: filterReachable reach rest
 
@@ -66,8 +66,8 @@ filterReachable reach (d::rest) = d :: filterReachable reach rest
 -- post-mangle-synthesized prelude reference, not just `not`.
 canonRef : HashMap String Unit -> String -> String
 canonRef defined n
-  | member n defined = n
-  | member ("core__" ++ n) defined = "core__" ++ n
+  | has n defined = n
+  | has ("core__" ++ n) defined = "core__" ++ n
   | otherwise = n
 
 -- set of all DFunDef names defined in the program (the only DCE-droppable decls).
@@ -80,7 +80,7 @@ definedFnNames decls =
 definedFnNamesInto : List Decl -> HashMap String Unit -> <Mut> Unit
 definedFnNamesInto [] _ = ()
 definedFnNamesInto ((DFunDef _ n _ _)::rest) s =
-  let _ = insert n () s
+  let _ = set n () s
   definedFnNamesInto rest s
 definedFnNamesInto (_::rest) s = definedFnNamesInto rest s
 
@@ -97,7 +97,7 @@ reachableNames decls =
   let _ = closure graph seen (map (canonRef defined) ("main" :: emittingRoots decls))
   seen
 
--- name -> refs(body) as a HashMap (multi-clause defs merged). O(1) insert/lookup;
+-- name -> refs(body) as a HashMap (multi-clause defs merged). O(1) set/get;
 -- replaces the old O(N²) assoc-list `addRefs`. Ref-list order is irrelevant (fed
 -- to the membership-only closure).  Each ref is canonicalized against the defined
 -- set so a post-mangle bare prelude reference (`not`) resolves to `core__not`.
@@ -110,7 +110,7 @@ funGraph defined decls =
 funGraphInto : HashMap String Unit -> List Decl -> HashMap String (List String) -> <Mut> Unit
 funGraphInto _ [] _ = ()
 funGraphInto defined ((DFunDef _ n ps body)::rest) g =
-  let _ = insert n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
+  let _ = set n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
   funGraphInto defined rest g
 funGraphInto defined (_::rest) g = funGraphInto defined rest g
 
@@ -136,15 +136,15 @@ isEmittingDecl _ = False
 
 -- ── worklist closure ───────────────────────────────────────────────────────
 -- BFS over the call graph: insert each unseen name into `seen`, enqueue its
--- refs.  `member` skips already-processed names, so every name is inserted once
+-- refs.  `has` skips already-processed names, so every name is inserted once
 -- → O(reachable + edges) with O(1)-average membership and O(1) graph lookup.
 -- The resulting `seen` set is the same set the old list-based closure produced.
 closure : HashMap String (List String) -> HashMap String Unit -> List String -> <Mut> Unit
 closure _ _ [] = ()
 closure graph seen (w::work)
-  | member w seen = closure graph seen work
+  | has w seen = closure graph seen work
   | otherwise =
-    let _ = insert w () seen
+    let _ = set w () seen
     closure graph seen (refsOf graph w ++ work)
 
 refsOf : HashMap String (List String) -> String -> List String

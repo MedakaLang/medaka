@@ -138,7 +138,7 @@ singleton k v = Bin 1 k v Tip Tip
    > findWithDefault 0 1 (fromList [(1, 10), (1, 20)])
    20 -}
 export fromList : Ord k => List (k, v) -> Map k v
-fromList xs = fold (m (k, v) => insert k v m) Tip xs
+fromList xs = fold (m (k, v) => set k v m) Tip xs
 
 -- ── Query ───────────────────────────────────────────────────────────────
 
@@ -160,28 +160,28 @@ isEmpty _ = False
 
 {- | Look up the value at a key.
 
-   > lookup 2 (fromList [(1, 10), (2, 20)])
+   > get 2 (fromList [(1, 10), (2, 20)])
    Some 20
-   > lookup 9 (fromList [(1, 10), (2, 20)])
+   > get 9 (fromList [(1, 10), (2, 20)])
    None -}
-export lookup : Ord k => k -> Map k v -> Option v
-lookup k Tip = None
-lookup k (Bin _ k2 v l r) = match compare k k2
-  Lt => lookup k l
-  Gt => lookup k r
+export get : Ord k => k -> Map k v -> Option v
+get k Tip = None
+get k (Bin _ k2 v l r) = match compare k k2
+  Lt => get k l
+  Gt => get k r
   Eq => Some v
 
 {- | `True` when the key is present.
 
-   > member 2 (fromList [(1, 10), (2, 20)])
+   > has 2 (fromList [(1, 10), (2, 20)])
    True
-   > member 9 (fromList [(1, 10), (2, 20)])
+   > has 9 (fromList [(1, 10), (2, 20)])
    False -}
-export member : Ord k => k -> Map k v -> Bool
-member k Tip = False
-member k (Bin _ k2 _ l r) = match compare k k2
-  Lt => member k l
-  Gt => member k r
+export has : Ord k => k -> Map k v -> Bool
+has k Tip = False
+has k (Bin _ k2 _ l r) = match compare k k2
+  Lt => has k l
+  Gt => has k r
   Eq => True
 
 {- | Value at a key, or a fallback when the key is absent.
@@ -191,7 +191,7 @@ member k (Bin _ k2 _ l r) = match compare k k2
    > findWithDefault 0 9 (fromList [(1, 10), (2, 20)])
    0 -}
 export findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m = match lookup k m
+findWithDefault d k m = match get k m
   None => d
   Some v => v
 
@@ -199,13 +199,13 @@ findWithDefault d k m = match lookup k m
 
 {- | Insert a key/value pair, replacing any existing value at the key.
 
-   > findWithDefault 0 2 (insert 2 99 (fromList [(1, 10), (2, 20)]))
+   > findWithDefault 0 2 (set 2 99 (fromList [(1, 10), (2, 20)]))
    99 -}
-export insert : Ord k => k -> v -> Map k v -> Map k v
-insert k v Tip = singleton k v
-insert k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (insert k v l) r
-  Gt => balance k2 v2 l (insert k v r)
+export set : Ord k => k -> v -> Map k v -> Map k v
+set k v Tip = singleton k v
+set k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (set k v l) r
+  Gt => balance k2 v2 l (set k v r)
   Eq => Bin s k v l r
 
 {- | Insert with a combining function.  On a collision the new value is
@@ -236,7 +236,7 @@ adjust f k (Bin s k2 v2 l r) = match compare k k2
 
 {- | Remove a key.  A no-op when the key is absent.
 
-   > member 2 (delete 2 (fromList [(1, 10), (2, 20)]))
+   > has 2 (delete 2 (fromList [(1, 10), (2, 20)]))
    False
    > size (delete 9 (fromList [(1, 10), (2, 20)]))
    2 -}
@@ -287,17 +287,17 @@ maxView (Bin _ k v l r) = match maxView r
 
 {- | Smallest key/value, or `None`.
 
-   > lookupMin (fromList [(3, 0), (1, 0), (2, 0)])
+   > getMin (fromList [(3, 0), (1, 0), (2, 0)])
    Some (1, 0) -}
-export lookupMin : Map k v -> Option (k, v)
-lookupMin m = map ((k, v, _) => (k, v)) (minView m)
+export getMin : Map k v -> Option (k, v)
+getMin m = map ((k, v, _) => (k, v)) (minView m)
 
 {- | Largest key/value, or `None`.
 
-   > lookupMax (fromList [(3, 0), (1, 0), (2, 0)])
+   > getMax (fromList [(3, 0), (1, 0), (2, 0)])
    Some (3, 0) -}
-export lookupMax : Map k v -> Option (k, v)
-lookupMax m = map ((k, v, _) => (k, v)) (maxView m)
+export getMax : Map k v -> Option (k, v)
+getMax m = map ((k, v, _) => (k, v)) (maxView m)
 
 {- | Drop the smallest entry (a no-op on the empty map).
 
@@ -367,7 +367,7 @@ export filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
 filterWithKey p m = foldrWithKey (filterStep p) Tip m
 
 filterStep : Ord k => (k -> v -> <e> Bool) -> k -> v -> Map k v -> <e> Map k v
-filterStep p k v acc = if p k v then insert k v acc else acc
+filterStep p k v acc = if p k v then set k v acc else acc
 
 -- ── Combining ───────────────────────────────────────────────────────────
 
@@ -378,7 +378,7 @@ filterStep p k v acc = if p k v then insert k v acc else acc
    > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
    2 -}
 export union : Ord k => Map k v -> Map k v -> Map k v
-union a b = foldrWithKey (k v acc => insert k v acc) b a
+union a b = foldrWithKey (k v acc => set k v acc) b a
 
 {- | Union with a combining function for shared keys: `f leftValue rightValue`.
 
@@ -402,9 +402,9 @@ export intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k 
 intersectionWith f a b = foldrWithKey (intersectStep f b) Tip a
 
 intersectStep : Ord k => (v -> w -> x) -> Map k w -> k -> v -> Map k x -> Map k x
-intersectStep f b k v acc = match lookup k b
+intersectStep f b k v acc = match get k b
   None => acc
-  Some w => insert k (f v w) acc
+  Some w => set k (f v w) acc
 
 -- ── Typeclass instances ─────────────────────────────────────────────────
 
@@ -527,17 +527,17 @@ prop "fromList builds a well-formed tree" (xs : List (Int, Int)) =
 prop "keys come out strictly ascending" (xs : List (Int, Int)) =
   ascending (keys (fromList xs))
 
-prop "insert then lookup returns the inserted value" (k : Int) (v : Int) (xs : List (Int, Int)) = eq (lookup k (insert k v (fromList xs))) (Some v)
+prop "insert then lookup returns the inserted value" (k : Int) (v : Int) (xs : List (Int, Int)) = eq (get k (set k v (fromList xs))) (Some v)
 
-prop "insert preserves well-formedness" (k : Int) (v : Int) (xs : List (Int, Int)) = wellFormed (insert k v (fromList xs))
+prop "insert preserves well-formedness" (k : Int) (v : Int) (xs : List (Int, Int)) = wellFormed (set k v (fromList xs))
 
 prop "delete removes the key and preserves well-formedness" (k : Int) (xs : List (Int, Int)) =
   let m = delete k (fromList xs)
-  not (member k m) && wellFormed m
+  not (has k m) && wellFormed m
 
 prop "union preserves well-formedness" (xs : List (Int, Int)) (ys : List (Int, Int)) = wellFormed (union (fromList xs) (fromList ys))
 
 prop "union is left-biased on shared keys" (k : Int) (xs : List (Int, Int)) =
-  let l = insert k 1 (fromList xs)
-  let r = insert k 2 (fromList xs)
-  eq (lookup k (union l r)) (Some 1)
+  let l = set k 1 (fromList xs)
+  let r = set k 2 (fromList xs)
+  eq (get k (union l r)) (Some 1)

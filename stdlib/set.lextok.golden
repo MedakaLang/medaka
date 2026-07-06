@@ -539,7 +539,7 @@ EQUAL
 IDENT "s"
 NEWLINE
 EXPORT
-IDENT "member"
+IDENT "has"
 COLON
 UPPER "Ord"
 IDENT "a"
@@ -551,13 +551,13 @@ IDENT "a"
 ARROW
 UPPER "Bool"
 NEWLINE
-IDENT "member"
+IDENT "has"
 IDENT "x"
 UPPER "Tip"
 EQUAL
 UPPER "False"
 NEWLINE
-IDENT "member"
+IDENT "has"
 IDENT "x"
 LPAREN
 UPPER "Bin"
@@ -574,13 +574,13 @@ IDENT "y"
 INDENT
 UPPER "Lt"
 FAT_ARROW
-IDENT "member"
+IDENT "has"
 IDENT "x"
 IDENT "l"
 NEWLINE
 UPPER "Gt"
 FAT_ARROW
-IDENT "member"
+IDENT "has"
 IDENT "x"
 IDENT "r"
 NEWLINE
@@ -965,7 +965,7 @@ NEWLINE
 DEDENT
 NEWLINE
 EXPORT
-IDENT "lookupMin"
+IDENT "getMin"
 COLON
 UPPER "Set"
 IDENT "a"
@@ -973,7 +973,7 @@ ARROW
 UPPER "Option"
 IDENT "a"
 NEWLINE
-IDENT "lookupMin"
+IDENT "getMin"
 IDENT "s"
 EQUAL
 IDENT "map"
@@ -992,7 +992,7 @@ IDENT "s"
 RPAREN
 NEWLINE
 EXPORT
-IDENT "lookupMax"
+IDENT "getMax"
 COLON
 UPPER "Set"
 IDENT "a"
@@ -1000,7 +1000,7 @@ ARROW
 UPPER "Option"
 IDENT "a"
 NEWLINE
-IDENT "lookupMax"
+IDENT "getMax"
 IDENT "s"
 EQUAL
 IDENT "map"
@@ -1270,7 +1270,7 @@ IDENT "x"
 IDENT "acc"
 EQUAL
 IF
-IDENT "member"
+IDENT "has"
 IDENT "x"
 IDENT "b"
 THEN
@@ -1336,7 +1336,7 @@ IDENT "acc"
 FAT_ARROW
 IDENT "acc"
 AND
-IDENT "member"
+IDENT "has"
 IDENT "x"
 IDENT "b"
 RPAREN
@@ -1896,7 +1896,7 @@ UPPER "Int"
 RPAREN
 EQUAL
 INDENT
-IDENT "member"
+IDENT "has"
 IDENT "x"
 LPAREN
 IDENT "insert"
@@ -1963,7 +1963,7 @@ RPAREN
 NEWLINE
 IDENT "not"
 LPAREN
-IDENT "member"
+IDENT "has"
 IDENT "x"
 IDENT "s"
 RPAREN
@@ -2039,11 +2039,11 @@ IDENT "acc"
 FAT_ARROW
 IDENT "acc"
 AND
-IDENT "member"
+IDENT "has"
 IDENT "e"
 IDENT "a"
 AND
-IDENT "member"
+IDENT "has"
 IDENT "e"
 IDENT "b"
 RPAREN
@@ -2122,13 +2122,13 @@ IDENT "acc"
 FAT_ARROW
 IDENT "acc"
 AND
-IDENT "member"
+IDENT "has"
 IDENT "e"
 IDENT "a"
 AND
 IDENT "not"
 LPAREN
-IDENT "member"
+IDENT "has"
 IDENT "e"
 IDENT "b"
 RPAREN
@@ -2299,7 +2299,7 @@ IDENT "acc"
 FAT_ARROW
 IDENT "acc"
 AND
-IDENT "member"
+IDENT "has"
 IDENT "e"
 IDENT "a"
 RPAREN
@@ -2329,7 +2329,7 @@ EQUAL
 INDENT
 IDENT "not"
 LPAREN
-IDENT "member"
+IDENT "has"
 IDENT "x"
 LPAREN
 IDENT "delete"
