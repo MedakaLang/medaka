@@ -1,4 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-test/error_quality_fixtures/parse/unclosed_paren.mdk:1:15: Parse error
+test/error_quality_fixtures/parse/unclosed_paren.mdk:1:15: unexpected `(`
+  |
+1 | main = println (1 + (2 * 3)
+  |                ^

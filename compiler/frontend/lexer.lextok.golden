@@ -895,6 +895,534 @@ PLUSPLUS
 IDENT "debugStringLit"
 IDENT "s"
 NEWLINE
+EXPORT
+IDENT "describeToken"
+COLON
+UPPER "Token"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TInt"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a number"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TFloat"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a number"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TString"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a string"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TChar"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a character literal"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TBool"
+UPPER "True"
+RPAREN
+EQUAL
+STRING "`true`"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TBool"
+UPPER "False"
+RPAREN
+EQUAL
+STRING "`false`"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TInterpOpen"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a string"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TInterpMid"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a string"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TInterpEnd"
+UNDERSCORE
+RPAREN
+EQUAL
+STRING "a string"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TIdent"
+IDENT "s"
+RPAREN
+EQUAL
+STRING "`"
+PLUSPLUS
+IDENT "s"
+PLUSPLUS
+STRING "`"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TUpper"
+IDENT "s"
+RPAREN
+EQUAL
+STRING "`"
+PLUSPLUS
+IDENT "s"
+PLUSPLUS
+STRING "`"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TBacktickIdent"
+IDENT "s"
+RPAREN
+EQUAL
+STRING "`"
+PLUSPLUS
+IDENT "s"
+PLUSPLUS
+STRING "`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLet"
+EQUAL
+STRING "`let`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRec"
+EQUAL
+STRING "`rec`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TWith"
+EQUAL
+STRING "`with`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TMut"
+EQUAL
+STRING "`mut`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TIn"
+EQUAL
+STRING "`in`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TIf"
+EQUAL
+STRING "`if`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TThen"
+EQUAL
+STRING "`then`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TElse"
+EQUAL
+STRING "`else`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TMatch"
+EQUAL
+STRING "`match`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TData"
+EQUAL
+STRING "`data`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRecord"
+EQUAL
+STRING "`record`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TInterface"
+EQUAL
+STRING "`interface`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDefault"
+EQUAL
+STRING "`default`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TImpl"
+EQUAL
+STRING "`impl`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TImport"
+EQUAL
+STRING "`import`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TExport"
+EQUAL
+STRING "`export`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TPublic"
+EQUAL
+STRING "`public`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TWhere"
+EQUAL
+STRING "`where`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TOf"
+EQUAL
+STRING "`of`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRequires"
+EQUAL
+STRING "`requires`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDo"
+EQUAL
+STRING "`do`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TAs"
+EQUAL
+STRING "`as`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TExtern"
+EQUAL
+STRING "`extern`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDeriving"
+EQUAL
+STRING "`deriving`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TType"
+EQUAL
+STRING "`type`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TNewtype"
+EQUAL
+STRING "`newtype`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TProp"
+EQUAL
+STRING "`prop`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TTest"
+EQUAL
+STRING "`test`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TBench"
+EQUAL
+STRING "`bench`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TEffect"
+EQUAL
+STRING "`effect`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TInternal"
+EQUAL
+STRING "`internal`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TFunction"
+EQUAL
+STRING "`function`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TPlus"
+EQUAL
+STRING "`+`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TMinus"
+EQUAL
+STRING "`-`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TMinusTight"
+EQUAL
+STRING "`-`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TStar"
+EQUAL
+STRING "`*`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TSlash"
+EQUAL
+STRING "`/`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TSlashEq"
+EQUAL
+STRING "`/=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TMod"
+EQUAL
+STRING "`%`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TEqEq"
+EQUAL
+STRING "`==`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TNeq"
+EQUAL
+STRING "`!=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLt"
+EQUAL
+STRING "`<`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TGt"
+EQUAL
+STRING "`>`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLeq"
+EQUAL
+STRING "`<=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TGeq"
+EQUAL
+STRING "`>=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TAnd"
+EQUAL
+STRING "`&&`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TOr"
+EQUAL
+STRING "`||`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TCons"
+EQUAL
+STRING "`::`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TPlusPlus"
+EQUAL
+STRING "`++`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TPipeRight"
+EQUAL
+STRING "`|>`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRCompose"
+EQUAL
+STRING "`>>`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLCompose"
+EQUAL
+STRING "`<<`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TFatArrow"
+EQUAL
+STRING "`=>`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TArrow"
+EQUAL
+STRING "`->`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLArrow"
+EQUAL
+STRING "`<-`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TAt"
+EQUAL
+STRING "`@`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TBang"
+EQUAL
+STRING "`!`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TAsAt"
+EQUAL
+STRING "`@`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TEqual"
+EQUAL
+STRING "`=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TColon"
+EQUAL
+STRING "`:`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TComma"
+EQUAL
+STRING "`,`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDot"
+EQUAL
+STRING "`.`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TPipe"
+EQUAL
+STRING "`|`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TUnderscore"
+EQUAL
+STRING "`_`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLParen"
+EQUAL
+STRING "`(`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRParen"
+EQUAL
+STRING "`)`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLBracket"
+EQUAL
+STRING "`[`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRBracket"
+EQUAL
+STRING "`]`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLBrace"
+EQUAL
+STRING "`{`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRBrace"
+EQUAL
+STRING "`}`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TLArray"
+EQUAL
+STRING "`[|`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TRArray"
+EQUAL
+STRING "`|]`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDotLBrace"
+EQUAL
+STRING "`.{`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDotStar"
+EQUAL
+STRING "`.*`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TEllipsis"
+EQUAL
+STRING "`...`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDotDot"
+EQUAL
+STRING "`..`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDotDotEq"
+EQUAL
+STRING "`..=`"
+NEWLINE
+IDENT "describeToken"
+UPPER "TNewline"
+EQUAL
+STRING "a line break"
+NEWLINE
+IDENT "describeToken"
+UPPER "TIndent"
+EQUAL
+STRING "an indent"
+NEWLINE
+IDENT "describeToken"
+UPPER "TDedent"
+EQUAL
+STRING "a dedent"
+NEWLINE
+IDENT "describeToken"
+UPPER "TEof"
+EQUAL
+STRING "end of input"
+NEWLINE
+IDENT "describeToken"
+LPAREN
+UPPER "TLexError"
+IDENT "s"
+RPAREN
+EQUAL
+IDENT "s"
+NEWLINE
 DATA
 UPPER "RawTok"
 EQUAL
