@@ -54,12 +54,12 @@ bucketHas x (y::rest)
 
 {- | `True` when the element is present.
 
-   > member 2 (fromList [1, 2, 3])
+   > has 2 (fromList [1, 2, 3])
    True
-   > member 9 (fromList [1, 2, 3])
+   > has 9 (fromList [1, 2, 3])
    False -}
-export member : (Eq a, Hashable a) => a -> HashSet a -> Bool
-member x (HashSet buckets _) =
+export has : (Eq a, Hashable a) => a -> HashSet a -> Bool
+has x (HashSet buckets _) =
   let arr = buckets.value
   bucketHas x (arrayGetUnsafe (slotOf x (arrayLength arr)) arr)
 
@@ -187,7 +187,7 @@ export default impl Foldable HashSet where
 allIn : (Eq a, Hashable a) => List a -> HashSet a -> Bool
 allIn [] _ = True
 allIn (x::rest) s
-  | member x s = allIn rest s
+  | has x s = allIn rest s
   | otherwise = False
 
 {- | Order-independent equality: same elements regardless of layout.
