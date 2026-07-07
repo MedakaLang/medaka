@@ -4,7 +4,7 @@ map2 : (a -> b) -> c a -> c b
 empty2 : a b
 insert2 : a -> b a -> b a
 toL : a b -> List b
-useEq : a -> a -> Bool
-mapTwice : (a -> b) -> c (d a) -> c (d b)
-build : a -> a -> b a
-collect : a b -> List b
+useEq : Eq2 a => a -> a -> Bool
+mapTwice : (Mappable2 c, Mappable2 d) => (a -> b) -> c (d a) -> c (d b)
+build : Container b => a -> a -> b a
+collect : Container a => a b -> List b

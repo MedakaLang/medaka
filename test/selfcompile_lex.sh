@@ -110,7 +110,7 @@ fi
 # ---- STEP 2: native-emit the lexer (the BIG, REAL emit) --------------------
 NATLL="$WORK/lex.native.ll"
 echo "step 2: native-emit lex_main (this is the big, real emit) ..."
-if ! "$EMITBIN" "$RUNTIME" "$CORE" "$ORACLE" "$SELFHOST" > "$NATLL" 2>"$WORK/lex-emit.err"; then
+if ! "$EMITBIN" "$RUNTIME" "$CORE" "$ORACLE" "$SELFHOST" "$STDLIB" > "$NATLL" 2>"$WORK/lex-emit.err"; then
   echo "FAIL (native-emit lex_main crashed — likely stack overflow):"; cat "$WORK/lex-emit.err"; exit 1
 fi
 # The native runtime auto-prints main's Unit as a trailing "()\n".  emitProgram's IR
