@@ -2465,11 +2465,47 @@ refMainKind prog (CApp f a) = match appHead f
     -- W-SQLITE-4: a call to a user fn whose declared sig returns Float (`main = f 2.5`).
     else if fnReturnsFloat fn then WFloat
     else if isUnitExtern fn then WUnit
+    -- composite-autoprint parity: a bare `main = myeq a b` calls a dispatched
+    -- interface method whose Bool result is type-erased at this CApp (→ WInt →
+    -- prints the raw i31 "1").  Native's `println`/`display` wrap renders the Bool
+    -- ctor as `True`/`False`, so recover Bool-ness structurally from the method's
+    -- lowered impl bodies (all conclusively Bool ⇒ WBool → $mdk_print_bool).
+    else if methodReturnsBoolW prog fn then WBool
     else refMainKind prog (appHead f)
+  -- a resolved dispatch head (`main = myeq a b` lowers to CApp (CMethod/CDict …) …):
+  -- same composite-autoprint Bool recovery as the CVar method case above.
+  CMethod fn _ _ _ => if methodReturnsBoolW prog fn then WBool else WInt
+  CDict fn _ => if methodReturnsBoolW prog fn then WBool else WInt
   h => refMainKind prog h
 -- W-SQLITE-4: a nullary Float-typed binding used as a value main (`main = h`, `h : Float`).
 refMainKind prog (CVar x _) = if fnReturnsFloat x then WFloat else WInt
 refMainKind prog other = WInt
+
+-- True iff EVERY lowered impl clause of dispatched method `fn` conclusively renders
+-- Bool (its body's structural refMainKind is WBool).  Used to recover Bool-ness for a
+-- type-erased `main = <method> a b` value-main so its auto-print matches native's
+-- `println`/`display` (`True`/`False`).  Conservative: no impls (not a method) or any
+-- non-Bool clause ⇒ False, so the caller keeps the existing WInt fallback.
+methodReturnsBoolW : Prog -> String -> Bool
+methodReturnsBoolW prog fn = match implBodiesForW fn (progImpls prog)
+  [] => False
+  bodies => allWBoolW prog bodies
+
+implBodiesForW : String -> List CImplEntry -> List CExpr
+implBodiesForW _ [] = []
+implBodiesForW fn ((CImplEntry name _ body)::rest) =
+  if name == fn then
+    implBodyExprW body :: implBodiesForW fn rest
+  else
+    implBodiesForW fn rest
+
+implBodyExprW : CImplBody -> CExpr
+implBodyExprW (CImplTagged _ _ _ _ _ e) = e
+implBodyExprW (CImplDefault _ e) = e
+
+allWBoolW : Prog -> List CExpr -> Bool
+allWBoolW _ [] = True
+allWBoolW prog (e::rest) = isWBool (refMainKind prog e) && allWBoolW prog rest
 
 -- the String-RESULT externs (drive value-main String auto-print).  `stringLength`
 -- returns Int, so it is NOT here.
@@ -2695,7 +2731,8 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
 
 emitClauseChainGo : Prog -> List String -> String -> List String -> Int -> List CClause -> Int -> <Mut> List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo _ _ _ _ _ [] _ = wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitClauseChainGo _ _ _ _ _ [] _ =
+  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitClauseChainGo prog baseEnv name params arity ((CClause pats body)::rest) i =
   let clLabel = "$cl_\{name}_\{intToString i}"
   let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
@@ -4268,7 +4305,7 @@ wasmTrapBytes text =
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
 wasmTrap : String -> String -> <Mut> List String
-wasmTrap code msg = wasmTrapBytes ("runtime error [" ++ code ++ "]: " ++ msg ++ "\n")
+wasmTrap code msg = wasmTrapBytes "runtime error [\{code}]: \{msg}\n"
   ++ ["unreachable"]
 
 -- B5: guard a concrete-Int div/mod divisor.  Stack in `[dividend:i64, divisor:i64]`;
@@ -4901,12 +4938,11 @@ emitLeafExternRef prog env d "writeFileBytes" _ =
 -- expression) is streamed through $mdk_eprint_str (forced via useEPutRef in noteW8Extern
 -- for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
-emitLeafExternRef prog env d "panic" [msg] =
-  wasmTrapBytes "runtime error [E-PANIC]: "
-    ++ emitRefExpr prog env d msg
-    ++ ["ref.cast (ref $str)", "call $mdk_eprint_str"]
-    ++ trapByteInstr 10
-    ++ ["unreachable"]
+emitLeafExternRef prog env d "panic" [msg] = wasmTrapBytes "runtime error [E-PANIC]: "
+  ++ emitRefExpr prog env d msg
+  ++ ["ref.cast (ref $str)", "call $mdk_eprint_str"]
+  ++ trapByteInstr 10
+  ++ ["unreachable"]
 emitLeafExternRef prog env d "panic" _ =
   gapL "wasm W10: panic takes exactly one argument"
 -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
@@ -6370,7 +6406,8 @@ emitDecisionTail prog env arity scrut arms tree =
 -- NOT need a result block (each path returns).  Reuses the same br_table tower shape
 -- with the slot bodies tail-emitting their arms.
 emitTreeTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> CTree -> <Mut> List String
-emitTreeTail prog env arity d root occs arms CTFail = wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitTreeTail prog env arity d root occs arms CTFail =
+  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeTail prog env arity d root occs arms (CTLeaf i) =
   emitLeafTail prog env arity root arms i
 emitTreeTail prog env arity d root occs arms (CTGuard i fail) =
@@ -7081,7 +7118,8 @@ emitDecisionRef prog env d scrut arms tree =
 -- exactly one (ref eq) for `decLabel`'s block to yield (via `br decLabel`), except
 -- the default tail of a switch tower which falls through with the value on the stack.
 emitTreeRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> CTree -> <Mut> List String
-emitTreeRef prog env d decLabel root occs arms CTFail = wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitTreeRef prog env d decLabel root occs arms CTFail =
+  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeRef prog env d decLabel root occs arms (CTLeaf i) =
   emitLeafRef prog env d decLabel root arms i
 emitTreeRef prog env d decLabel root occs arms (CTGuard i fail) =
