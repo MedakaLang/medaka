@@ -22,10 +22,55 @@ composite-main emitter crash" (PLAN.md 2026-07-06).
 > The sound path is either (a) a two-process wrap (CLI detects main type via its
 > clean gate, emitter does the single clean elaborate — but does NOT cover the
 > **single-process in-browser playground**), or (b) making in-process
-> re-elaborate sound via a `resetElaborationState()`. **Mechanism resolution is
-> under investigation** (which global state pollutes; is a reset feasible; what
-> covers build + wasm-CLI + in-browser-playground with least scope). `run`
+> re-elaborate sound via a `resetElaborationState()`. `run`
 > (single-process interpreter) is a separate bite; for now it keeps warning.
+>
+> ✅ **RESOLVED 2026-07-07 (empirical, see §10) — in-process re-elaborate IS
+> sound; the "pollution" premise was wrong.** Double-elaborate produces
+> byte-identical IR to single (verified scalar/tuple/list/derived/cross-module);
+> `elaborateModules` re-seeds its dispatch state every call, so NO
+> `resetElaborationState()` and NO two-process split are needed. The
+> underived-ADT miscompile is a **separate** cause: the EMIT path gates OFF
+> `checkImplObligations` (`typecheck.mdk:10726`, `implInferEnabled`), so the
+> clean `No impl of Display` error must come from re-running the **CHECK gate**
+> (`checkModules`/analyze, un-mangled) on the wrapped program — NOT an inline
+> `checkImplObligations` on the mangled emit-elaborated program (that mis-fires
+> on every case). This one in-process mechanism covers native build + wasm-CLI +
+> the **in-browser playground** (which already does check-then-emit in one
+> process). **NO seed re-mint** if confined to entry drivers + `medaka_cli` + a
+> shared helper.
+
+## 10. RESOLVED mechanism (implement this — supersedes §2's re-elaborate concern)
+
+Per driver, after the existing analyze/check (which populates `mainSchemeRef`):
+1. `mainTypeIsUnit () || mainTypeIsAsync ()` → unchanged path (no wrap).
+2. Else (bare zero-arg non-Unit value main) → rewrite entry decl to
+   `main = println <e>` (`DFunDef vis "main" [] (EApp (EVar "println") body)`;
+   `println` renders via `display` → raw strings, confirmed).
+3. **Re-run the check gate (analyze / `checkModules`) on the wrapped source** —
+   surfaces the underived-ADT `No impl of Display for C; add 'deriving Display'`
+   cleanly (exactly what source-level `medaka build` already does).
+4. Clean → emit the wrapped program (single emit-elaborate; sound).
+
+Shared helper `autoPrintWrap`/`shouldAutoPrintMain` (gated
+`not (mainTypeIsUnit () || mainTypeIsAsync ())` AND empty param list; reuse
+`findMainFunDef`) drives all four sites:
+- **CLI `medaka build`** (`build_cmd.mdk`/`medaka_cli.mdk`): already check-gates
+  then emits — insert wrap between (check unwrapped → learn main type → wrap →
+  check wrapped → emit wrapped).
+- **wasm-CLI build** (`entries/wasm_emit_modules_main.mdk` driver): same.
+- **In-browser playground** (`entries/playground_main.mdk`): already
+  check-then-emit — `analyzeSingle`/`analyzeMulti` (`:165`/`:173`), then `doEmit`
+  (`:256`)/`runEmit` (`:283`). After a clean analyze, if `mainTypeIsUnit ()` is
+  false, wrap the entry decl, re-analyze wrapped (catches underived), then
+  `doEmit` wrapped.
+- **`run`/eval** (`medaka_cli.mdk runRunCmd`): same AST wrap + re-elaborate — a
+  LATER bite; keeps warning for now.
+
+**Implementer caveat (critical):** route underived detection through the second
+**analyze/check** pass (un-mangled), NEVER an inline `checkImplObligations` on the
+mangled emit-elaborated program (it can't match mangled `display`/`println`
+obligations to impl heads → false errors on every program).
 
 ## 1. Reproduction (confirmed on `54344aba`)
 
