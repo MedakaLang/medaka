@@ -430,12 +430,56 @@ atomPermitted a policy = match lookupParam (atomLabel a) policy
 -- writes the OCaml-format `   [LOG] <s>\n` line straight to the captured output
 -- buffer (eval forces putStr → outputRef), so the log lines land BEFORE the
 -- transform-result line we print afterward — matching the oracle's ordering.
+--
+-- The stdlib platform externs (getEnv/runCommand/readFile/writeFile/… — the
+-- file/net/env catalog declared in stdlib/runtime.mdk) are native-only: they
+-- have NO binding under the tree-walk interpreter, so a plugin that reaches one
+-- during this accept-path demo run would panic `unbound identifier: getEnv`,
+-- leaking a stray runtime-error line before the (correct, statically-derived)
+-- verdict.  We stub them here as effectful NO-OPS returning a benign placeholder
+-- (`None` / `Err ""` / `[]`), so the demo run completes cleanly.  This ONLY
+-- affects check-policy's accept demo; `medaka run` never touches these stubs and
+-- keeps its native-only behaviour.  These bodies are eval'd but never
+-- typechecked, so `Err ""` serves for EVERY `Result _ a`-returning extern
+-- regardless of the Ok payload type.
 stubSource : String
 stubSource = stringConcat
   [
     "cacheGet req = \"\"\n",
     "cacheSet req result = ()\n",
     "logEvent s = putStr (stringConcat [\"   [LOG] \", s, \"\\n\"])\n",
+    -- env
+    "getEnv k = None\n",
+    "args u = []\n",
+    "executablePath u = \"\"\n",
+    -- file read
+    "readFile p = Err \"\"\n",
+    "readFileBytes p = Err \"\"\n",
+    "fileExists p = False\n",
+    "canonicalizePath p = p\n",
+    "listDir p = Err \"\"\n",
+    "statFile p = Err \"\"\n",
+    -- file write
+    "writeFile p c = Err \"\"\n",
+    "writeFileBytes p b = Err \"\"\n",
+    "appendFile p c = Err \"\"\n",
+    "makeDir p = Err \"\"\n",
+    "removeFile p = Err \"\"\n",
+    "rename o n = Err \"\"\n",
+    "removeDir p = Err \"\"\n",
+    -- exec
+    "runCommand cmd a = Err \"\"\n",
+    -- net
+    "netResolve h = Err \"\"\n",
+    "netTcpConnect h p = Err \"\"\n",
+    "netTcpListen h p = Err \"\"\n",
+    "netListenPort fd = Err \"\"\n",
+    "netTcpAccept fd = Err \"\"\n",
+    "netSend fd b = Err \"\"\n",
+    "netRecv fd n = Err \"\"\n",
+    "netShutdown fd how = Err \"\"\n",
+    "netClose fd = Err \"\"\n",
+    "netSetTimeout fd ms = Err \"\"\n",
   ]
 
 -- Run `fn` on the sample request "X-Forwarded-For: 192.168.1.1" with stub
