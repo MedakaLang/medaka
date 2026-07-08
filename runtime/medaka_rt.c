@@ -189,21 +189,6 @@ mdk_i64 __mdk_apply(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
   }
 }
 
-/* TRANSITION BRIDGE (remove after the next emitter-seed re-mint).
- * The runtime PAP helper was renamed `mdk_apply` -> `__mdk_apply` so a user
- * stdlib fn named `apply` (which mangles to `@mdk_apply`) no longer collides
- * with the runtime symbol.  The CURRENT emitter source emits `@__mdk_apply`,
- * but the checked-in emitter SEED (compiler/seed/emitter.ll.gz) still emits and
- * internally calls the old `@mdk_apply`.  Until the seed is re-minted from the
- * renamed source, provide a WEAK forwarder under the old name so the stale
- * seed-bootstrapped emitter (cold build + selfcompile fixpoint) still links.
- * It is WEAK so that a program supplying a strong `@mdk_apply` (the user fn)
- * overrides it — no duplicate-symbol error, no collision. */
-__attribute__((weak))
-mdk_i64 mdk_apply(mdk_i64 cw, mdk_i64 argc, const mdk_i64 *argv) {
-  return __mdk_apply(cw, argc, argv);
-}
-
 noreturn void mdk_oob(void) {
   fprintf(stderr, "runtime error [E-INDEX-OOB]: index out of bounds\n");
   exit(1);
