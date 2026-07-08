@@ -1,0 +1,7 @@
+-- Pin: a normal exhaustive match. All three engines accept.
+classify n =
+  match n
+    0 => "zero"
+    _ => "other"
+
+main = println (classify 0)

@@ -1,0 +1,19 @@
+-- P0-18 (FINDINGS.md): a standalone function with the same name as an
+-- interface method (documented-supported shape). check exits 0 (silent,
+-- ACCEPT). `run` errors: "type error in <file>. Run `medaka check` for
+-- details" (exit 1) — a dead end, since check itself reports nothing.
+-- `build` agrees with check (accepts, exit 0, runs fine).
+-- .expected = ACCEPT. Divergence direction: run wrongly REJECTS a program
+-- check is silent on (opposite of the P0-1 bucket).
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+size : Int -> Int
+size n = n + 1
+
+main = println (size (Box 3))

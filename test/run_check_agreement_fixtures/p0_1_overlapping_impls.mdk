@@ -1,0 +1,15 @@
+-- P0-1 (FINDINGS.md): two `impl Speak Bar` for the same type. check rejects
+-- (Overlapping impls). `run` today wrongly executes (prints "one", exit 0) —
+-- picks the first-defined impl silently instead of refusing.
+interface Speak a where
+  speak : a -> String
+
+data Bar = Bar
+
+impl Speak Bar where
+  speak b = "one"
+
+impl Speak Bar where
+  speak b = "two"
+
+main = println (speak Bar)

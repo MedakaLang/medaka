@@ -1,0 +1,5 @@
+-- P0-1 (FINDINGS.md): `if` with no else, used as if it always returns a value.
+-- check rejects (3 errors: Unit/Int mismatch cascade). `run` today wrongly
+-- executes, printing `()` and exiting 0.
+f x = if x > 0 then x
+main = println (f 5)

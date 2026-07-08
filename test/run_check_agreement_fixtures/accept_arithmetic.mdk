@@ -1,0 +1,3 @@
+-- Pin: a plain valid arithmetic program. All three engines must accept AND
+-- agree on the printed answer, guarding against future over-rejection.
+main = println (1 + 2 * 3)

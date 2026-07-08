@@ -1,0 +1,21 @@
+-- P0-17 (FINDINGS.md): interface with two methods, impl provides only one
+-- (`shout` missing), then main calls the missing method.
+-- DIVERGENCE DIRECTION (verified 2026-07-08, opposite of the naive "check
+-- rejects" framing): `check` exits 0 with ZERO diagnostics (this is itself the
+-- bug named in P0-17 — check should reject "impl Greet Foo is missing method
+-- 'shout'" and doesn't). `run` panics (E-PANIC: unbound identifier: shout,
+-- exit 1); `build`'s emitter also fails (no impl of method 'shout', exit 1).
+-- .expected = ACCEPT (check's actual verdict, source of truth per this gate's
+-- contract) — so this fixture is RED today because run/build both reject a
+-- program check is silent on. The eventual fix is almost certainly in `check`
+-- (add the missing-method diagnostic), which would flip .expected to REJECT.
+interface Greet a where
+  greet : a -> String
+  shout : a -> String
+
+data Foo = Foo
+
+impl Greet Foo where
+  greet f = "hi"
+
+main = println (shout Foo)

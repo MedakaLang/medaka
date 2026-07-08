@@ -1,0 +1,7 @@
+-- P0-1 (FINDINGS.md) lists `let x : String = 1` among run-wrongly-accepts repros.
+-- Verified 2026-07-08 (top-level form: x : String; x = 1): does NOT currently
+-- diverge — check rejects (Type mismatch) AND run also exits nonzero (E-PANIC:
+-- putStrLn: not a String), so this fixture agrees today. Kept as a pin.
+x : String
+x = 1
+main = println x

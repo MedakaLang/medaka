@@ -1,0 +1,9 @@
+-- P0-18 (FINDINGS.md): `Map { f => 1 }` with a function value as the key.
+-- check exits 0 (silent, ACCEPT). `run` panics (E-PANIC: intToString: not an
+-- Int, exit 1) — again a dead end, check reports nothing to explain it.
+-- `build` agrees with check (accepts, exit 0).
+-- .expected = ACCEPT. Same divergence direction as the standalone-fn fixture
+-- above: run wrongly REJECTS what check is silent on.
+import map.*
+f = x => x + 1
+main = println (Map { f => 1 })

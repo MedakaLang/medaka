@@ -1,0 +1,6 @@
+-- P0-1 (FINDINGS.md) lists heterogeneous-list `[1,"a"]` among run-wrongly-accepts
+-- repros. Verified 2026-07-08: does NOT currently diverge — check rejects (List
+-- elements have different types) AND run also exits nonzero (E-PANIC on the
+-- '++' Display path), so this fixture agrees today. Kept as a pin: it guards
+-- against a future regression that made this genuinely accept.
+main = println [1, "a"]

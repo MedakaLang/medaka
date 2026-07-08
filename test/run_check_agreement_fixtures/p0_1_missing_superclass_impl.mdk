@@ -1,0 +1,15 @@
+-- P0-1 (FINDINGS.md): "missing superclass impl" repro. `impl Ord2 Baz` without
+-- the required `impl Eq2 Baz`. check rejects (missing superinterface impl).
+-- `run` today wrongly executes (prints 0, exit 0).
+interface Eq2 a where
+  eq2 : a -> a -> Bool
+
+interface Ord2 a requires Eq2 a where
+  cmp2 : a -> a -> Int
+
+data Baz = Baz
+
+impl Ord2 Baz where
+  cmp2 a b = 0
+
+main = println (cmp2 Baz Baz)

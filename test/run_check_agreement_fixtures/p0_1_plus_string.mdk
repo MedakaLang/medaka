@@ -1,0 +1,5 @@
+-- P0-1 (FINDINGS.md): `1 + "a"` — check rejects (No impl of Num for String).
+-- `run` also exits nonzero today (E-PANIC: unknown op '+'), so this ONE agrees on
+-- exit code even though the error is a raw runtime panic instead of a located
+-- type error (that message-quality gap is P1-8, not this gate's concern).
+main = println (1 + "a")

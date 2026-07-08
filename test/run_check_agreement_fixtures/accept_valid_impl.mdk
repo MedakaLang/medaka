@@ -1,0 +1,10 @@
+-- Pin: a correct, non-overlapping single impl. All three engines accept.
+interface Speak2 a where
+  speak2 : a -> String
+
+data Cat = Cat
+
+impl Speak2 Cat where
+  speak2 c = "meow"
+
+main = println (speak2 Cat)
