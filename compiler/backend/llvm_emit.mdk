@@ -3900,7 +3900,16 @@ emitMethodDispatchChain e env name d methRoutes argOps =
     [] => match defaultFor e name
       Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOf name)) name entry argOps slot endL
       None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
-    _ => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
+    _ => match defaultFor e name
+      -- MIXED default+impls: append default-synthesis arms for interface tags with no
+      -- explicit impl (derived-Ord ADTs inheriting `max`/`min` from the default).
+      Some entry =>
+        let covered = implEntryTags impls
+        let uncovered = tagsMinus (ifaceTags e (methodIfaceOf name)) covered
+        match uncovered
+          [] => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
+          _ => emitDispatchChainDefaulted e dictPtr headTag impls uncovered name entry methWords argOps slot endL
+      None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -3975,9 +3984,21 @@ loadReqDicts e dictPtr n i
   | i >= n = []
   | otherwise = loadField e dictPtr i :: loadReqDicts e dictPtr n (i + 1)
 
-emitDispatchChain : Emit -> String -> String -> List CImplEntry -> String -> List String -> List String -> String -> String -> <Mut> Unit
-emitDispatchChain e _ _ [] _ _ _ _ _ = emit e "  unreachable"
-emitDispatchChain e dictPtr headTag (ent::rest) name methWords argOps slot endL =
+-- emit ONE tagged-impl dispatch arm: test the dict head tag against this impl's route
+-- key and, on a match, call the impl fn (prepending method-level + per-instance
+-- `requires` dicts) and jump to `endL`; otherwise fall through to the `next` label the
+-- caller continues after.
+--
+-- The matched impl's lifted fn expects `implReqCount` leading dict params, ordered
+-- methRoutes ++ implRoutes.  The first `lengthS methWords` are METHOD-LEVEL
+-- constraint dicts — already materialized from the caller's ambient args (env);
+-- the remaining are this impl's per-instance `requires` dicts, loaded from the
+-- runtime dispatch-dict cell's fields 0..k-1.  Sourcing the method-level ones from
+-- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
+-- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
+-- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
+emitDispatchArm : Emit -> String -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> <Mut> Unit
+emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
   let routeKey = implEntryRouteKey (implEntriesOf e) ent
   let symTag = implFnSymOf (implEntriesOf e) name ent
   let cmp = freshReg e
@@ -3987,21 +4008,59 @@ emitDispatchChain e dictPtr headTag (ent::rest) name methWords argOps slot endL 
   let next = "dispnext" ++ n
   let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
-  -- The matched impl's lifted fn expects `implReqCount` leading dict params, ordered
-  -- methRoutes ++ implRoutes.  The first `lengthS methWords` are METHOD-LEVEL
-  -- constraint dicts — already materialized from the caller's ambient args (env);
-  -- the remaining are this impl's per-instance `requires` dicts, loaded from the
-  -- runtime dispatch-dict cell's fields 0..k-1.  Sourcing the method-level ones from
-  -- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
-  -- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
-  -- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
   let cellCount = implReqCount e name ent - lengthS methWords
   let cellDicts = loadReqDicts e dictPtr cellCount 0
   let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
   let _ = emit e "  store i64 \{rv}, ptr \{slot}"
   let _ = emit e ("  br label %" ++ endL)
-  let _ = emit e (next ++ ":")
+  emit e (next ++ ":")
+
+emitDispatchChain : Emit -> String -> String -> List CImplEntry -> String -> List String -> List String -> String -> String -> <Mut> Unit
+emitDispatchChain e _ _ [] _ _ _ _ _ = emit e "  unreachable"
+emitDispatchChain e dictPtr headTag (ent::rest) name methWords argOps slot endL =
+  let _ = emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL
   emitDispatchChain e dictPtr headTag rest name methWords argOps slot endL
+
+-- GAP 2 phase-b (MIXED case): a method that HAS tagged impls but whose interface ALSO
+-- owns a default AND can carry element tags with no explicit impl — the derived-Ord
+-- ADT case.  `max`/`min` have real impls at primitive types (Int/Float/…), yet a
+-- `deriving (Ord)` ADT (e.g. `Color`) materializes only `compare` and inherits
+-- `max`/`min` from the interface DEFAULT.  A generic `Ord a` dict flowing through
+-- `maximum`/`minimum`'s fold reaches this chain; the plain chain enumerates ONLY the
+-- tagged impls, so the ADT tag matches no arm and falls to `unreachable`/nonexhaustive.
+-- Emit the tagged-impl arms, then — instead of an immediate `unreachable` — append one
+-- default-synthesis arm per `uncovered` iface tag (the same `@mdk_default_<method>_<tag>`
+-- machinery as the pure-default path, its inner `compare` restamped to `RKey tag`).
+emitDispatchChainDefaulted : Emit -> String -> String -> List CImplEntry -> List String -> String -> CImplEntry -> List String -> List String -> String -> String -> <Mut> Unit
+emitDispatchChainDefaulted e dictPtr headTag [] uncovered name entry _ argOps slot endL = emitDefaultDispatchChain e dictPtr headTag uncovered name entry argOps slot endL
+emitDispatchChainDefaulted e dictPtr headTag (ent::rest) uncovered name entry methWords argOps slot endL =
+  let _ = emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL
+  emitDispatchChainDefaulted
+    e
+    dictPtr
+    headTag
+    rest
+    uncovered
+    name
+    entry
+    methWords
+    argOps
+    slot
+    endL
+
+-- the type tags a method's tagged impls already cover (the `t` field of each entry),
+-- for diffing against the interface's full tag set to find the derived-default tags.
+implEntryTags : List CImplEntry -> List String
+implEntryTags [] = []
+implEntryTags (ent::rest) = implEntryTag ent :: implEntryTags rest
+
+-- interface tags NOT covered by any tagged impl — the derived-default tags that need a
+-- `@mdk_default_<method>_<tag>` synthesis arm appended to the tagged-impl dispatch chain.
+tagsMinus : List String -> List String -> List String
+tagsMinus [] _ = []
+tagsMinus (t::rest) covered
+  | contains t covered = tagsMinus rest covered
+  | otherwise = t :: tagsMinus rest covered
 -- GAP 1: prepend the matched impl's nested element-dicts (cell fields 1..reqCount)
 -- ahead of the real args, matching its leading dict-param order (dict_pass's
 -- methRoutes ++ implRoutes; here the impl's own requires, stored in cell order).
