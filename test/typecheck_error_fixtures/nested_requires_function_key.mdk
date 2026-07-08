@@ -1,0 +1,16 @@
+-- A conditional impl's `requires` obligation must REJECT when the recovered
+-- element type is a function (structurally un-Ord), not silently defer.  Mirrors
+-- the P0-18 `Map { f => 1 }` bug: `FromEntries (Map k v) (k, v) requires Ord k`
+-- selected at k = (Int -> Int) used to defer (a function head reads as
+-- non-concrete) and `check` accepted a program `run` rejects at runtime.  Here a
+-- local `Ord (Pair a) requires Ord a` at a = (Int -> Int) exercises the same
+-- checkReqOne path with no import.
+data Pair a = Pair a a
+
+impl Ord (Pair a) requires Ord a where
+  compare (Pair x _) (Pair y _) = compare x y
+
+f : Int -> Int
+f x = x
+
+main = println (compare (Pair f f) (Pair f f))

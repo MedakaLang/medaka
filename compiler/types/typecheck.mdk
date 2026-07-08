@@ -9331,11 +9331,18 @@ checkReqObligations prog heads loc ((ifaceR, monoArgs)::rest) =
   let _ = checkReqOne prog heads ifaceR monoArgs loc
   checkReqObligations prog heads loc rest
 
+-- A function-typed requirement arg is fully GROUND yet structurally un-Ord/Eq/etc
+-- (no `impl Ord (a -> b)` exists), so it must REJECT — but its head has no tycon,
+-- so `allConcreteHeads` reads it as non-concrete.  Order the function-typed reject
+-- BEFORE the concreteness defer (mirroring checkOneCallObligation): otherwise a
+-- `requires Ord k` with k = (Int -> Int) — e.g. `Map { f => 1 }` selecting
+-- `FromEntries (Map k v) (k, v) requires Ord k` — would DEFER into a silent accept,
+-- and `check` would pass a program `run` rejects at runtime (P0-18).
 checkReqOne : List Decl -> List (String, List Ty) -> String -> List Mono -> Option Loc -> <Mut> Unit
 checkReqOne prog heads iface args loc
-  | not (allConcreteHeads args) = ()
   | anyList monoIsFunction args && not (implMatches heads iface args) =
     pushNoImplError iface loc args
+  | not (allConcreteHeads args) = ()
   | implMatches heads iface args = checkNestedReqs prog heads iface args loc
   | otherwise = pushNoImplError iface loc args
 
