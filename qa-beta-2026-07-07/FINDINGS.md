@@ -173,10 +173,20 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
   `unknown module: helper`; from inside `src/`: works. `medaka.toml` (entry=…) doesn't help.
 - Expected: imports resolve relative to the entry file / project root.
 
-## P0-14: `export import` re-export: run works, native build panics the emitter
+## P0-14: `export import` re-export: run works, native build panics the emitter — ✅ FIXED 2026-07-09 (`36407355`)
 - Class: run-build-divergence / crash. Source: gap#F2.
 - Repro: base.mdk exports `double`; mid.mdk `export import base.{double}`; main imports
   mid → run prints 42; build: `E-PANIC: unbound variable 'double'`.
+- Root cause: the universal-mangle pass (`private_mangle.mdk`) computed each unit's
+  export set from LOCALLY-defined names only, so a name re-exported via `DUse True`
+  never entered that module's exports → an importer's reference got no rename entry
+  and stayed a bare, orphaned symbol with no backing define. Fix mirrors eval's
+  `pubReexports`: `exportsPerUnit` now carries `(name, definer)` pairs built as a
+  dependency-ordered fold that chases the `DUse True` chain to the ORIGINAL owning
+  module (transitively for >1-hop); every reference-mangle site emits
+  `<definer>__<name>` — byte-identical for locals/core, correct for re-exports.
+  run==build==check. Fixpoint C3a/C3b YES, no re-mint. Fixture
+  `test/llvm_fixtures_modules/reexport/`.
 
 ## P0-15: Attributes on a signature-less definition silently unbind it — ✅ FIXED 2026-07-08 (`71c737a3`)
 - Class: silent-wrong / doc-mismatch. Source: gap#F1.
