@@ -1,0 +1,25 @@
+-- P0-18 (Part B): N-way multi-impl selection for a definer shadow.  `size` is a
+-- standalone AND an interface method with TWO live impls (Box, Bar).  On the build
+-- path each `size <receiver>` must select per-receiver: `Box` → its impl (3), `Bar`
+-- → its impl (30), `Int` (no impl) → the standalone fallback (4).  Exercises the
+-- multi-impl arg-position RKey selection alongside the RLocal standalone route.
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+data Bar = Bar Int Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+impl Sizeable Bar where
+  size (Bar a b) = a + b
+
+size : Int -> Int
+size n = n + 1
+
+main =
+  println (size (Box 3))
+  println (size (Bar 10 20))
+  println (size 3)
