@@ -396,7 +396,7 @@ lookupEnv (EvalEnv frames) name = lookupFrames frames name
 lookupFrames : List (List (String, Ref Value)) -> String -> <Mut> Value
 lookupFrames [] name = panic ("unbound identifier: " ++ name)
 lookupFrames (frame::rest) name = match lookupFrameCell frame name
-  Some cell => forceCell cell
+  Some cell => forceCell cell name
   None => lookupFrames rest name
 
 -- C5 (mirror lib/eval.ml:223 lookup_method): resolve a method occurrence to the
@@ -420,8 +420,8 @@ lookupMethodFrames : List (List (String, Ref Value)) -> List (List (String, Ref 
 lookupMethodFrames all [] name = lookupFrames all name
 lookupMethodFrames all (frame::rest) name = match lookupFrameCell frame name
   Some cell =>
-    if isMethodBinding (forceCell cell) then
-      forceCell cell
+    if isMethodBinding (forceCell cell name) then
+      forceCell cell name
     else
       lookupMethodFrames all rest name
   None => lookupMethodFrames all rest name
@@ -439,16 +439,31 @@ anyTypedImpl ((VTypedImpl _ _ _ _ _)::_) = True
 anyTypedImpl (_::rest) = anyTypedImpl rest
 
 -- read a cell, forcing + memoising a deferred thunk on first access
-forceCell : Ref Value -> <Mut> Value
-forceCell cell = match cell.value
-  VThunk f => forceMemo cell f
+-- P0-2(b): black-hole a lazy cell while it is being forced so a non-productive
+-- self-reference (`xs = 1 :: xs`; top-level nullary bindings are LAZY and `::`
+-- is STRICT, so forcing `xs` re-forces `xs`) is caught as a clean coded
+-- E-CYCLIC-VALUE instead of self-forcing to a stack-overflow crash.  Before
+-- running the thunk we overwrite the cell with a black-hole thunk that panics
+-- if re-entered; on success we memoise the real value, clearing the mark.
+forceCell : Ref Value -> String -> <Mut> Value
+forceCell cell name = match cell.value
+  VThunk f => forceMemo cell name f
   v => v
 
-forceMemo : Ref Value -> (Unit -> <Mut> Value) -> <Mut> Value
-forceMemo cell f =
+forceMemo : Ref Value -> String -> (Unit -> <Mut> Value) -> <Mut> Value
+forceMemo cell name f =
+  let _ = setRef cell (VThunk (blackholeCell name))
   let v = f ()
   let _ = setRef cell v
   v
+
+-- The thunk a cell holds *while it is being forced*.  Re-entering the force of
+-- the same cell runs this and raises E-CYCLIC-VALUE, naming the binding.
+blackholeCell : String -> Unit -> <Mut> Value
+blackholeCell name _ =
+  runtimePanic
+    "E-CYCLIC-VALUE"
+    "\{name} refers to itself during initialization (non-productive cyclic value)"
 
 export force : Value -> <Mut> Value
 force (VThunk f) = f ()
@@ -472,7 +487,7 @@ lookupFrameCell ((n, cell)::rest) name
 lookupAtAddr : EvalEnv -> String -> Addr -> <Mut> Value
 lookupAtAddr env name AGlobal = lookupEnv env name
 lookupAtAddr (EvalEnv frames) name (ALocal depth slot) =
-  forceCell (addrCell (frameAtDepth frames depth name) slot name)
+  forceCell (addrCell (frameAtDepth frames depth name) slot name) name
 
 frameAtDepth : List (List (String, Ref Value)) -> Int -> String -> List (String, Ref Value)
 frameAtDepth [] _ name = panic ("EVarAt: frame depth out of range for " ++ name)
@@ -687,8 +702,24 @@ makeCtorGo name arity acc
 export applyValue : Value -> Value -> <Mut> Value
 applyValue f x = apply f x
 
+-- P0-2(a): guard the host C-stack against unbounded non-tail recursion.  We
+-- increment a depth counter on entry, raise a clean E-STACK-OVERFLOW past the
+-- limit, and decrement on the balanced return (a runtimePanic is noreturn, so a
+-- tripped guard just exits — the counter never needs unwinding).
 export apply : Value -> Value -> <Mut> Value
-apply f x = match applyOpt f x
+apply f x =
+  let d = evalDepthRef.value + 1
+  let _ = setRef evalDepthRef d
+  let _ = if d > evalDepthLimit then
+    runtimePanic "E-STACK-OVERFLOW" "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
+  else
+    ()
+  let r = applyDispatch f x
+  let _ = setRef evalDepthRef (d - 1)
+  r
+
+applyDispatch : Value -> Value -> <Mut> Value
+applyDispatch f x = match applyOpt f x
   Some v => v
   None => runtimePanic "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 
@@ -1634,6 +1665,22 @@ currentEvalLoc = Ref (Loc "" 0 0 0 0)
 
 export currentEvalFile : Ref String
 currentEvalFile = Ref ""
+
+-- P0-2(a): evaluator recursion-depth guard.  The tree-walker recurses on the
+-- host C stack (`eval`->`apply`->`eval`...) with no TCO, so a deep non-tail
+-- recursion (e.g. `loop n = 1 + loop (n-1)`) exhausts the 256 MB worker stack
+-- and dies with a bare SIGBUS.  Every function application flows through
+-- `apply`, so a balanced inc/dec counter there bounds the call depth: past the
+-- limit we raise a clean coded E-STACK-OVERFLOW *before* the hard crash.  The
+-- limit is tuned just under where `medaka run` empirically hard-crashes for the
+-- simplest per-frame program (~28-29k apply frames on the -O0 CLI build); the
+-- native signal backstop (runtime/medaka_rt.c) is the ultimate guarantee for
+-- heavier-per-frame programs that would crash below this bound.
+evalDepthRef : Ref Int
+evalDepthRef = Ref 0
+
+evalDepthLimit : Int
+evalDepthLimit = 25000
 
 -- Stage 4 (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md Fork C): when set, `runtimePanic`
 -- emits the `Diag`-shaped JSON envelope (same shape as `medaka check --json`)

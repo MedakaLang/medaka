@@ -1,0 +1,2 @@
+loop n = if n == 0 then 0 else 1 + loop (n - 1)
+main = println (loop 10000)

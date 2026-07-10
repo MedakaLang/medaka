@@ -37,6 +37,12 @@
  *   value is an 8-byte-aligned real pointer Boehm tracks natively
  *   (RUNTIME-DESIGN.md §8.0 fact 3, §8.1).  Precise GC remains future work.
  */
+/* _GNU_SOURCE: on glibc/Linux, pthread_getattr_np (used by the P0-2 fault
+ * backstop to find the worker stack bounds) is only declared under it.  No-op on
+ * Darwin, which uses pthread_get_stackaddr_np instead. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -1677,8 +1683,105 @@ struct mdk_main_args {
   int ret;
 };
 
+/* ---------------------------------------------------------------------------
+ * P0-2: "no silent death" signal backstop.  The tree-walking interpreter and
+ * deeply-recursive compiled programs can exhaust the 256 MB worker stack; the
+ * kernel then delivers SIGSEGV/SIGBUS and, with no handler, the process dies
+ * with a bare signal and ZERO output.  We install a SIGSEGV/SIGBUS handler on a
+ * dedicated `sigaltstack` (so it can run even when the worker stack is fully
+ * exhausted) that prints a clean, coded diagnostic and exits nonzero.
+ *
+ * Boehm coexistence: without incremental mode (we never call
+ * GC_enable_incremental), Boehm does not keep a live SIGSEGV handler during
+ * normal operation on the run path.  We nonetheless install AFTER GC_INIT (the
+ * `__attribute__((constructor)) mdk_gc_init` runs before `main`) and capture the
+ * previous handler via sigaction; for any fault that is NOT stack-overflow-shaped
+ * we CHAIN to that previous handler (so a legitimate GC-owned fault, if one ever
+ * exists, is still serviced), and only if there is none do we print a generic
+ * message and exit — never a silent death.  Only signal-async-safe calls
+ * (write/_exit) run in the handler; no allocation, no stdio. */
+static char mdk_sigaltstack[256 * 1024];   /* alt stack for the fault handler */
+static char *mdk_stack_lo = NULL;          /* worker stack low  address */
+static char *mdk_stack_hi = NULL;          /* worker stack high address */
+static struct sigaction mdk_old_segv;
+static struct sigaction mdk_old_bus;
+
+/* Is `addr` within (or just below the guard page of) the worker stack? */
+static int mdk_addr_near_stack(void *addr) {
+  if (!addr || !mdk_stack_lo || !mdk_stack_hi) return 0;
+  char *a = (char *)addr;
+  /* Allow a slack window below the mapped stack for the guard region. */
+  return a >= (mdk_stack_lo - (1 << 20)) && a <= mdk_stack_hi;
+}
+
+static void mdk_chain_previous(int sig, siginfo_t *info, void *uctx) {
+  struct sigaction *old = (sig == SIGBUS) ? &mdk_old_bus : &mdk_old_segv;
+  if (old->sa_flags & SA_SIGINFO) {
+    if (old->sa_sigaction) { old->sa_sigaction(sig, info, uctx); return; }
+  } else if (old->sa_handler != SIG_DFL && old->sa_handler != SIG_IGN) {
+    old->sa_handler(sig);
+    return;
+  }
+  /* No previous handler: no silent death — print generic and exit nonzero. */
+  static const char m[] =
+    "runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)\n";
+  write(2, m, sizeof(m) - 1);
+  _exit(139);
+}
+
+static void mdk_fault_handler(int sig, siginfo_t *info, void *uctx) {
+  if (mdk_addr_near_stack(info ? info->si_addr : NULL)) {
+    static const char m[] =
+      "runtime error [E-STACK-OVERFLOW]: stack overflow (recursion too deep)\n";
+    write(2, m, sizeof(m) - 1);
+    _exit(134);
+  }
+  mdk_chain_previous(sig, info, uctx);
+}
+
+/* Install the alt stack (per-thread) + the SIGSEGV/SIGBUS handlers.  Called on
+ * the worker thread, after its stack bounds have been recorded. */
+static void mdk_install_fault_handler(void) {
+  stack_t ss;
+  ss.ss_sp = mdk_sigaltstack;
+  ss.ss_size = sizeof(mdk_sigaltstack);
+  ss.ss_flags = 0;
+  if (sigaltstack(&ss, NULL) != 0) return;  /* best-effort; skip if unavailable */
+
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_sigaction = mdk_fault_handler;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGSEGV, &sa, &mdk_old_segv);
+  sigaction(SIGBUS, &sa, &mdk_old_bus);
+}
+
+/* Record the running (worker) thread's stack bounds for the fault handler. */
+static void mdk_record_stack_bounds(void) {
+#ifdef __APPLE__
+  void *hi = pthread_get_stackaddr_np(pthread_self());  /* high addr (top) */
+  size_t sz = pthread_get_stacksize_np(pthread_self());
+  mdk_stack_hi = (char *)hi;
+  mdk_stack_lo = (char *)hi - sz;
+#else
+  pthread_attr_t at;
+  if (pthread_getattr_np(pthread_self(), &at) == 0) {
+    void *base;
+    size_t sz;
+    if (pthread_attr_getstack(&at, &base, &sz) == 0) {
+      mdk_stack_lo = (char *)base;
+      mdk_stack_hi = (char *)base + sz;
+    }
+    pthread_attr_destroy(&at);
+  }
+#endif
+}
+
 static void *mdk_main_thread(void *p) {
   struct mdk_main_args *a = (struct mdk_main_args *)p;
+  mdk_record_stack_bounds();
+  mdk_install_fault_handler();
   a->ret = mdk_program_main(a->argc, a->argv);
   return NULL;
 }

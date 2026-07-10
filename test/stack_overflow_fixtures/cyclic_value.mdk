@@ -1,0 +1,3 @@
+import list.{take}
+xs = 1 :: xs
+main = println (take 3 xs)
