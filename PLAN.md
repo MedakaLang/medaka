@@ -175,8 +175,11 @@ after P0-5 (shares lexer/parser/desugar/eval). The batch:
   (keep single `let rec` for local recursive lambdas; drop only the `with` grouping); **`let-else`**.
 - **REPURPOSE `!` (boolean-not → Ref-DEREF sugar).** `!x` desugars to `x.value` (the existing Ref
   read — mirrors `:=`→`setRef`; no new eval/emit arm). `not` becomes the SOLE boolean negation
-  (already a prelude fn). 0 dogfood `!`-as-not uses → no compiler/stdlib migration. Add a hint on
-  `!someBool` → "use `not`". Net: Refs get OCaml-standard ergonomics — `Ref x` / `!x` / `x := v`.
+  (already a prelude fn). 0 dogfood `!`-as-not uses → no compiler/stdlib migration. **REQUIRED (user
+  2026-07-10):** applying `!` to a `Bool` (the old boolean-not use) must give a **helpful located error
+  pointing at the `not` function** — e.g. `` `!` is dereference (Ref), not boolean negation — use `not x` `` —
+  NOT a bare type-mismatch. (`!x` now means `x.value`, so `!aBool` will fail to unify Bool with `Ref a`;
+  intercept that shape and surface the `not`-function hint.) Net: Refs get OCaml-standard ergonomics — `Ref x` / `!x` / `x := v`.
   **Also update P0-5's `R-IMMUTABLE-ASSIGN` error copy** from `.value` to the nicer `!c` once this lands.
 - **KEEP-FOR-FUTURE:** compose `>>`/`<<` (foundational point-free FP, near-zero carry cost; pairs
   with the kept pipe `|>`). Everything else audited = KEEP (earned or high newcomer value).
