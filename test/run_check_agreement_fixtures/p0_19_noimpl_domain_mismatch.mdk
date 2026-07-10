@@ -1,0 +1,17 @@
+-- P0-19 (SHADOW-SEMANTICS row 13 / cell d9): a definer-shadow standalone `size`
+-- applied to a receiver with NO impl whose type ALSO does not match the standalone's
+-- declared domain (String vs Int).  S2 says the standalone fallback must then type
+-- against its declared domain — a mismatch is a located REJECT.  Was a silent build
+-- soundness hole (check accepted, build printed a garbage int).
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+size : Int -> Int
+size n = n + 1
+
+main = println (size "hi")

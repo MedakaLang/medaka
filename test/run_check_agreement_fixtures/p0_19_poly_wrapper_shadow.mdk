@@ -1,0 +1,19 @@
+-- P0-19 (SHADOW-SEMANTICS row 12 / cell d5b): a wrapper `useIt x = size x` over the
+-- definer-shadow standalone `size : Int -> Int` must MONOMORPHISE to the standalone's
+-- domain (S5), not generalize to `a -> Int`.  Calling it at a live-impl type (Box)
+-- must then REJECT (Box vs Int).  Was a silent build soundness hole (check accepted
+-- `useIt : a -> Int`, build printed a garbage int).
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+size : Int -> Int
+size n = n + 1
+
+useIt x = size x
+
+main = println (useIt (Box 3))

@@ -1202,6 +1202,18 @@ standaloneValuesRef = Ref []
 definerShadowNamesRef : Ref (List String)
 definerShadowNamesRef = Ref []
 
+-- P0-19: the declared top-level SIGNATURES of definer-shadow standalones
+-- (`size : Int -> Int`), keyed by name.  When a definer-shadow occurrence resolves
+-- to the STANDALONE (no visible impl for the grounded receiver, or an ungrounded
+-- receiver), inferDefinerShadowApp enforces this declared domain against the actual
+-- argument — closing the S2/S5 "must then type against the standalone's domain" hole
+-- that let `size "hi"` / a poly wrapper `useIt x = size x; useIt (Box 3)` type against
+-- the permissive method scheme and reach codegen as garbage.  Set per-path from
+-- `sigsOf prog`; empty for an unsignatured standalone (no domain to enforce → the old
+-- permissive behavior, unchanged).
+definerShadowSigsRef : Ref (List (String, Ty))
+definerShadowSigsRef = Ref []
+
 -- P0-18 (EMIT path only): the mangler (`mangleUnits`) renames a definer-shadow
 -- standalone def + its call sites to `<mid>__name` BEFORE marking, but (correctly)
 -- leaves the interface method name bare — so the mark pass's NAME-based shadow
@@ -2068,6 +2080,7 @@ resetState _ =
   let _ = setRef pendingRLocalSites []
   let _ = setRef shadowStandaloneSchemesRef []
   let _ = setRef definerShadowNamesRef []
+  let _ = setRef definerShadowSigsRef []
   let _ = setRef shadowKeyTableRef []
   let _ = setRef pendingBinopSites []
   let _ = setRef pendingArithSites []
@@ -4675,9 +4688,11 @@ inferAppExpr env f x = match hintArgName x
       Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
       None => match definerShadowArgHead f
        Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
-       None => match detectSwappedArgs2 env f x
-        Some swapResult => swapResult
-        None =>
+       None => match definerShadowVarHead f
+        Some dname => inferDefinerShadowVarApp env dname f x
+        None => match detectSwappedArgs2 env f x
+         Some swapResult => swapResult
+         None =>
           let ft = infer env f
           let xt = infer env x
           -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
@@ -4794,6 +4809,9 @@ definerShadowArgHead _ = None
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> <Mut> Mono
 inferDefinerShadowApp env name tagRef implRef f x =
   let sym = routeLocalSym tagRef.value
+  -- P0-19: capture the application's location BEFORE inferring the argument (which
+  -- moves currentLoc), so a standalone-domain mismatch reports at the call site.
+  let dloc = currentLoc.value
   let _ = setRef suppressRLocalRecord True
   let _ = setRef suppressArgStamp True
   -- P0-18: type the head against the STANDALONE scheme.  On the un-mangled run/check
@@ -4818,6 +4836,77 @@ inferDefinerShadowApp env name tagRef implRef f x =
   let _ = match argDispatchOf name
     Some _ => setRef pendingArgStamps ((name, tagRef, implRef, xt, currentFn.value, None)::pendingArgStamps.value)
     None => ()
+  -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
+  -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
+  -- occurrence resolves to the STANDALONE — a grounded receiver head with no visible
+  -- impl of the shadowed interface, or an ungrounded receiver (S5) — impose the
+  -- standalone's DECLARED domain on the argument, so a domain mismatch (`size "hi"`,
+  -- or a wrapper generalized over the shadow receiver then called at a live-impl type)
+  -- becomes a located reject instead of build-time garbage.  A grounded receiver WITH
+  -- an impl still dispatches (no enforcement) — that arm is untouched.  On the mangled
+  -- emit path (sym != "") `ft` is already the standalone scheme (definerShadowHeadType),
+  -- which enforces the domain itself, so this stays inert there.
+  let _ = if sym == "" then enforceStandaloneDomain env name xt dloc else ()
+  inferApp (envAlphaLets env) (EApp f x) ft xt
+
+-- P0-19: impose a definer-shadow standalone's declared domain on the actual argument
+-- [xt] WHEN the occurrence resolves to the standalone (RLocal): a grounded receiver
+-- head with no impl of the shadowed interface, or an ungrounded receiver (S5 —
+-- monomorphise the enclosing wrapper to the standalone's domain).  A grounded head
+-- that DOES have an impl dispatches → leave it (no domain constraint).  No declared
+-- signature ⇒ nothing to enforce (permissive fallback, unchanged).  [dloc] re-points
+-- currentLoc at the application so a mismatch localizes to the call, not the argument.
+enforceStandaloneDomain : TcEnv -> String -> Mono -> Option Loc -> <Mut> Unit
+enforceStandaloneDomain _ name xt dloc = match standaloneShadowDomain name
+  None => ()
+  Some dom => match headTyconMono xt
+    Some head =>
+      if implExistsForHead shadowKeyTableRef.value name head then
+        ()
+      else
+        unifyStandaloneDomain dom xt dloc
+    None => unifyStandaloneDomain dom xt dloc
+
+-- unify the standalone domain against the argument at the call's location.
+unifyStandaloneDomain : Mono -> Mono -> Option Loc -> <Mut> Unit
+unifyStandaloneDomain dom xt dloc =
+  let _ = setRef currentLoc dloc
+  unify dom xt
+
+-- a definer-shadow standalone's declared parameter type, freshly instantiated (so a
+-- polymorphic standalone domain does not leak vars across sites).  None when there is
+-- no top-level signature, or the signature is not a function type.
+standaloneShadowDomain : String -> <Mut> Option Mono
+standaloneShadowDomain name = match lookupAssoc name definerShadowSigsRef.value
+  None => None
+  Some ty => match normalize (instantiate (sigToScheme ty))
+    TFun a _ _ => Some a
+    _ => None
+
+-- P0-19: peel an application head to a definer-shadow interface-method occurrence on
+-- the UN-MARKED path (the `check` pipeline runs no marker, so the head is a bare
+-- `EVar`, not the `EMethodAt` that definerShadowArgHead matches on run/build).  Same
+-- guard as definerShadowArgHead: a single-param interface method whose name is a
+-- module-local standalone (definerShadowNamesRef).
+definerShadowVarHead : Expr -> <Mut> Option String
+definerShadowVarHead (ELoc _ f) = definerShadowVarHead f
+definerShadowVarHead (EVar name)
+  | singleParamIfaceMethod name && contains name definerShadowNamesRef.value =
+    Some name
+  | otherwise = None
+definerShadowVarHead _ = None
+
+-- P0-19: type an un-marked (check-path) definer-shadow application.  The head still
+-- infers to the permissive METHOD scheme (`a -> Int`) so the result stays `Int` for
+-- both dispatch and standalone, but enforceStandaloneDomain imposes the standalone's
+-- declared domain when the receiver has no impl / is ungrounded — the check-path twin
+-- of inferDefinerShadowApp's enforcement, giving `run`/`check`/`build` agreement.
+inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> <Mut> Mono
+inferDefinerShadowVarApp env name f x =
+  let dloc = currentLoc.value
+  let ft = infer env f
+  let xt = infer env x
+  let _ = enforceStandaloneDomain env name xt dloc
   inferApp (envAlphaLets env) (EApp f x) ft xt
 
 -- P0-18: the type of a definer-shadow application HEAD.  With a mangled symbol (the
@@ -8733,6 +8822,13 @@ checkProgramSeeded seed prog =
   -- user, and core's method impls live in DImpl blocks (not funDefs), so this picks
   -- up only genuine user shadows.  Mirrors the multi-module checkModuleFullImpl path.
   let _ = setRef definerShadowNamesRef (buildDefinerShadows prog prog)
+  -- P0-19: stash the standalone signatures + the impl key table so
+  -- inferDefinerShadowApp can enforce a definer-shadow standalone's declared domain on
+  -- a no-impl / ungrounded receiver (single-file check AND single-file run/build, which
+  -- both flow through here).  shadowKeyTableRef distinguishes dispatch (impl exists →
+  -- leave permissive) from standalone (no impl → enforce domain).
+  let _ = setRef definerShadowSigsRef sigs
+  let _ = setRef shadowKeyTableRef (buildKeyTable prog)
   let topSchemes = processTopGroups env1 sigs defs (groupNames defs omEmpty)
   -- FLAT-PATH SHADOW FIX (cont.): when a USER top-level fn shares a name with an
   -- interface method (e.g. user `eq : List Int -> List Int -> Bool` vs core's
@@ -10955,6 +11051,10 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
   let definerShadows = buildDefinerShadows (accData ++ implDecls ++ prog) prog
   let _ = setRef standaloneValuesRef (dedup (importerShadows ++ definerShadows))
   let _ = setRef definerShadowNamesRef definerShadows
+  -- P0-19: stash this module's standalone signatures so inferDefinerShadowApp can
+  -- enforce a definer-shadow standalone's declared domain on a no-impl / ungrounded
+  -- receiver (shadowKeyTableRef, set just below, gates dispatch-vs-standalone).
+  let _ = setRef definerShadowSigsRef (sigsOf prog)
   -- Bug C: stash each importer shadow's IMPORTED STANDALONE scheme (e.g. `toList` →
   -- `Map k v -> List (k, v)`) BEFORE env1 rebinds the name to the interface-method
   -- scheme, so inferAppExpr can recover the standalone result type for a no-impl
