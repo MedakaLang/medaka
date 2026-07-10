@@ -53,7 +53,7 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
 - Expected: `run` rejects exactly what `check` rejects. Other error classes DO gate run,
   so the gate exists but skips constraint/no-impl errors.
 
-## P0-2: Silent signal crashes (SIGBUS/SIGSEGV, zero output)
+## P0-2: Silent signal crashes (SIGBUS/SIGSEGV, zero output) — ⚠️ PARTIAL: (c) refutable-let build SIGSEGV ✅ FIXED 2026-07-10 (`ed8be866`); (a) stack-overflow + (b) cyclic-value STILL OPEN (design item)
 - Class: crash. Source: patterns#F5, playground#F2, numerics#F10, bindings#F6.
 - Repros:
   - `main = println (sum [1..=100000])` → `medaka run` exits 138 (SIGBUS), **no output at
@@ -133,7 +133,7 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
   (those should instead get a clean "not available in the playground" message).
 - Expected: pure shims (str_to_float) supplied; IO imports produce a friendly capability error.
 
-## P0-9: `import map` + `import set` together — false stdlib warnings in the playground, runtime breakage in the interpreter
+## P0-9: `import map` + `import set` together — false stdlib warnings in the playground, runtime breakage in the interpreter — ✅ FIXED 2026-07-10 (`2b17677f`): per-module ctor frames in eval + checked-module-first exhaust oracle; run works both orders, 0 false warnings
 - Class: silent-wrong / divergence. Source: playground#F4/#F5. Likely cross-module
   `Bin`/`Tip` ctor collision.
 - Repros:
@@ -145,7 +145,7 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
     (117:30 in a 5-line file). Build and playground print `Some two`.
 - Expected: no false warnings; run == build; diagnostics attributed to the right file.
 
-## P0-10: stdlib `hash_map`/`hash_set` cannot run in the interpreter
+## P0-10: stdlib `hash_map`/`hash_set` cannot run in the interpreter — ✅ FIXED 2026-07-10 (`16a53cdd`): 5 hash externs bound in eval with an interpreter-local hash (not byte-identical to native — nothing needs it); doctests pass under run, run-path test gate re-enabled
 - Class: run-build-divergence / crash. Source: numerics#F4, gap#F5.
 - Repro: `import hash_map.{new, set, get}`; `set "a" 1 m` →
   `medaka run`: `E-PANIC: unbound identifier: hashString` (no location); native build

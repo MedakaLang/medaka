@@ -32,6 +32,46 @@ quickstart, stdlib docs, public repo, LICENSE, KNOWN-GAPS, `--version`) and a
 unknown is the Linux deep-recursion stack, spiked first per `DISTRIBUTION-DESIGN.md`
 §D0). The prior north star (self-hosting → LLVM) is ✅ COMPLETE.
 
+## Current status (2026-07-10) — run≠build parity cluster: P0-2(c) + P0-10 + P0-9 CLOSED; P0-2(a)/(b) deferred. `main` = `2b17677f`
+
+Three run≠build/parity P0s from the beta QA sweep, each diagnosed (one read-only pass) → fixed →
+independently verified → merged. All fixpoint C3a/C3b YES, no seed re-mint.
+- **P0-2(c)** (`ed8be866`) — a failing **refutable `let`-without-`else`** (`let (Some y) = None`) SIGSEGV'd
+  the native build (`run` gave a clean `E-LET-REFUTE`). Root: `emitBlock`'s general `CSLet` arms +
+  `emitLet` catch-all destructured a refutable `PCon` with no tag check / no failure branch (only the
+  explicit `let pat = e else alt` form desugars to `CSLetElse`). Fix: `refutableCsLet` classifier (a
+  `PCon` is refutable iff its type has sibling ctors) + new `mdk_let_refute` runtime trap + `emitRefutableCsLet`
+  (mirrors `emitLetElse` but branches to the trap). Irrefutable path byte-identical (llvm 195/0). New gate
+  `diff_compiler_let_refute` (3/0). Residual: only top-level head-ctor checked (same single-level limit as
+  `emitLetElse`; nested `let Some (Some x) = e` not recursively checked).
+- **P0-10** (`16a53cdd`) — `hash_map`/`hash_set` panicked `unbound: hashString` under `run` (the 5 hash
+  externs were in `medaka_rt.c` but never bound in eval's `externBindings` — they lived only in the deleted
+  OCaml oracle). Fix: bound `hashInt`/`hashFloat`/`hashString`/`hashChar`/`hashBool` in eval with an
+  **interpreter-local** hash masked to `[0,2^30)` (xorshift for int/char, FNV-1a fold for string/float via
+  `stringToUtf8Bytes`/`floatToBytes64`, `boolToInt` for bool) — deliberately NOT byte-identical to native
+  (nothing under `run` needs it: `slotOf = hash % cap` needs only intra-engine consistency, all doctests are
+  order-independent). Doctests pass under run (map 10/10, set 7/7); the run-path test gate (`diff_compiler_test`)
+  was un-deferred for hash_map/hash_set (16/0).
+- **P0-9** (`2b17677f`) — `import map` + `import set` crashed the interpreter (`E-NOT-A-FUNCTION`) + emitted
+  ~14 false `W-NONEXHAUSTIVE-CLAUSES`, from a cross-module ctor-name collision (`Bin` arity 5 in map vs 4 in
+  set; native is safe via universal mangling, eval/exhaust are not). Fix (localized, option B — universal
+  ctor mangling in resolve deferred post-beta): (1) eval installs each module's ctors into its **per-module
+  frame** (shadows the bare-name global) so a module constructs via its own arity-correct ctor; (2) exhaust +
+  typecheck order the **checked module's own decls first** in the ctor oracle so first-wins bare-name arity/type
+  lookups pick the right module (the agent tried `(type,ctor)`-keying and found it insufficient — the pre-typecheck
+  clause pass has no scrutinee type — so ordering is the correct minimal fix). Run works both import orders, 0
+  false warnings; gates eval_modules 5/0, exhaust 6/0, check 77/0, fixpoint YES (compiler's own stdlib-`Map`
+  use via `support/ordmap` intact).
+
+**⭐ STILL OPEN — P0-2(a)+(b): stack-overflow / cyclic-value silent crashes (a DESIGN ITEM, needs a scoping
+decision).** Deep non-tail recursion (`loop 200000`) → bare SIGBUS/SIGSEGV, no diagnostic, on BOTH run
+(~256 MB worker stack) and build; `xs = 1 :: xs` + force → same class (Cons is strict → non-productive
+self-reference; no black-hole detection). Fix options (agent-scoped): (1) a recursion-depth guard in eval's
+apply/eval loop → clean `E-STACK-OVERFLOW: recursion too deep in <fn>` (interpreter-only); (2) a
+`sigaltstack` + SIGSEGV/SIGBUS handler in `runtime/medaka_rt.c` → `stack overflow` for BUILT binaries too
+(can't name the fn); (b) a black-hole check on top-level cell forcing → `E-CYCLIC-VALUE`. Recommend (1)+(2)+black-hole;
+scope as its own task. Touches `compiler/eval/eval.mdk` + `runtime/medaka_rt.c`.
+
 ## Current status (2026-07-10) — ✅ P0-19 shadow-conformance workstream FULLY CLOSED (all 4 BUG cells). `main` = `ebb8ee90`
 
 All four SHADOW-SEMANTICS §5 BUG cells are fixed, in two batches, pure `compiler/types/typecheck.mdk`
