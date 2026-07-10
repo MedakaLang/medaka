@@ -227,9 +227,13 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
   mangle rename-info into the mark pass → build `size (Box 3)` → **3**; llvm/build byte-identical,
   fixpoint C3a/C3b YES, no re-mint. Also fixed a second bug (element-type loss → SIGSEGV in Map
   `toList`). N-way + importer-on-live-impl generalization verified working. Full analysis in
-  `qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md`. **Remaining residual (DEFERRED, distinct seam):**
-  an importer shadow on a **no-impl** receiver rejects at check + panics on build (run correct) —
-  needs cross-module bare-name registration into the consuming module + a check-path fallback accept.
+  `qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md`. **Importer-no-impl residual ✅ FIXED 2026-07-09**
+  (`cfc4fa5a`): importer shadow on a no-impl receiver now `check` ACCEPTs + `build`/`run` return the
+  standalone (4); importer-on-live-impl still dispatches (3); definer cases unchanged. 4 path-scoped
+  `typecheck.mdk` changes (build routing via the seeded mangled-symbol signal; check obligation skips
+  shadows in `definerShadowNames` ∪ `standaloneValues`; importer detection recognizes a
+  locally-declared interface; importer dispatch includes the module's own impls). New gate
+  `diff_compiler_check_cli_modules` 12/0; fixpoint C3a/C3b YES, no re-mint. **P0-18 fully closed.**
 - **`Map` function-key** leg fixed earlier (`76bda5a1`, batch 1).
 - Class: error-ux / divergence. Source: type-system#F3, numerics#F3.
 - Repros:

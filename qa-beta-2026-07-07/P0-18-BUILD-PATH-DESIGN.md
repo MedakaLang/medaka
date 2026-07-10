@@ -12,10 +12,15 @@ pipeline order untouched. `medaka build` of `size (Box 3)` now → **3** (was ga
 element type (Map `toList` → `List a` not `List (k,v)`) → downstream SIGSEGV; now types against the
 standalone scheme via the mangled symbol. **Part B (user's Fork-3 override to generalize):** N-way
 multi-impl and importer-shadow-on-a-live-impl receiver BOTH already work post-Part-A (no further
-change). **Residual (scoped, DEFERRED — a distinct seam):** an importer shadow on a **no-impl**
-receiver still rejects at check + panics on build (run is correct) — needs cross-module registration
-of the imported shadow's bare name into the consuming module's `definerShadowNames`/`standaloneValues`
-+ a check-path standalone-fallback accept. Filed for follow-up. See §8 (appended).
+change). **Residual ✅ FIXED (`cfc4fa5a`, 2026-07-09):** the importer shadow on a **no-impl**
+receiver now `check` ACCEPTs + `build`/`run` return the standalone (4). 4 path-scoped `typecheck.mdk`
+changes: build routing (`definerShadowArgHead` also fires on the mark-pass-seeded `RLocal <sym>`
+cross-module signal); check obligation (`recordImplObligation` skips shadows in `definerShadowNames`
+∪ `standaloneValues` — the union preserves single-file definer coverage); importer detection
+(`buildStandaloneShadows` recognizes a shadow whose interface is declared locally in the importer);
+importer dispatch (`shadowKeyTableRef` includes the module's own impls so a live-impl receiver
+dispatches). Emit-inert (no importer shadows in compiler/stdlib → fixpoint safe). Gate
+`diff_compiler_check_cli_modules` 12/0. **P0-18 fully closed.**
 
 ---
 _Original design-pass header (preserved):_ **DIAGNOSED (empirically confirmed on `medaka build`), NOT implemented.** This is a

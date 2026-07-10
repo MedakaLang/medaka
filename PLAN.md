@@ -32,6 +32,23 @@ quickstart, stdlib docs, public repo, LICENSE, KNOWN-GAPS, `--version`) and a
 unknown is the Linux deep-recursion stack, spiked first per `DISTRIBUTION-DESIGN.md`
 §D0). The prior north star (self-hosting → LLVM) is ✅ COMPLETE.
 
+## Current status (2026-07-09) — P0-18 standalone-shadow dispatch FULLY CLOSED incl. importer-no-impl residual. `main` = `cfc4fa5a`
+
+Final residual closed (`cfc4fa5a`): an **importer shadow on a no-impl receiver** (imported `size`,
+receiver `Int`, no impl) now `check` ACCEPTs + `build`/`run` return the standalone (4); importer-on-
+live-impl still dispatches (3); all definer cases unchanged. 4 path-scoped `typecheck.mdk` changes
+(build routing via the mark-pass-seeded mangled-symbol signal; check obligation skips shadows in
+`definerShadowNames` ∪ `standaloneValues`; importer detection recognizes a locally-declared
+interface; importer dispatch includes the module's own impls). New gate `diff_compiler_check_cli_modules`
+12/0; agreement 14/0, build 60/0, llvm byte-identical, fixpoint C3a/C3b YES, no re-mint. **All of
+P0-18 (run/check + build + importer/N-way generalization + residual) is now closed.**
+
+**Follow-up queued (user will run in a separate session):** a formal `SHADOW-SEMANTICS.md`
+conformance spec for declaration shadowing (decision matrix over is-shadow × definer/importer ×
+receiver-has-impl × N-way × same/cross-module, a per-stage enforcement table, and a fixture-per-cell
+plan) — this arc produced 4 bugs across 4 pipeline stages, the signature of an under-specified
+cross-cutting invariant. Prompt written; to run once this is settled on main.
+
 ## Current status (2026-07-09) — P0-18 standalone-shadow dispatch FULLY CLOSED (run/check + build); soundness hole gone. `main` = `01ac360d`
 
 Both halves of P0-18 landed (Opus, Docker-gated throughout):
