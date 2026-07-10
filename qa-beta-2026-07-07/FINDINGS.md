@@ -223,8 +223,13 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
   `implExistsForHead`). ⚠️ **RESIDUAL:** `medaka build` still emits a wrong VALUE for
   `size (Box 3)` (garbage, exits 0 → gate unaffected) — a **separate, pre-existing** mangling-pass
   ordering issue (`private_mangle.mdk` mangles the shadow occurrence before marking, so emit never
-  sees a dispatch site). Needs a design decision; DEFERRED. Full analysis in
-  `qa-beta-2026-07-07/P0-18-STANDALONE-DISPATCH-DESIGN.md` (bottom).
+  sees a dispatch site). **✅ NOW FIXED 2026-07-09** (`0b4a7882`+`01ac360d`): Option 3 threads the
+  mangle rename-info into the mark pass → build `size (Box 3)` → **3**; llvm/build byte-identical,
+  fixpoint C3a/C3b YES, no re-mint. Also fixed a second bug (element-type loss → SIGSEGV in Map
+  `toList`). N-way + importer-on-live-impl generalization verified working. Full analysis in
+  `qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md`. **Remaining residual (DEFERRED, distinct seam):**
+  an importer shadow on a **no-impl** receiver rejects at check + panics on build (run correct) —
+  needs cross-module bare-name registration into the consuming module + a check-path fallback accept.
 - **`Map` function-key** leg fixed earlier (`76bda5a1`, batch 1).
 - Class: error-ux / divergence. Source: type-system#F3, numerics#F3.
 - Repros:

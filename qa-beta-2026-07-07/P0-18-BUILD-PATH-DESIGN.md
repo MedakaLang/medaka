@@ -1,6 +1,24 @@
 # P0-18 build-path soundness hole — design & scoping
 
-**Status: DIAGNOSED (empirically confirmed on `medaka build`), NOT implemented.** This is a
+**Status: ✅ IMPLEMENTED + merged (`0b4a7882` Part A + `01ac360d` Part B, on local main `01ac360d`, 2026-07-09).**
+Option 3 (thread mangle rename-info into the mark pass) + Fork-2 carry-in-route, mangler and
+pipeline order untouched. `medaka build` of `size (Box 3)` now → **3** (was garbage); N-way →
+3/30/4. Gates (Docker-verified): build repro 3/4 run==build, agreement **14/0**, `diff_compiler_build`
+**60/0** (+`definer_shadow_dispatch`/`definer_shadow_nway` fixtures), `diff_compiler_llvm*`
+**byte-identical** (194/44/15), construct-coverage 139/0, eval 23/0, full suite 76/0/1skip,
+**fixpoint C3a/C3b YES — NO seed re-mint** (Fork 4 held: the 5 in-tree shadows now route
+`EMethodAt`+`RLocal` but emit a byte-identical direct call). **Second bug found+fixed:**
+`inferDefinerShadowApp` typed the head against the interface method scheme, losing the concrete
+element type (Map `toList` → `List a` not `List (k,v)`) → downstream SIGSEGV; now types against the
+standalone scheme via the mangled symbol. **Part B (user's Fork-3 override to generalize):** N-way
+multi-impl and importer-shadow-on-a-live-impl receiver BOTH already work post-Part-A (no further
+change). **Residual (scoped, DEFERRED — a distinct seam):** an importer shadow on a **no-impl**
+receiver still rejects at check + panics on build (run is correct) — needs cross-module registration
+of the imported shadow's bare name into the consuming module's `definerShadowNames`/`standaloneValues`
++ a check-path standalone-fallback accept. Filed for follow-up. See §8 (appended).
+
+---
+_Original design-pass header (preserved):_ **DIAGNOSED (empirically confirmed on `medaka build`), NOT implemented.** This is a
 decision-ready design doc. The run/check path was fixed by `953d9ea1` (`size (Box 3)` → **3**,
 `size 3` → **4** on run/check; agreement gate 14/0). The `medaka build` (native emit) path still
 emits a **wrong value** for `size (Box 3)` — a silent soundness hole. This doc confirms the filed
