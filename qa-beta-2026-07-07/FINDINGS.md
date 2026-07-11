@@ -285,23 +285,25 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
 
 # P1 — Fix before beta if at all possible
 
-## P1-1: Int is 63-bit and literals silently wrap
+Reconciled 2026-07-11 against main 6e1ce9aa — verdicts stamped per-item below.
+
+## P1-1: Int is 63-bit and literals silently wrap — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: type-system#F5, numerics#F7, gap#F6. `println 9223372036854775807` → `-1`;
   `4611686018427387903 + 1` → negative. run==build. No diagnostic, no documentation;
   `minInt`/`maxInt` don't exist. Expected: out-of-range literal = compile error; document
   Int width; (arithmetic wrap at least documented).
 
-## P1-2: Scientific-notation floats: printer emits what the parser can't read
+## P1-2: Scientific-notation floats: printer emits what the parser can't read — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: numerics#F5, type-system#F15. `println 0.00001` prints `1e-05`; feeding
   `1e-05` back → `E-NOT-A-FUNCTION: applied non-function: 1`; `1e12` →
   `Unbound variable: e12`; `5.0e-324` lexes as `5.0e-3` applied to `24`. Playground
   copy-paste of program output fails. Expected: accept `NeM` literals (or never print them).
 
-## P1-3: Float printing truncates to ~12 significant digits — Debug is lossy
+## P1-3: Float printing truncates to ~12 significant digits — Debug is lossy — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: numerics#F6. `debug (0.1 + 0.2)` and `debug 0.3` both print `0.3` while `==`
   is False; `123456789012345.0` prints `1.23456789012e+14`. Expected: shortest-round-trip.
 
-## P1-4: Quadratic perf cliffs a newcomer hits in minutes
+## P1-4: Quadratic perf cliffs a newcomer hits in minutes — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: numerics#F8/F9, patterns#F14, playground#F11.
   - `println [1..=100000]` native: 21 s (O(n²) Display); 1M: minutes. Playground killer.
   - `[1..=100000]` construction in the interpreter: ~48 s (O(n²)); `sum [1..=1000000]`
@@ -310,7 +312,7 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
     compile-side kill-timer in the browser (run-side only) — pathological paste pins the
     worker forever (playground#F11).
 
-## P1-5: Guard/clause fall-through errors are wrong-class or jargon
+## P1-5: Guard/clause fall-through errors are wrong-class or jargon — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: patterns#F6/F7.
   - Guarded clauses all falling through: **native reports `E-INDEX-OOB: index out of
     bounds`** (user hunts a nonexistent indexing bug); interpreter reports it correctly.
@@ -318,21 +320,21 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
     `E-PANIC: no matching impl for dispatch` (no location, typeclass jargon); native
     says E-NONEXHAUSTIVE-MATCH.
 
-## P1-6: Interpreter lacks IO externs — readLine/readFile/args/getEnv panic under `run`, work under `build`
+## P1-6: Interpreter lacks IO externs — readLine/readFile/args/getEnv panic under `run`, work under `build` — NON-GOAL (reconcile 2026-07-11: interpreter deliberately FFI-free)
 - Source: tooling#F5, playground#F13. `E-PANIC: unbound identifier: readLine` (no
   location; reads like a scoping bug). check passes them. Expected: implement in eval or
   give a located "native-only primitive; use medaka build" error at check/run time.
 
-## P1-7: Warnings are never surfaced by `run` or `build`
+## P1-7: Warnings are never surfaced by `run` or `build` — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: patterns#F9. Non-exhaustive-match / unreachable-arm warnings appear only under
   `check`; run/build users' first signal is the runtime abort (or P1-5's wrong-class
   crash). Expected: run/build print warnings to stderr.
 
-## P1-8: `run`/`build` hide computed type errors behind "Run `medaka check` for details"
+## P1-8: `run`/`build` hide computed type errors behind "Run `medaka check` for details" — ◐ PARTIAL (reconcile 2026-07-11: FIXED for single-file; STILL-OPEN RESIDUAL: fix does not reach medaka.toml multi-module projects — run/build still deflect there, and plain `check` prints ZERO location in multi-module mode, worse than 1:0; `check --json` still correct)
 - Source: type-system#F16, bindings#F4, playground#F19. run already ran the typechecker;
   print the diagnostics. (The playground does better than the CLI here.)
 
-## P1-9: Beginner-error hint-family gaps (the machinery exists — `def`/`for`/`return`/`\x ->`/`::`/`show`/`true`/`case of` all have model hints) — ⏳ PARTIAL: Python block-keyword subset DONE 2026-07-09 (`547df921`)
+## P1-9: Beginner-error hint-family gaps (the machinery exists — `def`/`for`/`return`/`\x ->`/`::`/`show`/`true`/`case of` all have model hints) — ⏳ PARTIAL: Python block-keyword subset DONE 2026-07-09 (`547df921`) — ◐ PARTIAL (reconcile 2026-07-11: Python-block-keyword hints DONE + imported-but-not-in-scope import-hint now fires; STILL missing: module-never-imported mis-suggests `traverse`, and xs[0]/len/null/console.log/`===`/`#`/`//` remain hintless)
 - Source: beginner#F5/F6/F13/F14, patterns#F3, playground#F16/F17, tooling#F14.
 - **DONE:** foreign-keyword hints for `elif`/`class`/`try`/`except`/`finally` (extended
   `isForeignKwTok`+`foreignKwMsg` in `parser.mdk`; fire on the Python `keyword …:` shape,
@@ -347,7 +349,7 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
   (mis-suggests internal `RString`); `reverse`-unbound suggesting `traverse` instead of
   `import list.{reverse}` (needs an import-hint, not an alias).
 
-## P1-10: `<unknown location>` / 1:0 diagnostics family
+## P1-10: `<unknown location>` / 1:0 diagnostics family — ⬜ STILL-OPEN (reconcile 2026-07-11: `<unknown location>`/1:0 family; non-exhaustive range points at wrong node)
 - Source: type-system#F12/F19, beginner#F7, gap#F3/F8, tooling#F18, playground#F15.
   - "Duplicate type: Option" (prelude collision), recursive type alias, method-not-in-
     interface, unknown interface, overlap + missing-superclass errors: no location.
@@ -355,34 +357,34 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
     reports correct spans) — and no gate can catch this today.
   - Non-exhaustive warning range points at the last arm's body, not the `match`.
 
-## P1-11: NaN poisons ordered collections
+## P1-11: NaN poisons ordered collections — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: numerics#F14. `compare nan x` returns `Eq` for every x → a 2-entry Map literal
   with a NaN key collapses to 1 entry; `get`/`set` on NaN hit the wrong entry. Expected:
   total order for Ord Float (NaN sorted consistently) or documented UB.
 
-## P1-12: `medaka run` loses stdout printed before a runtime error
+## P1-12: `medaka run` loses stdout printed before a runtime error — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Source: playground#F7. `println "before"` then `10 / 0`: run shows only the error,
   "before" is gone (build and playground both flush). Debugging-by-println is broken
   exactly when needed.
 
-## P1-13: Playground: native-only modules say "unknown module: math"
+## P1-13: Playground: native-only modules say "unknown module: math" — MOOT/NON-GOAL (reconcile 2026-07-11: playground-scoped — module exclusion is INTENTIONAL, non-goal; message quality still open)
 - Source: playground#F12. `import math` in the browser → `unknown module: math` (it
   exists, it's just not bundled). Also: no sqrt/pow available in the playground at all.
   Expected: "not available in the browser playground; available: list, map, set, …" +
   consider a wasm-safe math subset.
 
-## P1-14: Playground compiler traps on large-but-legal input, uncoded
+## P1-14: Playground compiler traps on large-but-legal input, uncoded — ⬜ STILL-OPEN (reconcile 2026-07-11: playground-scoped, not natively reproducible; likely still open)
 - Source: playground#F10. ~2000 top-level decls / 2000 nested parens / 20k-term chain →
   `{"message": "compiler trap: Maximum call stack size exceeded"}`, no `code`, dummy
   0:0 range, "compiler trap" leaks. Native handles the same inputs.
 
-## P1-15: Doctest runner robustness
+## P1-15: Doctest runner robustness — ⬜ STILL-OPEN (reconcile 2026-07-11: abort-on-panic + vacuous-green same-line example)
 - Source: tooling#F6/F7/F15. A panicking doctest aborts the whole run at `:0:0` with no
   file/which-test; a syntactically-bad example → bare "parse error"; slightly-off
   formatting (example on the `{- |` line) is silently "(no doctests found)" (vacuous
   green); prop with an unbound name → mid-run E-PANIC instead of a located check error.
 
-## P1-16: Prelude-name value bindings silently ignored
+## P1-16: Prelude-name value bindings silently ignored — ⬜ STILL-OPEN (reconcile 2026-07-11: binding shadowing a prelude VALUE name silently lost to the prelude fn's type)
 - Source: bindings#F8. `map = 99`; `println map` → run panics `intToString: not an Int`,
   check says `No impl of Display for ((a -> b) -> c a -> c b)` — the user's binding
   silently lost to the prelude method (function-form shadowing works fine).
@@ -392,63 +394,89 @@ beta (first-day user pain, but survivable). **P2** = fix soon after / document. 
 
 # P2 — Fix soon / document for beta
 
-- **P2-1** Silent-accept validation gaps (type-system#F6/F7/F8, patterns#F10/F12,
+Reconciled 2026-07-11 against main 6e1ce9aa — verdicts stamped per-item below.
+
+- **P2-1** — ⬜ STILL-OPEN overall (reconcile 2026-07-11: sub-parts impl-on-primitive
+  ignored / deriving-unknown-iface accepted / dup record fields / unreachable clause /
+  mixed-arity / sig-no-body all STILL-OPEN; assignment-to-unbound-at-use-site FIXED by
+  the `:=` pivot) Silent-accept validation gaps (type-system#F6/F7/F8, patterns#F10/F12,
   bindings#F11/F12): user `impl Eq Int` accepted then ignored; `deriving (Frobnicate)`
   (unknown iface) accepted; duplicate record-literal fields accepted (first wins);
   duplicate/unreachable function clauses unwarned (match arms DO warn); mixed-arity
   clauses get a raw unification error; assignment to unbound name errors at the use
   site, not the assignment; signature with no definition accepted.
-- **P2-2** Kind checking absent on impls (type-system#F10): `impl Mappish Int` accepted;
+- **P2-2** — ⬜ STILL-OPEN (reconcile 2026-07-11: no kind-checking on impls) Kind checking
+  absent on impls (type-system#F10): `impl Mappish Int` accepted;
   use site leaks malformed type `Int Int`.
-- **P2-3** impl-for-type-alias: check rejects, run dispatches (type-system#F11).
-- **P2-4** Wildcard import doesn't bring interfaces into impl scope; error located
-  `<unknown location>` (type-system#F9).
-- **P2-5** String interpolation edges (numerics#F11/F12/F13): triple-quoted interp hole
+- **P2-3** — ✅ FIXED 2026-07-11 (reconcile: check/run/build now consistently reject —
+  divergence closed) impl-for-type-alias: check rejects, run dispatches (type-system#F11).
+- **P2-4** — ⬜ STILL-OPEN (reconcile 2026-07-11: wildcard import doesn't bring interfaces
+  into impl scope; unlocated) Wildcard import doesn't bring interfaces into impl scope;
+  error located `<unknown location>` (type-system#F9).
+- **P2-5** — ◐ PARTIAL (reconcile 2026-07-11: nested-string-in-hole FIXED, if-in-hole
+  not-reproduced/FIXED; triple-quote-hole-eats-newline + empty-hole STILL-OPEN) String
+  interpolation edges (numerics#F11/F12/F13): triple-quoted interp hole
   with spaces eats the following newline+indent; nested string-in-hole → "unterminated
   string literal" pointing past EOF; acceptance of if-in-hole depends on surrounding
   statement count; empty hole → "unexpected a string".
-- **P2-6** Layout traps (beginner#F8/F10): mixed tab/space indentation silently mis-nests
+- **P2-6** — ⬜ STILL-OPEN (reconcile 2026-07-11: tab/space mis-nest; BOM glyph not named)
+  Layout traps (beginner#F8/F10): mixed tab/space indentation silently mis-nests
   (surfaces as println-arity type errors); UTF-8 BOM → error quoting an invisible char.
-- **P2-7** CLI polish (tooling#F9/F10/F11/F12/F16/F19): no `--version`; misspelled
+- **P2-7** — ⬜ STILL-OPEN (reconcile 2026-07-11: CLI polish; sub-note: `medaka test`
+  no-args now exits 1 = that CI-trap sub-part FIXED) CLI polish (tooling#F9/F10/F11/F12/F16/F19): no `--version`; misspelled
   subcommand → "not yet in native CLI" jargon, no did-you-mean; `medaka fmt <dir>` is a
   silent no-op (CI trap; lint accepts dirs); `bench` in --help but unimplemented /
   `manifest` implemented but hidden; run on missing file → "unknown module: nope"
   (check: bare "No such file or directory"; build gets it right); `medaka test` with no
   args prints usage but exits 0; `check` output lacks trailing newline; unknown lint
   rule names silently accepted.
-- **P2-8** REPL/doc type display drops constraints (tooling#F13): `:type map` prints
+- **P2-8** — ⬜ STILL-OPEN (reconcile 2026-07-11: constraint dropped in `:type`/`doc`/hover)
+  REPL/doc type display drops constraints (tooling#F13): `:type map` prints
   `(a -> b) -> c a -> c b` with no `Mappable c =>`; `medaka doc` same; REPL banner
   doesn't mention `:browse`/`:type`; `:help` doesn't exist.
-- **P2-9** Native runtime errors lack file:line (numerics#F16, patterns#F11) and drop
+- **P2-9** — ◐ PARTIAL (reconcile 2026-07-11: interpreter now carries file:line+index =
+  FIXED; native `build` still lacks file:line+index = STILL-OPEN) Native runtime errors
+  lack file:line (numerics#F16, patterns#F11) and drop
   detail the interpreter has (offending index).
-- **P2-10** `deriving Display` without parens → "unexpected `data`" at 1:0
+- **P2-10** — MOSTLY-FIXED (reconcile 2026-07-11: location fixed by P0-11; no
+  did-you-mean hint text yet) `deriving Display` without parens → "unexpected `data`" at 1:0
   (playground#F9); Haskell habit, needs accept-or-hint.
-- **P2-11** Map/Set literals need `import map.*` — SYNTAX.md doesn't say so, error gives
+- **P2-11** — ✅ FIXED (reconcile 2026-07-11: SYNTAX.md documents the import + functionality
+  works; residual: bare-Map `Unknown type: Map` gives no import hint) Map/Set literals
+  need `import map.*` — SYNTAX.md doesn't say so, error gives
   no help (numerics#F17, gap#F7).
-- **P2-12** `panic "msg"` as main's last statement is a check error ("Ambiguous instance
+- **P2-12** — ✅ FIXED (reconcile 2026-07-11: divergence closed — all three reject)
+  `panic "msg"` as main's last statement is a check error ("Ambiguous instance
   for Display" at 1:0) yet run executes it (playground#F14).
-- **P2-13** Docs drift: SYNTAX.md Refs example uses nonexistent `set_ref`, `.value` read
+- **P2-13** — MOSTLY-FIXED; DOC-ONLY residuals (reconcile 2026-07-11: the "Verification"
+  section ~line 496 still cites dead `dune build --root .` / `test/test_eval.ml` /
+  `test_run.ml` paths, and negative `%`/`/` convention still undocumented) Docs drift:
+  SYNTAX.md Refs example uses nonexistent `set_ref`, `.value` read
   undocumented (bindings#F10); SYNTAX.md attribute example is the P0-15 failing shape;
   SYNTAX.md still cites deleted OCaml paths as ground truth; `bench` documented but dead
   (gap#F4); Int width undocumented; negative `%`/`/` conventions undocumented.
-- **P2-14** `let mut` closure capture is a silent snapshot (bindings#F9): counter idiom
+- **P2-14** — MOOT (reconcile 2026-07-11: `let mut` removed in the P0-5 pivot) `let mut`
+  closure capture is a silent snapshot (bindings#F9): counter idiom
   returns stale values with zero warning; the write attempt inside a lambda is a parse
   error reported at 1:0. Known-by-design semantics, but needs a warning or doc.
-- **P2-15** `-0.0` run/build divergence (numerics, known-deferred; re-confirmed).
+- **P2-15** — ⬜ STILL-OPEN (reconcile 2026-07-11: deferred by design; `-0.0` run/build
+  divergence) `-0.0` run/build divergence (numerics, known-deferred; re-confirmed).
 
 # P3 — Polish (grouped)
 
-- Non-ASCII identifiers rejected mid-token without naming the ASCII rule (beginner#F17).
-- `${x}` / f-string interpolation silently inert in strings — lint candidate (beginner#F16).
-- Capitalized definition `Double x = …` → bare "unexpected `Double`" (beginner#F15).
+Reconciled 2026-07-11 against main 6e1ce9aa — verdicts stamped per-item below.
+
+- Non-ASCII identifiers rejected mid-token without naming the ASCII rule (beginner#F17). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- `${x}` / f-string interpolation silently inert in strings — lint candidate (beginner#F16). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- Capitalized definition `Double x = …` → bare "unexpected `Double`" (beginner#F15). — ⬜ STILL-OPEN (reconcile 2026-07-11)
 - Cascading second diagnostics (field-access after unbound receiver; Ambiguous-Display
-  after a real error) (type-system#F17, playground#F16).
-- `import util` (bare) is a silent no-op — qualified access isn't a thing (tooling#F17).
-- Cyclic-import error readable but unlocated (tooling#F18).
-- `medaka new` accepts any name; medaka.toml never validated (tooling#F21).
-- `medaka doc` leaks the `{- |` pipe into rendered output (tooling#F20).
-- Effect-leak diagnostic prints `<>` jargon, wrong anchor (type-system#F22).
-- Wrong-arity call on unannotated fn → "No impl of Num for (Int -> Int)" (type-system#F21).
+  after a real error) (type-system#F17, playground#F16). — ✅ FIXED (reconcile 2026-07-11: not reproduced)
+- `import util` (bare) is a silent no-op — qualified access isn't a thing (tooling#F17). — MOSTLY-FIXED (reconcile 2026-07-11: now hints `import util.{helper}`)
+- Cyclic-import error readable but unlocated (tooling#F18). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- `medaka new` accepts any name; medaka.toml never validated (tooling#F21). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- `medaka doc` leaks the `{- |` pipe into rendered output (tooling#F20). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- Effect-leak diagnostic prints `<>` jargon, wrong anchor (type-system#F22). — ⬜ STILL-OPEN (reconcile 2026-07-11)
+- Wrong-arity call on unannotated fn → "No impl of Num for (Int -> Int)" (type-system#F21). — ⬜ STILL-OPEN (reconcile 2026-07-11)
 
 ---
 
