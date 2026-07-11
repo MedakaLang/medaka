@@ -1752,6 +1752,9 @@ printFor WChar =
     "scalar-mode main produced a Char — internal mode mismatch (Char main forces ref-mode)"
 printFor WRef =
   gapL "scalar-mode main produced a (ref eq) — internal mode mismatch"
+printFor WFloat =
+  gapL
+    "scalar-mode main produced a Float — internal mode mismatch (Float forces ref-mode)"
 
 emitScalarFnBind : List String -> List String -> CBind -> <Mut> List String
 emitScalarFnBind fnNames valNames (CBind name [CClause pats body]) =
@@ -2783,6 +2786,10 @@ labelFallthroughStmt : CStmt -> String -> CStmt
 labelFallthroughStmt (CSExpr e) label = CSExpr (labelFallthrough e label)
 labelFallthroughStmt (CSLet rf p e) label =
   CSLet rf p (labelFallthrough e label)
+-- CSAssign (`:=`/setRef in a do-block, the Ref-mutability model): the assigned
+-- expression is in tail-fallthrough position exactly like CSLet's RHS.
+labelFallthroughStmt (CSAssign x e) label =
+  CSAssign x (labelFallthrough e label)
 
 labelFallthroughArm : CArm -> String -> CArm
 labelFallthroughArm (CArm p gs b) label = CArm
@@ -3069,6 +3076,8 @@ emitMethodRef prog env d name (RLocal sym) implRoutes methRoutes args =
   let target = if sym == "" then name else sym
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   argInstrs ++ ["call $" ++ gname target]
+emitMethodRef prog env d name (RScalar _) implRoutes methRoutes args =
+  gapL ("wasm W5: RScalar route for method '" ++ name ++ "' is out of slice")
 
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag
@@ -3192,6 +3201,10 @@ routeWitness _ env _ (RDictFwd dpar) =
   else
     gapL ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
 routeWitness _ _ _ RNone = gapL "wasm W5: RNone route as a dict witness"
+-- RLocal (method-shadow) / RScalar (scalar-tag) carry no dict: emit the no-op i31
+-- witness (dict tag 0), mirroring llvm_emit's `dictWordOfRoute (RLocal _) = "0"`.
+routeWitness _ _ _ (RLocal _) = ["i32.const 0", "ref.i31"]
+routeWitness _ _ _ (RScalar _) = ["i32.const 0", "ref.i31"]
 
 -- a constrained-function occurrence applied to `args`: prepend the materialized
 -- dict witnesses (one per `=>` constraint, in route order) to the args, then call
@@ -6765,6 +6778,12 @@ freeVarsRoute bound (RDict d) = if contains d bound then [] else [d]
 freeVarsRoute bound (RDictFwd d) = if contains d bound then [] else [d]
 freeVarsRoute bound (RKey _ rs) = flatMap (freeVarsRoute bound) rs
 freeVarsRoute bound RNone = []
+-- RLocal (P0-18 method-shadow → direct call to a top-level standalone) and RScalar
+-- (a scalar-tag route from CBinPrim arithmetic) carry NO captured local — the target
+-- is a global symbol / scalar tag, never a closed-over variable.  Mirrors llvm_emit's
+-- methValDictNames (`_ => []`): RKey/RNone/RLocal/RScalar capture nothing.
+freeVarsRoute _ (RLocal _) = []
+freeVarsRoute _ (RScalar _) = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : List String -> CBind -> <Mut> List String
