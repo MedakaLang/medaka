@@ -276,14 +276,12 @@ declSexp (DInterface { pub, def, name, typarams, supers, methods }) = node
     slist (map superSexp supers),
     slist (map ifaceMethodSexp methods),
   ]
-declSexp (DImpl { pub, def, iface, tys, name, reqs, methods }) = node
+declSexp (DImpl { pub, iface, tys, reqs, methods }) = node
   "DImpl"
   [
     boolStr pub,
-    boolStr def,
     escStr iface,
     slist (map tySexp tys),
-    optStrSexp name,
     slist (map requireSexp reqs),
     slist (map implMethodSexp methods),
   ]

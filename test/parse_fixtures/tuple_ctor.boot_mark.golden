@@ -1,5 +1,5 @@
 (DInterface false false "Swap" ("p") () ((imethod "swap" (TyFun (TyApp (TyApp (TyVar "p") (TyVar "a")) (TyVar "b")) (TyApp (TyApp (TyVar "p") (TyVar "b")) (TyVar "a"))) None)))
-(DImpl false false "Swap" ((TyCon "__tuple2__")) None () ((im "swap" ((PTuple (PVar "x") (PVar "y"))) (ETuple (EVar "y") (EVar "x")))))
+(DImpl false "Swap" ((TyCon "__tuple2__")) () ((im "swap" ((PTuple (PVar "x") (PVar "y"))) (ETuple (EVar "y") (EVar "x")))))
 (DTypeSig false "fst2" (TyFun (TyApp (TyApp (TyCon "__tuple2__") (TyVar "a")) (TyVar "b")) (TyVar "a")))
 (DFunDef false "fst2" ((PTuple (PVar "x") PWild)) (EVar "x"))
 (DTypeSig false "mid3" (TyFun (TyApp (TyApp (TyApp (TyCon "__tuple3__") (TyVar "a")) (TyVar "b")) (TyVar "c")) (TyVar "b")))

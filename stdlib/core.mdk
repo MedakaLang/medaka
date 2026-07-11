@@ -608,7 +608,7 @@ export impl Mappable Option where
 
 {- `default` so a user-defined alternative (e.g. one that maps over the
    `Err` side) can coexist without forcing every call site to qualify. -}
-export default impl Mappable (Result e) where
+export impl Mappable (Result e) where
   map f (Ok a) = Ok (f a)
   map _ e = e
 
@@ -643,7 +643,7 @@ export impl Applicative Option where
 
 {- `default` (like `Mappable (Result e)`) so an error-accumulating
    alternative — a `Validation`-style applicative — can coexist. -}
-export default impl Applicative (Result e) where
+export impl Applicative (Result e) where
   pure a = Ok a
   ap (Ok f) (Ok a) = Ok (f a)
   ap (Err e) _ = Err e
@@ -759,7 +759,7 @@ export impl Thenable Option where
 
 {- `default` (like the rest of the `Result e` family) so a short-circuiting
    alternative can coexist with the standard error-propagating sequence. -}
-export default impl Thenable (Result e) where
+export impl Thenable (Result e) where
   andThen (Err e) _ = Err e
   andThen (Ok a) f = f a
 
@@ -912,7 +912,7 @@ export impl Foldable Option where
   toList None = []
   toList (Some x) = [x]
 
-export default impl Foldable (Result e) where
+export impl Foldable (Result e) where
   fold _ acc (Err _) = acc
   fold f acc (Ok x) = f acc x
   foldRight _ acc (Err _) = acc
@@ -977,7 +977,7 @@ export impl Traversable Option where
 {- `default` mirrors the `Foldable`/`Mappable (Result e)` impls so a
    user-defined alternative can coexist without qualifying call sites. -}
 -- lint-disable-next-line rule-match-on-param
-export default impl Traversable (Result e) where
+export impl Traversable (Result e) where
   traverse f res = match res
     Err e => pure (Err e)
     Ok x => map Ok (f x)
@@ -1193,10 +1193,10 @@ export flip : (a -> b -> <e> c) -> b -> a -> <e> c
 flip f b a = f a b
 
 {- | Apply a binary function `f` to two arguments after running each through a
-   projection `g` — the classic `on`.  `sortBy (compare `on` fst)` compares
+   projection `g` — the classic `on`.  `sortBy (on compare fst)` compares
    pairs by their first component.
 
-   > (compare `on` fst) (1, 9) (2, 8)
+   > on compare fst (1, 9) (2, 8)
    Lt -}
 export on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
 on f g x y = f (g x) (g y)

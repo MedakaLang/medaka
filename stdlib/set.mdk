@@ -327,7 +327,7 @@ isSubsetOf a b = foldrSet (x acc => acc && has x b) True a
    [1, 2, 3]
    > length (fromList [3, 1, 2, 1])
    3 -}
-export default impl Foldable Set where
+export impl Foldable Set where
   fold f z s = foldlSet f z s
   foldRight f z s = foldrSet f z s
   toList s = foldrSet (::) [] s
@@ -340,7 +340,7 @@ export default impl Foldable Set where
 
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
-export default impl Eq (Set a) requires Eq a where
+export impl Eq (Set a) requires Eq a where
   eq a b = if size a != size b then False else eq (toList a) (toList b)
 
 {- | Lexicographic ordering through the canonical ascending element list, so a
@@ -348,7 +348,7 @@ export default impl Eq (Set a) requires Eq a where
 
    > compare (fromList [1, 2]) (fromList [1, 3])
    Lt -}
-export default impl Ord (Set a) requires Ord a where
+export impl Ord (Set a) requires Ord a where
   compare a b = compare (toList a) (toList b)
 
 {- | Rendered as `fromList [a, …]`, the re-evaluable form (the `Set { … }`
@@ -357,7 +357,7 @@ export default impl Ord (Set a) requires Ord a where
 
    > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
    True -}
-export default impl Debug (Set a) requires Debug a where
+export impl Debug (Set a) requires Debug a where
   debug s = "fromList \{debug (toList s)}"
 
 -- Comma-joined elements for `Display (Set a)`; renders via `display` (unquoted).
@@ -373,19 +373,19 @@ displaySetItems (y::rest) = "\{y}, \{displaySetItems rest}"
    True
    > display (empty : Set Int) == "Set {}"
    True -}
-export default impl Display (Set a) requires Display a where
+export impl Display (Set a) requires Display a where
   display s = match toList s
     [] => "Set {}"
     xs => "Set { \{displaySetItems xs} }"
 
 {- | `++` on sets is union; `append` dispatches on its first `Set` argument, so
    the `Ord a` it needs threads in by the ordinary route. -}
-export default impl Semigroup (Set a) requires Ord a where
+export impl Semigroup (Set a) requires Ord a where
   append a b = union a b
 
 {- | Backs the `Set { x, … }` literal: the compiler lowers that to
    `fromEntries [x, …]` pinned at `Set`, dispatching here. -}
-export default impl FromEntries (Set a) a requires Ord a where
+export impl FromEntries (Set a) a requires Ord a where
   fromEntries es = fromList es
 
 {- | `Monoid.empty` for `Set` is the empty tree (nullary, dispatched on its
@@ -393,7 +393,7 @@ export default impl FromEntries (Set a) a requires Ord a where
 
    > isEmpty (empty : Set Int)
    True -}
-export default impl Monoid (Set a) requires Ord a where
+export impl Monoid (Set a) requires Ord a where
   empty = Tip
 
 -- ── Structural invariants (for testing / debugging) ─────────────────────

@@ -188,7 +188,7 @@ foldRightGo f z arr i
    10
    > length (fromList [9, 8, 7])
    3 -}
-export default impl Foldable MutArray where
+export impl Foldable MutArray where
   fold f z (MutArray backing len) = foldGo f z backing.value 0 len.value
   foldRight f z (MutArray backing len) =
     foldRightGo f z backing.value (len.value - 1)
@@ -200,12 +200,12 @@ export default impl Foldable MutArray where
 
    > eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
    True -}
-export default impl Eq (MutArray a) requires Eq a where
+export impl Eq (MutArray a) requires Eq a where
   eq a b = if count a != count b then False else eq (elems a) (elems b)
 
 {- | Rendered as `fromList [a, …]` over the live range.
 
    > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
    True -}
-export default impl Debug (MutArray a) requires Debug a where
+export impl Debug (MutArray a) requires Debug a where
   debug ma = "fromList \{debug (elems ma)}"

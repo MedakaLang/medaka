@@ -87,14 +87,6 @@ lower (ENumLit n r _) = match r.value
   None => CLit (LInt n)
 lower (EVar x) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
--- @Impl: drop the `@Name` disambiguation-hint argument — it is NOT a runtime arg.
--- The method head `f` already carries the NAMED impl-key route (stamped by
--- resolveArgStamp/resolveSite), so lowering `f` alone dispatches to the right impl
--- (mirror of eval.mdk's hint arm + lib/eval.ml:922).
-lower (EApp f (EVar h))
-  | startsWith "@" h = lower f
-lower (EApp f (ELoc _ (EVar h)))
-  | startsWith "@" h = lower f
 lower (EApp f x) = CApp (lower f) (lower x)
 lower (ELam pats body) = CLam pats (lower body)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
@@ -776,15 +768,15 @@ export lowerImplsWith : List ((String, String), List Int) -> List Decl -> List C
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
 lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
-lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, name = implNm, methods, ... }) = map (lowerImplMethod disp ifaceName typeArgs implNm) methods
+lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp ifaceName typeArgs) methods
 lowerDeclImpl _ (DInterface { typarams = typeParams, methods, ... }) =
   flatMap (lowerDefault typeParams) methods
 lowerDeclImpl _ _ = []
 
-lowerImplMethod : List ((String, String), List Int) -> String -> List Ty -> Option String -> ImplMethod -> CImplEntry
-lowerImplMethod disp ifaceName typeArgs implNm (ImplMethod mname pats body) =
+lowerImplMethod : List ((String, String), List Int) -> String -> List Ty -> ImplMethod -> CImplEntry
+lowerImplMethod disp ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
-  let key = implKeyOf ifaceName typeArgs implNm
+  let key = implKeyOf ifaceName typeArgs None
   let positions = lookupPositions ifaceName mname disp
   CImplEntry
     mname

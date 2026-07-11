@@ -273,12 +273,10 @@ annotateDecl (DBench p n body) = DBench p n (annotateExpr [] body)
 annotateDecl (DLetGroup p binds) =
   DLetGroup p (map (annotateLetBind (map letBindName binds :: [])) binds)
 annotateDecl (DInterface { pub, def, name, typarams, supers, methods }) = DInterface { pub = pub, def = def, name = name, typarams = typarams, supers = supers, methods = map annotateIfaceMethod methods }
-annotateDecl (DImpl { pub, def, iface, tys, name, reqs, methods }) = DImpl {
+annotateDecl (DImpl { pub, iface, tys, reqs, methods }) = DImpl {
   pub = pub,
-  def = def,
   iface = iface,
   tys = tys,
-  name = name,
   reqs = reqs,
   methods = map annotateImplMethod methods,
 }

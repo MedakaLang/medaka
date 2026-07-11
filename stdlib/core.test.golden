@@ -61,7 +61,7 @@ running doctests in stdlib/core.mdk
   ok   stdlib/core.mdk:1126: fromOption 0 None
   ok   stdlib/core.mdk:1175: fst (1, 2)
   ok   stdlib/core.mdk:1181: snd ("a", True)
-  ok   stdlib/core.mdk:1199: (compare `on` fst) (1, 9) (2, 8)
+  ok   stdlib/core.mdk:1199: on compare fst (1, 9) (2, 8)
   ok   stdlib/core.mdk:1207: curry fst 1 2
   ok   stdlib/core.mdk:1215: uncurry (a b => a + b) (3, 4)
   ok   stdlib/core.mdk:1223: discard (Some 5)

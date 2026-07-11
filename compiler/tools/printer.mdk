@@ -1616,19 +1616,17 @@ printDecl (DInterface { pub, def, name, typarams, supers, methods }) = Cat
             (Cat
               (text " where")
               (indentBlock (sepBy Hardline (map ifaceMethodDoc methods)))))))))
-printDecl (DImpl { pub, def, iface, tys, name, reqs, methods }) = Cat
+printDecl (DImpl { pub, iface, tys, reqs, methods }) = Cat
   (if pub then text "export " else Nil)
   (Cat
-    (if def then text "default " else Nil)
+    (text "impl ")
     (Cat
-      (text "impl ")
+      (implHead iface tys)
       (Cat
-        (implHead iface tys name)
+        (reqsDoc reqs)
         (Cat
-          (reqsDoc reqs)
-          (Cat
-            (text " where")
-            (indentBlock (sepBy Hardline (map implMethodDoc methods))))))))
+          (text " where")
+          (indentBlock (sepBy Hardline (map implMethodDoc methods)))))))
 printDecl (DUse pub path _) = Cat
   (if pub then text "export " else Nil)
   (Cat (text "import ") (printUsePath path))
@@ -1720,16 +1718,9 @@ ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body))) = Cat
     (concatD (map (p => Cat (text " ") (printPatAtom p)) pats))
     (Cat (text " = ") (printExprBody body)))
 
-implHead : String -> List Ty -> Option String -> Doc
-implHead iface tys None =
+implHead : String -> List Ty -> Doc
+implHead iface tys =
   Cat (text iface) (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys))
-implHead iface tys (Some name) = Cat
-  (text name)
-  (Cat
-    (text " of ")
-    (Cat
-      (text iface)
-      (concatD (map (t => Cat (text " ") (printTypeAtom t)) tys))))
 
 reqsDoc : List Require -> Doc
 reqsDoc [] = Nil

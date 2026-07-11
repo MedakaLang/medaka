@@ -412,7 +412,7 @@ intersectStep f b k v acc = match get k b
 
    > elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
    [10, 20] -}
-export default impl Mappable (Map k) where
+export impl Mappable (Map k) where
   map f Tip = Tip
   map f (Bin s k v l r) = Bin s k (f v) (map f l) (map f r)
 
@@ -421,7 +421,7 @@ export default impl Mappable (Map k) where
 
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
-export default impl Eq (Map k v) requires Eq k, Eq v where
+export impl Eq (Map k v) requires Eq k, Eq v where
   eq a b = if size a != size b then False else eq (toList a) (toList b)
 
 {- | Lexicographic ordering through the canonical ascending association list,
@@ -430,7 +430,7 @@ export default impl Eq (Map k v) requires Eq k, Eq v where
 
    > compare (fromList [(1, 10)]) (fromList [(1, 20)])
    Lt -}
-export default impl Ord (Map k v) requires Ord k, Ord v where
+export impl Ord (Map k v) requires Ord k, Ord v where
   compare a b = compare (toList a) (toList b)
 
 {- | Rendered as `fromList [(k, v), …]`, mirroring the constructor that would
@@ -439,7 +439,7 @@ export default impl Ord (Map k v) requires Ord k, Ord v where
 
    > debug (fromList [(1, 10), (2, 20)]) == "fromList [(1, 10), (2, 20)]"
    True -}
-export default impl Debug (Map k v) requires Debug k, Debug v where
+export impl Debug (Map k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (toList m)}"
 
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
@@ -456,7 +456,7 @@ displayMapEntries ((k, v)::rest) = "\{k} => \{v}, \{displayMapEntries rest}"
    True
    > display (empty : Map Int Int) == "Map {}"
    True -}
-export default impl Display (Map k v) requires Display k, Display v where
+export impl Display (Map k v) requires Display k, Display v where
   display m = match toList m
     [] => "Map {}"
     es => "Map { \{displayMapEntries es} }"
@@ -465,13 +465,13 @@ export default impl Display (Map k v) requires Display k, Display v where
 
    `append` dispatches on its first `Map` argument, so the `Ord k` it needs to
    merge threads in by the ordinary route. -}
-export default impl Semigroup (Map k v) requires Ord k where
+export impl Semigroup (Map k v) requires Ord k where
   append a b = union a b
 
 {- | Backs the `Map { k => v, … }` literal: the compiler lowers that to
    `fromEntries [(k, v), …]` pinned at `Map`, dispatching here.  The `Ord k`
    the build needs threads in by the ordinary return-position route. -}
-export default impl FromEntries (Map k v) (k, v) requires Ord k where
+export impl FromEntries (Map k v) (k, v) requires Ord k where
   fromEntries es = fromList es
 
 {- | `Monoid.empty` for `Map` is the empty tree.  `empty` is nullary and so
@@ -481,7 +481,7 @@ export default impl FromEntries (Map k v) (k, v) requires Ord k where
 
    > isEmpty (empty : Map Int Int)
    True -}
-export default impl Monoid (Map k v) requires Ord k where
+export impl Monoid (Map k v) requires Ord k where
   empty = Tip
 
 -- ── Structural invariants (for testing / debugging) ─────────────────────

@@ -406,8 +406,8 @@ symbolOfDecl d dp =
     DInterface { name = n, methods = ms, ... } =>
       let kids = map ((IfaceMethod mn _ _) => jChild mn 6 range) ms
       Some (jSymbol n 11 range kids)
-    DImpl { iface = ifc, name = nm, methods = ms, ... } =>
-      let label = implLabel nm ifc
+    DImpl { iface = ifc, methods = ms, ... } =>
+      let label = implLabel ifc
       let kids = map ((ImplMethod mn _ _) => jChild mn 6 range) ms
       Some (jSymbol label 5 range kids)
     DTypeAlias _ name _ _ => Some (jSymbol name 26 range [])
@@ -437,9 +437,8 @@ symbolOfDecl d dp =
 -- Event
 
 -- "impl Iface" / "Name of impl Iface" label (mirror handle_document_symbol's).
-implLabel : Option String -> String -> String
-implLabel None iface = stringConcat ["impl ", iface]
-implLabel (Some n) iface = stringConcat [n, " of impl ", iface]
+implLabel : String -> String
+implLabel iface = stringConcat ["impl ", iface]
 
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) and
 -- collect the symbols.
