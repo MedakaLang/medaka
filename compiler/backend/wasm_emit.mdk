@@ -6323,7 +6323,24 @@ emitAppTail prog env arity app =
       match implSelfReturnCall prog env name route methRoutes implRoutes app args
         Some retInstrs => retInstrs
         None => emitMethodRef prog env 0 name route implRoutes methRoutes args ++ ["return"]
-    CDict name routes => emitDictRef prog env 0 name routes args ++ ["return"]
+    -- P0-7: a `=>`-constrained NAMED function (`CDict`) in tail position.  The
+    -- un-annotated self-tail-recursive `Num a` loop (`loop acc n = … loop (acc+n) (n-1)`)
+    -- lowers its recursive call to a `CDict loop [<Num route>]` head — the dict-pass
+    -- widened `$loop` with a leading dict param, so its call is `dictWords ++ argInstrs
+    -- ++ call $loop`.  Without a `return_call` specialization this stayed a plain `call`
+    -- + `return`, so the un-annotated wasm loop grew the stack and overflowed V8 (the
+    -- annotated monomorphic version already tail-called via the CVar arm).  When the
+    -- constrained-fn call is SATURATED (route dicts + value args == the lifted arity),
+    -- the dict words + args exactly fill `$name`'s params, so it is a genuine tail call:
+    -- emit `dictWords ++ argInstrs ++ return_call $name` (the impl-fn analog of the CVar
+    -- arm's return_call).  An unsaturated/partial CDict tail app fails the gate and keeps
+    -- the ordinary `call`+`return`.
+    CDict name routes =>
+      if contains name (progFnNames prog) && listLen args == progFnArity prog name - listLen routes then
+        let dictWords = flatMap (routeWitness prog env 0) routes
+        let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
+        dictWords ++ argInstrs ++ ["return_call $" ++ gname name]
+      else emitDictRef prog env 0 name routes args ++ ["return"]
     _ =>
       let hi = emitRefExpr prog env 0 hd
       let arr = emitArgsArray prog env 0 args

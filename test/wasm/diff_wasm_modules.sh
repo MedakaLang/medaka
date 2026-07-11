@@ -66,6 +66,22 @@ TMC-ASSERT ok   $name: \$mdk_impl_List_map is a dest-passing loop, 0 recursive c
         msg="$(printf '%s\nTMC-ASSERT FAIL %s: recursive-call=%s loop=%s (expected 0 / >=1)' "$msg" "$name" "$rec" "$lp")"; st=1
       fi
     fi
+    # P0-7 return_call assertion: the un-annotated Num-poly self-tail-recursive
+    # `polyLoop` lowers its recursive call to a CDict head; it MUST become a
+    # `return_call` (constant stack), NOT a plain `call` + `return`.  We check the
+    # $..__polyLoop function body has >=1 `return_call $..__polyLoop` and 0 plain
+    # `call $..__polyLoop` (the sole plain call to it is from `main`, a separate fn).
+    if [ "$st" = 0 ] && [ "$name" = "w_polynum_tail_stack.mdk" ]; then
+      lpbody="$(awk '/func \$[^ ]*__polyLoop /{f=1} f&&/^  \(func /&&!/__polyLoop /{f=0} f' "$wat")"
+      plain="$(printf '%s' "$lpbody" | grep -cE '^\s*call \$[^ ]*__polyLoop')"
+      rc="$(printf '%s' "$lpbody" | grep -cE 'return_call \$[^ ]*__polyLoop')"
+      if [ "$rc" -ge 1 ] && [ "$plain" -eq 0 ]; then
+        msg="$msg
+RETCALL-ASSERT ok   $name: recursive self-call is return_call, 0 plain call"
+      else
+        msg="$(printf '%s\nRETCALL-ASSERT FAIL %s: plain-call=%s return_call=%s (expected 0 / >=1)' "$msg" "$name" "$plain" "$rc")"; st=1
+      fi
+    fi
   fi
   echo "$st" > "$RESULTDIR/$name.status"
   printf '%s\n' "$msg"

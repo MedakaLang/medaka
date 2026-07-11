@@ -1,0 +1,8 @@
+-- P0-7 regression: an un-annotated (Num-polymorphic) self-tail-recursive loop.
+-- Its recursive call lowers to a `CDict` head (the dict-pass widens the callee with
+-- a leading Num dict param), which historically stayed a plain `call` + `return` on
+-- wasm — growing the stack and overflowing V8.  The recursive self-call MUST now be a
+-- `return_call` (constant stack); N=1_000_000 would overflow a plain-call stack.
+-- (No signature on purpose: the annotated monomorphic path already tail-called.)
+polyLoop acc n = if n == 0 then acc else polyLoop (acc + n) (n - 1)
+main = println (polyLoop 0 1000000)
