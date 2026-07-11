@@ -208,8 +208,16 @@ The construct removals:
 - **REMOVE (0 dogfood uses, redundant, low newcomer+future value):** the **`function` keyword**
   ✅ DONE (`acd1f5b8`, −17 LOC net: `function`→located hint, `EFunction` deleted end-to-end grep=0,
   `TFunction` kept only as the hint sentinel; fixpoint YES); **backtick infix**
-  `` x `f` y `` (Haskell-flavored, redundant with prefix app) — NEXT; the **`let rec … with` mutual-group**
+  `` x `f` y `` ✅ DONE (`f6dabd5a`; `backtickOp`/production deleted, `firstBacktickIdx` hint, `TBacktickIdent`
+  kept as sentinel); the **`let rec … with` mutual-group** — NEXT
   (keep single `let rec` for local recursive lambdas; drop only the `with` grouping); **`let-else`**.
+  > **⚠️ TWO LESSONS from the backtick bite:** (1) **A construct-removal census MUST scan the always-loaded
+  > prelude** (`stdlib/core.mdk`) specifically — the orchestrator's "0 backtick uses" was WRONG (`core.mdk:1370`
+  > used `` `on` ``); deleting the production made the PRELUDE unparseable → the compiled binary parse-errored on
+  > EVERY program, which was MISDIAGNOSED as a native DCE/codegen miscompile. (2) **There is NO DCE miscompile** —
+  > an Opus agent proved emitted IR is byte-identical live-vs-dead (SSA counters shift wholesale but every body
+  > matches); the "run-vs-build split" was the prelude failing to load. So the remaining trim removals are NOT
+  > blocked by a codegen bug — just grep the PRELUDE + whole tree for real (non-comment, non-string) uses first.
 - **REPURPOSE `!` (boolean-not → Ref-DEREF sugar).** `!x` desugars to `x.value` (the existing Ref
   read — mirrors `:=`→`setRef`; no new eval/emit arm). `not` becomes the SOLE boolean negation
   (already a prelude fn). 0 dogfood `!`-as-not uses → no compiler/stdlib migration. **REQUIRED (user
