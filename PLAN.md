@@ -201,9 +201,9 @@ after P0-5 (shares lexer/parser/desugar/eval).
 
 The construct removals:
 - **REMOVE (0 dogfood uses, redundant, low newcomer+future value):** the **`function` keyword**
-  (→ RESERVE as a beginner-hint: "use `x => match x` or multi-clause"; `EFunction` arms are
-  desugar-dead so removal is exhaustiveness-self-guiding across ~13 files); **backtick infix**
-  `` x `f` y `` (Haskell-flavored, redundant with prefix app); the **`let rec … with` mutual-group**
+  ✅ DONE (`acd1f5b8`, −17 LOC net: `function`→located hint, `EFunction` deleted end-to-end grep=0,
+  `TFunction` kept only as the hint sentinel; fixpoint YES); **backtick infix**
+  `` x `f` y `` (Haskell-flavored, redundant with prefix app) — NEXT; the **`let rec … with` mutual-group**
   (keep single `let rec` for local recursive lambdas; drop only the `with` grouping); **`let-else`**.
 - **REPURPOSE `!` (boolean-not → Ref-DEREF sugar).** `!x` desugars to `x.value` (the existing Ref
   read — mirrors `:=`→`setRef`; no new eval/emit arm). `not` becomes the SOLE boolean negation
