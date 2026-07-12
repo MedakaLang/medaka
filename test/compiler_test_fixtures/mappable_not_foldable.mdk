@@ -25,7 +25,7 @@ import core.{Mappable}
 -- 42
 data Box a = Box a
 
-export default impl Mappable Box where
+export impl Mappable Box where
   map f (Box x) = Box (f x)
 
 unBox : Box a -> a

@@ -330,10 +330,8 @@ public export data Decl =
     }
   | DImpl {
       pub : Bool,
-      def : Bool,
       iface : String,
       tys : List Ty,
-      name : Option String,
       reqs : List Require,
       methods : List ImplMethod,
     }

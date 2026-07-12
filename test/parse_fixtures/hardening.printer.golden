@@ -5,8 +5,6 @@ recLet n = go n
 ifLet opt = match opt
   Some x => x
   _ => 0
-hint a b = combine @Additive a b
-hintLower a = run @fast a
 asParam = (xs@rest) => rest
 consAsParam = (ps@(x::_)) => x
 whereEol x = g x

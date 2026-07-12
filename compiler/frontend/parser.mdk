@@ -673,26 +673,7 @@ parseAtomRaw = do
     TMatch => parseMatch
     TDo => parseDo
     TInterpOpen _ => parseInterp
-    TAt => parseAtHint
     _ => failP "expected atom"
-
--- impl-disambiguation prefix hint `@Impl` / `@impl` (space-separated `@`, lexed
--- as TAt).  Mirrors lib/parser.mly `AT UPPER | AT IDENT → EVar ("@" ^ name)`.
-parseAtHint : Parser Expr
-parseAtHint = do
-  expectTok TAt
-  name <- atHintName
-  pure (EVar ("@" ++ name))
-
-atHintName : Parser String
-atHintName = do
-  t <- peekP
-  atHintNameFor t
-
-atHintNameFor : Token -> Parser String
-atHintNameFor (TUpper x) = emit x
-atHintNameFor (TIdent x) = emit x
-atHintNameFor _ = failP "expected name after @"
 
 -- a constructor (`Upper`) atom, or a record literal `Upper { field = e, … }`
 parseUpperAtom : String -> Parser Expr
@@ -1874,7 +1855,7 @@ parseDecl = do
     TEffect => parseEffect False
     TInternal => parseInternalEffect
     TInterface => parseInterface False False
-    TImpl => parseImpl False False
+    TImpl => parseImpl False
     TDefault => afterDefault False
     TType => parseTypeAlias False
     TNewtype => parseNewtype False
@@ -1882,7 +1863,8 @@ parseDecl = do
     TAt => parseAttrib
     _ => parseFunOrSig False
 
--- `default` prefixes an interface/impl (marks it as the default impl)
+-- `default` prefixes an interface (marks its default methods).  `default impl`
+-- has been removed — afterDefaultFor surfaces a located hint for it.
 afterDefault : Bool -> Parser Decl
 afterDefault pub = do
   expectTok TDefault
@@ -1892,8 +1874,8 @@ afterDefault pub = do
 
 afterDefaultFor : Bool -> Token -> Parser Decl
 afterDefaultFor pub TInterface = parseInterface pub True
-afterDefaultFor pub TImpl = parseImpl pub True
-afterDefaultFor _ _ = failP "expected interface or impl after default"
+afterDefaultFor _ TImpl = failP defaultImplRemovedMsg
+afterDefaultFor _ _ = failP "expected interface after default"
 
 afterExport : Parser Decl
 afterExport = do
@@ -1909,7 +1891,7 @@ afterExport = do
     TBench => parseBench True
     TEffect => parseEffect True
     TInterface => parseInterface True False
-    TImpl => parseImpl True False
+    TImpl => parseImpl True
     TDefault => afterDefault True
     TType => parseTypeAlias True
     TNewtype => parseNewtype True
@@ -2329,48 +2311,40 @@ ifaceMemberRest name pats TEqual = do
 ifaceMemberRest _ _ _ = failP "expected : or = in interface member"
 
 -- ── impl declarations ────────────────────────────────────────────────────
-parseImpl : Bool -> Bool -> Parser Decl
-parseImpl pub isDefault = do
+parseImpl : Bool -> Parser Decl
+parseImpl pub = do
   expectTok TImpl
   t <- peekP
-  implHead pub isDefault t
+  implHead pub t
 
--- `impl Iface tyargs…` (unnamed), `impl name of Iface tyargs…` (named, lower),
--- or `impl Name of Iface tyargs…` (named, upper)
-implHead : Bool -> Bool -> Token -> Parser Decl
-implHead pub isDefault (TIdent nm) = do
+-- `impl Iface tyargs…`.  (Named impls — `impl name of Iface …` — have been
+-- removed; a lowercase head or a stray `of` now yields a clean parse error.)
+implHead : Bool -> Token -> Parser Decl
+implHead pub (TUpper u) = do
   advance
-  expectTok TOf
-  iface <- upperNameP
-  implRest pub isDefault iface (Some nm)
-implHead pub isDefault (TUpper u) = do
-  advance
-  t <- peekP
-  implAfterUpper pub isDefault u t
-implHead _ _ _ = failP "expected impl head"
+  implRest pub u
+implHead pub (TIdent _) = failP namedImplRemovedMsg
+implHead _ _ = failP "expected impl head"
 
-implAfterUpper : Bool -> Bool -> String -> Token -> Parser Decl
-implAfterUpper pub isDefault u TOf = do
-  advance
-  iface <- upperNameP
-  implRest pub isDefault iface (Some u)
-implAfterUpper pub isDefault u _ = implRest pub isDefault u None
-
-implRest : Bool -> Bool -> String -> Option String -> Parser Decl
-implRest pub isDefault iface name = do
+implRest : Bool -> String -> Parser Decl
+implRest pub iface = do
   tyargs <- many parseTyAtom
   reqs <- implRequires
   methods <- implBody
   pure
     DImpl {
       pub = pub,
-      def = isDefault,
       iface = iface,
       tys = tyargs,
-      name = name,
       reqs = reqs,
       methods = methods,
     }
+
+namedImplRemovedMsg : String
+namedImplRemovedMsg = "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)"
+
+defaultImplRemovedMsg : String
+defaultImplRemovedMsg = "`default impl` has been removed — use a plain `impl` (specialization picks the most-specific instance automatically)"
 
 -- optional `requires Iface tyargs…, …`
 implRequires : Parser (List Require)

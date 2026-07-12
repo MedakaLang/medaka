@@ -238,7 +238,7 @@ unzip arr =
    (tail-recursive, builds reversed then `arrayFromList` after a final
    reverse): one O(N) traversal + one O(M) list build + one O(M) array
    copy, no mutation so the signature stays pure. -}
-export default impl Filterable Array where
+export impl Filterable Array where
   filterMap f arr =
     let n = arrayLength arr
     arrayFromList (revList (filterMapGo f arr 0 n []) [])
@@ -459,17 +459,17 @@ findIndexGo pred arr i n =
 
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
-export default impl Mappable Array where
+export impl Mappable Array where
   map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
 
-export default impl Foldable Array where
+export impl Foldable Array where
   fold f z arr = foldGo f arr 0 (arrayLength arr) z
   foldRight f z arr = foldRightGo f arr (arrayLength arr - 1) z
   toList arr = toListGo arr (arrayLength arr - 1) []
   isEmpty arr = arrayLength arr == 0
   length arr = arrayLength arr
 
-export default impl Semigroup (Array a) where
+export impl Semigroup (Array a) where
   append a b = arrayMakeWith
     (arrayLength a + arrayLength b)
     (i => if i < arrayLength a then arrayGetUnsafe i a else arrayGetUnsafe (i - arrayLength a) b)
@@ -479,10 +479,10 @@ export default impl Semigroup (Array a) where
 
    > length (empty : Array Int)
    0 -}
-export default impl Monoid (Array a) where
+export impl Monoid (Array a) where
   empty = [||]
 
-export default impl Eq (Array a) requires Eq a where
+export impl Eq (Array a) requires Eq a where
   eq a b =
     if arrayLength a != arrayLength b then
       False

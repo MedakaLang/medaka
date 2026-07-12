@@ -35,8 +35,8 @@ toList : Bag a -> List a
 toList (Bag xs) = xs
 
 -- impl bodies that CALL the standalone `toList` on a Bag receiver — the trigger.
-export default impl Eq (Bag a) requires Eq a where
+export impl Eq (Bag a) requires Eq a where
   eq a b = eq (toList a) (toList b)
 
-export default impl Debug (Bag a) requires Debug a where
+export impl Debug (Bag a) requires Debug a where
   debug b = debug (toList b)

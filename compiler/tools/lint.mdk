@@ -1647,7 +1647,7 @@ lambdaSectionFix _ (DFunDef vis name pats body) =
 lambdaSectionFix orc (DAttrib a d) = match lambdaSectionFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-lambdaSectionFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+lambdaSectionFix _ (DImpl { pub, iface, tys, reqs, methods }) =
   let methods2 = map fixImplMethod methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
@@ -1655,10 +1655,8 @@ lambdaSectionFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
     Some [
       DImpl {
         pub = pub,
-        def = def,
         iface = iface,
         tys = tys,
-        name = name,
         reqs = reqs,
         methods = methods2,
       }
@@ -1888,7 +1886,7 @@ ifMaxMinFix _ (DFunDef vis name pats body) =
 ifMaxMinFix orc (DAttrib a d) = match ifMaxMinFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-ifMaxMinFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+ifMaxMinFix _ (DImpl { pub, iface, tys, reqs, methods }) =
   let methods2 = map fixImplMethodIfMaxMin methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
@@ -1896,10 +1894,8 @@ ifMaxMinFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
     Some [
       DImpl {
         pub = pub,
-        def = def,
         iface = iface,
         tys = tys,
-        name = name,
         reqs = reqs,
         methods = methods2,
       }
@@ -2152,7 +2148,7 @@ andThenPureMapFix _ (DFunDef vis name pats body) =
 andThenPureMapFix orc (DAttrib a d) = match andThenPureMapFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-andThenPureMapFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+andThenPureMapFix _ (DImpl { pub, iface, tys, reqs, methods }) =
   let methods2 = map fixImplMethodAndThenPureMap methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
@@ -2160,10 +2156,8 @@ andThenPureMapFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
     Some [
       DImpl {
         pub = pub,
-        def = def,
         iface = iface,
         tys = tys,
-        name = name,
         reqs = reqs,
         methods = methods2,
       }
@@ -2471,7 +2465,7 @@ exprRuleFix excl f (DFunDef vis name pats body)
 exprRuleFix excl f (DAttrib a d) = match exprRuleFix excl f d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-exprRuleFix _ f (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+exprRuleFix _ f (DImpl { pub, iface, tys, reqs, methods }) =
   let methods2 = map (fixImplMethodWith f) methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
@@ -2479,10 +2473,8 @@ exprRuleFix _ f (DImpl { pub, def, iface, tys, name, reqs, methods }) =
     Some [
       DImpl {
         pub = pub,
-        def = def,
         iface = iface,
         tys = tys,
-        name = name,
         reqs = reqs,
         methods = methods2,
       }
@@ -2677,7 +2669,7 @@ concatToInterpFix _ (DFunDef vis name pats body) =
 concatToInterpFix orc (DAttrib a d) = match concatToInterpFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-concatToInterpFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
+concatToInterpFix _ (DImpl { pub, iface, tys, reqs, methods }) =
   let methods2 = map fixImplMethodConcat methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
@@ -2685,10 +2677,8 @@ concatToInterpFix _ (DImpl { pub, def, iface, tys, name, reqs, methods }) =
     Some [
       DImpl {
         pub = pub,
-        def = def,
         iface = iface,
         tys = tys,
-        name = name,
         reqs = reqs,
         methods = methods2,
       }

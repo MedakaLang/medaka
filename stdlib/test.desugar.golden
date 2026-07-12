@@ -1,5 +1,5 @@
 (DData Public "Expectation" () ((variant "Pass" (ConPos)) (variant "Fail" (ConPos (TyCon "String")))) ())
-(DImpl true false "Debug" ((TyCon "Expectation")) None () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Pass") () (ELit (LString "Pass"))) (arm (PCon "Fail" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Fail ")) (EApp (EVar "debug") (EVar "__a0"))))))))
+(DImpl true "Debug" ((TyCon "Expectation")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Pass") () (ELit (LString "Pass"))) (arm (PCon "Fail" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Fail ")) (EApp (EVar "debug") (EVar "__a0"))))))))
 (DExtern true "runExpectation" (TyFun (TyFun (TyCon "Unit") (TyCon "Expectation")) (TyCon "Expectation")))
 (DTypeSig true "pass" (TyCon "Expectation"))
 (DFunDef false "pass" () (EVar "Pass"))

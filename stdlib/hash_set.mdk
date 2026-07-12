@@ -177,7 +177,7 @@ foldlElems f z (x::rest) = foldlElems f (f z x) rest
    True
    > length (fromList [3, 1, 2, 1])
    3 -}
-export default impl Foldable HashSet where
+export impl Foldable HashSet where
   fold f z s = foldlElems f z (elemList s)
   foldRight f z s = foldrElems f z (elemList s)
   toList s = elemList s
@@ -194,10 +194,10 @@ allIn (x::rest) s
 
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
-export default impl Eq (HashSet a) requires Eq a, Hashable a where
+export impl Eq (HashSet a) requires Eq a, Hashable a where
   eq a b = if size a != size b then False else allIn (elemList a) b
 
 {- | Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
    equality). -}
-export default impl Debug (HashSet a) requires Debug a where
+export impl Debug (HashSet a) requires Debug a where
   debug s = "fromList \{debug (elemList s)}"

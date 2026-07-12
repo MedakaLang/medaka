@@ -174,10 +174,8 @@ binOp op a b = EBinOp op a b (Ref RNone)
 derivedImpl : String -> String -> List ImplMethod -> Decl
 derivedImpl iface tyName methods = DImpl {
   pub = True,
-  def = False,
   iface = iface,
   tys = [TyCon tyName None],
-  name = None,
   reqs = [],
   methods = methods,
 }

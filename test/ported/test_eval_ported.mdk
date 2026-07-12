@@ -258,15 +258,8 @@ unwrapSumM (MkSumM n) = n
 test "foldMap user monoid" = expectEqual 10 (unwrapSumM (foldMap MkSumM [1, 2, 3, 4]))
 
 -- ── List comprehensions ───────────────────────────────────────────────────────
--- Ported from: t_list_comp_guard, t_list_comp_multi_gen, t_list_comp_let,
---              t_list_comp_refutable_con
-
-test "list comp guard" = expectEqual [6, 8, 10] [x * 2 | x <- [1, 2, 3, 4, 5], x > 2]
-test "list comp multi gen" =
-  expectEqual [(1, 3), (1, 4), (2, 3), (2, 4)] [(x, y) | x <- [1, 2], y <- [3, 4]]
-test "list comp let binding" = expectEqual [4, 9] [y | x <- [1, 2, 3], let y = x * x, y > 2]
-test "list comp refutable ctor" =
-  expectEqual [1, 2, 3] [x | Some x <- [Some 1, None, Some 2, None, Some 3]]
+-- REMOVED 2026-07: list-comprehension syntax (`[e | x <- xs, guard]`) was removed
+-- (27116d9); the underlying map/filter/flatMap are covered elsewhere.
 
 -- ── Pipe / compose ───────────────────────────────────────────────────────────
 -- Ported from: t_pipe, t_compose
@@ -361,7 +354,7 @@ test "do custom Thenable" = expectEqual 2 doCustomUnwrap
 -- Ported from: t_ref
 
 refResult =
-  let mut count = Ref 0
+  let count = Ref 0
   setRef count 42
   count.value
 test "ref set and read" = expectEqual 42 refResult
@@ -395,8 +388,8 @@ whereR3 = result where
 test "where sequential" = expectEqual 15 whereR3
 
 whereR4 = outer 3 where
-  outer n = inner n + 1 where
-    inner k = k * 2
+  outer n = inner n + 1
+  inner k = k * 2
 test "where nested" = expectEqual 7 whereR4
 
 whereR5 = isEvenW 4 where
@@ -404,9 +397,10 @@ whereR5 = isEvenW 4 where
   isOddW n = if n == 0 then False else isEvenW (n - 1)
 test "where mutual recursion" = expectTrue whereR5
 
-classifyW n = match n
-  x => doubled x where
-    doubled y = y * 2
+classifyW n = classifyWGo n where
+  classifyWGo m = match m
+    x => doubled x
+  doubled y = y * 2
 test "where match arm" = expectEqual 10 (classifyW 5)
 
 countPos xs = fold g 0 xs where
@@ -591,41 +585,8 @@ emptyWrapEN = match emptyWrapE
   WrapE n => n
 test "nullary empty custom Wrap" = expectEqual 0 emptyWrapEN
 
--- ── @Name impl selection (Phase 30) ─────────────────────────────────────────
--- Ported from: t_named_additive, t_named_multiplicative, t_named_additive_typed,
---              t_named_multiplicative_typed, t_named_three_typed,
---              t_named_single_no_hint_typed, t_at_name_standalone
-
-interface CombineN a where
-  combineN : a -> a -> a
-impl Additive of CombineN Int where
-  combineN x y = x + y
-impl Multiplicative of CombineN Int where
-  combineN x y = x * y
-
-test "named impl @Additive" = expectEqual 7 (combineN @Additive 3 4)
-test "named impl @Multiplicative" = expectEqual 12 (combineN @Multiplicative 3 4)
-
-interface CombineThree a where
-  combineThree : a -> a -> a
-impl First of CombineThree Int where
-  combineThree x _ = x
-impl Last of CombineThree Int where
-  combineThree _ y = y
-impl SumT of CombineThree Int where
-  combineThree x y = x + y
-namedThree = (combineThree @First 3 4, combineThree @Last 3 4, combineThree @SumT 3 4)
-test "three named impls" = expectEqual (3, 4, 7) namedThree
-
-interface BarN a where
-  barN : a -> a -> a
-impl FooN of BarN Int where
-  barN x y = x + y
-test "single named impl no hint" = expectEqual 7 (barN 3 4)
-
--- SKIP: t_at_name_standalone — "@Foo" with no Foo impl in scope behaves
--- differently in the typed (medaka test) pipeline vs the untyped eval path.
--- In the typed path the @Foo hint resolves before evaluation; cannot express.
+-- (Named-impl `@Name` selection was removed 2026-07-11; the ported t_named_*
+-- cases were dropped with it — a second instance now uses a newtype wrapper.)
 
 -- ── Multi-impl dispatch (VMulti) ────────────────────────────────────────────
 -- Ported from: t_dispatch_list, t_dispatch_option_some, t_dispatch_option_none,
@@ -717,46 +678,10 @@ sumTo n = go 0 n where
 test "where self-rec" = expectEqual 15 (sumTo 5)
 
 -- ── Field assignment (Phase 28) ──────────────────────────────────────────────
--- Ported from: t_field_assign_record, t_field_assign_multi, t_field_assign_ref_value,
---              t_multi_field_assign, t_multi_field_ref_mid
-
-data PersonF = { name : String, age : Int }
-
-fieldAssignAge =
-  let mut p = PersonF { name = "Alice", age = 30 }
-  p.age = 31
-  p.age
-test "field assign record" = expectEqual 31 fieldAssignAge
-
-fieldAssignName =
-  let mut p = PersonF { name = "Alice", age = 30 }
-  p.age = 99
-  p.name = "Bob"
-  p.name
-test "multiple field assigns" = expectEqual "Bob" fieldAssignName
-
-refValueAssign =
-  let mut r = Ref 0
-  r.value = 42
-  r.value
-test "Ref .value assign" = expectEqual 42 refValueAssign
-
-data InnerF = { c : Int }
-data OuterF = { b : InnerF }
-
-multiFieldAssign =
-  let mut o = OuterF { b = InnerF { c = 1 } }
-  o.b.c = 42
-  o.b.c
-test "multi-level field assign" = expectEqual 42 multiFieldAssign
-
-data BoxF = { cell : Ref Int }
-
-multiFieldRefMid =
-  let mut box = BoxF { cell = Ref 0 }
-  box.cell.value = 7
-  box.cell.value
-test "multi-level Ref mid" = expectEqual 7 multiFieldRefMid
+-- REMOVED 2026-07: the t_field_assign_* cases exercised mutable-record field
+-- assignment (`p.age = 31`, `r.value = 42`) — the pre-P0-5 mutation model, since
+-- removed (records are immutable; mutable state is a `Ref` cell written with `:=`).
+-- The ported cases had no forward-compatible equivalent, so they were dropped.
 
 -- ── Record patterns (Phase 31) ───────────────────────────────────────────────
 -- Ported from: t_rec_pat_pun, t_rec_pat_explicit, t_rec_pat_rest
@@ -815,8 +740,7 @@ test "iface default method runs" = expectEqual "Hello World" (helloI 0)
 
 interface GreetW a where
   nameW : a -> String
-  helloW x = prefix ++ nameW x where
-    prefix = "Hi "
+  helloW x = "Hi " ++ nameW x
 
 impl GreetW Int where
   nameW _ = "there"
@@ -877,7 +801,7 @@ test "array make" = expectEqual [7, 7, 7, 7] (arrayToList (arrayMake 4 7))
 test "array get unsafe" = expectEqual 30 (arrayGetUnsafe 2 [|10, 20, 30, 40|])
 
 arraySetResult =
-  let mut a = [|1, 2, 3|]
+  let a = [|1, 2, 3|]
   arraySetUnsafe 1 99 a
   arrayGetUnsafe 1 a
 test "array set unsafe" = expectEqual 99 arraySetResult

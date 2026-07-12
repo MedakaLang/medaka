@@ -84,7 +84,7 @@ minimum (NECons x xs) = fold (acc y => min y acc) x xs
 
    > toList (map (n => n * 2) (NECons 1 [2, 3]))
    [2, 4, 6] -}
-export default impl Mappable NonEmpty where
+export impl Mappable NonEmpty where
   map f (NECons x xs) = NECons (f x) (map f xs)
 
 {- | Fold over every element (head first).  `toList` recovers the plain list.
@@ -93,34 +93,34 @@ export default impl Mappable NonEmpty where
    6
    > toList (NECons 1 [2, 3])
    [1, 2, 3] -}
-export default impl Foldable NonEmpty where
+export impl Foldable NonEmpty where
   fold f z (NECons x xs) = fold f (f z x) xs
   foldRight f z (NECons x xs) = foldRight f (foldRight f z xs) [x]
   toList (NECons x xs) = x::xs
   isEmpty _ = False
   length (NECons _ xs) = 1 + length xs
 
-export default impl Traversable NonEmpty where
+export impl Traversable NonEmpty where
   traverse f (NECons x xs) = andThen (f x) (y => map (NECons y) (traverse f xs))
 
 {- | Append concatenates: the head of the left operand, then everything else.
 
    > toList (append (NECons 1 [2]) (NECons 3 [4]))
    [1, 2, 3, 4] -}
-export default impl Semigroup (NonEmpty a) where
+export impl Semigroup (NonEmpty a) where
   append (NECons x xs) other = NECons x (xs ++ toList other)
 
-export default impl Eq (NonEmpty a) requires Eq a where
+export impl Eq (NonEmpty a) requires Eq a where
   eq (NECons x xs) (NECons y ys) = eq x y && eq xs ys
 
-export default impl Debug (NonEmpty a) requires Debug a where
+export impl Debug (NonEmpty a) requires Debug a where
   debug ne = "NonEmpty \{debug (toList ne)}"
 
 {- | Human-facing rendering (backs `println` and `\{}` interpolation).
 
    > display (NECons 1 [2, 3])
    "NonEmpty [1, 2, 3]" -}
-export default impl Display (NonEmpty a) requires Display a where
+export impl Display (NonEmpty a) requires Display a where
   display ne = "NonEmpty \{toList ne}"
 
 -- ---------------------------------------------------------------------------

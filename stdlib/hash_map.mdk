@@ -246,10 +246,10 @@ allEntriesIn ((k, v)::rest) m
 
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
-export default impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
+export impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
   eq a b = if size a != size b then False else allEntriesIn (entries a) b
 
 {- | Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
    layout-dependent — don't rely on it for equality; use `eq`). -}
-export default impl Debug (HashMap k v) requires Debug k, Debug v where
+export impl Debug (HashMap k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (entries m)}"
