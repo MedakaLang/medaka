@@ -50,13 +50,25 @@ done (the native compiler self-hosts to a reproducing fixpoint). See
 
 ## Building
 
-**Build the native compiler (requires clang + Boehm GC — no OCaml):**
+Medaka builds on **Linux and macOS**, and needs only **clang + the Boehm GC** — no OCaml, no opam,
+no dune.
+
+```sh
+# Debian / Ubuntu
+sudo apt install clang libgc-dev
+# macOS
+brew install bdw-gc
+```
+
+**Build the native compiler:**
 ```sh
 make medaka          # WARM (./medaka_emitter present): 2-stage rebuild from
                      # current source.  COLD (fresh clone): bootstraps
                      # the emitter from compiler/seed/emitter.ll.gz first.
 ./medaka run yourfile.mdk
 ```
+The checked-in seed carries no LLVM target triple, so a cold `make medaka` bootstraps on **x86_64 or
+arm64** from the same bytes.
 The result is a self-contained ~1.9 MB native binary doing
 check/fmt/new/build/run/test/repl/lsp. For fully OCaml-free user builds,
 `export MEDAKA_EMITTER=$(pwd)/medaka_emitter` so `medaka build` uses the

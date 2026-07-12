@@ -10,6 +10,14 @@ min-of-3, production build flags (`-O2 -Wl,-stack_size,0x20000000`, GC
 `MEDAKA_EMITTER=./medaka_emitter` (the OCaml `medaka build` path is dead — its
 interpreter can no longer parse the compiler emitter source).
 
+> ⚠️ **STALE MACHINE + STALE FLAGS (2026-07-12).** Two things moved out from under the
+> numbers above. (1) Primary dev is now a **dedicated x86_64 Linux box** (Debian 13,
+> 12-core EPYC 9645 / 32 GB, Debian clang 19), not the M5 Mac — the numbers are **not
+> comparable** across the move; re-baseline on the current box before calling anything a
+> regression. (2) `-Wl,-stack_size` is **gone** — it was Mach-O-only, and the compiler now
+> gets its stack from a 256 MB GC-aware worker pthread in `runtime/medaka_rt.c`, so the
+> build flags are `-O2 -pthread -lm` on both platforms. Use `/usr/bin/time -v` on Linux.
+
 ## Real-world validation (2026-06-18)
 
 Beyond the micro-benches, a realistic mixed-float kernel — `taylor.mdk`: exp(x) via a

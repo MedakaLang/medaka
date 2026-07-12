@@ -7,12 +7,19 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
-## RESUME — ✅ INDEX ARC #16 SHIPPED: typeclass indexing `a[i]` / `a[i][j]` / `a[i] := v` + coded `E-INDEX-OOB`. `main` = `c9478073`. Seed RE-MINTED (cold C3a + fixpoint C3b PASS). Tree GREEN (run_gates 77/1/1). (2026-07-12)
+## MERGE — 🔀 local Index-arc main ⨝ origin (Netcup move + #35 close). (2026-07-13, last macOS session's final act)
+
+Synced the macOS work laptop's local `main` (the Index arc #16, below) with `origin/main` (the Netcup-box work: the machine move + #35 close, next section). **Disjoint changes** — the sole textual conflict was this file (two RESUME logs). Post-merge reconciliation:
+- **#35 (`ctor_collision`) is CLOSED by the remote** (`837d737b`, the P0-9 port into `compiler/ir/core_ir_eval.mdk`'s per-module frames). So the merged tree is **`run_gates` 78/0/1 — fully green**; my Index entry's "the 1 fail is #35" is superseded, and the remote correctly notes it was **never an x86 bug** (red on Mac too) and the fix file was `core_ir_eval.mdk`, NOT `core_ir_lower.mdk` (the memory `project_ctor_collision_x86_divergence` is thus resolved — plain #35).
+- **Seed RE-MINTED post-merge** — the remote changed a compiled compiler file (`core_ir_eval.mdk`), so my Index-arc seed was stale against the merged source. Re-minted from merged source; cold `bootstrap_from_seed` C3a + `selfcompile_fixpoint` C3b re-verified, full `run_gates` re-verified, before pushing.
+- **Dev now lives on the Netcup Linux box** (next section) — the Index arc's Mac-centric notes (Docker, `medaka_emitter` borrow paths, Apple-clang perf) belong to the retired environment.
+
+## RESUME — ✅ INDEX ARC #16 SHIPPED: typeclass indexing `a[i]` / `a[i][j]` / `a[i] := v` + coded `E-INDEX-OOB`. Seed RE-MINTED (cold C3a + fixpoint C3b PASS). Tree GREEN. (2026-07-12)
 
 The user gated "go straight to the Index arc"; **#16 (Index+IndexMut CORE) is done end-to-end**. Design was decision-ready (`INDEX-DESIGN.md` + a new `INDEX-16-PLAN.md` that resolved the one open seam). Shipped as 7 isolated-worktree sub-stages, each gated+merged; owning memory **`project_index_arc_16_shipped`** has full detail.
 
 ### ⭐ DO-FIRST STATE
-- **`main` = `c9478073`.** Tree green: `FORCE=1 build_oracles` then `run_gates` → **77 pass / 1 fail / 1 skip**. The 1 fail is the **pre-existing #35** (`diff_compiler_core_ir_modules` ctor_collision; a cross-session memory `project_ctor_collision_x86_divergence` notes it CRASHES on the x86 box but is a golden-diff on Mac — unrelated to this arc).
+- At the time this arc landed on the macOS laptop, `run_gates` was **77 pass / 1 fail / 1 skip**, the 1 fail being the pre-existing **#35** `ctor_collision` — **now CLOSED by the merge with origin** (see the MERGE note above; the remote's `core_ir_eval.mdk` port fixes it, so the merged tree is 78/0/1).
 - **Seed re-minted** (`2379ff24`) — adding the `indexError` extern forced it (pre-arc seed can't emit the new stdlib). Cold `bootstrap_from_seed` C3a + `selfcompile_fixpoint` C3b both PASS.
 
 ### WHAT SHIPPED (#16a–#16e + 16b-2 + 16d, all merged)
@@ -27,6 +34,66 @@ The user gated "go straight to the Index arc"; **#16 (Index+IndexMut CORE) is do
 - **The full differential suite is the ONLY thing that catches probe-context + codegen regressions** a self-hosting feature introduces — green fixpoint + agent full-pipeline probes are NOT enough (both #16d and #16e passed those). Always run the whole `run_gates` (and eyeball the OUTPUT-comparing gates eval/llvm/build separately from dump gates) before merging a feature that changes desugar/emit.
 - **A missing `import` mimics a dispatch bug** — I mis-aimed an Opus agent at the typechecker for what were missing-`import` errors; it correctly disproved the hypothesis. See `project_stdlib_impl_needs_import_to_dispatch`.
 - **Golden recapture after a front-end/emit change spans ~8 families with distinct capture paths** (`--frozen desugar/mark/fmt/printer`; lex/tc/core_ir_sexp regenerate by mirroring each gate's RUN+strip_unit pipe; `diff_fixtures` TYPES need a surgical splice). Only indexing fixtures actually shift, so the changed-file count stays small — a good benign-ness signal. The recapture-agent choked on `build_oracles` respawn (TaskStop+reap+DIY).
+## RESUME — 🖥️ NEW HOME: dev moved to a dedicated x86_64 Linux box. Docs + memories swept. (2026-07-13)
+
+**The machine changed.** Primary dev is no longer the macOS work laptop — it is a **dedicated
+Netcup x86_64 Linux box** (Debian 13, 12-core EPYC / 32 GB), repo at **`/root/medaka`**.
+Everything about the old environment that shaped our workflow is gone with it:
+
+- **Build and gate NATIVELY.** `make medaka`, `sh test/run_gates.sh`. **Do NOT route anything
+  through `scripts/docker-dev.sh`** — Docker isn't installed, and the DLP scanner it existed to
+  escape (Cyberhaven, a macOS-work-laptop problem) doesn't exist here. `docker/README.md` now
+  carries a SUPERSEDED banner. Any prior instruction to "bake Docker routing into every agent
+  prompt" is RETIRED.
+- **The Mac is retained for macOS smoke-testing only** → the **dual-platform invariant still
+  holds**: every build/test script must run on BOTH Linux and macOS (`stat -c %Y` *or*
+  `stat -f %m`; system `-lgc` *or* `brew --prefix bdw-gc`; no Mach-O-only link flags). Linux is
+  now the default arm.
+- **⚠️ Every perf number on record predates the move** (Apple M5 / macOS / Apple clang) and is
+  NOT comparable to anything measured today — different ISA, clang, libc, GC build.
+  `PERF-RESULTS.md` + `PERF-RUNTIME.md` carry stale-machine banners. **Re-baseline
+  (`sh test/bench.sh`) before calling anything a regression or a win.**
+- **GitHub access is clean:** the box has its own **deploy key** (read+write) and a personal git
+  identity — the work account is not involved. (`ssh -T git@github.com` answers `Hi
+  val-grasley/medaka!` — naming the *repo* is how a deploy key identifies itself.)
+- ✅ **`ops/` provisioning is ON `main`** (merge `12a69487`, pushed): `ops/provision.sh`
+  (self-contained box provisioning: deps + node24 + clone + cold-bootstrap + hook + oracles +
+  gates), `ops/snipe_hetzner.py` + `ops/cloud-init.yaml` (Hetzner restock fallback),
+  `ops/README.md`, plus the `build_oracles.sh` `stat -c`-first Linux portability fix (`ac503dff`).
+
+Docs updated for the move: `AGENTS.md` ("Where you're running" + Environment gotcha),
+`README.md` (per-platform prereqs), `docker/README.md`, `compiler/PERF-{RESULTS,RUNTIME,SCOPE}.md`,
+`.claude/ORCHESTRATING.md` (primary-checkout path). Memories: `project_netcup_build_box` (now
+LIVE), `project_cyberhaven_docker_workflow` (SUPERSEDED), `feedback_serialize_heavy_builds`
+(DLP rationale removed; **caps are now un-tuned for 12 dedicated cores — re-tune by measurement,
+don't assume `JOBS=4` is still right**).
+
+### ✅ TASK #35 CLOSED — the tree is now FULLY GREEN (`run_gates` **78 / 0 / 1**, was 77/1/1)
+
+The last red gate (`diff_compiler_core_ir_modules` → `ctor_collision`) is fixed. Two corrections
+worth carrying:
+
+- **It was never an x86 arch bug.** I briefly mis-filed it as one because it surfaced on the first
+  non-Mac bootstrap. It was red on the Mac too — exactly the pre-existing task #35. The mechanism
+  is plain first-declaration-order lookup in a bare-name cell table: no hash iteration, no
+  `readdir`, no uninitialized read — nothing that *could* differ across ISAs. **Lesson: a red gate
+  on a new machine is usually not the machine's fault. Read this DO-FIRST block before diagnosing.**
+- **The old entry below named the wrong file.** The un-ported P0-9 fix was NOT in
+  `compiler/ir/core_ir_lower.mdk` — lowering was fine. The per-module frames are built in
+  **`compiler/ir/core_ir_eval.mdk`** (`cBuildModInfos` / `cInstallModGroups`).
+
+**Root cause:** `cevalModules` installed *every* module's ctors into one flat global frame keyed by
+**bare name**; `installConsts`+`findCell` is last-write-wins, so `boxmod`'s arity-5 `Bin` and
+`bagmod`'s arity-4 `Bin` collapsed into one cell and a module constructed via the *other* module's
+arity → saturate early → apply the surplus arg → `E-NOT-A-FUNCTION`. **Fix:** port P0-9's
+per-module **local** ctor frame (which shadows the global; the global stays for `Type(..)`
+cross-module ctor imports). Verified order-independent — flipping import order previously produced
+a *different* error (`no matching impl`), same collision, and now both orders are correct.
+
+Gated: `core_ir_modules` 5/0 · `run_gates` **78/0/1** (FORCE-rebuilt oracles) · fixpoint **C3a YES /
+C3b YES** (committed seed still bootstraps — **no re-mint owed**) · compiler source type-clean ·
+fmt + lint clean. Two new AGENTS.md gotchas landed from it (the `evalModules`/`cevalModules`
+lockstep rule, and the shared-fixture-corpus trap that let P0-9 ship "green").
 
 ## RESUME — ✅ PRE-INDEX RUNWAY: trim finish, dispatch cleanup, testing-DX, a compiler-wide type-safety gate, and a ~53× parse speedup. `main` = `b5fd5e84`. Seed RE-MINTED (cold C3a PASS). Tree GREEN (run_gates 77/1/1). (2026-07-11)
 

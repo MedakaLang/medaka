@@ -1,5 +1,17 @@
 # Dockerized Medaka build + gate suite
 
+> ## ⚠️ SUPERSEDED (2026-07-12) — you almost certainly do not want this
+>
+> This wrapper exists to solve **one problem on one machine**: the old macOS work laptop ran
+> an IT-managed DLP/endpoint content scanner (Cyberhaven) that hooked file I/O, so the gate
+> suite's write storm spiked the host CPU. Primary dev has since moved to a **dedicated
+> x86_64 Linux box with no such scanner**, where the entire point of this indirection
+> evaporates: just run `make medaka` and `sh test/run_gates.sh` natively — they're faster,
+> simpler, and there is nothing to escape. (Docker isn't even installed on the box.)
+>
+> Kept only as a fallback in case the retained macOS smoke-test Mac ever needs to run a full
+> suite. Everything below still describes how it works; none of it is the recommended path.
+
 Run Medaka's `make medaka` and the differential gate suite **entirely inside a
 Linux VM container**, so the build's write storm (67 clang oracle builds +
 thousands of temp files) never touches the host filesystem. On a macOS host
