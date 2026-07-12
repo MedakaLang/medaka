@@ -7,6 +7,67 @@ coherent. You usually do NOT implement directly. **Read `.claude/ORCHESTRATING.m
 (the orchestrator playbook — core loop, agent-prompt skeleton, verification discipline,
 footguns) and `AGENTS.md` (the agent-facing router/map).
 
+## RESUME — 🖥️ NEW HOME: dev moved to a dedicated x86_64 Linux box. Docs + memories swept. (2026-07-13)
+
+**The machine changed.** Primary dev is no longer the macOS work laptop — it is a **dedicated
+Netcup x86_64 Linux box** (Debian 13, 12-core EPYC / 32 GB), repo at **`/root/medaka`**.
+Everything about the old environment that shaped our workflow is gone with it:
+
+- **Build and gate NATIVELY.** `make medaka`, `sh test/run_gates.sh`. **Do NOT route anything
+  through `scripts/docker-dev.sh`** — Docker isn't installed, and the DLP scanner it existed to
+  escape (Cyberhaven, a macOS-work-laptop problem) doesn't exist here. `docker/README.md` now
+  carries a SUPERSEDED banner. Any prior instruction to "bake Docker routing into every agent
+  prompt" is RETIRED.
+- **The Mac is retained for macOS smoke-testing only** → the **dual-platform invariant still
+  holds**: every build/test script must run on BOTH Linux and macOS (`stat -c %Y` *or*
+  `stat -f %m`; system `-lgc` *or* `brew --prefix bdw-gc`; no Mach-O-only link flags). Linux is
+  now the default arm.
+- **⚠️ Every perf number on record predates the move** (Apple M5 / macOS / Apple clang) and is
+  NOT comparable to anything measured today — different ISA, clang, libc, GC build.
+  `PERF-RESULTS.md` + `PERF-RUNTIME.md` carry stale-machine banners. **Re-baseline
+  (`sh test/bench.sh`) before calling anything a regression or a win.**
+- **GitHub access is clean:** the box has its own **deploy key** (read+write) and a personal git
+  identity — the work account is not involved. (`ssh -T git@github.com` answers `Hi
+  val-grasley/medaka!` — naming the *repo* is how a deploy key identifies itself.)
+- ✅ **`ops/` provisioning is ON `main`** (merge `12a69487`, pushed): `ops/provision.sh`
+  (self-contained box provisioning: deps + node24 + clone + cold-bootstrap + hook + oracles +
+  gates), `ops/snipe_hetzner.py` + `ops/cloud-init.yaml` (Hetzner restock fallback),
+  `ops/README.md`, plus the `build_oracles.sh` `stat -c`-first Linux portability fix (`ac503dff`).
+
+Docs updated for the move: `AGENTS.md` ("Where you're running" + Environment gotcha),
+`README.md` (per-platform prereqs), `docker/README.md`, `compiler/PERF-{RESULTS,RUNTIME,SCOPE}.md`,
+`.claude/ORCHESTRATING.md` (primary-checkout path). Memories: `project_netcup_build_box` (now
+LIVE), `project_cyberhaven_docker_workflow` (SUPERSEDED), `feedback_serialize_heavy_builds`
+(DLP rationale removed; **caps are now un-tuned for 12 dedicated cores — re-tune by measurement,
+don't assume `JOBS=4` is still right**).
+
+### ✅ TASK #35 CLOSED — the tree is now FULLY GREEN (`run_gates` **78 / 0 / 1**, was 77/1/1)
+
+The last red gate (`diff_compiler_core_ir_modules` → `ctor_collision`) is fixed. Two corrections
+worth carrying:
+
+- **It was never an x86 arch bug.** I briefly mis-filed it as one because it surfaced on the first
+  non-Mac bootstrap. It was red on the Mac too — exactly the pre-existing task #35. The mechanism
+  is plain first-declaration-order lookup in a bare-name cell table: no hash iteration, no
+  `readdir`, no uninitialized read — nothing that *could* differ across ISAs. **Lesson: a red gate
+  on a new machine is usually not the machine's fault. Read this DO-FIRST block before diagnosing.**
+- **The old entry below named the wrong file.** The un-ported P0-9 fix was NOT in
+  `compiler/ir/core_ir_lower.mdk` — lowering was fine. The per-module frames are built in
+  **`compiler/ir/core_ir_eval.mdk`** (`cBuildModInfos` / `cInstallModGroups`).
+
+**Root cause:** `cevalModules` installed *every* module's ctors into one flat global frame keyed by
+**bare name**; `installConsts`+`findCell` is last-write-wins, so `boxmod`'s arity-5 `Bin` and
+`bagmod`'s arity-4 `Bin` collapsed into one cell and a module constructed via the *other* module's
+arity → saturate early → apply the surplus arg → `E-NOT-A-FUNCTION`. **Fix:** port P0-9's
+per-module **local** ctor frame (which shadows the global; the global stays for `Type(..)`
+cross-module ctor imports). Verified order-independent — flipping import order previously produced
+a *different* error (`no matching impl`), same collision, and now both orders are correct.
+
+Gated: `core_ir_modules` 5/0 · `run_gates` **78/0/1** (FORCE-rebuilt oracles) · fixpoint **C3a YES /
+C3b YES** (committed seed still bootstraps — **no re-mint owed**) · compiler source type-clean ·
+fmt + lint clean. Two new AGENTS.md gotchas landed from it (the `evalModules`/`cevalModules`
+lockstep rule, and the shared-fixture-corpus trap that let P0-9 ship "green").
+
 ## RESUME — ✅ PRE-INDEX RUNWAY: trim finish, dispatch cleanup, testing-DX, a compiler-wide type-safety gate, and a ~53× parse speedup. `main` = `b5fd5e84`. Seed RE-MINTED (cold C3a PASS). Tree GREEN (run_gates 77/1/1). (2026-07-11)
 
 A very long, high-throughput session. Everything design→delegate→isolated-worktree→VERIFY→merge; fixpoint C3a/C3b YES on every landing; **seed re-minted at the end (`b5fd5e84`, cold `bootstrap_from_seed` C3a PASS)** batching ~15 emitter-graph changes. User PAUSED before the Index arc — it needs an explicit go-ahead.

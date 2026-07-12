@@ -112,7 +112,7 @@ of `.mdk` source) is the heaviest real-world workload. This directly measures
 # (set MEDAKA_EMITTER to the bootstrapped binary)
 ```
 
-Measure: wall-clock + max-RSS via `/usr/bin/time -l` (macOS). Run 3×, take min.
+Measure: wall-clock + max-RSS via `/usr/bin/time -v` (Linux; `-l` on macOS). Run 3×, take min.
 
 **Tier 2 — Compute microbenchmarks (isolate native speed)**
 

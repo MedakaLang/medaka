@@ -57,6 +57,15 @@ anything that doesn't move the number (as `declSigOf` was).
 
 ## Machine / toolchain
 
+> ⚠️ **THE MACHINE CHANGED (2026-07-12) — every number in this file predates the move.**
+> All measurements below were taken on the Apple M5 Mac in the table. Primary dev has since
+> moved to a **dedicated x86_64 Linux box** (Debian 13, 12-core EPYC 9645 / 32 GB, Debian
+> clang 19). Different ISA, different clang, different libc, different GC build — so the
+> historical numbers here are **not comparable** to anything you measure today, in either
+> direction. Treat them as a record of *which optimizations paid off*, not as a baseline.
+> **Re-baseline before claiming a regression or a win:** `sh test/bench.sh` on the current
+> box, and compare against a run you took yourself.
+
 | | |
 |---|---|
 | Chip | Apple M5 (10-core: 4 P + 6 E), 32 GB |
@@ -64,8 +73,8 @@ anything that doesn't move the number (as `declSigOf` was).
 | clang | Apple clang 21.0.0 (clang-2100.0.123.102) |
 | Date | 2026-06-10 |
 
-Method: `/usr/bin/time -l`, min-of-3 unless noted, cache pre-warmed, no parallel
-CPU work during timing runs.
+Method: `/usr/bin/time -l` (macOS; `/usr/bin/time -v` on Linux), min-of-3 unless
+noted, cache pre-warmed, no parallel CPU work during timing runs.
 
 Reproduce with **`sh test/bench.sh`** (`--quick` for micros only, `--interp` to
 add the OCaml-interpreter self-compile, `-n N` for min-of-N). It builds each

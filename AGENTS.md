@@ -115,19 +115,27 @@ make medaka     # WARM (./medaka_emitter present): 2-stage rebuild from current 
 ./medaka run yourfile.mdk
 ```
 
-**Escaping a host DLP/endpoint scanner's CPU spikes — the Docker workflow (`scripts/docker-dev.sh`).**
-On a macOS machine running a content-scanning endpoint agent (e.g. Cyberhaven), the parallel gate
-suite's write storm (67 clang-oracle builds + thousands of temp files) drives the scanner to ~1.57
-host CPU-cores (**6.5× idle**). `scripts/docker-dev.sh {build|test|gates|shell|sync}` runs the whole
-build + gate suite inside an **arm64-native Debian container** so every write lands on a persistent
-named Docker volume (`medaka-work`) *inside the Linux VM* — invisible to the host scanner, which
-drops the cost to **~0.02 cores** (measured). Source enters via a **read-only** mount + rsync; the
-**critical invariant** is that NO writable host bind-mount is ever used (a `-v host:container` mount
-that receives writes routes them back to the host FS and defeats the whole point). The in-container
-`medaka` is a *Linux* binary — still `make medaka` on the host for LSP/editing (cheap, ~idle floor);
-move the write-heavy *test runs* into Docker. Cold container = fresh clone → bootstraps from the
-seed. Deferred: wasm/sqlite gates need `node`≥24 added to `docker/Dockerfile`. Full details +
-gotchas: **`docker/README.md`**.
+**Where you're running (2026-07-13).** Primary dev is a **dedicated x86_64 Linux box** (Debian 13
+trixie, 12 EPYC cores / 32 GB; repo at `/root/medaka`). Build straight on it — `make medaka`, then
+the gate suite. No container, no VM, no wrapper: run everything natively and in parallel. This box
+is the machine every number and every instruction in this file assumes.
+
+The **Mac is retained for macOS smoke-testing only** (there is no macOS alternative), so the
+**dual-platform invariant still holds: every build/test script must run on BOTH Linux and macOS.**
+When you touch a script, keep both arms alive — `stat -c %Y` *or* `stat -f %m`, `pkg-config`/system
+`-lgc` *or* `brew --prefix bdw-gc`, and no Mach-O-only link flags. Linux is the default arm now (it
+is what CI-of-record and every agent runs); macOS is the fallback arm, but it is not optional.
+
+Two platform facts worth knowing rather than rediscovering: the emitted LLVM IR carries **no target
+triple**, so the checked-in seed (`compiler/seed/emitter.ll.gz`) cold-bootstraps on x86 *or* arm from
+the same bytes (the C3a fixpoint reproduces byte-for-byte on both); and the deeply-recursive compiler
+gets its stack from a **256 MB GC-aware worker pthread** spawned in `runtime/medaka_rt.c`, not from a
+link flag — so it runs fine under Linux's default 8 MB `ulimit -s`.
+
+*Historical:* `scripts/docker-dev.sh` + `docker/` exist to run the build inside a Linux container,
+because the old macOS work laptop ran a DLP/endpoint scanner (Cyberhaven) that turned the gate
+suite's write storm into a 6.5×-idle host CPU spike. **That problem does not exist on this box — do
+not reach for the Docker wrapper.** It is kept only in case the Mac ever has to run a full suite.
 
 **Debugging a `.mdk` program — reach for structured diagnostics.** `medaka check <file>` prints
 human `file:L:C:` diagnostics with a caret; **`medaka check --json <file>`** (note: `--json`, not
@@ -277,7 +285,11 @@ verification to fix that). See `playground/e2e/README.md` for the full list.
     compiler root must also pass `$STDLIB`** (already fixed: `selfcompile_fixpoint`,
     `diff_compiler_{selfproc,check_modules,check_modules_batch,resolve_modules}`,
     `profile_compiler`).
-- **Environment.** opam/dune are NOT needed — the native build uses only clang + Boehm GC. If clang is not on PATH, check your system's package install.
+- **Environment.** opam/dune are NOT needed — the native build uses only **clang + Boehm GC**. On this
+  box (Debian 13) that is `clang` 19 and the system `libgc-dev` (`/usr/lib/x86_64-linux-gnu/libgc.so`,
+  found via plain `-lgc`); on macOS it is Apple clang + `brew install bdw-gc`. `node` ≥ 24 is needed
+  only for the wasm/sqlite/playground gates (present here; a system node 20 cannot run finalized
+  WasmGC). If clang or libgc is missing, install it from the system package manager — don't vendor it.
 - **In a worktree, build with `make -C /absolute/path/to/worktree medaka`.** The shell cwd resets to the main checkout root each call; running `make medaka` from there would build in main, not the worktree.
 - **In a worktree, edit the worktree's files — use the full worktree path.**
   The shell cwd resets to the main checkout root each call, so a relative
@@ -335,6 +347,26 @@ verification to fix that). See `playground/e2e/README.md` for the full list.
   with `routes=None arity=3`). Corollary (unchanged): because single-file masks
   these, the regression test must exercise the multi-module path
   (`diff_compiler_eval_modules.sh` drives `eval_modules`), not a single-file doctest.
+- **`evalModules` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are PARALLEL
+  module drivers — fix module-frame semantics in LOCKSTEP.** `cevalModules` is a deliberate
+  structural mirror of `evalModules`: same frame layout, same `importFrameOf`/`pubReexports`/
+  `installConsts` helpers. So any fix to module-frame *semantics* (ctor scoping, impl coalescing,
+  install order) applied to one is **silently absent from the other**. This is exactly how the
+  P0-9 cross-module ctor-collision fix (`2b17677f`) shipped: it patched `eval.mdk` and left
+  `core_ir_eval.mdk` broken for months (ported 2026-07-13). Note this is a *different* split from
+  the loader-vs-single-file one above — same family, one more axis.
+  - Underlying hazard, worth recognizing on sight: **`installConsts` + `findCell` is
+    last-write-wins on duplicate names** (`findCell` returns the *first* matching cell while
+    `installConsts` writes each entry in turn). Any flat frame keyed by **bare name** and built
+    from multi-module decls inherits it — e.g. `map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin`
+    collapse into one cell, so a module constructs via the *other* module's arity, saturates
+    early, and applies the surplus arg (`E-NOT-A-FUNCTION`). The fix shape is a per-module
+    **local** ctor frame that shadows the global (the global stays, for `Type(..)` imports).
+- ⚠️ **`test/eval_modules_fixtures/*/` is globbed by TWO gates** — `diff_compiler_eval_modules.sh`
+  *and* `diff_compiler_core_ir_modules.sh`. Adding a regression fixture there silently enrolls it
+  in the Core-IR gate too. P0-9 shipped "green" on `eval_modules 5/0` while leaving
+  `core_ir_modules` red, because only the first gate was run. **When adding a fixture to a shared
+  corpus, run every gate that globs it.**
 - Development is organized by numbered **Phases**. Open/forward work is in
   `PLAN.md`; the completed Phases 1–97 (with implementation notes) are in
   `PLAN-ARCHIVE.md`. Commit messages and code comments reference phase numbers.
