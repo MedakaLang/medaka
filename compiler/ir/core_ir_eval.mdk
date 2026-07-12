@@ -510,7 +510,16 @@ cBuildModInfos _ _ _ [] = []
 cBuildModInfos disp globalCells exportsMap ((mid, decls)::rest) =
   let cbinds = lowerGroups decls
   let cimpls = lowerImplsWith disp decls
-  let localCells = map (n => (n, Ref VUnit)) (map cBindName cbinds)
+  -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
+  -- live in its LOCAL frame — they stay in the shared global too (see
+  -- cevalModules) for by-name / `Type(..)` cross-module ctor imports.  The local
+  -- copy SHADOWS the global, which is keyed by BARE ctor name across every
+  -- module's decls; two modules defining a same-named ctor at different arities
+  -- (`map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin`) collide in that one global
+  -- cell, so a module would otherwise construct via the OTHER module's arity —
+  -- saturating early and applying the surplus arg (E-NOT-A-FUNCTION).
+  let modCtors = collectCtors decls
+  let localCells = map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
   let imports = importFrameOf exportsMap decls
   let menv = EvalEnv [localCells, imports, globalCells]
   let exports = localCells ++ pubReexports exportsMap decls
@@ -525,8 +534,11 @@ cModImplValues (CModInfo _ _ _ cimpls _ menv) =
 -- pass 2: install each module's groups into its own cells (its env)
 cInstallModGroups : List CModInfo -> <Mut> Unit
 cInstallModGroups [] = ()
-cInstallModGroups ((CModInfo _ _ cbinds _ cells menv)::rest) =
+cInstallModGroups ((CModInfo _ decls cbinds _ cells menv)::rest) =
   let _ = cInstallTopGroups menv cells cbinds
+  -- P0-9: install this module's own ctor values into its local cells (allocated
+  -- in cBuildModInfos), so map/set construct their own arity-correct `Bin`/`Tip`.
+  let _ = installConsts cells (collectCtors decls)
   cInstallModGroups rest
 
 -- the root module is last in dependency order; its locals hold `main`
