@@ -1,0 +1,749 @@
+-- | sqlite.lib.sqlparse — a SQL *expression* parser: `String -> SqlExpr`.
+--
+-- This is the INVERSE of `lib.select`'s `render`: `render` projects a `SqlExpr`
+-- to SQL text (with `?` placeholders), and this module reads SQL text back into
+-- a `SqlExpr`.  It is stage 1 of the SQL front end — stage 2 (the full `SELECT`
+-- statement parser) is meant to be built ON TOP of the sub-parsers exported
+-- here (`sqlExpr`, `literal`, `sqlIdent`, `keyword`, `symbol`, `lexeme`), not by
+-- forking them.
+--
+-- Built on the `parsec` dogfood library (`parsec/lib/parser.mdk`) via a
+-- cross-project dependency (see `sqlite/medaka.toml`).
+--
+-- ## Grammar (loosest binding first — standard SQL precedence)
+--
+-- ```
+-- expr    := orExpr
+-- orExpr  := andExpr  (OR  andExpr)*            -- left-assoc
+-- andExpr := notExpr  (AND notExpr)*            -- left-assoc
+-- notExpr := NOT notExpr | cmpExpr              -- NOT binds looser than `=`
+-- cmpExpr := addExpr cmpSuffix*                 -- left-assoc
+-- cmpSuffix := (= | == | != | <> | < | <= | > | >=) addExpr
+--            | IS [NOT] NULL
+-- addExpr := mulExpr ((+ | -) mulExpr)*         -- left-assoc
+-- mulExpr := atom    ((* | / | %) atom)*        -- left-assoc
+-- atom    := '(' expr ')' | literal | '-' atom | column
+-- column  := ident ['.' ident]                  -- bare `age` or `users.age`
+-- literal := NULL | integer | float | 'text' | X'blob'
+-- ```
+--
+-- ## Notes on the design
+--
+-- * **Keywords are case-insensitive** (`and` == `AND` == `AnD`) and are matched
+--   at WORD granularity, so a column named `NOTES` is never read as `NOT`
+--   followed by `ES` — `keyword` parses a whole identifier-shaped word and then
+--   compares it, so a keyword can only match a complete word.
+-- * **Reserved words cannot be bare column names** (`isReserved`).  The set
+--   deliberately includes the *statement* keywords (`SELECT`/`FROM`/`WHERE`/…)
+--   that stage 2 will need, so that `sqlExpr` never swallows the `FROM` in
+--   `SELECT a FROM t`.  A qualified name (`t.from`) is still fine — a dotted
+--   name can't collide with a keyword.
+-- * **Left recursion** is handled by `chainl1` (for the binary levels) and by an
+--   explicit suffix loop (`cmpSuffixes`) for the comparison / `IS NULL` level.
+--   Both COMMIT once an operator has matched — `a +` / `a AND` are hard errors,
+--   not a successful parse of `a` with trailing garbage.  (parsec's `chainl1` was
+--   made committed for this; see findings F5.)
+-- * **Recursive grammar values**: the back-edges (`parens` → `sqlExpr`,
+--   `notPrefix` → `notExpr`, `negAtom` → `atom`) are written with `do`-notation
+--   ON PURPOSE.  A top-level nullary binding is a VALUE, and `between`/`chainl1`
+--   are strict in their parser arguments, so `parens = between (symbol "(")
+--   (symbol ")") sqlExpr` is a non-productive cyclic value and is rejected at
+--   run time with `E-CYCLIC-VALUE`.  Under `do`-notation the recursive reference
+--   lands inside a continuation lambda and is only forced when the parser RUNS.
+--   See `sqlite/findings/sql-parser-expr.md` (F3).
+--
+-- ## Deliberately out of scope (stage 1)
+--
+-- `TRUE`/`FALSE` keywords, `LIKE`/`IN`/`BETWEEN`/`CASE`, function calls,
+-- `||` concatenation, quoted `"identifiers"`, and bare `.5` / `1.` float forms.
+
+import parsec.lib.parser.{
+  Parser,
+  runParser,
+  satisfy,
+  char,
+  string,
+  many,
+  many1,
+  optional,
+  choice,
+  chainl1,
+  spaces,
+  eof,
+  failWith,
+  attempt,
+  label,
+  digit,
+}
+import lib.select.{
+  SqlExpr,
+  ECol,
+  ELit,
+  EBin,
+  EArith,
+  EAnd,
+  EOr,
+  ENot,
+  EIsNull,
+  ENotNull,
+  Literal,
+  LInt,
+  LText,
+  LFloat,
+  LBlob,
+  LNull,
+  CmpOp,
+  OpEq,
+  OpNe,
+  OpLt,
+  OpLe,
+  OpGt,
+  OpGe,
+  ArithOp,
+  AAdd,
+  ASub,
+  AMul,
+  ADiv,
+  AMod,
+}
+import string.{
+  toUpper,
+  toInt,
+  toFloat,
+  fromChars,
+  isAlpha,
+  isAlphaNum,
+  replaceAll,
+}
+import hex.{decode, encodeUpper}
+
+-- ---------------------------------------------------------------------------
+-- Entry point
+-- ---------------------------------------------------------------------------
+
+-- | Parse a complete SQL expression.  Leading/trailing whitespace is allowed;
+--   trailing garbage is an error (the parser demands end-of-input).
+--
+-- (Shape is shown via `dumpExpr`, an unambiguous constructor dump — the DERIVED
+-- `Debug` does not parenthesize nested arguments, so it cannot pin a tree shape.
+-- See findings F2.)
+--
+-- > map dumpExpr (parseSqlExpr "age > 18")
+-- Ok "EBin OpGt (ECol age) (ELit (LInt 18))"
+--
+-- Qualified columns, string literals and `IS NOT NULL` all work:
+--
+-- > map dumpExpr (parseSqlExpr "users.name = 'bob'")
+-- Ok "EBin OpEq (ECol users.name) (ELit (LText 'bob'))"
+--
+-- > map dumpExpr (parseSqlExpr "email IS NOT NULL")
+-- Ok "ENotNull (ECol email)"
+--
+-- Trailing garbage is rejected rather than silently ignored:
+--
+-- > parseSqlExpr "a = 1 bogus"
+-- Err "expected end of input at 6"
+export parseSqlExpr : String -> Result String SqlExpr
+parseSqlExpr s = runParser topLevel s
+
+-- The whole-input parser: skip leading space, parse an expression, demand EOF.
+topLevel : Parser SqlExpr
+topLevel = do
+  _ <- spaces
+  e <- sqlExpr
+  _ <- eof
+  pure e
+
+-- ---------------------------------------------------------------------------
+-- Token helpers (a `lexeme` discipline: every token eats its TRAILING space,
+-- and `topLevel` eats the one leading run).
+-- ---------------------------------------------------------------------------
+
+-- | Run `p`, then consume any trailing whitespace.  This is the token
+--   discipline the whole grammar relies on: after any token, the position sits
+--   on the next non-space character.
+export lexeme : Parser a -> Parser a
+lexeme p = do
+  x <- p
+  _ <- spaces
+  pure x
+
+-- | Match an exact punctuation token (`(`, `<=`, `+`, …), then trailing space.
+--
+--   `attempt` rewinds a failed multi-character match (e.g. `<=` against `< 3`)
+--   back to the token's START, so half-matching a two-character operator can't
+--   masquerade as deep progress and hijack parsec's farthest-failure error
+--   selection.  `label` then supplies the message — and because `attempt` has
+--   already pulled the failure position back to the start, the label always
+--   applies (`label` only rewrites a failure that consumed nothing).
+--
+-- > runParser (symbol "<=") "<=  x"
+-- Ok "<="
+-- > runParser (symbol ")") "x"
+-- Err "expected ')' at 0"
+export symbol : String -> Parser String
+symbol s = label "expected '\{s}'" (attempt (lexeme (string s)))
+
+-- Characters that may START an identifier: a letter or `_`.
+identStart : Char -> Bool
+identStart c = isAlpha c || c == '_'
+
+-- Characters that may CONTINUE an identifier: alphanumeric or `_`.
+identChar : Char -> Bool
+identChar c = isAlphaNum c || c == '_'
+
+-- One identifier-shaped word (no trailing-space consumption, no reserved check).
+word : Parser String
+word = do
+  c <- satisfy identStart
+  cs <- many (satisfy identChar)
+  pure (fromChars (c::cs))
+
+-- ---------------------------------------------------------------------------
+-- Keywords
+-- ---------------------------------------------------------------------------
+
+-- | The reserved words.  These may not be used as BARE column names, so that a
+--   keyword is never swallowed by the identifier parser.  The list intentionally
+--   covers the statement keywords stage 2 needs (`SELECT`/`FROM`/…) as well as
+--   the expression keywords stage 1 uses (`AND`/`OR`/`NOT`/`IS`/`NULL`).
+export reservedWords : List String
+reservedWords = [
+  "AND",
+  "OR",
+  "NOT",
+  "IS",
+  "NULL",
+  "SELECT",
+  "DISTINCT",
+  "FROM",
+  "WHERE",
+  "GROUP",
+  "HAVING",
+  "ORDER",
+  "BY",
+  "ASC",
+  "DESC",
+  "LIMIT",
+  "OFFSET",
+  "JOIN",
+  "INNER",
+  "LEFT",
+  "OUTER",
+  "ON",
+  "AS",
+]
+
+-- | Is `w` a reserved word?  Case-insensitive.
+--
+-- > isReserved "and"
+-- True
+-- > isReserved "notes"
+-- False
+export isReserved : String -> Bool
+isReserved w = elem (toUpper w) reservedWords
+
+-- | Match the given keyword (which MUST be written uppercase) case-insensitively
+--   at WORD granularity, then trailing space.
+--
+--   Word granularity is what keeps `NOTES` a column rather than `NOT` + `ES`:
+--   this parses a whole identifier-shaped word and only then compares, so a
+--   keyword can never match a proper prefix of a longer word.  `attempt` rewinds
+--   the reported failure position to the keyword's start on a mismatch.
+--
+-- > runParser (keyword "NOT") "not "
+-- Ok ()
+-- > runParser (keyword "NOT") "notes"
+-- Err "expected keyword 'NOT' at 0"
+export keyword : String -> Parser Unit
+keyword kw = attempt
+  (do
+    w <- lexeme word
+    keywordCheck kw w)
+
+keywordCheck : String -> String -> Parser Unit
+keywordCheck kw w =
+  unless (toUpper w == kw) (failWith "expected keyword '\{kw}'")
+
+-- ---------------------------------------------------------------------------
+-- Identifiers / columns
+-- ---------------------------------------------------------------------------
+
+-- | A (possibly qualified) SQL identifier: `age` or `users.age`.  Rejects
+--   reserved words, so `sqlExpr` stops cleanly at `AND`/`FROM`/… instead of
+--   eating them as a column.  No whitespace is allowed around the `.`.
+--
+-- > runParser sqlIdent "users.age"
+-- Ok "users.age"
+-- > runParser sqlIdent "NOTES"
+-- Ok "NOTES"
+-- > runParser sqlIdent "and"
+-- Err "expected a column name at 0"
+export sqlIdent : Parser String
+sqlIdent = label
+  "expected a column name"
+  (attempt (lexeme
+    (do
+      w <- qualWord
+      identCheck w)))
+
+-- `word` optionally followed by `.word`, rejoined with the dot.
+qualWord : Parser String
+qualWord = do
+  a <- word
+  rest <- optional dotWord
+  pure (joinQual a rest)
+
+dotWord : Parser String
+dotWord = do
+  _ <- char '.'
+  word
+
+joinQual : String -> Option String -> String
+joinQual a None = a
+joinQual a (Some b) = "\{a}.\{b}"
+
+identCheck : String -> Parser String
+identCheck w =
+  if isReserved w then
+    failWith "'\{w}' is a reserved word and cannot be a column name"
+  else
+    pure w
+
+-- | A column reference.
+--
+-- > map dumpExpr (runParser column "users.age")
+-- Ok "ECol users.age"
+export column : Parser SqlExpr
+column = map ECol sqlIdent
+
+-- ---------------------------------------------------------------------------
+-- Literals
+-- ---------------------------------------------------------------------------
+
+-- | A SQL literal: `NULL`, an integer, a float, a `'quoted string'` (with `''`
+--   as the escaped single quote), or an `X'48EX'`-style blob.
+--
+-- > map dumpLiteral (runParser literal "42")
+-- Ok "LInt 42"
+-- > map dumpLiteral (runParser literal "-7")
+-- Ok "LInt -7"
+-- > map dumpLiteral (runParser literal "3.5")
+-- Ok "LFloat 3.5"
+-- > map dumpLiteral (runParser literal "NULL")
+-- Ok "LNull"
+--
+-- `''` is the SQL escape for a single quote inside a string:
+--
+-- > map dumpLiteral (runParser literal "'it''s'")
+-- Ok "LText 'it''s'"
+--
+-- An empty string literal is legal:
+--
+-- > map dumpLiteral (runParser literal "''")
+-- Ok "LText ''"
+--
+-- Blob literals are hex, `X'..'` (case-insensitive `x`):
+--
+-- > map dumpLiteral (runParser literal "X'4142'")
+-- Ok "LBlob X'4142'"
+export literal : Parser Literal
+literal =
+  label "expected a literal" (choice [nullLit, blobLit, numLit, textLit])
+
+-- NULL.  `keyword` gives word-granularity, so a column `nullable` is safe.
+nullLit : Parser Literal
+nullLit = do
+  _ <- keyword "NULL"
+  pure LNull
+
+-- An integer or float: [-] digits [ . digits ] [ (e|E) [+|-] digits ].
+-- Presence of a fraction or an exponent makes it a Float, otherwise an Int.
+numLit : Parser Literal
+numLit = attempt (lexeme
+  (do
+    sgn <- optional (char '-')
+    ds <- many1 digit
+    fr <- optional fracPart
+    ex <- optional expPart
+    numFrom (signText sgn) (fromChars ds) fr ex))
+
+signText : Option Char -> String
+signText None = ""
+signText (Some _) = "-"
+
+fracPart : Parser String
+fracPart = do
+  _ <- char '.'
+  ds <- many1 digit
+  pure ".\{fromChars ds}"
+
+expPart : Parser String
+expPart = do
+  _ <- satisfy (c => c == 'e' || c == 'E')
+  sgn <- optional (satisfy (c => c == '+' || c == '-'))
+  ds <- many1 digit
+  pure "e\{expSign sgn}\{fromChars ds}"
+
+expSign : Option Char -> String
+expSign None = ""
+expSign (Some c) = "\{c}"
+
+optText : Option String -> String
+optText None = ""
+optText (Some s) = s
+
+-- No fraction and no exponent ⇒ Int; otherwise Float.
+numFrom : String -> String -> Option String -> Option String -> Parser Literal
+numFrom sgn ds None None = intFrom "\{sgn}\{ds}"
+numFrom sgn ds fr ex = floatFrom "\{sgn}\{ds}\{optText fr}\{optText ex}"
+
+intFrom : String -> Parser Literal
+intFrom s = match toInt s
+  Some n => pure (LInt n)
+  None => failWith "malformed integer literal '\{s}'"
+
+floatFrom : String -> Parser Literal
+floatFrom s = match toFloat s
+  Some f => pure (LFloat f)
+  None => failWith "malformed float literal '\{s}'"
+
+-- A single-quoted string; `''` is an escaped single quote.
+textLit : Parser Literal
+textLit = lexeme
+  (do
+    _ <- char '\''
+    cs <- many strChar
+    _ <- char '\''
+    pure (LText (fromChars cs)))
+
+-- Inside a string: an escaped `''` (yielding one quote), else any non-quote char.
+-- Order matters — `escapedQuote` must be tried first, or the closing quote would
+-- end the string early.
+strChar : Parser Char
+strChar = orElse escapedQuote (satisfy (!= '\''))
+
+escapedQuote : Parser Char
+escapedQuote = attempt
+  (do
+    _ <- char '\''
+    _ <- char '\''
+    pure '\'')
+
+-- A hex blob literal: X'48656C6C6F' (or lowercase x).
+blobLit : Parser Literal
+blobLit = attempt (lexeme
+  (do
+    _ <- satisfy (c => c == 'x' || c == 'X')
+    _ <- char '\''
+    cs <- many (satisfy isHexDigit)
+    _ <- char '\''
+    blobFrom (fromChars cs)))
+
+isHexDigit : Char -> Bool
+isHexDigit c = c >= '0' && c <= '9'
+  || c >= 'a' && c <= 'f'
+  || c >= 'A' && c <= 'F'
+
+blobFrom : String -> Parser Literal
+blobFrom s = match decode s
+  Ok bytes => pure (LBlob bytes)
+  Err e => failWith "malformed blob literal: \{e}"
+
+-- ---------------------------------------------------------------------------
+-- The expression grammar, loosest binding outermost
+-- ---------------------------------------------------------------------------
+
+-- | A SQL expression (does NOT demand end-of-input — use `parseSqlExpr` for
+--   that).  Exported so stage 2 can drop it into a WHERE / ON / projection slot.
+--
+-- > map dumpExpr (runParser sqlExpr "a = 1 AND b = 2")
+-- Ok "EAnd (EBin OpEq (ECol a) (ELit (LInt 1))) (EBin OpEq (ECol b) (ELit (LInt 2)))"
+export sqlExpr : Parser SqlExpr
+sqlExpr = orExpr
+
+-- OR — loosest, left-associative.
+orExpr : Parser SqlExpr
+orExpr = chainl1 andExpr orOp
+
+orOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
+orOp = do
+  _ <- keyword "OR"
+  pure EOr
+
+-- AND — binds tighter than OR, left-associative.
+andExpr : Parser SqlExpr
+andExpr = chainl1 notExpr andOp
+
+andOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
+andOp = do
+  _ <- keyword "AND"
+  pure EAnd
+
+-- NOT — binds tighter than AND but LOOSER than a comparison, so `NOT a = 1`
+-- parses as `NOT (a = 1)`.  Right-recursive (`NOT NOT x` is legal).
+notExpr : Parser SqlExpr
+notExpr = orElse notPrefix cmpExpr
+
+-- The recursive reference to `notExpr` sits in a do-continuation (NOT in
+-- argument position), so this is productive — see the header note on
+-- E-CYCLIC-VALUE.
+notPrefix : Parser SqlExpr
+notPrefix = do
+  _ <- keyword "NOT"
+  e <- notExpr
+  pure (ENot e)
+
+-- Comparison / null-test level: an additive expression followed by zero or more
+-- suffixes.  Written as an explicit left-fold loop rather than `chainl1` because
+-- the two suffix shapes are not both infix (`IS NULL` is postfix).
+cmpExpr : Parser SqlExpr
+cmpExpr = do
+  l <- addExpr
+  cmpSuffixes l
+
+-- The HEAD of a comparison suffix: the `IS` keyword, or a comparison operator.
+-- Matching one COMMITS the parser to the rest of the suffix (see `cmpSuffixes`).
+data SuffixHead = HIs | HCmp CmpOp
+
+-- `cmpSuffixes` is a FUNCTION (it takes the accumulated left operand), so its
+-- self-recursion is ordinary function recursion — no cyclic-value hazard.
+--
+-- COMMITTED LOOP.  We `optional` only the suffix HEAD (the `IS`, or the `=`);
+-- once a head matches, the rest of the suffix is MANDATORY, with no `pure l`
+-- fallback underneath it.  That is what lets `a = ` blame the missing operand at
+-- column 4 instead of shrugging and reporting "expected end of input at 2" —
+-- a fallback that SUCCEEDS discards whatever deep failure was found beneath it
+-- (findings F5), so the fix is to not offer the fallback once we know an operand
+-- is required.
+cmpSuffixes : SqlExpr -> Parser SqlExpr
+cmpSuffixes l = do
+  h <- optional cmpSuffixHead
+  cmpSuffixTail l h
+
+cmpSuffixHead : Parser SuffixHead
+cmpSuffixHead = orElse (map (_ => HIs) (keyword "IS")) (map HCmp cmpOp)
+
+cmpSuffixTail : SqlExpr -> Option SuffixHead -> Parser SqlExpr
+cmpSuffixTail l None = pure l
+cmpSuffixTail l (Some HIs) = do
+  n <- optional (keyword "NOT")
+  _ <- keyword "NULL"
+  cmpSuffixes (nullTest n l)
+cmpSuffixTail l (Some (HCmp op)) = do
+  r <- addExpr
+  cmpSuffixes (EBin op l r)
+
+nullTest : Option Unit -> SqlExpr -> SqlExpr
+nullTest None = EIsNull
+nullTest (Some _) = ENotNull
+
+-- The comparison operators.  LONGEST FIRST: `<=` before `<`, `<>` before `<`,
+-- `==` before `=`, or the shorter token would win and strand the second char.
+cmpOp : Parser CmpOp
+cmpOp = choice
+  [
+    cmpTok "<=" OpLe,
+    cmpTok "<>" OpNe,
+    cmpTok ">=" OpGe,
+    cmpTok "!=" OpNe,
+    cmpTok "==" OpEq,
+    cmpTok "<" OpLt,
+    cmpTok ">" OpGt,
+    cmpTok "=" OpEq,
+  ]
+
+cmpTok : String -> CmpOp -> Parser CmpOp
+cmpTok s op = do
+  _ <- symbol s
+  pure op
+
+-- Additive — left-associative.
+addExpr : Parser SqlExpr
+addExpr = chainl1 mulExpr addOp
+
+addOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
+addOp = choice [arithTok "+" AAdd, arithTok "-" ASub]
+
+-- Multiplicative — binds tightest of the binary operators, left-associative.
+mulExpr : Parser SqlExpr
+mulExpr = chainl1 atom mulOp
+
+mulOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
+mulOp = choice [arithTok "*" AMul, arithTok "/" ADiv, arithTok "%" AMod]
+
+-- NOTE the eta-expanded lambda `(l r => EArith op l r)` rather than the natural
+-- partial application `EArith op`.  This is a WORKAROUND for a native-backend
+-- miscompile: a partially-applied data CONSTRUCTOR (here `EArith`, arity 3,
+-- given 1 argument) is silently miscompiled by `medaka build` — the value that
+-- comes back is not a well-formed `EArith` node, and the next `match` on it dies
+-- with `E-NONEXHAUSTIVE-MATCH`.  `medaka run` and `medaka check` are both fine,
+-- so this only shows up in a NATIVE build.  Partially-applied plain FUNCTIONS are
+-- unaffected; only constructors.  See `sqlite/findings/sql-parser-expr.md` (F1)
+-- for the 18-line standalone repro.  Do not "simplify" this back to `EArith op`
+-- until that bug is fixed — every arithmetic operator in the grammar depends on it.
+arithTok : String -> ArithOp -> Parser (SqlExpr -> SqlExpr -> SqlExpr)
+arithTok s op = do
+  _ <- symbol s
+  pure (l r => EArith op l r)
+
+-- An atom: a parenthesized expression, a literal, a unary minus, or a column.
+--
+-- ORDER MATTERS.  `literal` is tried before `column` so that `X'41'` is a blob
+-- rather than a column named `X`; `literal` backtracks cleanly when it isn't one
+-- (parsec's `orElse` re-runs the alternative from the ORIGINAL position), so a
+-- column actually named `x` still parses.
+atom : Parser SqlExpr
+atom =
+  label "expected an expression" (choice [parens, litAtom, negAtom, column])
+
+-- The recursive reference to `sqlExpr` is in a do-continuation, NOT in argument
+-- position.  Writing this as `between (symbol "(") (symbol ")") sqlExpr` would
+-- make `atom` a non-productive cyclic value (E-CYCLIC-VALUE) — see header.
+parens : Parser SqlExpr
+parens = do
+  _ <- symbol "("
+  e <- sqlExpr
+  _ <- symbol ")"
+  pure e
+
+litAtom : Parser SqlExpr
+litAtom = map ELit literal
+
+-- Unary minus on a non-literal (a negative NUMBER is handled by `numLit`, which
+-- is tried first).  `SqlExpr` has no negation node, so `-x` becomes `0 - x`.
+negAtom : Parser SqlExpr
+negAtom = do
+  _ <- symbol "-"
+  e <- atom
+  pure (EArith ASub (ELit (LInt 0)) e)
+
+-- ---------------------------------------------------------------------------
+-- renderSqlExpr : the inverse projection (literals INLINED)
+--
+-- `lib.select`'s `render` turns every literal into a `?` placeholder plus a bind
+-- (that is the injection-safe path for talking to a real database).  For the
+-- round-trip property we need the OTHER projection: one that inlines literals so
+-- the text can be parsed back.  Fully parenthesized, so the printed form pins
+-- the tree shape exactly — which is also what makes it a good precedence oracle.
+-- ---------------------------------------------------------------------------
+
+-- | Render a `SqlExpr` back to SQL text with literals INLINED and every binary
+--   node parenthesized.  `parseSqlExpr . renderSqlExpr` is the identity on
+--   `SqlExpr` (see `sqlite/sqlparse_probe.mdk`).
+--
+-- > map renderSqlExpr (parseSqlExpr "a = 1 OR b = 2 AND c = 3")
+-- Ok "((a = 1) OR ((b = 2) AND (c = 3)))"
+--
+-- Text literals are re-escaped on the way out:
+--
+-- > map renderSqlExpr (parseSqlExpr "name = 'it''s'")
+-- Ok "(name = 'it''s')"
+export renderSqlExpr : SqlExpr -> String
+renderSqlExpr (ECol name) = name
+renderSqlExpr (ELit l) = renderLiteral l
+renderSqlExpr (EBin op l r) =
+  "(\{renderSqlExpr l} \{cmpText op} \{renderSqlExpr r})"
+renderSqlExpr (EArith op l r) =
+  "(\{renderSqlExpr l} \{arithText op} \{renderSqlExpr r})"
+renderSqlExpr (EAnd l r) = "(\{renderSqlExpr l} AND \{renderSqlExpr r})"
+renderSqlExpr (EOr l r) = "(\{renderSqlExpr l} OR \{renderSqlExpr r})"
+renderSqlExpr (ENot e) = "(NOT \{renderSqlExpr e})"
+renderSqlExpr (EIsNull e) = "(\{renderSqlExpr e} IS NULL)"
+renderSqlExpr (ENotNull e) = "(\{renderSqlExpr e} IS NOT NULL)"
+
+-- | Render a single literal, inlined (NOT as a `?` placeholder).
+--
+-- > renderLiteral (LText "it's")
+-- "'it''s'"
+-- > renderLiteral LNull
+-- "NULL"
+export renderLiteral : Literal -> String
+renderLiteral (LInt n) = "\{n}"
+renderLiteral (LFloat f) = "\{f}"
+renderLiteral (LText s) = "'\{replaceAll "'" "''" s}'"
+renderLiteral (LBlob b) = "X'\{encodeUpper b}'"
+renderLiteral LNull = "NULL"
+
+cmpText : CmpOp -> String
+cmpText OpEq = "="
+cmpText OpNe = "<>"
+cmpText OpLt = "<"
+cmpText OpLe = "<="
+cmpText OpGt = ">"
+cmpText OpGe = ">="
+
+-- ---------------------------------------------------------------------------
+-- dumpExpr : an unambiguous CONSTRUCTOR-level dump (the tree-shape oracle)
+--
+-- Why this exists instead of `deriving (Debug)`: the DERIVED `Debug` does not
+-- parenthesize nested constructor arguments, so `EBin OpEq (ECol "a") (ELit
+-- (LInt 1))` prints as `EBin OpEq ECol "a" ELit LInt 1` — which is ambiguous
+-- (several distinct trees share that rendering) and therefore useless as a
+-- precedence proof.  See `sqlite/findings/sql-parser-expr.md` (F2).
+--
+-- `dumpExpr` parenthesizes every nested node, and quotes strings with SQL single
+-- quotes, so the output stays free of `"` and reads cleanly inside a doctest.
+-- ---------------------------------------------------------------------------
+
+-- | An unambiguous, fully-parenthesized constructor dump of a `SqlExpr`.  This
+--   is the tree-shape oracle used by the precedence doctests and by
+--   `sqlite/sqlparse_probe.mdk`.
+--
+-- > map dumpExpr (parseSqlExpr "age > 18")
+-- Ok "EBin OpGt (ECol age) (ELit (LInt 18))"
+--
+-- AND binds tighter than OR, so the OR is the ROOT:
+--
+-- > map dumpExpr (parseSqlExpr "a = 1 OR b = 2 AND c = 3")
+-- Ok "EOr (EBin OpEq (ECol a) (ELit (LInt 1))) (EAnd (EBin OpEq (ECol b) (ELit (LInt 2))) (EBin OpEq (ECol c) (ELit (LInt 3))))"
+export dumpExpr : SqlExpr -> String
+dumpExpr (ECol name) = "ECol \{name}"
+dumpExpr (ELit l) = "ELit (\{dumpLiteral l})"
+dumpExpr (EBin op l r) = "EBin \{dumpCmp op} (\{dumpExpr l}) (\{dumpExpr r})"
+dumpExpr (EArith op l r) =
+  "EArith \{dumpArith op} (\{dumpExpr l}) (\{dumpExpr r})"
+dumpExpr (EAnd l r) = "EAnd (\{dumpExpr l}) (\{dumpExpr r})"
+dumpExpr (EOr l r) = "EOr (\{dumpExpr l}) (\{dumpExpr r})"
+dumpExpr (ENot e) = "ENot (\{dumpExpr e})"
+dumpExpr (EIsNull e) = "EIsNull (\{dumpExpr e})"
+dumpExpr (ENotNull e) = "ENotNull (\{dumpExpr e})"
+
+-- | An unambiguous constructor dump of a `Literal`.
+--
+-- > map dumpLiteral (runParser literal "-7")
+-- Ok "LInt -7"
+-- > map dumpLiteral (runParser literal "3.5")
+-- Ok "LFloat 3.5"
+-- > map dumpLiteral (runParser literal "'it''s'")
+-- Ok "LText 'it''s'"
+-- > map dumpLiteral (runParser literal "X'4142'")
+-- Ok "LBlob X'4142'"
+export dumpLiteral : Literal -> String
+dumpLiteral (LInt n) = "LInt \{n}"
+dumpLiteral (LFloat f) = "LFloat \{f}"
+dumpLiteral (LText s) = "LText \{renderLiteral (LText s)}"
+dumpLiteral (LBlob b) = "LBlob \{renderLiteral (LBlob b)}"
+dumpLiteral LNull = "LNull"
+
+dumpCmp : CmpOp -> String
+dumpCmp OpEq = "OpEq"
+dumpCmp OpNe = "OpNe"
+dumpCmp OpLt = "OpLt"
+dumpCmp OpLe = "OpLe"
+dumpCmp OpGt = "OpGt"
+dumpCmp OpGe = "OpGe"
+
+dumpArith : ArithOp -> String
+dumpArith AAdd = "AAdd"
+dumpArith ASub = "ASub"
+dumpArith AMul = "AMul"
+dumpArith ADiv = "ADiv"
+dumpArith AMod = "AMod"
+
+arithText : ArithOp -> String
+arithText AAdd = "+"
+arithText ASub = "-"
+arithText AMul = "*"
+arithText ADiv = "/"
+arithText AMod = "%"
