@@ -77,20 +77,25 @@ N="${PERF_N:-250}"
 # (nothing ran it for months) and how diff_compiler_lint_multi sat "skipped" while
 # also failing. Do not "simplify" this into a skip.
 #
-#   match — exhaustiveness checking (compiler/frontend/exhaust.mdk, checkMatch,
-#           Maranget's pattern-matrix algorithm) over an N-constructor data decl
-#           with an N-arm match. MEASURED 2026-07-13, ratio CLIMBING with N:
-#               N=125->250  2.48x
-#               N=250->500  2.75x
-#               N=500->1000 3.10x     (274 MB net allocation at N=1000)
-#           A climbing ratio is the signature of a genuine quadratic, not n log n.
-#           Filed as T17. Remove this entry when it is fixed — the gate will TELL
-#           you to.
-KNOWN_SUPERLINEAR="match"
-# Per-shape ceiling while known-bad: fail if it gets WORSE than this.
-KNOWN_CEIL_match="3.0"
-# And fail if it gets BETTER than this (i.e. someone fixed it) — promote it.
-KNOWN_FIXED_match="2.3"
+# (Currently EMPTY — every shape scales sub-quadratically. Long may it last.)
+#
+# HISTORY — entries that were fixed and promoted OUT of this ledger:
+#
+#   match — exhaustiveness checking (compiler/frontend/exhaust.mdk + the
+#           `check_match` driver in compiler/types/typecheck.mdk) over an
+#           N-constructor data decl with an N-arm match. Filed as T17, ratio
+#           CLIMBING with N (2.48x -> 2.75x -> 3.10x per doubling; 274 MB net
+#           allocation at N=1000). FIXED 2026-07-13: it was FOUR quadratics
+#           stacked, all of the same "re-scan the whole thing once per element"
+#           shape — `usefulCovered` called `specializeCon` (a full matrix scan)
+#           once per signature constructor, `allCovered` did an O(#ctors x #rows)
+#           list-membership scan, the constructor oracle's four tables were assoc
+#           LISTS so every arity/type lookup was O(#ctors), and the redundant-arm
+#           fold re-ran the whole Maranget recursion against every preceding arm.
+#           Now: rows are bucketed by head constructor in ONE pass, the oracle is
+#           an OrdMap, and the redundancy fold skips arms that provably cannot be
+#           unreachable. 3.10x -> 2.18x; 274 MB -> 118 MB at N=1000.
+KNOWN_SUPERLINEAR=""
 
 is_known() {
   for k in $KNOWN_SUPERLINEAR; do [ "$k" = "$1" ] && return 0; done
@@ -187,46 +192,72 @@ fail=0
 known=0
 pass=0
 
-printf '%-10s %8s %12s %12s %8s  %s\n' shape N 'net-N' 'net-2N' ratio verdict
-printf -- '---------------------------------------------------------------------\n'
+printf '%-10s %8s %10s %10s %10s  %6s %6s  %s\n' \
+  shape N 'net-N' 'net-2N' 'net-4N' 'r1' 'r2' verdict
+printf -- '-------------------------------------------------------------------------------\n'
 
+# ⚠️ MEASURE THREE SIZES, NOT TWO — a single doubling is not enough.
+#
+# This gate originally sampled N and 2N and gated on that one ratio. It would have
+# MISSED the very bug it later found. At N=250 the (then-quadratic) `match` shape read
+# 2.76x — UNDER the 3.0 threshold — and would have passed. It was only caught because
+# someone hand-probed three doublings and saw the ratio CLIMB:
+#
+#     N=125->250  2.48x        N=250->500  2.75x        N=500->1000  3.10x
+#
+# THE SIGNAL FOR A QUADRATIC IS THE RATIO CLIMBING, not any single ratio. At small N a
+# quadratic is still diluted by linear terms and constant factors; a single sample near
+# the noise floor cannot distinguish n^1.4 from n^2.
+#
+# So: sample N, 2N, 4N. Gate on **r2** (the 2N->4N doubling) — it is the least
+# contaminated by the constant term. Also flag a CLIMBING trend (r2 meaningfully above
+# r1) even when r2 is still under the ceiling, because that is a quadratic caught early,
+# while it is small.
 for shape in bindings match listlit nesting; do
-  n1="$N"; n2=$((N * 2))
-  f1="$WORK/${shape}_$n1.mdk"; f2="$WORK/${shape}_$n2.mdk"
+  n1="$N"; n2=$((N * 2)); n3=$((N * 4))
+  f1="$WORK/${shape}_$n1.mdk"; f2="$WORK/${shape}_$n2.mdk"; f3="$WORK/${shape}_$n3.mdk"
   "gen_$shape" "$n1" "$f1"
   "gen_$shape" "$n2" "$f2"
+  "gen_$shape" "$n3" "$f3"
 
-  a1="$(alloc_of "$f1")"; a2="$(alloc_of "$f2")"
-  t1="$(time_of  "$f1")"; t2="$(time_of  "$f2")"
+  a1="$(alloc_of "$f1")"; a2="$(alloc_of "$f2")"; a3="$(alloc_of "$f3")"
+  t1="$(time_of  "$f1")"; t2="$(time_of  "$f3")"
 
   # A shape that produces no measurement is a HARNESS failure, not a pass. Never
   # let "I could not measure it" read as "it is fine" — that is the silent-green
   # bug class this whole suite was hardened against.
-  case "$a1$a2" in
+  case "$a1$a2$a3" in
     *[!0-9.]*|"") echo "FAIL $shape: profiler produced no allocation figure (harness bug)"; fail=$((fail+1)); continue ;;
   esac
 
   # Subtract the fixed prelude cost — see the BASELINE note above. Without this the
   # gate is blind.
-  verdict="$(awk -v a1="$a1" -v a2="$a2" -v b="$BASE_ALLOC" -v th="$THRESH" 'BEGIN {
-    d1 = a1 - b; d2 = a2 - b
+  verdict="$(awk -v a1="$a1" -v a2="$a2" -v a3="$a3" -v b="$BASE_ALLOC" -v th="$THRESH" 'BEGIN {
+    d1 = a1 - b; d2 = a2 - b; d3 = a3 - b
     # If the input costs less than the noise floor, N is too small to say anything.
     # Report that honestly instead of certifying it as "ok".
-    if (d1 < 1.0) { printf "%.2f TOOSMALL", 0; exit }
-    r = d2 / d1
-    printf "%.2f %s", r, (r > th ? "QUADRATIC" : "ok")
+    if (d1 < 1.0) { printf "0 0 TOOSMALL"; exit }
+    r1 = d2 / d1
+    r2 = d3 / d2
+    # Gate on r2 (least constant-factor contamination). Also catch a CLIMBING ratio
+    # even below the ceiling — that is a quadratic showing itself early.
+    climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+    printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
   }')"
-  ratio="${verdict% *}"; word="${verdict##* }"
+  r1="$(echo "$verdict" | cut -d' ' -f1)"
+  ratio="$(echo "$verdict" | cut -d' ' -f2)"
+  word="$(echo "$verdict" | cut -d' ' -f3)"
 
   d1="$(awk -v a="$a1" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
   d2="$(awk -v a="$a2" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
+  d3="$(awk -v a="$a3" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
 
   if [ "$word" = "TOOSMALL" ]; then
     # NOT a pass. An unmeasurable shape is a harness problem, and silently counting
     # it as fine is exactly how a suite starts lying about what it covers.
     fail=$((fail+1))
-    printf '%-10s %8s %9s MB %9s MB %8s  ** N TOO SMALL to measure — raise PERF_N **\n' \
-      "$shape" "$n1" "$d1" "$d2" "-"
+    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** N TOO SMALL — raise PERF_N **\n' \
+      "$shape" "$n1" "$d1" "$d2" "$d3" "-" "-"
 
   elif is_known "$shape"; then
     # A KNOWN-superlinear shape. Two ways this must still fail:
@@ -254,12 +285,14 @@ for shape in bindings match listlit nesting; do
 
   elif [ "$word" = "QUADRATIC" ]; then
     fail=$((fail+1))
-    printf '%-10s %8s %9s MB %9s MB %8s  ** SUPERLINEAR (>%s) **\n' \
-      "$shape" "$n1" "$d1" "$d2" "$ratio" "$THRESH"
+    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR **
+' \
+      "$shape" "$n1" "$d1" "$d2" "$d3" "$r1" "$ratio"
     printf '           time: %ss -> %ss\n' "$t1" "$t2"
   else
     pass=$((pass+1))
-    printf '%-10s %8s %9s MB %9s MB %8s  ok\n' "$shape" "$n1" "$d1" "$d2" "$ratio"
+    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ok
+' "$shape" "$n1" "$d1" "$d2" "$d3" "$r1" "$ratio"
   fi
 done
 

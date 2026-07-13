@@ -319,11 +319,28 @@ The workflow, in order:
    quadratic. Some stages are milliseconds at these sizes, so their *timing* is pure
    noise while their *allocation ratio* is stark.
 2. **`perf`** (`apt-get install linux-perf` — it is NOT installed by default) to NAME
-   the hot symbol. ⚠️ **Call graphs are unusable** in these binaries (tail calls, no
-   frame pointers → `mdk_lam160715 → mdk_lam160715 → …`). **Flat symbol counts only.**
-   ⚠️ And `perf` does not always lead: for an allocation-dominated profile it goes flat
-   (`GC_malloc_kind` at 11.5%, the guilty function at 0.33%). **A stage-timing probe
-   beats `perf` when allocation is the bottleneck.**
+   the hot symbol.
+
+   ⚠️ **USE DWARF CALL GRAPHS. Flat counts will mislead you.**
+   ```sh
+   perf record --call-graph dwarf,16384 -- <cmd>
+   ```
+   **This works** — the emitted LLVM carries CFI, so DWARF unwinding produces clean
+   stacks. (An earlier version of this doc said call graphs were "unusable"; that was
+   WRONG, it referred to frame-pointer unwinding, and it cost an agent a wrong turn.
+   Fixed 2026-07-13.)
+
+   **Why flat counts mislead here, specifically:** they profile **TIME**, but the perf
+   gate grades **ALLOCATION** — and on this workload those point at *different
+   functions*. Flat counts named `rootIdOf` at 28%, which is pure CPU and allocates
+   nothing, so it was invisible to the gate. The move that actually works is to pipe
+   `perf script` through a filter that attributes each `GC_malloc_kind` sample to its
+   nearest `mdk_` frame — i.e. **allocation attribution**, which is what the gate
+   measures. That named the two guilty functions in one shot.
+
+   Corollary: if the profile looks flat and allocation-dominated (`GC_malloc_kind`
+   ~11%, everything else <2%), you are looking at the wrong axis. Get allocation
+   attribution, or fall back to a stage-timing probe.
 3. Read the source to find *why* it is O(N), then **stub-and-measure** to confirm.
 4. ⚠️ **`whenL False (expensiveCall …)` is NOT a stub.** Medaka is STRICT — the argument
    still evaluates. This produced a false "hypothesis disproved" on a *correct*
