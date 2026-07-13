@@ -312,6 +312,41 @@ See **`.claude/skills/pr-review/SKILL.md`** for the playbook the reviewer runs. 
 reviewer READ-ONLY — it reports findings; you decide what to act on, and the *authoring*
 agent fixes them (it has the context; you do not).
 
+The review is worth it. It has twice returned **do-not-merge** on a diff whose own gates
+were green, each time on this repo's #1 bug class (check green / run dies):
+- **import aliasing** — aliasing an *interface method* left it unbound: `check` 0
+  diagnostics, `run` E-PANIC, `build` emitter failure. The author's fix covered standalone
+  constrained functions; its regression fixture **tested the bug it fixed, not the feature
+  it shipped**.
+- **the emitter arg-tuple removal** — see below.
+
+---
+
+## ⚠️ A clean auto-merge is NOT agreement (2026-07-13)
+
+**A clean `git merge` between two changes to the same subsystem proves only that they did
+not touch the same LINES. It says nothing about whether they agree.**
+
+Two agents changed the LLVM emitter in parallel (a TMC-parity arc and an arg-tuple
+removal). Git flagged 2 conflicts — and cleanly auto-merged a **third break it could not
+see**: TMC had added a brand-new caller (`emitGDispBody`'s `CDecision` arm) into the very
+machinery whose signature the other change was rewriting (single scrutinee word → `roots :
+List String`). Different lines, so no conflict; the merged tree **crashed**. A reviewer
+caught it, not git and not either author.
+
+So when two branches touch one subsystem:
+
+1. **Do NOT resolve a semantic conflict yourself.** Hand it to the authoring agent — it
+   knows what the code must *mean*. You know only what the lines look like. A wrong
+   resolution in an emitter is a **silent miscompile**, not a build error.
+2. **Grep the merged tree for every CALLER of any signature that changed** — not just the
+   ones that conflicted. That is where the invisible break lives.
+3. **Re-run the decisive gates ON THE MERGED TREE.** Pre-merge greens do not carry over.
+   Two independent changes landing together is the classic shape for a bug neither has
+   alone. Here: `typecheck_compiler_source.sh` (cheapest — catches a left-behind caller in
+   ~5s, and **`make medaka` does NOT gate on type errors**, so nothing else will), then the
+   fixpoint, then the parity/differential gates.
+
 ---
 
 ## Verifying a landing — never trust prose
