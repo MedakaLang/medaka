@@ -202,6 +202,8 @@ bash test/typecheck_compiler_source.sh # strict-typecheck the WHOLE compiler sou
                                        #   alongside the fixpoint for compiler .mdk changes — the
                                        #   bootstrap emit path does NOT gate on hadTypeErrors(), so
                                        #   an ill-typed compiler source builds green without this
+bash test/diff_compiler_tmc_parity.sh # BOTH backends TMC the same functions (census markers;
+                                       #   needs the wasm probes: sh test/wasm/build_wasm_oracle.sh)
 bash test/bootstrap_*.sh              # each native pipeline stage == interpreter output
 sh test/diff_compiler_engines.sh      # THE 3-ENGINE DIFFERENTIAL: eval == native == wasm on the
                                        #   SAME programs. Medaka has three implementations of its
@@ -301,6 +303,32 @@ playground/build_playground_wasm.sh` — the harness never builds it); launches
 `chromium.launch({channel:'chrome'})` — the **system** Google Chrome, not a Playwright-downloaded
 browser, because `npx playwright install` TLS-fails on this machine (do not try to bypass TLS
 verification to fix that). See `playground/e2e/README.md` for the full list.
+
+## ⚠️ Benchmarking an EMITTER change: you need TWO rebuilds, not one
+
+**This will make you measure the exact opposite of reality.** It cost an agent ~40 minutes
+and nearly produced a false "structurally hard, abandoned" report on a change that turned
+out to be a **2.2× win** (2026-07-13).
+
+In a self-hosting compiler, a binary has two independent properties:
+
+* its **behavior** comes from its **source**;
+* its **speed** comes from **the emitter that compiled it**.
+
+So after you change the emitter, ONE `FORCE_EMITTER_REBUILD=1 make medaka` gives you a
+binary with your **new behavior** but compiled by the **old** emitter — i.e. old machine
+code. Build a "before" and an "after" that way and **the two binaries are crossed**: you
+are timing the old emitter's codegen on both, plus whatever your change did to the
+*compile-time* work. The agent above measured its own optimization as a 2.5× SLOWDOWN.
+
+**You need TWO rebuilds to reach a single-generation emitter** (one to propagate the new
+behavior into the emitter, a second so the emitter is itself compiled BY that emitter).
+Then both arms are true single-generation binaries and the comparison means something.
+
+Corollary, learned the same day: **never use the main checkout's `/root/medaka/medaka_emitter`
+as a perf baseline.** It is a shared mutable artifact — another agent rebuilt it mid-session
+and silently invalidated every "before" number derived from it. Build your own baseline
+binary from your own base commit, in your own worktree.
 
 ## Hunting an O(n²) — the method that worked six times
 

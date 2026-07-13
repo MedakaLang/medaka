@@ -51,7 +51,7 @@ import frontend.ast.{
   Decl(..),
   Attr(..),
 }
-import support.util.{joinWith, listLen, allList, reverseL, isEmptyL}
+import support.util.{joinWith, listLen, allList, reverseL, isEmptyL, escOneHex2}
 
 -- ── Document algebra ──────────────────────────────
 -- Mirror of lib/printer.ml's `doc` type and combinators.
@@ -255,13 +255,28 @@ escapeCharLit c
   | c == "\n" = "\\n"
   | c == "\t" = "\\t"
   | c == "\r" = "\\r"
-  | c == " " = "\\0"
+  | c == "\0" = "\\0"
   | otherwise = c
 
--- OCaml `%S`-style string-literal escaping: quote, backslash, \n \t \r, and a
--- leading/trailing double quote.  (Control/non-printable chars beyond these —
--- which OCaml renders as \b or \ddd — do not occur in the fixtures; see the
--- residual-gaps note in the header.)
+-- String-literal escaping: quote, backslash, \n \t \r, NUL, and any other C0
+-- control char as `\u{XX}`.
+--
+-- The old version escaped exactly \\ " \n \t \r and passed EVERYTHING ELSE through
+-- raw, on the stated assumption that "control/non-printable chars beyond these do
+-- not occur in the fixtures". That assumption was false, and it was false in the
+-- FORMATTER'S OWN SOURCE FILE: printer.mdk:258 needs to compare against a NUL, so
+-- someone wrote `"\0"`, ran `medaka fmt`, and fmt round-tripped the escape back out
+-- as a RAW NUL BYTE. printer.mdk has carried a literal NUL ever since.
+--
+-- The damage is that a file with a NUL is BINARY to grep: `grep printDecl
+-- printer.mdk` printed NOTHING and exited 1 on a file with 34 matches — no warning,
+-- no "Binary file matches", just a confident silent lie, on a 1100-line compiler
+-- source. An agent hit exactly this and briefly concluded the code did not exist.
+--
+-- So this is the repo's defining bug class ("this didn't run" == "this passed")
+-- sitting in the SEARCH PATH, planted by our own formatter. The fix is the general
+-- one, not `\0`: never emit a raw C0 byte. The lexer round-trips \0 and \u{HEX}
+-- (lexer.mdk header), so every escape below re-reads to the same char.
 escStringLit : String -> String
 escStringLit s = "\"" ++ stringConcat (escSChars (stringToChars s) 0) ++ "\""
 
@@ -279,6 +294,8 @@ escSOne c
   | c == '\n' = "\\n"
   | c == '\t' = "\\t"
   | c == '\r' = "\\r"
+  | c == '\0' = "\\0"
+  | charCode c < 32 = "\\u{\{escOneHex2 (charCode c)}}"
   | otherwise = charToStr c
 
 printLit : Lit -> Doc

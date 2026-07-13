@@ -1,5 +1,5 @@
 # META
-source_lines=1810
+source_lines=1827
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -55,7 +55,7 @@ import frontend.ast.{
   Decl(..),
   Attr(..),
 }
-import support.util.{joinWith, listLen, allList, reverseL, isEmptyL}
+import support.util.{joinWith, listLen, allList, reverseL, isEmptyL, escOneHex2}
 
 -- ── Document algebra ──────────────────────────────
 -- Mirror of lib/printer.ml's `doc` type and combinators.
@@ -259,13 +259,28 @@ escapeCharLit c
   | c == "\n" = "\\n"
   | c == "\t" = "\\t"
   | c == "\r" = "\\r"
-  | c == " " = "\\0"
+  | c == "\0" = "\\0"
   | otherwise = c
 
--- OCaml `%S`-style string-literal escaping: quote, backslash, \n \t \r, and a
--- leading/trailing double quote.  (Control/non-printable chars beyond these —
--- which OCaml renders as \b or \ddd — do not occur in the fixtures; see the
--- residual-gaps note in the header.)
+-- String-literal escaping: quote, backslash, \n \t \r, NUL, and any other C0
+-- control char as `\u{XX}`.
+--
+-- The old version escaped exactly \\ " \n \t \r and passed EVERYTHING ELSE through
+-- raw, on the stated assumption that "control/non-printable chars beyond these do
+-- not occur in the fixtures". That assumption was false, and it was false in the
+-- FORMATTER'S OWN SOURCE FILE: printer.mdk:258 needs to compare against a NUL, so
+-- someone wrote `"\0"`, ran `medaka fmt`, and fmt round-tripped the escape back out
+-- as a RAW NUL BYTE. printer.mdk has carried a literal NUL ever since.
+--
+-- The damage is that a file with a NUL is BINARY to grep: `grep printDecl
+-- printer.mdk` printed NOTHING and exited 1 on a file with 34 matches — no warning,
+-- no "Binary file matches", just a confident silent lie, on a 1100-line compiler
+-- source. An agent hit exactly this and briefly concluded the code did not exist.
+--
+-- So this is the repo's defining bug class ("this didn't run" == "this passed")
+-- sitting in the SEARCH PATH, planted by our own formatter. The fix is the general
+-- one, not `\0`: never emit a raw C0 byte. The lexer round-trips \0 and \u{HEX}
+-- (lexer.mdk header), so every escape below re-reads to the same char.
 escStringLit : String -> String
 escStringLit s = "\"" ++ stringConcat (escSChars (stringToChars s) 0) ++ "\""
 
@@ -283,6 +298,8 @@ escSOne c
   | c == '\n' = "\\n"
   | c == '\t' = "\\t"
   | c == '\r' = "\\r"
+  | c == '\0' = "\\0"
+  | charCode c < 32 = "\\u{\{escOneHex2 (charCode c)}}"
   | otherwise = charToStr c
 
 printLit : Lit -> Doc
@@ -1814,7 +1831,7 @@ declLine : Decl -> String
 declLine d = render (printDecl d) ++ "\n"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "reverseL" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "escOneHex2" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatGroup" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String")))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
 (DFunDef false "text" ((PVar "s")) (EApp (EVar "Text") (EVar "s")))
@@ -1892,13 +1909,13 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
 (DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString " "))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "escSChars" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escSOne") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EVar "escSChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escSOne" (TyFun (TyCon "Char") (TyCon "String")))
-(DFunDef false "escSOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escSOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\0"))) (ELit (LString "\\0")) (EIf (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u{")) (EApp (EVar "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString "}"))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "printLit" (TyFun (TyCon "Lit") (TyCon "Doc")))
 (DFunDef false "printLit" ((PCon "LInt" (PVar "n"))) (EApp (EVar "text") (EApp (EVar "intToString") (EVar "n"))))
 (DFunDef false "printLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EVar "text") (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString ".")))) (EBinOp "++" (EVar "s") (ELit (LString "0"))) (EVar "s"))))))
@@ -2475,7 +2492,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "declLine" ((PVar "d")) (EBinOp "++" (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (ELit (LString "\n"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "reverseL" false) (mem "isEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "escOneHex2" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatGroup" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String")))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
 (DFunDef false "text" ((PVar "s")) (EApp (EVar "Text") (EVar "s")))
@@ -2553,13 +2570,13 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
 (DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString " "))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escStringLit" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "escSChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))) (ELit (LString "\""))))
 (DTypeSig false "escSChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "escSChars" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escSOne") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EVar "escSChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escSOne" (TyFun (TyCon "Char") (TyCon "String")))
-(DFunDef false "escSOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escSOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\0"))) (ELit (LString "\\0")) (EIf (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u{")) (EApp (EMethodRef "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString "}"))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "printLit" (TyFun (TyCon "Lit") (TyCon "Doc")))
 (DFunDef false "printLit" ((PCon "LInt" (PVar "n"))) (EApp (EVar "text") (EApp (EVar "intToString") (EVar "n"))))
 (DFunDef false "printLit" ((PCon "LFloat" (PVar "f"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "floatToString") (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EVar "text") (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString ".")))) (EBinOp "++" (EVar "s") (ELit (LString "0"))) (EVar "s"))))))
