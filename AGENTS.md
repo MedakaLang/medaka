@@ -139,6 +139,16 @@ Two facts about this that are easy to get wrong:
 
 There is no merge queue (GitHub requires an org-owned repo; this one is user-owned).
 
+**Where the backlog and the orchestration rules live** — none of this is reachable from
+anywhere else, so it is listed here:
+
+| Path | What it is |
+|------|-----------|
+| `.claude/workstreams/` | The per-orchestrator **backlogs** (one file per workstream + a `README.md` with the collision map). Start here for "what should I work on". |
+| `.claude/ORCHESTRATING.md` | The orchestration playbook — running agents, worktrees, merging. Its #1 lesson: *the gap docs lie — reproduce before you trust them.* |
+| `.claude/HANDOFF.md` | **Known-red gates.** Read it BEFORE diagnosing a failing gate: a red gate is usually already known and not your break. |
+| `.claude/skills/` | The task playbooks (see the table at the bottom of this file). |
+
 ## Build & test
 
 ```sh
@@ -147,6 +157,21 @@ make medaka     # WARM (./medaka_emitter present): 2-stage rebuild from current 
                 # Equivalent scripts: test/build_native_medaka.sh (warm), test/bootstrap_from_seed.sh (cold)
 ./medaka run yourfile.mdk
 ```
+
+**`C3a WARN: … lagging seed` is NOT a broken seed, and it is NOT something you did.** The seed
+is allowed to drift: `bootstrap_from_seed.sh` is TOLERANT by default (policy `9df88b32`) — the seed
+must *work*, byte-currency is only a drift detector, and `seed-health` in CI warns rather than fails
+on purpose. You only ever see this line if something triggered a **cold** bootstrap. Re-mint
+(`sh test/refresh_seed.sh`, **twice** — it is not idempotent after a codegen change) at checkpoints,
+not reflexively.
+
+**Borrowing an emitter to warm-start a fresh worktree is safe** (`cp <other-tree>/medaka_emitter .`
+then `make medaka`). `build_native_medaka.sh` fingerprints the `compiler/**/*.mdk` each emitter was
+built from into `.medaka_emitter.srcstamp` (gitignored, so it never travels with the `cp`) and
+rebuilds any emitter of unknown or mismatched provenance. ⚠️ Until 2026-07-13 it decided this by
+**mtime**, which `cp` inverts — the copy is newer than every just-checked-out source file, so a
+stale borrowed emitter was *trusted*, blew up in stage B on syntax it predated (`parse error`), and
+silently fell back to a cold re-bootstrap. That is where the spurious "lagging seed" scare came from.
 
 **Where you're running (2026-07-13).** Primary dev is a **dedicated x86_64 Linux box** (Debian 13
 trixie, 12 EPYC cores / 32 GB; repo at `/root/medaka`). Build straight on it — `make medaka`, then
@@ -420,7 +445,11 @@ fold is O(n²) all by itself, since list append is O(n).
 The workflow, in order:
 
 1. **`MEDAKA_PERF=1 test/bin/profile_main <runtime.mdk> <core.mdk> <target.mdk>`** —
-   per-stage time AND allocation. **Allocation is the reliable signal**: it is
+   per-stage time AND allocation. ⚠️ **`test/bin/` is a BUILD ARTIFACT — it is not
+   committed, so a fresh clone/worktree has no `profile_main`.** Build just that one
+   probe first (never the bare `FORCE=1 build_oracles.sh`, which builds all 54):
+   `FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one profile_main`.
+   **Allocation is the reliable signal**: it is
    deterministic (no runner noise), and it exposed every one of the six more sharply
    than wall-clock did. A stage whose allocation ~4× across an input doubling is
    quadratic. Some stages are milliseconds at these sizes, so their *timing* is pure
@@ -623,17 +652,24 @@ nearby code, consider them, but **only where they genuinely improve
 readability**. Don't force-fit: most candidate sites aren't improvements, and a
 rewrite that doesn't typecheck or that changes semantics is worse than the
 original. **Verify the rewrite on the binary** (`medaka test <file>`) — a
-plausible-looking change here is often wrong (e.g. `function` only applies when
-the body matches the *bare last param*, not `match (g param)`).
+plausible-looking change here is often wrong.
 
 - **Operator sections** — `(==)`, `(+ 1)`, `(2 * _)` (left needs explicit `_`)
   instead of `(x y => x == y)` / `(x => x + 1)` lambdas.
-- **`function` keyword** — point-free match, only when the body is
-  `match <lastParam>` on the bare final argument.
 - Pipe `|>` / compose `>> <<`, inclusive ranges `[lo..=hi]`, record update
-  `{ r | f = v }`, `let mut`, unary `!`, backtick infix `` `f` ``.
+  `{ r | f = v }`, unary `!`.
 
-`SYNTAX.md` is the ground-truth list of what parses; `test/parse_fixtures/rare_constructs.mdk`
+⚠️ **Do NOT reach for these — they are REMOVED and are hard parse errors**, each
+with a dedicated removal diagnostic in `compiler/frontend/parser.mdk`: the
+`function` keyword (`functionRemovedMsg`, `:1213` — use `x => match x { … }` or a
+multi-clause definition), **`let mut`** (`letMutRemovedMsg`, `:1198` — use a `Ref`
+cell: `let x = Ref 0`, `x := v`, read `x.value`), **backtick infix** `` `f` ``
+(`backtickInfixMsg`, `:3752` — use prefix application), the `record` keyword
+(`:1205`), `let-else`, **named impls** (`:2470`), and **`default impl`** (`:2473`).
+`test/check_removed_constructs.sh` is the tree-wide gate that keeps them out.
+
+`SYNTAX.md` is the ground-truth list of what parses (⚠️ with one known lie: it
+still lists backtick infix, which the parser rejects); `test/parse_fixtures/rare_constructs.mdk`
 has minimal examples. The self-hosted parser doesn't cover all of these yet —
 see PLAN.md "Known parser gaps" before assuming `compiler/` can parse one.
 
@@ -674,6 +710,9 @@ fix lands, then load. (A `UserPromptSubmit` hook,
   and the eval-modules vs single-file comparison did not flag it. See Gotchas for
   the full counterexample and the instrument-eval's-resolution-arms technique.
 - **add-lsp-capability** — add/extend an LSP feature.
+- **pr-review** — review an agent-authored PR diff for craft (style, efficiency,
+  missing tests, lying comments, leftover workarounds). Read-only; run AFTER CI is
+  green — the gates prove behavior, this judges craft.
 - **harden-typechecker** — typechecker-*internal* correctness/diagnostics work
   (much of the Phase 62–72 arc): add a `type_error`, tighten constraint/
   coherence/unification logic, without breaking error accumulation or level
@@ -723,4 +762,4 @@ fix lands, then load. (A `UserPromptSubmit` hook,
 | `compiler/README.md` | Self-host port slice log + roadmap |
 | `compiler/REROOT-PLAN.md` | The plan that took every differential gate OCaml-free (DONE 2026-06-13): gate categories (HOST/eval-probe-oracle/front-end/build), golden-capture infra, native-interp oracle, phasing. |
 | `compiler/DRIVER-COLLAPSE-PLAN.md` | The plan that folded single-file typecheck+eval into the 1-module case of the multi-module path (DONE 2026-06-13, closes audit §6): 5 phases (scaffold→test→dict→eval→check→delete), `check`-option-A (resolves imports), risk register. |
-| `compiler/ARGSTAMP-UNIFY-PLAN.md` | The approved plan (2026-06-14, IN PROGRESS) to retire the `argStampEnabled` eval-vs-emit dispatch fork (the finer split the driver collapse left; shared root of #55/#21): flip eval to full dict-threading, arg-tag survives only for the irreducible primitive residual; 6 phases, fork inventory, arg-tag dependency map. |
+| `compiler/ARGSTAMP-UNIFY-PLAN.md` | **COMPLETE (all phases 0–5 done 2026-06-14).** The plan that retired the `argStampEnabled` eval-vs-emit dispatch fork (the finer split the driver collapse left; shared root of #55/#21): eval and emit now run ONE elaboration mode (full static dict-threading); arg-tag survives only for the irreducible primitive `Eq Int`/`Ord Int` residual. Kept for the fork inventory + arg-tag dependency map. |
