@@ -100,8 +100,11 @@ SYM	isXxxExtern	add-primitive/SKILL.md's "one of the isXxxExtern family predicat
 SYM	TypeError	harden-typechecker/SKILL.md explicitly instructs "do **not** introduce a `TypeError` ADT as part of an unrelated change" — the token names something that must NOT exist, the mirror image of DOC-LINK-EXCEPTIONS.txt's `compiler/foo.mdk` (a deliberately fictional illustrative name)
 SYM	runST	ORCHESTRATING.md quotes "An agent reported 'we need `runST`'" as a cautionary example of a PREMATURE conclusion that was wrong — narrated as history of a claim that should NOT be trusted, not an assertion that runST exists
 
-# ── SYM: legitimate historical narration (correctly past-tense) ────────────
-SYM	suppressBinopStamp	AGENTS.md's doc-index row says gap #21 (closed 2026-06-14) "removed the `suppressBinopStamp` workaround" — the sentence's own grammar states it is GONE, not that it currently exists; confirmed absent from all of compiler/*.mdk
+# (A `suppressBinopStamp` SYM exception used to live here, excusing an AGENTS.md
+#  doc-index row that narrated gap #21's closure. The AGENTS.md terseness pass
+#  removed that row, so nothing cited the token anymore and the gate's ORPHAN SYM
+#  check correctly demanded this line's deletion. Left as a note because it is the
+#  ratchet's whole point working end-to-end on its first real cut.)
 
 # ── SYM: proposed rename target, doesn't exist yet by design ───────────────
 SYM	singleTyparamIfaceMethod	COMPILER-SOUNDNESS.md workstream: "**Rename it `singleTyparamIfaceMethod`** as part of this" — a proposed rename of the real (and correctly-cited) `singleParamIfaceMethod`; the new name is not expected to exist until that workstream item lands
