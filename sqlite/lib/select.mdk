@@ -43,12 +43,26 @@ public export data Literal =
   | LFloat Float
   | LBlob (Array Int)
   | LNull
+deriving (Eq, Debug)
 
 -- | A comparison operator.
-public export data CmpOp = OpEq | OpNe | OpLt | OpLe | OpGt | OpGe
+public export data CmpOp =
+  | OpEq
+  | OpNe
+  | OpLt
+  | OpLe
+  | OpGt
+  | OpGe
+deriving (Eq, Debug)
 
 -- | An arithmetic operator: `+`, `-`, `*`, `/` (division), `%` (modulo).
-public export data ArithOp = AAdd | ASub | AMul | ADiv | AMod
+public export data ArithOp =
+  | AAdd
+  | ASub
+  | AMul
+  | ADiv
+  | AMod
+deriving (Eq, Debug)
 
 -- | An untyped boolean/value expression tree.  `ECol`/`ELit` are leaves;
 --   `EBin` is a comparison; `EArith` is a numeric binary op; `EAnd`/`EOr`/`ENot`
@@ -63,6 +77,7 @@ public export data SqlExpr =
   | ENot SqlExpr
   | EIsNull SqlExpr
   | ENotNull SqlExpr
+deriving (Eq, Debug)
 
 -- | The join kind: `JInner` drops unmatched left rows (SQL INNER JOIN);
 --   `JLeft` keeps every left row, null-padding the right side when no match is
@@ -442,7 +457,7 @@ validIdentGo : Array Char -> Int -> Int -> Bool
 validIdentGo chars i n =
   if i >= n then
     True
-  else if identChar (charCode chars.[i]) then
+  else if identChar (charCode chars[i]) then
     validIdentGo chars (i + 1) n
   else
     False
@@ -472,7 +487,7 @@ countDots chars i n acc =
   if i >= n then
     acc
   else
-    countDots chars (i + 1) n (if charCode chars.[i] == 46 then acc + 1 else acc)
+    countDots chars (i + 1) n (if charCode chars[i] == 46 then acc + 1 else acc)
 
 -- Split on the first '.' (caller guarantees exactly one).  Returns (before, after).
 splitOnDot : String -> (String, String)
@@ -486,7 +501,7 @@ dotIndex : Array Char -> Int -> Int -> Int
 dotIndex chars i n =
   if i >= n then
     n
-  else if charCode chars.[i] == 46 then
+  else if charCode chars[i] == 46 then
     i
   else
     dotIndex chars (i + 1) n
