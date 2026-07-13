@@ -104,9 +104,22 @@ done
 # source, and "proved nothing" must never be reported as pass OR as a compiler failure —
 # that conflation is this suite's entire reason for existing (see the header).
 #
-# Skipped when NO_STALE_CHECK=1 (build_oracles.sh's own internal invocations), and
-# naturally a no-op in CI, which always builds oracles fresh.
-if [ -z "${NO_STALE_CHECK:-}" ] && [ -d "$ROOT/test/bin" ]; then
+# ⚠️ DISABLED IN CI ON PURPOSE — mtime is the WRONG SIGNAL THERE, and this is not a
+# cop-out, it is the stronger check winning.
+#
+# CI restores test/bin from an actions/cache whose KEY IS A CONTENT HASH of compiler/**,
+# stdlib/**, runtime/** and the build scripts. A cache HIT therefore means the oracles were
+# built from exactly this source — proven by hash, not inferred from a clock. Meanwhile
+# `actions/checkout` stamps every source file with a FRESH mtime, and the cache restores the
+# binaries with their ORIGINAL (older) mtimes. So mtime says "stale" about oracles that are
+# provably current, and this check red-lit all six shards on its first CI run.
+#
+# A content-hash key is STRICTLY STRONGER than an mtime comparison: mtime can be fooled by a
+# touch, a checkout, or a clock skew; a hash cannot. Keep the weak local heuristic for local
+# trees (where there is no hash to consult) and defer to the strong one where it exists.
+#
+# Also skipped by NO_STALE_CHECK=1 (build_oracles.sh's own internal invocations).
+if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; then
   newest_src=0
   for f in $(find "$ROOT/compiler" "$ROOT/stdlib" -name '*.mdk'; \
              find "$ROOT/runtime" -name '*.c' -o -name '*.h'); do
