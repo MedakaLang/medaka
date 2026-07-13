@@ -117,6 +117,12 @@ escFrom cs i
   | otherwise = escOne (arrayGetUnsafe i cs) :: escFrom cs (i + 1)
 
 escOne : Char -> String
+-- Escapes NUL and every other C0 control char rather than passing it through raw.
+-- Its twin in printer.mdk did NOT, and `medaka fmt` consequently wrote a literal NUL
+-- byte into printer.mdk's own source — which made the file BINARY to grep, so
+-- `grep printDecl printer.mdk` silently found nothing on a file with 34 matches.
+-- See the long note at printer.mdk's escStringLit. Keep these two in lockstep.
+--
 -- Intentional cross-file duplicate of the same helper in printer.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 escOne c
@@ -125,7 +131,24 @@ escOne c
   | c == '\n' = "\\n"
   | c == '\t' = "\\t"
   | c == '\r' = "\\r"
+  | c == '\0' = "\\0"
+  | charCode c < 32 = "\\u{\{escOneHex2 (charCode c)}}"
   | otherwise = charToStr c
+
+-- Shared with printer.mdk's escSOne (which imports it). escOne/escSOne are a
+-- deliberate divergent-by-design pair, but the hex digits are not — one copy.
+export escOneHex2 : Int -> String
+escOneHex2 b = escOneHexDigit (b / 16) ++ escOneHexDigit (b % 16)
+
+escOneHexDigit : Int -> String
+escOneHexDigit d
+  | d < 10 = intToString d
+  | d == 10 = "a"
+  | d == 11 = "b"
+  | d == 12 = "c"
+  | d == 13 = "d"
+  | d == 14 = "e"
+  | otherwise = "f"
 
 -- ── More generic list/option/string/int helpers ───────────────────────────
 

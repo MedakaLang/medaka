@@ -1704,8 +1704,13 @@ runtimePanic code msg = match currentEvalLoc.value
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
 -- the abort primitive must print verbatim, never re-banner.
+-- `\u{01}` (SOH), written as an ESCAPE, not as a raw 0x01 byte. It used to be raw --
+-- `medaka fmt`'s string escaper passed control chars through untouched, so the byte
+-- survived every reformat. The same defect put a literal NUL in printer.mdk, which
+-- made that file BINARY to grep (see printer.mdk's escStringLit note). The escaper
+-- now emits \0 and \u{XX}, so this escape round-trips instead of being lowered back.
 fmtSentinel : String
-fmtSentinel = ""
+fmtSentinel = "\u{01}"
 
 appendOutput : String -> <Mut | e> Value e
 appendOutput s =

@@ -1,5 +1,5 @@
 # META
-source_lines=344
+source_lines=367
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -121,6 +121,12 @@ escFrom cs i
   | otherwise = escOne (arrayGetUnsafe i cs) :: escFrom cs (i + 1)
 
 escOne : Char -> String
+-- Escapes NUL and every other C0 control char rather than passing it through raw.
+-- Its twin in printer.mdk did NOT, and `medaka fmt` consequently wrote a literal NUL
+-- byte into printer.mdk's own source — which made the file BINARY to grep, so
+-- `grep printDecl printer.mdk` silently found nothing on a file with 34 matches.
+-- See the long note at printer.mdk's escStringLit. Keep these two in lockstep.
+--
 -- Intentional cross-file duplicate of the same helper in printer.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 escOne c
@@ -129,7 +135,24 @@ escOne c
   | c == '\n' = "\\n"
   | c == '\t' = "\\t"
   | c == '\r' = "\\r"
+  | c == '\0' = "\\0"
+  | charCode c < 32 = "\\u{\{escOneHex2 (charCode c)}}"
   | otherwise = charToStr c
+
+-- Shared with printer.mdk's escSOne (which imports it). escOne/escSOne are a
+-- deliberate divergent-by-design pair, but the hex digits are not — one copy.
+export escOneHex2 : Int -> String
+escOneHex2 b = escOneHexDigit (b / 16) ++ escOneHexDigit (b % 16)
+
+escOneHexDigit : Int -> String
+escOneHexDigit d
+  | d < 10 = intToString d
+  | d == 10 = "a"
+  | d == 11 = "b"
+  | d == 12 = "c"
+  | d == 13 = "d"
+  | d == 14 = "e"
+  | otherwise = "f"
 
 -- ── More generic list/option/string/int helpers ───────────────────────────
 
@@ -395,7 +418,11 @@ noneHeadTag = "__none__"
 (DTypeSig false "escFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "escFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escOne") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EVar "escFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escOne" (TyFun (TyCon "Char") (TyCon "String")))
-(DFunDef false "escOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\0"))) (ELit (LString "\\0")) (EIf (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u{")) (EApp (EVar "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString "}"))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig true "escOneHex2" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escOneHex2" ((PVar "b")) (EBinOp "++" (EApp (EVar "escOneHexDigit") (EBinOp "/" (EVar "b") (ELit (LInt 16)))) (EApp (EVar "escOneHexDigit") (EBinOp "%" (EVar "b") (ELit (LInt 16))))))
+(DTypeSig false "escOneHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escOneHexDigit" ((PVar "d")) (EIf (EBinOp "<" (EVar "d") (ELit (LInt 10))) (EApp (EVar "intToString") (EVar "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 10))) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 11))) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 12))) (ELit (LString "c")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 13))) (ELit (LString "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 14))) (ELit (LString "e")) (EIf (EVar "otherwise") (ELit (LString "f")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig true "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isEmptyL" ((PList)) (EVar "True"))
 (DFunDef false "isEmptyL" (PWild) (EVar "False"))
@@ -534,7 +561,11 @@ noneHeadTag = "__none__"
 (DTypeSig false "escFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "escFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "escOne") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EVar "escFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escOne" (TyFun (TyCon "Char") (TyCon "String")))
-(DFunDef false "escOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "escOne" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (ELit (LString "\\\"")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\0"))) (ELit (LString "\\0")) (EIf (EBinOp "<" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "++" (EBinOp "++" (ELit (LString "\\u{")) (EApp (EMethodRef "display") (EApp (EVar "escOneHex2") (EApp (EVar "charCode") (EVar "c"))))) (ELit (LString "}"))) (EIf (EVar "otherwise") (EApp (EVar "charToStr") (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig true "escOneHex2" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escOneHex2" ((PVar "b")) (EBinOp "++" (EApp (EVar "escOneHexDigit") (EBinOp "/" (EVar "b") (ELit (LInt 16)))) (EApp (EVar "escOneHexDigit") (EBinOp "%" (EVar "b") (ELit (LInt 16))))))
+(DTypeSig false "escOneHexDigit" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "escOneHexDigit" ((PVar "d")) (EIf (EBinOp "<" (EVar "d") (ELit (LInt 10))) (EApp (EVar "intToString") (EVar "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 10))) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 11))) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 12))) (ELit (LString "c")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 13))) (ELit (LString "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 14))) (ELit (LString "e")) (EIf (EVar "otherwise") (ELit (LString "f")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig true "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isEmptyL" ((PList)) (EVar "True"))
 (DFunDef false "isEmptyL" (PWild) (EVar "False"))
