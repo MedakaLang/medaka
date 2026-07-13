@@ -780,25 +780,12 @@ concatExpr = chainl1 atom concatOp
 concatOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 concatOp = do
   _ <- symbol "||"
-  -- WORKAROUND(B1): eta-expanded, NOT bare `EConcat`. A partially-applied data
-  -- constructor silently miscompiles under `medaka build`. Revert when B1 closes.
-  pure (l r => EConcat l r)
+  pure EConcat
 
--- NOTE the eta-expanded lambda `(l r => EArith op l r)` rather than the natural
--- partial application `EArith op`.  This is a WORKAROUND for a native-backend
--- miscompile: a partially-applied data CONSTRUCTOR (here `EArith`, arity 3,
--- given 1 argument) is silently miscompiled by `medaka build` — the value that
--- comes back is not a well-formed `EArith` node, and the next `match` on it dies
--- with `E-NONEXHAUSTIVE-MATCH`.  `medaka run` and `medaka check` are both fine,
--- so this only shows up in a NATIVE build.  Partially-applied plain FUNCTIONS are
--- unaffected; only constructors.  See `sqlite/findings/sql-parser-expr.md` (F1)
--- for the 18-line standalone repro.  Do not "simplify" this back to `EArith op`
--- until that bug is fixed — every arithmetic operator in the grammar depends on it.
 arithTok : String -> ArithOp -> Parser (SqlExpr -> SqlExpr -> SqlExpr)
 arithTok s op = do
   _ <- symbol s
-  -- WORKAROUND(B1): eta-expanded, NOT bare `EArith op`. See above. Revert when B1 closes.
-  pure (l r => EArith op l r)
+  pure (EArith op)
 
 -- An atom: a parenthesized expression, a literal, a unary minus, a CASE
 -- expression, an aggregate call, a scalar function call, or a column.

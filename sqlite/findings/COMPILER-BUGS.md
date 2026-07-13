@@ -15,7 +15,9 @@
 > **When something reports FIXED: mark it closed here, and move its repro into a real regression
 > fixture so it stays closed.**
 >
-> Snapshot at the time of writing (the SQLite dogfood branch): **10 open, 0 fixed.**
+> Snapshot: **9 open, 1 fixed.** ✅ **B1 was FIXED on `main` (`ced6342d`) while this branch was in
+> flight** — the script detected it with no bookkeeping from anyone, and its workaround-list pointed
+> at the two sites to revert (done). That is the intended lifecycle; keep using it.
 
 Consolidated from the per-agent findings files in this directory. **Every item marked ✅ VERIFIED
 was reproduced by the orchestrator on the binary**, independently of the agent that reported it —
@@ -41,7 +43,7 @@ no longer exists, which is how workarounds quietly become permanent architecture
 
 | bug | site | what to do when it closes |
 |-----|------|---------------------------|
-| **B1** | `sqlite/lib/sqlparse.mdk` (×2) | Constructors are eta-expanded (`(l r => EArith op l r)`) instead of partially applied. Restore the natural point-free form. |
+| ~~**B1**~~ | ~~`sqlite/lib/sqlparse.mdk` (×2)~~ | ✅ **DONE** — bug fixed on `main` (`ced6342d`); eta-expansions reverted to point-free `EConcat` / `EArith op`, re-verified under native `build`. |
 | **B2** | `sqlite/lib/aggregate.mdk` | `AggQuery`'s fields are `aq`-prefixed (`aqFrom`/`aqWhere`/`aqGroupCols`/`aqAggs`/`aqHaving`) **solely** to avoid colliding with `Select`'s `from`/`where_`/`groupBy`/`having`. Rename back to the natural names. |
 | **B5** | `sqlite/lib/select.mdk`, `sqlite/lib/recordfmt.mdk` | `Eq` is hand-written for `Literal` and `Cell` because `deriving (Eq)` over their `Array` field can't be built. Replace with `deriving (Eq)` — and drop the `-- lint-disable-next-line rule-hand-rolled-derivable` that silences the linter's (currently wrong) advice. |
 | **MUT** | `sqlite/lib/btree.mdk` | The overflow gather uses pure `slice`+`concat` instead of `arrayMake`+`blit`, costing **O(chunks × bytes)** instead of O(bytes). Restore the mutable gather inside a `mut` block. |
@@ -95,7 +97,12 @@ happens to contain no literal above the threshold — it is a statement about th
 
 ## P0 — SILENT WRONG ANSWERS in `medaka build` (exit 0, no diagnostic)
 
-### B1 ✅ VERIFIED — a partially-applied **data constructor** miscompiles
+### B1 — ✅✅ **CLOSED (fixed on `main`, `ced6342d`: "an under-applied data constructor built a
+malformed cell")**. Workarounds in `sqlparse.mdk` reverted to point-free; re-verified under native
+`build` (round-trip 62/62, precedence 12/12, oracles 22/0). Left here as the worked example of the
+report → fix → auto-detect → revert lifecycle.
+
+#### (historical) a partially-applied **data constructor** miscompiles
 `check` ✓ · `run` ✓ correct · **native binary prints the WRONG answer, exit 0.**
 
 Repro: `repro_pap_ctor_miscompile.mdk` (~20 lines, no stdlib, no sqlite). One file, one build:
