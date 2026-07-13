@@ -74,6 +74,55 @@ a bug the user hits later. It produced, in one night:
 - `run_gates` printing a bare **"63 failed"** on a fresh worktree — correct, but reads as
   catastrophe. Now it says *"NOT a compiler regression; you have no oracles; run this."*
 
+### 0.0.3 The checkers had the blind spot they were built to police
+
+Three findings on 2026-07-13, all the same shape, and all found by *widening* a check
+rather than by writing a new one. They are the strongest evidence yet for the thesis in
+§0.0, because each tool was **working perfectly** — within a scope it had quietly chosen
+for itself.
+
+- **The CI coverage gate certified "82/82 covered, PASS" while the entire WasmGC backend
+  ran in no CI job at all.** One of the two production backends. 4 gates, 153 fixtures.
+  Four real codegen failures (`.[i]` → the `Index` interface's `index` method, unresolvable
+  in wasm_emit's ref-mode path) had been sitting in it, unseen, because nothing was
+  looking. The gate enumerated only `test/diff_compiler_*.sh` — the family it already knew
+  about. **A completeness check that defines its own scope will always certify itself
+  complete.** Widening it immediately found four MORE uncovered gates (`bootstrap_*`: each
+  native pipeline stage == the interpreter). Real coverage was **85 of 93**, not 82/82.
+
+- **The two gates AGENTS.md tells you to run for compiler changes ran nowhere in CI.**
+  `typecheck_compiler_source.sh` and `selfcompile_fixpoint.sh` — documented as mandatory,
+  enforced by nothing but memory. That is a habit, not a gate, and habits do not survive
+  parallel agents. It cost a real bug: `export data SnapMode` exports the type
+  ABSTRACTLY, so `import tools.snapshot.{SnapMode(..)}` bound nothing and every
+  `SnapCheck`/`SnapNew`/`SnapBless` in the CLI was an **unbound variable** — which shipped
+  to main with all 82 gates green, because the emitter's ctor table is global (the
+  ill-typed source emitted a *working* binary) and `make medaka` does not gate on
+  `hadTypeErrors()`. Now a `soundness` job. Note the seed-policy subtlety: the fixpoint
+  script exits `c3a && c3b`, but C3a is a seed DRIFT detector and blocking on it is what
+  produced 41 re-mints = 40% of this repo's git history. The job hard-fails on C3b
+  (self-reproduction) and only warns on C3a.
+
+- **`medaka fmt` corrupted its own source, and it blinded `grep`.** `printer.mdk:258`
+  compares a char against NUL, so someone wrote `"\0"` — and the printer's string escaper
+  handled `\\ " \n \t \r` and passed everything else through RAW, on the stated assumption
+  (in a comment, directly above it) that "control chars beyond these do not occur in the
+  fixtures". They occurred in the formatter's own source. fmt lowered the escape back to a
+  **literal NUL byte** and kept it stable across every reformat since. A file with a NUL is
+  **binary to grep**: `grep -c printDecl printer.mdk` printed NOTHING and exited 1 on a file
+  with 35 matches — no warning, not even "Binary file matches". A confident silent lie about
+  a 1100-line compiler source, to every human and agent who greps it. **The defining bug
+  class, planted in the search path, by our own tooling.** Fixed at the class (both escapers
+  now emit `\0`/`\u{XX}`; only NUL trips grep's heuristic, measured) and gated by
+  `diff_compiler_source_bytes.sh`.
+
+And one more, in the tool meant to make all this cheap: **`test/preflight.sh` — "THE AGENT
+LOOP" — hard-failed on every compiler-source change.** It re-derived the oracle set with the
+same grep `build_oracles.sh --for` uses, but without the step that makes it correct
+(intersecting against the authoritative `ENTRIES` list). The grep matches COMMENTS, and a
+comment named a deleted oracle. Two places derived one set; only one knew the rule. There is
+now one derivation, and preflight calls it.
+
 ---
 
 ### 0.1 (historical) The first landing
