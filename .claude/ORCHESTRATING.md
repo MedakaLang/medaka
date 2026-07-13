@@ -12,11 +12,62 @@ in the session prompt; this doc is the reusable distillation.
 
 ---
 
+## 🚦 `main` IS PROTECTED. YOU CANNOT PUSH TO IT. (2026-07-13)
+
+**Everything lands through a pull request.** `git push origin main` now fails with
+`GH013: Repository rule violations`. There is **no admin bypass** — protection you can bypass
+is theatre, so it is off for everyone including the repo owner.
+
+```
+git checkout -b <topic>          # never commit on main
+... work, verify ...
+git push -u origin <topic>
+gh pr create --fill
+gh pr merge --auto --merge       # merges itself the moment all 9 checks go green
+```
+
+**Nine required checks:** the six `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`.
+Zero approvals are required, so an agent can self-merge on green — the *checks* are the gate,
+not a human.
+
+`soundness` is required ON PURPOSE and must never be dropped: it runs the compiler-source
+typecheck + the self-compile fixpoint. **All 83 gates pass on an ill-typed compiler** (the
+build does not gate on type errors) — that is exactly how a compiler with unbound constructors
+shipped to `main`. The gate shards would have waved it through.
+
+### "Require branches to be up to date" is doing the merge queue's job
+
+`strict` is ON: a PR **cannot merge unless it is up to date with `main`**. So CI runs on *your
+branch merged onto current main*, not your branch in isolation. If main advances underneath
+you, you must update and re-run. That is the whole point — and it is not a formality:
+
+- Two green branches (TMC arc + the arg-tuple removal) merged cleanly and **crashed**. Git
+  flagged 2 conflicts and silently auto-merged a THIRD break it could not see: TMC had added a
+  new caller into the very machinery the other branch was re-signing. Different lines → no
+  conflict marker.
+- Two more branches both touched `typecheck.mdk`, auto-merged fine, and their **goldens**
+  diverged — taking `main` red.
+
+**PR CI tests your branch. Only the merged result matters.** Never assume a clean auto-merge
+means agreement; see "A clean auto-merge is NOT agreement" below.
+
+### There is NO merge queue, and there cannot be one here
+
+The `merge_queue` ruleset rule is rejected by the API: **GitHub's merge queue requires an
+ORGANIZATION-owned repository.** `val-grasley/medaka` is owned by a *user* account, so the
+feature is unavailable on any plan. `strict` mode above is the mitigation — it gives the same
+correctness guarantee, serialized instead of batched (you re-run CI after each merge rather
+than testing a batch once). **If this repo ever moves to a `medaka` org, turn the merge queue
+on** — the `merge_group:` trigger is already in `ci.yml` waiting for it, and without that
+trigger a queue would deadlock (its checks would never run).
+
+---
+
 ## The core loop
 
 ```
 scope-read (bounded) → frame a precise prompt → get approval → spawn (bg, isolated worktree)
-  → VERIFY empirically → merge to local main → reconcile docs/tasks/memory → next
+  → VERIFY empirically → open a PR → CI green → merge → reconcile docs/tasks/memory → next
 ```
 
 - **Bounded scope-read.** Read just enough to write a precise prompt + STOP
