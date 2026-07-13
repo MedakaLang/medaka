@@ -152,6 +152,85 @@ jobs:
   # demanding it forced a re-mint on every emitter change — 41 re-mints, 86 MB, 40%
   # of the repo's entire git history. So here drift WARNS and a seed that can no
   # longer do its job FAILS. Re-mint at checkpoints (`make bootstrap` is strict).
+  # ── Compiler soundness: the two gates that were documented but never enforced ──
+  #
+  # AGENTS.md has always said: for a compiler `.mdk` change, run the self-compile
+  # fixpoint AND typecheck_compiler_source.sh. Neither ran in CI. They ran when an
+  # agent remembered — which is a habit, not a gate.
+  #
+  # It cost us: `snapshot.mdk` declared `export data SnapMode` (which exports a type
+  # ABSTRACTLY), medaka_cli.mdk imported `SnapMode(..)`, and every SnapCheck/SnapNew/
+  # SnapBless in the CLI was an UNBOUND VARIABLE. It shipped to main and every gate
+  # stayed green — because the emitter's ctor table is global, so the ill-typed source
+  # still emitted a working binary, and `make medaka` does not gate on hadTypeErrors().
+  # Fixed in a10c2705. The bug is not that it broke; it is that it COULDN'T be seen.
+  #
+  #   typecheck  — is the compiler source well-typed?      (the build does NOT ask)
+  #   fixpoint   — does the emitter reproduce itself?      (C3a/C3b byte-identical)
+  #
+  # These two ask questions no other job asks. `gates` runs the compiler; it never
+  # typechecks it. `seed-health` proves the seed WORKS; it never proves the current
+  # source is well-typed, nor that emission has reached a fixpoint.
+  soundness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clang libgc-dev
+      - name: Build medaka (cold bootstrap from seed)
+        run: make medaka
+
+      # typecheck_compiler_source.sh exits 2 (SKIP) when its oracle is absent. In CI
+      # a skip here is INDISTINGUISHABLE FROM A PASS — the precise bug this whole job
+      # exists to close — so build the oracle first and assert on the PASS line, not
+      # on the exit status.
+      - name: Build the typecheck oracle
+        run: FORCE=1 sh test/build_oracles.sh --build-one diagnostics_project_main
+
+      - name: Compiler source must be well-typed
+        run: |
+          bash test/typecheck_compiler_source.sh 2>&1 | tee /tmp/tc.log
+          if ! grep -q 'PASS: compiler source is type-clean' /tmp/tc.log; then
+            echo "::error::The compiler source is ILL-TYPED (or the gate skipped). The build does not gate on this — that is why the gate exists."
+            exit 1
+          fi
+
+      # The script asserts C3a AND C3b (its exit status is `c3a && c3b`), which is the
+      # right bar for a checkpoint re-mint but the WRONG bar for CI. They answer two
+      # different questions, and the SEED POLICY (test/bootstrap_from_seed.sh, and the
+      # seed-health job below) is explicit that only one of them may block:
+      #
+      #   C3b — IR1 == IR2. The compiled compiler reproduces its own output. This is
+      #         SOUNDNESS, it is independent of the seed, and it must HARD FAIL.
+      #   C3a — IR1 == the seed-bootstrapped reference. This is a DRIFT DETECTOR: it
+      #         says the checked-in seed is byte-CURRENT, not that anything is broken.
+      #
+      # Blocking on C3a would turn CI red on every emitter change until someone re-mints
+      # the seed — which is precisely the churn that produced 41 re-mints / 86 MB / 40%
+      # of this repo's git history before the policy was fixed. So: C3b errors, C3a warns.
+      #
+      # Do not "simplify" this to the script's exit status. (Also note `| tee` would mask
+      # that status anyway — assert on the verdict lines, as seed-health does.)
+      - name: Emitter must reproduce itself (C3b fixpoint; C3a drift only warns)
+        run: |
+          bash test/selfcompile_fixpoint.sh 2>&1 | tee /tmp/fp.log || true
+          # A skip is not a pass. We just installed clang+libgc, so a toolchain skip here
+          # means something is wrong, not absent.
+          if grep -q 'skipping spike' /tmp/fp.log; then
+            echo "::error::The fixpoint gate SKIPPED on a runner with a full toolchain. A skip is not a pass."
+            exit 1
+          fi
+          if ! grep -q 'C3b PASS' /tmp/fp.log; then
+            echo "::error::NO FIXPOINT: the compiled compiler does not reproduce its own output (C3b). This is a miscompile in the emitter."
+            exit 1
+          fi
+          if grep -q 'C3a FAIL' /tmp/fp.log; then
+            echo "::warning::Seed has DRIFTED from current emission (it still works, and the compiler still reaches a fixpoint). Re-mint at the next checkpoint: sh test/refresh_seed.sh"
+          fi
+
   seed-health:
     runs-on: ubuntu-latest
     timeout-minutes: 25
