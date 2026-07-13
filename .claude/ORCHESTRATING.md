@@ -117,6 +117,52 @@ at arm time so you only get new events.
 **Never merge on red, and never merge on a green *preflight*.** The full suite on the
 PR is the only authority.
 
+### Branching off an UNVERIFIED base — a judgment call, not a rule
+
+CI is now the authority, but it is also **minutes**, and agents are cheap. Waiting for
+green before spawning the next agent serializes the thing you just spent the effort to
+parallelize. So: **you MAY branch new work off a base whose CI is still running.** Do it
+deliberately, priced against the chance CI comes back red.
+
+**The question is not "is the base green?" It is "if this base turns red, what does it
+cost me?"**
+
+Cheap to be wrong (branch freely):
+- The new agent's work is **disjoint** from the risky change (different files, different
+  subsystem). A red base then gets fixed *underneath* it and the agent's branch rebases
+  cleanly, or merges as-is.
+- The base's uncertainty is in **docs, CI config, or a gate script**, not the compiler.
+- The new work is **additive new files** (a new module, a new gate) rather than an edit
+  to something the base touched.
+
+Expensive to be wrong (WAIT):
+- The new work **builds directly on** the uncertain change (e.g. the base rewrote the
+  emitter and the new agent is emitting IR through it). A red base means the agent's
+  premise is void and its work is *discarded*, not rebased.
+- The base changed **goldens or the seed**. A red there means recapture, and everything
+  downstream of it is now founded on wrong expectations.
+- You would have to **re-derive a diagnosis**, not just re-apply a diff.
+
+**Signals that the base is low-risk** (so branch away): the change was doc/config only;
+`make preflight` was green locally; the fixpoint + `typecheck_compiler_source` already
+passed on it; the diff is additive; CI has already gone green on an *earlier* commit of
+the same branch and this push was small.
+
+**Signals that it is high-risk** (so wait, or branch off the last KNOWN-GREEN commit
+instead): the emitter/`Value`/dispatch was touched; goldens moved; a shard is already
+red; the change is one an agent reported without you verifying it.
+
+**The escape hatch nobody remembers:** you can branch off the **last known-green SHA**
+rather than the branch tip. You get parallelism *and* a verified base; the cost is one
+merge later. When the tip is risky but you want to keep moving, this is usually the
+right answer and it is strictly better than either waiting or gambling.
+
+⚠️ **If you do branch off an unverified tip, say so in the agent's prompt.** Its STEP-0
+`BASE_OK` assert will happily pass against a base that CI is about to reject — the assert
+proves *ancestry*, not *correctness*. An agent that knows its base is provisional will
+STOP and report when something upstream looks wrong, instead of "fixing" your bug for you
+and tangling the two changes together.
+
 ### CI (2026-07-13)
 
 `.github/workflows/ci.yml`, GitHub-**hosted** runners (free + unlimited on a public
