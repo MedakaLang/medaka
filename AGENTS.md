@@ -106,6 +106,39 @@ byte-output builder (`emit*`/`buildArray`); neither is auto-prelude — import t
 by bare name like `import map`;
 `io.mdk` is the ergonomic layer over the `runtime.mdk` IO externs).
 
+## 🚦 How work lands: `main` is PROTECTED — you cannot push to it
+
+**Every change goes through a pull request.** `git push origin main` fails with
+`GH013: Repository rule violations`. There is **no admin bypass** — it is off for everyone,
+including the repo owner. If a push to `main` is rejected, that is the rule working, not a
+credentials problem: open a PR.
+
+```sh
+git checkout -b <topic>              # never commit on main
+# ... work; verify (see `make preflight` below) ...
+git push -u origin <topic>
+gh pr create --fill
+gh pr merge --auto --merge           # merges itself the moment all 9 checks go green
+```
+
+**Nine required checks:** the six `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`.
+**Zero approvals are required** — the *checks* are the gate, not a human, so an agent can
+self-merge on green.
+
+Two facts about this that are easy to get wrong:
+
+- **`soundness` is required on purpose.** It runs `typecheck_compiler_source.sh` + the
+  self-compile fixpoint. **All 83 gates pass on an ill-typed compiler** — `make medaka` does
+  not gate on type errors — which is exactly how a compiler with unbound constructors once
+  shipped to `main` with every gate green. The gate shards cannot catch that; `soundness` can.
+- **A PR must be up to date with `main` before it can merge** ("strict" mode). CI therefore
+  runs on *your branch merged onto current main*, not your branch alone. If `main` advances,
+  update and re-run. This is not a formality: two green branches have merged cleanly into a
+  **crashing** tree (git auto-merged a break it could not see — one branch had added a caller
+  into machinery the other was re-signing, on different lines, so no conflict marker).
+
+There is no merge queue (GitHub requires an org-owned repo; this one is user-owned).
+
 ## Build & test
 
 ```sh
