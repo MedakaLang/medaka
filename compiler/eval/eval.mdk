@@ -52,11 +52,6 @@ import support.util.{
   joinDot,
   dedup,
 }
--- stdlib `sortBy` is effect-POLYMORPHIC (`(a -> a -> <e> Ordering) -> …`), which
--- is exactly what the arraySort* prims need: their comparator is a Value closure
--- applied through `apply` (`<Mut | e>`).  List's instances live in `core`, so this
--- import drags in no new instance surface (AGENTS.md: near-free).
-import list.{sortBy}
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
 -- pipeline and does not import eval.mdk (no cycle) — verified by grep before
@@ -1916,8 +1911,6 @@ externBindings _ = [
   ("arraySetUnsafe", prim3M pArraySetUnsafe),
   ("arrayBlit", prim5M pArrayBlit),
   ("arrayFill", prim2M pArrayFill),
-  ("arraySortInPlaceBy", prim2M pArraySortInPlaceBy),
-  ("arraySortBy", prim2M pArraySortBy),
   ("Ref", prim1 pRef),
   ("setRef", prim2M pSetRef),
   ("putStr", prim1M pPutStr),
@@ -2291,37 +2284,6 @@ pArrayFill v (VArray a) =
   let _ = arrayFill v a
   VUnit
 pArrayFill _ _ = panic "arrayFill: not an Array"
-
--- arraySortInPlaceBy / arraySortBy : the comparator arrives as a Value CLOSURE,
--- so it has to be applied through `apply` (effect `<Mut | e>`) and CANNOT be
--- handed to the PURE host `arraySortInPlaceBy` extern — same reason
--- pArrayMakeWith rebuilds via a list instead of delegating.  So sort the element
--- list with the effect-polymorphic stdlib `sortBy` and write it back.
-valueToOrdering : Value e -> Ordering
-valueToOrdering (VCon "Lt" []) = Lt
-valueToOrdering (VCon "Eq" []) = Eq
-valueToOrdering (VCon "Gt" []) = Gt
-valueToOrdering _ = panic "sort comparator: did not return an Ordering"
-
-sortValues : Value e -> List (Value e) -> <Mut | e> List (Value e)
-sortValues cmp vs = sortBy (a b => valueToOrdering (apply (apply cmp a) b)) vs
-
-writeBackFrom : Array (Value e) -> Int -> List (Value e) -> <Mut | e> Unit
-writeBackFrom _ _ [] = ()
-writeBackFrom a i (v::rest) =
-  let _ = arraySetUnsafe i v a
-  writeBackFrom a (i + 1) rest
-
-pArraySortInPlaceBy : Value e -> Value e -> <Mut | e> Value e
-pArraySortInPlaceBy cmp (VArray a) =
-  let _ = writeBackFrom a 0 (sortValues cmp (arrayToListG a))
-  VUnit
-pArraySortInPlaceBy _ _ = panic "arraySortInPlaceBy: not an Array"
-
-pArraySortBy : Value e -> Value e -> <Mut | e> Value e
-pArraySortBy cmp (VArray a) =
-  VArray (arrayFromList (sortValues cmp (arrayToListG a)))
-pArraySortBy _ _ = panic "arraySortBy: not an Array"
 
 -- arrayBlit : Array a -> Int -> Array a -> Int -> Int -> <Mut> Unit
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
