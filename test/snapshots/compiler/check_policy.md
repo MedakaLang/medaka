@@ -305,7 +305,7 @@ lookupAssocL k ((n, v)::rest) = if k == n then Some v else lookupAssocL k rest
 -- already returns Atoms), recurse into the result; at TApp recurse into both
 -- sides.  Deduped/sorted by label.  Mirror mono_effects / scheme_effects, but
 -- the threaded representation is now `Atom` so the param survives to the compare.
-monoEffects : Mono -> List Atom
+monoEffects : Mono -> <Mut> List Atom
 monoEffects m = match normalize m
   TFun _ row result =>
     let atoms = effrowLabels row
@@ -319,7 +319,7 @@ monoEffects m = match normalize m
     None => sortUniqAtoms (monoEffects a ++ monoEffects b)
   _ => []
 
-schemeEffects : Scheme -> List Atom
+schemeEffects : Scheme -> <Mut> List Atom
 schemeEffects (Forall _ _ mono) = monoEffects mono
 
 -- Sort atoms by label and drop label-duplicates (first atom of a label wins;
@@ -361,7 +361,7 @@ atomLabels [] = []
 atomLabels (a::rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
-fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
+fnEffectsTable : List (String, Scheme) -> <Mut> List (String, List Atom)
 fnEffectsTable [] = []
 fnEffectsTable ((name, sch)::rest) = match schemeEffects sch
   [] => fnEffectsTable rest
@@ -851,9 +851,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "lookupAssocL" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "lookupAssocL" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAssocL" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAssocL") (EVar "k")) (EVar "rest"))))
-(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyEffect ("Mut") None (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EVar "atoms") (EApp (EVar "monoEffects") (EVar "result"))))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EApp (EVar "monoEffects") (EVar "a")) (EApp (EVar "monoEffects") (EVar "b"))))))) (arm PWild () (EListLit))))
-(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyEffect ("Mut") None (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "mono"))) (EApp (EVar "monoEffects") (EVar "mono")))
 (DTypeSig false "sortUniqAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "sortUniqAtoms" ((PVar "atoms")) (EApp (EVar "dedupAtoms") (EApp (EVar "sortAtoms") (EVar "atoms"))))
@@ -872,7 +872,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PList)) (EListLit))
 (DFunDef false "atomLabels" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "drender") (EApp (EVar "atomParam") (EVar "a")))) (EApp (EVar "atomLabels") (EVar "rest"))))
-(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyEffect ("Mut") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "fnEffectsTable" ((PList)) (EListLit))
 (DFunDef false "fnEffectsTable" ((PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EVar "schemeEffects") (EVar "sch")) (arm (PList) () (EApp (EVar "fnEffectsTable") (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EVar "fnEffectsTable") (EVar "rest"))))))
 (DTypeSig false "fnHasEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -1082,9 +1082,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "lookupAssocL" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "lookupAssocL" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAssocL" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAssocL") (EVar "k")) (EVar "rest"))))
-(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DTypeSig false "monoEffects" (TyFun (TyCon "Mono") (TyEffect ("Mut") None (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "monoEffects" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EBlock (DoLet false false (PVar "atoms") (EApp (EVar "effrowLabels") (EVar "row"))) (DoExpr (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EVar "atoms") (EApp (EVar "monoEffects") (EVar "result"))))))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EMatch (EApp (EVar "tupleSpine") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))) (arm (PCon "Some" PWild) () (EListLit)) (arm (PCon "None") () (EApp (EVar "sortUniqAtoms") (EBinOp "++" (EApp (EVar "monoEffects") (EVar "a")) (EApp (EVar "monoEffects") (EVar "b"))))))) (arm PWild () (EListLit))))
-(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
+(DTypeSig false "schemeEffects" (TyFun (TyCon "Scheme") (TyEffect ("Mut") None (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "schemeEffects" ((PCon "Forall" PWild PWild (PVar "mono"))) (EApp (EVar "monoEffects") (EVar "mono")))
 (DTypeSig false "sortUniqAtoms" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "sortUniqAtoms" ((PVar "atoms")) (EApp (EVar "dedupAtoms") (EApp (EVar "sortAtoms") (EVar "atoms"))))
@@ -1103,7 +1103,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "atomLabels" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "atomLabels" ((PList)) (EListLit))
 (DFunDef false "atomLabels" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EApp (EVar "atomLabel") (EVar "a")) (EApp (EVar "drender") (EApp (EVar "atomParam") (EVar "a")))) (EApp (EVar "atomLabels") (EVar "rest"))))
-(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
+(DTypeSig false "fnEffectsTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyEffect ("Mut") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "fnEffectsTable" ((PList)) (EListLit))
 (DFunDef false "fnEffectsTable" ((PCons (PTuple (PVar "name") (PVar "sch")) (PVar "rest"))) (EMatch (EApp (EVar "schemeEffects") (EVar "sch")) (arm (PList) () (EApp (EVar "fnEffectsTable") (EVar "rest"))) (arm (PVar "effs") () (EBinOp "::" (ETuple (EVar "name") (EVar "effs")) (EApp (EVar "fnEffectsTable") (EVar "rest"))))))
 (DTypeSig false "fnHasEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
