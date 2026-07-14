@@ -301,7 +301,7 @@ lookupAssocL k ((n, v)::rest) = if k == n then Some v else lookupAssocL k rest
 -- already returns Atoms), recurse into the result; at TApp recurse into both
 -- sides.  Deduped/sorted by label.  Mirror mono_effects / scheme_effects, but
 -- the threaded representation is now `Atom` so the param survives to the compare.
-monoEffects : Mono -> List Atom
+monoEffects : Mono -> <Mut> List Atom
 monoEffects m = match normalize m
   TFun _ row result =>
     let atoms = effrowLabels row
@@ -315,7 +315,7 @@ monoEffects m = match normalize m
     None => sortUniqAtoms (monoEffects a ++ monoEffects b)
   _ => []
 
-schemeEffects : Scheme -> List Atom
+schemeEffects : Scheme -> <Mut> List Atom
 schemeEffects (Forall _ _ mono) = monoEffects mono
 
 -- Sort atoms by label and drop label-duplicates (first atom of a label wins;
@@ -357,7 +357,7 @@ atomLabels [] = []
 atomLabels (a::rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
-fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
+fnEffectsTable : List (String, Scheme) -> <Mut> List (String, List Atom)
 fnEffectsTable [] = []
 fnEffectsTable ((name, sch)::rest) = match schemeEffects sch
   [] => fnEffectsTable rest
