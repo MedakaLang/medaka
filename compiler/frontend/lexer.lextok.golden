@@ -183,9 +183,6 @@ PIPE
 UPPER "TEffect"
 NEWLINE
 PIPE
-UPPER "TInternal"
-NEWLINE
-PIPE
 UPPER "TFunction"
 NEWLINE
 PIPE
@@ -634,11 +631,6 @@ IDENT "tokenToString"
 UPPER "TEffect"
 EQUAL
 STRING "EFFECT"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TInternal"
-EQUAL
-STRING "INTERNAL"
 NEWLINE
 IDENT "tokenToString"
 UPPER "TFunction"
@@ -1175,11 +1167,6 @@ IDENT "describeToken"
 UPPER "TEffect"
 EQUAL
 STRING "`effect`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TInternal"
-EQUAL
-STRING "`internal`"
 NEWLINE
 IDENT "describeToken"
 UPPER "TFunction"
@@ -1943,11 +1930,6 @@ IDENT "keywordOrIdent"
 STRING "effect"
 EQUAL
 UPPER "TEffect"
-NEWLINE
-IDENT "keywordOrIdent"
-STRING "internal"
-EQUAL
-UPPER "TInternal"
 NEWLINE
 IDENT "keywordOrIdent"
 STRING "function"

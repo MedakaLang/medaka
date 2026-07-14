@@ -206,20 +206,17 @@ seedEffectDomains _ = setRef
   ]
 
 -- register a label's domain from its `effect` decl: Some "Prefix" ⇒ Prefix;
--- None/internal ⇒ atomic.  Internal labels are never parameterized (forced PUnit).
-registerEffectDomain : String -> Option String -> Bool -> Unit
-registerEffectDomain name domain isInternal =
-  setRef
-    effectDomains
-    ((name, domainParam domain isInternal)::effectDomains.value)
+-- None ⇒ atomic.
+registerEffectDomain : String -> Option String -> Unit
+registerEffectDomain name domain =
+  setRef effectDomains ((name, domainParam domain)::effectDomains.value)
 
--- the ⊤-param a declared label carries: internal/atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
-domainParam : Option String -> Bool -> Param
-domainParam _ True = PUnit
-domainParam (Some "Prefix") False = PPrefix None
-domainParam (Some "Set") False = PSet None
-domainParam (Some "Product") False = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
-domainParam _ False = PUnit
+-- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
+domainParam : Option String -> Param
+domainParam (Some "Prefix") = PPrefix None
+domainParam (Some "Set") = PSet None
+domainParam (Some "Product") = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
+domainParam _ = PUnit
 
 -- re-seed to the builtins, then register every `effect …` decl in the program.
 populateEffectDomains : List Decl -> Unit
@@ -229,8 +226,8 @@ populateEffectDomains decls =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain isInternal)::rest) =
-  let _ = registerEffectDomain name domain isInternal
+populateGo ((DEffect _ name domain)::rest) =
+  let _ = registerEffectDomain name domain
   populateGo rest
 populateGo (_::rest) = populateGo rest
 

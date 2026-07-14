@@ -1647,8 +1647,8 @@ printDecl (DImpl { pub, iface, tys, reqs, methods }) = Cat
 printDecl (DUse pub path _) = Cat
   (if pub then text "export " else Nil)
   (Cat (text "import ") (printUsePath path))
-printDecl (DEffect pub name domain isInternal) =
-  Cat (effDeclHead pub isInternal) (Cat (text name) (effDomainDoc domain))
+printDecl (DEffect pub name domain) =
+  Cat (effDeclHead pub) (Cat (text name) (effDomainDoc domain))
 printDecl (DProp pub propName propParams propBody) = Cat
   (if pub then text "export " else Nil)
   (Cat
@@ -1799,10 +1799,9 @@ effDomainDoc None = Nil
 effDomainDoc (Some d) = Cat (text " ") (text d)
 
 -- header for an effect declaration: internal/export/plain effect keyword.
-effDeclHead : Bool -> Bool -> Doc
-effDeclHead _ True = text "internal effect "
-effDeclHead True False = text "export effect "
-effDeclHead False False = text "effect "
+effDeclHead : Bool -> Doc
+effDeclHead True = text "export effect "
+effDeclHead False = text "effect "
 
 ppConstr : Constraint -> String
 ppConstr (Constraint iface args) =

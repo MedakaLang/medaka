@@ -27,8 +27,9 @@
 --
 -- No stdlib imports (compiler isolation): generic helpers come from
 -- support.util; the total Expr traversal is hand-rolled here (rather than reusing
--- desugar's `Expr -> Expr` engine) precisely so the CHANGED flag threads purely —
--- `setRef` carries `<Mut>`, which would leak into the transform's pure type.
+-- desugar's `Expr -> Expr` engine) precisely so the CHANGED flag threads purely
+-- (an in-place mutable-cell approach would leak a host capability into the
+-- transform's otherwise-pure type).
 
 import frontend.ast.{
   Ty(..),
@@ -98,7 +99,7 @@ allCodemods = [effectLabelsCodemod]
 effectLabelsCodemod : Codemod
 effectLabelsCodemod = Codemod {
   name = "effect-labels",
-  descr = "strip and/or rename effect-row labels (<Mut>, <Panic>, …)",
+  descr = "strip and/or rename effect-row labels (e.g. <Rand>, <Net>, …)",
   argHelp = "--strip L1,L2   --rename Old=New   (repeatable)",
   mk = mkEffectLabels,
   warn = warnEffectLabels,
@@ -241,7 +242,7 @@ mapTyInDecl f (DData vis n tps variants ders) =
   let (vs2, c) = mapVariantsB f variants
   (DData vis n tps vs2 ders, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
-mapTyInDecl _ (DEffect pub n dom isIntern) = (DEffect pub n dom isIntern, False)
+mapTyInDecl _ (DEffect pub n dom) = (DEffect pub n dom, False)
 mapTyInDecl f (DProp pub n params body) =
   let (params2, c1) = mapPropParamsB f params
   let (body2, c2) = mapTyInExpr f body
@@ -589,9 +590,9 @@ parseEffectArgs ("--rename"::v::rest) acc = match splitOnChar '=' v
       parseEffectArgs rest ((old, ARename nw)::acc)
   _ => Err "--rename expects Old=New, got '\{v}'"
 parseEffectArgs ["--strip"] _ =
-  Err "--strip requires a value (e.g. --strip Mut,Panic)"
+  Err "--strip requires a value (e.g. --strip Rand,Net)"
 parseEffectArgs ["--rename"] _ =
-  Err "--rename requires a value (e.g. --rename Panic=Exit)"
+  Err "--rename requires a value (e.g. --rename Old=New)"
 parseEffectArgs (x::_) _ = Err "unknown argument '\{x}'"
 
 prependDrops : List String -> List (String, EffAction) -> List (String, EffAction)
@@ -675,7 +676,7 @@ declEffectWarns _ [] = []
 declEffectWarns acts (d::ds) = declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
-declEffectWarn acts (DEffect _ name _ _) = match lookupAssoc name acts
+declEffectWarn acts (DEffect _ name _) = match lookupAssoc name acts
   None => []
   Some _ => [
     "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched"

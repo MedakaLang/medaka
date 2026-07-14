@@ -1464,13 +1464,13 @@ runCheckPolicyCmd argv = match parsePolicyArgs argv
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability
 -- manifest as a TOML artifact.  Given a source file and an optional --fn name
 -- (default "main"), typechecks the file, reads the named fn's inferred effect
--- row, filters to security labels (dropping Mut/Panic), and prints:
+-- row, and prints:
 --
 --   [package.capabilities]
 --   Net = "idp.example.com/api"
 --   Stdout = true
 --
--- Security/internal rule: isSecurity l = not (l == "Mut" || l == "Panic").
+-- Every effect label is a host capability, so the whole verified row is emitted.
 -- Labels sorted ascending (stable output).  Prefix-param → string TOML value;
 -- ⊤/Unit param → boolean `true`.
 --

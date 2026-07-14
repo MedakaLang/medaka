@@ -344,7 +344,7 @@ doStmtDictSites : DoStmt -> List (Ref (List Route))
 doStmtEVars : DoStmt -> List String
 doStmtSites : DoStmt -> List (Ref Route)
 domainIsTupleOfArity : Mono -> Int -> Bool
-domainParam : Option String -> Bool -> Param
+domainParam : Option String -> Param
 drender : Param -> String
 drenderN : Param -> String
 dropPairs : Int -> List (String, Int) -> List (String, Int)
@@ -986,7 +986,7 @@ registerConstraintRegs : List (String, List (String, Mono)) -> Unit
 registerData : TcEnv -> Decl -> TcEnv
 registerDispatchMonos : String -> List Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> String -> Unit
-registerEffectDomain : String -> Option String -> Bool -> Unit
+registerEffectDomain : String -> Option String -> Unit
 registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> Unit
 registerImplMethodDicts : String -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) -> Unit

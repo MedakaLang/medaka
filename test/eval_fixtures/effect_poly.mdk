@@ -1,6 +1,6 @@
 -- Effect-polymorphism erasure (STAGE2-DESIGN §2.3).  `runTwice`'s effect row `e`
--- is a quantified VARIABLE — instantiated to <Mut> at the `bump` call site (it
--- mutates a Ref) and to the empty/pure row at the `square` call site.  After
+-- is a quantified VARIABLE — instantiated to distinct rows at distinct call sites
+-- (the Ref-mutating `bump` vs the pure `square`).  After
 -- erasure both instantiations flow through the SAME combinator code: effects
 -- carry no runtime witness, so an effect-polymorphic function is represented
 -- identically to a monomorphic one.  Diffed against the tree-walker by eval /
@@ -17,5 +17,5 @@ square x = x * x
 
 main =
   let r = Ref 7
-  -- effectful instantiation (e = <Mut>) vs pure instantiation (e = {})
+  -- Ref-mutating instantiation vs pure instantiation (e = {})
   (runTwice (bump r) 0, runTwice square 3, r.value)

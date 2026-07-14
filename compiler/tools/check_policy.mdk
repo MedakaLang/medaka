@@ -560,13 +560,11 @@ listIsEmpty _ = False
 
 -- ── WS-1c: capability manifest emission ─────────────────────────────────────
 -- Emit a module's verified capability manifest as a TOML artifact.
--- M(module) = filter_security(verified-row of the entry point) — §7 of
--- EFFECTS-SEMANTICS.md.
+-- M(module) = verified-row of the entry point — §7 of EFFECTS-SEMANTICS.md.
 --
--- Security/internal classification (§7, lines ~441-466):
---   internal: Mut, Panic (purity/divergence tracking; no host counterpart)
---   security: everything else (all ioAlias labels + every user `effect Foo`)
--- Rule: isSecurity l = not (l == "Mut" || l == "Panic")
+-- Every effect label is a host capability now (the old internal-only `Mut`/`Panic`
+-- purity labels were removed 2026-07-14), so the whole verified row goes in the
+-- manifest — there is no longer a class of labels to filter out.
 --
 -- TOML value rendering:
 --   PPrefix (Some s) → key = "s"   (concrete prefix/param as a string value)
@@ -579,13 +577,6 @@ listIsEmpty _ = False
 -- compiled .wasm binary as a custom section.  Touches wasm_emit.mdk; left
 -- as a seam.  Add a `-- WS-1c wasm: encode M as custom section bytes` marker
 -- in backend/wasm_emit.mdk when that work is picked up.
-
--- Is a label a security label (goes in the manifest)?
--- All labels except Mut and Panic are security.  User-declared `effect Foo`
--- defaults to security (no host override path exists yet), so the rule is
--- simply: drop the two known internal labels.
-isSecurity : String -> Bool
-isSecurity l = not (l == "Mut" || l == "Panic")
 
 -- Render one atom as a TOML key-value line.
 -- PPrefix (Some s) → 'Label = "s"'
@@ -627,28 +618,17 @@ lowerChar "S" = "s"
 lowerChar "P" = "p"
 lowerChar c = c
 
--- Filter atoms to security labels only, then render TOML.
--- Returns the full TOML block (empty string if no security effects).
+-- Render the whole capability row as TOML.
+-- Returns the full TOML block (bare header if no effects).
 export manifestToml : List Atom -> String
+manifestToml [] = "[package.capabilities]\n"
 manifestToml atoms =
-  let secAtoms = filterSecurity atoms
-  match secAtoms
-    [] => "[package.capabilities]\n"
-    _ =>
-      let lines = map atomToToml secAtoms
-      "[package.capabilities]\n" ++ joinTomlLines lines
+  let lines = map atomToToml atoms
+  "[package.capabilities]\n" ++ joinTomlLines lines
 
 joinTomlLines : List String -> String
 joinTomlLines [] = ""
 joinTomlLines (x::xs) = "\{x}\n\{joinTomlLines xs}"
-
-filterSecurity : List Atom -> List Atom
-filterSecurity [] = []
-filterSecurity (a::rest) =
-  if isSecurity (atomLabel a) then
-    a :: filterSecurity rest
-  else
-    filterSecurity rest
 
 -- Parse args for `medaka manifest <file.mdk> [--fn name]`.
 -- Default fn name: "main" (the conventional entry point for manifest extraction;
@@ -665,7 +645,7 @@ parseManifestGo (f::rest) None fn = parseManifestGo rest (Some f) fn
 parseManifestGo (f::rest) (file@(Some _)) fn = parseManifestGo rest file fn
 
 -- Run manifest extraction: typecheck the file, read the named fn's inferred
--- effect row, filter to security labels, return TOML.
+-- effect row, return TOML.
 -- Returns (toml, fnEffects) so the caller can also drive round-trip validation.
 export runManifest : String -> String -> String -> String -> String
 runManifest rtSrc coreSrc src fnName =
@@ -686,8 +666,7 @@ runManifest rtSrc coreSrc src fnName =
 -- Returns a comma-joined string suitable for --allow.
 export manifestToAllowStr : List Atom -> String
 manifestToAllowStr atoms =
-  let secAtoms = filterSecurity atoms
-  let toks = map atomToAllowTok secAtoms
+  let toks = map atomToAllowTok atoms
   joinWith "," toks
 
 atomToAllowTok : Atom -> String
@@ -725,4 +704,4 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let fnEffects = match lookupAssocL fnName effTable
     None => []
     Some e => e
-  filterSecurity fnEffects
+  fnEffects

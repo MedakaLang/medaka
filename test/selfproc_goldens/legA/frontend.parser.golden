@@ -343,7 +343,6 @@ parseImpl : Bool -> Parser Decl
 parseImport : Bool -> Parser Decl
 parseInfix : Parser Expr
 parseInterface : Bool -> Bool -> Parser Decl
-parseInternalEffect : Parser Decl
 parseInterp : Parser Expr
 parseKvBlockElem : Parser KvItem
 parseKvField : Parser KvItem

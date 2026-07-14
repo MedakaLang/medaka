@@ -1886,7 +1886,6 @@ parseDecl = do
     TTest => parseTest False
     TBench => parseBench False
     TEffect => parseEffect False
-    TInternal => parseInternalEffect
     TInterface => parseInterface False False
     TImpl => parseImpl False
     TDefault => afterDefault False
@@ -2320,7 +2319,7 @@ parseEffect pub = do
   name <- upperNameP
   dom <- effDomainP
   skipNewlines
-  pure (DEffect pub name dom False)
+  pure (DEffect pub name dom)
 
 effDomainP : Parser (Option String)
 effDomainP = do
@@ -2332,15 +2331,6 @@ effDomainFor (TUpper d) = do
   advance
   pure (Some d)
 effDomainFor _ = pure None
-
--- `internal effect Mut` — purity/discipline label; never granted/parameterized.
-parseInternalEffect : Parser Decl
-parseInternalEffect = do
-  expectTok TInternal
-  expectTok TEffect
-  name <- upperNameP
-  skipNewlines
-  pure (DEffect False name None True)
 
 -- ── interface declarations ───────────────────────────────────────────────
 parseInterface : Bool -> Bool -> Parser Decl

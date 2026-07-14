@@ -4,10 +4,6 @@ EFFECT
 UPPER "Net"
 UPPER "Prefix"
 NEWLINE
-INTERNAL
-EFFECT
-UPPER "Mut"
-NEWLINE
 EFFECT
 UPPER "Stdout"
 NEWLINE
@@ -215,7 +211,6 @@ NEWLINE
 EOF
 === AST ===
 effect Net Prefix
-internal effect Mut
 effect Stdout
 extern netGet : String -> <Net "a.com/foo"> String
 fetch : String -> <Net "a.com/foo"> String

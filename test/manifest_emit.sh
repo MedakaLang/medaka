@@ -4,10 +4,9 @@
 # WS-1c of docs/design/EFFECTS-CONFORMANCE-ROADMAP.md.  Verifies:
 #   1. TOML golden output: correct key=value rendering (Prefix param → string,
 #      ⊤ param → true).
-#   2. Internal-label drop: Mut/Panic NEVER appear in the manifest.
-#   3. Security-label inclusion: Stdout, Net, etc. DO appear.
-#   4. Round-trip accept: manifest-derived --allow tokens → check-policy rc 0.
-#   5. Tightened reject: narrowed param (non-matching prefix) → check-policy rc 1.
+#   2. Multi-label ordering: a two-capability row emits BOTH labels, sorted ascending.
+#   3. Round-trip accept: manifest-derived --allow tokens → check-policy rc 0.
+#   4. Tightened reject: narrowed param (non-matching prefix) → check-policy rc 1.
 #
 # Native-only gate (no OCaml oracle for `manifest` — it's a new native subcommand).
 # Usage: sh test/manifest_emit.sh
@@ -49,34 +48,35 @@ Net = "idp.example.com/api"'
   fi
 fi
 
-# ── case 2: manifest_mixed.mdk — Mut dropped, Stdout retained ────────────────
-# entry has inferred <Mut, Stdout>; manifest must be:
+# ── case 2: manifest_mixed.mdk — multi-label row, both labels sorted ──────────
+# entry has inferred <Clock, Stdout>; manifest must be:
 #   [package.capabilities]
+#   Clock = true
 #   Stdout = true
-# (Mut is internal → dropped; Stdout is security → retained; labels sorted ascending)
+# (both are ⊤-param host capabilities → true; labels sorted ascending)
 MIXED_FIX="$ROOT/test/check_policy_fixtures/manifest_mixed.mdk"
 [ -f "$MIXED_FIX" ] || { fail_case "mixed-golden" "missing $MIXED_FIX"; }
 
 if [ -f "$MIXED_FIX" ]; then
   got="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$MIXED_FIX" --fn entry 2>&1)"
   expected='[package.capabilities]
+Clock = true
 Stdout = true'
   if [ "$got" = "$expected" ]; then
-    ok_case "mixed-golden (Mut dropped, Stdout retained)"
+    ok_case "mixed-golden (multi-label row, sorted ascending)"
   else
     fail_case "mixed-golden" "expected: $expected; got: $got"
   fi
 
-  # Assert Mut does NOT appear
-  if printf '%s' "$got" | grep -qF "Mut"; then
-    fail_case "mut-absent" "Mut appeared in manifest: $got"
+  # Assert both labels appear
+  if printf '%s' "$got" | grep -qF "Clock"; then
+    ok_case "clock-present (Clock capability in manifest)"
   else
-    ok_case "mut-absent (internal Mut not in manifest)"
+    fail_case "clock-present" "Clock missing from manifest: $got"
   fi
 
-  # Assert Stdout DOES appear
   if printf '%s' "$got" | grep -qF "Stdout"; then
-    ok_case "stdout-present (security Stdout in manifest)"
+    ok_case "stdout-present (Stdout capability in manifest)"
   else
     fail_case "stdout-present" "Stdout missing from manifest: $got"
   fi

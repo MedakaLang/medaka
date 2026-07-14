@@ -83,7 +83,6 @@ public export data Token =
   | TTest
   | TBench
   | TEffect
-  | TInternal
   | TFunction
   | TPlus
   | TMinus
@@ -184,7 +183,6 @@ tokenToString TProp = "PROP"
 tokenToString TTest = "TEST"
 tokenToString TBench = "BENCH"
 tokenToString TEffect = "EFFECT"
-tokenToString TInternal = "INTERNAL"
 tokenToString TFunction = "FUNCTION"
 tokenToString TPlus = "PLUS"
 tokenToString TMinus = "MINUS"
@@ -288,7 +286,6 @@ describeToken TProp = "`prop`"
 describeToken TTest = "`test`"
 describeToken TBench = "`bench`"
 describeToken TEffect = "`effect`"
-describeToken TInternal = "`internal`"
 describeToken TFunction = "`function`"
 describeToken TPlus = "`+`"
 describeToken TMinus = "`-`"
@@ -436,7 +433,6 @@ keywordOrIdent "prop" = TProp
 keywordOrIdent "test" = TTest
 keywordOrIdent "bench" = TBench
 keywordOrIdent "effect" = TEffect
-keywordOrIdent "internal" = TInternal
 keywordOrIdent "function" = TFunction
 keywordOrIdent s = TIdent s
 

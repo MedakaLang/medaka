@@ -1,22 +1,22 @@
--- WS-1c manifest gate fixture.
--- `compute` is pure (no effects); its inferred row is empty.
--- `writeOut` uses Stdout (security, ⊤ param → manifest: Stdout = true).
--- `mutate` uses Mut (internal → must NOT appear in manifest).
--- `entry` calls both writeOut and mutate, so its row is <Mut, Stdout>.
--- The manifest of `entry` must be:
+-- WS-1c manifest gate fixture: multi-label manifest ORDERING.
+-- Every effect label is a host capability, so a function's whole verified row
+-- lands in the manifest — this fixture checks that a two-label row emits BOTH
+-- entries, sorted ascending.
+-- `writeOut` uses Stdout (putStr → <Stdout>).
+-- `tick` uses Clock (wallTimeSec → <Clock>).
+-- `entry` calls both, so its inferred row is <Clock, Stdout>.
+-- The manifest of `entry` must be (labels sorted ascending; both ⊤-param → true):
 --   [package.capabilities]
+--   Clock = true
 --   Stdout = true
--- (Mut dropped as internal; Stdout retained as security; labels sorted ascending.)
 
 writeOut : String -> <Stdout> Unit
 writeOut s = putStr s
 
-mutate : <Mut> Unit
-mutate =
-  let r = ref 0
-  setRef r 1
+tick : <Clock> Float
+tick = wallTimeSec ()
 
-entry : String -> <Mut, Stdout> Unit
+entry : String -> <Clock, Stdout> Unit
 entry s =
-  let _ = mutate
+  let _ = tick
   writeOut s
