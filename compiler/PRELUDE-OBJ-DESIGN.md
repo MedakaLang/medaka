@@ -245,9 +245,10 @@ the original reason for prelude DCE no longer applies.
    the program half (`declare`s for prelude symbols, `external` for prelude globals)
    and `clangLink` links the object with `-Wl,--gc-sections` / `-Wl,-dead_strip`.
    Unset or missing file → the exact current behavior, byte for byte.
-3. **`test/diff_compiler_prelude_obj.sh`** — the soundness gate, modelled on
-   `test/diff_compiler_rt_obj.sh`: for a fixture sample at both opt levels, build once
-   inline and once with `MEDAKA_PRELUDE_OBJ` and assert **identical program OUTPUT**.
+3. **A soundness gate — to be added as `diff_compiler_prelude_obj.sh`** (does not exist yet;
+   this is the proposal), modelled on `test/diff_compiler_rt_obj.sh`: for a fixture sample at
+   both opt levels, build once inline and once with `MEDAKA_PRELUDE_OBJ` and assert
+   **identical program OUTPUT**.
    (Note: unlike `rt_obj`, byte-identical *binaries* are **not** achievable — the two
    paths deliberately hand clang different IR — so the gate must compare behavior, and
    say so in its header.)
