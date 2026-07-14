@@ -319,11 +319,24 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 24 | operator-named shadow (`==` etc.) | — | n/a — operator occurrences resolve through the desugared method-call path, not bare-`EVar` funDef intersection | — | — | — | — | UNREACHABLE |
 | 25 | definer · **CONSTRAINED** standalone (`size : Num a => a -> a`) · no-impl recv | S9 | RLocal **carrying the standalone's dicts** → 4 | `d10_definer_constrained.mdk` | 4 | 4 | accept | **OK** (fixed 2026-07-13, S-1 / clause S9; was `check` green + `run` E-PANIC + `build` printing a raw heap pointer) |
 | 26 | definer · method of a **multi-TYPARAM interface** (`interface Ix a i`) · applied | S8 (does not cover it) | dispatch 4; standalone 3 | `d11_definer_multityparam_iface.mdk` | **E-PANIC `unknown op '*'`** | 4,3 | accepts | **BUG** (**S-3**; `run` diverges from check+build — an S7 violation. Every entry point gates on `singleParamIfaceMethod`, which counts interface TYPE PARAMS, not method params, so this shadow bypasses the machinery entirely. `check`/`build` happen to be per-receiver CORRECT. Pinned KNOWN-BAD by the gate.) |
+| 27 | definer · **UNGROUNDED (numeric-literal) receiver** whose grounded head HAS a live prelude impl | S2+S5 | standalone → 3, 30 | `d12_definer_ungrounded_literal.mdk` | 3,30 | 3,30 | accept | **OK** (the P0-20 cell, now INVERTED: `eq 1 2` = 3, was `False`. `groundShadowReceiver` grounds the literal to the standalone's domain BEFORE the S2 question, so check/run/build ask it about the same head) |
+| 28 | **importer** · **UNGROUNDED (numeric-literal) receiver** · prelude iface + the Fork-1 control | S2+S5 | standalone → True, False; **method** → False, True | `i5_importer_ungrounded_literal/` | T,F,F,T | T,F,F,T | accept | **OK** (fixed 2026-07-14, **S1-RESIDUAL-B** — was `Type mismatch: Int literal vs Int Int` on ALL THREE paths, PRE-EXISTING, and invisible to the corpus because i1/i3/i4 all use GROUNDED receivers. The last two lines are the Fork-1 control: an importer shadow still dispatches on a live-impl head) |
 
-**Tally: 19 OK · 1 BUG (row 26 / S-3) · 3 UNTESTED-NO-FIXTURE · 1 UNREACHABLE ·
-2 baselines.** Rows 10/12/13/14 were BUG until P0-19; row 25 was BUG until S-1.
-Row 26 is the only open cell, and it is a **loud** divergence (`run` panics),
-not a silent wrong answer.
+**Tally: 21 OK · 1 BUG (row 26 / S-3) · 3 UNTESTED-NO-FIXTURE · 1 UNREACHABLE ·
+2 baselines.** Rows 10/12/13/14 were BUG until P0-19; row 25 was BUG until S-1;
+**row 28 was BUG until 2026-07-14 (S1-RESIDUAL-B) — and it was PRE-EXISTING, not
+introduced by the inversion.** Row 26 is the only open cell, and it is a **loud**
+divergence (`run` panics), not a silent wrong answer.
+
+> ⭐ **Rows 27–28 exist because the corpus was blind to an entire AXIS.** Every
+> importer fixture used a **grounded** receiver, so the gate graded **18/0 while
+> row 28 was broken**. A numeric literal is `Num a => a` — **ungrounded** at
+> inference time — so the routing decision is taken before the receiver has a head
+> tycon, and the type is then resolved against a receiver that has *since changed*.
+> **That is the P0-20 root cause, and it is the root cause of this entire arc.**
+> When adding a shadow fixture, vary the receiver's **PROVENANCE** — literal /
+> grounded / dict-bound — not just its type. **A gate that cannot express a cell
+> cannot defend it.**
 
 > **The 2026-07-14 inversion moved exactly five rows — 5, 6, 7, 8, 14 — all
 > ACCEPT → located REJECT.** The change is **monotonically more rejecting** for
@@ -635,18 +648,52 @@ this row's `build` failure (it saw a GC OOM) to the missing dict.
 > working behavior, so if it is a live latent bug the gate will catch it the
 > moment it bites.
 
-### S1-RESIDUAL-B — importer shadow on an UNGROUNDED receiver under-applies on `run`
+### S1-RESIDUAL-B — importer shadow on an UNGROUNDED receiver — ✅ **CLOSED 2026-07-14**
 
-`import prov.{size}` where `prov.size : Num a => a -> a` shadows a local interface method,
-called as `size 3`: **`build` and `wasm` are correct (4); `run` still under-applies.**
+**The filed diagnosis was right, and its own suggested fix was the fix.** But the residual
+**understated the blast radius**, and that is the part worth remembering.
 
-Cause: a `Num` literal receiver is not grounded when `inferShadowApp` asks
-`headTyconMono tx`, so it never reaches that function's *standalone* arm (which does compute
-the dicts) and falls to its ordinary-app arm. The occurrence is then recorded by the generic
-`recordRLocalSite`, whose dict slots come back empty for this cross-module case. `build` is
-unaffected because an importer shadow reaches the standalone through the **mangled symbol**
-via `inferDefinerShadowApp`, which does compute them. `inferShadowApp` lacks the
-`groundShadowReceiver` call that P0-20 added to `inferDefinerShadowApp` — that asymmetry is
-the likely root.
-*Fix location:* `compiler/types/typecheck.mdk` `inferShadowApp` (add the P0-20 grounding) or
-`recordRLocalSite`'s cross-module slot resolution.
+*As filed:* `import prov.{size}` where `prov.size : Num a => a -> a` shadows a local
+interface method, called as `size 3` — "`build` and `wasm` are correct (4); `run` still
+under-applies." Read that way it sounds like a **constrained**-standalone dict-threading
+nit on one engine.
+
+*What it actually was:* the root breaks an **unconstrained** standalone at **`check`**, on
+**all three paths**, whenever the shadowed method is **higher-kinded** — which every
+`Foldable`/`Mappable`/`Traversable` method is:
+
+```medaka
+-- prov.mdk:  export isEmpty : Int -> Bool   (isEmpty n = n == 0)
+import prov.{isEmpty}
+main = println (debug (isEmpty 0))    -- Type mismatch: Int literal vs Int Int
+```
+
+The **`Int Int`** is the tell. A numeric literal is `Num a => a`, i.e. **ungrounded** at
+inference time, so `inferShadowApp`'s `headTyconMono tx` said `None`, it never reached its
+*standalone* arm, and it fell to the ordinary-app arm — which types against the **method**
+scheme the env rebound the name to. The prelude's `Foldable.isEmpty : t a -> Bool` is
+higher-kinded, so unifying `t a` against the literal's tyvar solved `t := Int, a := Int`.
+The user's imported `isEmpty : Int -> Bool` was **never consulted**.
+
+**Cause (as filed):** `inferShadowApp` lacked the `groundShadowReceiver` call that P0-20 gave
+its definer peer `inferDefinerShadowApp`. **Fix (as filed):** add it — ground the ungrounded
+receiver to the *imported* standalone's declared domain (`importerShadowDomain`) **before**
+asking the S2 impl question, so typecheck and the post-inference route resolver ask it about
+the **same head**.
+
+> ⚠️ **This is the P0-20 shape again, one arm over: ONE DECISION, DERIVED TWICE, AT TWO
+> DIFFERENT TIMES, OVER A RECEIVER THAT CHANGED IN BETWEEN.** It is the recurring root cause
+> of this entire arc. When you touch shadow routing, the question to ask is never "is the
+> receiver the right *type*" but "**is the receiver GROUNDED YET, and will it still be the
+> same thing when the route is stamped?**"
+
+**Why no gate caught it, and the lesson.** Every importer fixture — `i1`, `i3`, `i4` — used a
+**grounded** receiver (a `Box`, a `Tok`, a `List`). **Not one used a bare numeric literal**,
+so the corpus was *structurally blind* to the cell and the gate graded **18/0 over a real
+break**. Rows 27–28 (`d12`, `i5`) close it, and `i5` carries the Fork-1 control in the same
+fixture. **A gate that cannot express a cell cannot defend it: vary the receiver's
+PROVENANCE — literal / grounded / dict-bound — not just its type.**
+
+*Fixed in:* `compiler/types/typecheck.mdk` `inferShadowApp` + `importerShadowDomain`.
+Fork 1 is untouched: grounding only decides **which head** the per-receiver rule is applied
+to; a grounded head with a live impl still dispatches (`isEmpty [1, 2]` → `Foldable.isEmpty`).

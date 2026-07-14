@@ -58,7 +58,28 @@
 # faithfully implemented the OLD S2; the inversion abolishes the rule it
 # implemented. This is NOT a regression -- see the row`s label.
 #
-# ⚠️ i1/i3/i4 (IMPORTER shadows) and d11 MUST NOT MOVE. Fork 1 confines the
+# ###################################################################
+# # THE CORPUS WAS STRUCTURALLY BLIND TO THE UNGROUNDED RECEIVER    #
+# ###################################################################
+# d12 and i5 (added 2026-07-14) close a hole that let this gate grade 18/0 over a
+# REAL BREAK. Every importer fixture -- i1, i3, i4 -- uses a GROUNDED receiver (a
+# Box, a Tok, a List). Not one used a bare numeric literal. But a numeric literal
+# is `Num a => a`: it is UNGROUNDED at inference time and only unifies to Int
+# LATER. So the routing decision is taken on a receiver that HAS NO HEAD TYCON
+# YET, and the type is then resolved against a receiver that has SINCE CHANGED.
+#
+# That shape -- ONE DECISION, DERIVED TWICE, AT TWO DIFFERENT TIMES, OVER A VALUE
+# THAT CHANGED IN BETWEEN -- is the recurring root cause of this whole arc (P0-20;
+# .claude/workstreams/COMPILER-SOUNDNESS.md). It bit `inferShadowApp` exactly as
+# S1-RESIDUAL-B predicted it would, and the symptom was a *higher-kinded* unify
+# accident: the prelude's `Foldable.isEmpty : t a -> Bool` swallowed the literal as
+# `t := Int, a := Int`, giving the tell-tale `Type mismatch: Int literal vs Int Int`.
+#
+# ⭐ A GATE THAT CANNOT EXPRESS A CELL CANNOT DEFEND IT. When adding a shadow
+# fixture, vary the receiver's PROVENANCE (literal / grounded / dict-bound), not
+# just its type -- that axis is where every silent bug in this arc has lived.
+#
+# ⚠️ i1/i3/i4/i5 (IMPORTER shadows) and d11 MUST NOT MOVE. Fork 1 confines the
 # inversion to DEFINER shadows: an `import` is a SIBLING scope, not an inner
 # one. Inverting importers would break the everyday `import map` pattern
 # (i4: `isEmpty [1,2]` must still reach `Foldable.isEmpty`). During
@@ -143,7 +164,9 @@ i1_importer_local_iface/main.mdk|I1/I2 importer shadow, LOCAL interface (S2/S6)|
 i3_importer_imported_iface/main.mdk|I3 importer shadow, iface+impl in a THIRD module (S6)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3\n4
 i4_importer_prelude_iface/main.mdk|I4 importer shadow of a PRELUDE method (S2, stdlib shape)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nFalse\nFalse\nTrue
 d10_definer_constrained.mdk|D10 definer, CONSTRAINED standalone dict-passed via RLocal (S9, was the S-1 bug)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|4
-d11_definer_multityparam_iface.mdk|D11 KNOWN-BAD: multi-typaram interface bypasses shadow machinery (S-3, doc residual)|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|4\n3'
+d11_definer_multityparam_iface.mdk|D11 KNOWN-BAD: multi-typaram interface bypasses shadow machinery (S-3, doc residual)|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|4\n3
+d12_definer_ungrounded_literal.mdk|D12 definer, UNGROUNDED numeric-literal receiver whose grounded head HAS a live prelude impl (S2+S5; the P0-20 cell, now inverted: the standalone wins, 3 not False)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3\n30
+i5_importer_ungrounded_literal/main.mdk|I5 importer, UNGROUNDED numeric-literal receiver (S2+S5; regression for S1-RESIDUAL-B, closed 2026-07-14) + the FORK-1 control in the same fixture (isEmpty [1,2] must still reach Foldable)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nFalse\nFalse\nTrue'
 
 # --- Coverage self-audit: every top-level fixture unit (a .mdk file, or a
 # directory) in FIXDIR must appear in TABLE, or this gate silently re-creates

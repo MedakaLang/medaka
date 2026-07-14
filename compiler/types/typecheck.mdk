@@ -5007,17 +5007,43 @@ singleParamIfaceMethod name = match lookupAssoc name methodIfaceParamsRef.value
 -- stamp the route RLocal (when marked); if the receiver DOES have an impl (or its head
 -- is not yet concrete) fall through to ordinary dispatch (typed against the method
 -- scheme the env rebound the name to).  Mirror of lib/typecheck.ml:2308-2329.
--- ⚠️ S1-RESIDUAL-B (open; SHADOW-SEMANTICS.md §6): this function has NO
--- groundShadowReceiver call, unlike its definer peer inferDefinerShadowApp (which P0-20
--- gave one).  So an UNGROUNDED receiver — a bare `Num` literal, `size 3` — never reaches
--- the standalone arm below (headTyconMono is None), falls to the ordinary-app arm, and its
--- dicts come back empty from the generic recordRLocalSite.  Net effect: an IMPORTED
--- constrained standalone shadow is correct on `build`/`wasm` (they reach it through the
--- MANGLED symbol via inferDefinerShadowApp, which does ground + dict it) but still
--- UNDER-APPLIES on `run`.  Fix: add the P0-20 grounding here.
+--
+-- ✅ S1-RESIDUAL-B CLOSED (2026-07-14).  This function used to have NO groundShadowReceiver
+-- call, unlike its definer peer inferDefinerShadowApp (which P0-20 gave one).  An UNGROUNDED
+-- receiver — a bare `Num` LITERAL is the everyday case, it is `Num a => a`, not `Int` — so
+-- never reached the standalone arm below (headTyconMono is None) and fell to the
+-- ordinary-app arm, which types against the METHOD scheme the env rebound the name to.
+--
+--   -- lib/prov.mdk:  export isEmpty : Int -> Bool
+--   import lib.prov.{isEmpty}
+--   main = println (debug (isEmpty 0))     -- Type mismatch: Int literal vs Int Int
+--
+-- The `Int Int` in that message is the tell: the PRELUDE's `Foldable.isEmpty : t a -> Bool`
+-- is higher-kinded, so unifying `t a` with the literal's tyvar solved `t := Int, a := Int`.
+-- The user's imported `isEmpty : Int -> Bool` was never consulted.  (Filed as "under-applies
+-- on run" for a CONSTRAINED standalone; the root is broader — it breaks an UNCONSTRAINED one
+-- at `check` too, whenever the shadowed method is higher-kinded.)
+--
+-- Fix, exactly as filed: ground an ungrounded receiver to the IMPORTED standalone's declared
+-- domain BEFORE asking the S2 impl question, so typecheck and the post-inference route
+-- resolver ask it about the SAME head.  That symmetry is the whole P0-20 lesson — a decision
+-- derived twice, at two different times, over a receiver that changed in between.
+--
+-- ⚠️ NOT affected by the S2 inversion: an IMPORTER shadow keeps the per-receiver rule
+-- (Fork 1).  Grounding only decides WHICH head the rule is applied to; a grounded head with
+-- a live impl still dispatches (`isEmpty [1, 2]` → `Foldable.isEmpty`, fixture i4).
 inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> <Mut> Mono
 inferShadowApp env mname tagRefs f x =
+  -- capture the application's loc BEFORE inferring the argument (which moves currentLoc),
+  -- so a domain mismatch localizes to the call site, not the argument.
+  let dloc = currentLoc.value
   let tx = infer env x
+  -- The dict-var carve-out (S5/Fork 2) applies to importer shadows too: a receiver that is
+  -- the enclosing fn's `=>`-bound constraint var DISPATCHES through that dict, so it must
+  -- NOT be ground to the standalone's domain (that would monomorphise the written signature).
+  -- groundShadowReceiver is also inert on an already-grounded receiver, so i1/i3/i4 (all
+  -- concrete receivers) are byte-identical.
+  let _ = groundShadowReceiver (importerShadowDomain mname) tx (definerReceiverIsDictVar mname tx) dloc
   match headTyconMono tx
     Some head => if implExistsForHead shadowKeyTableRef.value mname head then inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
     else match lookupAssoc mname shadowStandaloneSchemesRef.value
@@ -5039,6 +5065,23 @@ inferShadowApp env mname tagRefs f x =
         r
       None => inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
     None => inferApp (envAlphaLets env) (EApp f x) (infer env f) tx
+
+-- S1-RESIDUAL-B: the IMPORTED standalone's declared domain — the first arrow domain of the
+-- scheme stashed in shadowStandaloneSchemesRef (the concrete-head pick made per module by
+-- checkModuleFullImpl).  The importer peer of shadowDomainFor's mangled arm, and it must NOT
+-- be `lookupVar env mname`: env1 rebound the bare name to the interface METHOD, which is the
+-- very scheme whose higher-kinded domain caused the bug.
+--
+-- None (⇒ grounding is a no-op) when the name has no stashed standalone scheme, or when that
+-- standalone's own first parameter is itself polymorphic (`f : a -> Bool`) — unifying a bare
+-- tyvar domain with an ungrounded receiver leaves it ungrounded anyway, so the caller's
+-- headTyconMono still says None and the old ordinary-app arm runs, byte-identically.
+importerShadowDomain : String -> <Mut> Option Mono
+importerShadowDomain mname = match lookupAssoc mname shadowStandaloneSchemesRef.value
+  None => None
+  Some s => match normalize (instantiate s)
+    TFun a _ _ => Some a
+    _ => None
 
 -- S-1 (importer half): re-record each of the importer shadow's route refs as an
 -- RLocalSite carrying the imported standalone's own constraint dicts, so
