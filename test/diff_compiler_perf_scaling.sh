@@ -345,7 +345,7 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck"
 # Ceilings gate r2. They are set with real headroom over the observed spread
 # (match r2 3.23-3.36, listlit r2 3.39-3.55 across 3 batches) because a ratio at
 # these small absolute times is the least stable number this gate computes.
-KNOWN_SLOW_TIME="match:typecheck listlit:typecheck"
+KNOWN_SLOW_TIME=""   # drained by #115 (union-find path compression): match 6.0s->0.11s, listlit 5.3s->0.06s
 KNOWN_TCEIL_match_typecheck="4.6";    KNOWN_TFIXED_match_typecheck="2.60"
 KNOWN_TCEIL_listlit_typecheck="4.8";  KNOWN_TFIXED_listlit_typecheck="2.60"
 
@@ -425,10 +425,26 @@ for shape in bindings match listlit nesting xref; do
     fi
 
     # RULE 4 — the per-stage floor. Under it, the ratio is noise: SKIP, loudly.
+    #
+    # ⚠️ BUT A LEDGERED STAGE MAY NOT SKIP. Dropping below the floor is not an
+    # absence of signal for a KNOWN_SLOW_TIME entry — it IS the signal: the stage
+    # got so fast it is no longer measurable, which is exactly what "fixed" looks
+    # like. Skipping here would let a stale ledger entry rot behind a green gate,
+    # and "a ledger that cannot notice the bug is fixed" is a skip-list — the very
+    # thing this ratchet exists to not be. (Caught for real: #115's fix took
+    # `match:typecheck` from 6.0 s to 75 ms, under the floor, and the first cut of
+    # this gate reported "0 known-superlinear, 0 regressed" and exited 0.)
     below="$(awk -v v="$s3" -v f="$TIME_FLOOR" 'BEGIN{print (v + 0 < f + 0) ? 1 : 0}')"
     if [ "$below" = "1" ]; then
       ms3="$(awk -v v="$s3" 'BEGIN{printf "%.0f", v*1000}')"
       msf="$(awk -v f="$TIME_FLOOR" 'BEGIN{printf "%.0f", f*1000}')"
+      if is_known_time "${shape}:${st}"; then
+        fail=$((fail+1))
+        time_lines="${time_lines}           time ${st}: ** PROMOTE: now too FAST to time-gate ** ${ms3} ms at N=${n3} < ${msf} ms floor
+           Remove \"${shape}:${st}\" from KNOWN_SLOW_TIME — the bug is FIXED.
+"
+        continue
+      fi
       time_lines="${time_lines}           time ${st}: SKIP — too small to time-gate: ${ms3} ms at N=${n3} < ${msf} ms floor
 "
       continue
