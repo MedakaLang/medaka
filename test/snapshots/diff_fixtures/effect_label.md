@@ -20,8 +20,8 @@ handler k = get k
 main : <IO> Unit
 main = println "effect labels ok"
 # DESUGAR
-(DEffect false "KV" None false)
-(DEffect false "Log" None false)
+(DEffect false "KV" None)
+(DEffect false "Log" None)
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
@@ -30,8 +30,8 @@ main = println "effect labels ok"
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect labels ok"))))
 # MARK
-(DEffect false "KV" None false)
-(DEffect false "Log" None false)
+(DEffect false "KV" None)
+(DEffect false "Log" None)
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))

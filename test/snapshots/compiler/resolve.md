@@ -1,5 +1,5 @@
 # META
-source_lines=2416
+source_lines=2418
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -309,8 +309,6 @@ checkType cur env (TyConstrained cs t) = flatMap (checkConstraint cur env) cs
 builtInEffects : List String
 builtInEffects = [
   "IO",
-  "Mut",
-  "Panic",
   "Rand",
   "Stdout",
   "Stderr",
@@ -970,7 +968,7 @@ dataRecordNames (_::rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _)::rest) = n :: effectNames rest
+effectNames ((DEffect _ n _)::rest) = n :: effectNames rest
 effectNames ((DAttrib _ d)::rest) = effectNames (d::rest)
 effectNames (_::rest) = effectNames rest
 
@@ -1557,7 +1555,11 @@ ppResError (UnknownConstructor n _ s) = match s
 ppResError (UnknownType n _ s) = match s
   Some sug => "Unknown type: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
   None => "Unknown type: " ++ n
-ppResError (UnknownEffect n _) = "Unknown effect: " ++ n
+ppResError (UnknownEffect n _) =
+  if n == "Mut" || n == "Panic" then
+    "Unknown effect: \{n} — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"
+  else
+    "Unknown effect: " ++ n
 ppResError (UnknownField n _) = "Unknown field: " ++ n
 ppResError (FieldNotInRecord f r _) =
   "Unknown field: \{f}. Record '\{r}' has no field '\{f}'"
@@ -2183,7 +2185,7 @@ expIfaceMethodsDirect (_::rest) = expIfaceMethodsDirect rest
 
 expEffectsDirect : List Decl -> List String
 expEffectsDirect [] = []
-expEffectsDirect ((DEffect True n _ _)::rest) = n :: expEffectsDirect rest
+expEffectsDirect ((DEffect True n _)::rest) = n :: expEffectsDirect rest
 expEffectsDirect (_::rest) = expEffectsDirect rest
 
 reExpEffects : ModuleExports -> List ModuleExports -> List Decl -> List String
@@ -2489,7 +2491,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "labels"))) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EVar "cur")) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Mut")) (ELit (LString "Panic")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -2741,7 +2743,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effectNames" ((PList)) (EListLit))
-(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
+(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "effectNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -2991,7 +2993,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "ppResError" ((PCon "UnboundVariableExported" (PVar "n") (PVar "m") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unbound variable: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ". (Did you forget to 'import "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ".{"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "}'?)"))))
 (DFunDef false "ppResError" ((PCon "UnknownConstructor" (PVar "n") PWild (PVar "s"))) (EMatch (EVar "s") (arm (PCon "Some" (PVar "sug")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown constructor: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ". Did you mean '"))) (EApp (EVar "display") (EVar "sug"))) (ELit (LString "'"))) (EApp (EApp (EVar "haskellNote") (EVar "n")) (EVar "sug")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "Unknown constructor: ")) (EVar "n")))))
 (DFunDef false "ppResError" ((PCon "UnknownType" (PVar "n") PWild (PVar "s"))) (EMatch (EVar "s") (arm (PCon "Some" (PVar "sug")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown type: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ". Did you mean '"))) (EApp (EVar "display") (EVar "sug"))) (ELit (LString "'"))) (EApp (EApp (EVar "haskellNote") (EVar "n")) (EVar "sug")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "Unknown type: ")) (EVar "n")))))
-(DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n")))
+(DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Mut"))) (EBinOp "==" (EVar "n") (ELit (LString "Panic")))) (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown effect: ")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"))) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n"))))
 (DFunDef false "ppResError" ((PCon "UnknownField" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown field: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "FieldNotInRecord" (PVar "f") (PVar "r") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown field: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ". Record '"))) (EApp (EVar "display") (EVar "r"))) (ELit (LString "' has no field '"))) (EApp (EVar "display") (EVar "f"))) (ELit (LString "'"))))
 (DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
@@ -3209,7 +3211,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "expIfaceMethodsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest")))
 (DTypeSig false "expEffectsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expEffectsDirect" ((PList)) (EListLit))
-(DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
+(DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
 (DFunDef false "expEffectsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EVar "rest")))
 (DTypeSig false "reExpEffects" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reExpEffects" ((PVar "coreExp") (PVar "known") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "overPubUse") (EVar "coreExp")) (EVar "known")) (EVar "reExpEffectsFrom"))) (EApp (EVar "pubUsePaths") (EVar "prog"))))
@@ -3357,7 +3359,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "labels"))) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EVar "cur")) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Mut")) (ELit (LString "Panic")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
+(DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -3609,7 +3611,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "effectNames" ((PList)) (EListLit))
-(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
+(DFunDef false "effectNames" ((PCons (PCon "DEffect" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "effectNames") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "effectNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -3859,7 +3861,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "ppResError" ((PCon "UnboundVariableExported" (PVar "n") (PVar "m") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unbound variable: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ". (Did you forget to 'import "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ".{"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "}'?)"))))
 (DFunDef false "ppResError" ((PCon "UnknownConstructor" (PVar "n") PWild (PVar "s"))) (EMatch (EVar "s") (arm (PCon "Some" (PVar "sug")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown constructor: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ". Did you mean '"))) (EApp (EMethodRef "display") (EVar "sug"))) (ELit (LString "'"))) (EApp (EApp (EVar "haskellNote") (EVar "n")) (EVar "sug")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "Unknown constructor: ")) (EVar "n")))))
 (DFunDef false "ppResError" ((PCon "UnknownType" (PVar "n") PWild (PVar "s"))) (EMatch (EVar "s") (arm (PCon "Some" (PVar "sug")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown type: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ". Did you mean '"))) (EApp (EMethodRef "display") (EVar "sug"))) (ELit (LString "'"))) (EApp (EApp (EVar "haskellNote") (EVar "n")) (EVar "sug")))) (arm (PCon "None") () (EBinOp "++" (ELit (LString "Unknown type: ")) (EVar "n")))))
-(DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n")))
+(DFunDef false "ppResError" ((PCon "UnknownEffect" (PVar "n") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "Mut"))) (EBinOp "==" (EVar "n") (ELit (LString "Panic")))) (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown effect: ")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"))) (EBinOp "++" (ELit (LString "Unknown effect: ")) (EVar "n"))))
 (DFunDef false "ppResError" ((PCon "UnknownField" (PVar "n") PWild)) (EBinOp "++" (ELit (LString "Unknown field: ")) (EVar "n")))
 (DFunDef false "ppResError" ((PCon "FieldNotInRecord" (PVar "f") (PVar "r") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Unknown field: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ". Record '"))) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString "' has no field '"))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString "'"))))
 (DFunDef false "ppResError" ((PCon "DuplicateDefinition" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
@@ -4077,7 +4079,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 (DFunDef false "expIfaceMethodsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest")))
 (DTypeSig false "expEffectsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expEffectsDirect" ((PList)) (EListLit))
-(DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
+(DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
 (DFunDef false "expEffectsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EVar "rest")))
 (DTypeSig false "reExpEffects" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reExpEffects" ((PVar "coreExp") (PVar "known") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "overPubUse") (EVar "coreExp")) (EVar "known")) (EVar "reExpEffectsFrom"))) (EApp (EVar "pubUsePaths") (EVar "prog"))))

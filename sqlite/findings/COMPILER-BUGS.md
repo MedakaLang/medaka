@@ -57,8 +57,8 @@ no longer exists, which is how workarounds quietly become permanent architecture
 | **B1w** | `sqlite/lib/sqlparse.mdk` (×2) | ⚠️ **STILL NEEDED — for WasmGC only.** `main`'s `ced6342d` fixed this in the LLVM emitter; the **WasmGC emitter still fails to emit** a partially-applied constructor. Revert the eta-expansions only when B1 is fixed in **both** backends. |
 | **B2** | `sqlite/lib/aggregate.mdk` | ⭐ **B2 IS NOW CLOSED — this revert is OWED.** `AggQuery`'s fields are `aq`-prefixed (`aqFrom`/`aqWhere`/`aqGroupCols`/`aqAggs`/`aqHaving`) **solely** to avoid colliding with `Select`'s `from`/`where_`/`groupBy`/`having`. Rename back to the natural names. |
 | **B5** | `sqlite/lib/select.mdk`, `sqlite/lib/recordfmt.mdk` | `Eq` is hand-written for `Literal` and `Cell` because `deriving (Eq)` over their `Array` field can't be built. Replace with `deriving (Eq)` — and drop the `-- lint-disable-next-line rule-hand-rolled-derivable` that silences the linter's (currently wrong) advice. |
-| **MUT** | `sqlite/lib/btree.mdk` | The overflow gather uses pure `slice`+`concat` instead of `arrayMake`+`blit`, costing **O(chunks × bytes)** instead of O(bytes). Restore the mutable gather inside a `mut` block. |
-| **MUT** | `sqlite/lib/recordenc.mdk` | `beSintBytes` duplicates stdlib `bytebuilder.emitBeSint` purely to keep `<Mut>` out of `encodeRecord`'s signature. Delete it and call `bytebuilder`. |
+| **MUT** | `sqlite/lib/btree.mdk` | The overflow gather uses pure `slice`+`concat` instead of `arrayMake`+`blit`, costing **O(chunks × bytes)** instead of O(bytes). ✅ **UNBLOCKED — `<Mut>` removed 2026-07-14** (labels are host capabilities now; no purity contagion). The mutable gather no longer needs a `mut` block (that block was rejected) — restore `arrayMake`+`blit` directly. |
+| **MUT** | `sqlite/lib/recordenc.mdk` | `beSintBytes` duplicated stdlib `bytebuilder.emitBeSint` purely to keep `<Mut>` out of `encodeRecord`'s signature. ✅ **RESOLVED — `<Mut>` removed 2026-07-14**; the signature concern is gone. Delete `beSintBytes` and call `bytebuilder`. |
 
 ## The theme worth reading first
 
@@ -292,17 +292,21 @@ old spelling. Wants one repo-wide sweep.
 
 ---
 
-## Language design (not a bug — a decision)
+## Language design (not a bug — a decision) — ✅ RESOLVED 2026-07-14
 
-**`<Mut>` effect masking.** Two independent authors hit the same wall: `<Mut>` is contagious, so a
-pure function cannot use a local mutable buffer, and allocate→fill→freeze is unavailable to pure
-code. Costs paid: a duplicated stdlib encoder, and an O(chunks × bytes) gather where O(bytes) was
-available. Investigating it turned up a **spec defect**: `EFFECTS-SEMANTICS.md:448` classifies
-`Mut` as "purity tracking", but allocation and reads are both pure, so a **pure-typed function
-observably returns two different answers across a mutation** (`repro_mut_not_purity.mdk`).
+**`<Mut>` effect masking — MOOTED by removing `Mut`.** Two independent authors hit the same wall:
+`<Mut>` was contagious, so a pure function could not use a local mutable buffer, and
+allocate→fill→freeze was unavailable to pure code. Costs paid: a duplicated stdlib encoder, and an
+O(chunks × bytes) gather where O(bytes) was available. Investigating it turned up a **spec defect**
+(issue **#61**): `Mut` was classified as "purity tracking", but allocation and reads are both pure, so
+a **pure-typed function observably returned two different answers across a mutation**.
 
-Full analysis, recommendation, and the rejected alternative with its three counterexamples:
-**[`MUT-SCOPING-DESIGN.md`](../../docs/design/MUT-SCOPING-DESIGN.md)**. Surfaced in PLAN.md as a workstream.
+**Resolution (2026-07-14):** the `Mut`/`Panic` effect labels and the whole internal-label class were
+**removed** from the language — effect labels are host capabilities only, and purity is no longer
+tracked as an effect. The `mut` masking block proposed in `MUT-SCOPING-DESIGN.md` was **rejected** in
+favor of removal. The reproductions `repro_mut_closure_launder.mdk` and `repro_mut_not_purity.mdk`
+were **deleted** (their bug class no longer exists), and issue **#61 was closed as mooted**. The two
+**MUT** workaround rows above are now unblocked reverts, not open blockers.
 
 ---
 

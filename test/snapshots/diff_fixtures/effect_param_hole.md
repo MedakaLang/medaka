@@ -27,14 +27,14 @@ fetch _ = netGet "a.com/foo"
 main : <IO> Unit
 main = println "effect hole ok"
 # DESUGAR
-(DEffect false "Net" (Some "Prefix") false)
+(DEffect false "Net" (Some "Prefix"))
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*")) None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect hole ok"))))
 # MARK
-(DEffect false "Net" (Some "Prefix") false)
+(DEffect false "Net" (Some "Prefix"))
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*")) None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))

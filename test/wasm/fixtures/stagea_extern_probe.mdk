@@ -4,8 +4,8 @@ import array
 extern bitAnd : Int -> Int -> Int
 extern shiftLeft : Int -> Int -> Int
 extern shiftRight : Int -> Int -> Int
-extern arrayBlit : Array a -> Int -> Array a -> Int -> Int -> <Mut> Unit
-extern arrayFill : a -> Array a -> <Mut> Unit
+extern arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
+extern arrayFill : a -> Array a -> Unit
 
 main =
   -- varint-style: 3 continuation bytes -> value 16385

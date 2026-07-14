@@ -2,6 +2,6 @@ main : <IO> Unit
 greet : String -> <IO> Unit
 readAll : <IO> String
 runState : <e> a
-combine : <IO, Mut> Unit
+combine : <IO, Rand> Unit
 withTail : <IO | e> a
 pureFn : Int -> Int

@@ -305,8 +305,6 @@ checkType cur env (TyConstrained cs t) = flatMap (checkConstraint cur env) cs
 builtInEffects : List String
 builtInEffects = [
   "IO",
-  "Mut",
-  "Panic",
   "Rand",
   "Stdout",
   "Stderr",
@@ -966,7 +964,7 @@ dataRecordNames (_::rest) = dataRecordNames rest
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _ _)::rest) = n :: effectNames rest
+effectNames ((DEffect _ n _)::rest) = n :: effectNames rest
 effectNames ((DAttrib _ d)::rest) = effectNames (d::rest)
 effectNames (_::rest) = effectNames rest
 
@@ -1553,7 +1551,11 @@ ppResError (UnknownConstructor n _ s) = match s
 ppResError (UnknownType n _ s) = match s
   Some sug => "Unknown type: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
   None => "Unknown type: " ++ n
-ppResError (UnknownEffect n _) = "Unknown effect: " ++ n
+ppResError (UnknownEffect n _) =
+  if n == "Mut" || n == "Panic" then
+    "Unknown effect: \{n} — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"
+  else
+    "Unknown effect: " ++ n
 ppResError (UnknownField n _) = "Unknown field: " ++ n
 ppResError (FieldNotInRecord f r _) =
   "Unknown field: \{f}. Record '\{r}' has no field '\{f}'"
@@ -2179,7 +2181,7 @@ expIfaceMethodsDirect (_::rest) = expIfaceMethodsDirect rest
 
 expEffectsDirect : List Decl -> List String
 expEffectsDirect [] = []
-expEffectsDirect ((DEffect True n _ _)::rest) = n :: expEffectsDirect rest
+expEffectsDirect ((DEffect True n _)::rest) = n :: expEffectsDirect rest
 expEffectsDirect (_::rest) = expEffectsDirect rest
 
 reExpEffects : ModuleExports -> List ModuleExports -> List Decl -> List String

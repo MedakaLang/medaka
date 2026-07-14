@@ -1,5 +1,5 @@
 # META
-source_lines=684
+source_lines=685
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -31,8 +31,9 @@ stages=DESUGAR,MARK
 --
 -- No stdlib imports (compiler isolation): generic helpers come from
 -- support.util; the total Expr traversal is hand-rolled here (rather than reusing
--- desugar's `Expr -> Expr` engine) precisely so the CHANGED flag threads purely —
--- `setRef` carries `<Mut>`, which would leak into the transform's pure type.
+-- desugar's `Expr -> Expr` engine) precisely so the CHANGED flag threads purely
+-- (an in-place mutable-cell approach would leak a host capability into the
+-- transform's otherwise-pure type).
 
 import frontend.ast.{
   Ty(..),
@@ -102,7 +103,7 @@ allCodemods = [effectLabelsCodemod]
 effectLabelsCodemod : Codemod
 effectLabelsCodemod = Codemod {
   name = "effect-labels",
-  descr = "strip and/or rename effect-row labels (<Mut>, <Panic>, …)",
+  descr = "strip and/or rename effect-row labels (e.g. <Rand>, <Net>, …)",
   argHelp = "--strip L1,L2   --rename Old=New   (repeatable)",
   mk = mkEffectLabels,
   warn = warnEffectLabels,
@@ -245,7 +246,7 @@ mapTyInDecl f (DData vis n tps variants ders) =
   let (vs2, c) = mapVariantsB f variants
   (DData vis n tps vs2 ders, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
-mapTyInDecl _ (DEffect pub n dom isIntern) = (DEffect pub n dom isIntern, False)
+mapTyInDecl _ (DEffect pub n dom) = (DEffect pub n dom, False)
 mapTyInDecl f (DProp pub n params body) =
   let (params2, c1) = mapPropParamsB f params
   let (body2, c2) = mapTyInExpr f body
@@ -593,9 +594,9 @@ parseEffectArgs ("--rename"::v::rest) acc = match splitOnChar '=' v
       parseEffectArgs rest ((old, ARename nw)::acc)
   _ => Err "--rename expects Old=New, got '\{v}'"
 parseEffectArgs ["--strip"] _ =
-  Err "--strip requires a value (e.g. --strip Mut,Panic)"
+  Err "--strip requires a value (e.g. --strip Rand,Net)"
 parseEffectArgs ["--rename"] _ =
-  Err "--rename requires a value (e.g. --rename Panic=Exit)"
+  Err "--rename requires a value (e.g. --rename Old=New)"
 parseEffectArgs (x::_) _ = Err "unknown argument '\{x}'"
 
 prependDrops : List String -> List (String, EffAction) -> List (String, EffAction)
@@ -679,7 +680,7 @@ declEffectWarns _ [] = []
 declEffectWarns acts (d::ds) = declEffectWarn acts d ++ declEffectWarns acts ds
 
 declEffectWarn : List (String, EffAction) -> Decl -> List String
-declEffectWarn acts (DEffect _ name _ _) = match lookupAssoc name acts
+declEffectWarn acts (DEffect _ name _) = match lookupAssoc name acts
   None => []
   Some _ => [
     "'effect \{name}' is declared here but effect-labels targets \{name}; the declaration is left untouched"
@@ -696,7 +697,7 @@ declEffectWarn _ _ = []
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))
 (DTypeSig false "effectLabelsCodemod" (TyCon "Codemod"))
-(DFunDef false "effectLabelsCodemod" () (ERecordCreate "Codemod" ((fa "name" (ELit (LString "effect-labels"))) (fa "descr" (ELit (LString "strip and/or rename effect-row labels (<Mut>, <Panic>, …)"))) (fa "argHelp" (ELit (LString "--strip L1,L2   --rename Old=New   (repeatable)"))) (fa "mk" (EVar "mkEffectLabels")) (fa "warn" (EVar "warnEffectLabels")))))
+(DFunDef false "effectLabelsCodemod" () (ERecordCreate "Codemod" ((fa "name" (ELit (LString "effect-labels"))) (fa "descr" (ELit (LString "strip and/or rename effect-row labels (e.g. <Rand>, <Net>, …)"))) (fa "argHelp" (ELit (LString "--strip L1,L2   --rename Old=New   (repeatable)"))) (fa "mk" (EVar "mkEffectLabels")) (fa "warn" (EVar "warnEffectLabels")))))
 (DTypeSig true "codemodName" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodName" ((PRec "Codemod" ((rf "name" None)) true)) (EVar "name"))
 (DTypeSig true "codemodDescr" (TyFun (TyCon "Codemod") (TyCon "String")))
@@ -743,7 +744,7 @@ declEffectWarn _ _ = []
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DData" (PVar "vis") (PVar "n") (PVar "tps") (PVar "variants") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "variants"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "tps")) (EVar "vs2")) (EVar "ders")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
-(DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "isIntern"))) (ETuple (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "isIntern")) (EVar "False")))
+(DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (ETuple (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "False")))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
@@ -865,8 +866,8 @@ declEffectWarn _ _ = []
 (DFunDef false "parseEffectArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "parseEffectArgs" ((PCons (PLit (LString "--strip")) (PCons (PVar "v") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseEffectArgs") (EVar "rest")) (EApp (EApp (EVar "prependDrops") (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "v"))) (EVar "acc"))))
 (DFunDef false "parseEffectArgs" ((PCons (PLit (LString "--rename")) (PCons (PVar "v") (PVar "rest"))) (PVar "acc")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "="))) (EVar "v")) (arm (PList (PVar "old") (PVar "nw")) () (EIf (EBinOp "||" (EBinOp "==" (EVar "old") (ELit (LString ""))) (EBinOp "==" (EVar "nw") (ELit (LString "")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--rename expects Old=New, got '")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "'")))) (EApp (EApp (EVar "parseEffectArgs") (EVar "rest")) (EBinOp "::" (ETuple (EVar "old") (EApp (EVar "ARename") (EVar "nw"))) (EVar "acc"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--rename expects Old=New, got '")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "'")))))))
-(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--strip"))) PWild) (EApp (EVar "Err") (ELit (LString "--strip requires a value (e.g. --strip Mut,Panic)"))))
-(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--rename"))) PWild) (EApp (EVar "Err") (ELit (LString "--rename requires a value (e.g. --rename Panic=Exit)"))))
+(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--strip"))) PWild) (EApp (EVar "Err") (ELit (LString "--strip requires a value (e.g. --strip Rand,Net)"))))
+(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--rename"))) PWild) (EApp (EVar "Err") (ELit (LString "--rename requires a value (e.g. --rename Old=New)"))))
 (DFunDef false "parseEffectArgs" ((PCons (PVar "x") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown argument '")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "'")))))
 (DTypeSig false "prependDrops" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))))))
 (DFunDef false "prependDrops" ((PList) (PVar "acc")) (EVar "acc"))
@@ -904,7 +905,7 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarns" (PWild (PList)) (EListLit))
 (DFunDef false "declEffectWarns" ((PVar "acts") (PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")) (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "ds"))))
 (DTypeSig false "declEffectWarn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
+(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
 (DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")))
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))
 # MARK
@@ -917,7 +918,7 @@ declEffectWarn _ _ = []
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))
 (DTypeSig false "effectLabelsCodemod" (TyCon "Codemod"))
-(DFunDef false "effectLabelsCodemod" () (ERecordCreate "Codemod" ((fa "name" (ELit (LString "effect-labels"))) (fa "descr" (ELit (LString "strip and/or rename effect-row labels (<Mut>, <Panic>, …)"))) (fa "argHelp" (ELit (LString "--strip L1,L2   --rename Old=New   (repeatable)"))) (fa "mk" (EVar "mkEffectLabels")) (fa "warn" (EVar "warnEffectLabels")))))
+(DFunDef false "effectLabelsCodemod" () (ERecordCreate "Codemod" ((fa "name" (ELit (LString "effect-labels"))) (fa "descr" (ELit (LString "strip and/or rename effect-row labels (e.g. <Rand>, <Net>, …)"))) (fa "argHelp" (ELit (LString "--strip L1,L2   --rename Old=New   (repeatable)"))) (fa "mk" (EVar "mkEffectLabels")) (fa "warn" (EVar "warnEffectLabels")))))
 (DTypeSig true "codemodName" (TyFun (TyCon "Codemod") (TyCon "String")))
 (DFunDef false "codemodName" ((PRec "Codemod" ((rf "name" None)) true)) (EVar "name"))
 (DTypeSig true "codemodDescr" (TyFun (TyCon "Codemod") (TyCon "String")))
@@ -964,7 +965,7 @@ declEffectWarn _ _ = []
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DData" (PVar "vis") (PVar "n") (PVar "tps") (PVar "variants") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "variants"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "tps")) (EVar "vs2")) (EVar "ders")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
-(DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "isIntern"))) (ETuple (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "isIntern")) (EVar "False")))
+(DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (ETuple (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "False")))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
@@ -1086,8 +1087,8 @@ declEffectWarn _ _ = []
 (DFunDef false "parseEffectArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "parseEffectArgs" ((PCons (PLit (LString "--strip")) (PCons (PVar "v") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseEffectArgs") (EVar "rest")) (EApp (EApp (EVar "prependDrops") (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "v"))) (EVar "acc"))))
 (DFunDef false "parseEffectArgs" ((PCons (PLit (LString "--rename")) (PCons (PVar "v") (PVar "rest"))) (PVar "acc")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "="))) (EVar "v")) (arm (PList (PVar "old") (PVar "nw")) () (EIf (EBinOp "||" (EBinOp "==" (EVar "old") (ELit (LString ""))) (EBinOp "==" (EVar "nw") (ELit (LString "")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--rename expects Old=New, got '")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "'")))) (EApp (EApp (EVar "parseEffectArgs") (EVar "rest")) (EBinOp "::" (ETuple (EVar "old") (EApp (EVar "ARename") (EVar "nw"))) (EVar "acc"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "--rename expects Old=New, got '")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "'")))))))
-(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--strip"))) PWild) (EApp (EVar "Err") (ELit (LString "--strip requires a value (e.g. --strip Mut,Panic)"))))
-(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--rename"))) PWild) (EApp (EVar "Err") (ELit (LString "--rename requires a value (e.g. --rename Panic=Exit)"))))
+(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--strip"))) PWild) (EApp (EVar "Err") (ELit (LString "--strip requires a value (e.g. --strip Rand,Net)"))))
+(DFunDef false "parseEffectArgs" ((PList (PLit (LString "--rename"))) PWild) (EApp (EVar "Err") (ELit (LString "--rename requires a value (e.g. --rename Old=New)"))))
 (DFunDef false "parseEffectArgs" ((PCons (PVar "x") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown argument '")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "'")))))
 (DTypeSig false "prependDrops" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))))))
 (DFunDef false "prependDrops" ((PList) (PVar "acc")) (EVar "acc"))
@@ -1125,6 +1126,6 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarns" (PWild (PList)) (EListLit))
 (DFunDef false "declEffectWarns" ((PVar "acts") (PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")) (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "ds"))))
 (DTypeSig false "declEffectWarn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
+(DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DEffect" PWild (PVar "name") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "acts")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'effect ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is declared here but effect-labels targets "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "; the declaration is left untouched")))))))
 (DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")))
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))

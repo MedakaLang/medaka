@@ -1,5 +1,5 @@
 # META
-source_lines=46
+source_lines=44
 stages=DESUGAR,MARK
 # SOURCE
 -- Capability-effects v2 Stage 2a: PARAMETERIZED effect surface syntax.
@@ -8,14 +8,12 @@ stages=DESUGAR,MARK
 -- typecheck through the REAL indentation-aware `check` pipeline on both the
 -- OCaml oracle and the native self-host, exercising every Stage-2a form:
 --   * `effect Net Prefix`     — domain-carrying effect decl (Prefix refinement)
---   * `internal effect Mut`   — non-public effect decl
 --   * `effect Stdout`         — plain (domainless) effect decl
 --   * `<Net "a.com/foo">`      — effect-row atom with a Prefix-pattern argument
 --   * `data Async e a = … <e> …` — an effect-row PARAMETER on a data decl:
 --       `e` is kind-inferred KRow from its use in the Suspend field's effect
 --       tail, so `runAsync : Async e a -> <e> a` performs exactly the stored row
 effect Net Prefix
-internal effect Mut
 effect Stdout
 
 extern netGet : String -> <Net "a.com/foo"> String
@@ -49,9 +47,8 @@ seqIO (Suspend t) k = Suspend (u => seqIO (t u) k)
 main : <IO> Unit
 main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
 # DESUGAR
-(DEffect false "Net" (Some "Prefix") false)
-(DEffect false "Mut" None true)
-(DEffect false "Stdout" None false)
+(DEffect false "Net" (Some "Prefix"))
+(DEffect false "Stdout" None)
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
@@ -68,9 +65,8 @@ main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "runAsync") (EApp (EApp (EVar "seqIO") (EVar "yld")) (ELam (PWild) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "println") (ELit (LString "effect param ok")))))))))
 # MARK
-(DEffect false "Net" (Some "Prefix") false)
-(DEffect false "Mut" None true)
-(DEffect false "Stdout" None false)
+(DEffect false "Net" (Some "Prefix"))
+(DEffect false "Stdout" None)
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))

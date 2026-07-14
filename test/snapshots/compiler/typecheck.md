@@ -1,5 +1,5 @@
 # META
-source_lines=13720
+source_lines=13717
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -210,20 +210,17 @@ seedEffectDomains _ = setRef
   ]
 
 -- register a label's domain from its `effect` decl: Some "Prefix" ⇒ Prefix;
--- None/internal ⇒ atomic.  Internal labels are never parameterized (forced PUnit).
-registerEffectDomain : String -> Option String -> Bool -> Unit
-registerEffectDomain name domain isInternal =
-  setRef
-    effectDomains
-    ((name, domainParam domain isInternal)::effectDomains.value)
+-- None ⇒ atomic.
+registerEffectDomain : String -> Option String -> Unit
+registerEffectDomain name domain =
+  setRef effectDomains ((name, domainParam domain)::effectDomains.value)
 
--- the ⊤-param a declared label carries: internal/atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
-domainParam : Option String -> Bool -> Param
-domainParam _ True = PUnit
-domainParam (Some "Prefix") False = PPrefix None
-domainParam (Some "Set") False = PSet None
-domainParam (Some "Product") False = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
-domainParam _ False = PUnit
+-- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
+domainParam : Option String -> Param
+domainParam (Some "Prefix") = PPrefix None
+domainParam (Some "Set") = PSet None
+domainParam (Some "Product") = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
+domainParam _ = PUnit
 
 -- re-seed to the builtins, then register every `effect …` decl in the program.
 populateEffectDomains : List Decl -> Unit
@@ -233,8 +230,8 @@ populateEffectDomains decls =
 
 populateGo : List Decl -> Unit
 populateGo [] = ()
-populateGo ((DEffect _ name domain isInternal)::rest) =
-  let _ = registerEffectDomain name domain isInternal
+populateGo ((DEffect _ name domain)::rest) =
+  let _ = registerEffectDomain name domain
   populateGo rest
 populateGo (_::rest) = populateGo rest
 
@@ -13756,19 +13753,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectDomains" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "seedEffectDomains" (PWild) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))))))
-(DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyCon "Unit")))))
-(DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain") (PVar "isInternal")) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "domainParam") (EVar "domain")) (EVar "isInternal"))) (EFieldAccess (EVar "effectDomains") "value"))))
-(DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyCon "Param"))))
-(DFunDef false "domainParam" (PWild (PCon "True")) (EVar "PUnit"))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Prefix"))) (PCon "False")) (EApp (EVar "PPrefix") (EVar "None")))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set"))) (PCon "False")) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product"))) (PCon "False")) (EApp (EVar "PProduct") (EListLit)))
-(DFunDef false "domainParam" (PWild (PCon "False")) (EVar "PUnit"))
+(DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain")) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "domainParam") (EVar "domain"))) (EFieldAccess (EVar "effectDomains") "value"))))
+(DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Param")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Prefix")))) (EApp (EVar "PPrefix") (EVar "None")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set")))) (EApp (EVar "PSet") (EVar "None")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product")))) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "domainParam" (PWild) (EVar "PUnit"))
 (DTypeSig false "populateEffectDomains" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "populateEffectDomains" ((PVar "decls")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoExpr (EApp (EVar "populateGo") (EVar "decls")))))
 (DTypeSig false "populateGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "populateGo" ((PList)) (ELit LUnit))
-(DFunDef false "populateGo" ((PCons (PCon "DEffect" PWild (PVar "name") (PVar "domain") (PVar "isInternal")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerEffectDomain") (EVar "name")) (EVar "domain")) (EVar "isInternal"))) (DoExpr (EApp (EVar "populateGo") (EVar "rest")))))
+(DFunDef false "populateGo" ((PCons (PCon "DEffect" PWild (PVar "name") (PVar "domain")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "registerEffectDomain") (EVar "name")) (EVar "domain"))) (DoExpr (EApp (EVar "populateGo") (EVar "rest")))))
 (DFunDef false "populateGo" ((PCons PWild (PVar "rest"))) (EApp (EVar "populateGo") (EVar "rest")))
 (DTypeSig false "lookupDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Param"))))
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))
@@ -17370,19 +17366,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "effectDomains" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "seedEffectDomains" (PWild) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))))))
-(DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyCon "Unit")))))
-(DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain") (PVar "isInternal")) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "domainParam") (EVar "domain")) (EVar "isInternal"))) (EFieldAccess (EVar "effectDomains") "value"))))
-(DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyCon "Param"))))
-(DFunDef false "domainParam" (PWild (PCon "True")) (EVar "PUnit"))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Prefix"))) (PCon "False")) (EApp (EVar "PPrefix") (EVar "None")))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set"))) (PCon "False")) (EApp (EVar "PSet") (EVar "None")))
-(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product"))) (PCon "False")) (EApp (EVar "PProduct") (EListLit)))
-(DFunDef false "domainParam" (PWild (PCon "False")) (EVar "PUnit"))
+(DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain")) (EApp (EApp (EVar "setRef") (EVar "effectDomains")) (EBinOp "::" (ETuple (EVar "name") (EApp (EVar "domainParam") (EVar "domain"))) (EFieldAccess (EVar "effectDomains") "value"))))
+(DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Param")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Prefix")))) (EApp (EVar "PPrefix") (EVar "None")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set")))) (EApp (EVar "PSet") (EVar "None")))
+(DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product")))) (EApp (EVar "PProduct") (EListLit)))
+(DFunDef false "domainParam" (PWild) (EVar "PUnit"))
 (DTypeSig false "populateEffectDomains" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "populateEffectDomains" ((PVar "decls")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoExpr (EApp (EVar "populateGo") (EVar "decls")))))
 (DTypeSig false "populateGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "populateGo" ((PList)) (ELit LUnit))
-(DFunDef false "populateGo" ((PCons (PCon "DEffect" PWild (PVar "name") (PVar "domain") (PVar "isInternal")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerEffectDomain") (EVar "name")) (EVar "domain")) (EVar "isInternal"))) (DoExpr (EApp (EVar "populateGo") (EVar "rest")))))
+(DFunDef false "populateGo" ((PCons (PCon "DEffect" PWild (PVar "name") (PVar "domain")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "registerEffectDomain") (EVar "name")) (EVar "domain"))) (DoExpr (EApp (EVar "populateGo") (EVar "rest")))))
 (DFunDef false "populateGo" ((PCons PWild (PVar "rest"))) (EApp (EVar "populateGo") (EVar "rest")))
 (DTypeSig false "lookupDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))) (TyCon "Param"))))
 (DFunDef false "lookupDomain" (PWild (PList)) (EVar "PUnit"))

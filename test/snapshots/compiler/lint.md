@@ -3303,7 +3303,7 @@ nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData _ _ _ _ _) = []
 nonDefRefL (DUse _ _ _) = []
-nonDefRefL (DEffect _ _ _ _) = []
+nonDefRefL (DEffect _ _ _) = []
 nonDefRefL (DTypeAlias _ _ _ _) = []
 nonDefRefL (DNewtype _ _ _ _ _ _) = []
 nonDefRefL d = bodyIdents d
@@ -4735,7 +4735,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DData" PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeAlias" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DNewtype" PWild PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))
@@ -6018,7 +6018,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DData" PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeAlias" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DNewtype" PWild PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))

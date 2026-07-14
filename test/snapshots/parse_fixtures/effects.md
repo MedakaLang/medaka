@@ -6,7 +6,7 @@ main : <IO> Unit
 greet : String -> <IO> Unit
 readAll : <IO> String
 runState : <e> a
-combine : <IO, Mut> Unit
+combine : <IO, Rand> Unit
 withTail : <IO | e> a
 pureFn : Int -> Int
 # PARSE
@@ -14,7 +14,7 @@ pureFn : Int -> Int
 (DTypeSig false "greet" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DTypeSig false "readAll" (TyEffect ("IO") None (TyCon "String")))
 (DTypeSig false "runState" (TyEffect () (Some "e") (TyVar "a")))
-(DTypeSig false "combine" (TyEffect ("IO" "Mut") None (TyCon "Unit")))
+(DTypeSig false "combine" (TyEffect ("IO" "Rand") None (TyCon "Unit")))
 (DTypeSig false "withTail" (TyEffect ("IO") (Some "e") (TyVar "a")))
 (DTypeSig false "pureFn" (TyFun (TyCon "Int") (TyCon "Int")))
 # DESUGAR
@@ -22,7 +22,7 @@ pureFn : Int -> Int
 (DTypeSig false "greet" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DTypeSig false "readAll" (TyEffect ("IO") None (TyCon "String")))
 (DTypeSig false "runState" (TyEffect () (Some "e") (TyVar "a")))
-(DTypeSig false "combine" (TyEffect ("IO" "Mut") None (TyCon "Unit")))
+(DTypeSig false "combine" (TyEffect ("IO" "Rand") None (TyCon "Unit")))
 (DTypeSig false "withTail" (TyEffect ("IO") (Some "e") (TyVar "a")))
 (DTypeSig false "pureFn" (TyFun (TyCon "Int") (TyCon "Int")))
 # MARK
@@ -30,6 +30,6 @@ pureFn : Int -> Int
 (DTypeSig false "greet" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DTypeSig false "readAll" (TyEffect ("IO") None (TyCon "String")))
 (DTypeSig false "runState" (TyEffect () (Some "e") (TyVar "a")))
-(DTypeSig false "combine" (TyEffect ("IO" "Mut") None (TyCon "Unit")))
+(DTypeSig false "combine" (TyEffect ("IO" "Rand") None (TyCon "Unit")))
 (DTypeSig false "withTail" (TyEffect ("IO") (Some "e") (TyVar "a")))
 (DTypeSig false "pureFn" (TyFun (TyCon "Int") (TyCon "Int")))

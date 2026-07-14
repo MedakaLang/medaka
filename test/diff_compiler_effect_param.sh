@@ -21,7 +21,6 @@
 #
 # Stage-2a forms covered by test/diff_fixtures/effect_param.mdk:
 #   effect Net Prefix      — domain-carrying effect decl (Prefix refinement)
-#   internal effect Mut    — non-public effect decl
 #   effect Stdout          — plain (domainless) effect decl
 #   <Net "a.com/foo">      — effect-row atom with a Prefix-pattern argument
 #

@@ -1,6 +1,6 @@
 -- beta mutability: a `Ref` cell rewritten with `:=` (replaces the removed
 -- `let mut` + bare reassignment). (1 + 10) * 2 = 22.
-main : <IO, Mut> Unit
+main : <IO> Unit
 main =
   let x = Ref 1
   x := x.value + 10

@@ -191,7 +191,7 @@ kebab-case; never renumber (append only).
 | `R-UNBOUND` | `UnboundVariable` |
 | `R-UNKNOWN-CTOR` | `UnknownConstructor` |
 | `R-UNKNOWN-TYPE` | `UnknownType` |
-| `R-UNKNOWN-EFFECT` | `UnknownEffect` |
+| `R-UNKNOWN-EFFECT` | `UnknownEffect` — special-cases the removed `Mut`/`Panic` labels with a migration hint (same code) |
 | `R-UNKNOWN-FIELD` | `UnknownField` |
 | `R-FIELD-NOT-IN-RECORD` | `FieldNotInRecord` |
 | `R-DUPLICATE-DEF` | `DuplicateDefinition` |
