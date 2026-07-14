@@ -33,8 +33,17 @@ for _p in llvm_emit_main wasm_emit_main wasm_emit_modules_main; do
   [ -x "$ROOT/test/bin/$_p" ] || _need="$_need $_p"
 done
 [ -z "$_need" ] || {
-  echo "emit probes missing:$_need — building (sh test/wasm/build_wasm_oracle.sh) ..."
-  sh "$ROOT/test/wasm/build_wasm_oracle.sh" > /dev/null 2>&1
+  echo "emit probes missing:$_need — building ..."
+  # build_wasm_oracle.sh provides ONLY the wasm probes; llvm_emit_main is a
+  # build_oracles.sh oracle.  Provision each from its actual producer — a
+  # provision step that runs the wrong builder "succeeds" and then skips, which
+  # reads like a toolchain problem and is not one (this gate did exactly that).
+  case "$_need" in *llvm_emit_main*)
+    FORCE=1 JOBS=1 sh "$ROOT/test/build_oracles.sh" --build-one llvm_emit_main > /dev/null 2>&1 ;;
+  esac
+  case "$_need" in *wasm_emit*)
+    sh "$ROOT/test/wasm/build_wasm_oracle.sh" > /dev/null 2>&1 ;;
+  esac
   for _p in llvm_emit_main wasm_emit_main wasm_emit_modules_main; do
     [ -x "$ROOT/test/bin/$_p" ] || {
       echo "skipping (could not build emit probe: $_p)"
