@@ -165,6 +165,21 @@ for f in "$WORK/d1"/*; do
   cmp -s "$f" "$WORK/d2/$nm" || echo "$nm" >> "$WORK/differ"
 done
 
+# ── C's FLOOR: a gate that can no-op, WILL ────────────────────────────────────
+# C only inspects defines COMMON to both programs. If that set were ever tiny (a
+# broken emitter, a probe that failed to build, a future change that renames every
+# prelude symbol per-program), C would pass VACUOUSLY — nothing to compare, so
+# nothing differs, so "PASS". That is the silent-green failure this whole suite
+# exists to prevent, so state the denominator and FAIL on an empty one.
+ncommon="$(ls -1 "$WORK/d1" 2>/dev/null | while read -r n; do [ -f "$WORK/d2/$n" ] && echo "$n"; done | grep -c . || true)"
+if [ "$ncommon" -lt 100 ]; then
+  echo "FAIL [C program-independent]: only $ncommon define(s) are common to both probe"
+  echo "  programs (expected >=100 — the prelude alone is ~270). C compares only COMMON"
+  echo "  defines, so with a set this small it would pass VACUOUSLY, having checked"
+  echo "  nothing. Something is wrong with the probes or the emitter, not with C."
+  fails=$((fails + 1))
+fi
+
 # the only bodies allowed to differ between two different programs
 bad="$(grep -v -e '^mdk_disp_' -e '^mdk_program_main$' "$WORK/differ" || true)"
 nbad="$(printf '%s\n' "$bad" | grep -c . || true)"
@@ -180,8 +195,8 @@ if [ "$nbad" -ne 0 ]; then
   echo "  the -64% IR win is made of."
   fails=$((fails + 1))
 else
-  echo "PASS [C program-independent]  of the defines common to both programs, only $ndiff differ,"
-  echo "                              all of them @mdk_disp_*/mdk_program_main (allowed)"
+  echo "PASS [C program-independent]  checked $ncommon defines common to both programs;"
+  echo "                              only $ndiff differ, all @mdk_disp_*/mdk_program_main (allowed)"
 fi
 
 echo
