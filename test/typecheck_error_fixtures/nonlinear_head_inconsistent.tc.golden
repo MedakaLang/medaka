@@ -1,0 +1,1 @@
+TYPE ERROR: No impl of Firstish for Pair Int Bool; write an 'impl Firstish Pair'.

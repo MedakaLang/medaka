@@ -1,0 +1,20 @@
+-- #156 S1 / Fork B regression: matchTyMono must be a genuine SUBSTITUTION (a
+-- most-general MATCHER, DICT-SEMANTICS §3 `inst`).  The impl head `Pair a a`
+-- binds the SAME var `a` in two positions.  Matched against `Pair Int Bool` the
+-- old `xs ++ ys` combine bound a↦Int AND a↦Bool and STILL reported a "match"
+-- (no consistency check) — a false impl selection with NO substitution behind it.
+-- Now the two inconsistent bindings fail the consistency check, so no impl is
+-- selected and this is a located `No impl` error instead of a bogus dispatch.
+-- (The CONSISTENT sibling `Pair a a` vs `Pair Int Int` still matches — see the
+-- live canary test/eval_typed_fixtures/return_only_param_dispatch.mdk.)
+-- Prelude-dependent (numeric/Bool literals), so PRELUDE_DEP / Driver B only.
+data Pair a b = Pair a b
+
+interface Firstish t where
+  firstish : t -> Int
+
+impl Firstish (Pair a a) where
+  firstish _ = 0
+
+bad : Int
+bad = firstish (Pair 1 True)
