@@ -1,5 +1,5 @@
 # META
-source_lines=3170
+source_lines=3179
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1437,6 +1437,15 @@ evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith "==" a b = VBool (valueEq a b)
 evalArith "!=" a b = VBool (not (valueEq a b))
+-- Float comparisons use IEEE ordered semantics directly (these compile to native
+-- `fcmp o*`).  They MUST precede the generic `valueCompare` arms below: on a NaN
+-- operand `valueCompare` yields neither LT nor GT, so `not (ordGt …)` / `not (ordLt …)`
+-- would wrongly report `nan <= nan` etc. as True (#288).  IEEE: every ordered
+-- relational compare against NaN is False; only `!=` is True (handled above).
+evalArith "<" (VFloat a) (VFloat b) = VBool (a < b)
+evalArith ">" (VFloat a) (VFloat b) = VBool (a > b)
+evalArith "<=" (VFloat a) (VFloat b) = VBool (a <= b)
+evalArith ">=" (VFloat a) (VFloat b) = VBool (a >= b)
 evalArith "<" a b = VBool (ordLt (valueCompare a b))
 evalArith ">" a b = VBool (ordGt (valueCompare a b))
 evalArith "<=" a b = VBool (not (ordGt (valueCompare a b)))
@@ -3838,6 +3847,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "!=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
+(DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString ">")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString "<=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<=" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString ">=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">=" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "ordLt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString ">")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))
@@ -5189,6 +5202,10 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "!=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
+(DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString ">")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString "<=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<=" (EVar "a") (EVar "b"))))
+(DFunDef false "evalArith" ((PLit (LString ">=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">=" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "ordLt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString ">")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EVar "ordGt") (EApp (EApp (EVar "valueCompare") (EVar "a")) (EVar "b"))))))

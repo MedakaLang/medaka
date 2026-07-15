@@ -694,6 +694,17 @@ useFileBytesRef = Ref False
 floatLocalsRef : Ref (List String)
 floatLocalsRef = Ref []
 
+-- #288: top-level nullary value bindings whose RHS is statically Float (e.g.
+-- `nan = 0.0 / 0.0`).  A `global.get` of such a binding carries no static Float
+-- tag at the USE site, so a `nan <= nan` comparison would fall to the poly
+-- $mdk_value_cmp path (3-way -1/0/1) which cannot represent NaN's unorderedness —
+-- `<=`/`>=` then wrongly report True on NaN.  Seeding these names (in emitRefProgram,
+-- before any body emission) lets `cexprIsFloat` recognize the operand as Float so the
+-- comparison lowers to inline `f64.le`/`f64.ge` (IEEE-correct, NaN → False), mirroring
+-- native's `staticIsFloat`-reads-the-global fcmp path.
+floatGlobalsRef : Ref (List String)
+floatGlobalsRef = Ref []
+
 -- W-SQLITE-4 stage 2: ctor name → field INDICES declared as Float (from
 -- ctorFieldTypeNames; installed by installCtorFloatFields from each wasm entry).
 -- Drives cexprIsFloat's CFieldAccess arm and ctor-payload Float binder seeding.
@@ -2105,6 +2116,11 @@ emitRefProgram prog groups =
     -- stage-D: writeFileBytes's write host imports (reset/push/commit).
     ++ (if useFileBytesRef.value then fileBytesHostImportLines else [])
   let valNames = progValNames prog
+  -- #288: record the top-level nullary bindings whose RHS is statically Float, BEFORE
+  -- any fn / init body emission, so `cexprIsFloat` recognizes a `global.get` of one as
+  -- Float and a `<=`/`>=` over it lowers to inline `f64.le`/`f64.ge` (IEEE NaN → False)
+  -- rather than the poly $mdk_value_cmp path (which collapses NaN to EQ).
+  let _ = setRef floatGlobalsRef (floatValGlobalNames prog (filterList isValBind groups))
   -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
   -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
   -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
@@ -4560,7 +4576,10 @@ cexprIsFloat prog env (CLit (LFloat _)) = True
 cexprIsFloat prog env (CVar "pi" _) = not (contains "pi" env)
 cexprIsFloat prog env (CVar "e" _) = not (contains "e" env)
 -- W8b: a name known to be Float in the current body (an `impl Num Float` param).
+-- #288: also a top-level nullary binding whose RHS is statically Float, unless a
+-- local of the same name shadows it (mirrors the pi/e `not (contains x env)` guard).
 cexprIsFloat prog env (CVar x _) = contains x floatLocalsRef.value
+  || not (contains x env) && contains x floatGlobalsRef.value
 -- C3: also True when the binop itself carries an "Float" scalar-tag (e.g. a nested
 -- Float binop whose operands are type-lost but the typecheck stamped the node).
 cexprIsFloat prog env (CBinPrim op l r tag) = isArithOp op
@@ -7412,6 +7431,20 @@ isValBind _ = False
 isFnBind : CBind -> Bool
 isFnBind (CBind "main" _) = False
 isFnBind b = not (isValBind b)
+
+-- #288: names of nullary value bindings whose RHS is statically Float (structural
+-- `cexprIsFloat`, e.g. `nan = 0.0 / 0.0`).  Seeds floatGlobalsRef so a `global.get`
+-- of such a name reads as Float at a comparison site.
+floatValGlobalNames : Prog -> List CBind -> List String
+floatValGlobalNames prog binds = flatMap (floatValGlobalName prog) binds
+
+floatValGlobalName : Prog -> CBind -> List String
+floatValGlobalName prog (CBind name [CClause [] body]) =
+  if cexprIsFloat prog [] body then
+    [name]
+  else
+    []
+floatValGlobalName _ _ = []
 
 userFnBinds : List CBind -> List CBind
 userFnBinds groups = filterList isFnBind groups

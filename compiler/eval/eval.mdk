@@ -1433,6 +1433,15 @@ evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith "==" a b = VBool (valueEq a b)
 evalArith "!=" a b = VBool (not (valueEq a b))
+-- Float comparisons use IEEE ordered semantics directly (these compile to native
+-- `fcmp o*`).  They MUST precede the generic `valueCompare` arms below: on a NaN
+-- operand `valueCompare` yields neither LT nor GT, so `not (ordGt …)` / `not (ordLt …)`
+-- would wrongly report `nan <= nan` etc. as True (#288).  IEEE: every ordered
+-- relational compare against NaN is False; only `!=` is True (handled above).
+evalArith "<" (VFloat a) (VFloat b) = VBool (a < b)
+evalArith ">" (VFloat a) (VFloat b) = VBool (a > b)
+evalArith "<=" (VFloat a) (VFloat b) = VBool (a <= b)
+evalArith ">=" (VFloat a) (VFloat b) = VBool (a >= b)
 evalArith "<" a b = VBool (ordLt (valueCompare a b))
 evalArith ">" a b = VBool (ordGt (valueCompare a b))
 evalArith "<=" a b = VBool (not (ordGt (valueCompare a b)))
