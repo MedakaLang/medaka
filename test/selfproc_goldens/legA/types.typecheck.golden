@@ -384,7 +384,7 @@ endsWithStr : String -> String -> Bool
 enforceStandaloneDomain : TcEnv -> String -> Mono -> Option Loc -> Unit
 entail : Map String (List ImplEntry) -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entailAssumRoute : String -> EntailKind -> Route
-entailAssumVar : Mono -> String -> EntailKind -> Option String
+entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
 entailFallback : Map String (List ImplEntry) -> EntailKind -> Route
 entailInst : Map String (List ImplEntry) -> String -> Mono -> String -> String -> EntailKind -> (Route, List Route)
 enterLevel : Unit -> Unit
@@ -1151,7 +1151,7 @@ splitOnFirstEqGo : String -> Int -> Int -> Option Int
 splitOnFirstEqStr : String -> Option Int
 splitOnSemi : String -> List String
 splitOnSemiGo : String -> Int -> Int -> List String -> List String
-stampOpRoute : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Mono -> String -> Unit
+stampOpRouteVal : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Mono -> String -> Route
 stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
