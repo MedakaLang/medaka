@@ -504,8 +504,13 @@ fi
 # parse_result : FROZEN (native canonical; astdump.exe had no native equivalent).
 # Committed .parse_result_oracle files are the reference.
 
-# lex_files : FROZEN (native canonical; lextok.exe had no native equivalent).
-# Committed .lextok.golden files are the reference.
+# lex_files : re-cuttable via `CAPTURE=1 sh test/diff_compiler_lex_files.sh` — the
+# gate's own CAPTURE=1 branch writes each .lextok.golden through the IDENTICAL
+# "$RUN" "$f" | strip_unit invocation the gate reads with (single source of
+# truth; #167). Needs only test/bin/lex_main (`sh test/build_oracles.sh
+# --build-one lex_main`), NOT $MAIN. Historical note: lextok.exe (OCaml) had no
+# native equivalent, which is why this family was frozen in the first place —
+# the goldens are native-canonical output, not a cross-checked oracle.
 
 # check_modules / tcmod : FROZEN (native canonical; tc_module_probe.exe had no
 # native equivalent).  Committed oracle.tcmod files are the reference.

@@ -12,6 +12,10 @@
 # real token-kind/position/text divergence.
 #
 # Usage:  sh test/diff_compiler_lex_files.sh [file.mdk ...]
+#         CAPTURE=1 sh test/diff_compiler_lex_files.sh   # (re)capture .lextok.golden
+#           files via the EXACT SAME "$RUN" "$f" | strip_unit invocation the read
+#           path below diffs against — single source of truth, so a captured golden
+#           can never drift from what the gate itself checks.
 # Exit:   0 if every file's token stream matches literally, else 1.
 set -u
 
@@ -32,13 +36,27 @@ else
   done
 fi
 
+if [ "${CAPTURE:-0}" = "1" ]; then
+  wrote=0
+  for f in $files; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f")"
+    golden="${f%.mdk}.lextok.golden"
+    "$RUN" "$f" 2>/dev/null | strip_unit > "$golden"
+    wrote=$((wrote + 1))
+    printf 'captured %s\n' "$name"
+  done
+  printf '\n%d goldens written\n' "$wrote"
+  exit 0
+fi
+
 pass=0
 fail=0
 for f in $files; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
   golden="${f%.mdk}.lextok.golden"
-  [ -f "$golden" ] || { echo "no golden for $name (run sh test/capture_goldens.sh lextok)"; fail=$((fail+1)); continue; }
+  [ -f "$golden" ] || { echo "no golden for $name (run CAPTURE=1 sh test/diff_compiler_lex_files.sh)"; fail=$((fail+1)); continue; }
   expected="$(cat "$golden")"
   actual="$("$RUN" "$f" 2>/dev/null | strip_unit)"
   if [ "$expected" = "$actual" ]; then
