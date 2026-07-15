@@ -1,5 +1,5 @@
 # META
-source_lines=9992
+source_lines=9999
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -8980,9 +8980,16 @@ intPred "<=" = "sle"
 intPred ">=" = "sge"
 intPred op = panic ("llvm spike: unsupported comparison " ++ op)
 
+-- IEEE-754 comparison predicates (issue #285).  `==`/`<`/`>`/`<=`/`>=` are all
+-- ORDERED (`o*`): every relational comparison against NaN is false, which is
+-- correct IEEE semantics.  `!=` is the LONE exception — `a != b` must be TRUE
+-- when either operand is NaN — so it needs the UNORDERED-or-not-equal predicate
+-- `une`, not the ordered `one` (which is false for NaN and would break both IEEE
+-- and the identity `(a != b) == !(a == b)`).  Matches eval and the wasm backend's
+-- `f64.ne` (also une-equivalent).
 floatPred : String -> String
 floatPred "==" = "oeq"
-floatPred "!=" = "one"
+floatPred "!=" = "une"
 floatPred "<" = "olt"
 floatPred ">" = "ogt"
 floatPred "<=" = "ole"
@@ -11891,7 +11898,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "intPred" ((PVar "op")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "llvm spike: unsupported comparison ")) (EVar "op"))))
 (DTypeSig false "floatPred" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "floatPred" ((PLit (LString "=="))) (ELit (LString "oeq")))
-(DFunDef false "floatPred" ((PLit (LString "!="))) (ELit (LString "one")))
+(DFunDef false "floatPred" ((PLit (LString "!="))) (ELit (LString "une")))
 (DFunDef false "floatPred" ((PLit (LString "<"))) (ELit (LString "olt")))
 (DFunDef false "floatPred" ((PLit (LString ">"))) (ELit (LString "ogt")))
 (DFunDef false "floatPred" ((PLit (LString "<="))) (ELit (LString "ole")))
@@ -14006,7 +14013,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "intPred" ((PVar "op")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "llvm spike: unsupported comparison ")) (EVar "op"))))
 (DTypeSig false "floatPred" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "floatPred" ((PLit (LString "=="))) (ELit (LString "oeq")))
-(DFunDef false "floatPred" ((PLit (LString "!="))) (ELit (LString "one")))
+(DFunDef false "floatPred" ((PLit (LString "!="))) (ELit (LString "une")))
 (DFunDef false "floatPred" ((PLit (LString "<"))) (ELit (LString "olt")))
 (DFunDef false "floatPred" ((PLit (LString ">"))) (ELit (LString "ogt")))
 (DFunDef false "floatPred" ((PLit (LString "<="))) (ELit (LString "ole")))
