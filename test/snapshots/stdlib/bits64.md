@@ -1,5 +1,5 @@
 # META
-source_lines=300
+source_lines=302
 stages=DESUGAR,MARK
 # SOURCE
 {- bits64.mdk — 64-bit-unsigned arithmetic over the 63-bit `Int` fixnum.
@@ -24,14 +24,10 @@ stages=DESUGAR,MARK
    that needs the C `unsigned long long` overflow / bit semantics.  All ops are
    modulo 2^64 (they wrap), matching C's unsigned arithmetic. -}
 
--- Several bodies here are byte-for-byte the limb helpers `compiler/eval/eval.mdk`
--- hand-rolled for SplitMix64/FNV-1a (issue #98); mirroring that proven code is
--- the whole point of this module (issue #223).  The `rule-duplicate-body` fix —
--- "consolidate into a shared module" — is NOT available: the compiler cannot
--- import this stdlib module without a seed re-mint + fixpoint re-validation and
--- the extra always-typechecked surface (see AGENTS.md "Dogfooding"/Traps), so
--- eval.mdk keeps its own copy on purpose.
--- lint-disable-file rule-duplicate-body
+-- The SplitMix64/FNV-1a limb helpers the interpreter's RNG/hash externs are
+-- built on (issue #98) now live HERE: `compiler/eval/eval.mdk` imports this
+-- module instead of hand-rolling its own copy (issue #223), so the two share
+-- one proven implementation.
 
 import core.{Ordering}
 
@@ -185,8 +181,14 @@ export xor64 : U64 -> U64 -> U64
 xor64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   (bitXor a0 b0, bitXor a1 b1, bitXor a2 b2, bitXor a3 b3)
 
--- Limb `i` of a `uint64` (0 for `i < 0` or `i > 3`).
-limbAt : U64 -> Int -> Int
+{- | Limb `i` of a `uint64` — its bits `[16i, 16i+15]` as an `Int` in
+   `[0, 2^16)`.  Out-of-range `i` (`< 0` or `> 3`) reads as `0`.
+
+   > limbAt (10, 20, 30, 40) 2
+   30
+   > limbAt (ofInt 65536) 1
+   1 -}
+export limbAt : U64 -> Int -> Int
 limbAt (a0, a1, a2, a3) i =
   if i == 0 then
     a0
@@ -327,7 +329,7 @@ mod64 dividend divisor =
 (DFunDef false "or64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (ETuple (EApp (EApp (EVar "bitOr") (EVar "a0")) (EVar "b0")) (EApp (EApp (EVar "bitOr") (EVar "a1")) (EVar "b1")) (EApp (EApp (EVar "bitOr") (EVar "a2")) (EVar "b2")) (EApp (EApp (EVar "bitOr") (EVar "a3")) (EVar "b3"))))
 (DTypeSig true "xor64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "xor64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (ETuple (EApp (EApp (EVar "bitXor") (EVar "a0")) (EVar "b0")) (EApp (EApp (EVar "bitXor") (EVar "a1")) (EVar "b1")) (EApp (EApp (EVar "bitXor") (EVar "a2")) (EVar "b2")) (EApp (EApp (EVar "bitXor") (EVar "a3")) (EVar "b3"))))
-(DTypeSig false "limbAt" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DTypeSig true "limbAt" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "limbAt" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PVar "i")) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "a0") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 1))) (EVar "a1") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 2))) (EVar "a2") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 3))) (EVar "a3") (ELit (LInt 0)))))))
 (DTypeSig false "shiftWords" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "shiftWords" ((PVar "n")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (ELit (LInt 3)) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (ELit (LInt 2)) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 16))) (ELit (LInt 1)) (ELit (LInt 0))))))
@@ -370,7 +372,7 @@ mod64 dividend divisor =
 (DFunDef false "or64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (ETuple (EApp (EApp (EVar "bitOr") (EVar "a0")) (EVar "b0")) (EApp (EApp (EVar "bitOr") (EVar "a1")) (EVar "b1")) (EApp (EApp (EVar "bitOr") (EVar "a2")) (EVar "b2")) (EApp (EApp (EVar "bitOr") (EVar "a3")) (EVar "b3"))))
 (DTypeSig true "xor64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "xor64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (ETuple (EApp (EApp (EVar "bitXor") (EVar "a0")) (EVar "b0")) (EApp (EApp (EVar "bitXor") (EVar "a1")) (EVar "b1")) (EApp (EApp (EVar "bitXor") (EVar "a2")) (EVar "b2")) (EApp (EApp (EVar "bitXor") (EVar "a3")) (EVar "b3"))))
-(DTypeSig false "limbAt" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DTypeSig true "limbAt" (TyFun (TyCon "U64") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "limbAt" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PVar "i")) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "a0") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 1))) (EVar "a1") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 2))) (EVar "a2") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 3))) (EVar "a3") (ELit (LInt 0)))))))
 (DTypeSig false "shiftWords" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "shiftWords" ((PVar "n")) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (ELit (LInt 3)) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 32))) (ELit (LInt 2)) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 16))) (ELit (LInt 1)) (ELit (LInt 0))))))
