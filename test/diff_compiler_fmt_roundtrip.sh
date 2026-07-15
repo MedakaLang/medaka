@@ -94,8 +94,10 @@ $ROOT/stdlib/*.mdk $ROOT/test/fmt_fixtures/*.mdk $ROOT/test/parse_fixtures/*.mdk
   full_run=1
 fi
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT INT TERM
+# Local scratch dir — deliberately NOT named TMPDIR (that is the well-known env var;
+# reassigning it would leak into this script's every child process).
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT INT TERM
 
 n=0
 pass=0
@@ -108,12 +110,31 @@ for f in $files; do
   n=$((n + 1))
   rel="${f#"$ROOT"/}"
 
-  before="$("$PARSE" "$f" 2>/dev/null)"
+  # An oracle CRASH must never impersonate a result. Without these checks, a
+  # non-zero exit's empty/garbage stdout flows into the AST compare and gets
+  # misdiagnosed as "fmt changed the parse" — or, if BOTH parse calls crash on an
+  # unparseable file, as a clean PASS. This gate exists to stop a crash looking
+  # clean, so a non-zero oracle exit is a hard, labelled failure. ($? right after a
+  # $(...) assignment is that command's status — these stay in the MAIN shell so the
+  # n/fail counters are not lost to a subshell.)
+  before="$("$PARSE" "$f" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: parse_main crashed (exit %d) on the original source\n' "$rel" "$rc"
+    exit 1
+  fi
 
-  formatted="$TMPDIR/$n.mdk"
-  "$FMT" "$f" 2>/dev/null > "$formatted"
+  formatted="$WORKDIR/$n.mdk"
+  "$FMT" "$f" 2>/dev/null > "$formatted"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: fmt_main crashed (exit %d)\n' "$rel" "$rc"
+    exit 1
+  fi
 
-  after="$("$PARSE" "$formatted" 2>/dev/null)"
+  after="$("$PARSE" "$formatted" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: parse_main crashed (exit %d) re-parsing the formatted output\n' "$rel" "$rc"
+    exit 1
+  fi
 
   if is_known "$rel"; then
     seen_known="$seen_known $rel"
@@ -131,9 +152,9 @@ for f in $files; do
   else
     fail=$((fail + 1))
     printf 'FAIL %s (fmt round-trip changed the AST — not in the known-divergence ledger)\n' "$rel"
-    printf '%s\n' "$before" > "$TMPDIR/$n.before.sexp"
-    printf '%s\n' "$after" > "$TMPDIR/$n.after.sexp"
-    diff -u "$TMPDIR/$n.before.sexp" "$TMPDIR/$n.after.sexp" | sed 's/^/    /'
+    printf '%s\n' "$before" > "$WORKDIR/$n.before.sexp"
+    printf '%s\n' "$after" > "$WORKDIR/$n.after.sexp"
+    diff -u "$WORKDIR/$n.before.sexp" "$WORKDIR/$n.after.sexp" | sed 's/^/    /'
   fi
 done
 
