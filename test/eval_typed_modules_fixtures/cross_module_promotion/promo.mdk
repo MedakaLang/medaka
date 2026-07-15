@@ -1,0 +1,13 @@
+-- #194 fallback regression: an UNSIGNATURED constrained free function DEFINED here
+-- and CALLED from another module.  Its body dispatches `+` (Num) at its quantified
+-- parameter, so it infers `Num a => a -> a` with NO signature — the promotion shape.
+-- discoverPromotedModules must promote `dbl`/`quad` and seed their cross-module
+-- inferred arities (crossModuleFunConstraintsRef) so the CALLER module's call sites
+-- get the leading dict argument.  This is the multi-module analogue of
+-- prelude_shadow_constrained, exercising the elaborateModules NON-EMPTY-harvest
+-- fallback path (a directly-promoted fn ⇒ discard the bare sweep, run 2-pass).
+export dbl x = x + x
+
+-- a second promoted fn that CALLS the first (transitive promotion within the module):
+-- `quad` inherits `Num a =>` from `dbl`.
+export quad x = dbl (dbl x)

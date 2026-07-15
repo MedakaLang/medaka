@@ -1884,6 +1884,15 @@ sitesFor fn idx = fromOption [] (omLookup fn idx)
 promotedRef : Ref (List String)
 promotedRef = Ref []
 
+-- #194: cross-module accumulator for the FIRST (bare-dict) elaboration sweep's
+-- direct promotions.  resetState clears promotedRef per module, so elabHarvestWorker
+-- unions each module's promotedRef.value into here right after that module's
+-- elabModuleStamp (before the next module's resetState wipes it).  elaborateModules
+-- reads it to decide the empty-case short-circuit vs the discard-and-fallback.  Set
+-- to [] by elaborateModules before the sweep; NOT touched by resetState.
+promotionHarvestRef : Ref (List String)
+promotionHarvestRef = Ref []
+
 dictEligibleRef : Ref (List String)
 dictEligibleRef = Ref []
 
@@ -13552,31 +13561,77 @@ elaborateModules runtimeDecls coreDecls modulesIn =
   let argNames = map fst argDispatchIdxRef.value
   let _ = setRef dictEligibleRef (moduleUserFnNames modules)
   let _ = setRef dictEligibleSetRef (namesToSet (moduleUserFnNames modules) omEmpty)
-  let promoted = discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames
-  let bareDictNames = dedup (moduleDictNames coreDecls allDecls modules ++ promoted)
-  -- IMPORT ALIASING: prePassDict* marks a call site `EVar n` as a dict application only
-  -- when `n` is in dictNames — a set of DEFINITION names.  An aliased call site writes
-  -- the LOCAL name, so unless the alias locals are added here the call is never marked,
-  -- receives no dict arguments, and silently UNDER-APPLIES: `check` stays green and
-  -- `run` dies downstream with a type-confused value (the Phase-134 shape).
-  let dictNames = dedup (bareDictNames
-    ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
+  -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program
+  -- typecheck.  Direct-promotion == ∅ ⟹ full-promoted == ∅ (inherited promotion needs a
+  -- leaf direct promotion to inherit from), so a SINGLE bare-dict elaboration sweep that
+  -- harvests zero direct promotions is ALREADY the final, correct answer — no discovery
+  -- pass, no second sweep.  The bare-dict names (moduleDictNames + aliases, WITHOUT any
+  -- promoted set) drive both the prePass marking and the final dictPass.
+  let bareDictNames0 = dedup (moduleDictNames coreDecls allDecls modules)
+  let dictNames0 = dedup (bareDictNames0
+    ++ aliasDictNames bareDictNames0 (("core", coreDecls)::modules) modules)
   let markRpNames = dedup (rpNames ++ methodConstraintNames allDecls ++ buildStandaloneShadowsGraph allDecls (flatMap snd modules))
-  let core2 = prePassDictArg markRpNames dictNames argNames mangledShadowMapRef.value coreDecls
-  let modules2 = map (prePassModulePairArg markRpNames dictNames argNames mangledShadowMapRef.value) modules
   let runtimeSeed = externSchemes runtimeDecls
-  let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
+  -- FIRST SWEEP (bare-dict): the real per-module elaboration, harvesting each module's
+  -- direct promotions (registerInferredConstraints → promotedRef, unioned per module by
+  -- elabHarvestWorker).  On a program that promotes NOTHING — every compiler self-compile
+  -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
+  -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
+  let core2a = prePassDictArg markRpNames dictNames0 argNames mangledShadowMapRef.value coreDecls
+  let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames mangledShadowMapRef.value) modules
+  let _ = setRef promotionHarvestRef []
+  let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   let _ = foldModules
-    elabWorker
+    elabHarvestWorker
     (_last _mid _extra _rest => ())
     ()
-    (runtimeSeed ++ coreSchemes)
-    coreSchemes
+    (runtimeSeed ++ coreSchemesA)
+    coreSchemesA
     []
-    (publicDataDecls core2)
-    core2
-    modules2
-  dictPassModulesIfEnabled dictNames core2 modules2
+    (publicDataDecls core2a)
+    core2a
+    modules2a
+  match promotionHarvestRef.value
+    -- EMPTY: no direct promotion anywhere ⟹ no full promotion ⟹ nothing needed marking
+    -- beyond moduleDictNames.  The bare sweep IS final — 1 whole-program typecheck.
+    [] => dictPassModulesIfEnabled dictNames0 core2a modules2a
+    -- NON-EMPTY: ≥1 fn was directly promoted, so its call sites (unmarked under bareDict,
+    -- while its body already routes RDict) are UNSOUND to keep.  DISCARD the bare sweep
+    -- and fall back to today's EXACT 2-pass path: joint discovery (which seeds
+    -- crossModuleFunConstraintsRef so a promoted fn's inferred arity is visible when its
+    -- cross-module CALLER is checked) then the real marking sweep with the
+    -- promotion-augmented dict-name set.  resetCrossModuleState clears the Qual
+    -- accumulators the bare sweep filled; mainSchemeRef is re-armed for last-wins.
+    _ =>
+      let _ = resetCrossModuleState ()
+      let _ = setRef mainSchemeRef None
+      -- the bare sweep's per-module elabModuleStamp left superDeclsRef at the LAST
+      -- module's implDecls; restore the whole-graph value (mirror the WS-1b set above)
+      -- so discovery's super-expansion sees every interface, exactly as today's path.
+      let _ = setRef superDeclsRef allDecls
+      let promoted = discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames
+      let bareDictNames = dedup (moduleDictNames coreDecls allDecls modules ++ promoted)
+      -- IMPORT ALIASING: prePassDict* marks a call site `EVar n` as a dict application only
+      -- when `n` is in dictNames — a set of DEFINITION names.  An aliased call site writes
+      -- the LOCAL name, so unless the alias locals are added here the call is never marked,
+      -- receives no dict arguments, and silently UNDER-APPLIES: `check` stays green and
+      -- `run` dies downstream with a type-confused value (the Phase-134 shape).
+      let dictNames = dedup (bareDictNames
+        ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
+      let core2 = prePassDictArg markRpNames dictNames argNames mangledShadowMapRef.value coreDecls
+      let modules2 = map (prePassModulePairArg markRpNames dictNames argNames mangledShadowMapRef.value) modules
+      let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
+      let _ = foldModules
+        elabWorker
+        (_last _mid _extra _rest => ())
+        ()
+        (runtimeSeed ++ coreSchemes)
+        coreSchemes
+        []
+        (publicDataDecls core2)
+        core2
+        modules2
+      dictPassModulesIfEnabled dictNames core2 modules2
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 
@@ -14028,6 +14083,19 @@ elabWorker mid seed accData accAll prog =
     Some s => setRef mainSchemeRef (Some s)
     None => ()
   (schemes, ())
+
+-- #194: elabWorker + harvest.  Runs the identical per-module elaboration, then unions
+-- THIS module's directly-promoted fns (promotedRef, populated by
+-- registerInferredConstraints inside checkModuleFullImpl's generalization) into
+-- promotionHarvestRef.  Timing: elabModuleStamp → checkModuleFullImpl → checkBodyImpl
+-- calls resetState (wiping promotedRef) at module START, then registerInferredFor
+-- writes this module's promotions; foldModules calls the worker HEAD-first, so this
+-- harvest reads the head module's set BEFORE the recursion into `rest` resets it.
+elabHarvestWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
+elabHarvestWorker mid seed accData accAll prog =
+  let result = elabWorker mid seed accData accAll prog
+  let _ = setRef promotionHarvestRef (dedup (promotionHarvestRef.value ++ promotedRef.value))
+  result
 
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
