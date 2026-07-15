@@ -218,10 +218,8 @@ cohOverlapMsg : String -> List Mono -> List Mono -> String
 cohPpEach : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 cohPpPair : List Mono -> List Mono -> (String, String)
 cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
+cohStep : Mono -> Mono -> MStep Int Mono Mono
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
-cohSub : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
-cohSubGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
-cohSubR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
 cohSubsumes : List Mono -> List Mono -> Bool
 coherenceUserDecls : Ref (List Decl)
 collectAbstractRecordTypes : List Decl -> List String
@@ -232,7 +230,6 @@ collectIfaceNames : List Decl -> List String
 collectMethodSites : Expr -> List (Ref Route)
 collectRowEffvarIds : List Mono -> List Int
 collectTyIds : List Mono -> List Int
-combineSubst : Option (List (String, Mono)) -> Option (List (String, Mono)) -> Option (List (String, Mono))
 commaStr : Int -> String
 commonPrefixLen : String -> String -> Int -> Int
 composeOp : Mono -> Mono -> Bool -> Mono
@@ -393,6 +390,8 @@ entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
 entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
 envAlphaLets : TcEnv -> List (String, Expr)
 eqCompareOp : Mono -> Mono -> Mono
+eqInt : Int -> Int -> Bool
+eqStr : String -> String -> Bool
 eqUnimplementableHead : Mono -> Bool
 exitLevel : Unit -> Unit
 expandIoInBound : List Atom -> List Atom
@@ -715,6 +714,7 @@ lookupAssocS2 : String -> List (String, List (String, Int)) -> Option (List (Str
 lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
 lookupAxis : String -> List (String, Param) -> Option Param
 lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
+lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
 lookupCtxKind : Loc -> List (Loc, String) -> Option String
 lookupDomain : String -> List (String, Param) -> Param
@@ -740,9 +740,10 @@ mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
 matchCol0Type : Mono -> Option String
+matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
 matchOracle : Ref Oracle
+matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
-matchTyMonoList : List Ty -> List Mono -> Option (List (String, Mono))
 matchWarningHelp : Ref (List (String, String))
 matchWarningLocs : Ref (List (Option Loc))
 matchWarnings : Ref (List String)
@@ -1236,11 +1237,10 @@ tyHeadEq : Ty -> Ty -> Bool
 tyIsConcrete : Ty -> Bool
 tyMatchesAst : Ty -> Ty -> Bool
 tyOfMsg : Option String -> String
+tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStrictlyMoreSpecific : Ty -> Ty -> Bool
 tyStructEq : Ty -> Ty -> Bool
 tyStructEqList : List Ty -> List Ty -> Bool
-tySubsumeGo : Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
-tySubsumeGoList : List Ty -> List Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
 tySubsumes : Ty -> Ty -> Bool
 tyVarArgNames : List Ty -> List String
 tyVarNames : Ty -> List String
