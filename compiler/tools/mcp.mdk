@@ -1,9 +1,3 @@
--- lint-disable-file rule-duplicate-body
--- (The JSON-RPC envelope + field-accessor helpers below — responseMsg/fieldOr/
---  fieldStr — are intentionally COPIED from compiler/tools/lsp.mdk, which is not
---  importable here without exporting them and widening the cross-module surface.
---  The duplication is deliberate; same precedent as lsp.mdk's own top-of-file
---  disable for its playground_main.mdk mirror.)
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
 --
 -- Foundation for the `medaka mcp` workstream (#246 / #247): a JSON-RPC 2.0
@@ -22,12 +16,13 @@
 --   a framed JSON-RPC message.  All logging goes to stderr via `logMcp`; a stray
 --   stdout write corrupts the stream.
 --
--- The json parse/stringify + the JSON-RPC envelope builders (responseMsg /
--- errorMsg) are COPIED here rather than imported from lsp.mdk: those builders are
--- not exported from lsp.mdk, and copying the tiny envelope helpers keeps the
--- cross-module surface small (no edit to lsp.mdk, no new shared type/instance
--- surface) — the json layer itself IS imported, since it is already exported and
--- drags no new type surface.
+-- The json layer (parse/stringify/ctors) IS imported — it is already exported
+-- and drags no new type surface.  A few tiny helpers are instead COPIED from
+-- lsp.mdk (responseMsg + the fieldOr/fieldStr accessors): lsp.mdk does not export
+-- them, and copying keeps the cross-module surface small (no edit to lsp.mdk, no
+-- new shared type/instance surface).  Each copy carries its own scoped
+-- rule-duplicate-body disable.  `errorMsg` is ORIGINAL to this file — LSP never
+-- emits a JSON-RPC error object over its transport, so there is nothing to copy.
 
 import json.{
   Json,
@@ -59,6 +54,8 @@ mcpServerVersion = "0.1.0-preview"
 
 -- A JSON-RPC success envelope: { jsonrpc, id, result }.
 responseMsg : Json -> Json -> Json
+-- Intentional cross-file duplicate of lsp.mdk's responseMsg; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
+-- lint-disable-next-line rule-duplicate-body
 responseMsg idJson result =
   jObject [("jsonrpc", JString "2.0"), ("id", idJson), ("result", result)]
 
@@ -74,11 +71,15 @@ errorMsg idJson code message = jObject
 -- ── field accessors (copied from lsp.mdk) ────────────────────────────────────
 
 fieldOr : String -> Json -> Json
+-- Intentional cross-file duplicate of lsp.mdk's fieldOr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
+-- lint-disable-next-line rule-duplicate-body
 fieldOr key j = match lookup key j
   Some v => v
   None => JNull
 
 fieldStr : String -> Json -> Option String
+-- Intentional cross-file duplicate of lsp.mdk's fieldStr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
+-- lint-disable-next-line rule-duplicate-body
 fieldStr key j = match lookup key j
   Some v => asString v
   None => None
@@ -160,7 +161,7 @@ handleToolsCall runtimeSrc coreSrc idJson params = match fieldStr "name" params
 -- returns method-not-found (-32601); an unrecognized *notification* is ignored.
 dispatchMsg : String -> String -> Json -> <IO> Unit
 dispatchMsg runtimeSrc coreSrc msg = match methodOf msg
-  None => unit
+  None => logMcp "ignored: message has no string 'method' field"
   Some meth =>
     let idJson = fieldOr "id" msg
     let params = fieldOr "params" msg
