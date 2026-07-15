@@ -9,9 +9,14 @@
 -- the `==`/`<`/`>` NaN cases (all IEEE-false), plus non-NaN `!=` so the common case
 -- and the `(a != b) == !(a == b)` identity are guarded too.
 --
--- NOTE: `<=`/`>=` on NaN are deliberately NOT exercised here -- eval and wasm
--- currently give the WRONG (True) answer for those (tracked separately), so run and
--- build legitimately disagree and this corpus (run==build) cannot host them yet.
+-- #288 (S0 silent wrongness, now FIXED): `<=`/`>=` on NaN.  eval derived them as
+-- `not (ordGt/ordLt (valueCompare …))`, and wasm routed a two-global-operand compare
+-- through the 3-way `$mdk_value_cmp` (-1/0/1) which cannot model NaN's unorderedness --
+-- both wrongly printed True while native (inline `fcmp ole`/`oge`) gave the IEEE-correct
+-- False.  Fixed: eval gained Float-specific IEEE arms (compiler/eval/eval.mdk), and wasm
+-- now recognizes a top-level Float global so the compare lowers to inline `f64.le`/`f64.ge`
+-- (compiler/backend/wasm_emit.mdk).  These four lines pin run==build==value on the NaN
+-- `<=`/`>=` edge (all IEEE False) plus a NaN-vs-finite case.
 
 nan = 0.0 / 0.0
 
@@ -22,3 +27,7 @@ main =
   println (debug (nan > 1.0))    -- False
   println (debug (1.0 != 2.0))   -- True  (non-NaN != still works)
   println (debug (1.0 != 1.0))   -- False (non-NaN != still works)
+  println (debug (nan <= nan))   -- IEEE False (#288: eval/wasm gave True)
+  println (debug (nan >= nan))   -- IEEE False (#288: eval/wasm gave True)
+  println (debug (nan <= 1.0))   -- IEEE False
+  println (debug (1.0 >= nan))   -- IEEE False
