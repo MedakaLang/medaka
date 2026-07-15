@@ -1,0 +1,5 @@
+import promo.{dbl, quad}
+
+-- cross-module calls of promoted (inferred-constraint) fns at Int: the caller module
+-- supplies the Num dict argument that promo's dbl/quad take as their leading param.
+main = println (intToString (dbl 21) ++ " " ++ intToString (quad 5))

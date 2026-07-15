@@ -371,6 +371,7 @@ effvarCounter : Ref Int
 effvarId : Ref Effvar -> Int
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
+elabHarvestWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> List (String, Scheme)
 elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
@@ -930,6 +931,7 @@ productNorm : List (String, Param) -> Param
 promotedConstraintIfaces : List String -> List (String, List String) -> List (String, List String)
 promotedConstraints : List String -> List (String, List Int) -> List (String, List Int)
 promotedRef : Ref (List String)
+promotionHarvestRef : Ref (List String)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 publicDataDecls : List Decl -> List Decl
