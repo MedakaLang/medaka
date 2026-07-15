@@ -8976,9 +8976,16 @@ intPred "<=" = "sle"
 intPred ">=" = "sge"
 intPred op = panic ("llvm spike: unsupported comparison " ++ op)
 
+-- IEEE-754 comparison predicates (issue #285).  `==`/`<`/`>`/`<=`/`>=` are all
+-- ORDERED (`o*`): every relational comparison against NaN is false, which is
+-- correct IEEE semantics.  `!=` is the LONE exception — `a != b` must be TRUE
+-- when either operand is NaN — so it needs the UNORDERED-or-not-equal predicate
+-- `une`, not the ordered `one` (which is false for NaN and would break both IEEE
+-- and the identity `(a != b) == !(a == b)`).  Matches eval and the wasm backend's
+-- `f64.ne` (also une-equivalent).
 floatPred : String -> String
 floatPred "==" = "oeq"
-floatPred "!=" = "one"
+floatPred "!=" = "une"
 floatPred "<" = "olt"
 floatPred ">" = "ogt"
 floatPred "<=" = "ole"

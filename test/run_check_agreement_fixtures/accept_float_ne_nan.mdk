@@ -1,0 +1,24 @@
+-- Regression for #285 (S0 silent wrongness): native Float `!=` on NaN was WRONG.
+-- The specialized inline Float-comparison path emitted `fcmp <floatPred op>`, and
+-- floatPred "!=" was "one" (ORDERED not-equal), which is false when either operand
+-- is NaN -- so `nan != nan` printed False under `build` while `run` (eval) and the
+-- wasm backend (f64.ne) gave the IEEE-correct True.  `!=` is the LONE relational
+-- predicate that must be true for NaN, so it needs "une" (unordered-or-not-equal);
+-- every other comparison is correctly ordered.  Fixed in floatPred
+-- (compiler/backend/llvm_emit.mdk).  Pins run==build==value on the NaN `!=` edge and
+-- the `==`/`<`/`>` NaN cases (all IEEE-false), plus non-NaN `!=` so the common case
+-- and the `(a != b) == !(a == b)` identity are guarded too.
+--
+-- NOTE: `<=`/`>=` on NaN are deliberately NOT exercised here -- eval and wasm
+-- currently give the WRONG (True) answer for those (tracked separately), so run and
+-- build legitimately disagree and this corpus (run==build) cannot host them yet.
+
+nan = 0.0 / 0.0
+
+main =
+  println (debug (nan != nan))   -- IEEE True  (the #285 bug: native gave False)
+  println (debug (nan == nan))   -- IEEE False (ordered oeq, unchanged)
+  println (debug (nan < 1.0))    -- False
+  println (debug (nan > 1.0))    -- False
+  println (debug (1.0 != 2.0))   -- True  (non-NaN != still works)
+  println (debug (1.0 != 1.0))   -- False (non-NaN != still works)
