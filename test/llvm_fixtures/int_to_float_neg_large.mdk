@@ -1,0 +1,2 @@
+-- #199: intToFloat of a large NEGATIVE Int — boxed-negative unbox + f64.convert_i64_s.
+main = intToFloat (0 - 4503599627370497)

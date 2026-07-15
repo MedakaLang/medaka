@@ -1,0 +1,3 @@
+-- #199: hashInt of a large NEGATIVE Int exercises the boxed-negative branch of the
+-- $mdk_unbox_int seam.  -(2^52+1) built by int arithmetic (no >=1e15 float literal, #57).
+main = hashInt (0 - 4503599627370497)

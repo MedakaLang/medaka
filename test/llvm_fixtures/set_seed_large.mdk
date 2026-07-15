@@ -1,0 +1,5 @@
+-- #199: setSeed with a seed outside +-2^30 must unbox the full width (not i31.get_s).
+-- The draw is deterministic and observably differs if the seed were truncated.
+main =
+  let _ = setSeed 4503599627370497
+  randomInt 0 1000000
