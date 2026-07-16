@@ -195,12 +195,10 @@ atomParam (Atom _ p) = p
 -- with the builtin Prefix labels (Net/FileRead/FileWrite) and extended per
 -- program from `effect Net Prefix` decls.  An assoc-list Ref (the label set is
 -- tiny).  (Mirror of lib/typecheck.ml's effect_domains Hashtbl.)
-effectDomains : Ref (List (String, Param))
-effectDomains = Ref []
 
 seedEffectDomains : Unit -> Unit
 seedEffectDomains _ = setRef
-  effectDomains
+  driverState.value.effectDomains
   [
     ("Net", PPrefix None),
     ("FileRead", PPrefix None),
@@ -213,7 +211,9 @@ seedEffectDomains _ = setRef
 -- None ⇒ atomic.
 registerEffectDomain : String -> Option String -> Unit
 registerEffectDomain name domain =
-  setRef effectDomains ((name, domainParam domain)::effectDomains.value)
+  setRef
+    driverState.value.effectDomains
+    ((name, domainParam domain)::driverState.value.effectDomains.value)
 
 -- the ⊤-param a declared label carries: atomic ⇒ PUnit; Prefix ⇒ PPrefix None.
 domainParam : Option String -> Param
@@ -246,7 +246,7 @@ lookupDomain l ((k, p)::rest) = if l == k then p else lookupDomain l rest
 -- ⊤ parameter for a label's domain (design §2.1): consults the registry;
 -- labels with no Prefix entry are atomic ⇒ PUnit.
 dtopFor : String -> Param
-dtopFor label = match lookupDomain label effectDomains.value
+dtopFor label = match lookupDomain label driverState.value.effectDomains.value
   PPrefix None => PPrefix None
   PSet None => PSet None
   PProduct _ => PProduct []     -- WS-4: product domain ⊤ (no axis constrained)
@@ -1115,8 +1115,6 @@ public export data Kind = KType | KRow
 -- genuinely-unknown field on an unbound receiver (the `<unknown>` message).  This
 -- mirrors resolve's destructure-side AbstractFieldAccess signal (env.types ∋ owner
 -- ∧ owner owns no field) without threading anything new through the import seed.
-abstractRecordTypesRef : Ref (List String)
-abstractRecordTypesRef = Ref []
 
 -- collect the names of all VisAbstract record-shaped (a DData whose variants
 -- carry named fields) decls across the given decl list.  Only
@@ -1134,7 +1132,7 @@ collectAbstractRecordTypes (_::rest) = collectAbstractRecordTypes rest
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAbstractRecordTypes coreDecls modules =
   setRef
-    abstractRecordTypesRef
+    driverState.value.abstractRecordTypesRef
     (collectAbstractRecordTypes coreDecls ++ flatMap (m => collectAbstractRecordTypes (snd m)) modules)
 
 -- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
@@ -1235,8 +1233,6 @@ public export data PendingEntry =
 -- of RKey<head> (which would panic with no impl).  Mirrors lib/typecheck.ml's
 -- env.standalone_values + the EApp RLocal stamp (typecheck.ml:1603-1640,4585).
 -- NOT cleared by resetState — elabModuleStamp rebuilds it per module.
-standaloneValuesRef : Ref (List String)
-standaloneValuesRef = Ref []
 
 -- DEFINER-shadow names (facet 2): the names THIS module declares as a top-level
 -- funDef that ALSO name an interface method (buildDefinerShadows) — e.g. a user
@@ -1286,8 +1282,6 @@ standaloneValuesRef = Ref []
 -- deliberately NOT cleared by resetState (checkModuleFullImpl's per-module resetState
 -- must not wipe it mid-graph) — the forward-construction membership check makes a
 -- stale value inert (no funDef matches → no entry).
-mangledShadowMapRef : Ref (List (String, String))
-mangledShadowMapRef = Ref []
 
 -- the MANGLED standalone symbol a route's RLocal fallback should call, or "" for
 -- the bare-name (un-mangled) case.  Read off the marked EMethodAt route at record
@@ -1402,8 +1396,6 @@ routeLocalSym _ = ""
 -- decls — still resolves its index during that module's check).  Set per module by
 -- checkModuleFullImpl from [implDecls].  Independent of methodIfaceParamsRef (which
 -- the module path populates only for the module's OWN interfaces).
-methodDispatchIdxRef : Ref (List (String, Int))
-methodDispatchIdxRef = Ref []
 
 -- #154 PR-B: PERSISTENT per-run dispatch-index accumulator for the multi-module path.
 -- checkBodyImpl's Module arm used to `argDispatchIndices implDecls` (= `accAll ++ prog`) —
@@ -1523,6 +1515,70 @@ freshToggles _ = Toggles {
 toggles : Ref Toggles
 toggles = Ref (freshToggles ())
 
+-- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
+-- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
+-- `resetCrossModuleState` (CrossRun).  They have HETEROGENEOUS lifecycles
+-- (driver-set-once preamble state like `effectDomains`/`mainSchemeRef`; module-path
+-- scratch set fresh per module like `standaloneValuesRef`/`methodDispatchIdxRef`;
+-- group-scoped state reset before each check group like `matchOracle`/`matchWarnings`),
+-- so there is NO single `freshDriverState` reset point: `freshDriverState` is the
+-- INITIAL construction only, and every field is (re)written at its OWN current site,
+-- exactly as before.  Re-homing them here does NOT change any write/reset timing — it
+-- makes the #143/#144-style silent clobber STRUCTURALLY VISIBLE: a residual survivor is
+-- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
+-- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
+-- no whole-record copy is allocated per set.
+data DriverState =
+  | DriverState {
+      effectDomains : Ref (List (String, Param)),
+      abstractRecordTypesRef : Ref (List String),
+      argDispatchIdxRef : Ref (List (String, Int)),
+      dictEligibleRef : Ref (List String),
+      dictEligibleSetRef : Ref (OrdMap Unit),
+      mangledShadowMapRef : Ref (List (String, String)),
+      userIfaceNamesRef : Ref (List String),
+      coherenceUserDecls : Ref (List Decl),
+      superDeclsRef : Ref (List Decl),
+      standaloneValuesRef : Ref (List String),
+      methodDispatchIdxRef : Ref (List (String, Int)),
+      matchOracle : Ref Oracle,
+      matchWarnings : Ref (List TcDiag),
+      promotionHarvestRef : Ref (List String),
+      mainSchemeRef : Ref (Option Scheme),
+      sigNameSetRef : Ref (OrdMap Unit),
+      sigTyMapRef : Ref (OrdMap Ty),
+      implInferEnabled : Ref Bool,
+    }
+
+-- INITIAL construction only (NOT a per-module reset): each field reproduces its former
+-- top-level ref's initial.  The driver/per-module/per-group sites write each field at
+-- their own current point afterward, unchanged.
+freshDriverState : Unit -> DriverState
+freshDriverState _ = DriverState {
+  effectDomains = Ref [],
+  abstractRecordTypesRef = Ref [],
+  argDispatchIdxRef = Ref [],
+  dictEligibleRef = Ref [],
+  dictEligibleSetRef = Ref omEmpty,
+  mangledShadowMapRef = Ref [],
+  userIfaceNamesRef = Ref [],
+  coherenceUserDecls = Ref [],
+  superDeclsRef = Ref [],
+  standaloneValuesRef = Ref [],
+  methodDispatchIdxRef = Ref [],
+  matchOracle = Ref (buildOracle []),
+  matchWarnings = Ref [],
+  promotionHarvestRef = Ref [],
+  mainSchemeRef = Ref None,
+  sigNameSetRef = Ref omEmpty,
+  sigTyMapRef = Ref omEmpty,
+  implInferEnabled = Ref False,
+}
+
+-- The single module-level cell holding the residual driver/module/group survivors.
+driverState : Ref DriverState
+driverState = Ref (freshDriverState ())
+
 -- one entry per occurrence of a registered interface method: (iface, typarams,
 -- declared method Ty, the occurrence's instantiated mono).  Resolved post-inference.
 -- B.10.2c: the 5th element is the `currentLoc` span snapshotted at the RECORD
@@ -1640,8 +1696,6 @@ recordLocalBind name v =
 -- driver (elaborateDict / the module path) BEFORE inference; read by inferDictAtFound
 -- to expand a call site's constraint slots with their transitive supers.  Read-only
 -- during inference, so it needs no reset-lifecycle care.
-superDeclsRef : Ref (List Decl)
-superDeclsRef = Ref []
 
 -- WS-1b: the USER-module interface names (NOT core/prelude).  Super-expansion is
 -- gated to user interfaces only: a prelude super chain (Ord requires Eq) is already
@@ -1649,8 +1703,6 @@ superDeclsRef = Ref []
 -- Eq slot to `clamp : Ord a =>` would desync its def arity from its arg-tag call sites
 -- (the prior-attempt clamp regression).  User interfaces (Sub requires Sup) ARE
 -- dict-passed and need the super slot.  Set by elaborateModules.
-userIfaceNamesRef : Ref (List String)
-userIfaceNamesRef = Ref []
 
 -- #11 soundness (native obligation hole): the INTERFACE names of a constrained
 -- fn's `=>` constraints, slot-parallel to funConstraintsRef's ids.  funConstraintsRef
@@ -1943,17 +1995,10 @@ sitesFor fn idx = fromOption [] (omLookup fn idx)
 -- elabModuleStamp (before the next module's resetState wipes it).  elaborateModules
 -- reads it to decide the empty-case short-circuit vs the discard-and-fallback.  Set
 -- to [] by elaborateModules before the sweep; NOT touched by resetState.
-promotionHarvestRef : Ref (List String)
-promotionHarvestRef = Ref []
-
-dictEligibleRef : Ref (List String)
-dictEligibleRef = Ref []
 
 -- O(log n) membership mirror of dictEligibleRef (set in lockstep at both set
 -- sites).  maybeInferConstraint tests it per SCC member per discovery pass — an
 -- O(members × eligible) scan over the whole program when it was a list.
-dictEligibleSetRef : Ref (OrdMap Unit)
-dictEligibleSetRef = Ref omEmpty
 
 -- Whether checkProgramSeeded ALSO infers each parametric impl's return-position
 -- method bodies (instance-`requires` dict-passing, Phase 83/84 single-level).  ON
@@ -1961,8 +2006,6 @@ dictEligibleSetRef = Ref omEmpty
 -- `=== TYPES ===` golden path (checkProgram) and the multi-module path
 -- (elaborateModules) so their scheme output stays byte-identical.  Deliberately
 -- NOT reset by resetState — the entrypoint that owns the path sets it.
-implInferEnabled : Ref Bool
-implInferEnabled = Ref False
 
 -- ── D0.5 arg-position dispatch MEASUREMENT (probe-only) ─────────────────────
 -- Classify every ARGUMENT-position interface-method occurrence (the bare-EVar
@@ -1976,8 +2019,6 @@ implInferEnabled = Ref False
 -- method name → 0-based index of its first argument mentioning the interface
 -- typaram (its dispatch position).  Set by the probe before elaboration; absence
 -- of a name means "not an arg-position interface method" → not measured.
-argDispatchIdxRef : Ref (List (String, Int))
-argDispatchIdxRef = Ref []
 
 -- ── D3a arg-position dispatch STAMPING (Native backend, ALL elaboration paths) ──
 -- The action analog of the D0.5 measurement: instead of classifying each
@@ -2262,8 +2303,6 @@ currentMethodMismatch = Ref None
 -- dependency order), matching bin/main.ml's `final_schemes` lookup.  `None` until
 -- a module binding `main` is elaborated; reset at the top of elaborateModules so a
 -- prior run can't leak.  Type-level only → no emitted IR changes → fixpoint-safe.
-mainSchemeRef : Ref (Option Scheme)
-mainSchemeRef = Ref None
 
 -- Head type-constructor of a (possibly applied) mono: walk the TApp left spine to
 -- the constructor.  `Async e Unit` → Some "Async".
@@ -2275,7 +2314,7 @@ monoHeadCon m = match normalize m
 
 -- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
 export mainTypeIsAsync : Unit -> Bool
-mainTypeIsAsync _ = match mainSchemeRef.value
+mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => monoHeadCon t == Some "Async"
   None => False
 
@@ -2285,7 +2324,7 @@ mainTypeIsAsync _ = match mainSchemeRef.value
 -- explicit `main : <IO> Unit` annotation is present — e.g. `main = applyEff f 42`
 -- where `applyEff : (a -> <IO> b) -> a -> <IO> b` and `f : Int -> <IO> Unit`.
 export mainTypeIsUnit : Unit -> Bool
-mainTypeIsUnit _ = match mainSchemeRef.value
+mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => match normalize t
     TCon "Unit" => True
     _ => False
@@ -2296,7 +2335,7 @@ mainTypeIsUnit _ = match mainSchemeRef.value
 -- even when the structural `mainKind`/`refMainKind` can't see through a polymorphic
 -- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
 export mainTypeIsFloat : Unit -> Bool
-mainTypeIsFloat _ = match mainSchemeRef.value
+mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => match normalize t
     TCon "Float" => True
     _ => False
@@ -2317,8 +2356,6 @@ mainTypeIsFloat _ = match mainSchemeRef.value
 -- `List String` did, so the text-rendering paths (checkMatchToLines,
 -- checkToLinesWithRuntime, checkModulesEntryReport) stay byte-identical; the
 -- `W-*` code and the prefix strip happen on the driver/diagnostics.mdk side.
-matchWarnings : Ref (List TcDiag)
-matchWarnings = Ref []
 
 -- True iff the last typecheck pass pushed any match warning.  Read by the snapshot
 -- runner (`tools/snapshot.mdk`) to decide whether a rendered `# TYPES` section carries
@@ -2327,12 +2364,9 @@ matchWarnings = Ref []
 -- the accumulator rather than sniffing the rendered text: the renderer must not have to
 -- guess which of its own lines are diagnostics.
 export hadMatchWarnings : Unit -> Bool
-hadMatchWarnings _ = match matchWarnings.value
+hadMatchWarnings _ = match driverState.value.matchWarnings.value
   [] => False
   _ => True
-
-matchOracle : Ref Oracle
-matchOracle = Ref (buildOracle [])
 
 -- #158 PR3: the ~58 per-RUN accumulators/counters that `resetState` clears are bundled
 -- into ONE typed record so their reset lifecycle is a TYPE FACT, not a hand-maintained
@@ -3643,7 +3677,7 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
 recordRLocalSite env name tagRef inst
   | toggles.value.suppressRLocalRecord.value = ()
-  | not (contains name standaloneValuesRef.value) = ()
+  | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
     Some idx => match nthArgMono idx inst
@@ -3667,12 +3701,13 @@ standaloneSchemeFor env name sym = match lookupAssoc name perRun.value.shadowSta
 -- methodDispatchIdxRef (built by checkModuleFullImpl from every interface decl).
 -- Ungated, unlike argDispatchOf — RLocal detection must run on the eval path too.
 methodDispatchIdx : String -> Option Int
-methodDispatchIdx name = lookupAssoc name methodDispatchIdxRef.value
+methodDispatchIdx name =
+  lookupAssoc name driverState.value.methodDispatchIdxRef.value
 
 -- the dispatch-arg index of an arg-position method, but only when stamping is
 -- enabled (the emit path) — off, every EMethodAt is a return-position site.
 argDispatchOf : String -> Option Int
-argDispatchOf name = lookupAssoc name argDispatchIdxRef.value
+argDispatchOf name = lookupAssoc name driverState.value.argDispatchIdxRef.value
 
 -- Phase 69.x-e: if [name] is a method with method-level constraints (foldMap's
 -- `Monoid m`), map each constraint's scheme id through this occurrence's
@@ -3854,7 +3889,7 @@ inferDictAtFound name routesRef inst =
     -- so this call site applies one dict per EXPANDED slot — matching the def params
     -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
     -- equals its sub slot's id (shared type param), still pinned in [snd inst].
-    let expanded = expandSupersPairs superDeclsRef.value (zipL declaredIfaces declaredIds)
+    let expanded = expandSupersPairs driverState.value.superDeclsRef.value (zipL declaredIfaces declaredIds)
     let ids = map snd expanded
     let monos = constraintMonosOf ids (snd inst)
     let ifaces = map fst expanded
@@ -4005,7 +4040,7 @@ expandSupersFix allDecls acc frontier =
 -- shared id since constraints in a `requires` chain are over the same type param).
 superSlotsOf : List Decl -> (String, Int) -> List (String, Int)
 superSlotsOf allDecls (iface, id)
-  | not (contains iface userIfaceNamesRef.value) = []   -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
+  | not (contains iface driverState.value.userIfaceNamesRef.value) = []   -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
   | otherwise = match ifaceSupersOf allDecls iface
     None => []
     Some (typarams, supers) =>
@@ -4234,7 +4269,7 @@ resolveFieldRecord te fname = match headTyconMono te
     Some ri => Some (r, ri)
     None => match lookupRecordByMangledHead r fname
       Some pair => Some pair
-      None => if contains r abstractRecordTypesRef.value then
+      None => if contains r driverState.value.abstractRecordTypesRef.value then
         let _ = pushTypeError "T-ABSTRACT-FIELD" (abstractFieldMsg r fname)
         None
       else resolveFieldByOwners te fname
@@ -4974,7 +5009,7 @@ recordImplObligation x mono
   -- Check BOTH refs: the single-file check path (checkProgram) sets only
   -- `definerShadowNamesRef`, while the multi-module path sets `standaloneValuesRef`
   -- (importer ∪ definer) — so either alone would miss one path's shadows.
-  | contains x perRun.value.definerShadowNamesRef.value || contains x standaloneValuesRef.value =
+  | contains x perRun.value.definerShadowNamesRef.value || contains x driverState.value.standaloneValuesRef.value =
     mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
@@ -5232,7 +5267,7 @@ shadowStandaloneHead _ _ = None
 -- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
 -- stashed standalone scheme, and names a SINGLE-param interface method.
 isShadowStandalone : String -> Bool
-isShadowStandalone name = contains name standaloneValuesRef.value
+isShadowStandalone name = contains name driverState.value.standaloneValuesRef.value
   && isSome (lookupAssoc name perRun.value.shadowStandaloneSchemesRef.value)
   && singleParamIfaceMethod name
 
@@ -5578,7 +5613,7 @@ supersFix acc frontier =
   supersFix (acc ++ next) next
 
 directSupers : String -> List String
-directSupers iface = match ifaceSupersOf superDeclsRef.value iface
+directSupers iface = match ifaceSupersOf driverState.value.superDeclsRef.value iface
   None => []
   Some (_, supers) => map superIfaceName supers
 
@@ -5897,7 +5932,7 @@ shadowStandaloneDictSlots : (List Int, List String) -> List (Int, Mono) -> (List
 shadowStandaloneDictSlots slots subst =
   if isEmptyL (fst slots) then ([], [])
   else
-    let expanded = expandSupersPairs superDeclsRef.value (zipL (snd slots) (fst slots))
+    let expanded = expandSupersPairs driverState.value.superDeclsRef.value (zipL (snd slots) (fst slots))
     (constraintMonosOf (map snd expanded) subst, map fst expanded)
 
 -- ── S-1, REJECT direction on the plain `check` path ───────────────────────────
@@ -6487,11 +6522,11 @@ nonExhaustiveMatchWarning =
 checkMatchExhaustive : Mono -> List Arm -> Unit
 checkMatchExhaustive scrutTy arms =
   let rows = nonGuardedRows arms
-  if useful matchOracle.value (matchCol0Type scrutTy) rows [PWild] then
+  if useful driverState.value.matchOracle.value (matchCol0Type scrutTy) rows [PWild] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
     setRef
-      matchWarnings
-      (TcDiag "" 2 currentLoc.value msg help None :: matchWarnings.value)
+      driverState.value.matchWarnings
+      (TcDiag "" 2 currentLoc.value msg help None :: driverState.value.matchWarnings.value)
   else ()
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -6527,9 +6562,9 @@ checkMatchRedundant scrutTy arms =
 checkRedundantGo : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
 checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
-  let dp = desugarPat matchOracle.value pat
+  let dp = desugarPat driverState.value.matchOracle.value pat
   let _ = if armUnreachable col0 prec heads offCol dp then
-    setRef matchWarnings (TcDiag "" 2 (orElseLoc (exprLoc body) currentLoc.value) unreachableArmWarning None None :: matchWarnings.value)
+    setRef driverState.value.matchWarnings (TcDiag "" 2 (orElseLoc (exprLoc body) currentLoc.value) unreachableArmWarning None None :: driverState.value.matchWarnings.value)
   else ()
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range collapses to a wildcard that over-states coverage
@@ -6557,8 +6592,10 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
 armUnreachable : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
 armUnreachable col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
-  | otherwise = patUnreachable matchOracle.value col0 prec (PCon c args)
-armUnreachable col0 prec _ _ dp = patUnreachable matchOracle.value col0 prec dp
+  | otherwise =
+    patUnreachable driverState.value.matchOracle.value col0 prec (PCon c args)
+armUnreachable col0 prec _ _ dp =
+  patUnreachable driverState.value.matchOracle.value col0 prec dp
 
 noteHeadCtor : Pat -> OrdMap Unit -> OrdMap Unit
 noteHeadCtor (PCon c _) heads = omInsert c () heads
@@ -6584,7 +6621,7 @@ armIsUnguarded (_::_) = False
 -- `(message, Option help)` so the caller can stash both in the warning's TcDiag —
 -- no more message-keyed `matchWarningHelp` side channel.
 nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
-nonExhaustiveMsg scrutTy rows = match usefulWitness matchOracle.value (matchCol0Type scrutTy) rows 1
+nonExhaustiveMsg scrutTy rows = match usefulWitness driverState.value.matchOracle.value (matchCol0Type scrutTy) rows 1
   Some (w::_) =>
     let witnessStr = renderWitness w
     let hint = "add a '\{witnessStr} => …' arm, or a '_' wildcard arm to catch the rest."
@@ -6605,7 +6642,7 @@ isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
 nonGuardedRows : List Arm -> List (List Pat)
 nonGuardedRows [] = []
 nonGuardedRows ((Arm pat [] _)::rest) =
-  [desugarPat matchOracle.value pat] :: nonGuardedRows rest
+  [desugarPat driverState.value.matchOracle.value pat] :: nonGuardedRows rest
 nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 
 -- the head type name of the scrutinee, for the matrix's column-0 oracle: a
@@ -7194,13 +7231,13 @@ elaborateOne runtimeDecls coreDecls (rootId, prog) =
 -- filled after inference) and its def gets matching leading dict params.
 export elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
 elaborateDict runtimeDecls dictNames eligibleNames prog =
-  let _ = setRef superDeclsRef prog
-  let _ = setRef dictEligibleRef eligibleNames
-  let _ = setRef dictEligibleSetRef (namesToSet eligibleNames omEmpty)
-  let _ = setRef implInferEnabled True
+  let _ = setRef driverState.value.superDeclsRef prog
+  let _ = setRef driverState.value.dictEligibleRef eligibleNames
+  let _ = setRef driverState.value.dictEligibleSetRef (namesToSet eligibleNames omEmpty)
+  let _ = setRef driverState.value.implInferEnabled True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
-  let _ = setRef argDispatchIdxRef (argDispatchIndices prog)
-  let argNames = map fst argDispatchIdxRef.value
+  let _ = setRef driverState.value.argDispatchIdxRef (argDispatchIndices prog)
+  let argNames = map fst driverState.value.argDispatchIdxRef.value
   -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
   -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
   let prog2 = prePassDictArg (returnPosMethodNames prog ++ methodConstraintNames prog) allNames argNames [] prog
@@ -8931,12 +8968,10 @@ globalCoherenceConflict modules =
 -- (NO prelude), so a user impl that overrides a prelude impl is not flagged.  []
 -- (the golden/profile drivers and the no-runtime path) ⇒ checkToLines uses its own
 -- prelude-free arg; checkToLinesWithRuntime runs no coherence (byte-identical).
-coherenceUserDecls : Ref (List Decl)
-coherenceUserDecls = Ref []
 
 -- exported so the single-file front-end drivers set the user boundary before check
 export setCoherenceUserDecls : List Decl -> Unit
-setCoherenceUserDecls ds = setRef coherenceUserDecls ds
+setCoherenceUserDecls ds = setRef driverState.value.coherenceUserDecls ds
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- One parametric impl that carries a `requires`: its head tag (the tycon eval
@@ -10323,7 +10358,7 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
 -- 1-module path.
 export checkProgramSchemes : List Decl -> List Decl -> List (String, Scheme)
 checkProgramSchemes coreProg userProg =
-  let _ = setRef implInferEnabled False
+  let _ = setRef driverState.value.implInferEnabled False
   checkProgramSeededSplit [] coreProg userProg
 
 -- Like checkProgramSchemes but ALSO seeds runtime.mdk's externs (putStrLn,
@@ -10334,7 +10369,7 @@ checkProgramSchemes coreProg userProg =
 -- readLine ()` hovers as `String`, not a free `a`.
 export checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSchemesWithRuntime runtimeDecls coreProg userProg =
-  let _ = setRef implInferEnabled False
+  let _ = setRef driverState.value.implInferEnabled False
   checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
 
 -- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
@@ -10405,7 +10440,7 @@ checkBodyImpl seed mode prog0 =
   let superDecls = match mode
     Flat _ => prog
     Module _ _ implDecls => implDecls
-  let _ = setRef superDeclsRef superDecls
+  let _ = setRef driverState.value.superDeclsRef superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreamble / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
@@ -10456,9 +10491,9 @@ checkBodyImpl seed mode prog0 =
       let _ = setRef perRun.value.flatCoreFnNamesRef (namesToSet (map fst (funDefs coreProg)) omEmpty)
       ()
     Module _ _ _ =>
-      let _ = setRef standaloneValuesRef (dedup (importerShadows ++ definerShadows))
+      let _ = setRef driverState.value.standaloneValuesRef (dedup (importerShadows ++ definerShadows))
       let _ = setRef perRun.value.shadowStandaloneSchemesRef (pickStandaloneSchemes importerShadows seed)
-      let _ = setRef methodDispatchIdxRef crossRun.value.universeMethodDispatchIdxRef.value
+      let _ = setRef driverState.value.methodDispatchIdxRef crossRun.value.universeMethodDispatchIdxRef.value
       let _ = setRef perRun.value.funConstraintsRef crossRun.value.crossModuleFunConstraintsRef.value
       let _ = setRef perRun.value.funConstraintIfacesRef crossRun.value.crossModuleFunConstraintIfacesRef.value
       let _ = setRef perRun.value.funConstraintsRef (aliasConstraintEntries prog crossRun.value.crossModuleFunConstraintsQualRef.value
@@ -10553,7 +10588,7 @@ checkBodyImpl seed mode prog0 =
   let _ = match mode
     Flat _ => ()
     Module mid _ _ =>
-      let _ = expandSupersTable superDeclsRef.value
+      let _ = expandSupersTable driverState.value.superDeclsRef.value
       let _ = setRef crossRun.value.crossModuleFunConstraintsRef perRun.value.funConstraintsRef.value
       let _ = setRef crossRun.value.crossModuleFunConstraintsQualRef
         (attributeModuleArities mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
@@ -10592,7 +10627,7 @@ checkBodyImpl seed mode prog0 =
       -- accumulator (appended before this point) includes — and it is a no-op for the
       -- single-param obligations the perf `modules` shape exercises.
       let obUniv = ImplUniverse crossRun.value.obUnivConcreteRef.value crossRun.value.obUnivHeadlessRef.value crossRun.value.obUnivIfaceTagsRef.value
-      let _ = if not implInferEnabled.value then
+      let _ = if not driverState.value.implInferEnabled.value then
                 let _ = checkImplObligationsU obUniv perRun.value.pendingImplObligations.value
                 setNumlitFloats ()
               else ()
@@ -10699,7 +10734,7 @@ extendPropParams env ((PropParam x ty)::rest) =
 -- calls without perturbing either table.
 inferImplBodiesIfEnabledIn : TcEnv -> List Decl -> List Decl -> Unit
 inferImplBodiesIfEnabledIn env allProg decls
-  | implInferEnabled.value =
+  | driverState.value.implInferEnabled.value =
     inferImplBodies env allProg (returnPosMethodNames allProg) decls
   | otherwise = ()
 
@@ -11988,8 +12023,6 @@ buildAdj (n::rest) nameSet cbn m =
 -- O(log n) presence check instead of an O(sigs) `lookupAssoc` scan per SCC member
 -- (was O(members·sigs) over the whole compiler). Module-level ref, matching the
 -- `currentFn`/`curEffect` idiom; processing is sequential per module.
-sigNameSetRef : Ref (OrdMap Unit)
-sigNameSetRef = Ref omEmpty
 
 sigNamesToSet : List (String, Ty) -> OrdMap Unit -> OrdMap Unit
 sigNamesToSet [] m = m
@@ -12004,13 +12037,11 @@ sigNamesToSet ((n, _)::rest) m = sigNamesToSet rest (omInsert n () m)
 -- Built from the REVERSED list: `omFromPairs` is last-write-wins, while the
 -- `lookupAssoc` it replaces was first-match-wins, so reversing preserves which
 -- signature a duplicated name resolves to.
-sigTyMapRef : Ref (OrdMap Ty)
-sigTyMapRef = Ref omEmpty
 
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> List (String, Scheme)
 processTopGroups env sigs defs names =
-  let _ = setRef sigNameSetRef (sigNamesToSet sigs omEmpty)
-  let _ = setRef sigTyMapRef (omFromPairs (reverseL sigs) omEmpty)
+  let _ = setRef driverState.value.sigNameSetRef (sigNamesToSet sigs omEmpty)
+  let _ = setRef driverState.value.sigTyMapRef (omFromPairs (reverseL sigs) omEmpty)
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   processSCCs env sigs grouped ordered
@@ -12212,7 +12243,7 @@ preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List
 preunifySigsEx _ [] = ([], [])
 preunifySigsEx sigs ((m, v)::rest) =
   let (restRegs, restTvs) = preunifySigsEx sigs rest
-  match omLookup m sigTyMapRef.value
+  match omLookup m driverState.value.sigTyMapRef.value
     Some ty =>
       let inst = instantiateSigTracked ty
       let _ = unify v (fst inst)
@@ -12329,7 +12360,8 @@ inferMembers env sigs grouped ((m, v)::rest) =
 -- the peel source for a member: Some placeholder if it has a signature (peel the
 -- declared arrow domains onto the clause params), None otherwise
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
-memberPeelSource sigs m v = map (_ => v) (omLookup m sigNameSetRef.value)
+memberPeelSource sigs m v =
+  map (_ => v) (omLookup m driverState.value.sigNameSetRef.value)
 
 -- peel up to [n] arrow domains off [t], normalizing at each level.  A signature
 -- with fewer arrows than the clause has params stops early and returns fewer
@@ -12397,7 +12429,7 @@ peelOntoParams (Some src) patTypes pats =
 -- doesn't declare; effect *variables* (polymorphic `<e>`) carry no labels and so
 -- never escape (Phase 79e)
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
-checkEffectEscape sigs m effs = match omLookup m sigTyMapRef.value
+checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.value
   None => ()
   Some ty => match atomsEscape effs (declaredEffects ty)
     [] => ()
@@ -12435,7 +12467,7 @@ memberClauseIsValue (_, _) = True
 
 -- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
-memberSigIsFun sigs m v = match omLookup m sigNameSetRef.value
+memberSigIsFun sigs m v = match omLookup m driverState.value.sigNameSetRef.value
   None => False
   Some _ => match normalize v
     TFun _ _ _ => True
@@ -12546,8 +12578,8 @@ registerInferredConstraints sigs ((m, sch)::rest) =
 
 maybeInferConstraint : List (String, Ty) -> String -> Scheme -> Unit
 maybeInferConstraint sigs m sch
-  | not (omHasKey m dictEligibleSetRef.value) = ()
-  | omHasKey m sigNameSetRef.value = ()
+  | not (omHasKey m driverState.value.dictEligibleSetRef.value) = ()
+  | omHasKey m driverState.value.sigNameSetRef.value = ()
   | otherwise = registerInferredFor m (inferredConstraintIds m (schemeIds sch))
 
 -- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
@@ -12609,10 +12641,10 @@ checkSigConstraintCoverage regs sigs sigTvMaps addedObls ((m, sch)::rest) =
   checkSigConstraintCoverage regs sigs sigTvMaps addedObls rest
 
 checkSigConstraintOne : List (String, List (String, Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (String, List String, Ty, Mono, Option Loc) -> String -> Scheme -> Unit
-checkSigConstraintOne regs sigs sigTvMaps addedObls m sch = match omLookup m sigTyMapRef.value
+checkSigConstraintOne regs sigs sigTvMaps addedObls m sch = match omLookup m driverState.value.sigTyMapRef.value
   None => ()   -- unsigned member: its inferred constraints are promoted, not checked
   Some _ =>
-    let declared = censusSuperClose superDeclsRef.value (declaredPairsFor m regs)
+    let declared = censusSuperClose driverState.value.superDeclsRef.value (declaredPairsFor m regs)
     let inferredA = schemeObligationsOf (schemeIds sch) addedObls
     let inferredB = inferredIfacePairs m (schemeIds sch)
     let inferred = dedupPairs (inferredA ++ inferredB)
@@ -12839,13 +12871,13 @@ checkToLines prog =
 export checkToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkToLinesWithRuntime runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = setRef implInferEnabled False
-  let _ = setRef matchWarnings []
-  let _ = setRef matchOracle (buildOracle prog)
+  let _ = setRef driverState.value.implInferEnabled False
+  let _ = setRef driverState.value.matchWarnings []
+  let _ = setRef driverState.value.matchOracle (buildOracle prog)
   let schemes = checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
-  let _ = runFinalChecks coherenceUserDecls.value prog
+  let _ = runFinalChecks driverState.value.coherenceUserDecls.value prog
   let errs = reverseL perRun.value.typeErrors.value
-  let warns = map tcMsg (reverseL matchWarnings.value)
+  let warns = map tcMsg (reverseL driverState.value.matchWarnings.value)
   match errs
     [] => joinNl (schemeLines schemes ++ warns)
     _ => joinNl (typeErrorLines (map tcMsg errs))
@@ -12865,11 +12897,11 @@ checkToLinesWithRuntime runtimeDecls coreProg userProg =
 export checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkErrorsWithRuntime runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = setRef implInferEnabled False
-  let _ = setRef matchWarnings []
-  let _ = setRef matchOracle (buildOracle prog)
+  let _ = setRef driverState.value.implInferEnabled False
+  let _ = setRef driverState.value.matchWarnings []
+  let _ = setRef driverState.value.matchOracle (buildOracle prog)
   let _ = checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
-  let _ = runFinalChecks coherenceUserDecls.value prog
+  let _ = runFinalChecks driverState.value.coherenceUserDecls.value prog
   match perRun.value.typeErrors.value
     [] => False
     _ => True
@@ -12883,10 +12915,10 @@ checkErrorsWithRuntime runtimeDecls coreProg userProg =
 -- against `dev/diagdump.exe --check-match` (the harness sorts).
 export checkMatchToLines : List Decl -> List Decl -> String
 checkMatchToLines runtimeDecls prog =
-  let _ = setRef matchWarnings []
-  let _ = setRef matchOracle (buildOracle prog)
+  let _ = setRef driverState.value.matchWarnings []
+  let _ = setRef driverState.value.matchOracle (buildOracle prog)
   let _ = checkProgramSeeded (externSchemes runtimeDecls) prog
-  joinNl (map tcMsg (reverseL matchWarnings.value))
+  joinNl (map tcMsg (reverseL driverState.value.matchWarnings.value))
 
 -- ── diagnostics entry point (compiler/diagnostics.mdk bridge) ────────────
 -- Run the full typecheck pass (runtime-seeded) over [prog] and return the
@@ -12896,12 +12928,15 @@ checkMatchToLines runtimeDecls prog =
 export checkProgramDiags : List Decl -> List Decl -> List Decl -> (List TcDiag, List TcDiag)
 checkProgramDiags runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = setRef implInferEnabled False
-  let _ = setRef matchWarnings []
-  let _ = setRef matchOracle (buildOracle prog)
+  let _ = setRef driverState.value.implInferEnabled False
+  let _ = setRef driverState.value.matchWarnings []
+  let _ = setRef driverState.value.matchOracle (buildOracle prog)
   let _ = checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
-  let _ = runFinalChecks coherenceUserDecls.value prog
-  (reverseL perRun.value.typeErrors.value, reverseL matchWarnings.value)
+  let _ = runFinalChecks driverState.value.coherenceUserDecls.value prog
+  (
+    reverseL perRun.value.typeErrors.value,
+    reverseL driverState.value.matchWarnings.value,
+  )
 
 -- ── multi-module typecheck (bootstrap front-end) ───────────────────────────
 -- Threads per-module exports in dependency order.  The prelude (core) is checked
@@ -13008,7 +13043,7 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
 -- allProg = [implDecls] (interfaces + accumulated impls); rpNames computed over it.
 inferModuleImplBodiesIfEnabled : TcEnv -> List Decl -> List Decl -> Unit
 inferModuleImplBodiesIfEnabled env implDecls prog
-  | implInferEnabled.value =
+  | driverState.value.implInferEnabled.value =
     inferImplBodies env implDecls (returnPosMethodNames implDecls) prog
   | otherwise = ()
 
@@ -13065,7 +13100,7 @@ buildDefinerShadows implDecls prog =
   -- shadow.  For each mangled funDef that the mangle map flags as an iface-method
   -- shadow, register the BARE method name — that is the name the mark pass stamped
   -- on the `EMethodAt`, which `definerShadowArgHead`/`resolveRLocalSite` key off.
-  let bares = flatMap (n => match lookupAssoc n mangledShadowMapRef.value
+  let bares = flatMap (n => match lookupAssoc n driverState.value.mangledShadowMapRef.value
     Some bare => [bare]
     None => []) localNames
   removeAllS (localBoundNames prog) (dedup (direct ++ bares))
@@ -13138,7 +13173,7 @@ definerShadowsFromSet : OrdMap Unit -> List Decl -> List String
 definerShadowsFromSet ifaceSet prog =
   let localNames = dedup (map fst (funDefs prog))
   let direct = filter (n => omHasKey n ifaceSet) localNames
-  let bares = flatMap (n => match lookupAssoc n mangledShadowMapRef.value
+  let bares = flatMap (n => match lookupAssoc n driverState.value.mangledShadowMapRef.value
     Some bare => [bare]
     None => []) localNames
   removeAllS (localBoundNames prog) (dedup (direct ++ bares))
@@ -13193,7 +13228,7 @@ buildStandaloneShadowsGraph allDecls userDecls =
   -- `direct` name-intersection misses them; recover them via the mangle map so the
   -- prePass marks their (mangled) occurrences `EMethodAt`.  Empty on the un-mangled
   -- path (the map is empty there) → `direct` alone → byte-identical.
-  let mangled = filter (n => isSome (lookupAssoc n mangledShadowMapRef.value)) fns
+  let mangled = filter (n => isSome (lookupAssoc n driverState.value.mangledShadowMapRef.value)) fns
   dedup (direct ++ mangled)
 
 -- `public export data` / `public export record` decls — re-registered in every
@@ -13805,8 +13840,8 @@ checkModules runtimeDecls coreDecls modules =
 -- standalone caller that skips it would leak the previous run's universe into this one.
 export checkModuleFullDiags : List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModuleFullDiags seedVars accData accAll prog =
-  let _ = setRef implInferEnabled False
-  let _ = setRef matchWarnings []
+  let _ = setRef driverState.value.implInferEnabled False
+  let _ = setRef driverState.value.matchWarnings []
   -- P0-9: THIS module's own decls (`prog`) come FIRST so its constructors win
   -- the oracle's first-wins bare-name tables.  Another loaded module (in accData)
   -- can define a same-named ctor at a different arity (`map`'s arity-5 `Bin` vs
@@ -13814,7 +13849,7 @@ checkModuleFullDiags seedVars accData accAll prog =
   -- the WRONG arity/type for this module's own `Bin` in a match and false-warns
   -- W-NONEXHAUSTIVE.  buildOracle is duplicate-tolerant, and accData still
   -- supplies prelude Option/Result ctors (this module never redefines them).
-  let _ = setRef matchOracle (buildOracle (prog ++ accData))
+  let _ = setRef driverState.value.matchOracle (buildOracle (prog ++ accData))
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `toList`
@@ -13828,7 +13863,7 @@ checkModuleFullDiags seedVars accData accAll prog =
   (
     schemes,
     reverseL perRun.value.typeErrors.value,
-    reverseL matchWarnings.value,
+    reverseL driverState.value.matchWarnings.value,
   )
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
 -- module via accData, plus this module's own prog), NOT just `prog`.  The
@@ -14031,13 +14066,13 @@ export elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> 
 -- elaborateModules), so their goldens are unaffected; the diff gates all run with
 -- impl inference ON — a single elaboration mode across every driver.
 elaborateModules runtimeDecls coreDecls modulesIn =
-  let _ = setRef implInferEnabled True
+  let _ = setRef driverState.value.implInferEnabled True
   -- IMPORT ALIASING of an interface/impl METHOD — resolve it back to the origin name
   -- before ANY of the marking / stamping / dict-arity machinery below runs.  See
   -- renameAliasedMethods: a method is global-by-name, so an alias of one is a second
   -- SPELLING, not a second binding.
   let modules = renameAliasedMethods coreDecls modulesIn
-  let _ = setRef mainSchemeRef None
+  let _ = setRef driverState.value.mainSchemeRef None
   let _ = resetCrossModuleState ()
   let allDecls = coreDecls ++ flatMap snd modules
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
@@ -14049,14 +14084,14 @@ elaborateModules runtimeDecls coreDecls modulesIn =
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
-  let _ = setRef mangledShadowMapRef (computeMangledShadowMap allDecls (("core", coreDecls)::modules))
-  let _ = setRef superDeclsRef allDecls  -- WS-1b: interfaces in scope for the discovery scratch typecheck
-  let _ = setRef userIfaceNamesRef (collectIfaceNames (flatMap snd modules))  -- WS-1b: gate super-expansion to user interfaces
+  let _ = setRef driverState.value.mangledShadowMapRef (computeMangledShadowMap allDecls (("core", coreDecls)::modules))
+  let _ = setRef driverState.value.superDeclsRef allDecls  -- WS-1b: interfaces in scope for the discovery scratch typecheck
+  let _ = setRef driverState.value.userIfaceNamesRef (collectIfaceNames (flatMap snd modules))  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
-  let _ = setRef argDispatchIdxRef (argDispatchIndices allDecls)
-  let argNames = map fst argDispatchIdxRef.value
-  let _ = setRef dictEligibleRef (moduleUserFnNames modules)
-  let _ = setRef dictEligibleSetRef (namesToSet (moduleUserFnNames modules) omEmpty)
+  let _ = setRef driverState.value.argDispatchIdxRef (argDispatchIndices allDecls)
+  let argNames = map fst driverState.value.argDispatchIdxRef.value
+  let _ = setRef driverState.value.dictEligibleRef (moduleUserFnNames modules)
+  let _ = setRef driverState.value.dictEligibleSetRef (namesToSet (moduleUserFnNames modules) omEmpty)
   -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program
   -- typecheck.  Direct-promotion == ∅ ⟹ full-promoted == ∅ (inherited promotion needs a
   -- leaf direct promotion to inherit from), so a SINGLE bare-dict elaboration sweep that
@@ -14073,9 +14108,9 @@ elaborateModules runtimeDecls coreDecls modulesIn =
   -- elabHarvestWorker).  On a program that promotes NOTHING — every compiler self-compile
   -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
   -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
-  let core2a = prePassDictArg markRpNames dictNames0 argNames mangledShadowMapRef.value coreDecls
-  let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames mangledShadowMapRef.value) modules
-  let _ = setRef promotionHarvestRef []
+  let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
+  let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
+  let _ = setRef driverState.value.promotionHarvestRef []
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
   -- impl-body universe (`accAll ++ prog`, order-observable through buildImplTable/
@@ -14094,7 +14129,7 @@ elaborateModules runtimeDecls coreDecls modulesIn =
     []
     core2a
     modules2a
-  match promotionHarvestRef.value
+  match driverState.value.promotionHarvestRef.value
     -- EMPTY: no direct promotion anywhere ⟹ no full promotion ⟹ nothing needed marking
     -- beyond moduleDictNames.  The bare sweep IS final — 1 whole-program typecheck.
     [] => dictPassModulesIfEnabled dictNames0 core2a modules2a
@@ -14107,11 +14142,11 @@ elaborateModules runtimeDecls coreDecls modulesIn =
     -- accumulators the bare sweep filled; mainSchemeRef is re-armed for last-wins.
     _ =>
       let _ = resetCrossModuleState ()
-      let _ = setRef mainSchemeRef None
+      let _ = setRef driverState.value.mainSchemeRef None
       -- the bare sweep's per-module elabModuleStamp left superDeclsRef at the LAST
       -- module's implDecls; restore the whole-graph value (mirror the WS-1b set above)
       -- so discovery's super-expansion sees every interface, exactly as today's path.
-      let _ = setRef superDeclsRef allDecls
+      let _ = setRef driverState.value.superDeclsRef allDecls
       let promoted = discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames
       let bareDictNames = dedup (moduleDictNames coreDecls allDecls modules ++ promoted)
       -- IMPORT ALIASING: prePassDict* marks a call site `EVar n` as a dict application only
@@ -14121,8 +14156,8 @@ elaborateModules runtimeDecls coreDecls modulesIn =
       -- `run` dies downstream with a type-confused value (the Phase-134 shape).
       let dictNames = dedup (bareDictNames
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
-      let core2 = prePassDictArg markRpNames dictNames argNames mangledShadowMapRef.value coreDecls
-      let modules2 = map (prePassModulePairArg markRpNames dictNames argNames mangledShadowMapRef.value) modules
+      let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
+      let modules2 = map (prePassModulePairArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
       -- order-observable) but not accData (dead Module field).  wantAll=True keeps the
@@ -14511,7 +14546,7 @@ markModules coreDecls modules =
 -- is also still bound, so a tyvar receiver routes RDict.
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> List (String, Scheme)
 elabModuleStamp mid seedVars accData implDecls prog =
-  let _ = setRef superDeclsRef implDecls  -- WS-1b: interfaces in scope for super expansion
+  let _ = setRef driverState.value.superDeclsRef implDecls  -- WS-1b: interfaces in scope for super expansion
   let schemes = checkModuleFullImpl mid seedVars accData implDecls prog
   let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals (per module, before dictPass)
   let stampImplTable = buildImplTable implDecls
@@ -14588,7 +14623,7 @@ elabWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List D
 elabWorker mid seed accData accAll prog =
   let schemes = elabModuleStamp mid seed accData (accAll ++ prog) prog
   let _ = match lookupAssoc "main" schemes
-    Some s => setRef mainSchemeRef (Some s)
+    Some s => setRef driverState.value.mainSchemeRef (Some s)
     None => ()
   (schemes, ())
 
@@ -14602,7 +14637,7 @@ elabWorker mid seed accData accAll prog =
 elabHarvestWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), Unit)
 elabHarvestWorker mid seed accData accAll prog =
   let result = elabWorker mid seed accData accAll prog
-  let _ = setRef promotionHarvestRef (dedup (promotionHarvestRef.value ++ perRun.value.promotedRef.value))
+  let _ = setRef driverState.value.promotionHarvestRef (dedup (driverState.value.promotionHarvestRef.value ++ perRun.value.promotedRef.value))
   result
 
 schemeLines : List (String, Scheme) -> List String

@@ -1,5 +1,4 @@
 abstractFieldMsg : String -> String -> String
-abstractRecordTypesRef : Ref (List String)
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
@@ -55,7 +54,6 @@ appendDataUniverse : List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : List Decl -> Unit
 applyParams : Mono -> List Mono -> Mono
-argDispatchIdxRef : Ref (List (String, Int))
 argDispatchIndices : List Decl -> List (String, Int)
 argDispatchOf : String -> Option Int
 argDispatchOfDecl : Decl -> List (String, Int)
@@ -223,7 +221,6 @@ cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
 cohStep : Mono -> Mono -> MStep Int Mono Mono
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
 cohSubsumes : List Mono -> List Mono -> Bool
-coherenceUserDecls : Ref (List Decl)
 collectAbstractRecordTypes : List Decl -> List String
 collectByParam : List String -> List (String, Mono) -> List Mono
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
@@ -311,8 +308,6 @@ depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List
 derivableIface : String -> Bool
 detectSwappedArgs2 : TcEnv -> Expr -> Expr -> Option Mono
 dictArityOf : String -> Int
-dictEligibleRef : Ref (List String)
-dictEligibleSetRef : Ref (Map String Unit)
 dictParamName : String -> Int -> String
 dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
@@ -343,6 +338,7 @@ domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 drender : Param -> String
 drenderN : Param -> String
+driverState : Ref DriverState
 dropPairs : Int -> List (String, Int) -> List (String, Int)
 dropSchemesNamed : List String -> List (String, Scheme) -> List (String, Scheme)
 dropShadowedCore : List String -> List Decl -> List Decl
@@ -352,7 +348,6 @@ dtopFor : String -> Param
 effHoleSrc : String
 effStr : List Atom -> String
 effTailNames : Ty -> List String
-effectDomains : Ref (List (String, Param))
 effectEscapeMsg : String -> List Atom -> List Atom -> String
 effectLeakCheck : List Atom -> List Atom -> Unit
 effectLeakMsg : List Atom -> List Atom -> String
@@ -443,6 +438,7 @@ foreachUnit : (a -> Unit) -> List a -> Unit
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
 freshCrossRun : Unit -> CrossRun
+freshDriverState : Unit -> DriverState
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffvar : Unit -> Ref Effvar
@@ -533,7 +529,6 @@ implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option (List (String, Mono))
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagsForIface : List Decl -> String -> List String
-implInferEnabled : Ref Bool
 implKeyTc : String -> List Ty -> String
 implMatchesReceiverU : ImplUniverse -> String -> Mono -> Bool
 implMatchesSuper : String -> List Ty -> Decl -> Bool
@@ -716,22 +711,18 @@ lookupSchemeIface : String -> Int -> List (String, List (String, Int)) -> Option
 lookupVar : TcEnv -> String -> Option Scheme
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : Mono -> Unit
-mainSchemeRef : Ref (Option Scheme)
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
 mangledHeadCandidates : String -> String -> List (String, RecordInfo)
 mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
-mangledShadowMapRef : Ref (List (String, String))
 mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
 matchCol0Type : Mono -> Option String
 matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
-matchOracle : Ref Oracle
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
-matchWarnings : Ref (List TcDiag)
 matchedEntry : Map String (List KeyEntry) -> String -> Mono -> Option KeyEntry
 matchingEntries : Map String (List KeyEntry) -> String -> Mono -> List KeyEntry
 matchingEntriesByIface : Map String (List KeyEntry) -> String -> Mono -> List KeyEntry
@@ -757,7 +748,6 @@ methodConstraintNamesOfDecl : Decl -> List String
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
 methodDictArityOf : String -> Int
 methodDispatchIdx : String -> Option Int
-methodDispatchIdxRef : Ref (List (String, Int))
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodMembersOf : List String -> Loc -> List UseMember
 methodSchemes : List String -> List IfaceMethod -> List (String, Scheme)
@@ -898,7 +888,6 @@ processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr))
 productNorm : List (String, Param) -> Param
 promotedConstraintIfaces : List String -> List (String, List String) -> List (String, List String)
 promotedConstraints : List String -> List (String, List Int) -> List (String, List Int)
-promotionHarvestRef : Ref (List String)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 publicDataDecls : List Decl -> List Decl
@@ -1083,13 +1072,11 @@ shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigConstraints : Ty -> List (String, String)
 sigConstraintsOf : Ty -> List Constraint
-sigNameSetRef : Ref (Map String Unit)
 sigNamesToSet : List (String, Ty) -> Map String Unit -> Map String Unit
 sigToScheme : Ty -> Scheme
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigTooGeneralMsg : String -> Ty -> String
 sigTvarIds : List Mono -> List Int
-sigTyMapRef : Ref (Map String Ty)
 sigsOf : List Decl -> List (String, Ty)
 singleParamIfaceMethod : String -> Bool
 siteRDictName : Ref Route -> List String
@@ -1114,7 +1101,6 @@ standaloneShadowDomain : String -> Option Mono
 standaloneShadowScheme : String -> Option Mono
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
-standaloneValuesRef : Ref (List String)
 strHasSlash : String -> Bool
 strHasSlashGo : String -> Int -> Int -> Bool
 stripArrows : Mono -> Mono
@@ -1130,7 +1116,6 @@ substParams : List String -> List (String, Ty) -> List Ty
 substRow : List (Int, Ref Effvar) -> EffRow -> EffRow
 substTyVars : List (String, Ty) -> Ty -> Ty
 suggestField : String -> List String -> Option String
-superDeclsRef : Ref (List Decl)
 superIfaceName : Super -> String
 superImplExists : List Decl -> String -> List Ty -> Bool
 superImplMsgsOf : List Decl -> Decl -> List String
@@ -1225,7 +1210,6 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unreachableArmWarning : String
 useModuleId : Decl -> List String
 usePathModuleId : UsePath -> String
-userIfaceNamesRef : Ref (List String)
 usesImplDict : String -> Int -> Expr -> Bool
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 variantFieldTailNames : Variant -> List String
