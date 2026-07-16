@@ -47,12 +47,20 @@ passed **every** output gate byte-identical and failed ONLY the fixpoint (the em
 emit its own new code). Then `typecheck_compiler_source.sh` (the build does not gate on type
 errors) and the gates your diff touches.
 
-### 2. Hash containers do NOT self-compile inside llvm_emit — OrdMap and List-memos do
-Proven both ways (`compiler/PERF-RESULTS.md`): `HashMap` in the emitter's own module graph broke
-the fixpoint; the plain-ADT `OrdMap` (which the emitter already imports — PERF-RESULTS calls its
-2026-06-11 ancestor "EMap") and `Ref (Option (List …))` memos are fixpoint-safe.
-Every #349–#352 perf fix must use the safe shapes. If you need a hash container, you have found
-a D4 capability gap — file it, don't work around it silently.
+### 2. The hash-container ban is RETIRED (retested 2026-07-16) — but fixpoint FIRST survives it
+The 2026-06-11 "HashMap in llvm_emit breaks the fixpoint" failure (PERF-RESULTS "Attempted &
+reverted") **no longer reproduces**: the same shape — a module-level
+`Ref (Option (HashMap String Unit))` index, aliased `hash_map` imports, live in `isKnownFn` —
+passed `selfcompile_fixpoint` C3a/C3b byte-for-byte on 2026-07-16 (post-#364 main). The
+intervening emitter fixes closed the gap without anyone noticing — which is D4's whole point.
+Two disciplines survive the retest: (a) a NEW container shape still proves itself against the
+fixpoint FIRST — the June failure was invisible to every output gate; the first emitter-source
+PR that ships a hash container should also pin the shape as a fixture so the capability cannot
+silently regress; (b) weigh the import — `hash_map` is a new-type import (drags its whole impl
+surface; every future `hash_map` stdlib change then perturbs the emitter fixpoint/seed).
+`OrdMap` (which PERF-RESULTS calls by its 2026-06-11 ancestor name "EMap") stays the default for
+constant tables at O(log n); reach for a hash container where O(1) on a hot, large, mutable set
+genuinely pays for the import.
 
 ### 3. `sigs` is MUTATED mid-emission — memoizing it serves stale Float types
 The two-pass Float propagation rewrites the sig table (`f x = x + 1.0` re-infers on pass 2).
@@ -102,6 +110,8 @@ Verified DISPROVED at `40e14b85` (a correction needs the same proof as a filing)
   already OrdMap (its one straggler is `pubFnNames`, in #352).
 - **`1e+300` prints and re-lexes** — #51 is CLOSED; the round-trip law currently holds where
   probed.
+- **Hash containers DO self-compile in llvm_emit now** (retested 2026-07-16, fixpoint C3a/C3b
+  YES on the exact June shape) — trap 2 above; the old ban is history, not a rule.
 
 ### 10. One compiler-source PR in flight; stage commits by path
 Goldens are re-cut from source, never text-merged; and never `git add -A`

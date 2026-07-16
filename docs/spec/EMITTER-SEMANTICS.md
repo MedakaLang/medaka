@@ -373,7 +373,7 @@ laws bind **all four engines** and every reflective helper (V6).
 | M1 mangling injectivity | ✗ STATIC | `sanitizeId` separator-collapse breaks "impossible by construction" — **#347** (needs-repro) |
 | D1 determinism | ✅ | knob-independence measured (PERF-RESULTS); goldens path-stable |
 | D2/D3 fixpoint + seed | ✅ gated | `selfcompile_fixpoint` C3a/C3b; seed triple-free |
-| D4 self-compile closure | ⚠ folklore | HashMap-in-emitter gap known only via PERF-RESULTS prose; no fixture names the unsupported shape — fold into #353's staging |
+| D4 self-compile closure | ⚠ improving | the 2026-06-11 HashMap-in-emitter gap **no longer reproduces** (retested 2026-07-16: the exact shape, live in `isKnownFn`, passed the fixpoint C3a/C3b) — the ban is retired; residual ask: pin the shape as a fixture with the first shipped hash-container use so the capability cannot regress silently |
 | Perf posture | ✗ STATIC | hot-path quadratics **#349–#352**; enforcement blind spot: no lower/emit stage in `perf_scaling` — **#359** |
 
 ---

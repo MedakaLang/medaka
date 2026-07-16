@@ -563,6 +563,18 @@ interpreter 42.1×.
 
 ## Attempted & reverted — `isKnownFn` via HashMap (2026-06-11)
 
+> **UPDATE (2026-07-16, retested): this gap is CLOSED — the ban below is history, not a
+> rule.** The exact failing shape (a module-level `Ref (Option (HashMap String Unit))`
+> index + aliased `hash_map` imports, routed live through `isKnownFn`) was re-applied to
+> `llvm_emit.mdk` on post-#364 main and `selfcompile_fixpoint` passed **C3a AND C3b
+> byte-for-byte**; a standalone `medaka build` probe of the same shape also runs
+> correctly (run == build). The intervening month of emitter fixes closed the gap
+> without a dedicated fix. Hash containers are therefore admissible in the emitter
+> again — subject to the standing disciplines: fixpoint FIRST for any new container
+> shape (this failure was invisible to every output gate), and the new-type import
+> weight (`.claude/workstreams/EMITTER.md` trap 2). The "blocked pending the emitter
+> self-compile gap" caveats attached to isKnownFn-class items below are obsolete.
+
 `isKnownFn e name = containsStr name (fnNames e)` (O(fns) scan per CApp/CVar node,
 ~105 profile samples) was the next O(N²) target. Tried indexing `fns` into a
 module-level `Ref (Option (HashMap String Unit))` populated at each `Emit`
