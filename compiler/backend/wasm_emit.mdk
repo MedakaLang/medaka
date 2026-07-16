@@ -4484,13 +4484,26 @@ emitBinRef prog env d op l r tag =
     let _ = setRef useStrLeafRef True
     emitValueCmpRef prog env d op l r
   else if isCmpOp op && isPolyNumBinop l r then
+    -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArithRef is
+    -- set (wasm_emit.mdk's `valueArithRt` binding) — and it now UNCONDITIONALLY
+    -- defines $mdk_value_div/$mdk_value_mod with a baked-in coded divisor-zero
+    -- guard (wasm_preamble.mdk) referencing the $mdk_write_err_byte host import,
+    -- even for a program that only ever uses poly-`Num` `==`/`<`/etc (this branch).
+    -- So useTrapImport must be forced here too, not just at the arith branch below
+    -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
+    -- (the import undeclared) because the unused div/mod bodies still reference it.
     let _ = setRef useValueArithRef True
+    let _ = setRef useTrapImport True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
   -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
   -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
+  -- #371: same useTrapImport note as the isCmpOp branch above — $mdk_value_div/
+  -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
+  -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
   else if isArithOp op && isPolyNumBinop l r then
     let _ = setRef useValueArithRef True
+    let _ = setRef useTrapImport True
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
     -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
