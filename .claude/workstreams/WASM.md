@@ -356,53 +356,20 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   Refs and there is no disable for the census-mode gap flag; process-per-emit masks it.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
-  `nan`, `nan`, `1.0`, `1.0`) — the N6 interim bar holds there. ⚠️ **The second half of this
-  entry is now DRAINED: the HOF-routed `<=`/`>=` NaN defect (#305) is FIXED** — ws:emitter's
-  #484 made Float relational ops IEEE predicates on the **type-lost path** too (both backends,
-  one atomic PR), and took a latent `== NaN` bug with it. `WASM-SEMANTICS`'s **N5 row is now ✅**.
-  For N6's **current** status (`compare`/`min`/`max`/`sort` at NaN → totalOrder, **#360**) read
-  **`WASM-SEMANTICS`'s N6 row — do not restate it here.**
+  `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed
+  `<=`/`>=` NaN defect (#305) is **FIXED** by #484 (`849e0d4b`).
 
-  > ⭐ **Why this entry no longer says what N6's state IS.** It used to read *"#360 remains
-  > decided-and-unimplemented"* — an **encoded fact with no derivation and no expiry**, in a ledger
-  > headed *do NOT re-file*, i.e. sited where a stale claim does the most harm.
-  >
-  > **It rotted before this sentence was even reviewed.** #490 implemented N6 and merged at
-  > 16:46Z — *during* the review of this very commit — so the old wording was already false while a
-  > reviewer was reading it. **The pointer version survived that untouched.** That is the whole
-  > argument, demonstrated in real time.
-  >
-  > ⚠️ **NOT because the contract is reliably fresher — I claimed that and it is FALSE.** Draining
-  > is a **coin flip**: #484 and #490 drained `WASM-SEMANTICS` unprompted; **#388** (fixed #345/#369)
-  > and **#401** (fixed #381) **did not** — #401 touched *zero* doc files, and **#401 was authored by
-  > this very workstream**. Both stale rows then needed a manual sweep (#390, #409). So the real
-  > reason to stop duplicating is simpler and stronger: **one unreliable copy beats two
-  > independently-rottable ones**, and you don't have to bet on which artifact is current.
-  >
-  > ⇒ **A debunkings ledger records what was DISPROVED — a fact that cannot expire — never an OPEN
-  > issue's STATE, which expires the moment someone finishes the work.** (A **closed** issue's
-  > resolution — *"#305 FIXED by #484"* above — is a stable historical event, closer to a changelog
-  > line than a live status; that is the carve-out, and it is the only one.) The disproof — *NaN
-  > `compare`/`min`/`max` are engine-uniform, probe-run* — is the durable half and stays.
+  For N6's **current** status (`compare`/`min`/`max`/`sort` at NaN → totalOrder, #360) read
+  **`WASM-SEMANTICS`'s N6 row — do not restate it here.** This entry used to, and it went stale
+  the day it was written. Two prior fix PRs (**#388**, **#401**) did not keep that row in sync
+  unprompted and it needed manual sweeps (#390, #409) — **no workstream ledger has a drain rule
+  that reaches it (#488)**, so the fix is to keep ONE copy, not to bet on which is current.
 
-  > **Why this line is worth reading twice.** It sat in a ledger headed *"do NOT re-file"* —
-  > whose purpose is to tell you a question is **settled**. A stale entry here does not merely
-  > misinform: **it discourages the very check that would catch it.**
-  >
-  > ⚠️ **It is a CONVENTION GAP, not a workstream boundary — I claimed the latter and a reviewer
-  > disproved it in under a minute.** The tell: #484 didn't drain **its own team's** ledger either
-  > — `.claude/workstreams/EMITTER.md`'s debunkings section *still* reads *"the live NaN defect is
-  > the generic/HOF path (#305)"* (**#488**). A boundary would predict ws:emitter *could* reach
-  > `EMITTER.md` and did; instead **neither** workstream ledger was touched — only the explicitly
-  > named contract files (`docs/spec/*-SEMANTICS.md`). And `EMITTER.md` contains **no drain-rule
-  > text at all**: this file only checks itself because #409 wrote the rule *into this file*.
-  > **No drain checklist — ours or theirs — currently covers ANY workstream doc's debunkings
-  > ledger.**
-  >
-  > **So the practical rule stands and its scope is wider than "yours":** when *any* issue a
-  > debunkings ledger cites gets closed, **the drain is the LEDGER OWNER's, and nobody will do it
-  > for them.** Run the rule's grep on every closed `#N`, not just your own — and if the sibling's
-  > ledger is stale, **tell them** (#488), because their file has no rule telling them to look.
+  > **Rule of thumb for this ledger:** record what was **DISPROVED** (probe-run facts, which don't
+  > expire) and **commit SHAs** (immutable on protected `main`). Avoid restating an **open** issue's
+  > status — it expires the moment someone finishes the work. A **closed** issue's resolution is
+  > usually safe but not guaranteed: **#315** was closed and **reopened 17 minutes later** ("*it is
+  > NOT fixed*").
 
 ## Before you measure anything
 
