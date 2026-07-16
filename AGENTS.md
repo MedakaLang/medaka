@@ -401,14 +401,20 @@ narrative lives at the link.
   `map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin` collapse into one cell). The fix shape is a
   per-module **local** ctor frame that shadows the global.
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
-  silently enrolls (or de-enrolls) you in gates you never named. Before touching one, find
-  every consumer — `grep -rl '<fixture_dir>' test/` — then run **all** of them. Known
-  multi-consumer dirs: `test/eval_modules_fixtures/*/` → `diff_compiler_eval_modules.sh`
-  **and** `diff_compiler_core_ir_modules.sh` (P0-9 shipped "green" having run only the first);
-  `test/wasm/fixtures/` → **four** consumers (`test/wasm/diff_wasm.sh` — ⚠️ note the `wasm/`
-  subdir; unlike every other gate here it does NOT sit directly under `test/`, and guessing so
-  costs you two failed invocations; `diff_compiler_engines.sh`; `tmc_census.sh`; and the keys of
-  `test/engine_divergence.txt`).
+  silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
+  **`grep -rl '<fixture_dir>' test/` to ENUMERATE every consumer, then run all of them.**
+  ⚠️ **The set GROWS. Do not trust any count — including this sentence.** This bullet used to
+  say `test/wasm/fixtures/` had *"four"* consumers; it has **eight** (it drifted the moment
+  someone added `build_wasm_cmd.sh`), and `llvm_fixtures_typed/` has ~6. An agent obeying the
+  number literally runs half the gates and believes it was exhaustive — **the count
+  manufactured the very confidence this warning exists to prevent.** That is
+  *"check the SET, not one member"* failing inside the sentence that teaches it: a count is an
+  encoded fact with no derivation and no expiry, and the `grep` one clause earlier already
+  derives it. Cautionary example, not a list to trust: `test/eval_modules_fixtures/*/` feeds
+  `diff_compiler_eval_modules.sh` **and** `diff_compiler_core_ir_modules.sh` — **P0-9 shipped
+  "green" having run only the first.** ⚠️ Also note `test/wasm/diff_wasm.sh` lives under
+  `test/wasm/`, not directly under `test/` like every other gate; guessing costs two failed
+  invocations.
 - ⚠️ **The compiler's own sources are IN the snapshot corpus, so a source change MOVES ITS
   OWN GOLDEN. Bless it in the SAME commit.** Push the source without the golden and `main`
   goes red, and the hook then forces the *next* agent to bless a file they never touched —
