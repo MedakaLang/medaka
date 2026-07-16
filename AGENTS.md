@@ -245,6 +245,25 @@ gets RESPAWNED by the harness** — it has killed several agents. Use the target
 ⚠️ **`preflight` is a FILTER, NOT AN AUTHORITY.** It runs a subset and prints what it
 skipped. **CI on the PR is the authority. Nothing merges on a green preflight.**
 
+⚠️ **On a BLAST-RADIUS path, `make preflight` IS the full suite — the two rules above
+collide, and this carve-out is the resolution** (#492). For `stdlib/*`, `compiler/support/*`,
+`compiler/entries/*` and friends, preflight's own `mark_full` adds the `diff_compiler_*`
+catch-all, so "the loop" silently becomes the ~84-gate run this section forbids. **The
+widening is CORRECT** — a prelude change moves essentially every golden, and a narrow
+preflight would report green having run lexer + snapshot + doctests. So on those paths:
+
+- preflight now **announces this loudly before it spends the box**, and prints the exact
+  `run_gates.sh` line it is about to become;
+- **`PREFLIGHT_NO_FULL=1 sh test/preflight.sh`** declines it. It runs **NOTHING** and says
+  so — deliberately *not* a narrower subset, because a green that tested less than it
+  appears to is the hazard this whole suite exists to prevent;
+- **preferred: push and let CI run it** across its parallel runners.
+
+**Two agents were killed for obeying `make preflight` here** before it said any of this.
+If you took the loop at its word on a prelude change, that was the tooling's bug, not
+yours. An instruction that silently expands into what another instruction forbids is worse
+than either alone: the one who obeys pays.
+
 **A full local run IS justified when:** you changed `compiler/backend/*` (run
 `selfcompile_fixpoint.sh` — preflight forces this); you changed `compiler/support/*` or
 `stdlib/core.mdk` (blast radius genuinely is everything); you are merging two branches that
