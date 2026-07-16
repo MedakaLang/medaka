@@ -19,21 +19,27 @@ an open issue is an unfiled finding.
 
 > ### 🔁 CLOSING AN ISSUE IS NOT DONE UNTIL THE ROWS ASSERTING IT ARE DRAINED — **in the SAME commit**
 >
-> **This file and `docs/spec/WASM-SEMANTICS.md` drift for exactly one reason: nobody updates them
-> together.** Caught twice in one session, same shape both times: #369 was FIXED while the contract's
+> **This file and `docs/spec/WASM-SEMANTICS.md` drift, and both times we caught it the cause was the
+> same: nobody updated them together.** Caught twice in one session, same shape both times: #369 was FIXED while the contract's
 > N4 row still read *"✗ CONFIRMED S0"*, and #381 was CLOSED while its Perf-posture row still read
 > *"✗ STATIC"*. Both times this file was right and **the contract — the doc this very paragraph calls
 > ground truth — was the stale one.**
 >
-> **Every `**#N**` in that table is an encoded claim that N is OPEN**, with no derivation and no expiry
-> (#383 tracks the sweep; #404 the same disease in stdlib). So when you close a wasm issue:
+> **Every `#N` in that table is an encoded claim about N's state**, with no derivation and no expiry
+> (#383 tracks the sweep). So when you close a wasm issue:
 > `grep -rn '#<N>' docs/spec/WASM-SEMANTICS.md test/engine_divergence.txt test/ENGINE-DIVERGENCE.md
 > test/CAPABILITY-EXCEPTIONS.txt .claude/workstreams/WASM.md` and drain **all** of it in the closing
 > commit. *A bug that is stale in three places is invisible in all three.*
 >
-> The derived fix (nobody has built it yet): the table's `**#N**` refs are **mechanically checkable**
-> against issue state — a gate could parse them and fail when a cited issue is CLOSED. Then it
-> self-drains instead of needing a human sweep.
+> ⚠️ **A derived fix is NOT available today, and the obvious one does not work.** *"A gate could parse
+> the `**#N**` refs and fail when a cited issue is CLOSED"* is **false** — the table's markup is not a
+> state signal, and its own rows disprove it: **bold is used for CLOSED issues** precisely when a row
+> announces a fix (`**#369 FIXED** by #388`, `**#381 FIXED** by #401`), while **open** issues appear
+> **unbolded** (`the #349–#352 sibling census`, `shipped (#396)`), and some bold spans wrap prose
+> around the number rather than the number itself. A naive gate would flag the two rows this session
+> just FIXED and silently skip four open ones. **A gate here would need a consistent machine-readable
+> format to exist FIRST** — that is the actual prerequisite work, and nobody has done it. Until then
+> this rule is enforced by the grep above and by a reviewer, not by CI.
 
 **The playground runs on this backend, and the playground is the 0.1.0 front door.** A stranger's first
 Medaka program goes through `wasm_emit`. That is what makes this workstream a release concern and not
