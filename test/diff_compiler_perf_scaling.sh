@@ -137,6 +137,13 @@ XREF_N="${PERF_XREF_N:-4000}"
 # it, blinding the gate to the formatter/comment quadratic it exists to catch.
 COMMENTS_N="${PERF_COMMENTS_N:-1000}"
 
+# `manydefs` samples at its own N for the same reason `xref` does: the stage it
+# must be able to see (`lint`) only reaches ~0.62s at N=16000 (4N of 4000). At a
+# 2000-base range its largest-N lint time is 0.28s — barely over the 200ms floor,
+# so a faster runner could drop it UNDER and the floor would silently SKIP the one
+# stage this shape exists to grade. Sized for ~3x floor headroom instead.
+MANYDEFS_N="${PERF_MANYDEFS_N:-4000}"
+
 # min-of-K sample count for the TIME signal. K>=5 required (see file header);
 # allocation needs no such thing — it is deterministic, one run suffices.
 PERF_K="${PERF_K:-5}"
@@ -260,6 +267,15 @@ trap 'rm -rf "$WORK"' EXIT
 #              from 0 per comment; remaining-comment-tail rescanned per decl), so
 #              like #78/#115 they are graded on TIME — allocation is blind to them.
 #              See gen_comments and the fmt entry in TIME_STAGES.
+#   manydefs — the LINTER's per-file tier. N signed tiny private defs + one export.
+#              The other shapes are blind to it: `bindings` has no signatures (so
+#              ruleMissingSignature's set stays empty) and its defs are too few to
+#              separate the O(defs^2) term from the rule's heavy linear term. Both
+#              of this rule's fixed quadratics were List-as-a-SET (dead-code's
+#              assoc-list ref map + `contains`-over-visited; missing-signature's
+#              `contains` over signed names) — the same shape as #78/#115 — and
+#              BOTH are invisible to the alloc verdict (see the `lint` note in
+#              TIME_STAGES), so this shape is graded on lint TIME.
 #   modules  — MULTI-MODULE (issue #153). The five shapes above are single-file,
 #              so they run only the single-file driver and are STRUCTURALLY BLIND
 #              to the O(modules^2) family in checkModuleFullImpl / elabModuleStamp.
@@ -326,6 +342,24 @@ gen_nesting() {
   # binding" without one, which aborted the WHOLE profiler (issue #359 wiring).
   # It matches the _baseline.mdk fixture, so it subtracts straight back out.
   printf 'main = println 1\n' >> "$f"
+}
+
+gen_manydefs() {
+  n=$1; f=$2; : > "$f"
+  # N SIGNED, private, tiny top-level defs + one exported `main`. Two shapes in one:
+  #   * many defs  -> the dead-code rule's ref-map/closure (reachableNames) and the
+  #     exported/reachable membership tests scale with the DEF COUNT;
+  #   * one signature per def -> ruleMissingSignature's signed-name set scales too.
+  # Bodies are deliberately TINY: the rule's honest linear term (declToString +
+  # identTokens per decl) is proportional to body size, so small bodies keep it from
+  # diluting the O(defs^2) term. With real bodies the pre-fix ratio only reached
+  # 3.05 (under the 3.0 gate) at 3200 defs; with tiny ones it hits 3.32/3.59 (alloc)
+  # and 3.45/4.47 (time) — an unmistakable signal.
+  printf 'export main : Int\nmain = p0 + p1\n' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf 'p%s : Int\np%s = %s\n' "$i" "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
 }
 
 gen_comments() {
@@ -536,6 +570,16 @@ stage_times_min_modules() {
 # shape's TIME signal catches the class. On every OTHER shape fmt is under the
 # 200ms floor and SKIPs (loud, harmless); the `comments` shape is sized so its fmt
 # time clears the floor and is graded.
+#
+# `lint` is the PER-FILE lint tier (profile_main runs lintProgram over allRules on
+# the raw AST). Graded on TIME, and the `manydefs` shape is sized so it clears the
+# floor: its two historical quadratics were BOTH invisible to the alloc verdict —
+# one (mergeRefs' assoc-list ref map) allocates quadratically but is only ~11% of
+# `total`, so the total-alloc ratio DILUTES it to 2.24/2.53 ("ok") while the lint
+# stage itself read 3.32/3.59; the other (missingSigPair's `contains` over the
+# signed-name list) is a PURE SCAN that allocates nothing at all. Per-stage time is
+# the only signal that sees both.
+#
 # `lower` and `emit` are the BACKEND arm (issue #359). Until 2026-07-16 this list
 # stopped at typecheck, so the O(n^2) detector graded NOTHING downstream of the front
 # end and every emitter quadratic was structurally invisible to it — the same blind
@@ -568,7 +612,7 @@ stage_times_min_modules() {
 # the target reads smaller here than it would in isolation. Read a `lower`/`emit`
 # ratio as a LOWER BOUND on the true exponent: over-threshold is real, under-threshold
 # is not proof of linearity.
-TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck fmt lower emit"
+TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck fmt lint lower emit"
 
 # ── KNOWN SLOW (TIME) — a ledger, NOT a skip-list ────────────────────────────
 #
@@ -631,15 +675,17 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck fmt lower emit"
 #     top-level declarations, and ALLOCATION IS BLIND TO IT.
 #
 #         xref, emit stage            TIME              ALLOC (whole-run net)
-#           N=4000                    0.643s            1136.3 MB
-#           N=8000                    2.392s  (3.72x)   2312.6 MB  (2.04x)
-#           N=16000                   9.917s  (4.15x)   4711.9 MB  (2.04x)
+#           N=4000                    0.643s            1528.8 MB
+#           N=8000                    2.392s  (3.72x)   3099.5 MB  (2.03x)
+#           N=16000                   9.917s  (4.15x)   6289.6 MB  (2.03x)
 #
 #     Allocation reads a clean, flat, LINEAR 2.04x/2.04x — "ok" — while emit takes
 #     TEN SECONDS to emit 16000 functions. Heap pinned, min-of-5, quiet box (load
 #     <4). It is NOT a GC heap-resize step: a step COLLAPSES one doubling later, and
-#     this ratio CLIMBS (3.72 -> 4.15) PAST the pure-quadratic 4.0 with the heap
-#     pinned at 2 GB.
+#     this ratio CLIMBS (3.72 -> 4.15) to/past the pure-quadratic 4.0 with the heap
+#     pinned at 2 GB. Observed r2 band across FOUR DCE-realistic quiet-box batches:
+#     3.85 / 4.01 / 4.11 / 4.15 (r1 3.62-3.82). The ~4.0 reading is the stable one;
+#     treat the band, not any single batch, as the measurement.
 #
 #     ⚠️ THESE ARE THE *DCE-REALISTIC* NUMBERS, and that distinction is the whole
 #     reason to trust them. The first cut of this entry measured a fixture whose
@@ -683,9 +729,11 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck fmt lower emit"
 KNOWN_SLOW_TIME="xref:emit"
 KNOWN_TCEIL_match_typecheck="4.6";    KNOWN_TFIXED_match_typecheck="2.60"
 KNOWN_TCEIL_listlit_typecheck="4.8";  KNOWN_TFIXED_listlit_typecheck="2.60"
-# Observed r2 4.15/4.13 on the DCE-realistic fixture; ceiling 5.6 matches the
+# Observed r2 3.85-4.15 across four DCE-realistic batches (incl. the merged tree with
+# the `lint` stage present, which does not perturb emit). Ceiling 5.6 matches the
 # modules:typecheck precedent, whose observed band (4.1-4.3) is the same one, rather
-# than the tighter match/listlit ceilings set on a ~3.3 band. TFIXED 2.60 (the
+# than the tighter match/listlit ceilings set on a ~3.3 band; it clears the top of
+# this band by 1.45, comparable to that precedent's 1.3. TFIXED 2.60 (the
 # file-wide convention): drop under it and #349/#350/#352 are fixed and this entry
 # must be promoted out.
 KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
@@ -726,10 +774,11 @@ printf -- '---------------------------------------------------------------------
 # contaminated by the constant term. Also flag a CLIMBING trend (r2 meaningfully above
 # r1) even when r2 is still under the ceiling, because that is a quadratic caught early,
 # while it is small.
-for shape in bindings match listlit nesting xref comments; do
+for shape in bindings match listlit nesting xref comments manydefs; do
   case "$shape" in
     xref)     base_n="$XREF_N" ;;
     comments) base_n="$COMMENTS_N" ;;
+    manydefs) base_n="$MANYDEFS_N" ;;
     *)        base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
