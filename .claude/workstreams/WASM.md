@@ -51,17 +51,35 @@ semantics PR is in those files.
 
 ---
 
-## ⚠️ Enforcement-first is NOT executable when the tree is already dirty (2026-07-16)
+## ⭐ A new gate must land GREEN — and the perf gate already has the ledger that lets it (2026-07-16)
 
-#384's DAG sequences the perf-gate arm (#359) *before* the perf fixes (#381/#382) so the fixes are
-regressable. **That ordering cannot land.** `diff_compiler_perf_scaling` grades scaling *ratios* and
-fails on regression, so adding an emit stage while the quadratic is still live puts a measured **5.3×**
-ratio in front of a gate expecting ~2.0× ⇒ **`main` goes red on landing**, blocking the merge queue for
-every workstream. **Gate-first only works on an already-clean tree.**
+**A gate cannot land red**: `main` would block the merge queue for every workstream. So how do you land
+#359's emit stage while #381's quadratic is still live and measuring **5.3×** against a ~2.0× threshold?
 
-The correct order is **fix → gate, inside one session**: it buys the same un-regressability, and every
-PR is green. Generalize it: *a new gate must land green, so it lands **after** the bug it grades.* The
-same constraint binds #359's native arm against #349–#352.
+**Two ways, and the second is the one to reach for:**
+
+1. **Fix → gate.** Land #381 first, then the stage lands green trivially.
+2. **Gate → fix, with a SELF-DRAINING ledger entry.** `diff_compiler_perf_scaling.sh` already has this
+   built in and it is the repo's own idiom: `KNOWN_SLOW_TIME` + per-`shape:stage`
+   `KNOWN_TCEIL_*`/`KNOWN_TFIXED_*` ceilings (`:554-559`, `:645-687`). A ledgered stage is graded against
+   **its ceiling**, not the clean-tree threshold — so it lands **green on a dirty tree** — and it fails if
+   the stage gets *worse*. **Crucially it also FAILS when the bug is FIXED** (`:648-652`, `:665-679`:
+   *"PROMOTE: now too FAST to time-gate … Remove `<shape>:<stage>` from KNOWN_SLOW_TIME — the bug is
+   FIXED"*), which is what makes it drain instead of rot. `KNOWN_SLOW_TIME` is **empty today** precisely
+   because it drained (the `match:typecheck` entry went out with #117's 58× fix).
+
+**⇒ #384's "enforcement first" DAG IS executable as written.** Option 2 is strictly better when the fix
+is not already in hand: the gate exists *before* the fix, so the fix's own landing is what trips the
+PROMOTE detector — the gate proves the fix rather than the author's prose. Same for #359's native arm
+against #349–#352.
+
+> **How this section got here is the lesson.** It first asserted the DAG was *"not executable"* and that
+> *"gate-first only works on an already-clean tree"* — a categorical rule, derived from reading ONE line
+> (`TIME_STAGES`, `:453`) and never reading the ledger 100 lines below it. **An independent reviewer
+> killed it.** That is this repo's #1 lesson (*"reproduce before you trust"*) pointed at a **gate** instead
+> of a bug: a static read named a mechanism, not its behavior — the same error as filing #381 STATIC and
+> never measuring it. **Read the gate before you claim what it does, and never let a plan you like turn
+> into a rule in a doc without one adversarial pass over it.**
 
 ---
 
@@ -135,8 +153,8 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
 - ~~**Float `%` is a rounded f64 formula, not fmod** (#369, S0)~~ — **CLOSED 2026-07-16, fixed by
   #388** (`53f63fbd`), which landed N4 as one cross-engine semantics: `$mdk_float_rem` is now the
   exact libm power-of-two reduction (`wasm_preamble.mdk:1024-1046`) and `$mdk_value_mod`'s Float arm
-  routes to it (`:730-734`), so **both** paths this bug named are fixed. Re-verified with 24 probes
-  (inline + poly × 6 cases × 3 engines): eval == native == wasm, incl. `1.0e17 % 3.0` → `1.0` and
+  routes to it (`:730-734`), so **both** paths this bug named are fixed. Re-verified with 36 probes
+  (2 paths × 6 cases × 3 engines): eval == native == wasm, incl. `1.0e17 % 3.0` → `1.0` and
   `1.0e300 % 1.0e-300` (~2000 down-walk iterations, still bit-exact vs C fmod). Pinned by
   `test/wasm/fixtures/polynum_mod_float{,_large,_neg}.mdk`. **Closing as already-fixed is a success —
   the sibling's #345 fix reached the wasm arm because it was landed atomically.**
