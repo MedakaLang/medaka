@@ -1,5 +1,5 @@
 # META
-source_lines=1522
+source_lines=1523
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -542,12 +542,13 @@ derivedNextDepth c depth
    the same hash — the contractual invariant.  Hash values need not be unique.
    Primitive impls delegate to per-type externs (`hashInt`/`hashString`/… —
    specified deterministic hashers, byte-identical across the tree-walker and the
-   native backend); derived and compound impls use a djb2-style fold: seed with
+   native backend); the derived impls and the compound impls below
+   (`Option`/`Result`/`List`/tuples) share one djb2-style fold: seed with the
    constructor ordinal, then `acc = acc * 33 + hash field` left-to-right over
-   fields.  `deriving (Hashable)` generates this fold for `data`, `record`, and
-   `newtype` types.  The fold is NOT masked non-negative — `Int` wraps, so a hash
-   may be negative; only eq-agreement is contractual, and hash_map/hash_set mask
-   at the point of use. -}
+   fields.  `deriving (Hashable)` generates exactly that fold for `data`,
+   `record`, and `newtype` types (#422).  The fold is NOT masked non-negative:
+   `Int` wraps, so a hash may be negative.  Only eq-agreement is contractual —
+   hash_map/hash_set mask at the point of use (#416). -}
 export interface Hashable a where
   hash : a -> Int
 

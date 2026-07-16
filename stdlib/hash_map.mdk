@@ -10,11 +10,14 @@
    returning a fresh map. Reach for `Map` when you want persistence/ordering;
    reach for `HashMap` when you want raw speed and a single owner.
 
-   Keys hash via the `Hashable` typeclass method `hash` (structural by default via
-   `deriving (Hashable)`). It must agree with the key's `Eq`, which holds for every
-   structural `Eq` impl (all the built-ins) — a *custom* `Eq` that isn't structural
-   would break it, so don't key a HashMap on such a type. Iteration order is
-   unspecified (hash order).
+   Keys hash via the `Hashable` typeclass method `hash`. It must agree with the
+   key's `Eq`, which holds for every structural `Eq` impl (all the built-ins) —
+   a *custom* `Eq` that isn't structural would break it, so don't key a
+   HashMap on such a type. A custom key type gets a structural impl from
+   `deriving (Hashable)` (#422); hand-write `impl Hashable T` only when the
+   derived fold is not what you want. A hash may be NEGATIVE (the fold wraps) —
+   `slotOf` masks the sign off before indexing, so that is safe (#416).
+   Iteration order is unspecified (hash order).
 
    The mutating ops sequence mutation statements in block bodies. A conditional
    mutation whose body is a multi-statement block (`deleteAt`) uses an **else-less

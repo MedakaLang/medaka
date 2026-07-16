@@ -1,5 +1,5 @@
 # META
-source_lines=209
+source_lines=212
 stages=DESUGAR,MARK
 # SOURCE
 {- hash_set.mdk — a mutable hash set (Module 6).
@@ -13,9 +13,12 @@ stages=DESUGAR,MARK
 
    Standalone rather than a wrapper over `HashMap a Unit` — same reasoning as
    set.mdk over `Map a Unit` (self-contained, no qualified-import gymnastics, no
-   `Unit` payload). Elements hash via the `Hashable` typeclass method `hash`
-   (structural by default via `deriving (Hashable)`), which
-   must agree with the element's `Eq`. Iteration order is unspecified.
+   `Unit` payload). Elements hash via the `Hashable` typeclass method `hash`,
+   which must agree with the element's `Eq`. A custom element type gets a
+   structural impl from `deriving (Hashable)` (#422); hand-write `impl Hashable
+   T` only when the derived fold is not what you want. A hash may be NEGATIVE
+   (the fold wraps) — `slotOf` masks the sign off before indexing, so that is
+   safe (#416). Iteration order is unspecified.
 
    `Foldable HashSet` makes `toList`/`elem`/`length`/`any`/… work (a set's
    elements *are* its `toList`, unlike a map's pairs). -}
