@@ -27,7 +27,8 @@ probe h =
   let _ = hmSet (K 2 h) 20 m
   let s = hsNew ()
   let _ = hsInsert (K 1 h) s
-  (hmGet (K 1 h) m, hmGet (K 2 h) m, hsHas (K 1 h) s)
+  let _ = hsInsert (K 2 h) s
+  (hmGet (K 1 h) m, hmGet (K 2 h) m, hsHas (K 1 h) s && hsHas (K 2 h) s)
 
 main : <IO> Unit
 main =
