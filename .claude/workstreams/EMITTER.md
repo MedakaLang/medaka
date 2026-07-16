@@ -47,9 +47,10 @@ passed **every** output gate byte-identical and failed ONLY the fixpoint (the em
 emit its own new code). Then `typecheck_compiler_source.sh` (the build does not gate on type
 errors) and the gates your diff touches.
 
-### 2. Hash containers do NOT self-compile inside llvm_emit — OrdMap/EMap and List-memos do
+### 2. Hash containers do NOT self-compile inside llvm_emit — OrdMap and List-memos do
 Proven both ways (`compiler/PERF-RESULTS.md`): `HashMap` in the emitter's own module graph broke
-the fixpoint; plain-ADT `EMap`/`OrdMap` and `Ref (Option (List …))` memos are fixpoint-safe.
+the fixpoint; the plain-ADT `OrdMap` (which the emitter already imports — PERF-RESULTS calls its
+2026-06-11 ancestor "EMap") and `Ref (Option (List …))` memos are fixpoint-safe.
 Every #349–#352 perf fix must use the safe shapes. If you need a hash container, you have found
 a D4 capability gap — file it, don't work around it silently.
 
