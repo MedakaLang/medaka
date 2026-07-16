@@ -364,11 +364,22 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
 
   > **Why this line is worth reading twice.** It sat in a ledger headed *"do NOT re-file"* —
   > whose purpose is to tell you a question is **settled**. A stale entry here does not merely
-  > misinform: **it discourages the very check that would catch it.** It survived #484 because
-  > ws:emitter correctly drained the *contract* (`WASM-SEMANTICS.md`) but cannot reach this
-  > file — **the same-commit drain rule stops at the workstream boundary.** So: when a sibling
-  > closes an issue this file's disproof ledger cites, **the drain is YOURS**, and nobody will
-  > do it for you. Run the rule's grep on every closed `#N`, not just your own.
+  > misinform: **it discourages the very check that would catch it.**
+  >
+  > ⚠️ **It is a CONVENTION GAP, not a workstream boundary — I claimed the latter and a reviewer
+  > disproved it in under a minute.** The tell: #484 didn't drain **its own team's** ledger either
+  > — `.claude/workstreams/EMITTER.md`'s debunkings section *still* reads *"the live NaN defect is
+  > the generic/HOF path (#305)"* (**#488**). A boundary would predict ws:emitter *could* reach
+  > `EMITTER.md` and did; instead **neither** workstream ledger was touched — only the explicitly
+  > named contract files (`docs/spec/*-SEMANTICS.md`). And `EMITTER.md` contains **no drain-rule
+  > text at all**: this file only checks itself because #409 wrote the rule *into this file*.
+  > **No drain checklist — ours or theirs — currently covers ANY workstream doc's debunkings
+  > ledger.**
+  >
+  > **So the practical rule stands and its scope is wider than "yours":** when *any* issue a
+  > debunkings ledger cites gets closed, **the drain is the LEDGER OWNER's, and nobody will do it
+  > for them.** Run the rule's grep on every closed `#N`, not just your own — and if the sibling's
+  > ledger is stale, **tell them** (#488), because their file has no rule telling them to look.
 
 ## Before you measure anything
 
