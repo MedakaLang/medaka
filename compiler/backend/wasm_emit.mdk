@@ -241,6 +241,7 @@ import backend.emit_support.{
   isDictParamName,
   ftPrefix,
   labelFallthrough,
+  rngBound,
 }
 import backend.wasm_preamble.{
   preambleHeadLines,
@@ -3077,8 +3078,34 @@ patTestBind prog (PList ps) occ clLabel env =
 -- refutable subpatterns.
 patTestBind prog (PTuple ps) occ clLabel env =
   patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
+-- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
+-- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
+-- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
+-- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
+-- Both Int and Char are plain i31 immediates (Char = its codepoint, cf. the PLit LChar
+-- arm above), so one signed test serves both — `i31.get_s` keeps NEGATIVE bounds
+-- (`-1..1`) correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
+-- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
+patTestBind prog (PRng lo hi incl) occ clLabel env = (
+  rngCmpW occ (rngBound lo) "i32.lt_s" clLabel ++ rngCmpW occ (rngBound hi) (if incl then "i32.gt_s" else "i32.ge_s") clLabel,
+  [],
+  env,
+)
 patTestBind prog other occ clLabel env =
   gapL3 ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
+
+-- one half of a range test: read `occ` as a signed i31 and `br_if clLabel` when `cmp`
+-- against `bound` holds (i.e. when the value is OUT of range).  `occ` is re-embedded
+-- per half — patTestBind's contract already requires it be a cheap re-runnable read.
+rngCmpW : List String -> Int -> String -> String -> List String
+rngCmpW occ bound cmp clLabel = occ
+  ++ [
+    "ref.cast (ref i31)",
+    "i31.get_s",
+    "i32.const " ++ intToString bound,
+    cmp,
+    "br_if " ++ clLabel,
+  ]
 
 -- (tests, binds, env') for a refutable fixed-length list clause head against `occ`.
 -- Each element requires its cell be a Cons; the spine end requires Nil.
@@ -6536,16 +6563,19 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
 
 -- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitGuardArmRef,
 -- for guarded arms in tail position.
+-- G6 (#379): same `patTestBind` re-match as emitGuardArmRef — see its note.  A `PRng`
+-- arm reaches THIS site too (`f n = match n` is a tail match), so the range test has to
+-- exist on both engines or the two disagree.
 emitGuardArmTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$gt" ++ intToString d
+    let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
+    let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeTail prog env arity d root occs arms fail
   None => gapL "ref-mode: tail guarded arm index out of range"
@@ -7349,21 +7379,27 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
     binds ++ bodyCode ++ ["br " ++ decLabel]
   None => gapL "ref-mode: decision arm index out of range"
 
--- a guarded arm: bind the pattern, evaluate the guards; all-pass → body + br
+-- a guarded arm: RE-MATCH the pattern, evaluate the guards; all-pass → body + br
 -- decLabel; any fail → the `fail` subtree (resumes at the same column context).
 -- Fall-through is a labelled block `$g<d>`: a failed guard `br_if $g<d>` skips the
 -- body, then control falls into the fail subtree after the block's `end`.
+-- G6 (#379): the re-match goes through `patTestBind` (test+bind against `gLabel`), not
+-- `bindPatRef` (bind only) — a `PRng` arm canonicalizes to PWild in the matrix, so the
+-- tree routes HERE unconditionally and this re-match must do the range comparison.
+-- An irrefutable pattern emits NO test, so the plain-`if`-guard case is unchanged.
+-- Mirrors llvm_emit's emitGuardedArm/`emitRefutArm`.  `root` is the scrutinee
+-- `local.get` (occ0), which satisfies patTestBind's re-runnable-read contract.
 -- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitLeafRef.
 emitGuardArmRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$g" ++ intToString d
+    let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
+    let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
   None => gapL "ref-mode: guarded arm index out of range"
@@ -7940,10 +7976,14 @@ firstTyIsW tym c ty = match omLookup c tym
   Some t => eqStr t ty
   None => False
 
--- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
--- before the Prog exists).  Keep in lockstep with `ctorsOfType`.
-ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
-ctorsOfTypeIxW tcm ty =
+-- the shared 5-branch ctor-list dispatch used by BOTH `ctorsOfTypeIxW` (memo-only,
+-- called before the `Prog` exists) and `ctorsOfType` (Prog-based). Parameterized
+-- over the fallback for a plain user type, so each caller supplies its own way to
+-- resolve that case (a direct memo lookup vs `ctorsOfTypeUser`) while the
+-- reserved/List/Bool/tuple branches — and their order — exist exactly once, so
+-- the two can no longer drift apart.
+ctorsOfTypeDispatchW : (String -> List String) -> String -> List String
+ctorsOfTypeDispatchW userFallback ty =
   if isReservedType ty then
     reservedCtorsOfType ty
   else if ty == "List" then
@@ -7953,7 +7993,14 @@ ctorsOfTypeIxW tcm ty =
   else if isTupleType ty then
     [tupleCtorName (tupleTypeArity ty)]
   else
-    orEmptyCtors (omLookup ty tcm)
+    userFallback ty
+
+-- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
+-- before the Prog exists). Shares its branches with `ctorsOfType` via
+-- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
+ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
+ctorsOfTypeIxW tcm ty =
+  ctorsOfTypeDispatchW (t => orEmptyCtors (omLookup t tcm)) ty
 
 ctorArity : Prog -> String -> Int
 ctorArity (Prog ctorArs _ _ _ _ _ _ _ _) name = match ctorArLookupW ctorArs name
@@ -8004,18 +8051,16 @@ orNeg1Ord None = -1
 
 -- the declaration-ordered ctor list of a user type (the ctor→type map lists each
 -- type's ctors consecutively in declaration order — filter to this type).
+-- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
+-- program's ctorTypes table), so `ctorsOfTypeUser` would return [] → a 0-slot
+-- br_table tower → both arms dropped → fall-through `unreachable` if it weren't
+-- special-cased in the shared dispatch below. A genuine `match <Bool> { True =>
+-- …; False => … }` (a CDecision switch, not a lowered CIf) hits this.
+-- Index-aligned to syntheticCtorOrdinal: False=0, True=1.
+-- Shares its branches with `ctorsOfTypeIxW` via `ctorsOfTypeDispatchW` — nothing
+-- left to keep in lockstep by hand.
 ctorsOfType : Prog -> String -> List String
-ctorsOfType prog ty =
-  if isReservedType ty then reservedCtorsOfType ty
-  else if ty == "List" then ["Cons", "Nil"]
-  -- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
-  -- program's ctorTypes table), so ctorsOfTypeUser would return [] → a 0-slot
-  -- br_table tower → both arms dropped → fall-through `unreachable`.  A genuine
-  -- `match <Bool> { True => …; False => … }` (a CDecision switch, not a lowered CIf)
-  -- hits this.  Index-aligned to syntheticCtorOrdinal: False=0, True=1.
-  else if ty == "Bool" then ["False", "True"]
-  else if isTupleType ty then [tupleCtorName (tupleTypeArity ty)]
-  else ctorsOfTypeUser prog ty
+ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
@@ -8442,6 +8487,9 @@ ptag (PTuple _) = "PTuple (W7)"
 ptag (PCons _ _) = "PCons (list — W7)"
 ptag (PList _) = "PList (list — W7)"
 ptag (PAs _ _) = "PAs"
+-- #380 (first half): without this arm a range-shaped residual gap fell to `_ = "?"` and
+-- named no construct — which is why the #379 ledger rows read `… literal): ?`.
+ptag (PRng _ _ _) = "PRng"
 ptag _ = "?"
 
 -- the W3 scope wall: any out-of-slice node lands here (an explicit hard stop).

@@ -1,5 +1,5 @@
 # META
-source_lines=8449
+source_lines=8497
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -245,6 +245,7 @@ import backend.emit_support.{
   isDictParamName,
   ftPrefix,
   labelFallthrough,
+  rngBound,
 }
 import backend.wasm_preamble.{
   preambleHeadLines,
@@ -3081,8 +3082,34 @@ patTestBind prog (PList ps) occ clLabel env =
 -- refutable subpatterns.
 patTestBind prog (PTuple ps) occ clLabel env =
   patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
+-- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
+-- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
+-- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
+-- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
+-- Both Int and Char are plain i31 immediates (Char = its codepoint, cf. the PLit LChar
+-- arm above), so one signed test serves both — `i31.get_s` keeps NEGATIVE bounds
+-- (`-1..1`) correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
+-- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
+patTestBind prog (PRng lo hi incl) occ clLabel env = (
+  rngCmpW occ (rngBound lo) "i32.lt_s" clLabel ++ rngCmpW occ (rngBound hi) (if incl then "i32.gt_s" else "i32.ge_s") clLabel,
+  [],
+  env,
+)
 patTestBind prog other occ clLabel env =
   gapL3 ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
+
+-- one half of a range test: read `occ` as a signed i31 and `br_if clLabel` when `cmp`
+-- against `bound` holds (i.e. when the value is OUT of range).  `occ` is re-embedded
+-- per half — patTestBind's contract already requires it be a cheap re-runnable read.
+rngCmpW : List String -> Int -> String -> String -> List String
+rngCmpW occ bound cmp clLabel = occ
+  ++ [
+    "ref.cast (ref i31)",
+    "i31.get_s",
+    "i32.const " ++ intToString bound,
+    cmp,
+    "br_if " ++ clLabel,
+  ]
 
 -- (tests, binds, env') for a refutable fixed-length list clause head against `occ`.
 -- Each element requires its cell be a Cons; the spine end requires Nil.
@@ -6540,16 +6567,19 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
 
 -- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitGuardArmRef,
 -- for guarded arms in tail position.
+-- G6 (#379): same `patTestBind` re-match as emitGuardArmRef — see its note.  A `PRng`
+-- arm reaches THIS site too (`f n = match n` is a tail match), so the range test has to
+-- exist on both engines or the two disagree.
 emitGuardArmTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$gt" ++ intToString d
+    let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
+    let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeTail prog env arity d root occs arms fail
   None => gapL "ref-mode: tail guarded arm index out of range"
@@ -7353,21 +7383,27 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
     binds ++ bodyCode ++ ["br " ++ decLabel]
   None => gapL "ref-mode: decision arm index out of range"
 
--- a guarded arm: bind the pattern, evaluate the guards; all-pass → body + br
+-- a guarded arm: RE-MATCH the pattern, evaluate the guards; all-pass → body + br
 -- decLabel; any fail → the `fail` subtree (resumes at the same column context).
 -- Fall-through is a labelled block `$g<d>`: a failed guard `br_if $g<d>` skips the
 -- body, then control falls into the fail subtree after the block's `end`.
+-- G6 (#379): the re-match goes through `patTestBind` (test+bind against `gLabel`), not
+-- `bindPatRef` (bind only) — a `PRng` arm canonicalizes to PWild in the matrix, so the
+-- tree routes HERE unconditionally and this re-match must do the range comparison.
+-- An irrefutable pattern emits NO test, so the plain-`if`-guard case is unchanged.
+-- Mirrors llvm_emit's emitGuardedArm/`emitRefutArm`.  `root` is the scrutinee
+-- `local.get` (occ0), which satisfies patTestBind's re-runnable-read contract.
 -- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitLeafRef.
 emitGuardArmRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$g" ++ intToString d
+    let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
+    let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
   None => gapL "ref-mode: guarded arm index out of range"
@@ -7944,10 +7980,14 @@ firstTyIsW tym c ty = match omLookup c tym
   Some t => eqStr t ty
   None => False
 
--- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
--- before the Prog exists).  Keep in lockstep with `ctorsOfType`.
-ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
-ctorsOfTypeIxW tcm ty =
+-- the shared 5-branch ctor-list dispatch used by BOTH `ctorsOfTypeIxW` (memo-only,
+-- called before the `Prog` exists) and `ctorsOfType` (Prog-based). Parameterized
+-- over the fallback for a plain user type, so each caller supplies its own way to
+-- resolve that case (a direct memo lookup vs `ctorsOfTypeUser`) while the
+-- reserved/List/Bool/tuple branches — and their order — exist exactly once, so
+-- the two can no longer drift apart.
+ctorsOfTypeDispatchW : (String -> List String) -> String -> List String
+ctorsOfTypeDispatchW userFallback ty =
   if isReservedType ty then
     reservedCtorsOfType ty
   else if ty == "List" then
@@ -7957,7 +7997,14 @@ ctorsOfTypeIxW tcm ty =
   else if isTupleType ty then
     [tupleCtorName (tupleTypeArity ty)]
   else
-    orEmptyCtors (omLookup ty tcm)
+    userFallback ty
+
+-- `ctorsOfType`'s dispatch, off the memo and without a `Prog` (the indices are built
+-- before the Prog exists). Shares its branches with `ctorsOfType` via
+-- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
+ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
+ctorsOfTypeIxW tcm ty =
+  ctorsOfTypeDispatchW (t => orEmptyCtors (omLookup t tcm)) ty
 
 ctorArity : Prog -> String -> Int
 ctorArity (Prog ctorArs _ _ _ _ _ _ _ _) name = match ctorArLookupW ctorArs name
@@ -8008,18 +8055,16 @@ orNeg1Ord None = -1
 
 -- the declaration-ordered ctor list of a user type (the ctor→type map lists each
 -- type's ctors consecutively in declaration order — filter to this type).
+-- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
+-- program's ctorTypes table), so `ctorsOfTypeUser` would return [] → a 0-slot
+-- br_table tower → both arms dropped → fall-through `unreachable` if it weren't
+-- special-cased in the shared dispatch below. A genuine `match <Bool> { True =>
+-- …; False => … }` (a CDecision switch, not a lowered CIf) hits this.
+-- Index-aligned to syntheticCtorOrdinal: False=0, True=1.
+-- Shares its branches with `ctorsOfTypeIxW` via `ctorsOfTypeDispatchW` — nothing
+-- left to keep in lockstep by hand.
 ctorsOfType : Prog -> String -> List String
-ctorsOfType prog ty =
-  if isReservedType ty then reservedCtorsOfType ty
-  else if ty == "List" then ["Cons", "Nil"]
-  -- Bool's ctors are SYNTHETIC (registered via syntheticCtor* helpers, not in the
-  -- program's ctorTypes table), so ctorsOfTypeUser would return [] → a 0-slot
-  -- br_table tower → both arms dropped → fall-through `unreachable`.  A genuine
-  -- `match <Bool> { True => …; False => … }` (a CDecision switch, not a lowered CIf)
-  -- hits this.  Index-aligned to syntheticCtorOrdinal: False=0, True=1.
-  else if ty == "Bool" then ["False", "True"]
-  else if isTupleType ty then [tupleCtorName (tupleTypeArity ty)]
-  else ctorsOfTypeUser prog ty
+ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
@@ -8446,6 +8491,9 @@ ptag (PTuple _) = "PTuple (W7)"
 ptag (PCons _ _) = "PCons (list — W7)"
 ptag (PList _) = "PList (list — W7)"
 ptag (PAs _ _) = "PAs"
+-- #380 (first half): without this arm a range-shaped residual gap fell to `_ = "?"` and
+-- named no construct — which is why the #379 ledger rows read `… literal): ?`.
+ptag (PRng _ _ _) = "PRng"
 ptag _ = "?"
 
 -- the W3 scope wall: any out-of-slice node lands here (an explicit hard stop).
@@ -8459,7 +8507,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerVars" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerVars" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -9198,7 +9246,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "h")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "t")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PList" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")))
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0))))
+(DFunDef false "patTestBind" ((PVar "prog") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i32.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i32.gt_s")) (ELit (LString "i32.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env")))
 (DFunDef false "patTestBind" ((PVar "prog") (PVar "other") (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EVar "gapL3") (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other")))))
+(DTypeSig false "rngCmpW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "rngCmpW" ((PVar "occ") (PVar "bound") (PVar "cmp") (PVar "clLabel")) (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "bound"))) (EVar "cmp") (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))))
 (DTypeSig false "patTestBindList" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "patTestBindList" (PWild (PList) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
 (DFunDef false "patTestBindList" ((PVar "prog") (PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
@@ -9978,7 +10029,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitLeafTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLeafTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") PWild (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "bodyCode") (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "binds") (EVar "bodyCode"))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail decision arm index out of range"))))))
 (DTypeSig false "emitGuardArmTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitGuardArmTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$gt")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (ELit (LInt 0))) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env3")) (EVar "arity")) (EVar "body"))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail guarded arm index out of range"))))))
+(DFunDef false "emitGuardArmTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$gt")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (ELit (LInt 0))) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env3")) (EVar "arity")) (EVar "body"))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail guarded arm index out of range"))))))
 (DTypeSig false "emitSwitchTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PList) (PVar "arms") (PVar "branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EListLit)) (EVar "arms")) (EVar "dft")))
 (DFunDef false "emitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PCons (PVar "foc") (PVar "rest")) (PVar "arms") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))
@@ -10149,7 +10200,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitLeafRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitLeafRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") PWild (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "bodyCode") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "bodyCode")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel"))))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: decision arm index out of range"))))))
 (DTypeSig false "emitGuardArmRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$g")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "body"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel")))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: guarded arm index out of range"))))))
+(DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$g")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "body"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel")))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: guarded arm index out of range"))))))
 (DTypeSig false "guardStashLocal" (TyCon "String"))
 (DFunDef false "guardStashLocal" () (ELit (LString "__gbind")))
 (DTypeSig false "emitGuardChainRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -10336,8 +10387,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "indexCtorsW" ((PVar "tym") (PVar "ty") (PCons (PVar "c") (PVar "cs")) (PVar "i") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "m")) (EVar "m") (EIf (EApp (EApp (EApp (EVar "firstTyIsW") (EVar "tym")) (EVar "c")) (EVar "ty")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "i")) (EVar "m")) (EVar "m")))))
 (DTypeSig false "firstTyIsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "firstTyIsW" ((PVar "tym") (PVar "c") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "tym")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "eqStr") (EVar "t")) (EVar "ty"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
 (DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "orEmptyCtors") (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "tcm"))))))))
+(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EVar "orEmptyCtors") (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "ctorArity" ((PCon "Prog" (PVar "ctorArs") PWild PWild PWild PWild PWild PWild PWild PWild) (PVar "name")) (EMatch (EApp (EApp (EVar "ctorArLookupW") (EVar "ctorArs")) (EVar "name")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorArLookupW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -10352,7 +10405,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "orNeg1Ord" ((PCon "Some" (PVar "o"))) (EVar "o"))
 (DFunDef false "orNeg1Ord" ((PCon "None")) (EUnOp "-" (ELit (LInt 1))))
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EApp (EVar "ctorsOfTypeUser") (EVar "prog")) (EVar "ty")))))))
+(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWithStr") (EVar "ty")) (ELit (LString "$Tuple"))))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
@@ -10556,6 +10609,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons (list — W7)")))
 (DFunDef false "ptag" ((PCon "PList" PWild)) (ELit (LString "PList (list — W7)")))
 (DFunDef false "ptag" ((PCon "PAs" PWild PWild)) (ELit (LString "PAs")))
+(DFunDef false "ptag" ((PCon "PRng" PWild PWild PWild)) (ELit (LString "PRng")))
 (DFunDef false "ptag" (PWild) (ELit (LString "?")))
 (DTypeSig false "gap" (TyFun (TyCon "String") (TyVar "a")))
 (DFunDef false "gap" ((PVar "msg")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "wasm_emit gap — ")) (EVar "msg"))))
@@ -10567,7 +10621,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerVars" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerVars" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -11306,7 +11360,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "h")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "t")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PList" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")))
 (DFunDef false "patTestBind" ((PVar "prog") (PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0))))
+(DFunDef false "patTestBind" ((PVar "prog") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i32.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i32.gt_s")) (ELit (LString "i32.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env")))
 (DFunDef false "patTestBind" ((PVar "prog") (PVar "other") (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EVar "gapL3") (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other")))))
+(DTypeSig false "rngCmpW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "rngCmpW" ((PVar "occ") (PVar "bound") (PVar "cmp") (PVar "clLabel")) (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "bound"))) (EVar "cmp") (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))))
 (DTypeSig false "patTestBindList" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "patTestBindList" (PWild (PList) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
 (DFunDef false "patTestBindList" ((PVar "prog") (PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EVar "discrimReadOf") (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
@@ -12086,7 +12143,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitLeafTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLeafTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") PWild (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "bodyCode") (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "binds") (EVar "bodyCode"))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail decision arm index out of range"))))))
 (DTypeSig false "emitGuardArmTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitGuardArmTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$gt")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (ELit (LInt 0))) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env3")) (EVar "arity")) (EVar "body"))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail guarded arm index out of range"))))))
+(DFunDef false "emitGuardArmTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$gt")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (ELit (LInt 0))) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env3")) (EVar "arity")) (EVar "body"))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: tail guarded arm index out of range"))))))
 (DTypeSig false "emitSwitchTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PList) (PVar "arms") (PVar "branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EListLit)) (EVar "arms")) (EVar "dft")))
 (DFunDef false "emitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PCons (PVar "foc") (PVar "rest")) (PVar "arms") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))
@@ -12257,7 +12314,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitLeafRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitLeafRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") PWild (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "bodyCode") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "body"))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "bodyCode")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel"))))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: decision arm index out of range"))))))
 (DTypeSig false "emitGuardArmRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$g")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "binds") (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "body"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel")))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: guarded arm index out of range"))))))
+(DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EBlock (DoLet false false (PVar "savedNum") (EApp (EApp (EVar "seedArmNumEnv") (EVar "pat")) (EVar "body"))) (DoLet false false (PVar "gLabel") (EBinOp "++" (ELit (LString "$g")) (EApp (EVar "intToString") (EVar "d")))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "body"))) (EListLit (EBinOp "++" (ELit (LString "br ")) (EVar "decLabel")))))) (EListLit (ELit (LString "end"))))) (DoLet false false PWild (EApp (EVar "restoreArmNumEnv") (EVar "savedNum"))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: guarded arm index out of range"))))))
 (DTypeSig false "guardStashLocal" (TyCon "String"))
 (DFunDef false "guardStashLocal" () (ELit (LString "__gbind")))
 (DTypeSig false "emitGuardChainRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -12444,8 +12501,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "indexCtorsW" ((PVar "tym") (PVar "ty") (PCons (PVar "c") (PVar "cs")) (PVar "i") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "m")) (EVar "m") (EIf (EApp (EApp (EApp (EVar "firstTyIsW") (EVar "tym")) (EVar "c")) (EVar "ty")) (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (EVar "i")) (EVar "m")) (EVar "m")))))
 (DTypeSig false "firstTyIsW" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "firstTyIsW" ((PVar "tym") (PVar "c") (PVar "ty")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "tym")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "eqStr") (EVar "t")) (EVar "ty"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
 (DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "orEmptyCtors") (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "tcm"))))))))
+(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EVar "orEmptyCtors") (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "ctorArity" ((PCon "Prog" (PVar "ctorArs") PWild PWild PWild PWild PWild PWild PWild PWild) (PVar "name")) (EMatch (EApp (EApp (EVar "ctorArLookupW") (EVar "ctorArs")) (EVar "name")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorArLookupW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -12460,7 +12519,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "orNeg1Ord" ((PCon "Some" (PVar "o"))) (EVar "o"))
 (DFunDef false "orNeg1Ord" ((PCon "None")) (EUnOp "-" (ELit (LInt 1))))
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EApp (EVar "ctorsOfTypeUser") (EVar "prog")) (EVar "ty")))))))
+(DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWithStr") (EVar "ty")) (ELit (LString "$Tuple"))))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
@@ -12664,6 +12723,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons (list — W7)")))
 (DFunDef false "ptag" ((PCon "PList" PWild)) (ELit (LString "PList (list — W7)")))
 (DFunDef false "ptag" ((PCon "PAs" PWild PWild)) (ELit (LString "PAs")))
+(DFunDef false "ptag" ((PCon "PRng" PWild PWild PWild)) (ELit (LString "PRng")))
 (DFunDef false "ptag" (PWild) (ELit (LString "?")))
 (DTypeSig false "gap" (TyFun (TyCon "String") (TyVar "a")))
 (DFunDef false "gap" ((PVar "msg")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "wasm_emit gap — ")) (EVar "msg"))))
