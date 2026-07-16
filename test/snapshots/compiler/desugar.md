@@ -1,5 +1,5 @@
 # META
-source_lines=1016
+source_lines=1014
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -387,7 +387,7 @@ deriveImpls f (d::ds) = match f (deriveRefName d)
 -- both starts working AND starts being advertised by the message, with no
 -- hand-typed list to rot.
 -- The generator is a THUNK on purpose: Medaka is strict, so an eager
--- `List (String, Decl)` would run all five derivers on every lookup.
+-- `List (String, Decl)` would run every deriver on every lookup.
 dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
 dataDerivers name params variants = [
   ("Eq", _ => applyDeriveParams name params (deriveEqData name variants)),
@@ -423,8 +423,6 @@ deriveForData name params variants iface =
 
 -- A newtype is structurally a single-constructor, single-field data type, so the
 -- data derivers produce the right tagged rendering via a synthetic variant.
--- (Num/Generic use specialized derivers in lib/desugar.ml — not exercised by the
--- corpus, so deferred; the corpus only derives Eq/Ord/Debug/Display.)
 -- The newtype deriver table — the newtype counterpart of `dataDerivers`, and
 -- likewise the single source of both the lookup and the diagnostic's copy.
 -- It is deliberately SHORTER than `dataDerivers`: `Generic` (and `Num`) go
