@@ -58,34 +58,49 @@ semantics PR is in those files.
 
 **Two ways, and the second is the one to reach for:**
 
-1. **Fix → gate.** Land #381 first, then the stage lands green trivially.
-2. **Gate → fix, with a SELF-DRAINING ledger entry.** `diff_compiler_perf_scaling.sh` already has this
-   built in and it is the repo's own idiom: `KNOWN_SLOW_TIME` + per-`shape:stage`
-   `KNOWN_TCEIL_*`/`KNOWN_TFIXED_*` ceilings (`:554-559`, `:645-687`). A ledgered stage is graded against
-   **its ceiling**, not the clean-tree threshold — so it lands **green on a dirty tree** — and it fails if
-   the stage gets *worse*. **Crucially it also FAILS when the bug is FIXED** (`:648-652`, `:665-679`:
-   *"PROMOTE: now too FAST to time-gate … Remove `<shape>:<stage>` from KNOWN_SLOW_TIME — the bug is
-   FIXED"*), which is what makes it drain instead of rot. `KNOWN_SLOW_TIME` is **empty today** precisely
-   because it drained (the `match:typecheck` entry went out with #117's 58× fix).
+1. **Fix → gate.** Land the fix first, then the stage lands green trivially.
+2. **Gate → fix, with a SELF-DRAINING ledger entry.** `test/diff_compiler_perf_scaling.sh` already has
+   this built in and it is the repo's own idiom. Grep it for **`KNOWN_SLOW_TIME`**, **`is_known_time`**,
+   and the per-`shape:stage` **`KNOWN_TCEIL_*` / `KNOWN_TFIXED_*`** ceilings. A ledgered stage is graded
+   against **its ceiling**, not the clean-tree threshold — so it lands **green on a dirty tree** — and
+   fails if the stage gets *worse*. **Crucially it also FAILS when the bug is FIXED** (grep **`PROMOTE`**:
+   *"now too FAST to time-gate … Remove `<shape>:<stage>` from KNOWN_SLOW_TIME — the bug is FIXED"*),
+   which is what makes it **drain instead of rot**. Proof it drains in service: the `match:typecheck`
+   entry went out with **#117**'s 58× union-find fix (that PR's body: *"Both entries then drained"*).
 
 **⇒ #384's "enforcement first" DAG IS executable as written.** Option 2 is strictly better when the fix
 is not already in hand: the gate exists *before* the fix, so the fix's own landing is what trips the
-PROMOTE detector — the gate proves the fix rather than the author's prose. Same for #359's native arm
+PROMOTE detector — **the gate proves the fix rather than the author's prose.** Same for #359's native arm
 against #349–#352.
+
+**The worked example is #396** (ws:emitter, 2026-07-16), and it is the strongest evidence in this file
+for grading TIME: wiring `lower`+`emit` into the detector **immediately caught a live native quadratic**
+— `xref:emit` at r2 = **3.96** — *while the ALLOC arm read a clean linear **2.04** and called it "ok"*.
+It landed **green on that dirty tree** by ledgering `xref:emit` at a ceiling, without widening `THRESH`.
+That is the #110/#115 thesis reproduced live: **a pure scan allocates nothing, so only TIME can see it.**
+Our own #381 replicated it on the wasm arm the same day (r2 = **5.30**). **Both were STATIC audit
+findings until someone measured them** — a grep-proven census names a *shape*, not a *cost*.
 
 > **How this section got here is the lesson.** It first asserted the DAG was *"not executable"* and that
 > *"gate-first only works on an already-clean tree"* — a categorical rule, derived from reading ONE line
-> (`TIME_STAGES`, `:497`) and never reading the `KNOWN_SLOW_TIME` ledger **57 lines below it** (`:554`).
+> (`TIME_STAGES`) and never reading the `KNOWN_SLOW_TIME` ledger a little further down the same file.
 > **An independent reviewer killed it.** That is this repo's #1 lesson (*"reproduce before you trust"*)
 > pointed at a **gate** instead of a bug: a static read named a mechanism, not its behavior — the same
 > error as filing #381 STATIC and never measuring it. **Read the gate before you claim what it does, and
 > never let a plan you like become a rule in a doc without one adversarial pass over it.**
 >
-> Coda, because it is the same disease one level down: the first draft cited `TIME_STAGES` as **`:453`** —
-> copied verbatim from #359's body, where it had **already drifted** (it is `:497` today). So the claim was
-> wrong *and* its only citation was stale, and the doc-symbol gate could not see either, because both are
-> **prose about behavior**, not a symbol reference. **Line numbers in an issue body are encoded facts with
-> no derivation and no expiry — re-derive them against the file before you quote them.**
+> **Coda — this section cited LINE NUMBERS three times, and was wrong three times.** Draft 1 cited
+> `TIME_STAGES:453`, copied verbatim from #359's body where it had *already* drifted. Draft 2 "fixed" it
+> to `:497` and cited five ranges in the ledger. Then **#396 landed +102/-4 on that same file and moved
+> every one of them** — and added an `xref:emit` entry that falsified draft 2's *"`KNOWN_SLOW_TIME` is
+> empty today"*. Elapsed: about two hours.
+>
+> **So this section now cites SYMBOLS (`KNOWN_SLOW_TIME`, `is_known_time`, `PROMOTE`), not lines** — they
+> are greppable, they survive edits, and `make agent-doc-symbols` can actually check them. **A line number
+> is an encoded fact with no derivation and no expiry; a symbol name is a query.** Note what neither doc
+> gate could catch here: `docs-links` checks paths and `agent-doc-symbols` checks backticked symbols, but
+> a false claim *about behavior* and a stale `:NNN` in prose are invisible to both. **Prose about behavior
+> is the ungated surface — it is exactly where an adversarial reviewer, not a gate, is the control.**
 
 ---
 
@@ -182,7 +197,8 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   #382). NOTHING gates it: `diff_compiler_perf_scaling.sh` has no emit stage (#359), and
   most of these scans allocate nothing, so the arm must grade TIME.
   **⭐ #381 MEASURED 2026-07-16 (was STATIC) — it is WORSE than quadratic (~N^2.4).** Via the
-  discriminating test on the perf gate's own `gen_match` shape (`diff_compiler_perf_scaling.sh:278`),
+  discriminating test on the perf gate's own `gen_match` shape (grep `gen_match` in
+  `test/diff_compiler_perf_scaling.sh`: one data decl with N ctors + one N-arm match),
   min-of-3, `GC_INITIAL_HEAP_SIZE=512M` pinned:
 
   | N | `wasm_emit_main` | ratio | `llvm_emit_main` | ratio |
