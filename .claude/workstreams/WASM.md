@@ -51,6 +51,46 @@ semantics PR is in those files.
 
 ---
 
+## 🔬 THE CLASS: **a probe whose SKIPPED STEP is invisible in its output** (named 2026-07-16)
+
+**Three instances in ONE day, across BOTH backend workstreams.** That is past coincidence — treat it as
+a standing hazard whenever you point a probe at anything:
+
+| # | probe | the step it skipped, invisible in its output | what got published |
+|---|---|---|---|
+| 1 | ws:emitter's `profile_main` backend stages | **`dceFilter` never ran** — the fixtures' `main` rooted nothing, so a real build prunes all N | *"10 s to emit 16000 functions"* — a path that cannot execute |
+| 2 | our wasm `gen_match` timing | **the probe PANICKED** (`gen_match` has no `main`); `2>&1 >/dev/null` swallowed it | a real number, but of work-before-a-panic |
+| 3 | our llvm `gen_match` **control** | **the same panic** — so the "discriminating test" compared **two panics** | *"llvm is linear (2.02×)"* — false; llvm is super-linear |
+
+**Every one produced a number that looked like evidence** — plausible magnitude, clean ratios,
+reproducible. None of them announced what they had skipped. Note #3 especially: **the control was
+broken in the same way as the thing it controlled for**, which is the failure a control exists to
+prevent, so it pointed the right way *for the wrong reason* and survived review.
+
+**The bar — the only place in the tree that gets this right** is `compiler/entries/wasm_emit_gaps_main.mdk`
+(grep `GAP CENSUS`): it skips DCE **deliberately and says so, in the file**. *Skipping a step is fine.
+Skipping it silently is the bug.*
+
+**Three defences, in order of strength:**
+
+1. **Run the step inside the instrument.** ws:emitter's #396 runs `dceFilter` *inside* `profile_main`, at
+   the same pipeline point as `llvm_emit_modules_main` — the property is **demonstrated**, not argued.
+2. **Ship a FALSIFIABILITY CONTROL.** #396's: same fixture, dead root (`main = println 1`) vs live root —
+   **0.024 s vs 0.677 s, 28×**. Without one, a fixture "fix" is unfalsifiable, which is the same defect as
+   a gate that cannot fail. **This is what separates a fixed measurement from a differently-broken one.**
+3. **Assert the probe COMPLETED** — exit 0, expected marker present (`[perf] total`), output **non-empty**.
+   Never trust a timing that may have run past a panic. ⚠️ And a byte-diff over **empty** captures is a
+   green that proves nothing: #401's first WAT capture had **38 silently-empty** files that would have
+   diffed "identical".
+
+**Corollary — the unit of a claim, again.** *"Does the fixture survive DCE?"* is a **per-FIXTURE**
+question, not per-probe: `xref` puts the cost in N *unreferenced* decls (DCE prunes all N ⇒ dead
+measurement) while `gen_match` concentrates it in ONE function `main` roots (DCE **must** keep it).
+Same disease as *"a plural noun is a claim about a SET"* and *"a one-backend fix is a half fix"*: the
+general claim was the wrong unit.
+
+---
+
 ## ⭐ A new gate must land GREEN — and the perf gate already has the ledger that lets it (2026-07-16)
 
 **A gate cannot land red**: `main` would block the merge queue for every workstream. So how do you land
