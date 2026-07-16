@@ -331,6 +331,33 @@ mains.
 > i64 ops over the `$mdk_box_int`/`$mdk_unbox_int` seam. `lit_int_large_tag` was a fourth
 > row here (it uses `intBitsToFloat`). All three promoted; capability rows deleted.
 
+> **Recursive `let..in` + refutable pattern guards FIXED 2026-07-16 (#379).** Five rows
+> promoted: `lam_rec_tuple`, `let_local_fn`, `let_local_rec`, `rec_local` (all
+> `ref-mode: recursive let binding`) and `guard_refut_ctor` (`ref-mode: refutable pattern
+> guard (p <- e) in a tail match arm`). Both were wiring gaps, not design gaps.
+> (1) `emitLetRef` had no `True (PVar x) (CLam …)` clause, so a recursive
+> function-`let` in EXPRESSION position hit the catch-all — while the *block-statement*
+> form of the same binding already routed to `emitSelfRecLocalBind`. That asymmetry was
+> the whole bug; the `let..in` arm now takes the same route (peer of the native emitter's
+> `emitLet … True (PVar f) (CLam …)` → `emitRecLam`).
+> (2) Guards were emitted by `flatMap` over a FIXED env, which structurally cannot bind
+> a name for later guards or the body. `emitGuardChainRef` now threads the env and lowers
+> `CGBind` via the existing `patTestBind` (wasm's peer of native's `emitRefutMatch`) —
+> a failed test `br`s to the same `$g<d>`/`$gt<d>` guard block the CGBool path always
+> used, so the fall-through mechanism was reused verbatim, not redesigned.
+> One genuinely new piece: wasm must PRE-DECLARE every local, whereas the native peer
+> just reuses the SSA register `emitExpr` returns. The guard RHS is therefore stashed in
+> `guardStashLocal` (`$__gbind`), declared via `collectGuardLocals`. ONE slot per function
+> is sufficient — a stash is consumed (tests ++ binds) immediately after it is set, and a
+> nested `CGBind` inside the RHS finishes evaluating before the outer `local.set`, so live
+> ranges never overlap.
+
+> ⚠️ **The `26 fixtures` in the heading above was STALE when this note was written**: the
+> ledger held **31** `wasm:emitter-gap` rows while the heading said 26, so the obvious
+> `26 − 5 = 21` would have been wrong twice over. It is 26 *now* only because five rows
+> were promoted out of 31. **Derive it, never subtract it:**
+> `grep -c 'wasm:emitter-gap' test/engine_divergence.txt`.
+
 The WasmGC emitter cannot produce a module that assembles and validates. It reports
 its own gaps, which is to its credit. Distinct causes, by frequency:
 
@@ -340,7 +367,6 @@ its own gaps, which is to its credit. Distinct causes, by frequency:
 | 4 | `wasm-tools parse: unknown func $mdk_char_to_str` — the preamble omits a helper it emits calls to |
 | 4 | `ref-mode: unsupported pattern in match arm` |
 | 4 | `ref-mode: unbound variable 'index'` |
-| 4 | `ref-mode: recursive let binding` |
 | 3 | `wasm-tools validate: func N failed to validate` |
 | 2 | `wasm-tools parse: unknown type $str` |
 | 2 | `scalar-mode: unsupported Core IR node CRecord` |

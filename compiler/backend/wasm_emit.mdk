@@ -230,7 +230,6 @@ import backend.trmc_analysis.{
   clauseArityOf,
   clauseBodyOf,
   armBody,
-  allBoolGuards,
   lastStmtExpr,
 }
 import backend.private_mangle.{hashName}
@@ -4835,7 +4834,23 @@ emitLetRef prog env d False PWild e1 e2 =
 emitLetRef prog env d False pat e1 e2 =
   let (binds, env2) = emitDestructureLet prog env d pat e1
   binds ++ emitRefExpr prog env2 d e2
-emitLetRef _ _ _ _ _ _ _ = gapL "ref-mode: recursive `let` binding"
+-- #379: a recursive function-`let` in EXPRESSION position (`let go i = … in e2` →
+-- CLet True (PVar go) (CLam …)).  The block-statement form already routed here via
+-- emitBlockRef; the `let..in` form fell to the catch-all gap below — that asymmetry
+-- was the whole bug.  Same route as emitBlockRef's CSLet arm and the peer of the
+-- native emitter's `emitLet e env True (PVar f) (CLam …)` → emitRecLam clause:
+-- lift the one-member letgroup (its prologue rebinds `go` inside the lifted body, so
+-- the self-call resolves), rebuild `go`'s closure into local `$go`, then emit `e2`
+-- with `go` bound.  `collectExprLocals` already declares `$go` (its CLet clause
+-- wildcards the rec flag), so no locals change is needed.
+emitLetRef prog env d True (PVar x) (CLam pats body) e2 = emitSelfRecLocalBind prog env x pats body
+  ++ emitRefExpr prog (x::env) d e2
+-- a recursive NON-function `let` (`let x = … x … in e2`) is a value knot that no
+-- backend ties: the native emitter's rec clause likewise matches only `(PVar f)
+-- (CLam …)` and has no `True`/non-CLam clause at all.  We keep a named gap here
+-- rather than inherit its non-exhaustive trap.
+emitLetRef _ _ _ _ _ _ _ =
+  gapL "ref-mode: recursive non-function `let` binding (value knot)"
 
 emitBlockRef : Prog -> List String -> Int -> List CStmt -> List String
 emitBlockRef prog env d [CSExpr ex] = emitRefExpr prog env d ex
@@ -6523,14 +6538,16 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
 -- for guarded arms in tail position.
 emitGuardArmTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
-  Some (CArm pat guards body) => if allBoolGuards guards then
+  Some (CArm pat guards body) =>
     let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$gt" ++ intToString d
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ flatMap (emitGuardTest prog env2 0 gLabel) guards ++ emitRefTail prog env2 arity body) ++ ["end"]
+    -- #379: guards now thread the env (a CGBind binds names the body can see), so the
+    -- body is emitted under env3, not env2.
+    let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
+    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeTail prog env arity d root occs arms fail
-  else gapL "ref-mode: refutable pattern guard (`p <- e`) in a tail match arm — not yet lowered"
   None => gapL "ref-mode: tail guarded arm index out of range"
 
 emitSwitchTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> List CTBranch -> CTree -> List String
@@ -7339,22 +7356,53 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
 -- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitLeafRef.
 emitGuardArmRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
-  Some (CArm pat guards body) => if allBoolGuards guards then
+  Some (CArm pat guards body) =>
     let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv pat body
     let gLabel = "$g" ++ intToString d
-    let armCode = ["block " ++ gLabel] ++ indent (binds ++ flatMap (emitGuardTest prog env2 d gLabel) guards ++ emitRefExpr prog env2 d body ++ ["br " ++ decLabel]) ++ ["end"]
+    -- #379: guards now thread the env (a CGBind binds names the body can see), so the
+    -- body is emitted under env3, not env2.
+    let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
+    let armCode = ["block " ++ gLabel] ++ indent (binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
     let _ = restoreArmNumEnv savedNum
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
-  else gapL "ref-mode: refutable pattern guard (`p <- e`) in a match arm — not yet lowered"
   None => gapL "ref-mode: guarded arm index out of range"
 
--- a CGBool guard: unbox the i31 Bool; if false, br out of the guard block (skip body).
-emitGuardTest : Prog -> List String -> Int -> String -> CGuard -> List String
-emitGuardTest prog env d gLabel (CGBool g) = emitRefExpr prog env d g
-  ++ ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
-emitGuardTest _ _ _ _ (CGBind _ _) =
-  gapL "ref-mode: refutable pattern guard (`p <- e`) — not yet lowered"
+-- #379: the stash slot for a refutable pattern guard's right-hand side.  `patTestBind`
+-- embeds its `occ` snippet once per test AND once per bind, so `occ` must be a cheap,
+-- side-effect-free, re-runnable read — every other caller passes a `local.get`.  The
+-- guard RHS must therefore be evaluated ONCE into a local.  The native peer just reuses
+-- the SSA register `emitExpr` hands back (llvm_emit's `emitGuardChain`); wasm has no
+-- free-mint temp, so the slot is declared like any other body local, via
+-- `collectGuardLocals`.  ONE slot per function suffices: a stash is consumed
+-- (tests ++ binds, into named locals) immediately after it is set, and a nested CGBind
+-- inside the RHS finishes evaluating before the outer `local.set` — live ranges never
+-- overlap, so no depth indexing is needed (unlike the `__rf<d>` scratch pool, which
+-- `maxIndexAt` sizes by walking arm BODIES only, never their guards).
+guardStashLocal : String
+guardStashLocal = "__gbind"
+
+-- emit a clause's guard chain left-to-right, THREADING the env: a `CGBind p <- e` binds
+-- names that later guards AND the body can see -- which the old `flatMap` over a
+-- FIXED env could not express.  A CGBool tests the unboxed i31 Bool; a
+-- CGBind evaluates `e` into the stash and refutably matches `p` against it via
+-- patTestBind (an irrefutable `p` emits no test and just binds; a refutable `Just x <- e`
+-- tests the discriminant).  Either failure `br`s to gLabel, exiting the guard block and
+-- landing in the fail subtree — the same fall-through the CGBool path always used.
+-- Peer of the native emitter's `emitGuardChain`.  Returns (code, env').
+emitGuardChainRef : Prog -> List String -> Int -> String -> List CGuard -> (List String, List String)
+emitGuardChainRef _ env _ _ [] = ([], env)
+emitGuardChainRef prog env d gLabel ((CGBool g)::rest) =
+  let unbox = ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
+  let boolTest = emitRefExpr prog env d g ++ unbox
+  let (more, env2) = emitGuardChainRef prog env d gLabel rest
+  (boolTest ++ more, env2)
+emitGuardChainRef prog env d gLabel ((CGBind p ex)::rest) =
+  let sv = gname guardStashLocal
+  let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
+  let (tests, binds, env2) = patTestBind prog p ["local.get $" ++ sv] gLabel env
+  let (more, env3) = emitGuardChainRef prog env2 d gLabel rest
+  (rhs ++ tests ++ binds ++ more, env3)
 
 -- a CTSwitch on the focus column.  All heads in one switch are homogeneous.  ADT
 -- heads → discriminant + br_table on the dense per-type ordinal.  Int-literal heads
@@ -7703,7 +7751,11 @@ collectArmLocals (CArm pat guards body) = patVars pat
 
 collectGuardLocals : CGuard -> List String
 collectGuardLocals (CGBool g) = collectExprLocals g
-collectGuardLocals (CGBind p e) = patVars p ++ collectExprLocals e
+-- #379: `guardStashLocal` is the slot emitGuardChainRef evaluates the RHS into before
+-- refutably matching `p` against it — declared here so it rides the normal body-local
+-- path (dedupKeep collapses the repeats when a function has several such guards).
+collectGuardLocals (CGBind p e) =
+  guardStashLocal :: patVars p ++ collectExprLocals e
 
 -- the variables a pattern binds (for local declaration).
 patVars : Pat -> List String
