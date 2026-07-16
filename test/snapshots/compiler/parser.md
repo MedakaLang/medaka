@@ -1,5 +1,5 @@
 # META
-source_lines=4068
+source_lines=4078
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -580,8 +580,18 @@ isIntMinLit n = n == intMinLit
 -- to whichever site typechecked first (`Parser Lit`) and clash with the rest.
 -- `fatalP` is a function, so each call site instantiates it freshly; this is the
 -- same shape every `failP "…"` in this file already uses.
+-- Per ERROR-QUALITY.md §4.5 the message states WHAT is wrong and the actionable
+-- "what to do" belongs in a `help:` line, so the intMinBound advice lives in
+-- `parseErrHelpFix` (`compiler/driver/diagnostics.mdk`), not here.  Two prefixes
+-- are load-bearing and must move together with that function:
+--   * "integer literal too large" — `parseErrCode` keys on it for L-INT-OVERFLOW,
+--     shared DELIBERATELY with the lexer's out-of-range message (#171);
+--   * the full "(max 4611686018427387903)" text — `parseErrHelpFix` keys on it to
+--     attach the help to THIS message only.  The lexer's sibling message ends
+--     "(max magnitude 2^62)" and must NOT get this help: for a literal that far
+--     out of range the `-` advice is useless, since no sign makes it fit.
 intLitTooBigMsg : String
-intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903); -4611686018427387904 is the minimum and is only writable with its `-`"
+intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903)"
 
 -- unary minus, tighter than `*` (a leading `-` in operand position)
 parseUnary : Parser Expr
@@ -4272,7 +4282,7 @@ parseResult src = match tokenizeWithOffsets src
 (DTypeSig false "isIntMinLit" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isIntMinLit" ((PVar "n")) (EBinOp "==" (EVar "n") (EVar "intMinLit")))
 (DTypeSig false "intLitTooBigMsg" (TyCon "String"))
-(DFunDef false "intLitTooBigMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903); -4611686018427387904 is the minimum and is only writable with its `-`")))
+(DFunDef false "intLitTooBigMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig false "parseUnary" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseUnary" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "unaryFor") (EVar "t")))))
 (DTypeSig false "unaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -5584,7 +5594,7 @@ parseResult src = match tokenizeWithOffsets src
 (DTypeSig false "isIntMinLit" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isIntMinLit" ((PVar "n")) (EBinOp "==" (EVar "n") (EVar "intMinLit")))
 (DTypeSig false "intLitTooBigMsg" (TyCon "String"))
-(DFunDef false "intLitTooBigMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903); -4611686018427387904 is the minimum and is only writable with its `-`")))
+(DFunDef false "intLitTooBigMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig false "parseUnary" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseUnary" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "unaryFor") (EVar "t")))))
 (DTypeSig false "unaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
