@@ -740,6 +740,41 @@ valueEqRuntimeLines = [
 -- (`i64.rem_s`) and fmod for Float (== `$mdk_float_rem` == LLVM `frem` ==
 -- native's `mdk_num_mod`).  Emitted only when a poly-`Num` operand is routed here
 -- (`useValueArithRef`); `$mdk_unbox_int`/`$mdk_box_int` are always in scope (ioRuntimeLines).
+--
+-- ── #371: poly-`Num` int `/`/`%` divisor-zero guard ──────────────────────────
+-- $mdk_value_div/$mdk_value_mod's int arms used to be bare i64.div_s/rem_s — no
+-- guard — so a poly-`Num` `/`/`%` by zero died with a raw engine trap ("divide by
+-- zero") instead of the coded [E-DIV-ZERO]/[E-MOD-ZERO] line every other engine
+-- (native mdk_num_div/mdk_num_mod, runtime/medaka_rt.c; the concrete-Int wasm path
+-- via emitDivZeroGuard, wasm_emit.mdk) produces. This file is pure static data with
+-- no access to that dynamic per-call-site helper (the circular-import note at the
+-- top of this file) — but the message here is fixed at authoring time (no
+-- per-call-site code/text to thread through), so the byte-unrolled trap sequence
+-- (mirroring wasmTrap's `i32.const <n>` / `call $mdk_write_err_byte` per byte — no
+-- $str value, no data segment, works in scalar AND ref mode) is built by a small
+-- ASCII-only local helper instead of importing wasm_emit's dynamic one.
+asciiTrapBytesW : String -> List String
+asciiTrapBytesW s =
+  let cs = stringToChars s
+  asciiTrapGoW cs (arrayLength cs) 0
+
+asciiTrapGoW : Array Char -> Int -> Int -> List String
+asciiTrapGoW cs n i =
+  if i >= n then
+    []
+  else
+    "        i32.const " ++ intToString (charCode (arrayGetUnsafe i cs)) :: "        call $mdk_write_err_byte" :: asciiTrapGoW cs n (i + 1)
+
+-- the fixed [E-DIV-ZERO]/[E-MOD-ZERO] lines, matching native's mdk_num_div/
+-- mdk_num_mod message bytes exactly (runtime/medaka_rt.c:622,627).
+valueDivZeroTrapW : List String
+valueDivZeroTrapW = asciiTrapBytesW "runtime error [E-DIV-ZERO]: division by zero\n"
+  ++ ["        unreachable"]
+
+valueModZeroTrapW : List String
+valueModZeroTrapW = asciiTrapBytesW "runtime error [E-MOD-ZERO]: modulo by zero\n"
+  ++ ["        unreachable"]
+
 export valueArithRuntimeLines : List String
 valueArithRuntimeLines = [
   "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
@@ -761,21 +796,37 @@ valueArithRuntimeLines = [
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
   "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+  "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
+  "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
+  "  ;; if zero, else div_s using the stashed value (unbox once, not twice).",
   "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+  "    (local $vdr i64)",
   "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
   "      (then (struct.new $float (f64.div",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+  "      (else",
+  "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
+  "        (if (i64.eqz (local.get $vdr)) (then"]
+  ++ valueDivZeroTrapW ++
+  ["        ))",
+  "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
   "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
   "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
   "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).",
+  "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.",
   "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+  "    (local $vdr i64)",
   "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
   "      (then (struct.new $float (call $mdk_float_rem",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+  "      (else",
+  "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
+  "        (if (i64.eqz (local.get $vdr)) (then"]
+  ++ valueModZeroTrapW ++
+  ["        ))",
+  "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
   "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
   "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    (if (ref.test (ref $float) (local.get $a))",
