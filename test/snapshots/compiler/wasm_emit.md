@@ -1,5 +1,5 @@
 # META
-source_lines=8357
+source_lines=8348
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -7674,25 +7674,16 @@ patVars _ = []
 
 -- ── operator tables (both modes) ─────────────────────────────────────────────
 
-wasmBinOp : String -> String
-wasmBinOp "+" = "i32.add"
-wasmBinOp "-" = "i32.sub"
-wasmBinOp "*" = "i32.mul"
-wasmBinOp "/" = "i32.div_s"
-wasmBinOp "%" = "i32.rem_s"
-wasmBinOp "==" = "i32.eq"
-wasmBinOp "!=" = "i32.ne"
-wasmBinOp "<" = "i32.lt_s"
-wasmBinOp ">" = "i32.gt_s"
-wasmBinOp "<=" = "i32.le_s"
-wasmBinOp ">=" = "i32.ge_s"
-wasmBinOp op =
-  gapS
-    ("unsupported binary operator '" ++ op ++ "' (`::`/`++` are list/string ops — W6/W7)")
-
--- layer-17 §2.1: the i64 peer of wasmBinOp for ref-mode Int arithmetic over the
--- box/unbox seam.  Division/modulo are i64 signed (i64.div_s/i64.rem_s) — matching
--- native's truncated-toward-zero div and sign-of-dividend rem (medaka_rt.c).
+-- Ref-mode Int arithmetic/comparison over the box/unbox seam (layer-17 §2.1):
+-- i64 throughout, so values outside +/-2^30 no longer truncate.  Division/modulo are
+-- i64 signed (i64.div_s/i64.rem_s) — matching native's truncated-toward-zero div and
+-- sign-of-dividend rem (medaka_rt.c).
+--
+-- (The i32 peer `wasmBinOp` was removed with #305: its last two callers were the
+-- ordering arms of emitValueCmpRef/emitValueCmpNumRef, which compared a 3-way
+-- -1/0/1 against 0 — the derivation that could not express NaN's unorderedness.
+-- Those now call the per-op IEEE $mdk_value_lt/le/gt/ge(_num) instead, and every
+-- surviving caller was already on wasmBinOp64.)
 wasmBinOp64 : String -> String
 wasmBinOp64 "+" = "i64.add"
 wasmBinOp64 "-" = "i64.sub"
@@ -10173,19 +10164,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
 (DFunDef false "patVars" (PWild) (EListLit))
-(DTypeSig false "wasmBinOp" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "wasmBinOp" ((PLit (LString "+"))) (ELit (LString "i32.add")))
-(DFunDef false "wasmBinOp" ((PLit (LString "-"))) (ELit (LString "i32.sub")))
-(DFunDef false "wasmBinOp" ((PLit (LString "*"))) (ELit (LString "i32.mul")))
-(DFunDef false "wasmBinOp" ((PLit (LString "/"))) (ELit (LString "i32.div_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "%"))) (ELit (LString "i32.rem_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "=="))) (ELit (LString "i32.eq")))
-(DFunDef false "wasmBinOp" ((PLit (LString "!="))) (ELit (LString "i32.ne")))
-(DFunDef false "wasmBinOp" ((PLit (LString "<"))) (ELit (LString "i32.lt_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString ">"))) (ELit (LString "i32.gt_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "<="))) (ELit (LString "i32.le_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString ">="))) (ELit (LString "i32.ge_s")))
-(DFunDef false "wasmBinOp" ((PVar "op")) (EApp (EVar "gapS") (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "' (`::`/`++` are list/string ops — W6/W7)")))))
 (DTypeSig false "wasmBinOp64" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "wasmBinOp64" ((PLit (LString "+"))) (ELit (LString "i64.add")))
 (DFunDef false "wasmBinOp64" ((PLit (LString "-"))) (ELit (LString "i64.sub")))
@@ -12290,19 +12268,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
 (DFunDef false "patVars" (PWild) (EListLit))
-(DTypeSig false "wasmBinOp" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "wasmBinOp" ((PLit (LString "+"))) (ELit (LString "i32.add")))
-(DFunDef false "wasmBinOp" ((PLit (LString "-"))) (ELit (LString "i32.sub")))
-(DFunDef false "wasmBinOp" ((PLit (LString "*"))) (ELit (LString "i32.mul")))
-(DFunDef false "wasmBinOp" ((PLit (LString "/"))) (ELit (LString "i32.div_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "%"))) (ELit (LString "i32.rem_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "=="))) (ELit (LString "i32.eq")))
-(DFunDef false "wasmBinOp" ((PLit (LString "!="))) (ELit (LString "i32.ne")))
-(DFunDef false "wasmBinOp" ((PLit (LString "<"))) (ELit (LString "i32.lt_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString ">"))) (ELit (LString "i32.gt_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString "<="))) (ELit (LString "i32.le_s")))
-(DFunDef false "wasmBinOp" ((PLit (LString ">="))) (ELit (LString "i32.ge_s")))
-(DFunDef false "wasmBinOp" ((PVar "op")) (EApp (EVar "gapS") (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "' (`::`/`++` are list/string ops — W6/W7)")))))
 (DTypeSig false "wasmBinOp64" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "wasmBinOp64" ((PLit (LString "+"))) (ELit (LString "i64.add")))
 (DFunDef false "wasmBinOp64" ((PLit (LString "-"))) (ELit (LString "i64.sub")))
