@@ -1,5 +1,5 @@
 # META
-source_lines=1014
+source_lines=1016
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -345,7 +345,9 @@ anyRefutable (p::ps) = isRefutable p || anyRefutable ps
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
 -- Mirror of lib/desugar.ml's expand_decl + the Eq/Debug/Display/Ord/Generic
--- derivers.  A `data`/`newtype` with derives becomes the decl (derives cleared)
+-- derivers, PLUS `Hashable` (#422), which has no counterpart in the reference —
+-- it generates the djb2 fold core.mdk's `Hashable` doc specifies.  A
+-- `data`/`newtype` with derives becomes the decl (derives cleared)
 -- followed by one generated impl per derived interface; a `newtype` derives via
 -- a synthetic single-variant data deriver.  Generated bodies are core (no sugar),
 -- so they pass through the later passes unchanged.  Generated names are
