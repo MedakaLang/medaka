@@ -1,3 +1,0 @@
-main =
-  let test = 1
-  println test
