@@ -50,6 +50,31 @@
 #      never look like "this passed" — every silent-green bug in this repo is that
 #      sentence.
 #
+# ── ⚠️ CHOOSING A PIN: A PIN THAT MOVES FOR AN UNRELATED REASON IS A FALSE DRAIN ─
+#
+# A false drain is WORSE THAN NO FIXTURE: the row goes RED, a reader believes the issue
+# is fixed, and closes a LIVE BUG on the strength of it. So pin the NARROWEST thing that
+# is actually the defect, and nothing else:
+#
+#   diag:         code + range + FULL MESSAGE. Use when THE MESSAGE IS THE DEFECT —
+#                 #532 (never says `test` is reserved), #66/#135 (blames indentation).
+#   diag-code:    code + range ONLY. THE DEFAULT per TESTING-DESIGN §4.5 ("the assertion
+#                 is on `code` + `range` (stable); the prose can change freely").
+#                 Use when the message legitimately varies. #333's message embeds the
+#                 ENTIRE stdlib module list — a `diag:` pin there would drain the day
+#                 someone adds a stdlib module, an event with no relation to #333.
+#   stdout:       exact whole stdout. stdout-bytes: same, no trailing newline appended.
+#   stdout-line:  each named EXACT WHOLE LINE must be present. For large dumps no fixture
+#                 can pin whole — #93's `check --types` prints every prelude scheme, which
+#                 move whenever the prelude does. Literal whole-line, never substring,
+#                 never regex (ppx_expect and Dune both shipped regex matchers and then
+#                 DELIBERATELY REMOVED them). Pin BOTH the bug's line AND a line proving
+#                 the command still ran.
+#   file-after:   the fixture's bytes after an in-place rewrite (fmt --write).
+#
+# Ask of every pin: "what ELSE in this repo could move this string?" If the answer is
+# anything at all, pin something narrower.
+#
 # ── DIAGNOSTIC PINS ARE HAND-WRITTEN AND DELIBERATELY NOT BLESSABLE ─────────────
 #
 # There is no --bless here, on purpose (docs/ops/TESTING-DESIGN.md §4.5). A must-fail
@@ -129,8 +154,9 @@ claim_has() { grep -q "^$2:" "$1"; }
 run_verb() {
   _verb="$1"; _dir="$2"; _file="$3"; _out="$4"
   case "$_verb" in
-    check)      bound "$MEDAKA" check      "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
-    check-json) bound "$MEDAKA" check --json "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
+    check)       bound "$MEDAKA" check         "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
+    check-json)  bound "$MEDAKA" check --json  "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
+    check-types) bound "$MEDAKA" check --types "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
     run)        bound "$MEDAKA" run        "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
     fmt-write)
       _work="$TMP/fmtwork"; rm -rf "$_work"; mkdir -p "$_work"
@@ -145,6 +171,70 @@ run_verb() {
 printf '%s\n' "MUST-FAIL suite — every row asserts an OPEN issue's bug STILL reproduces."
 printf '%s\n' "A RED run here usually means someone FIXED something. That is a good failure."
 echo
+
+# ── ONE FIXTURE PER ISSUE. ─────────────────────────────────────────────────────
+#
+# ⚠️ THIS IS NOT HYPOTHETICAL, AND IT HAPPENED WITHIN A DAY. Two sessions independently
+# pinned #532 twenty-one minutes apart (`532-test-is-reserved-but-unsaid` and
+# `532-test-keyword-no-reserved-diagnostic`, 0a76f3e6 + 9337e0d3) and NOTHING NOTICED.
+# Deriving the member set from `ls` is right, but it means nothing enforces uniqueness.
+#
+# Why a duplicate is a real defect and not untidiness:
+#   * when the bug is fixed, BOTH rows drain. The fixer deletes the one the message named,
+#     and the second reads as a fresh unexplained failure — "didn't I just delete that?";
+#   * two claims about one bug CAN SILENTLY DISAGREE about what it does. That is exactly
+#     the reasoning that kept #142 out of this suite (it is already covered by the
+#     self-draining test/fmt_roundtrip_known_divergence.txt ledger — duplicate machinery
+#     in two places that can disagree). The same argument applies inside the corpus.
+#
+# DERIVED, NOT REGISTERED. The check reads the corpus itself — each claim's own `issue:`
+# key — so there is no list of issue numbers to maintain and nothing to forget. A registry
+# here would be the encoded-fact disease this whole suite exists to cure.
+#
+# It keys on the `issue:` FIELD, not the directory prefix: the field is the authoritative
+# claim (it is what the drain message tells you to close), and two directories could
+# collide on it while their names differ. The prefix is checked separately, below, because
+# a directory whose name disagrees with its own claim sends the reader to the wrong issue.
+dup_fail=0
+for d in "$FIXDIR"/*/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/claim.txt" ] || continue
+  printf '%s\t%s\n' "$(sed -n 's/^issue:[[:space:]]*//p' "$d/claim.txt" | head -1)" "$(basename "$d")"
+done | sort > "$TMP/issues"
+
+for n in $(cut -f1 "$TMP/issues" | uniq -d); do
+  dup_fail=1
+  echo "MALFORMED: issue #$n is pinned by MORE THAN ONE fixture:"
+  awk -F'\t' -v n="$n" '$1==n{print "       test/must_fail_fixtures/" $2 "/"}' "$TMP/issues"
+  echo "  One fixture per issue. Both will drain when #$n is fixed, and the second will read"
+  echo "  as an unexplained failure after the first is deleted. Merge them: keep the claim"
+  echo '  with the sharper repro and the better "what:", port anything the other says, and'
+  echo "  delete the loser. Decide on the PINS, not on which landed first."
+  echo
+done
+
+# A directory whose name disagrees with its own claim's `issue:` points the reader at the
+# wrong issue — the drain message says "close #A" while the path says #B.
+for d in "$FIXDIR"/*/; do
+  [ -d "$d" ] || continue
+  [ -f "$d/claim.txt" ] || continue
+  _b="$(basename "$d")"
+  _claimed="$(sed -n 's/^issue:[[:space:]]*//p' "$d/claim.txt" | head -1)"
+  _prefix="${_b%%-*}"
+  case "$_prefix" in
+    ''|*[!0-9]*)
+      dup_fail=1
+      echo "MALFORMED: $_b/ does not start with its issue number — name it '<N>-<slug>'."
+      echo ;;
+    *)
+      if [ "$_prefix" != "$_claimed" ]; then
+        dup_fail=1
+        echo "MALFORMED: $_b/ is named for issue #$_prefix but its claim.txt says 'issue: $_claimed'."
+        echo "  The drain message would tell the reader to close #$_claimed while the path says #$_prefix."
+        echo
+      fi ;;
+  esac
+done
 
 checked=0; repro=0; drained=0; broke=0; malformed=0
 
@@ -215,6 +305,60 @@ for dir in "$FIXDIR"/*/; do
     fi
   fi
 
+  # ── diag-code: CODE + RANGE only, message NOT asserted. ────────────────────────
+  #
+  # ⚠️ USE THIS WHEN THE MESSAGE LEGITIMATELY VARIES — and use `diag:` when the MESSAGE
+  # IS THE DEFECT. Getting this backwards manufactures a FALSE DRAIN, which is worse
+  # than no fixture: the row goes RED, someone reads "issue fixed", and closes a live bug.
+  #
+  # This verb exists because #333's real message embeds the ENTIRE stdlib module list
+  # ("unknown module: X — available modules: array, async, base64, …"). Pinning that with
+  # `diag:` would drain the row the day ANYONE ADDS A STDLIB MODULE — an event with no
+  # connection whatsoever to #333. The pin would have been an encoded fact about a set
+  # that moves for unrelated reasons.
+  #
+  # It is also what docs/ops/TESTING-DESIGN.md §4.5 prescribes as the DEFAULT: "The
+  # assertion is on `code` + `range` (stable); the prose can change freely." `diag:` is
+  # the stricter, deliberate exception, for rows where the wording is the bug being
+  # pinned (#532: the message never says `test` is reserved; #66: it blames indentation).
+  if claim_has "$claim" diag-code; then
+    render_diags "$out" | awk '{print $1, $2}' > "$TMP/$name.dcodes"
+    claim_get "$claim" diag-code > "$TMP/$name.wantdcodes"
+    if ! cmp -s "$TMP/$name.dcodes" "$TMP/$name.wantdcodes"; then
+      fail="$fail\n     diagnostic code+range: expected:"
+      while IFS= read -r l; do fail="$fail\n       - $l"; done < "$TMP/$name.wantdcodes"
+      fail="$fail\n                            actual:"
+      if [ -s "$TMP/$name.dcodes" ]; then
+        while IFS= read -r l; do fail="$fail\n       - $l"; done < "$TMP/$name.dcodes"
+      else
+        fail="$fail\n       - (none)"
+      fi
+    fi
+  fi
+
+  # ── stdout-line: each named EXACT LINE must be present in stdout. ──────────────
+  #
+  # For a command whose output is a large DUMP that no fixture can pin whole — #93's
+  # `check --types` prints every scheme in the prelude, ~130 lines that move whenever
+  # the prelude does. Pinning all of it with `stdout:` would drain on any prelude edit.
+  #
+  # This is a LITERAL WHOLE-LINE match, not a substring and not a regex ("normalize the
+  # ACTUAL, never the expected" — ppx_expect and Dune both shipped regex matchers and
+  # then DELIBERATELY REMOVED them). Discrimination comes from pinning BOTH the bug's
+  # line AND a line that proves the command still worked: #93 pins the fabricated
+  # `eq : Num b => a -> a -> Bool` AND the real `eq : Num a => a -> a`, so a dump that
+  # broke entirely fails as "expected line missing" on BOTH, and its control catches it.
+  if claim_has "$claim" stdout-line; then
+    claim_get "$claim" stdout-line > "$TMP/$name.wantlines"
+    while IFS= read -r want; do
+      [ -z "$want" ] && continue
+      if ! grep -qxF -- "$want" "$out"; then
+        fail="$fail\n     stdout-line: expected this EXACT line in stdout, and it is absent:"
+        fail="$fail\n       - $want"
+      fi
+    done < "$TMP/$name.wantlines"
+  fi
+
   # ── file-after: the fixture's bytes after an in-place rewrite (fmt --write) ──
   if claim_has "$claim" file-after; then
     claim_get "$claim" file-after | while IFS= read -r l; do printf '%b\n' "$l"; done > "$TMP/$name.wantf"
@@ -278,6 +422,7 @@ done
 echo
 printf 'checked %d fixtures: %d still reproduce, %d DRAINED, %d control-broke, %d malformed\n' \
   "$checked" "$repro" "$drained" "$broke" "$malformed"
+[ "$dup_fail" -eq 0 ] || echo "corpus is MALFORMED: see the one-fixture-per-issue findings above"
 
 # N == 0 must be a FAILURE, not a pass. A must-fail suite that graded nothing and
 # printed green would be the exact bug this whole suite exists to prevent.
@@ -293,4 +438,4 @@ if [ "$drained" -gt 0 ]; then
   echo "   per-fixture instructions above, close the issue(s), and delete the fixture(s)."
 fi
 
-[ $((drained + broke + malformed)) -eq 0 ]
+[ $((drained + broke + malformed + dup_fail)) -eq 0 ]
