@@ -43,16 +43,27 @@ if [ "${1:-}" = "--one" ]; then
   golden="${f%.mdk}.eval.golden"
   ll="$WORKDIR/$name.ll"; bin="$WORKDIR/$name.bin"
   st=0; out=""
+  # Emit to a raw temp file and check $EMITBIN's OWN exit status directly
+  # (dash has no `set -o pipefail`, so `cmd | perl` in an `if !` tests perl's
+  # exit status, not the emitter's — see #632/#443). Only on a successful emit
+  # do we run the `()`-strip post-process into $ll.
+  raw="$WORKDIR/$name.raw.ll"
   if [ ! -f "$golden" ]; then
     out="no golden for $name (run sh test/capture_goldens.sh --frozen llvm_eval)"; st=1
-  elif ! "$EMITBIN" "$f" 2>"$WORKDIR/$name.emit.err" | perl -0pe 's/\(\)\s*\z//' > "$ll"; then
-    out="$(printf 'FAIL %s (emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
-  elif ! "$CC" $GC_CFLAGS "$ll" "$RTOBJ" $GC_LIBS -lm -o "$bin" 2>"$WORKDIR/$name.cc.err"; then
-    out="$(printf 'FAIL %s (clang)\n%s' "$name" "$(cat "$WORKDIR/$name.cc.err")")"; st=1
   else
-    ref="$(cat "$golden")"; self="$("$bin" 2>/dev/null)"
-    if [ "$ref" = "$self" ]; then out="ok   $name"
-    else out="$(printf 'FAIL %s\n  ref : %s\n  self: %s' "$name" "$ref" "$self")"; st=1; fi
+    "$EMITBIN" "$f" > "$raw" 2>"$WORKDIR/$name.emit.err"
+    emit_rc=$?
+    if [ "$emit_rc" -ne 0 ]; then
+      out="$(printf 'FAIL %s (emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
+    elif ! perl -0pe 's/\(\)\s*\z//' "$raw" > "$ll"; then
+      out="FAIL $name (postprocess: perl failed on emitted IR)"; st=1
+    elif ! "$CC" $GC_CFLAGS "$ll" "$RTOBJ" $GC_LIBS -lm -o "$bin" 2>"$WORKDIR/$name.cc.err"; then
+      out="$(printf 'FAIL %s (clang)\n%s' "$name" "$(cat "$WORKDIR/$name.cc.err")")"; st=1
+    else
+      ref="$(cat "$golden")"; self="$("$bin" 2>/dev/null)"
+      if [ "$ref" = "$self" ]; then out="ok   $name"
+      else out="$(printf 'FAIL %s\n  ref : %s\n  self: %s' "$name" "$ref" "$self")"; st=1; fi
+    fi
   fi
   printf '%s\n' "$out" > "$RESULTDIR/$name.out"
   echo "$st" > "$RESULTDIR/$name.status"
@@ -85,16 +96,31 @@ if ! "$CC" $GC_CFLAGS -c "$RT" -o "$RTOBJ" 2>/dev/null; then RTOBJ="$RT"; fi
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 
 # Fan the fixtures across an xargs -P pool of --one workers (see top of file).
-ls "$FIXDIR"/*.mdk 2>/dev/null \
-  | EMITBIN="$EMITBIN" CC="$CC" GC_CFLAGS="$GC_CFLAGS" GC_LIBS="$GC_LIBS" \
-    RTOBJ="$RTOBJ" WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+fixtures="$(ls "$FIXDIR"/*.mdk 2>/dev/null)"
+n_fixtures=0
+if [ -n "$fixtures" ]; then
+  n_fixtures="$(printf '%s\n' "$fixtures" | wc -l | tr -d ' ')"
+  printf '%s\n' "$fixtures" \
+    | EMITBIN="$EMITBIN" CC="$CC" GC_CFLAGS="$GC_CFLAGS" GC_LIBS="$GC_LIBS" \
+      RTOBJ="$RTOBJ" WORKDIR="$WORK" RESULTDIR="$RESULTS" \
+      xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+fi
 
-pass=0; fail=0
+pass=0; fail=0; seen=0
 for s in "$RESULTS"/*.status; do
   [ -f "$s" ] || continue
+  seen=$((seen+1))
   if [ "$(cat "$s")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
+
+# Completeness check (issue #637): a worker killed mid-run under xargs -P
+# writes no .status file at all, so it would otherwise vanish from BOTH
+# pass and fail — a silently-shrunk "green" run.
+if [ "$seen" -ne "$n_fixtures" ]; then
+  missing=$((n_fixtures - seen))
+  echo "FAIL: $missing of $n_fixtures workers produced no result — a worker died/was killed; this run is INCOMPLETE, not green."
+  exit 1
+fi
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
