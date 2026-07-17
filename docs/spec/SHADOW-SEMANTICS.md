@@ -4,9 +4,12 @@
 (`test/diff_compiler_shadow_semantics.sh`): it runs every fixture in
 `test/shadow_fixtures/` through `check` + `run` + `build`, asserting each cell's
 verdict AND (per **S7**) that `run` and the built binary print the same pinned
-value. **Every cell is now conformant** — S-3 (row 26, multi-typaram interface),
-the last open one, was closed on 2026-07-17 (#54), and its KNOWN-BAD ledger row
-did exactly what a ledger row is for: it went RED the day the bug was fixed. Until
+value. **No cell diverges any more** — S-3 (row 26, multi-typaram interface), the
+last **BUG**, was closed on 2026-07-17 (#54), and its KNOWN-BAD ledger row did
+exactly what a ledger row is for: it went RED the day the bug was fixed. One **GAP**
+remains (row 26's residual, row 29 / `d21`: S5's dict-bound-receiver carve-out is not
+honoured at multi-typaram width) — a clause the binary does not reach, on which all
+three engines nonetheless agree, pinned by the gate so it cannot rot. Until
 this gate existed the corpus below **ran nowhere**, and the matrix's own Status
 column had silently gone stale in the OK direction (see the note under §2).
 **Scope:** a bare name `N` that is BOTH a top-level standalone function AND an
@@ -162,6 +165,15 @@ Given an occurrence of bare name `N`:
   generic code unwritable in any module that shadows a method name.
   (`definerReceiverIsDictVar`; gated: `accept_constrained_receiver_shadow` → `14`,
   and `definer_shadow_nway`, which dispatches N-way through exactly this channel.)
+
+  ⚠️ **GAP (row 29 / `d21`, #54 residual): the carve-out is NOT honoured when the
+  interface has more than one typaram.** `definerReceiverIsDictVar` does not recognise
+  a multi-typaram constraint variable, so `useIface : Ix a i => a -> i -> Int` calling
+  `get x i` falls to S2 and monomorphises to the standalone's domain, making a `Box`
+  call a located reject. All three engines agree, so this is a **conformance gap
+  against S5, not an S7 violation** — and it is what #54 *left*, not what it broke:
+  before #54 this same cell shipped a binary printing a raw heap pointer at exit 0.
+  Honouring S5 here is follow-up work; the gate's `d21` row goes RED the day it lands.
 
 - **S6 (module-independence).** **[CHANGED]** For a **definer** shadow the impl
   query is *deleted*, so S6 is **trivially satisfied**: where the interface and impl
@@ -340,10 +352,26 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 27 | definer · **UNGROUNDED (numeric-literal) receiver** whose grounded head HAS a live prelude impl | S2+S5 | standalone → 3, 30 | `d12_definer_ungrounded_literal.mdk` | 3,30 | 3,30 | accept | **OK** (the P0-20 cell, now INVERTED: `eq 1 2` = 3, was `False`. `groundShadowReceiver` grounds the literal to the standalone's domain BEFORE the S2 question, so check/run/build ask it about the same head) |
 | 28 | **importer** · **UNGROUNDED (numeric-literal) receiver** · prelude iface + the Fork-1 control | S2+S5 | standalone → True, False; **method** → False, True | `i5_importer_ungrounded_literal/` | T,F,F,T | T,F,F,T | accept | **OK** (fixed 2026-07-14, **S1-RESIDUAL-B** — was `Type mismatch: Int literal vs Int Int` on ALL THREE paths, PRE-EXISTING, and invisible to the corpus because i1/i3/i4 all use GROUNDED receivers. The last two lines are the Fork-1 control: an importer shadow still dispatches on a live-impl head) |
 
-**Tally: 22 OK · 0 BUG · 3 UNTESTED-NO-FIXTURE · 1 UNREACHABLE · 2 baselines.**
+| 29 | definer · **dict-bound `=>` receiver** (S5's carve-out) on a **multi-TYPARAM interface** | S5 (carve-out) | **dispatch** → 3, 6 | `d21_definer_multityparam_dictvar_receiver.mdk` | reject `Int vs Box` | reject | reject | **GAP** (**S5 not honoured at multi-typaram width** — `definerReceiverIsDictVar` does not recognise a multi-typaram constraint var, so the occurrence falls to S2 and `useIface` monomorphises to the standalone's domain. ⚠️ **Not an S7 violation** — the three engines agree exactly; this is a conformance gap against S5, pinned by the gate so it cannot rot. **#54 residual.** Found by crossing d11's axis with receiver PROVENANCE while fixing #54; pre-#54 this exact cell was **SILENT WRONGNESS** — `check` exit 0 with the `Ix a i =>` constraint dropped from the reported scheme, `run` E-PANIC, and `build` exit 0 shipping a binary that printed the raw heap pointer `69867028434928`. #54 traded that for a located reject) |
+
+**Tally: 22 OK · 0 BUG · 1 GAP (row 29, S5 at multi-typaram width) ·
+3 UNTESTED-NO-FIXTURE · 1 UNREACHABLE · 2 baselines.**
 Rows 10/12/13/14 were BUG until P0-19; row 25 was BUG until S-1; **row 28 was BUG
 until 2026-07-14 (S1-RESIDUAL-B) — and it was PRE-EXISTING, not introduced by the
-inversion.** Row 26 was the last open cell and closed 2026-07-17 (#54).
+inversion.** Row 26 was the last open **BUG** and closed 2026-07-17 (#54) — which is also when
+row 29 was *added*, as that fix's residual: it is a **GAP** (a clause the binary does
+not reach), not a BUG (a divergence between the engines), and it is strictly better
+than what it replaced.
+
+> ⭐ **Row 29 is why "fix the cell" is not the same as "close the axis."** #54 was
+> filed as, and was, a loud S7 violation on row 26. Driving that fix to its edges —
+> crossing row 26's axis (typaram arity) with the axis **this document's own warning
+> above names** (receiver provenance) — turned up row 29: the *same* bypass, one axis
+> over, was **silently shipping a raw heap pointer at exit 0**. Strictly worse than
+> the panic that got the issue filed, and invisible to every gate, because by S7 all
+> three engines have to agree before a differential gate can see anything. **Twice
+> now the silent bug has been hiding on the provenance axis** (rows 27–28 were the
+> first time). Cross it *before* you call a shadow fix done.
 
 > ⭐ **Rows 27–28 exist because the corpus was blind to an entire AXIS.** Every
 > importer fixture used a **grounded** receiver, so the gate graded **18/0 while

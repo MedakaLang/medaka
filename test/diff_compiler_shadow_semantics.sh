@@ -116,7 +116,35 @@
 # very next run and is now re-pinned to the fixed behavior -- REJECT/REJECT/
 # REJECT, the d7 twin at multi-typaram width. THE LEDGER WORKED TWICE (d10, d11).
 #
-# There are no KNOWN-BAD-because-broken rows left except d18 (BUILD_CRASH, #410
+# ###################################################################
+# # d21 -- WHAT DRIVING d11's FIX TO ITS EDGES ACTUALLY FOUND       #
+# ###################################################################
+# d11 pinned the LOUD half. Crossing its axis (typaram arity) with the one this
+# gate's own ⭐ rule above names -- receiver PROVENANCE -- found the SILENT half,
+# and nothing in the corpus could express it. d21 is d11 with an S5 dict-bound
+# receiver (`useIface : Ix a i => a -> i -> Int`). On eedd1482, pre-#54:
+#
+#     check -> exit 0, reporting `useIface : a -> b -> Int`
+#              (the `Ix a i =>` constraint SILENTLY DROPPED from the scheme)
+#     run   -> E-PANIC `unknown op '*'`
+#     build -> exit 0; the shipped binary printed  69867028434928  then  3
+#              -- a RAW HEAP POINTER rendered as an Int, at exit 0
+#
+# That is the S-1 / P0-20 garbage-pointer shape, live, reachable through the same
+# bypass d11 pinned -- and STRICTLY WORSE than d11's panic, because it is silent.
+# #54 closes it: all three engines now give the identical located reject. What d21
+# pins is the RESIDUAL -- S5's carve-out ("a dict-bound `=>` receiver DISPATCHES")
+# is still not honoured at multi-typaram width, because definerReceiverIsDictVar
+# does not recognise a multi-typaram constraint var. That is an S5 CONFORMANCE GAP,
+# not an S7 violation: the three engines agree exactly. It goes RED the day S5 is
+# honoured here, which is the signal to re-pin it to ACCEPT/3/6.
+#
+# ⭐ THE LESSON, AGAIN: the corpus was blind to this cell for the SAME reason it was
+# blind to row 28 -- an unexercised receiver-provenance axis. Twice now, the axis
+# named in this file's own warning is where the silent bug was hiding. When you fix
+# a shadow cell, CROSS ITS AXIS WITH PROVENANCE BEFORE YOU CALL IT DONE.
+#
+# Rows pinned to a KNOWN gap: d18 (BUILD_CRASH, #410 residual) and d21 (S5, #54
 # residual). A KNOWN-BAD row is not a skip -- it runs and asserts every turn.
 #
 # Untested-per-the-doc (rows 21-23: importer value-position / importer N-way /
@@ -190,6 +218,7 @@ d13_definer_return_pos.mdk|D13 definer, RETURN-POSITION method shadow (S4, matri
 d17_definer_value_pos_arity_differ.mdk|D17 definer, value position where METHOD arity (2) DIFFERS from STANDALONE arity (1) (S4; S1-RESIDUAL-A, #410). The emitter lift built a 2-arity closure over a 1-arity body, so map got PAPs back and build printed heap pointers as Ints at exit 0 -- SILENT WRONGNESS. Fixed by methValArity (route-derived, not name-derived). D4/D4b are arity-EQUAL, which is why the corpus was blind to this|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[2, 3, 4]
 d19_definer_value_pos_arity_differ_zeroimpls.mdk|D19 definer, arity-differ value position with ZERO impls (S2+S4, #410) -- shadow-hood + arity mismatch + value position suffice; the impl universe is irrelevant|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[2, 3, 4]
 d20_definer_value_pos_arity_differ_opposite.mdk|D20 definer, OPPOSITE arity direction to d17: METHOD arity 1 < STANDALONE arity 2 (S4, #410). Pins the other side of the route-derived arity -- the closure must be arity 2 so `f 1 2` is a saturated direct call|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3
+d21_definer_multityparam_dictvar_receiver.mdk|D21 definer, S5 CARVE-OUT at MULTI-TYPARAM width: a dict-bound `Ix a i =>` receiver does NOT dispatch -- `definerReceiverIsDictVar` does not recognise a multi-typaram constraint var, so the occurrence falls to S2 and `useIface` monomorphises to the standalone`s domain. An S5 CONFORMANCE GAP (#54 residual), NOT an S7 violation: all three engines agree exactly. Pre-#54 this file was SILENT WRONGNESS -- check exit 0 (constraint dropped from the reported scheme), run E-PANIC, build exit 0 printing a RAW HEAP POINTER. Goes RED the day S5 is honoured here|REJECT|REJECT|REJECT|NONE|
 d18_definer_value_pos_arity_differ_unannot.mdk|D18 KNOWN-BAD: d17 WITHOUT the List Int annotation (#410 headline repro). println`s Display requirement gets a NULL element dict (RNone route) so the shipped binary SEGFAULTs while run is correct. The element TYPE resolves to Int -- this is the requirement ROUTE, stamped in types/typecheck.mdk, NOT an emitter bug|ACCEPT|ACCEPT|ACCEPT|BUILD_CRASH|[2, 3, 4]'
 
 # --- Coverage self-audit: every top-level fixture unit (a .mdk file, or a

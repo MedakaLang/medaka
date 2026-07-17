@@ -128,6 +128,17 @@ discarded stdout on panic**, so a `println` probe returned nothing whether the p
   S2 inversion never queries the impl universe, so typaram arity is irrelevant to them); only the
   importer arms — whose per-receiver rule genuinely keys on the receiver at the interface's one
   typaram — keep the renamed count test. Closing **S-3** / SHADOW-SEMANTICS row 26.
+- **⭐ FIXING THE CELL IS NOT CLOSING THE AXIS — cross the fix with receiver PROVENANCE
+  before you call it done.** #54 was filed as row 26's loud `run` panic. Driving that fix
+  to its edges — row 26's axis (typaram arity) × the provenance axis (grounded / literal /
+  **dict-bound**) — found row 29 (`d21`): the *same* bypass, one axis over, where the base
+  binary `eedd1482` **shipped a raw heap pointer at exit 0** (`check` exit 0 with the
+  `Ix a i =>` constraint dropped from the scheme it printed; `run` E-PANIC; `build` exit 0
+  printing `69867028434928`). **Strictly worse than the panic that got the issue filed, and
+  no gate could see it** — by S7 all three engines must agree before a differential gate has
+  anything to compare. That is **twice** the silent bug has been hiding on the provenance
+  axis (rows 27–28 were the first). It is now pinned as row 29, an S5 **GAP** (all three
+  engines agree; S5's dict-var carve-out just is not reached at multi-typaram width).
 
 ---
 

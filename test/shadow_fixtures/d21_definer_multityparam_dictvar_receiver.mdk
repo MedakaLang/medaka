@@ -1,0 +1,52 @@
+-- SHADOW-SEMANTICS cell D21 (matrix row 29): the S5 CARVE-OUT at MULTI-TYPARAM
+-- width.  `useIface : Ix a i => a -> i -> Int` calls `get` on its own dict-bound
+-- `=>` constraint variable, inside a module that shadows `get`.  S5's carve-out
+-- says such a receiver DISPATCHES -- writing `Ix a i =>` is an explicit, written-
+-- down request to resolve through the interface.
+--
+-- ⚠️ IT DOES NOT, at multi-typaram width: `definerReceiverIsDictVar` does not
+-- recognise a multi-typaram constraint var, so the occurrence falls to S2 and
+-- `useIface` monomorphises to the standalone's domain (`Int -> Int -> Int`),
+-- making the `Box` call a located reject.  That is an S5 CONFORMANCE GAP, pinned
+-- here, NOT an S7 violation -- check/run/build agree exactly.  See #54's residual.
+-- Expected: check/run/build all REJECT (`Int vs Box`) at the `useIface (Box 3) 1` call.
+--
+-- ⭐ WHY THIS CELL EXISTS.  It is the receiver-PROVENANCE axis (grounded / literal /
+-- DICT-BOUND) crossed with the typaram-arity axis -- the crossing d11 alone could not
+-- reach, and the corpus was blind to it.  On `eedd1482` (pre-#54) this exact file was
+-- **SILENT WRONGNESS of the P0-20 kind**, strictly worse than d11's loud panic:
+--
+--   check  -> exit 0, and reported `useIface : a -> b -> Int` -- the `Ix a i =>`
+--             constraint SILENTLY DROPPED from the scheme it printed
+--   run    -> E-PANIC `unknown op '*'`
+--   build  -> exit 0, and the shipped binary printed `69867028434928` then `3`,
+--             at exit 0: a RAW HEAP POINTER rendered as an Int
+--
+-- #54 closed that by bringing multi-typaram interfaces into the definer machinery;
+-- the reject below is the S2 default it now (correctly, consistently) lands on.  The
+-- residual is only that S5's carve-out cannot re-open it.  A cell that trades a
+-- garbage-pointer miscompile for a located reject is a fix; this row pins the trade
+-- so the remaining half cannot rot silently, and goes RED the day S5 is honoured here.
+-- 🚨 DO NOT RUN `medaka fmt --write` ON THIS FILE.  It DESTROYS the `Ix a i =>`
+-- constraint below, rewriting it to `() =>`, which is not even parseable
+-- (`expected type atom`).  Found while adding this fixture, 2026-07-17; single-typaram
+-- constraints round-trip fine, so the formatter has never been exercised on this shape.
+-- Reported with #54.  The pre-commit hook excludes `test/` from `fmt --check`, which is
+-- the only reason this file can be committed at all.
+interface Ix a i where
+  get : a -> i -> Int
+
+data Box = Box Int
+
+impl Ix Box Int where
+  get (Box n) i = n + i
+
+get : Int -> Int -> Int
+get n i = n * i
+
+useIface : Ix a i => a -> i -> Int
+useIface x i = get x i
+
+main =
+  println (useIface (Box 3) 1)
+  println (get 3 1)
