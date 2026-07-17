@@ -19,12 +19,14 @@
 #
 # Corpus: the UNION of ALL FOUR emitter corpora —
 #
-#   test/llvm_fixtures/        (201)   untyped, prelude-free
-#   test/llvm_fixtures_typed/   (45)   real prelude, TYPECHECKS
-#   test/wasm/fixtures/        (149)   untyped, prelude-free
-#   test/wasm/fixtures_typed/    (9)   real prelude, TYPECHECKS
-#                              ────
-#                               404
+#   test/llvm_fixtures/               untyped, prelude-free
+#   test/llvm_fixtures_typed/         real prelude, TYPECHECKS
+#   test/wasm/fixtures/               untyped, prelude-free
+#   test/wasm/fixtures_typed/         real prelude, TYPECHECKS
+#
+# (Corpus size is NOT hardcoded here on purpose — each directory's fixture count
+# drifts as fixtures are added, and a hand-maintained total rots the moment it
+# does. The gate derives and reports the live count itself; read it off a run.)
 #
 # Before this gate the two backends were validated on essentially disjoint corpora
 # (5 basenames in common) — which is exactly why 7 of the 22 known divergences are
@@ -441,6 +443,7 @@ CORPUS="$(ls "$ROOT"/test/llvm_fixtures/*.mdk \
              "$ROOT"/test/wasm/fixtures/*.mdk \
              "$ROOT"/test/wasm/fixtures_typed/*.mdk 2>/dev/null)"
 [ -n "$CORPUS" ] || { echo "the fixture corpus is empty — the gate compared nothing"; exit 2; }
+n_dispatched="$(printf '%s\n' "$CORPUS" | wc -l | tr -d ' ')"
 
 # Fan-out. NOTE this gate deliberately does NOT honour run_gates.sh's INNER_JOBS
 # (which it exports to every gate as $JOBS, default 3). Every other gate is a
@@ -467,6 +470,19 @@ printf '%s\n' "$CORPUS" \
 cat "$RESULTS"/*.sig 2>/dev/null | sort > "$WORK/all.tsv"
 compared=$(wc -l < "$WORK/all.tsv" | tr -d ' ')
 [ "$compared" -gt 0 ] || { echo "ZERO-COMPARISON: not one fixture produced a result — the gate did not run"; exit 2; }
+
+# Completeness check (issue #448 follow-up, same shape as #637's fix to the sibling
+# xargs -P aggregation gates): a worker killed mid-run under xargs -P (the
+# documented xargs -P-pool-killed hazard on this box) writes no .sig file at all,
+# so it would otherwise vanish from EVERY tally below — a silently-shrunk "green"
+# run reporting fewer comparisons than were actually dispatched, never announcing
+# it ran less than the full corpus. N == 0 dispatched can't reach here (the CORPUS
+# emptiness check above already exits first), but the formula is safe for it too.
+if [ "$compared" -ne "$n_dispatched" ]; then
+  missing=$((n_dispatched - compared))
+  echo "FAIL: $missing of $n_dispatched workers produced no result — a worker died/was killed; this run is INCOMPLETE, not green."
+  exit 1
+fi
 
 # ── CAPTURE: rewrite the ledger from the observed signatures ──────────────────
 # Emits a line only for a fixture that is NOT clean.  The category+reason text is
