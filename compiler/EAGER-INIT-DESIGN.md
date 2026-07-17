@@ -576,8 +576,13 @@ the question: one DID, and its filename is why nobody read it.**
 - **Change:** `emit_support.mdk` `:59` (`CStringSlice` → descend `lo`/`hi`) and `:75`
   (`eagerVarsArms` → descend guards). Optionally F4(a).
 - **Fixtures (new, mirroring the existing pair's shape exactly):**
-  - `test/llvm_fixtures/eager_global_slice_bound_hidden.mdk` + `_ordered.mdk` control (§1.2)
-  - `test/llvm_fixtures/eager_global_guard_hidden.mdk` + `_ordered.mdk` control (§1.3)
+  - **AS BUILT (Stage A):** `test/llvm_fixtures_typed/eager_global_string_slice.mdk` (§1.2) —
+    the *typed* corpus, NOT `llvm_fixtures/`: that corpus's probe is prelude-free and cannot
+    do `CStringSlice` at all, so it silently gives the wrong answer. The typed corpus also
+    compares native against an eval oracle and refuses to capture on mismatch.
+  - **AS BUILT (Stage A):** `test/llvm_fixtures/eager_global_guard.mdk` (§1.3)
+    + `test/llvm_fixtures_typed/eager_global_list_slice.mdk` (the control that proved
+    `CListSlice` descends its bounds while `CStringSlice` did not)
   - **Precedent to copy verbatim:** `test/llvm_fixtures/eager_global_call_hidden.mdk` +
     `eager_global_call_ordered.mdk`, ledgered `emitter:shared-eager-init` at
     `test/engine_divergence.txt:121`. **The category already exists** (added 2026-07-16 for #553)
@@ -733,7 +738,8 @@ as "#553 fixed".
 
 - **PR-2 (the diagnostic) is now cheaper and better-founded than PR-3** — the code exists, eval is
   the oracle, and a fixture is `run` vs `build` on `x = x + 1`. **Consider landing it with PR-1.**
-- **New fixture for PR-1/PR-2:** `test/llvm_fixtures/eager_global_self_cycle.mdk` (§9.1) —
+- **New fixture, NOT YET BUILT** (Stage B / divergence #5, `x = x + 1`) — an
+  `eager_global_self_cycle` fixture (§9.1), name proposed not created —
   ledgerable **today** under the existing `emitter:shared-eager-init` category
   (`test/engine_divergence.txt:121`), no new taxonomy needed. It pins a divergence that is
   currently **completely ungated**.
