@@ -1089,7 +1089,7 @@ uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 uniEscTermErr : Array Char -> Int -> Int -> Int -> String
 uniEscTermErr src len s he
   | he >= len = "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but the file ended"
-  | at src he == '_' = "unicode escape uses a `_` separator, which is not allowed here. `_` groups digits in integer literals (`1_000`, `0xD_EAD`), but a `\\u{...}` codepoint must be an unbroken run of hex digits — write `\\u{41}`, not `\\u{4_1}`"
+  | at src he == '_' = "unicode escape uses a `_` separator, which is not allowed here. `_` groups digits in integer literals (`1_000`, `0xD_EAD`), but a `\\u{...}` codepoint must be an unbroken run of hex digits — write the digits unbroken, as in `\\u{41}` rather than `\\u{4_1}`"
   | he == s && at src he == '}' = "unicode escape `\\u{}` has no digits. A codepoint needs at least one hex digit — `\\u{41}` is 'A' and `\\u{0}` is NUL"
   | he == s = "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but found `\{charToStr (at src he)}`"
   | otherwise = "unicode escape is not terminated. Expected `}` after the hex digits, but found `\{charToStr (at src he)}`"
