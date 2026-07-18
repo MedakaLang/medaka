@@ -816,7 +816,19 @@ Eval-only fixtures capture the shape (these pass under `eval_typed_modules_main`
 
 ---
 
-## NATIVE-EAGER-INIT — eager value-global init is ordered by DEPENDENCY, not source (#553; deviation owned by #561)
+## NATIVE-EAGER-INIT — eager value-global init is ordered by DEPENDENCY, not source (#553; deviation formerly owned by #561, now CLOSED)
+
+⚠️ **UPDATE (2026-07-18): #561 SHIPPED and is CLOSED — the deviation this section describes is
+GONE.** PR-A (native, #659) and PR-B (wasm, #661) made both backends emit dispatch-reaching and
+cyclic nullary globals LAZILY (the 3-state force-fn mechanism — see
+`compiler/EAGER-INIT-DESIGN.md` §10), matching eval's `VThunk`/`forceCell`/`blackholeCell`
+exactly. Rows #4 and #5 in the table below are FIXED on both backends, not just native; every
+"OPEN (deviation, #561)" / "until #561" phrase below describes the **pre-#561 state** this
+section was written against — read them as history, not current status. PR-C added regression
+coverage for two more cycle shapes (`llvm/eager_global_mutual_cycle`,
+`llvmT/eager_global_dispatch_hidden_cycle`) to `test/diff_compiler_engines.sh` so a regression
+back to eager init flips a required gate red. The rest of this section is left as the historical
+record of the investigation that led to #561.
 
 **This law existed nowhere for the native backend until 2026-07-17.** `grep -i eager` over
 `STAGE2-DESIGN.md`, `RUNTIME-DESIGN.md` and this file returned **zero hits**; the only written

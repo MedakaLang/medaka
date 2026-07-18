@@ -1,0 +1,28 @@
+-- #561 (PR-A native + PR-B wasm, both SHIPPED) — strictness-parity regression
+-- coverage for a MUTUAL value cycle, the sibling shape to the SELF cycle already
+-- pinned by eager_global_self_cycle.mdk (acceptance repro #5).
+--
+-- `x = y + 1` / `y = x + 1` is a two-node non-productive cycle: neither `x` nor
+-- `y` can be initialized without the other already having a value. A topo sort
+-- has no correct order for it, same as the self-cycle case, just with the back
+-- edge one hop further away. The decided semantics (see eager_global_self_cycle.mdk
+-- and docs/spec/WASM-SEMANTICS.md §WP10) are that ANY genuine top-level value
+-- cycle raises E-CYCLIC-VALUE (exit 1) — laziness turns "no order exists" into
+-- "detect re-entrancy and abort", instead of silently reading a still-zero cell.
+--
+-- The golden is EMPTY (this harness diffs STDOUT; the error goes to stderr).
+--
+-- Measured on the shipping engines (2026-07-18), all three post-#561:
+--   eval   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--   native -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--   wasm   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--
+-- If either backend ever regresses to eager init on a mutual cycle (e.g. a topo
+-- sort or eager-reach-map change that treats a two-node cycle differently from a
+-- one-node cycle), this fixture stops raising E-CYCLIC-VALUE and the gate goes
+-- red. Do NOT delete it.
+
+x = y + 1
+y = x + 1
+
+main = x

@@ -1,29 +1,42 @@
--- #561 PR-A (native) — the GENUINE-VALUE-CYCLE that only LAZINESS can answer, now
--- FIXED on the NATIVE backend and serving as a REGRESSION LOCK (acceptance repro #5).
+-- #561 (PR-A native #659 + PR-B wasm #661, both SHIPPED — #561 CLOSED) — the
+-- GENUINE-VALUE-CYCLE that only LAZINESS can answer, fixed on BOTH backends and
+-- serving as a REGRESSION LOCK (acceptance repro #5).
 --
 -- `x = x + 1` is a non-productive cyclic value: `x` depends on `x`. A topo sort has NO
--- correct order for it (that is why #553 Stage B deliberately left it open). eval — the
--- reference engine implementing the DECIDED lazy-nullary semantics — black-holes the
--- cell and raises E-CYCLIC-VALUE (exit 1). #561 PR-A makes native match: a top-level
--- nullary global reaching a cycle is emitted LAZILY (@mdk_force_x + an @mdk_gs_x state
--- flag), and re-entering the still-FORCING cell calls @mdk_cyclic_value → the same coded
--- E-CYCLIC-VALUE, exit 1, EMPTY stdout.
+-- correct order for it (that is why #553 Stage B deliberately left it open). This is the
+-- decided intended-abort: eval — the reference engine implementing the DECIDED
+-- lazy-nullary semantics — black-holes the cell and raises E-CYCLIC-VALUE (exit 1).
+-- #561 makes BOTH backends match: a top-level nullary global reaching a cycle is
+-- emitted LAZILY (native: @mdk_force_x + an @mdk_gs_x state flag; wasm: $force_x + a
+-- $gs_x state flag — the same 3-state mechanism, see compiler/EAGER-INIT-DESIGN.md
+-- §10), and re-entering the still-FORCING cell raises the same coded E-CYCLIC-VALUE,
+-- exit 1, EMPTY stdout, on every engine.
 --
--- The golden is EMPTY (this harness diffs STDOUT; the error goes to stderr). Before PR-A
--- native EAGER-initialised `x`'s cell to 0, computed `0 + 1`, and printed `1` at exit 0 —
--- a silent wrong answer. If native regresses to eager init, this fixture prints `1` and
--- fails. Do NOT delete it, and do NOT restore the `1` golden.
+-- The golden is EMPTY (this harness diffs STDOUT; the error goes to stderr). Before
+-- #561 native EAGER-initialised `x`'s cell to 0, computed `0 + 1`, and printed `1` at
+-- exit 0 — a silent wrong answer; wasm's pre-#561 ref-mode eager init left the cell
+-- null and trapped at instantiate ("dereferencing a null pointer") — the RIGHT exit
+-- code for the WRONG reason. If either backend regresses to eager init, this fixture
+-- stops raising the coded E-CYCLIC-VALUE and the gate goes red. Do NOT delete it, and
+-- do NOT restore the `1` golden.
 --
--- ⚠️ WASM IS STILL A GAP until #561 PR-B: wasm's ref-mode eager init leaves the cell null
--- and prints nothing (empty stdout, trap, exit 1). So native and wasm now COINCIDE on
--- empty stdout (nw=eq) but for different reasons; eval errors (its arm is `na`). The
--- engines ledger row (test/engine_divergence.txt) records `na:eq:na:na:ran:ran` and stays
--- ledgered until PR-B makes wasm raise E-CYCLIC-VALUE too and the row fully drains.
+-- The engines ledger row (test/engine_divergence.txt) stays permanently ledgered as
+-- `na:eq:na:na:ran:ran` under `eval:intended-abort` — not because anything is still
+-- wrong, but because the eval-arm classifier records ANY interpreter E-* runtime error
+-- as `na` (arm unavailable) by design (§4.4 of the gate header), so `en`/`ew` can never
+-- read `eq` for a fixture whose correct behavior IS an eval-side E-* error. `nw=eq`
+-- (native and wasm both empty-stdout/exit-1) is the signal that matters here.
 --
--- Measured on the shipping engines after PR-A (2026-07-18):
+-- PR-C added sibling regression coverage for other cycle shapes:
+-- eager_global_mutual_cycle.mdk (a two-node mutual cycle) and
+-- test/llvm_fixtures_typed/eager_global_dispatch_hidden_cycle.mdk (a cycle whose back
+-- edge is hidden behind interface-method dispatch).
+--
+-- Measured on the shipping engines after #561 (2026-07-18), all three:
 --   eval   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout   (correct)
 --   native -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout   (FIXED — was `1`)
---   wasm   -> instantiate trap, exit 1, empty stdout                 (PR-B gap)
+--   wasm   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout   (FIXED — was an
+--                                                                     unnamed null-deref trap)
 
 x = x + 1
 

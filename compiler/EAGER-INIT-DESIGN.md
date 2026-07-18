@@ -748,11 +748,15 @@ as "#553 fixed".
 
 ## 10. #561 — LAZINESS (the terminal fix)
 
-**Status: PR-A SHIPPED (native, this change).** §5.1 rejected laziness for 0.1.0 on a *cost*
-argument (a forced/value-cache check on every global read). #561 keeps that concern honest with
-a **fast-path**: only the value globals that have **no static init order** go lazy; every other
-value global stays on the byte-identical eager prologue. This section records the mechanism, the
-SAFE/LAZY predicate, the native encoding, and the PR staging.
+**Status: PR-A (native) SHIPPED (#659), PR-B (wasm) SHIPPED (#661) — #561 CLOSED.** Both backends
+now classify LAZY value globals identically and raise the coded `E-CYCLIC-VALUE` on the same
+cycles, matching eval. §5.1 rejected laziness for 0.1.0 on a *cost* argument (a forced/value-cache
+check on every global read). #561 keeps that concern honest with a **fast-path**: only the value
+globals that have **no static init order** go lazy; every other value global stays on the
+byte-identical eager prologue. This section records the mechanism, the SAFE/LAZY predicate, the
+native + wasm encodings, and the PR staging. **PR-C (regression corpus — this change)** adds
+cycle-shape fixtures (mutual cycle, dispatch-hidden cycle) to the `diff_compiler_engines.sh`
+corpus so a regression to eager init on either backend flips a gate red; see §10.5 and §10.6.
 
 ### 10.1 The 3-state cell — a faithful transliteration of eval
 
@@ -830,10 +834,58 @@ so a prior program's classification can never leak across a same-process re-emit
 
 ### 10.5 Staging
 
-- **PR-A (this change): NATIVE.** 3-state lazy globals + fast-path; drains the native arm of
+- **PR-A SHIPPED (#659): NATIVE.** 3-state lazy globals + fast-path; drains the native arm of
   `llvm/eager_global_self_cycle` (`na:ne…` → `na:eq…`) and adds
   `llvmT/eager_global_dispatch_hidden` (repro #4, native 0 → 42).
-- **PR-B: WASM.** The same mechanism on `wasm_emit.mdk` (WasmGC has a native forced/value-cache
-  field per `WASMGC-DESIGN.md:249-252`). Fully drains the two ledger rows.
-- **PR-C: parity gate.** Assert both backends classify the same globals LAZY and raise
-  `E-CYCLIC-VALUE` on the same cycles (mirrors `diff_compiler_tmc_parity.sh`).
+- **PR-B SHIPPED (#661): WASM.** The same mechanism on `wasm_emit.mdk` (WasmGC has a native
+  forced/value-cache field per `WASMGC-DESIGN.md:249-252`). Fully drains the two ledger rows —
+  both `llvm/eager_global_self_cycle` and `llvmT/eager_global_dispatch_hidden` now show `nw=eq`
+  with native and wasm agreeing (both raise the coded `E-CYCLIC-VALUE` / print the same value).
+- **PR-C SHIPPED (this change): regression corpus.** Rather than a bespoke parity-gate script,
+  landed as fixtures in the EXISTING `diff_compiler_engines.sh` three-engine differential (which
+  already runs `eval == native == wasm` on the shared `llvm_fixtures`/`llvm_fixtures_typed`
+  corpora — see test header §"Three tiers"): a MUTUAL-cycle fixture
+  (`llvm/eager_global_mutual_cycle`, the two-node sibling to the self-cycle repro) and a
+  DISPATCH-HIDDEN-cycle fixture (`llvmT/eager_global_dispatch_hidden_cycle`, a CMethod-routed
+  self-reference — the cyclic sibling to the ordering-only `eager_global_dispatch_hidden`). Both
+  ledgered `eval:intended-abort` in `test/engine_divergence.txt` for the same structural reason as
+  the original self-cycle row (the eval-arm classifier records ANY interpreter `E-*` as `na`, so
+  `en`/`ew` stay `na` while `nw=eq`) — that is the gate's permanent, by-design signature for an
+  `E-CYCLIC-VALUE` fixture, not a residual gap. §10.6 records the scalar-mode reachability
+  question this staging note left open.
+
+### 10.6 Scalar-mode wasm emit: N/A for lazy globals (verified, not just waved off)
+
+PR-B wired the 3-state force mechanism (§10.1's transliteration) into `wasm_emit.mdk`'s **ref**
+emit path only — `emitScalarInit`/`emitScalarProgram` (the OTHER wasm output shape, used when a
+program needs none of ref-mode's uniform `(ref eq)` representation) has no knowledge of
+`lazyGlobalNames`, no `$force_<name>` functions, and still eagerly initializes every value global
+in topo order, exactly as it did before #561. A conformance reviewer flagged this during PR-B
+review: is a LAZY global that reaches scalar mode a live gap?
+
+**No — verified unreachable, not just argued.** Mode selection is a single boolean,
+`useRef = useClos || programUsesAdt … || isNonEmptyList impls || useStrRef.value || …`
+(`compiler/backend/wasm_emit.mdk:905`, computed once per program before either emit path
+runs) — `emitScalarProgram` only ever runs when `useRef` is `False`. Walk what makes a global
+LAZY at all (§10.2 — reaches a `CMethod` in eager position, OR sits in a value cycle):
+
+- **Dispatch-reaching LAZY.** A `CMethod` occurrence requires an `interface`/`impl` pair to exist
+  in the elaborated program, i.e. `impls` is non-empty — `isNonEmptyList impls` alone forces
+  `useRef = True`. Structurally cannot reach scalar mode.
+- **Cyclic LAZY.** A cycle with no operation on it at all (`x = x`) does not typecheck at the
+  program's top level (`Ambiguous instance for Display` — nothing pins the auto-print type), so it
+  never reaches emit. Every genuine cyclic fixture in this corpus (`eager_global_self_cycle`,
+  `eager_global_mutual_cycle`, and the dispatch-hidden cycle) closes over some typeclass-dispatched
+  operation (`+`, `mk`) to typecheck at all, which pulls in the operation's `impl` (`Num Int`, or
+  the fixture's own `interface`/`impl`) — same `isNonEmptyList impls ⇒ useRef` argument applies.
+
+**Empirically confirmed, not just derived**: both new PR-C fixtures (§10.5) were built through
+the shipping CLI (`medaka build --target wasm --allow-internal`) and both raise `E-CYCLIC-VALUE`
+via the `$force_<name>` black-hole (2026-07-18, this worktree) — the only path that could ever
+produce that output, since `emitScalarInit` has no such call at all. So: **no lazy global reaches
+`emitScalarInit`/`emitScalarProgram` via `medaka build --target wasm`, today or by any change that
+keeps the LAZY predicate as-is** — the concern is closed by construction, not by absence of a
+counterexample. A fixture that would *regress* this is not addable without inventing a way to make
+a global LAZY without any `impl` in the program, which the LAZY predicate (§10.2) does not permit;
+if that predicate ever changes to admit a non-dispatch, non-typeclass cycle source, this section's
+reasoning (and the need for a scalar-mode force path) should be re-checked.
