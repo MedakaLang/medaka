@@ -1,0 +1,3 @@
+c : Char
+c = 'a'
+main = println (c == 'a')

@@ -634,6 +634,7 @@ and load the matching skill rather than re-deriving the workflow. (A `UserPrompt
 | **benchmark-emitter** | ANY change to `compiler/backend/*` you intend to measure, or a fixpoint failure on a change that looks correct. |
 | **add-lsp-capability** | Add/extend an LSP feature. |
 | **pr-review** | Review an agent-authored PR diff for craft. Read-only; run AFTER CI is green. |
+| **bug-hunt** | Adversarially hunt lurking S0/S1 bugs: derive hot veins from the tracker, fan out isolated-worktree subagents by subsystem, verify first-hand, file deduped issues with self-draining pins. Best run right after a batch of S0/S1s is closed. |
 
 ⚠️ **`harden-typechecker` is narrower than it looks.** Adding a `type_error` does NOT by
 itself make a task typechecker-internal. If the fix threads through resolve/eval/desugar/AST
