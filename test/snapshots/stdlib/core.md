@@ -1,5 +1,5 @@
 # META
-source_lines=1629
+source_lines=1638
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -1108,7 +1108,10 @@ export interface Slice c where
 
 {- | `slice arr lo hi` copies `arr`'s elements over `[lo, hi)` into a fresh
    `Array`.  O(hi - lo).  Raises the coded `sliceError` (E-SLICE-OOB) when the
-   range runs outside `arr` -- unlike stdlib `Array.sliceClamped`, which clamps. -}
+   range runs outside `arr` -- unlike stdlib `Array.sliceClamped`, which clamps.
+
+   > slice [|10, 20, 30, 40, 50|] 1 3
+   [|20, 30|] -}
 export impl Slice (Array a) where
   slice arr lo hi =
     if lo < 0 || hi > arrayLength arr || hi - lo < 0 then
@@ -1118,13 +1121,19 @@ export impl Slice (Array a) where
 
 {- | `slice s lo hi` is the substring of `s` over `[lo, hi)` (codepoints).
    Out-of-range bounds are clamped by the underlying `stringSlice`, matching
-   stdlib `String.sliceClamped`. -}
+   stdlib `String.sliceClamped`.
+
+   > slice "hello" 1 4
+   "ell" -}
 export impl Slice String where
   slice s lo hi = stringSlice lo hi s
 
 {- | `slice xs lo hi` is the sublist of `xs` over `[lo, hi)`.  O(hi) -- walks the
    cons chain.  Out-of-range bounds are CLAMPED (never panics), matching the
-   interpreter's list-slice contract. -}
+   interpreter's list-slice contract.
+
+   > slice [10, 20, 30, 40] 1 3
+   [20, 30] -}
 export impl Slice (List a) where
   slice xs lo hi = sliceListGo xs 0 lo hi
 
