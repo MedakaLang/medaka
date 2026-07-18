@@ -1,0 +1,41 @@
+-- #561 (PR-A native + PR-B wasm, both SHIPPED) — strictness-parity regression
+-- coverage for a value cycle whose back edge is HIDDEN behind interface-method
+-- dispatch, the cyclic sibling to eager_global_dispatch_hidden.mdk (which pins
+-- an ORDERING bug, not a cycle: `cell = mkVal True` there reaches a SAFE global
+-- through a CMethod head that a topo sort's direct free-var scan can't follow).
+--
+-- Here the CMethod-hidden edge closes a real cycle: `cell = mk True` and
+-- `mk _ = cell + 1` — the impl body reads `cell` right back. The topo sort
+-- can't see the `cell -> cell` edge (it doesn't follow through a CMethod head,
+-- same reason the ordering bug exists), but the LAZY-INIT machinery does not
+-- need to see it structurally: it force-initializes `cell`, the force re-enters
+-- `mk True` which reads `cell` while it is still being forced, and the
+-- still-FORCING state raises E-CYCLIC-VALUE — exactly like a directly-visible
+-- self cycle, just reached one dispatch hop later.
+--
+-- This fixture lives in the TYPED corpus deliberately, same reasoning as
+-- eager_global_dispatch_hidden.mdk: the untyped llvm_fixtures/ probe is
+-- prelude-free and typecheck-free, so it never produces the CMethod node that
+-- makes this edge (and this bug class) exist at all.
+--
+-- The golden is EMPTY (this harness diffs STDOUT; the error goes to stderr).
+--
+-- Measured on the shipping engines (2026-07-18), all three post-#561:
+--   eval   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--   native -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--   wasm   -> runtime error [E-CYCLIC-VALUE], exit 1, empty stdout
+--
+-- If a future change makes dispatch-hidden cycle detection diverge from the
+-- direct self-cycle case (e.g. a force-guard that only fires on a directly
+-- visible self-reference), this fixture stops raising E-CYCLIC-VALUE on
+-- whichever engine regressed, and the gate goes red. Do NOT delete it.
+
+interface Mk a where
+  mk : a -> Int
+
+impl Mk Bool where
+  mk _ = cell + 1
+
+cell = mk True
+
+main = cell
