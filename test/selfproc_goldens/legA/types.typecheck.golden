@@ -572,6 +572,7 @@ implMethodNameTc : ImplMethod -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, String)
 importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importOriginsOf : List Decl -> List (String, String)
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl

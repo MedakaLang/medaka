@@ -713,6 +713,35 @@ if [ "$x739_build_code" -eq 0 ] && [ -x "$TMP/x739.out" ] && [ "$x739_build_out"
 else
   fail=$((fail+1)); printf 'FAIL 739/samename-emit-build (exit %d, binary=%s, out [%s])\n' "$x739_build_code" "$([ -x "$TMP/x739.out" ] && echo yes || echo no)" "$x739_build_out"
 fi
+#  13d. #739 fix follow-up — the UNDER-application hole (CI-caught regression of the first cut).
+#       An ALIASED selective import of a CONSTRAINED fn (`import p.{f as g}`) used at a VALID
+#       type MUST keep its dict — check/run/build all accept and print the value.  The first
+#       #739 cut treated the alias local (`g`) as authoritative: it IS in currentImportDefinersRef
+#       but `qualConstraintFor` missed (the qual table is keyed by the ORIGIN `f`, not the alias),
+#       so declaredConstraintSlots returned ([],[]) and inferDictAtFound DROPPED the Display dict →
+#       `no matching impl for dispatch` at run/build.  The alias→origin resolution (importOriginsOf
+#       + currentImportOriginsRef) fixes it.  This is the same shape as hash_map.{set as hmSet}
+#       (Hash/Eq dict) that diff_compiler_test's hash_negative_hash caught.
+cat > "$TMP/aliascon_p.mdk" <<'EOF'
+export f : Display a => a -> String
+f x = display x
+EOF
+cat > "$TMP/aliascon.mdk" <<'EOF'
+import aliascon_p.{f as g}
+main = println (g 42)
+EOF
+ac_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/aliascon.mdk" 2>/dev/null)"
+ac_run_code=$?
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/aliascon.mdk" >/dev/null 2>&1
+ac_check_code=$?
+MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/aliascon.mdk" -o "$TMP/aliascon.out" >/dev/null 2>&1
+ac_build_code=$?
+ac_build_out="$([ -x "$TMP/aliascon.out" ] && "$TMP/aliascon.out" 2>/dev/null | head -1)"
+if [ "$ac_check_code" -eq 0 ] && [ "$ac_run_code" -eq 0 ] && [ "$ac_run" = "42" ] && [ "$ac_build_code" -eq 0 ] && [ "$ac_build_out" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   739/aliased-constrained-import-keeps-dict (check/run/build all 42)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 739/aliased-constrained-import-keeps-dict (check %d, run %d [%s], build %d [%s])\n' "$ac_check_code" "$ac_run_code" "$ac_run" "$ac_build_code" "$ac_build_out"
+fi
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
