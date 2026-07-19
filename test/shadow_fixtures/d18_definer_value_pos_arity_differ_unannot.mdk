@@ -1,21 +1,22 @@
--- SHADOW-SEMANTICS cell D18: KNOWN-BAD (issue #410 headline repro).
+-- SHADOW-SEMANTICS cell D18: FIXED (issue #410 headline repro), was BUILD_CRASH.
 --
--- Identical to d17 but WITHOUT the `List Int` annotation. The emitter arity lie
--- d17 pins is fixed; what remains is a SEPARATE, upstream bug: `println`'s
--- `Display (List Int)` requirement is emitted with a NULL element dict
--- (`@mdk_dc_N = [2 x i64] [<List-display tag>, i64 0]` — the `0` is an RNone
--- route), so `display` dereferences NULL and the shipped binary SEGFAULTs.
+-- Identical to d17 but WITHOUT the `List Int` annotation.  The emitter arity lie
+-- d17 pins was already fixed; d18 pinned a SEPARATE, upstream bug now also closed.
 --
--- The element TYPE resolves correctly to Int (annotating `List String` reports
--- "Type mismatch: Int vs String" at the list literal), so this is not a typing
--- failure — it is the requirement ROUTE being stamped without being resolved
--- against the inferred type. Adding the annotation (d17) makes the route
--- resolve, which is what isolates the two bugs. The route is stamped in
--- compiler/types/typecheck.mdk, so this is NOT an emitter fix.
+-- Root cause (contra the old note, which blamed the "route stamped without being
+-- resolved against the inferred type"): the EMIT path typed the bare value-position
+-- shadow `size` as the permissive METHOD scheme (`a -> a -> Int`), NOT the standalone
+-- (`Int -> Int`), because maybeStandaloneValueMono keys on the BARE name and the mangler
+-- had renamed the standalone funDef to `<mid>__size`.  So `map size [1,2,3]` inferred
+-- element type `Int -> Int` (a function), and `println`'s `Display (List (Int -> Int))`
+-- correctly stamped a NULL element dict (there is no Display for a function): the
+-- `@mdk_dc_N = [2 x i64] [<List-display tag>, i64 0]` was faithful to a WRONG type.  `run`
+-- was correct ([2, 3, 4]) because eval follows the RLocal route this same call stamped.
 --
--- Pinned BUILD_CRASH: `run` is correct ([2, 3, 4]) while the built binary
--- crashes. This row goes RED the day the route bug is fixed — re-pin it to
--- ALL_EXACT with value [2, 3, 4] then, and delete this note.
+-- Fix: maybeStandaloneValueMonoEmit (compiler/types/typecheck.mdk) — inferMethodAt now
+-- recovers the post-mangle shadow from the occurrence's RLocal route sym and pins the
+-- standalone scheme, so the element grounds to Int BEFORE resolveDictApps.  Now ALL_EXACT
+-- [2, 3, 4] on check/run/build.  Its importer twin is i6b (#669).
 interface Sizeable a where
   size : a -> a -> Int
 
