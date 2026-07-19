@@ -3941,10 +3941,35 @@ lookupQualIfaces src name (((m, n), v)::rest)
 declaredConstraintSlots : String -> (List Int, List String)
 declaredConstraintSlots name = match qualConstraintFor name
   Some (ids, ifs) => (ids, ifs)
-  None => (
-    fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value),
-    fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value),
-  )
+  -- #739: source-exact fallback.  An EXPLICITLY-imported name (present in
+  -- currentImportDefinersRef) whose (import-source, name) qual entry is ABSENT is
+  -- genuinely UNCONSTRAINED in its source module — every module's constrained fns ARE
+  -- attributed into crossModuleFunConstraintsQualRef when it is processed, so a MISS for a
+  -- known import means "no constraint", not "look elsewhere".  Do NOT fall back to the
+  -- bare-name funConstraintsRef here: on the emit path that table is JOINTLY seeded across
+  -- every module (aliasConstraintEntries), so a DIFFERENT module's same-named CONSTRAINED
+  -- fn (`p.f : Display a => …`) would be misattributed to this unconstrained callee
+  -- (`q.f`), and per-module tyvarCounter reset makes its constraint id collide with a fresh
+  -- instantiation var → the call site records a phantom `Display Z` obligation and
+  -- run/build OVER-REJECT a valid program (#739).  Mirrors the check-path
+  -- declaredCrossModuleObls source-exact discipline (#673/#738).  Only local / wildcard /
+  -- re-export / check-path (mid "") names — absent from currentImportDefinersRef — still
+  -- take the bare-name path (byte-identical when there is no collision).
+  None =>
+    if hasImportDefiner name then ([], [])
+    else (
+      fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value),
+      fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value),
+    )
+
+-- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
+-- the qual constraint table for such a name is authoritative ("unconstrained in its
+-- source"), so declaredConstraintSlots must NOT fall through to the source-blind bare-name
+-- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
+hasImportDefiner : String -> Bool
+hasImportDefiner name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
+  Some _ => True
+  None => False
 
 inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mono
 inferDictAtFound name routesRef inst =
@@ -3955,7 +3980,16 @@ inferDictAtFound name routesRef inst =
   let known = match q
         Some _ => True
         None => hasKeySL2 name perRun.value.funConstraintsRef.value
-  if known && anyIdPinned declaredIds (snd inst) then
+  -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
+  -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
+  -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
+  -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing: leave routesRef
+  -- empty and return the plain instantiated type.  Neither branch below is safe here — the
+  -- `if` branch would record a phantom obligation off the bare-name collision, and the
+  -- `else` (recursive) branch's realizeRecDictApps does its OWN source-blind bare-name
+  -- funConstraintsRef lookup and would forward the wrong module's dict slot.
+  if isEmptyL declaredIds && hasImportDefiner name then fst inst
+  else if known && anyIdPinned declaredIds (snd inst) then
     -- WS-1b: expand the callee's constraint slots with their transitive supers HERE
     -- (the global table isn't expanded until expandSupersTable runs after inference),
     -- so this call site applies one dict per EXPANDED slot — matching the def params
