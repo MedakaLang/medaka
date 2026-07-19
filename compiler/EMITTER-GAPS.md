@@ -1030,3 +1030,44 @@ Verified all five repros wasm build + validate + run correctly, matching eval ==
 `prelude_default_parametric_requires`, `numeric_combinators`, `hof_compose`, `effect_poly`) promoted
 out of `test/engine_divergence.txt` (their `.pin` values unchanged). Fixpoint C3a/C3b YES,
 `typecheck_compiler_source` clean.
+
+## Wasm user-`Cons`/`Nil` DUPLICATE TYPE ID — CLOSED (#712, S1, 2026-07-20, `wasm_emit.mdk`/`trmc_analysis.mdk` only)
+
+`medaka build --target wasm` of a program with a USER ADT `data T = Cons Int T | Nil` failed
+`wasm-tools` PARSE with **"duplicate type identifier"** on `$C_Cons`, while eval == native == `(60, 3,
+0)`. The WasmGC backend gives every ctor a NOMINAL struct type `$C_<ctor>`, and the built-in list
+cons cell is the reserved `$C_Cons` (`sub $T_List`). A user ctor literally named `Cons` minted the
+SAME id (`sub $T_T`), so the module declared `$C_Cons` TWICE. `Cons`/`Nil` are NOT prelude `data`
+ctors — they are pure list SYNTAX with no `data` decl — so resolve lets a user reuse them, and native
+has no analogue (its LLVM value rep is a uniform boxed cell with no per-ctor nominal type; the
+`private_mangle.mdk` universal-ctor discipline it uses to keep such names collision-free has no WasmGC
+counterpart until now).
+
+**The tangle:** after `conHeadInfo HCons = ("Cons", 2)` / `ctorTailName (CBinPrim "::" …) = "Cons"`,
+the built-in list and a user `Cons` collapse to the same NAME "Cons"; and once `data T = Cons …`
+exists, the bare-name ctor table maps `Cons → T`, so even `ctorTypeName "Cons"` is poisoned to `T` for
+the built-in list. The only signal that survives is the CHead / CExpr constructor: `HCons` /
+`CBinPrim "::"` is ALWAYS the built-in list; `HCon "Cons"` / `CApp (CVar "Cons")` is ALWAYS the user
+ctor (the built-in list never lowers to those).
+
+**Fix (WasmGC identifier only — LLVM IR unchanged, fixpoint byte-identical):**
+- `ctorStructName` remaps a USER `Cons`/`Nil` to `$CU_Cons`/`$CU_Nil` (the reserved built-in stays
+  bare `$C_Cons`). This auto-corrects EVERY user construct / match-field-extract / decl / pattern
+  site, since they all route through `ctorStructName` with the bare name.
+- The built-in list's own GENERIC paths must NOT be remapped — they are pinned off the CHead / tail
+  expr rather than the (poisoned) name: `headCtorStructName HCons = "C_Cons"` drives the
+  decision-tree switch field-extract (`emitOrdinalSlot`/`…Tail`); `switchTypeName` pins `HCons`/`HNil`
+  → `"List"` for the discriminant root; and the TRMC `::`-spine loop threads an `isBuiltinList` flag
+  (from the new `ctorTailIsCons`, carried in `WTrmcCtx`) so `trmcCellStruct` keeps `$C_Cons` for a
+  `h :: t` leaf while a user `Cons` recursion gets `$CU_Cons`. The hard-coded `$C_Cons`/`$T_List`
+  sites (`emitListRef`, `::` binop, `emitWDispCell`/`Base`, `patTestBind (PCons …)`) were already
+  built-in-only and are unchanged.
+
+The keying is collision-free for ALL user/prelude same-name pairs: `Some`/`None`/`Ok`/`Err`/`Lt`/`Eq`/
+`Gt` are real prelude ctors (resolve forbids re-declaring them, so no user pair can form), and
+`Cons`/`Nil` — the only reserved list-syntax names a user CAN reuse — are disambiguated here.
+Verified `test/engine_fixtures/adt_user_cons_nil.mdk` wasm build + `wasm-tools validate` + run ==
+`(60, 3, 0)` == eval == native, and normal prelude-list programs (`[1,2,3]`, `map`/`fold`/`sliceListGo`
+TRMC) still wasm-build byte-for-byte as before. Promoted out of `test/engine_divergence.txt` (row
+deleted; `.pin` unchanged). Wasm-only (outside the LLVM self-compile graph) → fixpoint C3a/C3b
+byte-identical, no seed re-mint.
