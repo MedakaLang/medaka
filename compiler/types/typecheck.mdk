@@ -3701,7 +3701,23 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
     -- runs the standalone.  Inert for an application head (shadowHeadCtxRef True).
     match maybeStandaloneValueMono name
       Some m => m
-      None => ret
+      -- #410/#669 (S4, EMIT path): maybeStandaloneValueMono is keyed on the BARE name via
+      -- `definerShadowNamesRef`, but the mangler (mangleUnits) has already renamed the
+      -- definer standalone's funDef + call sites to `<mid>__name` before marking, so the
+      -- bare name is no longer in that ref and the pin above misses — the occurrence then
+      -- gets the permissive METHOD scheme (`a -> a -> Int`), so `map size` infers element
+      -- type `Int -> Int` (a function) and `println`'s `Display (List (Int -> Int))`
+      -- stamps a NULL element route (RNone → i64 0 dict word → the built binary SEGFAULTs,
+      -- while `run` is correct because eval follows the RLocal route this same call already
+      -- stamped).  Recover the shadow post-mangle exactly as the app-head path does (P0-18):
+      -- the route sym seeded on `tagRef` names the mangled standalone, and
+      -- `standaloneValuesRef` is the emit-path shadow set (definer ∪ importer) that stamped
+      -- RLocal.  Pin the occurrence's TYPE to that standalone's scheme so the element var is
+      -- grounded (`Int`/`String`) BEFORE resolveDictApps, closing the check-vs-build type
+      -- skew.  Value-position ONLY (shadowHeadCtxRef False); an app head keeps `ret`.
+      None => match maybeStandaloneValueMonoEmit env name tagRef
+        Some m => m
+        None => ret
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
 -- mono cell UNGATED so resolveRLocalSites can route RLocal when the receiver
 -- grounds to a no-impl head (the arg-stamp path would otherwise leave it RNone
@@ -5878,6 +5894,39 @@ maybeStandaloneValueMono name
   | ifaceMethodName name && contains name perRun.value.definerShadowNamesRef.value = standaloneShadowScheme name
   | not (singleTyparamIfaceMethod name) = None
   | otherwise = importerStandaloneValueScheme name
+
+-- #410/#669 (S4, EMIT path only): the sym-recovering peer of maybeStandaloneValueMono,
+-- for the marked (EMethodAt) value-position occurrence whose bare name maybeStandaloneValueMono
+-- can no longer see because the mangler renamed the definer standalone's funDef to
+-- `<mid>__name`.  The signal is PER-OCCURRENCE, not graph-wide: rewriteArgScoped (:7937)
+-- seeds the tagRef route with `RLocal <mangled>` for EXACTLY the value-position standalone
+-- shadows (the `sm` mangled-shadow map), while an ordinary return/arg-position method value
+-- gets `RNone` — so a non-empty routeLocalSym is the mark pass's own "this occurrence is a
+-- standalone shadow" verdict, and keying on it (not on the whole-graph `standaloneValuesRef`)
+-- is what keeps this from pinning the compiler's genuine method-values and breaking dispatch.
+-- The scheme is recovered by `standaloneSchemeFor`: an IMPORTER shadow via
+-- shadowStandaloneSchemesRef, a DEFINER shadow via the env under that mangled sym — the same
+-- accessor recordRLocalSite already trusts to compute this site's RLocal dicts.  Value-position
+-- ONLY (shadowHeadCtxRef False, mirroring maybeStandaloneValueMono's first guard); an
+-- application head is bracketed True by inferShadowAppHead / inferDefinerShadowApp and keeps
+-- ordinary per-receiver dispatch.  None (⇒ caller keeps the method scheme) when the route
+-- carries no mangled sym, or when the standalone scheme is unavailable.
+-- ⚠️ singleTyparamIfaceMethod is REQUIRED, not incidental: at MULTI-typaram width the
+-- importer app-head path (`get (Box 3) 1`, interface `Ix a i`) uses ORDINARY dispatch and
+-- does NOT bracket shadowHeadCtxRef (inferShadowApp/inferDefinerShadowApp only fire for
+-- single-typaram shadows), so an app head there reaches inferMethodAt with shadowHeadCtxRef
+-- False AND a mangled route sym — indistinguishable from a value position by those two
+-- signals alone.  The check-path maybeStandaloneValueMono declines multi-typaram importer
+-- shadows for exactly this reason (its importer arm is singleTyparamIfaceMethod-gated, Fork 1),
+-- so mirroring that guard here keeps emit in lockstep with check and leaves i10's per-receiver
+-- dispatch (4 then 3) intact.  Sz/Sizeable are single-typaram, so #410/#669 still pin.
+maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
+maybeStandaloneValueMonoEmit env name tagRef
+  | toggles.value.shadowHeadCtxRef.value = None
+  | routeLocalSym tagRef.value == "" = None
+  | not (singleTyparamIfaceMethod name) = None
+  | otherwise =
+    map instantiate (standaloneSchemeFor env name (routeLocalSym tagRef.value))
 
 -- #411: is [name] an occurrence whose TYPE maybeStandaloneValueMono pins to the
 -- standalone?  ⭐ THE ROUTE MUST FOLLOW THE ARM (the P0-20 lesson): a site typed against

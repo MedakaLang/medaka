@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I6b provider (#669): exports the standalone `size : Int -> Int`
+-- that shadows the consumer's LOCAL interface method `Sizeable.size`.  The importer twin
+-- of d18's local standalone.  Its arity (1) DIFFERS from the method's (2), which is what
+-- made the emit-path type skew observable.
+export size : Int -> Int
+size n = n + 1
