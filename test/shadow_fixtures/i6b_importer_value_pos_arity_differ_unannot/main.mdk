@@ -13,8 +13,11 @@
 -- ONE root cause with d18, ONE fix site: maybeStandaloneValueMonoEmit
 -- (compiler/types/typecheck.mdk) recovers the post-mangle shadow from the occurrence's
 -- RLocal route sym and pins the standalone scheme, grounding the element BEFORE
--- resolveDictApps.  standaloneSchemeFor resolves the importer here via the env under the
--- mangled sym (`prov__size`).  Exercised through the multi-module loader (this dir has
+-- resolveDictApps.  standaloneSchemeFor's DESIGNED importer path is shadowStandaloneSchemesRef
+-- (keyed on the bare name), but that ref is NOT populated for this value-position occurrence on
+-- the emit path, so this importer falls through to the SAME env/mangled-sym branch as a definer
+-- (`lookupVar env "prov__size"`) -- verified by disabling that fallback, which SEGFAULTs BOTH
+-- this cell and its definer twin d18.  Exercised through the multi-module loader (this dir has
 -- prov.mdk + main.mdk), NOT a single-file doctest, so the importer frame is real.
 -- Expected: check accepts; run/build print [2, 3, 4].
 import prov.{size}

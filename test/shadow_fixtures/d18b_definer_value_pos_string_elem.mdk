@@ -1,0 +1,19 @@
+-- SHADOW-SEMANTICS cell D18b (#410, NON-DEFAULTING variant of d18): the value-position
+-- definer shadow with STRING elements instead of Int.  Guards a materially different
+-- grounding path -- String has no Num-defaulting fallback, so if maybeStandaloneValueMonoEmit
+-- failed to pin the standalone the element would stay a function type (`String -> String`)
+-- with no Display and the built binary would SEGFAULT on a NULL element dict, exactly as
+-- the Int case did.  d18/i6b pin the Int path; this pins that the grounding is REAL, not
+-- an artifact of Int defaulting.  Expected: check/run/build all print [a!, b!, c!].
+interface Sizeable a where
+  size : a -> a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box a) (Box b) = a + b
+
+size : String -> String
+size n = n ++ "!"
+
+main = println (map size ["a", "b", "c"])

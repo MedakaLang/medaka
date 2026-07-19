@@ -1,5 +1,5 @@
 # META
-source_lines=15499
+source_lines=15508
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -5924,6 +5924,15 @@ maybeStandaloneValueMono name
 -- shadows for exactly this reason (its importer arm is singleTyparamIfaceMethod-gated, Fork 1),
 -- so mirroring that guard here keeps emit in lockstep with check and leaves i10's per-receiver
 -- dispatch (4 then 3) intact.  Sz/Sizeable are single-typaram, so #410/#669 still pin.
+--
+-- #410/#669 DIRECTION-2 (deliberately NOT taken): the alternative floor was to leave the type
+-- alone and instead make a container element route that resolves to RNone from a genuinely-free
+-- var a LOUD `T-AMBIGUOUS-INSTANCE` rather than a silent null dict.  Rejected: an empty
+-- container's RNone element is BENIGN (never dereferenced) — `main = println []` is a VALID
+-- program that stamps exactly that RNone element — so a fail-loud rule would reject valid code,
+-- and the `Undetermined`/KeepNone design (:9899) forbids element-position errors for this reason.
+-- Grounding the shadow occurrence's TYPE here (direction 1) closes the actual SIGSEGV vector at
+-- its source without that hazard, so the loud-floor was not needed.
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
 maybeStandaloneValueMonoEmit env name tagRef
   | toggles.value.shadowHeadCtxRef.value = None
