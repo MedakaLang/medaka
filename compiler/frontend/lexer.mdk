@@ -1146,13 +1146,19 @@ uniEscErr src len p
     Some cp if uniIsSurrogate cp => "unicode escape '\{uniEscText src len p}' is a UTF-16 surrogate, not a character. Codepoints D800-DFFF only ever encode one half of a surrogate pair and are never valid on their own"
     _ => "unicode escape '\{uniEscText src len p}' is out of range. A codepoint must be at most 10FFFF"
 
--- `\u{HEX}'` : the hex codepoint, then `}` then closing `'`.
+-- `\u{HEX}'` : the hex codepoint, then `}` (`he`), then the closing `'` (`he + 1`).
+-- The closing quote is REQUIRED, exactly as in `escChar`/`rawChar`: a `\u{…}` escape
+-- is still ONE codepoint, so `'\u{41}z` (unterminated) and `'\u{41}ab'` (a second
+-- codepoint after the escape) are rejected rather than resumed mid-literal (#668).
 readCharUnicode : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 readCharUnicode src len p depth id = match uniEscChar src len p
   None => lexErrorTok p (uniEscErr src len p)
   Some c =>
     let he = uHexEnd src len (p + 3)
-    RTok (TChar (charToStr c)) p (he + 2) :: scan src len (he + 2) depth id
+    if he + 1 < len && isApos (at src (he + 1)) then
+      RTok (TChar (charToStr c)) p (he + 2) :: scan src len (he + 2) depth id
+    else
+      lexErrorTok (p - 1) charUntermMsg
 
 uHexEnd : Array Char -> Int -> Int -> Int
 uHexEnd src len p
