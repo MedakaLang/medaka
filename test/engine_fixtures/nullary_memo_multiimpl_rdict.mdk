@@ -1,0 +1,38 @@
+-- #747: a nullary return-position impl method with ≥2 impls, reached through a
+-- genuinely POLYMORPHIC runtime-dict route (RDictFwd — `useTwice : HasUnit a =>`
+-- forwards the dict at a concrete type only known at RUNTIME), is the SAME
+-- per-instance CAF eval memoises globally per resolved tag (VTypedImpl memoThunk,
+-- shared regardless of route).  #731/#746 could only STATICALLY hoist the sole-impl
+-- case (nullary_memo_rdict_fwd.mdk); with ≥2 impls the tag is runtime-determined, so
+-- the native/wasm dispatch chain re-ran the body PER OCCURRENCE, duplicating the side
+-- effect (`[box] [box] [cup] [cup] BBCC`) — a run != build S1.  The fix synthesizes a
+-- per-tag `$memo_<tag>_theUnit` CAF and makes each dispatch arm FORCE it, so each
+-- resolved tag's effect fires once, shared across occurrences: `[box] [cup] BBCC`.
+-- Also the criterion-1 control: the Box and Cup tags memoise INDEPENDENTLY (each fires
+-- its own effect exactly once — NOT one shared cell returning Box's value for Cup).
+interface HasUnit a where
+  theUnit : a
+
+data Box = Box String
+data Cup = Cup String
+
+impl HasUnit Box where
+  theUnit =
+    let _ = putStr "[box] "
+    Box "B"
+
+impl HasUnit Cup where
+  theUnit =
+    let _ = putStr "[cup] "
+    Cup "C"
+
+unBox : Box -> String
+unBox (Box s) = s
+
+unCup : Cup -> String
+unCup (Cup s) = s
+
+useTwice : HasUnit a => (a -> String) -> String
+useTwice un = un theUnit ++ un theUnit
+
+main = putStrLn (useTwice unBox ++ useTwice unCup)

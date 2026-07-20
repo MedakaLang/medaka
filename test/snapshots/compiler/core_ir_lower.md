@@ -1,5 +1,5 @@
 # META
-source_lines=1380
+source_lines=1416
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -788,6 +788,16 @@ hasDefaultL (_::rest) m = hasDefaultL rest m
 soleMemoKeysRef : Ref (List (String, String))
 soleMemoKeysRef = Ref []
 
+-- #747: ALL (method, selector) memo keys of the program (nullary/return-position/
+-- no-requires impls), computed once in hoistNullaryMemo.  Read by the RDict/RDictFwd
+-- MULTI-impl arm of hoistDictNullary to enumerate every impl tag of the method so a
+-- `$memo_<selector>_<method>` CAF is synthesized for each.  The occurrence stays a
+-- runtime dispatch; the emit backends' dispatch chain forces the matching per-tag CAF
+-- (per-runtime-tag memoisation), so each resolved tag's side effect fires once — the
+-- same sharing eval's per-VTypedImpl memoThunk gives regardless of route.
+allMemoKeysRef : Ref (List (String, String))
+allMemoKeysRef = Ref []
+
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
 -- collide with a user/prelude binding; it flows verbatim into `@mdk_g_<name>`.  The
@@ -801,16 +811,41 @@ memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
 recordMemoRef : String -> String -> Unit
 recordMemoRef tag method = setRef memoRefsRef ((tag, method)::memoRefsRef.value)
 
--- #731 item 1: rewrite a runtime-dict-routed nullary occurrence to the shared CAF
--- iff the method is statically single-impl (soleMemoKeysRef, computed in
--- hoistNullaryMemo).  Otherwise the tag is only known at runtime → leave the
--- per-call dispatch untouched.
+-- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
+--   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
+--     ONE impl, so hoist the occurrence itself to that shared CAF (statically the
+--     same one an RKey occurrence names) — #731 item 1, unchanged.
+--   • multi-impl (#747): the resolved tag is only known at runtime, so the occurrence
+--     STAYS a dispatch — but synthesize a `$memo_<selector>_<method>` CAF for EVERY
+--     impl tag of the method (recordMultiImplMemo).  The emit backends' dispatch chain
+--     forces the matching per-tag CAF instead of re-calling the impl fn, so each
+--     resolved tag's side effect fires once, shared across routes (matching eval's
+--     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
+--     independently.  A method with no nullary/return-position impl records nothing.
 hoistDictNullary : String -> Route -> CExpr
 hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
   Some sel =>
     let _ = recordMemoRef sel name
     CVar (memoBindName sel name) AGlobal
-  None => CMethod name route [] []
+  None =>
+    let _ = recordMultiImplMemo name
+    CMethod name route [] []
+
+-- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
+-- multi-impl method reached via a runtime-dict route.  Records each (selector, method)
+-- into memoRefsRef so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
+-- bind (dedupPairs collapses repeats).  Only fires for methods that appear in the
+-- program's memo keys — a nullary occurrence of a NON-memoisable method records
+-- nothing, leaving its per-call dispatch untouched.
+recordMultiImplMemo : String -> Unit
+recordMultiImplMemo name = recordMultiImplMemoGo name allMemoKeysRef.value
+
+recordMultiImplMemoGo : String -> List (String, String) -> Unit
+recordMultiImplMemoGo _ [] = ()
+recordMultiImplMemoGo name ((m, sel)::rest)
+  | m == name =
+    let _ = recordMemoRef sel name in recordMultiImplMemoGo name rest
+  | otherwise = recordMultiImplMemoGo name rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -822,6 +857,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   else
     let _ = setRef memoRefsRef []
     let _ = setRef soleMemoKeysRef (soleMemoKeys implEntries keys)
+    let _ = setRef allMemoKeysRef keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
     let refs = dedupPairs (reverseL memoRefsRef.value) []
@@ -1700,14 +1736,21 @@ nodeTag _ = "?"
 (DFunDef false "hasDefaultL" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m")))
 (DTypeSig false "soleMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "soleMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "allMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "allMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EApp (EVar "sanitizeId") (EVar "selector")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EFieldAccess (EVar "memoRefsRef") "value"))))
 (DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))
+(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
+(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EFieldAccess (EVar "allMemoKeysRef") "value")))
+(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
+(DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value"))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value"))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -2276,14 +2319,21 @@ nodeTag _ = "?"
 (DFunDef false "hasDefaultL" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m")))
 (DTypeSig false "soleMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "soleMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "allMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "allMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EApp (EVar "sanitizeId") (EVar "selector")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EFieldAccess (EVar "memoRefsRef") "value"))))
 (DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))
+(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
+(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EFieldAccess (EVar "allMemoKeysRef") "value")))
+(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
+(DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value"))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value"))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))

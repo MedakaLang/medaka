@@ -193,6 +193,40 @@ decend2:
   call void @mdk_print_int(i64 %t16)
   ret i32 0
 }
+define i64 @mdk_force_$memo_Int_zero() {
+entry:
+  %t0 = load i8, ptr @mdk_gs_$memo_Int_zero
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk_g_$memo_Int_zero
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @.gname.$memo_Int_zero)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk_gs_$memo_Int_zero
+  %t2 = call i64 @mdk_impl_Int_zero()
+  store i64 %t2, ptr @mdk_g_$memo_Int_zero
+  store i8 2, ptr @mdk_gs_$memo_Int_zero
+  ret i64 %t2
+}
+define i64 @mdk_force_$memo_Flag_zero() {
+entry:
+  %t0 = load i8, ptr @mdk_gs_$memo_Flag_zero
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk_g_$memo_Flag_zero
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @.gname.$memo_Flag_zero)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk_gs_$memo_Flag_zero
+  %t2 = call i64 @mdk_impl_Flag_zero()
+  store i64 %t2, ptr @mdk_g_$memo_Flag_zero
+  store i8 2, ptr @mdk_gs_$memo_Flag_zero
+  ret i64 %t2
+}
 define i64 @mdk_firstZero(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_zero_0_0(i64 %arg0)
@@ -209,8 +243,14 @@ entry:
   ret i64 3
 }
 
+@mdk_g_$memo_Int_zero = global i64 0
+@mdk_gs_$memo_Int_zero = global i8 0
+@mdk_g_$memo_Flag_zero = global i64 0
+@mdk_gs_$memo_Flag_zero = global i8 0
 @mdk_dc_0 = internal constant [1 x i64] [i64 6384077407]
 @mdk_dc_1 = internal constant [1 x i64] [i64 193460240]
+@.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
+@.gname.$memo_Flag_zero = private unnamed_addr constant [16 x i8] c"\24\6D\65\6D\6F\5F\46\6C\61\67\5F\7A\65\72\6F\00"
 define i64 @mdk_disp_zero_0_0(i64 %dict) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
@@ -219,14 +259,14 @@ entry:
   %t4 = icmp eq i64 %t1, 193460240
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_impl_Int_zero()
+  %t6 = call i64 @mdk_force_$memo_Int_zero()
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
   %t7 = icmp eq i64 %t1, 6384077407
   br i1 %t7, label %dispyes8, label %dispnext8
 dispyes8:
-  %t9 = call i64 @mdk_impl_Flag_zero()
+  %t9 = call i64 @mdk_force_$memo_Flag_zero()
   store i64 %t9, ptr %t2
   br label %dispend3
 dispnext8:

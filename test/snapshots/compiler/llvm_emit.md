@@ -1,5 +1,5 @@
 # META
-source_lines=10505
+source_lines=10535
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1206,6 +1206,15 @@ implPats (CImplEntry _ _ (CImplDefault pats _)) = pats
 implBody : CImplEntry -> CExpr
 implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
 implBody (CImplEntry _ _ (CImplDefault _ body)) = body
+
+-- #747: is this a nullary/return-position/no-requires impl — the exact shape
+-- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
+-- mirroring eval's memoThunk gate)?  A dispatch arm for such an impl, reached with no
+-- method-level or value args, is memoised via its `$memo_<symTag>_<method>` CAF.
+implEntryMemoisable : CImplEntry -> Bool
+implEntryMemoisable (CImplEntry _ _ (CImplTagged _ _ _ positions pats _)) = isEmptyL positions
+  && isEmptyL pats
+implEntryMemoisable _ = False
 
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
@@ -4859,11 +4868,32 @@ emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
 emitDispatchArmBody : Emit -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
 emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
   let symTag = implFnSymOf (implEntriesOf e) name ent
-  let cellCount = implReqCount e name ent - lengthS methWords
-  let cellDicts = loadReqDicts e dictPtr cellCount 0
-  let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
-  let _ = emit e "  store i64 \{rv}, ptr \{slot}"
-  emit e ("  br label %" ++ endL)
+  -- #747: a nullary/return-position/no-requires impl reached through this runtime
+  -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
+  -- synthesized a `$memo_<symTag>_<name>` lazy global for it (a LAZY value global —
+  -- isLazyGlobal confirms it exists); FORCE that shared CAF instead of re-calling the
+  -- impl fn, so the resolved tag's side effect runs once and is shared across every
+  -- occurrence at that tag (matching eval's per-VTypedImpl memoThunk).  Each tag has
+  -- its OWN `$memo` CAF ⇒ distinct tags memoise independently.
+  if isEmptyL methWords && isEmptyL argOps && implEntryMemoisable ent
+      && isLazyGlobal (memoGlobalName symTag name) then
+    let rv = freshReg e
+    let _ = emit e "  \{rv} = call i64 @mdk_force_\{memoGlobalName symTag name}()"
+    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+    emit e ("  br label %" ++ endL)
+  else
+    let cellCount = implReqCount e name ent - lengthS methWords
+    let cellDicts = loadReqDicts e dictPtr cellCount 0
+    let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
+    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+    emit e ("  br label %" ++ endL)
+
+-- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
+-- core_ir_lower.memoBindName EXACTLY (safeIdent == sanitizeId, and symTag already IS
+-- the sanitized selector implFnSymTag chose), so the force target names the global
+-- core_ir_lower prepended.
+memoGlobalName : String -> String -> String
+memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
 
 -- a GENERAL instance (`impl Iface a`) is stored under noneHeadTag, so its runtime
 -- dict header is hashName noneHeadTag — but a caller's dict carries the CONCRETE
@@ -10762,6 +10792,9 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "implBody" (TyFun (TyCon "CImplEntry") (TyCon "CExpr")))
 (DFunDef false "implBody" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body")))) (EVar "body"))
 (DFunDef false "implBody" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild (PVar "body")))) (EVar "body"))
+(DTypeSig false "implEntryMemoisable" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
+(DFunDef false "implEntryMemoisable" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild (PVar "positions") (PVar "pats") PWild))) (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "isEmptyL") (EVar "pats"))))
+(DFunDef false "implEntryMemoisable" (PWild) (EVar "False"))
 (DTypeSig false "implEntryTag" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild PWild))) (ELit (LString "")))
@@ -11408,7 +11441,9 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitDispatchArm" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
 (DFunDef false "emitDispatchArm" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "implEntryRouteKey") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "ent"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EVar "routeKey"))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "dispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "dispnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArmBody") (EVar "e")) (EVar "dictPtr")) (EVar "ent")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":")))))))
 (DTypeSig false "emitDispatchArmBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
-(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "name")) (EVar "ent"))) (DoLet false false (PVar "cellCount") (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords")))) (DoLet false false (PVar "cellDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "cellCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EApp (EApp (EVar "implFnName") (EVar "symTag")) (EVar "name"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))
+(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "name")) (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "methWords")) (EApp (EVar "isEmptyL") (EVar "argOps"))) (EApp (EVar "implEntryMemoisable") (EVar "ent"))) (EApp (EVar "isLazyGlobal") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString " = call i64 @mdk_force_"))) (EApp (EVar "display") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (ELit (LString "()"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))) (EBlock (DoLet false false (PVar "cellCount") (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords")))) (DoLet false false (PVar "cellDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "cellCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EApp (EApp (EVar "implFnName") (EVar "symTag")) (EVar "name"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))))
+(DTypeSig false "memoGlobalName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "memoGlobalName" ((PVar "symTag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EVar "symTag"))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "isGeneralEntry" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
 (DFunDef false "isGeneralEntry" ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryTag") (EVar "ent")) (EVar "noneHeadTag")))
 (DTypeSig false "firstGeneralEntry" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))
@@ -12940,6 +12975,9 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "implBody" (TyFun (TyCon "CImplEntry") (TyCon "CExpr")))
 (DFunDef false "implBody" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body")))) (EVar "body"))
 (DFunDef false "implBody" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild (PVar "body")))) (EVar "body"))
+(DTypeSig false "implEntryMemoisable" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
+(DFunDef false "implEntryMemoisable" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild (PVar "positions") (PVar "pats") PWild))) (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "isEmptyL") (EVar "pats"))))
+(DFunDef false "implEntryMemoisable" (PWild) (EVar "False"))
 (DTypeSig false "implEntryTag" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "tag") PWild PWild PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntryTag" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild PWild))) (ELit (LString "")))
@@ -13586,7 +13624,9 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitDispatchArm" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
 (DFunDef false "emitDispatchArm" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "implEntryRouteKey") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "ent"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EMethodRef "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EVar "routeKey"))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "dispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "dispnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchArmBody") (EVar "e")) (EVar "dictPtr")) (EVar "ent")) (EVar "name")) (EVar "methWords")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":")))))))
 (DTypeSig false "emitDispatchArmBody" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
-(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "name")) (EVar "ent"))) (DoLet false false (PVar "cellCount") (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords")))) (DoLet false false (PVar "cellDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "cellCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EApp (EApp (EVar "implFnName") (EVar "symTag")) (EVar "name"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))
+(DFunDef false "emitDispatchArmBody" ((PVar "e") (PVar "dictPtr") (PVar "ent") (PVar "name") (PVar "methWords") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EVar "implEntriesOf") (EVar "e"))) (EVar "name")) (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "methWords")) (EApp (EVar "isEmptyL") (EVar "argOps"))) (EApp (EVar "implEntryMemoisable") (EVar "ent"))) (EApp (EVar "isLazyGlobal") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (EBlock (DoLet false false (PVar "rv") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString " = call i64 @mdk_force_"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "memoGlobalName") (EVar "symTag")) (EVar "name")))) (ELit (LString "()"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))) (EBlock (DoLet false false (PVar "cellCount") (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methWords")))) (DoLet false false (PVar "cellDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "cellCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EApp (EApp (EVar "implFnName") (EVar "symTag")) (EVar "name"))) (EBinOp "++" (EBinOp "++" (EVar "methWords") (EVar "cellDicts")) (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))))
+(DTypeSig false "memoGlobalName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "memoGlobalName" ((PVar "symTag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EVar "symTag"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "isGeneralEntry" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
 (DFunDef false "isGeneralEntry" ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryTag") (EVar "ent")) (EVar "noneHeadTag")))
 (DTypeSig false "firstGeneralEntry" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))
