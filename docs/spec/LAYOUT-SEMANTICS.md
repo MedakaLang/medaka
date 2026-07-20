@@ -589,3 +589,14 @@ left-shifted.
    spec is a lexer bug (file a ROADMAP item), whereas a divergence between this
    spec and SYNTAX.md/PLAN.md is a doc-drift bug in *those* files (this file is
    the layout ground truth).
+
+5. **This contract is scoped to the TOKEN STREAM, not the grammar.** §4–§8
+   define what `compiler/frontend/lexer.mdk` must emit — which tokens herald a
+   block and where INDENT/DEDENT/NEWLINE land — nothing more. A herald firing
+   exactly as specified does not imply the parser has a production to consume
+   the resulting block; that is a separate obligation the grammar either does
+   or doesn't meet (§11 gives a worked example). So: a token stream that
+   diverges from §4–§8 is a **lexer** bug (item 4); a construct this file
+   licenses that the lexer heralds correctly but the parser still rejects is a
+   **parser** bug, not a lexer bug — don't generalize item 4 above to cover
+   the parser too.
