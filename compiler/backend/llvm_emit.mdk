@@ -1203,6 +1203,15 @@ implBody : CImplEntry -> CExpr
 implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
 implBody (CImplEntry _ _ (CImplDefault _ body)) = body
 
+-- #747: is this a nullary/return-position/no-requires impl — the exact shape
+-- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
+-- mirroring eval's memoThunk gate)?  A dispatch arm for such an impl, reached with no
+-- method-level or value args, is memoised via its `$memo_<symTag>_<method>` CAF.
+implEntryMemoisable : CImplEntry -> Bool
+implEntryMemoisable (CImplEntry _ _ (CImplTagged _ _ _ positions pats _)) = isEmptyL positions
+  && isEmptyL pats
+implEntryMemoisable _ = False
+
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
 implEntryTag (CImplEntry _ _ (CImplDefault _ _)) = ""
@@ -4855,11 +4864,32 @@ emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
 emitDispatchArmBody : Emit -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
 emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
   let symTag = implFnSymOf (implEntriesOf e) name ent
-  let cellCount = implReqCount e name ent - lengthS methWords
-  let cellDicts = loadReqDicts e dictPtr cellCount 0
-  let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
-  let _ = emit e "  store i64 \{rv}, ptr \{slot}"
-  emit e ("  br label %" ++ endL)
+  -- #747: a nullary/return-position/no-requires impl reached through this runtime
+  -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
+  -- synthesized a `$memo_<symTag>_<name>` lazy global for it (a LAZY value global —
+  -- isLazyGlobal confirms it exists); FORCE that shared CAF instead of re-calling the
+  -- impl fn, so the resolved tag's side effect runs once and is shared across every
+  -- occurrence at that tag (matching eval's per-VTypedImpl memoThunk).  Each tag has
+  -- its OWN `$memo` CAF ⇒ distinct tags memoise independently.
+  if isEmptyL methWords && isEmptyL argOps && implEntryMemoisable ent
+      && isLazyGlobal (memoGlobalName symTag name) then
+    let rv = freshReg e
+    let _ = emit e "  \{rv} = call i64 @mdk_force_\{memoGlobalName symTag name}()"
+    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+    emit e ("  br label %" ++ endL)
+  else
+    let cellCount = implReqCount e name ent - lengthS methWords
+    let cellDicts = loadReqDicts e dictPtr cellCount 0
+    let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
+    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+    emit e ("  br label %" ++ endL)
+
+-- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
+-- core_ir_lower.memoBindName EXACTLY (safeIdent == sanitizeId, and symTag already IS
+-- the sanitized selector implFnSymTag chose), so the force target names the global
+-- core_ir_lower prepended.
+memoGlobalName : String -> String -> String
+memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
 
 -- a GENERAL instance (`impl Iface a`) is stored under noneHeadTag, so its runtime
 -- dict header is hashName noneHeadTag — but a caller's dict carries the CONCRETE

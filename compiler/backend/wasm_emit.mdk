@@ -3474,7 +3474,23 @@ emitGeneralArm _ _ None _ _ _ _ = []
 emitGeneralArm prog name (Some (tag, key)) blk dpar argInstrs nArgs =
   let reqDicts = implReqDictCount prog name key nArgs
   let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
-  reqLoads ++ argInstrs ++ ["call $" ++ implFnSymOfTag tag name, "br " ++ blk]
+  reqLoads ++ argInstrs ++ dispatchCallSeqW tag name nArgs ++ ["br " ++ blk]
+
+-- #747: the call instruction(s) a matched dispatch arm emits.  A nullary/return-
+-- position/no-requires impl (nArgs == 0 and a `$memo_<symTag>_<method>` LAZY value
+-- global synthesized by core_ir_lower — isLazyGlobalW confirms it exists) is a
+-- per-instance CAF: FORCE its shared CAF (`call $force_<memo>`, which memoises into
+-- `$<memo>` and black-holes a cyclic re-force) instead of re-calling `$mdk_impl_*`, so
+-- the resolved tag's side effect runs once and is shared across every occurrence at
+-- that tag (matching eval's per-VTypedImpl memoThunk).  Each tag owns its own `$memo`
+-- CAF ⇒ distinct tags memoise independently.  Otherwise the ordinary impl call.
+dispatchCallSeqW : String -> String -> Int -> List String
+dispatchCallSeqW tag name nArgs =
+  let memoName = "$memo_\{tag}_\{name}"
+  if nArgs == 0 && isLazyGlobalW memoName then
+    ["call $force_" ++ gname memoName]
+  else
+    ["call $" ++ implFnSymOfTag tag name]
 
 -- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
 -- routeKey?  if so: load this impl's nested requires-dicts from the dict param's
@@ -3497,7 +3513,7 @@ emitDispatchChain prog name ((tag, key)::rest) blk tagRead dpar argInstrs nArgs 
   let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
   indentBy idt (tagRead
     ++ ["i32.const " ++ intToString (dictTag key), "i32.eq", "if"])
-    ++ indentBy (idt + 1) (reqLoads ++ argInstrs ++ ["call $" ++ implFnSymOfTag tag name, "br " ++ blk])
+    ++ indentBy (idt + 1) (reqLoads ++ argInstrs ++ dispatchCallSeqW tag name nArgs ++ ["br " ++ blk])
     ++ indentBy idt ["else"]
     ++ emitDispatchChain prog name rest blk tagRead dpar argInstrs nArgs (idt + 1)
     ++ indentBy idt ["end"]

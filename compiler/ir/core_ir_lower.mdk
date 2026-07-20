@@ -784,6 +784,16 @@ hasDefaultL (_::rest) m = hasDefaultL rest m
 soleMemoKeysRef : Ref (List (String, String))
 soleMemoKeysRef = Ref []
 
+-- #747: ALL (method, selector) memo keys of the program (nullary/return-position/
+-- no-requires impls), computed once in hoistNullaryMemo.  Read by the RDict/RDictFwd
+-- MULTI-impl arm of hoistDictNullary to enumerate every impl tag of the method so a
+-- `$memo_<selector>_<method>` CAF is synthesized for each.  The occurrence stays a
+-- runtime dispatch; the emit backends' dispatch chain forces the matching per-tag CAF
+-- (per-runtime-tag memoisation), so each resolved tag's side effect fires once — the
+-- same sharing eval's per-VTypedImpl memoThunk gives regardless of route.
+allMemoKeysRef : Ref (List (String, String))
+allMemoKeysRef = Ref []
+
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
 -- collide with a user/prelude binding; it flows verbatim into `@mdk_g_<name>`.  The
@@ -797,16 +807,41 @@ memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
 recordMemoRef : String -> String -> Unit
 recordMemoRef tag method = setRef memoRefsRef ((tag, method)::memoRefsRef.value)
 
--- #731 item 1: rewrite a runtime-dict-routed nullary occurrence to the shared CAF
--- iff the method is statically single-impl (soleMemoKeysRef, computed in
--- hoistNullaryMemo).  Otherwise the tag is only known at runtime → leave the
--- per-call dispatch untouched.
+-- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
+--   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
+--     ONE impl, so hoist the occurrence itself to that shared CAF (statically the
+--     same one an RKey occurrence names) — #731 item 1, unchanged.
+--   • multi-impl (#747): the resolved tag is only known at runtime, so the occurrence
+--     STAYS a dispatch — but synthesize a `$memo_<selector>_<method>` CAF for EVERY
+--     impl tag of the method (recordMultiImplMemo).  The emit backends' dispatch chain
+--     forces the matching per-tag CAF instead of re-calling the impl fn, so each
+--     resolved tag's side effect fires once, shared across routes (matching eval's
+--     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
+--     independently.  A method with no nullary/return-position impl records nothing.
 hoistDictNullary : String -> Route -> CExpr
 hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
   Some sel =>
     let _ = recordMemoRef sel name
     CVar (memoBindName sel name) AGlobal
-  None => CMethod name route [] []
+  None =>
+    let _ = recordMultiImplMemo name
+    CMethod name route [] []
+
+-- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
+-- multi-impl method reached via a runtime-dict route.  Records each (selector, method)
+-- into memoRefsRef so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
+-- bind (dedupPairs collapses repeats).  Only fires for methods that appear in the
+-- program's memo keys — a nullary occurrence of a NON-memoisable method records
+-- nothing, leaving its per-call dispatch untouched.
+recordMultiImplMemo : String -> Unit
+recordMultiImplMemo name = recordMultiImplMemoGo name allMemoKeysRef.value
+
+recordMultiImplMemoGo : String -> List (String, String) -> Unit
+recordMultiImplMemoGo _ [] = ()
+recordMultiImplMemoGo name ((m, sel)::rest)
+  | m == name =
+    let _ = recordMemoRef sel name in recordMultiImplMemoGo name rest
+  | otherwise = recordMultiImplMemoGo name rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -818,6 +853,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   else
     let _ = setRef memoRefsRef []
     let _ = setRef soleMemoKeysRef (soleMemoKeys implEntries keys)
+    let _ = setRef allMemoKeysRef keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
     let refs = dedupPairs (reverseL memoRefsRef.value) []
