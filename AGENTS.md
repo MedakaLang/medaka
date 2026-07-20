@@ -587,8 +587,11 @@ narrative lives at the link.
   at the start of a task and diff/checkout against `$BASE`, never a moving ref. Full failure
   modes + the pinned-`$BASE` recipe: `.claude/workstreams/HARNESS.md` (H-2).
 - **For layout questions** (legal indentation shapes, leading-op set, then/else, tabs,
-  let…in wrapping), `docs/spec/LAYOUT-SEMANTICS.md` is ground truth. A lexer-vs-spec
-  divergence is a lexer bug; a SYNTAX/PLAN-vs-spec divergence is a doc bug.
+  let…in wrapping), `docs/spec/LAYOUT-SEMANTICS.md` is ground truth. Its §12 conformance
+  contract is scoped to the **lexer's token stream only**: a lexer-vs-spec divergence is a
+  lexer bug; a SYNTAX/PLAN-vs-spec divergence is a doc bug. A construct the spec licenses
+  that the lexer heralds correctly but the **parser** still can't consume is a parser bug,
+  not a lexer bug — don't generalize the rule that far (§12 item 5).
 - Development is organized by numbered **Phases**. Open work: `PLAN.md`. Completed Phases
   1–97 with implementation notes: `archive/PLAN-ARCHIVE.md`. Commits reference phase numbers.
 
