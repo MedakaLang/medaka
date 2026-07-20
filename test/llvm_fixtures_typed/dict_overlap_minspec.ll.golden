@@ -165,6 +165,40 @@ entry:
   call void @mdk_print_int(i64 %t3)
   ret i32 0
 }
+define i64 @mdk_force_$memo_Int_def() {
+entry:
+  %t0 = load i8, ptr @mdk_gs_$memo_Int_def
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk_g_$memo_Int_def
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @.gname.$memo_Int_def)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk_gs_$memo_Int_def
+  %t2 = call i64 @mdk_impl_Int_def()
+  store i64 %t2, ptr @mdk_g_$memo_Int_def
+  store i8 2, ptr @mdk_gs_$memo_Int_def
+  ret i64 %t2
+}
+define i64 @mdk_force_$memo_Default__Box_Int___def() {
+entry:
+  %t0 = load i8, ptr @mdk_gs_$memo_Default__Box_Int___def
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk_g_$memo_Default__Box_Int___def
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @.gname.$memo_Default__Box_Int___def)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk_gs_$memo_Default__Box_Int___def
+  %t2 = call i64 @mdk_impl_Default__Box_Int___def()
+  store i64 %t2, ptr @mdk_g_$memo_Default__Box_Int___def
+  store i8 2, ptr @mdk_gs_$memo_Default__Box_Int___def
+  ret i64 %t2
+}
 define i64 @mdk_force_theVal() {
 entry:
   %t0 = load i8, ptr @mdk_gs_theVal
@@ -242,8 +276,14 @@ entry:
   ret i64 %t2
 }
 
+@mdk_g_$memo_Int_def = global i64 0
+@mdk_gs_$memo_Int_def = global i8 0
+@mdk_g_$memo_Default__Box_Int___def = global i64 0
+@mdk_gs_$memo_Default__Box_Int___def = global i8 0
 @mdk_g_theVal = global i64 0
 @mdk_gs_theVal = global i8 0
+@.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
+@.gname.$memo_Default__Box_Int___def = private unnamed_addr constant [29 x i8] c"\24\6D\65\6D\6F\5F\44\65\66\61\75\6C\74\5F\5F\42\6F\78\5F\49\6E\74\5F\5F\5F\64\65\66\00"
 @.gname.theVal = private unnamed_addr constant [7 x i8] c"\74\68\65\56\61\6C\00"
 @mdk_dc_0 = internal constant [1 x i64] [i64 -308483285326192921]
 define i64 @mdk_disp_def_0_0(i64 %dict) {
@@ -254,7 +294,7 @@ entry:
   %t4 = icmp eq i64 %t1, 193460240
   br i1 %t4, label %dispyes5, label %dispnext5
 dispyes5:
-  %t6 = call i64 @mdk_impl_Int_def()
+  %t6 = call i64 @mdk_force_$memo_Int_def()
   store i64 %t6, ptr %t2
   br label %dispend3
 dispnext5:
@@ -271,7 +311,7 @@ dispnext8:
   %t13 = icmp eq i64 %t1, -308483285326192921
   br i1 %t13, label %dispyes14, label %dispnext14
 dispyes14:
-  %t15 = call i64 @mdk_impl_Default__Box_Int___def()
+  %t15 = call i64 @mdk_force_$memo_Default__Box_Int___def()
   store i64 %t15, ptr %t2
   br label %dispend3
 dispnext14:
