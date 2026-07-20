@@ -556,6 +556,7 @@ implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List 
 implEntryOf : Decl -> List ImplEntry
 implExistsForHead : Map String (List KeyEntry) -> String -> String -> Bool
 implExistsForHeadGo : List KeyEntry -> String -> String -> Bool
+implHeadGround : Decl -> Bool
 implHeadLoc : List Ty -> Option Loc
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
@@ -669,6 +670,7 @@ inferStmt : TcEnv -> DoStmt -> TcEnv
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferUnop : String -> Mono -> Mono
 inferUnopE : TcEnv -> String -> Expr -> Ref Route -> Mono
+inferUserImplBodies : TcEnv -> List Decl -> List Decl -> Unit
 inferValueField : TcEnv -> Expr -> Mono
 inferVar : TcEnv -> String -> Mono
 inferVarPlain : TcEnv -> String -> Mono

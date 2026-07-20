@@ -11222,7 +11222,10 @@ checkBodyImpl seed mode prog0 =
       let _ = inferPropBodies preludeBodyEnv coreProg
       let _ = inferTestBodies preludeBodyEnv coreProg
       let _ = scopeShadowsUser ()
-      let _ = inferImplBodiesIfEnabledIn preludeBodyEnv prog prog0
+      -- #760: USER impl bodies inferred on every path (see inferUserImplBodies) so the
+      -- check path records + rejects their missing-instance obligations; the CORE call
+      -- above stays emit-gated (re-inferring core leaks spurious ambiguities).
+      let _ = inferUserImplBodies preludeBodyEnv prog prog0
       let _ = inferDefaultBodiesIfEnabled preludeBodyEnv prog0
       let _ = inferPropBodies preludeBodyEnv prog0
       let _ = inferTestBodies preludeBodyEnv prog0
@@ -11388,6 +11391,63 @@ inferImplBodiesIfEnabledIn env allProg decls
   | driverState.value.implInferEnabled.value =
     inferImplBodies env allProg (returnPosMethodNames allProg) decls
   | otherwise = ()
+
+-- #760 (S1, check-vs-emit soundness): infer the USER program's impl-method bodies on
+-- EVERY path — not only the emit path (implInferEnabled).  The gate created a hole:
+-- the EMIT/eval path (implInferEnabled ON) inferred impl bodies but SKIPS
+-- checkImplObligations, while the CHECK path (implInferEnabled OFF) ran
+-- checkImplObligations but did NOT infer impl bodies — so NO path both inferred an
+-- impl body AND checked its obligations.  A `deriving (Eq)`/`(Debug)` (or a hand-written
+-- impl) over a field whose type lacks that instance therefore `check`ed clean, ran with
+-- a permissive structural fallback, and `build` PANICKED ("no impl of method 'eq' for
+-- type 'Inner'").  Inferring the body on the check path records the field's `Eq Inner`
+-- obligation via recordImplObligation, which checkImplObligations then rejects with the
+-- SAME diagnostic a direct `==` already emits.
+--
+-- SCOPED TO THE USER decls (`prog0`), NOT the prelude (`coreProg`): re-inferring CORE's
+-- own parametric impl bodies on the check path is heavier and pointless — core is
+-- known-good (it builds + self-compiles), so only user impls need check-path inference.
+--
+-- SCOPED TO GROUND-HEADED impls (no type variable in the impl head).  A ground impl —
+-- `impl Eq Outer`, the derived instance for a non-parametric type — only ever calls
+-- methods on its fields' CONCRETE types, so every obligation it records is concrete:
+-- checkImplObligations/checkCallObligations either finds the impl or emits the genuine
+-- `No impl of Eq for Inner`.  A PARAMETRIC impl (`impl Eq (List a) requires Eq a`) instead
+-- records obligations on its abstract element tyvar; those never ground on the check path
+-- and would reach checkUndeterminedObligation, which reports a spurious `Ambiguous instance`
+-- for any iface with >= 2 impls (it fired on EVERY program the moment core's own parametric
+-- impls were inferred standalone — the prelude snapshot).  The emit path never exercised
+-- that because it SKIPS the obligation gate.  Inferring only ground impls records the
+-- concrete missing-instance rejects (the whole point of #760) while structurally avoiding
+-- the abstract-element ambiguity.  A parametric impl over a concrete field (a rarer nesting)
+-- stays deferred to `build` exactly as it was before #760 — a residual, not a regression.
+--
+-- DIAGNOSTICS PUSHED *DURING* body inference are DROPPED (snapshot + restore typeErrors /
+-- typeErrorsSticky).  #760 surfaces missing INSTANCES, and those are recorded as
+-- pendingImpl/CallObligations (side effects) that checkImplObligations/checkCallObligations
+-- gate LATER — AFTER this returns — so restoring the error accumulators here does NOT drop a
+-- single missing-instance reject.  What it DOES drop are the type/effect errors the body
+-- inference itself raises (e.g. an EFFECT LEAK: `putStr` in a pure-typed method body, or a
+-- body type mismatch).  Those are separate soundness axes with their own blast radius, they
+-- were NOT checked on the check path before #760 (impl bodies weren't inferred at all), and
+-- newly enforcing them here would reject latent-but-working programs unrelated to #760
+-- (it flagged the effectful `impl Speak Dog` in test/engine_fixtures/nullary_memo_with_args).
+-- Keeping the scope to missing instances leaves effect/mismatch enforcement exactly as it was.
+inferUserImplBodies : TcEnv -> List Decl -> List Decl -> Unit
+inferUserImplBodies env allProg decls =
+  let savedErrs = perRun.value.typeErrors.value
+  let savedSticky = typeErrorsSticky.value
+  let _ = inferImplBodies env allProg (returnPosMethodNames allProg) (filterList implHeadGround decls)
+  let _ = setRef perRun.value.typeErrors savedErrs
+  setRef typeErrorsSticky savedSticky
+
+-- True for a DImpl whose head types carry NO type variable (a monomorphic receiver like
+-- `Eq Outer` / `Debug (List Int)`); False for a parametric head (`Eq (List a)`) and every
+-- non-impl decl (which contributes no impl body regardless).
+implHeadGround : Decl -> Bool
+implHeadGround (DAttrib _ d) = implHeadGround d
+implHeadGround (DImpl { tys, ... }) = isEmptyL (flatMap tyVarNames tys)
+implHeadGround _ = False
 
 -- C8b: default-body type-checking runs UNCONDITIONALLY (mirrors the oracle's
 -- register_interface default-body loop at lib/typecheck.ml:3122-3160 which checks
@@ -14089,6 +14149,8 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
 
 -- gate: per-module impl-body inference runs only on the emit path (implInferEnabled).
 -- allProg = [implDecls] (interfaces + accumulated impls); rpNames computed over it.
+-- #760: see checkModuleFullImpl for the check-path USER-impl inference (inferUserImplBodies)
+-- that closes the missing-instance hole on the multi-module path without re-inferring core.
 inferModuleImplBodiesIfEnabled : TcEnv -> List Decl -> List Decl -> Unit
 inferModuleImplBodiesIfEnabled env implDecls prog
   | driverState.value.implInferEnabled.value =
