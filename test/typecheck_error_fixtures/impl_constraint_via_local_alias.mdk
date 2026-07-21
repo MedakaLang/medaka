@@ -1,0 +1,17 @@
+-- #816 round-2 adversarial break 1: binding the constrained helper to a LOCAL
+-- first (`let f = hh`) re-generalizes it; before registerLocalScheme the use
+-- `f x` instantiated no obligation at all and check-green programs crashed at
+-- run (native SEGFAULT).  Rejected by T-IMPL-TOO-SPECIFIC via the local
+-- scheme's re-instantiated call obligation.
+hh : Num x => x -> x
+hh v = v + 1
+
+data Dog = Dog
+
+interface Mk a where
+  mk : a -> b -> b
+
+impl Mk Dog where
+  mk d x =
+    let f = hh
+    f x

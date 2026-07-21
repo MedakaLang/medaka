@@ -1,0 +1,21 @@
+-- Round-2 FP regression control: a GENERALIZED local (`let p = (y => True)`)
+-- shadowing the method name `p` must not record a phantom obligation — the
+-- body-watermark discriminator treats any scheme generalized inside the body
+-- as local.  Accepted.
+interface P a where
+  p : a -> Bool
+
+data Dog = Dog
+
+impl P Dog where
+  p d = True
+
+interface F a where
+  sel : a -> b -> b
+
+data Cat = Cat
+
+impl F Cat where
+  sel c x =
+    let p = (y => True)
+    if p x then x else x

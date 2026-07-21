@@ -71,6 +71,7 @@ argImplRequiresRoutesRecD : Map String (List ImplEntry) -> Map String (List KeyE
 argLitFits : Expr -> Mono -> Bool
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
+argPerformableOccs : Bool -> Ty -> List (String, List Atom)
 argReqRoute : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argStampMono : PendingEntry -> Mono
 armDictSites : Arm -> List (Ref (List Route))
@@ -145,6 +146,7 @@ checkCallObligations : List Decl -> List (String, List Mono, Option Loc) -> Unit
 checkCallObligationsU : ImplUniverse -> List String -> List (String, List Mono, Option Loc) -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : List Decl -> Unit
+checkDefaultEffectLaunder : String -> Mono -> Mono -> Option Loc -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Option Loc -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffectAtoms : List (String, Option String) -> Unit
@@ -344,6 +346,7 @@ dedupVecOblsGo : List (String, List Int) -> List (String, List Int) -> List (Str
 defaultAmbiguousNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
 defaultBodyLocalNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
 defaultEachMember : List (String, List String, Ty, Mono, Option Loc) -> List (String, Mono) -> Unit
+defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNum : List (String, List String, Ty, Mono, Option Loc) -> List Mono -> Unit
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
@@ -552,6 +555,7 @@ groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Ex
 groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
 groupRefs : List (List Pat, Expr) -> List String
+groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
 growImplUniverse : List (String, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 guardDictSites : Guard -> List (Ref (List Route))
 guardEVars : Guard -> List String
@@ -657,7 +661,7 @@ inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
 inferDefaultMethod : TcEnv -> String -> List String -> IfaceMethod -> Unit
-inferDefaultMethodBody : String -> TcEnv -> Mono -> List Pat -> Expr -> Unit
+inferDefaultMethodBody : String -> String -> Mono -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
 inferDefaultMethods : TcEnv -> String -> List String -> List IfaceMethod -> Unit
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
@@ -680,7 +684,7 @@ inferLamChecked : TcEnv -> List Mono -> List Pat -> Expr -> Mono
 inferLastStmt : TcEnv -> DoStmt -> Mono
 inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLetBinds : TcEnv -> List (LetBind, (String, Scheme)) -> Unit
-inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Mono
+inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
 inferListLit : TcEnv -> List Expr -> Mono
@@ -747,6 +751,7 @@ instantiateVarTracked : String -> Scheme -> Mono
 intercalateComma : List String -> String
 ioAliasLabels : List String
 isArithBinop : String -> Bool
+isBodyLocalScheme : String -> Scheme -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
 isCtorAppHead : Expr -> Bool
@@ -756,7 +761,6 @@ isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool
 isLitArg : Expr -> Bool
 isMangledFor : String -> String -> Bool
-isMonoLocalScheme : Scheme -> Bool
 isNonexpansive : Expr -> Bool
 isShadowStandalone : String -> Bool
 isSubTop : Param -> Bool
@@ -774,6 +778,7 @@ kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> 
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String
 krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
+krowSlotOccs : Bool -> String -> List Ty -> List (String, List Atom)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
@@ -1061,6 +1066,7 @@ registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) 
 registerImplRequires : List (String, Mono) -> List String -> List Require -> List ImplMethod -> Unit
 registerInferredConstraints : List (String, Ty) -> List (String, Scheme) -> Unit
 registerInferredFor : String -> List Int -> Unit
+registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> List (String, Mono) -> Unit
 registerMemberSlots : String -> Int -> List Mono -> List Int
 registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
