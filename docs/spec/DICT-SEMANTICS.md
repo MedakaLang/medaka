@@ -363,6 +363,22 @@ axes, silently:
   performs IO — the laundering vein of
   [`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 (#814).
 
+**W3 and graded interfaces.** One family of impls cannot satisfy W3 under a
+*plain* interface signature: an effect-row-indexed container (`Async e a`) whose
+functor/monad impls must store the method's callback in the container — the sound
+result index is `e ⊔ e'`, inexpressible with the head fixed at `Async e`, so the
+body can only typecheck by identifying a caller-owned effect variable with the
+instance-head row parameter (the tracked #817 exemption). The resolution is
+**graded interfaces** — interfaces over row-indexed constructors
+`f : Row → Type → Type` whose signatures compose indices by the row join in result
+position (`gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b`); see
+[`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 "Graded interfaces" for the
+semantics and #820 for the plan. Dictionary-wise nothing changes: a graded
+interface elaborates to an ordinary dictionary, one instance per constructor
+*family* (`impl GMappable Async` — no overlap-on-grade dimension), grades erase
+with the rows they are, and — the point — the graded impl inhabits its scheme at
+full generality, so W3 holds for it with **no exemption**.
+
 W3 needs **no variance analysis**: rigidity decides scheme membership
 uniformly. In particular a body like `mk d = k ⇒ k ()` (fixing `b` to a
 callback-taking arrow — a shape a variance-aware effect check would be tempted
