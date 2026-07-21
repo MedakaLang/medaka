@@ -560,7 +560,9 @@ through the container performs the deferred effect (verified; tracked as #817) �
 the sound result row `e ⊔ e'` is inexpressible while the instance head fixes the
 container's row, so rejecting the identification would outlaw effect-polymorphic
 data's shipped functor/monad instances outright. The resolution is design-scoped and
-owned by #817; the type-variable half has **no** such exception (a method type
+owned by #817 — and now specified: **graded interfaces** (below, and #820) make the
+container's index absorb the callback row by signature shape, after which this
+exception retires. The type-variable half has **no** such exception (a method type
 variable may never alias an instance-head type variable).
 
 Two deliberate design notes. **First**, rigidity is an over-approximation in one corner:
@@ -595,13 +597,77 @@ Medaka expresses an *effectful computation as a first-class value* **without** a
 error-ness rides in `Result e a` — composition is ordinary `do`/monad structure,
 not a tracked row label and not a handler. (Decided invariant.)
 
+**Graded interfaces (row-indexed constructors; the sound composition surface for
+effect-polymorphic data).** Effect-polymorphic data exposes a gap the plain
+interface system cannot close. An ordinary functor signature at `f := Async e`
+reads `map : (a →^{e'} b) → Async e a →^{e'} Async e b` — the result carries the
+**same** index `e` as the input, yet any implementation of the `Suspend` arm must
+store the callback inside the container, so the stored thunk's row is really
+`e ⊔ e'`. The impl can only typecheck by privately identifying `e' ≈ e`, which the
+caller never sees: `e'` is charged at the *build* site (the `map` application) while
+the stored effect fires at the *force* site (`runAsync`), charged only `e`. The
+result is the deferred-effect launder tracked as the W3 carve-out (#817) — and it is
+not an implementation accident: with `f` fixed to `Async e`, the sound result type
+is **inexpressible**. The two candidate patches both fail on principle: propagating
+the impl's identification to call sites is dispatch-dependent effect refinement
+(violating the orthogonality below, the same reason #784's Option B was rejected),
+and widening `runAsync` to a blanket row destroys the precision that makes the
+index worth having.
+
+The principled closure is **grading** (Katsumata's parametric effect monads): an
+interface over a **row-indexed constructor** `f : Row → Type → Type`, whose method
+signatures compose indices by the row join, in **result position**:
+
+```
+gmap     : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b
+gpure    : a → f ⟨ ⟩ a
+gap      : f e (a → b) → f e₂ a → f (e ⊔ e₂) b
+gandThen : f e a → (a →^{e₂} f e₃ b) → f (e ⊔ e₂ ⊔ e₃) b
+grun     : f e a →^{e} a                    -- per-type eliminator (runAsync)
+```
+
+A **grade** is an ordinary effect row used as a type index; grade composition is
+the row join `⊔` of §2.4 — associative, commutative, idempotent, with unit `⟨ ⟩` —
+so the graded monad laws are the plain monad laws with indices multiplied out (unit
+grade `⟨ ⟩`, join associativity). Three consequences, each independently valuable:
+
+- **Soundness with no exception.** The `Suspend` arm's stored thunk types at
+  `e ⊔ e₂`, and the declared result index *says so* — the impl inhabits the graded
+  scheme at full generality, so W3 (§6 above, DICT-SEMANTICS §3) holds for graded
+  impls with **no carve-out**; the #817 exemption retires when the stdlib migrates.
+- **Construction is genuinely pure.** The plain signature charges the callback row
+  at the build site — an over-approximation in the *other* direction (the effect
+  is paid where nothing runs). Graded signatures charge nothing until `grun`, the
+  sole discharge point: the accounting finally matches the operational story of a
+  deferred computation.
+- **Erasure and dispatch are untouched.** A grade is a row: it erases (§8), it
+  rides no dictionary, and graded elaboration is the ordinary dictionary
+  translation — one instance per constructor *family* (`impl GMappable Async`),
+  with no overlap-on-grade dimension. The orthogonality invariant below survives
+  verbatim.
+
+**Well-formedness and decidability.** Joins may appear only in result/index
+positions of graded method signatures; unification never *decomposes* a join —
+instantiation is checked by grade **subsumption** (`e ≤ e₁ ⊔ e₂` per §2.4's order),
+the direction the escape check already decides. This is the same discipline that
+keeps the parameter domains decidable (§2.3): expressiveness bounded exactly where
+decidability demands it. A **degenerate form is admissible today** ("graded-lite"):
+all grades in a signature collapsed to one shared variable
+(`gandThen : f e a → (a →^e f e b) → f e b`), realizing the join by unification —
+sound, requiring no new machinery, mildly over-approximate (input indices widen to
+the join, which is safe: an index is an upper bound). The full family with
+independent grades is the ideal; an implementation may realize the graded-lite
+prefix first. Design driver and phased plan: #820 (algebra #821, graded heads
+#822, stdlib/Async migration #823, `do`-notation routing #824).
+
 **Orthogonality to dictionaries (restated).** When an interface method's signature
 carries an effect variable (`andThen : m a → (a →^e m b) →^e m b`), the effect var
 generalizes and instantiates exactly as above and is **independent** of the
 dictionary that resolves `m`'s instance. Parameters ride as inert data on the row;
 the dict machinery keys on labels/methods and never inspects a parameter. A change
 to effect parameters touches unification and the escape check **only** — never
-dispatch.
+dispatch. Graded interfaces preserve this: a grade rides the *type index*, joined
+by signature shape at elaboration — never routed, never inspected by dispatch.
 
 ---
 
@@ -752,3 +818,10 @@ a clause:
   unforgeable, confined at boundaries — the "host is the handler" stance.)
 - P. Cousot, R. Cousot. *Abstract Interpretation.* POPL 1977. (The α/γ Galois
   connection; sound over-approximation — the discipline §4's parameter analysis obeys.)
+- S. Katsumata. *Parametric Effect Monads and Semantics of Effect Systems.* POPL
+  2014. (Graded monads — monads indexed by an ordered monoid of effects; §6's
+  graded interfaces instantiate the monoid to the row join.)
+- D. Orchard, T. Petricek, A. Mycroft. *The semantic marriage of monads and
+  effects.* / Orchard et al., *Granule.* (Grading in practice: index algebras
+  tracked through composition, kept out of the term semantics — the erasure
+  stance §6's graded interfaces inherit.)
