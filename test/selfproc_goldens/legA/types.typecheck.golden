@@ -22,6 +22,7 @@ aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
 alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
+allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allCoreFns : List String -> Bool
 allDictObls : List (Ref (List Route), List Mono, List String) -> List (String, List String, Ty, Mono, Option Loc)
@@ -74,6 +75,7 @@ armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armSites : Arm -> List (Ref Route)
 armUnreachable : Option String -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+arrowLaunderEscape : List EffRow -> List EffRow -> List Atom
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 astEffrowE : List (String, Ref Effvar) -> Ty -> EffRow
@@ -148,7 +150,7 @@ checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkIfaceMethodEffs : String -> List IfaceMethod -> Unit
 checkImplCompleteness : List Decl -> List Decl -> Unit
 checkImplCompletenessMap : Map String (List String) -> List Decl -> Unit
-checkImplEffectLaunder : String -> String -> Ty -> Int -> Mono -> Expr -> Unit
+checkImplEffectLaunder : String -> String -> Mono -> Mono -> Option Loc -> Unit
 checkImplObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 checkImplObligationsU : ImplUniverse -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 checkInterfaceCycles : List Decl -> Unit
@@ -839,7 +841,6 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
-monoBodyEffect : Int -> Mono -> Option EffRow
 monoConcrete : Mono -> Bool
 monoHeadCon : Mono -> Option String
 monoIsApp : Mono -> Bool

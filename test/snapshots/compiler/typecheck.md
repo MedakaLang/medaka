@@ -1,5 +1,5 @@
 # META
-source_lines=16367
+source_lines=16378
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -12768,21 +12768,25 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- laundering at the CALL site remains #784's concern.
     let expected = fromAstTypeE (freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))) (baseMap ++ extraMap) mty
     let actual = inferClauses env [(pats, body)]
-    -- #803 (S0): inspect the body's OWN inferred latent effect BEFORE it is unified
-    -- into the return.  An effect an impl legitimately performs by USING an argument
-    -- (applying a callback `a -> <e> b`, running a row-kinded `Async e` arg) enters the
-    -- body row as that argument's effect VARIABLE (an unbound tail at impl-check, since
-    -- params are fresh vars here).  An INTRINSIC effect — `putStr`, or a call to a
-    -- concrete-effect helper, sourced from NO argument — instead lands as a CONCRETE
-    -- ATOM on the body arrow.  So the body row's concrete atoms are exactly the intrinsic
-    -- effects; they must be bounded by the method's declared return row, else they
-    -- launder to pure at the call site.  This MUST run before `unify expected actual`:
-    -- unify merges the intrinsic atom into the shared open tail (both-open arm, :898,
-    -- runs no effectLeakCheck), after which effrowLabels no longer sees it (that was the
-    -- hole in the first cut — it inspected the post-unify var and missed every impl that
-    -- ALSO applies its callback).  argument-contributed effects need no explicit set: at
-    -- impl-check they are variables, never concrete atoms, so they are structurally exempt.
-    let _ = checkImplEffectLaunder iface mname mty (listLen pats) actual body
+    -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
+    -- DECLARED return by the effect the method declares at that same arrow — inspected
+    -- BEFORE `unify expected actual`.  An effect an impl legitimately performs by USING an
+    -- argument (applying a callback `a -> <e> b`, running a row-kinded `Async e` arg)
+    -- enters the body row as that argument's effect VARIABLE (an unbound tail at
+    -- impl-check, since params are fresh vars here).  An INTRINSIC effect — `putStr`, or a
+    -- call to a concrete-effect helper, sourced from NO argument — instead lands as a
+    -- CONCRETE ATOM on whichever arrow evaluates it.  So per arrow, the impl's concrete
+    -- atoms must be a subset of the method's declared concrete atoms; anything more
+    -- launders to pure at the call site.  Walking ALL declared arrows (not just the
+    -- impl's `pats` count) is load-bearing: a curried / eta-reduced impl
+    -- (`speak d k = u => putStr …`) writes FEWER patterns and performs its intrinsic
+    -- effect on a RETURNED-lambda arrow BEYOND its pattern count — the arrow the declared
+    -- return still covers.  Must run before unify: unify merges the intrinsic atom into
+    -- the shared open tail (both-open arm, :898, runs no effectLeakCheck), after which
+    -- effrowLabels no longer sees it.  Argument-contributed effects need no explicit set:
+    -- at impl-check they are variables, never concrete atoms, so they are structurally
+    -- exempt at every arrow.
+    let _ = checkImplEffectLaunder iface mname expected actual (orElseLoc (implBodyLoc body) (firstTyConLoc mty))
     let _ = unify expected actual
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
@@ -12828,43 +12832,50 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
 -- G4: mark binop sites recorded while inferring this impl body so resolveBinopSite
 -- routes their element dict (RDict) — and ONLY theirs, not top-level operators.
 
--- #803 (S0, silent wrongness): the impl-body effect-LAUNDER check.  Sound rule:
+-- #803 (S0, silent wrongness): the impl-body effect-LAUNDER check.  Sound rule, per
+-- arrow of the method's DECLARED type down to its final return:
 --
---     body_latent ⊆ declared_return_concrete ∪ argContributable
+--     ∀ arrow i ≤ methodArity.  atoms(body_arrow_effect_i) ⊆ atoms(declared_effect_i)
 --
--- where argContributable is the union of the effect rows an impl may legitimately
--- perform by USING its arguments (a function arg's arrow latent effect, a row-kinded
--- data arg's effect row).  The check exploits the impl-check frame to make this
--- cheap and exact: BEFORE `unify expected actual`, every parameter is still a fresh
--- variable, so argContributable is entirely effect VARIABLES with no concrete atoms,
--- and any effect the body performs by using an argument appears in [bodyEff] as that
--- variable — never as a concrete atom.  Hence body_latent's *concrete atoms* are
--- exactly the INTRINSIC effects (an argument contributes none), and the residual
--- `atoms(bodyEff) \ declared_return` is precisely `body_latent \ (declared ∪ argContrib)`
--- restricted to concrete atoms — the only atoms that can launder (a variable is
--- visible to the caller and cannot lie).  [declared_return] is IO-expanded via the
--- same atomsEscape/expandIoInBound the binding-boundary leak check uses (:527), so an
--- honestly-declared `<Stdout | e>` / `<IO | e>` return diffs to empty and stays
--- accepted; a pure/var-only `<e>` return has an empty bound and rejects ANY intrinsic
--- atom.  [npats] locates the body arrow: inferClauses builds
--- `p1 -> <>(…) pn -> <bodyEff> ret`, the latent effect sitting on the LAST arrow.
-checkImplEffectLaunder : String -> String -> Ty -> Int -> Mono -> Expr -> Unit
-checkImplEffectLaunder iface mname mty npats actual body = match monoBodyEffect npats actual
-  None => ()
-  Some bodyEff => match atomsEscape (effrowLabels bodyEff) (declaredEffects mty)
-    [] => ()
-    escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" (orElseLoc (implBodyLoc body) (firstTyConLoc mty)) (effectLaunderMsg iface mname escaping)
+-- i.e. the impl's concrete latent atoms at each arrow must be bounded by the method's
+-- declared concrete atoms at that same arrow (the general form of
+-- `body_latent ⊆ decl(φ) ∪ argContributable`).  Checked BEFORE `unify expected actual`,
+-- which makes argContributable free and exact: every parameter is still a fresh
+-- variable there, so an effect the body performs by USING an argument (applying a
+-- callback, running a row-kinded `Async e` arg) appears as that variable — never a
+-- concrete atom — at every arrow.  Hence the body's *concrete atoms* on any arrow are
+-- exactly the INTRINSIC effects, and per-arrow `atomsEscape` against the declared row
+-- (IO-expanded via the same expandIoInBound the binding-boundary check uses, :527) is
+-- precisely the laundered set — a variable is caller-visible and cannot lie, so only a
+-- concrete atom can launder.  [expected] (the declared method type as a Mono, with a
+-- FRESH effvar per declared var so its concrete atoms are exactly what is written) and
+-- [actual] (the inferred clause type) share arrow structure; walking [expected]'s arrows
+-- bounds the walk at methodArity.  Walking ALL declared arrows — not the impl's pattern
+-- count — is what closes the curried / eta-reduced hole: a returned-lambda arrow beyond
+-- the impl's `pats` still carries a declared return effect, so its intrinsic atoms are
+-- still bounded.
+checkImplEffectLaunder : String -> String -> Mono -> Mono -> Option Loc -> Unit
+checkImplEffectLaunder iface mname expected actual loc = match arrowLaunderEscape (allArrowEffs expected) (allArrowEffs actual)
+  [] => ()
+  escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" loc (effectLaunderMsg iface mname escaping)
 
--- the latent effect on the body arrow of an inferred [npats]-arg clause type:
--- peel [npats] `TFun`s and read the effect on the last one (where inferClauses puts
--- the body's effect; earlier arrows carry fresh empty rows — see arrowsWithLastEffect).
--- npats == 0 (a nullary method) has no body arrow → None: such a method cannot carry a
--- well-formed argument-carried effect var (a return-only var is rejected by #784), so a
--- concrete/pure leak there is already the binding-boundary check's (#782) territory.
-monoBodyEffect : Int -> Mono -> Option EffRow
-monoBodyEffect npats actual = match normalize actual
-  TFun _ eff b => if npats <= 1 then Some eff else monoBodyEffect (npats - 1) b
-  _ => None
+-- the effect rows on each arrow of a Mono arrow spine, outermost first, down to the
+-- non-arrow result (length = the type's arity).
+allArrowEffs : Mono -> List EffRow
+allArrowEffs m = match normalize m
+  TFun _ eff b => eff :: allArrowEffs b
+  _ => []
+
+-- per-arrow launder residual: at each arrow position, the impl's ([actual]) concrete
+-- atoms not permitted by the method's ([declared]) concrete atoms there, IO-expanded.
+-- [declared] bounds the length to methodArity; the walk stops when [declared] runs out
+-- (nothing is promised past the declared return) OR [actual] does (an eta-reduced body
+-- whose remaining arrows sit inside an as-yet-unresolved var carry no atoms pre-unify).
+arrowLaunderEscape : List EffRow -> List EffRow -> List Atom
+arrowLaunderEscape [] _ = []
+arrowLaunderEscape _ [] = []
+arrowLaunderEscape (d::ds) (a::as2) = atomsEscape (effrowLabels a) (effrowLabels d)
+  ++ arrowLaunderEscape ds as2
 
 -- the first source span inside an impl-method body, for locating T-EFFECT-LAUNDER
 -- at the offending body rather than the shared interface signature.  Peels the
@@ -19353,11 +19364,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferImplMethods" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferImplMethods" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferImplMethod") (EVar "env")) (EVar "allProg")) (EVar "iface")) (EVar "implTvMap")) (EVar "headMonos")) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferImplMethods") (EVar "env")) (EVar "allProg")) (EVar "iface")) (EVar "implTvMap")) (EVar "headMonos")) (EVar "rest")))))
 (DTypeSig false "inferImplMethod" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplMethod") (TyCon "Unit"))))))))
-(DFunDef false "inferImplMethod" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyResolved") (EVar "allProg")) (EVar "iface")) (EVar "mname")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "ifaceParams") (PVar "mty"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "True"))) (DoLet false false (PVar "oblN0") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value")) (DoLet false false (PVar "baseMap") (EApp (EApp (EVar "zipL") (EVar "ifaceParams")) (EVar "headMonos"))) (DoLet false false (PVar "extraMap") (EApp (EVar "freshTvMap") (EApp (EApp (EVar "removeAllS") (EVar "ifaceParams")) (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "mty")))))) (DoLet false false (PVar "expected") (EApp (EApp (EApp (EVar "fromAstTypeE") (EApp (EVar "freshEffMap") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "mty")) (EApp (EVar "rowArgNames") (EVar "mty")))))) (EBinOp "++" (EVar "baseMap") (EVar "extraMap"))) (EVar "mty"))) (DoLet false false (PVar "actual") (EApp (EApp (EVar "inferClauses") (EVar "env")) (EListLit (ETuple (EVar "pats") (EVar "body"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffectLaunder") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EVar "listLen") (EVar "pats"))) (EVar "actual")) (EVar "body"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "expected")) (EVar "actual"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value") (EVar "oblN0"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligations") "value"))) (DoLet false false PWild (EApp (EApp (EVar "defaultBodyLocalNum") (EVar "addedObls")) (EVar "expected"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerImplMethodDicts") (EVar "mname")) (EVar "ifaceParams")) (EVar "mty")) (EVar "extraMap"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (ELit (LString ""))))))))
-(DTypeSig false "checkImplEffectLaunder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
-(DFunDef false "checkImplEffectLaunder" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "npats") (PVar "actual") (PVar "body")) (EMatch (EApp (EApp (EVar "monoBodyEffect") (EVar "npats")) (EVar "actual")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "bodyEff")) () (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EVar "effrowLabels") (EVar "bodyEff"))) (EApp (EVar "declaredEffects") (EVar "mty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "escaping") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-LAUNDER"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "implBodyLoc") (EVar "body"))) (EApp (EVar "firstTyConLoc") (EVar "mty")))) (EApp (EApp (EApp (EVar "effectLaunderMsg") (EVar "iface")) (EVar "mname")) (EVar "escaping"))))))))
-(DTypeSig false "monoBodyEffect" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "EffRow")))))
-(DFunDef false "monoBodyEffect" ((PVar "npats") (PVar "actual")) (EMatch (EApp (EVar "normalize") (EVar "actual")) (arm (PCon "TFun" PWild (PVar "eff") (PVar "b")) () (EIf (EBinOp "<=" (EVar "npats") (ELit (LInt 1))) (EApp (EVar "Some") (EVar "eff")) (EApp (EApp (EVar "monoBodyEffect") (EBinOp "-" (EVar "npats") (ELit (LInt 1)))) (EVar "b")))) (arm PWild () (EVar "None"))))
+(DFunDef false "inferImplMethod" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyResolved") (EVar "allProg")) (EVar "iface")) (EVar "mname")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "ifaceParams") (PVar "mty"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "True"))) (DoLet false false (PVar "oblN0") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value")) (DoLet false false (PVar "baseMap") (EApp (EApp (EVar "zipL") (EVar "ifaceParams")) (EVar "headMonos"))) (DoLet false false (PVar "extraMap") (EApp (EVar "freshTvMap") (EApp (EApp (EVar "removeAllS") (EVar "ifaceParams")) (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "mty")))))) (DoLet false false (PVar "expected") (EApp (EApp (EApp (EVar "fromAstTypeE") (EApp (EVar "freshEffMap") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "mty")) (EApp (EVar "rowArgNames") (EVar "mty")))))) (EBinOp "++" (EVar "baseMap") (EVar "extraMap"))) (EVar "mty"))) (DoLet false false (PVar "actual") (EApp (EApp (EVar "inferClauses") (EVar "env")) (EListLit (ETuple (EVar "pats") (EVar "body"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffectLaunder") (EVar "iface")) (EVar "mname")) (EVar "expected")) (EVar "actual")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "implBodyLoc") (EVar "body"))) (EApp (EVar "firstTyConLoc") (EVar "mty"))))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "expected")) (EVar "actual"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value") (EVar "oblN0"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligations") "value"))) (DoLet false false PWild (EApp (EApp (EVar "defaultBodyLocalNum") (EVar "addedObls")) (EVar "expected"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerImplMethodDicts") (EVar "mname")) (EVar "ifaceParams")) (EVar "mty")) (EVar "extraMap"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (ELit (LString ""))))))))
+(DTypeSig false "checkImplEffectLaunder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
+(DFunDef false "checkImplEffectLaunder" ((PVar "iface") (PVar "mname") (PVar "expected") (PVar "actual") (PVar "loc")) (EMatch (EApp (EApp (EVar "arrowLaunderEscape") (EApp (EVar "allArrowEffs") (EVar "expected"))) (EApp (EVar "allArrowEffs") (EVar "actual"))) (arm (PList) () (ELit LUnit)) (arm (PVar "escaping") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-LAUNDER"))) (EVar "loc")) (EApp (EApp (EApp (EVar "effectLaunderMsg") (EVar "iface")) (EVar "mname")) (EVar "escaping"))))))
+(DTypeSig false "allArrowEffs" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "EffRow"))))
+(DFunDef false "allArrowEffs" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "eff") (PVar "b")) () (EBinOp "::" (EVar "eff") (EApp (EVar "allArrowEffs") (EVar "b")))) (arm PWild () (EListLit))))
+(DTypeSig false "arrowLaunderEscape" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "arrowLaunderEscape" ((PList) PWild) (EListLit))
+(DFunDef false "arrowLaunderEscape" (PWild (PList)) (EListLit))
+(DFunDef false "arrowLaunderEscape" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "a") (PVar "as2"))) (EBinOp "++" (EApp (EApp (EVar "atomsEscape") (EApp (EVar "effrowLabels") (EVar "a"))) (EApp (EVar "effrowLabels") (EVar "d"))) (EApp (EApp (EVar "arrowLaunderEscape") (EVar "ds")) (EVar "as2"))))
 (DTypeSig false "implBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "implBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "implBodyLoc" ((PCon "ELam" PWild (PVar "b"))) (EApp (EVar "implBodyLoc") (EVar "b")))
@@ -23126,11 +23141,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferImplMethods" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferImplMethods" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferImplMethod") (EVar "env")) (EVar "allProg")) (EVar "iface")) (EVar "implTvMap")) (EVar "headMonos")) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferImplMethods") (EVar "env")) (EVar "allProg")) (EVar "iface")) (EVar "implTvMap")) (EVar "headMonos")) (EVar "rest")))))
 (DTypeSig false "inferImplMethod" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplMethod") (TyCon "Unit"))))))))
-(DFunDef false "inferImplMethod" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyResolved") (EVar "allProg")) (EVar "iface")) (EVar "mname")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "ifaceParams") (PVar "mty"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "True"))) (DoLet false false (PVar "oblN0") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value")) (DoLet false false (PVar "baseMap") (EApp (EApp (EVar "zipL") (EVar "ifaceParams")) (EVar "headMonos"))) (DoLet false false (PVar "extraMap") (EApp (EVar "freshTvMap") (EApp (EApp (EVar "removeAllS") (EVar "ifaceParams")) (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "mty")))))) (DoLet false false (PVar "expected") (EApp (EApp (EApp (EVar "fromAstTypeE") (EApp (EVar "freshEffMap") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "mty")) (EApp (EVar "rowArgNames") (EVar "mty")))))) (EBinOp "++" (EVar "baseMap") (EVar "extraMap"))) (EVar "mty"))) (DoLet false false (PVar "actual") (EApp (EApp (EVar "inferClauses") (EVar "env")) (EListLit (ETuple (EVar "pats") (EVar "body"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffectLaunder") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EVar "listLen") (EVar "pats"))) (EVar "actual")) (EVar "body"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "expected")) (EVar "actual"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value") (EVar "oblN0"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligations") "value"))) (DoLet false false PWild (EApp (EApp (EVar "defaultBodyLocalNum") (EVar "addedObls")) (EVar "expected"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerImplMethodDicts") (EVar "mname")) (EVar "ifaceParams")) (EVar "mty")) (EVar "extraMap"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (ELit (LString ""))))))))
-(DTypeSig false "checkImplEffectLaunder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
-(DFunDef false "checkImplEffectLaunder" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "npats") (PVar "actual") (PVar "body")) (EMatch (EApp (EApp (EVar "monoBodyEffect") (EVar "npats")) (EVar "actual")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "bodyEff")) () (EMatch (EApp (EApp (EVar "atomsEscape") (EApp (EVar "effrowLabels") (EVar "bodyEff"))) (EApp (EVar "declaredEffects") (EVar "mty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "escaping") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-LAUNDER"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "implBodyLoc") (EVar "body"))) (EApp (EVar "firstTyConLoc") (EVar "mty")))) (EApp (EApp (EApp (EVar "effectLaunderMsg") (EVar "iface")) (EVar "mname")) (EVar "escaping"))))))))
-(DTypeSig false "monoBodyEffect" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "EffRow")))))
-(DFunDef false "monoBodyEffect" ((PVar "npats") (PVar "actual")) (EMatch (EApp (EVar "normalize") (EVar "actual")) (arm (PCon "TFun" PWild (PVar "eff") (PVar "b")) () (EIf (EBinOp "<=" (EVar "npats") (ELit (LInt 1))) (EApp (EVar "Some") (EVar "eff")) (EApp (EApp (EVar "monoBodyEffect") (EBinOp "-" (EVar "npats") (ELit (LInt 1)))) (EVar "b")))) (arm PWild () (EVar "None"))))
+(DFunDef false "inferImplMethod" ((PVar "env") (PVar "allProg") (PVar "iface") (PVar "implTvMap") (PVar "headMonos") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EApp (EVar "ifaceMethodTyResolved") (EVar "allProg")) (EVar "iface")) (EVar "mname")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "ifaceParams") (PVar "mty"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "True"))) (DoLet false false (PVar "oblN0") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value")) (DoLet false false (PVar "baseMap") (EApp (EApp (EVar "zipL") (EVar "ifaceParams")) (EVar "headMonos"))) (DoLet false false (PVar "extraMap") (EApp (EVar "freshTvMap") (EApp (EApp (EVar "removeAllS") (EVar "ifaceParams")) (EApp (EVar "dedup") (EApp (EVar "tyVarNames") (EVar "mty")))))) (DoLet false false (PVar "expected") (EApp (EApp (EApp (EVar "fromAstTypeE") (EApp (EVar "freshEffMap") (EApp (EVar "dedup") (EBinOp "++" (EApp (EVar "effTailNames") (EVar "mty")) (EApp (EVar "rowArgNames") (EVar "mty")))))) (EBinOp "++" (EVar "baseMap") (EVar "extraMap"))) (EVar "mty"))) (DoLet false false (PVar "actual") (EApp (EApp (EVar "inferClauses") (EVar "env")) (EListLit (ETuple (EVar "pats") (EVar "body"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkImplEffectLaunder") (EVar "iface")) (EVar "mname")) (EVar "expected")) (EVar "actual")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "implBodyLoc") (EVar "body"))) (EApp (EVar "firstTyConLoc") (EVar "mty"))))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "expected")) (EVar "actual"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligationsN") "value") (EVar "oblN0"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingImplObligations") "value"))) (DoLet false false PWild (EApp (EApp (EVar "defaultBodyLocalNum") (EVar "addedObls")) (EVar "expected"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerImplMethodDicts") (EVar "mname")) (EVar "ifaceParams")) (EVar "mty")) (EVar "extraMap"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImplBody")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn")) (ELit (LString ""))))))))
+(DTypeSig false "checkImplEffectLaunder" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
+(DFunDef false "checkImplEffectLaunder" ((PVar "iface") (PVar "mname") (PVar "expected") (PVar "actual") (PVar "loc")) (EMatch (EApp (EApp (EVar "arrowLaunderEscape") (EApp (EVar "allArrowEffs") (EVar "expected"))) (EApp (EVar "allArrowEffs") (EVar "actual"))) (arm (PList) () (ELit LUnit)) (arm (PVar "escaping") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-LAUNDER"))) (EVar "loc")) (EApp (EApp (EApp (EVar "effectLaunderMsg") (EVar "iface")) (EVar "mname")) (EVar "escaping"))))))
+(DTypeSig false "allArrowEffs" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "EffRow"))))
+(DFunDef false "allArrowEffs" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "eff") (PVar "b")) () (EBinOp "::" (EVar "eff") (EApp (EVar "allArrowEffs") (EVar "b")))) (arm PWild () (EListLit))))
+(DTypeSig false "arrowLaunderEscape" (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyApp (TyCon "List") (TyCon "Atom")))))
+(DFunDef false "arrowLaunderEscape" ((PList) PWild) (EListLit))
+(DFunDef false "arrowLaunderEscape" (PWild (PList)) (EListLit))
+(DFunDef false "arrowLaunderEscape" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "a") (PVar "as2"))) (EBinOp "++" (EApp (EApp (EVar "atomsEscape") (EApp (EVar "effrowLabels") (EVar "a"))) (EApp (EVar "effrowLabels") (EVar "d"))) (EApp (EApp (EVar "arrowLaunderEscape") (EVar "ds")) (EVar "as2"))))
 (DTypeSig false "implBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "implBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "implBodyLoc" ((PCon "ELam" PWild (PVar "b"))) (EApp (EVar "implBodyLoc") (EVar "b")))
