@@ -1,0 +1,6 @@
+-- Round-2 FP 7 control: <e> at EVEN contravariant depth — the impl receives a
+-- CONSUMER of e-callbacks and can only SUPPLY callbacks, never perform e, so
+-- the coverage rule must accept (a malicious effectful supply pours atoms into
+-- e's own cell, where the post-unify atom check reads them).  Accepted.
+interface A4 a where
+  probe : a -> ((Unit -> <e> Unit) -> Int) -> Int

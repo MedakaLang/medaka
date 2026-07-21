@@ -1,0 +1,10 @@
+-- #816 round-2 adversarial break 2: the GENERIC default path had no effect
+-- axis, so a cross-module impl inheriting this default laundered the intrinsic
+-- putStr while the same-module specialization rejected it — module placement
+-- flipped soundness.  Now rejected at the declaring interface (no impl needed)
+-- by the default-path #803 walk (T-EFFECT-LAUNDER, "Default body of …").
+interface Sp a where
+  speak : a -> (Unit -> <e> Unit) -> <e> String
+  speak x k =
+    let _ = putStr "DEFAULT-INTRINSIC "
+    "hi"

@@ -1,0 +1,23 @@
+issue: 825
+what: an impl applying its <e>-callback INSIDE a returned value whose declared row
+what: is pure closes e := <> — the impl privately commits the caller's row to
+what: empty, so a caller's <Stdout> callback runs inside a thunk the checker types
+what: pure (`mkPure : Unit -> <Stdout> (Unit -> Unit)`: the OUTER arrow is charged
+what: at build time where nothing runs; the returned thunk that actually prints is
+what: `Unit -> Unit`).  Enforcing the reject (a closed method effect var IS a pin)
+what: outlaws the compiler's own Parser monad — the identical shape over pure
+what: stored arrows — so the channel is a documented W3 residual pending graded
+what: interfaces (#820); see also the Async sibling #817.
+cmd: check main.mdk
+exit: 0
+stdout-line: mkPure : Unit -> <Stdout> Unit -> Unit
+control: check control.mdk
+why-control: control.mdk applies the SAME callback EAGERLY (before building the
+why-control: pure thunk), so the effect is charged at the arrow that actually
+why-control: performs it — the honest shape.  It must check clean at exit 0,
+why-control: proving callback application, effect-var threading, and closure
+why-control: return are intact; the bug is specifically the DEFERRED application
+why-control: under a pure declared row.
+why-note: A fix (graded result rows, or rejecting closed method effect vars once
+why-note: Parser is re-typed) flips main.mdk's exit or its printed scheme,
+why-note: draining this row.

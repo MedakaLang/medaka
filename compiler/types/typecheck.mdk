@@ -979,7 +979,111 @@ checkIfaceMethodEffs iface ((IfaceMethod mname mty _)::rest) =
   let _ = match undeterminedRetEffVars mty
     [] => ()
     bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyConLoc mty) (effectUndeterminedMsg iface mname bad)
+  let _ = checkArgEffVarCoverage iface mname mty
   checkIfaceMethodEffs iface rest
+
+-- The DUAL of the #784 rule, closing the adversarial review's break 4 (and the
+-- argument-only variant): an effect var's ARGUMENT-position occurrences are
+-- rows an impl can PERFORM by using that argument, so the method's own rows
+-- must account for them.  Two ill-formed shapes, both rejected at the
+-- interface declaration:
+--   * argument-only — `use : a -> (Unit -> <e> Unit) -> Int`: e rides an
+--     argument but no non-argument row, so an impl applying the callback
+--     performs e with no row charging it (verified launder: a pure-typed
+--     wrapper prints);
+--   * uncovered atoms — `act1 : a -> (Unit -> <Stdout | e> Unit) -> <e> Unit`:
+--     the callback's concrete <Stdout> pours into a row declared bare <e>,
+--     which a caller instantiates to <> (verified launder).  Sound iff every
+--     non-argument occurrence of e covers the union of its argument-side
+--     atoms, IO-expanded (`<Stdout | e>` callback with `<Stdout | e>` return
+--     is accepted; so is an `<IO | e>` return).
+-- Post-unify inspection CANNOT catch these: the same-tail row-unification arm
+-- (`<e>` ~ `<Stdout | e>`) succeeds without recording the atom anywhere, so
+-- the declaration is the only seam with the information intact.
+checkArgEffVarCoverage : String -> String -> Ty -> Unit
+checkArgEffVarCoverage iface mname mty =
+  checkArgEffVars
+    iface
+    mname
+    mty
+    (methodEffArgOccs mty)
+    (methodEffRetOccs mty)
+    (dedup (map fst (methodEffArgOccs mty)))
+
+checkArgEffVars : String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+checkArgEffVars _ _ _ _ _ [] = ()
+checkArgEffVars iface mname mty argOccs retOccs (v::rest) =
+  let vrets = filterList (o => fst o == v) retOccs
+  let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
+  let _ = if isEmptyL vrets then pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyConLoc mty) (argOnlyEffVarMsg iface mname v)
+  else match retOccsEscape vatoms vrets
+    [] => ()
+    esc => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyConLoc mty) (argAtomsUncoveredMsg iface mname v esc)
+  checkArgEffVars iface mname mty argOccs retOccs rest
+
+-- first non-empty escape of the argument-side atoms against a non-argument
+-- occurrence's declared atoms (IO-expanded via atomsEscape)
+retOccsEscape : List Atom -> List (String, List Atom) -> List Atom
+retOccsEscape _ [] = []
+retOccsEscape vatoms ((_, declAtoms)::rest) =
+  if isNonEmptyL (atomsEscape vatoms declAtoms) then
+    atomsEscape vatoms declAtoms
+  else
+    retOccsEscape vatoms rest
+
+-- effect-var occurrences (name, written atoms) inside ARGUMENT positions of a
+-- method signature that an impl can PERFORM: rows of functions the impl can
+-- CALL (odd contravariant depth) and row-kinded values it can RUN.  The
+-- arrow's own row is NOT an argument position, and — round-2 adversarial
+-- FP 7 — a row at EVEN depth (`((Unit -> <e> Unit) -> Int)` argument: the
+-- impl receives a CONSUMER of e-callbacks and can only SUPPLY callbacks) is
+-- excluded: the impl cannot perform e there, and a malicious effectful supply
+-- pours its atoms into e's own cell where the post-unify atom check reads
+-- them.
+methodEffArgOccs : Ty -> List (String, List Atom)
+methodEffArgOccs (TyConstrained _ t) = methodEffArgOccs t
+methodEffArgOccs (TyEffect _ _ t) = methodEffArgOccs t
+methodEffArgOccs (TyFun a b) = argPerformableOccs True a ++ methodEffArgOccs b
+methodEffArgOccs _ = []
+
+-- rows in an argument subtree, collected only where [perf] (the impl can call
+-- or run the value at this position); each arrow-LHS descent flips it.
+argPerformableOccs : Bool -> Ty -> List (String, List Atom)
+argPerformableOccs perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
+  ++ argPerformableOccs perf t
+argPerformableOccs perf (TyEffect _ None t) = argPerformableOccs perf t
+argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
+  ++ argPerformableOccs perf b
+argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
+argPerformableOccs perf (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon n _, args) => krowSlotOccs perf n args
+  _ => argPerformableOccs perf a ++ argPerformableOccs perf b
+argPerformableOccs perf (TyConstrained _ t) = argPerformableOccs perf t
+argPerformableOccs _ _ = []
+
+-- one ctor node: its bare row-kinded slots (if performable) + recurse the args
+krowSlotOccs : Bool -> String -> List Ty -> List (String, List Atom)
+krowSlotOccs perf n args = match lookupAssoc n perRun.value.dataParamKindsRef.value
+  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+    ++ flatMap (argPerformableOccs perf) args
+  _ => flatMap (argPerformableOccs perf) args
+
+-- effect-var occurrences in NON-argument positions: each spine arrow's own row,
+-- plus every occurrence inside the final return type (nested rows and bare
+-- row-kinded ctor-arg slots).
+methodEffRetOccs : Ty -> List (String, List Atom)
+methodEffRetOccs (TyConstrained _ t) = methodEffRetOccs t
+methodEffRetOccs (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: methodEffRetOccs t
+methodEffRetOccs (TyEffect _ None t) = methodEffRetOccs t
+methodEffRetOccs (TyFun _ b) = methodEffRetOccs b
+methodEffRetOccs t = effVarOccAtoms t ++ map (n => (n, [])) (rowArgNames t)
+
+argOnlyEffVarMsg : String -> String -> String -> String
+argOnlyEffVarMsg iface mname v = "Argument-only effect variable <\{v}> in method '\{mname}' of interface '\{iface}': <\{v}> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <\{v}> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <\{v}> through the method's row (e.g. `-> <\{v}> …`), or drop it from the argument."
+
+argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
+argAtomsUncoveredMsg iface mname v esc = "Effect variable <\{v}> in method '\{mname}' of interface '\{iface}' carries <\{renderAtoms esc}> at an argument position, but a method row carrying <\{v}> does not include it: an impl that uses that argument performs <\{renderAtoms esc}> on a row a caller can instantiate to <>, laundering it. Declare <\{renderAtoms esc}> (or `<IO | \{v}>`) at every row where <\{v}> appears, or remove the concrete label from the argument's row."
 
 -- The predicate: return-position effect tail vars minus argument-carried ones.
 -- An effect var is argument-carried — hence soundly pinned at every call site —
@@ -2536,74 +2640,77 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- record of values would rebuild the whole 58-field record on every push.
 -- (#158 PR4 extracted shadowHeadCtxRef OUT of here into `Toggles`; its resetState clearing is
 -- preserved by freshToggles being minted in the same resetState — see resetState below.)
-data PerRun =
-  | PerRun {
-      tyvarCounter : Ref Int,
-      effvarCounter : Ref Int,
-      curEffect : Ref EffRow,
-      recordsRef : Ref (List (String, RecordInfo)),
-      recordByNameRef : Ref (OrdMap RecordInfo),
-      fieldOwnersRef : Ref (OrdMap (List String)),
-      dataParamKindsRef : Ref (List (String, List Kind)),
-      aliasTableRef : Ref (List (String, (List String, Ty))),
-      pendingSites : Ref (List PendingEntry),
-      pendingRLocalSites : Ref (List PendingEntry),
-      shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
-      definerShadowNamesRef : Ref (List String),
-      definerShadowSigsRef : Ref (List (String, Ty)),
-      shadowKeyTableRef : Ref (OrdMap (List KeyEntry)),
-      pendingBinopSites : Ref (List PendingEntry),
-      pendingUnopSites : Ref (List PendingEntry),
-      pendingArithSites : Ref (List (Ref Route, Mono)),
-      methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
-      registeredIfacesRef : Ref (OrdMap Unit),
-      pendingImplObligations : Ref (List (String, List String, Ty, Mono, Option Loc)),
-      pendingImplObligationsN : Ref Int,
-      numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
-      poisonedVars : Ref (List Int),
-      tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
-      numlitVarLocs : Ref (List (Mono, Loc)),
-      numlitUntainted : Ref (List (Mono, Loc)),
-      numlitOpLocs : Ref (List Loc),
-      numlitCtxTags : Ref (List (Loc, String)),
-      localBindRefs : Ref (List (String, Mono)),
-      localSchemesOut : Ref (List (String, Scheme)),
-      seedSchemesOut : Ref (List (String, Scheme)),
-      pendingArgStamps : Ref (List PendingEntry),
-      activeDictVars : Ref (List (Int, String)),
-      activeDictPreds : Ref (List (String, Mono, String)),
-      funConstraintsRef : Ref (List (String, List Int)),
-      funConstraintIfacesRef : Ref (List (String, List String)),
-      currentImportDefinersRef : Ref (List (String, String)),
-      currentImportOriginsRef : Ref (List (String, String)),
-      pendingDictApps : Ref (List (Ref (List Route), List Mono, List String)),
-      pendingDictAppsN : Ref Int,
-      pendingCallObligations : Ref (List (String, List Mono, Option Loc)),
-      pendingCallObligationsN : Ref Int,
-      schemeObligationsRef : Ref (List (String, List (String, List Int))),
-      methodConstraintsRef : Ref (List (String, List Int)),
-      methodConstraintPositionsRef : Ref (List (String, List Int)),
-      pendingMethodDicts : Ref (List (Ref (List Route), List Mono)),
-      pendingRecDictApps : Ref (List RecDictApp),
-      currentFn : Ref String,
-      currentImplBody : Ref Bool,
-      methodSiteFns : Ref (OrdMap (List Mono)),
-      dictAppFns : Ref (OrdMap (List (List Mono))),
-      promotedRef : Ref (List String),
-      methodShadowNamesRef : Ref (List String),
-      flatShadowScopingRef : Ref Bool,
-      flatCoreFnNamesRef : Ref (OrdMap Unit),
-      flatUserShadowNamesRef : Ref (List String),
-      groupConstraintMonosRef : Ref (List (String, Mono)),
-      typeErrors : Ref (List TcDiag),
-      occursCheckFailed : Ref Bool,
-      currentLevel : Ref Int,
-    }
+data PerRun = PerRun {
+    tyvarCounter : Ref Int,
+    bodyLocalSchemesRef : Ref (List (String, List Int)),
+    inRigidityBodyRef : Ref Bool,  -- True while an IMPL or DEFAULT method body is being inferred — the scope
+    effvarCounter : Ref Int,  -- in which registerLocalScheme records obligations (see its comment)
+    curEffect : Ref EffRow,  -- names GENERALIZED inside the top-level body currently being inferred
+    recordsRef : Ref (List (String, RecordInfo)),  -- (local `let`/`where` helpers), reset at each body start: an occurrence
+    recordByNameRef : Ref (OrdMap RecordInfo),  -- resolving to one is a LOCAL shadow, never a method occurrence, so no
+    fieldOwnersRef : Ref (OrdMap (List String)),  -- method obligation is recorded for it (round-2 adversarial break 3).
+    dataParamKindsRef : Ref (List (String, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
+    aliasTableRef : Ref (List (String, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
+    pendingSites : Ref (List PendingEntry),  -- `Num a =>` on an unrelated scheme (types/numlit_bidir).
+    pendingRLocalSites : Ref (List PendingEntry),
+    shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
+    definerShadowNamesRef : Ref (List String),
+    definerShadowSigsRef : Ref (List (String, Ty)),
+    shadowKeyTableRef : Ref (OrdMap (List KeyEntry)),
+    pendingBinopSites : Ref (List PendingEntry),
+    pendingUnopSites : Ref (List PendingEntry),
+    pendingArithSites : Ref (List (Ref Route, Mono)),
+    methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
+    registeredIfacesRef : Ref (OrdMap Unit),
+    pendingImplObligations : Ref (List (String, List String, Ty, Mono, Option Loc)),
+    pendingImplObligationsN : Ref Int,
+    numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
+    poisonedVars : Ref (List Int),
+    tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
+    numlitVarLocs : Ref (List (Mono, Loc)),
+    numlitUntainted : Ref (List (Mono, Loc)),
+    numlitOpLocs : Ref (List Loc),
+    numlitCtxTags : Ref (List (Loc, String)),
+    localBindRefs : Ref (List (String, Mono)),
+    localSchemesOut : Ref (List (String, Scheme)),
+    seedSchemesOut : Ref (List (String, Scheme)),
+    pendingArgStamps : Ref (List PendingEntry),
+    activeDictVars : Ref (List (Int, String)),
+    activeDictPreds : Ref (List (String, Mono, String)),
+    funConstraintsRef : Ref (List (String, List Int)),
+    funConstraintIfacesRef : Ref (List (String, List String)),
+    currentImportDefinersRef : Ref (List (String, String)),
+    currentImportOriginsRef : Ref (List (String, String)),
+    pendingDictApps : Ref (List (Ref (List Route), List Mono, List String)),
+    pendingDictAppsN : Ref Int,
+    pendingCallObligations : Ref (List (String, List Mono, Option Loc)),
+    pendingCallObligationsN : Ref Int,
+    schemeObligationsRef : Ref (List (String, List (String, List Int))),
+    methodConstraintsRef : Ref (List (String, List Int)),
+    methodConstraintPositionsRef : Ref (List (String, List Int)),
+    pendingMethodDicts : Ref (List (Ref (List Route), List Mono)),
+    pendingRecDictApps : Ref (List RecDictApp),
+    currentFn : Ref String,
+    currentImplBody : Ref Bool,
+    methodSiteFns : Ref (OrdMap (List Mono)),
+    dictAppFns : Ref (OrdMap (List (List Mono))),
+    promotedRef : Ref (List String),
+    methodShadowNamesRef : Ref (List String),
+    flatShadowScopingRef : Ref Bool,
+    flatCoreFnNamesRef : Ref (OrdMap Unit),
+    flatUserShadowNamesRef : Ref (List String),
+    groupConstraintMonosRef : Ref (List (String, Mono)),
+    typeErrors : Ref (List TcDiag),
+    occursCheckFailed : Ref Bool,
+    currentLevel : Ref Int,
+  }
 
 -- Construct all 58 field-Refs fresh (each reproduces its former top-level ref's initial).
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
+  bodyLocalSchemesRef = Ref [],
+  inRigidityBodyRef = Ref False,
   effvarCounter = Ref 0,
   curEffect = Ref (EffRow [] None),
   recordsRef = Ref [],
@@ -3789,7 +3896,22 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
   Some s =>
     let inst = instantiateTracked s
     let _ = recordMethodDicts name methodRef (snd inst)
-    let _ = recordImplObligation name (fst inst)
+    -- A LAMBDA/PATTERN-BOUND shadow of a method name resolves to a MONOMORPHIC
+    -- local scheme (`Forall [] []`) — the scope-blind marker still rewrote the
+    -- occurrence to EMethodAt, but it denotes the local, and recording a method
+    -- obligation for it invents a predicate on whatever the local's var unifies
+    -- with (a prelude default `filter p t = …` under a user `interface P` whose
+    -- method is named `p` recorded a phantom `P elem` obligation — which the
+    -- #816 W3 survivor check then rejected as an undeclared constraint on the
+    -- method's element var).  Every genuine interface method quantifies at
+    -- least its interface parameter, so a mono scheme is never a real method
+    -- occurrence.  (Top-LEVEL shadows are already suppressed inside
+    -- recordImplObligation via definerShadowNamesRef/standaloneValuesRef; this
+    -- is the local-binding sibling.)
+    let _ = if isBodyLocalScheme name s then
+      fst inst
+    else
+      recordImplObligation name (fst inst)
     let _ = recordRLocalSite env name tagRef (fst inst)
     let ret = match argDispatchOf name
       Some idx =>
@@ -4350,6 +4472,8 @@ blockRecLet env x e =
   let _ = checkRecBindNonFunction x e  -- #799
   let _ = enterLevel ()
   let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let dictN0 = perRun.value.pendingDictAppsN.value
   let placeholder = freshVar ()
   let envSelf = extendVar env x (monoScheme placeholder)
   let t1 = infer envSelf e
@@ -4359,21 +4483,26 @@ blockRecLet env x e =
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x t1  -- LSP hover (block rec-let bypasses inferPat)
-  seedAlphaLets (extendVar env x (generalize t1)) x e  -- WS-2: α scope-seed
+  let sch = generalize t1
+  let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  seedAlphaLets (extendVar env x sch) x e  -- WS-2: α scope-seed
 
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockLet env (PVar x) e =
   let _ = enterLevel ()
   let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let dictN0 = perRun.value.pendingDictAppsN.value
   let t = infer env e
   let _ = exitLevel ()
   let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
+  let sch = genRestricted (isNonexpansive e) t
+  let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
-  let env1 = extendVar env x (genRestricted (isNonexpansive e) t)
-  seedAlphaLets env1 x e
+  seedAlphaLets (extendVar env x sch) x e
 blockLet env pat e =
   let t = infer env e
   let pr = inferPat env pat
@@ -5170,7 +5299,15 @@ inferVarPlain : TcEnv -> String -> Mono
 inferVarPlain env x = match lookupVar env x
   Some s =>
     let mono = instantiateVarTracked x s
-    recordImplObligation x mono
+    -- a lambda/pattern-bound local shadowing a method name resolves to a
+    -- MONOMORPHIC scheme; recording a method obligation for it invents a
+    -- predicate on whatever the local unifies with (see inferMethodAt's
+    -- identical guard for the marked path — the prelude `filter p t = …`
+    -- default under a user interface with a method named `p`)
+    if isBodyLocalScheme x s then
+      mono
+    else
+      recordImplObligation x mono
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -6850,6 +6987,8 @@ inferRecLet env x e1 e2 =
   let _ = checkRecBindNonFunction x e1  -- #799
   let _ = enterLevel ()
   let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let dictN0 = perRun.value.pendingDictAppsN.value
   let placeholder = freshVar ()
   let envSelf = extendVar env x (monoScheme placeholder)
   let t1 = infer envSelf e1
@@ -6859,12 +6998,46 @@ inferRecLet env x e1 e2 =
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x t1  -- LSP hover (recursive PVar let bypasses inferPat)
-  infer (seedAlphaLets (extendVar env x (generalize t1)) x e1) e2  -- WS-2: α scope-seed
+  let sch = generalize t1
+  let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  infer (seedAlphaLets (extendVar env x sch) x e1) e2  -- WS-2: α scope-seed
+
+-- Round-2 adversarial break "let-alias evasion" (#816): register a LOCAL
+-- binding's generalized scheme obligations exactly as processSCC does for
+-- top-level members, so a later use re-instantiates them into the
+-- call-obligation window every checker reads.  Before this, `let f = hh`
+-- (re-generalizing `hh : Num x => x -> x`) registered NOTHING: the RHS
+-- occurrence's obligation stayed on a var generalization then orphaned, Int
+-- defaulting satisfied it quietly, and `f x` at a method-scheme var sailed
+-- through check into an eval panic / native SEGFAULT.  Name collisions across
+-- bodies are safe: obligations are keyed by the scheme's own quantified ids,
+-- and substMonos skips ids a different scheme's instantiation does not map.
+registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
+registerLocalScheme x sch oblN0 callN0 dictN0 =
+  let _ = setRef perRun.value.bodyLocalSchemesRef ((x, schemeIds sch)::perRun.value.bodyLocalSchemesRef.value)
+  -- Obligation registration is scoped to IMPL/DEFAULT bodies — the W3 channel
+  -- the round-2 alias break exploits.  Registering for every local everywhere
+  -- is the RIGHT general fix (a top-level `where` helper's orphaned constraint
+  -- is the same pre-existing S0: `f x = go x where go n = n + 1` types
+  -- `f : a -> a` and `f "abc"` panics at run), but it re-routes constraints
+  -- through the ambiguity machinery program-wide (an Ord-constrained
+  -- where-helper's use trips `Ambiguous instance` instead of deferring to the
+  -- enclosing scheme) — that generalization is tracked as its own issue and
+  -- belongs with its own blast-radius pass.
+  if perRun.value.inRigidityBodyRef.value then
+    let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
+    let callOblsDelta = takeFirst (perRun.value.pendingCallObligationsN.value - callN0) perRun.value.pendingCallObligations.value
+    let forwardedObls = allDictObls (takeFirst (perRun.value.pendingDictAppsN.value - dictN0) perRun.value.pendingDictApps.value)
+    registerSchemeObligations [] callOblsDelta (addedObls ++ forwardedObls) [(x, sch)]
+  else
+    ()
 
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
 inferLetSimple env pat e1 e2 =
   let _ = enterLevel ()
   let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let dictN0 = perRun.value.pendingDictAppsN.value
   let t1 = infer env e1
   let _ = exitLevel ()
   -- PLAN.md #11: ground an ambiguous Num-only var before this inner let
@@ -6873,18 +7046,15 @@ inferLetSimple env pat e1 e2 =
   let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
   let _ = defaultAmbiguousNum addedObls t1
   let _ = registerAmbiguousConstraints addedObls [t1]   -- RETPOS soundness
-  inferLetBody env pat t1 e1 e2
+  inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
 
-inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Mono
-inferLetBody env (PVar x) t1 e1 e2 =
+inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
+inferLetBody env (PVar x) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
-  infer
-    (seedAlphaLets
-      (extendVar env x (genRestricted (isNonexpansive e1) t1))
-      x
-      e1)
-    e2  -- WS-2: α scope-seed
-inferLetBody env pat t1 _ e2 =
+  let sch = genRestricted (isNonexpansive e1) t1
+  let _ = registerLocalScheme x sch oblN0 callN0 dictN0
+  infer (seedAlphaLets (extendVar env x sch) x e1) e2  -- WS-2: α scope-seed
+inferLetBody env pat t1 _ e2 _ _ _ =
   let pr = inferPat env pat
   let _ = unify (fst pr) t1
   infer (extendVars env (snd pr)) e2
@@ -7569,6 +7739,8 @@ processLetGroup : TcEnv -> List LetBind -> TcEnv
 processLetGroup env binds =
   let _ = enterLevel ()
   let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let dictN0 = perRun.value.pendingDictAppsN.value
   let placeholders = map letBindPlaceholder binds
   let env2 = extendVars env placeholders
   let _ = inferLetBinds env2 (zipL binds placeholders)
@@ -7579,7 +7751,34 @@ processLetGroup env binds =
   let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
   let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
-  generalizeGroup env (zipL binds placeholders)
+  let genv = generalizeGroup env (zipL binds placeholders)
+  -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
+  -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
+  -- registered NOTHING in schemeObligationsRef — only top-level SCCs did — so a
+  -- later use `f x` instantiated no obligation at all: the one recorded at the
+  -- RHS occurrence stayed on a var the generalization then orphaned, Int
+  -- defaulting quietly satisfied it, and a scheme-var instantiation sailed
+  -- through check into an eval panic / native SEGFAULT.  Register the group
+  -- exactly as processSCC does; instantiateVarTracked's per-use re-recording
+  -- then feeds the same call-obligation window every checker reads.  Name
+  -- collisions across bodies are safe: the obligation ids are the scheme's own
+  -- quantified ids, and substMonos skips entries whose ids a different scheme's
+  -- instantiation does not map.
+  let callOblsDelta = takeFirst (perRun.value.pendingCallObligationsN.value - callN0) perRun.value.pendingCallObligations.value
+  let forwardedObls = allDictObls (takeFirst (perRun.value.pendingDictAppsN.value - dictN0) perRun.value.pendingDictApps.value)
+  let _ = setRef perRun.value.bodyLocalSchemesRef (map (p => (fst p, schemeIds (snd p))) (groupSchemesOf genv binds) ++ perRun.value.bodyLocalSchemesRef.value)
+  let _ = if perRun.value.inRigidityBodyRef.value then
+    registerSchemeObligations [] callOblsDelta (addedObls ++ forwardedObls) (groupSchemesOf genv binds)
+  else
+    ()
+  genv
+
+-- the generalized (name, scheme) pairs of a just-closed local group
+groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
+groupSchemesOf _ [] = []
+groupSchemesOf genv ((LetBind name _)::rest) = match lookupVar genv name
+  Some sch => (name, sch) :: groupSchemesOf genv rest
+  None => groupSchemesOf genv rest
 
 letBindPlaceholder : LetBind -> (String, Scheme)
 letBindPlaceholder (LetBind name _) = (name, monoScheme (freshVar ()))
@@ -11859,16 +12058,16 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- `No impl of Foldable for Map` obligation.  The interface scheme is shadow-free.
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
-inferOneIfaceDefaults env (DInterface { typarams, methods, ... }) =
+inferOneIfaceDefaults env (DInterface { name, typarams, methods, ... }) =
   let ifaceSchemes = methodSchemesPure methods
-  inferDefaultMethods (extendVars env ifaceSchemes) typarams methods
+  inferDefaultMethods (extendVars env ifaceSchemes) name typarams methods
 inferOneIfaceDefaults _ _ = ()
 
-inferDefaultMethods : TcEnv -> List String -> List IfaceMethod -> Unit
-inferDefaultMethods _ _ [] = ()
-inferDefaultMethods env typarams (m::rest) =
-  let _ = inferDefaultMethod env typarams m
-  inferDefaultMethods env typarams rest
+inferDefaultMethods : TcEnv -> String -> List String -> List IfaceMethod -> Unit
+inferDefaultMethods _ _ _ [] = ()
+inferDefaultMethods env iface typarams (m::rest) =
+  let _ = inferDefaultMethod env iface typarams m
+  inferDefaultMethods env iface typarams rest
 
 -- C8b: type-check ALL interface default bodies, unconditionally.
 --
@@ -11890,13 +12089,54 @@ inferDefaultMethods env typarams (m::rest) =
 --
 -- Double-error guard: snapshot typeErrors length before body inference; skip the
 -- outer unify if new errors were added (matches the oracle's single-error raise).
-inferDefaultMethod : TcEnv -> List String -> IfaceMethod -> Unit
-inferDefaultMethod env typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
+inferDefaultMethod : TcEnv -> String -> List String -> IfaceMethod -> Unit
+inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
   let st = sigToSchemeTvs mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
   let _ = setRef perRun.value.currentFn ""
+  let _ = setRef perRun.value.bodyLocalSchemesRef []
+  let _ = setRef perRun.value.inRigidityBodyRef True
+  let schemeOblsSnap = perRun.value.schemeObligationsRef.value
   let inst = instantiateTracked (fst st)
-  let _ = inferDefaultMethodBody mname env (fst inst) pats body
+  -- W3 on the GENERIC default path (adversarial break 1): window this body's
+  -- obligations on both channels, exactly as inferImplMethod does.
+  let oblN0 = perRun.value.pendingImplObligationsN.value
+  let callN0 = perRun.value.pendingCallObligationsN.value
+  let defLoc = orElseLoc (implBodyLoc body) (firstTyConLoc mty)
+  let subject = defaultSubject iface mname
+  -- EFFECT axis on the generic default path (round-2 adversarial break 2): a
+  -- cross-module impl inherits the default via the untagged fallback, so this
+  -- is the ONLY place its intrinsic effects can be bounded — the same-module
+  -- specialized copy goes through inferImplMethod, and module placement must
+  -- not flip soundness.  [expected2] rebuilds the declared type over a private
+  -- effMap/tvMap: the pre-unify #803 arrow walk runs inside
+  -- inferDefaultMethodBody (before its unify loses the atoms to the shared
+  -- tail), and after the body unifies clean, aliasing [expected2] onto the
+  -- solved [actualTy] lets the same post-unify effect-var rigidity used on the
+  -- impl path read the solution through [effMap2].
+  let effMap2 = freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))
+  let expected2 = fromAstTypeE effMap2 (freshTvMap (removeAllS (rowArgNames mty) (dedup (tyVarNames mty)))) mty
+  let errsB0 = listLen perRun.value.typeErrors.value
+  let actualTy = inferDefaultMethodBody mname subject expected2 defLoc env (fst inst) pats body
+  let _ = if listLen perRun.value.typeErrors.value == errsB0 then
+    let _ = unify expected2 actualTy
+    checkImplEffVarRigidity subject mty effMap2 False defLoc
+  else
+    ()
+  let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
+  let addedCallObls = takeFirst (perRun.value.pendingCallObligationsN.value - callN0) perRun.value.pendingCallObligations.value
+  let _ = checkDefaultMethodRigidity
+    iface
+    typarams
+    mname
+    mty
+    (snd st)
+    (snd inst)
+    addedObls
+    addedCallObls
+    defLoc
+  let _ = setRef perRun.value.schemeObligationsRef schemeOblsSnap
+  let _ = setRef perRun.value.inRigidityBodyRef False
   -- register AFTER body inference, so each constraint var's id in [snd inst] is
   -- its SURVIVING (normalized) union-find root — the same id the in-body return-
   -- position `empty`/`++` site normalizes to (activeDictVarOf reads that root).
@@ -11904,7 +12144,7 @@ inferDefaultMethod env typarams (IfaceMethod mname mty (Some (MethodDefault pats
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
   registerMethodDictSlots mname 0 ids (snd inst)
-inferDefaultMethod _ _ _ = ()
+inferDefaultMethod _ _ _ _ = ()
 
 -- Infer a default method body against [expectedTy], suppressing the outer
 -- unify if the body itself already pushed a type error (prevents duplicates
@@ -11921,15 +12161,19 @@ inferDefaultMethod _ _ _ = ()
 -- sees the body's `Num <wrong-type>` usage (e.g. `(5 : Bool)` ⇒ `Num Bool`);
 -- dropping them here mirrors that single-error outcome instead of cascading a
 -- spurious `No impl of Num for Bool`.
-inferDefaultMethodBody : String -> TcEnv -> Mono -> List Pat -> Expr -> Unit
-inferDefaultMethodBody mname env expectedTy pats body =
+inferDefaultMethodBody : String -> String -> Mono -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
+inferDefaultMethodBody mname subject expected2 defLoc env expectedTy pats body =
   let oblSnapshot = perRun.value.pendingImplObligations.value
   let oblSnapshotN = perRun.value.pendingImplObligationsN.value
   let errsBefore = listLen perRun.value.typeErrors.value
   let actualTy = inferClauses env [(pats, body)]
   let errsAfter = listLen perRun.value.typeErrors.value
-  if errsAfter != errsBefore then ()
+  let _ = if errsAfter != errsBefore then ()
   else
+    -- the pre-unify #803 arrow walk, default-path phrasing.  MUST run before
+    -- the unify below: it merges an intrinsic atom into the shared open tail,
+    -- after which no row inspection can recover it.
+    let _ = checkDefaultEffectLaunder subject expected2 actualTy defLoc
     let errsPreUnify = listLen perRun.value.typeErrors.value
     let _ = setRef currentMethodMismatch (Some mname)
     let _ = unify expectedTy actualTy
@@ -11937,6 +12181,14 @@ inferDefaultMethodBody mname env expectedTy pats body =
     -- mismatch reported ⇒ restore the pre-body obligation list (drop the body's
     -- own added `Num <wrong-type>` cascade, prepended at the front)
     if listLen perRun.value.typeErrors.value != errsPreUnify then restorePendingObls oblSnapshot oblSnapshotN else ()
+  actualTy
+
+-- the #803 per-arrow intrinsic-atom bound, phrased for a DEFAULT body (the impl
+-- path's checkImplEffectLaunder keeps its committed-golden message verbatim)
+checkDefaultEffectLaunder : String -> Mono -> Mono -> Option Loc -> Unit
+checkDefaultEffectLaunder subject expected actual loc = match arrowLaunderEscape (allArrowEffs expected) (allArrowEffs actual)
+  [] => ()
+  escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" loc (defaultEffectLaunderMsg subject escaping)
 
 -- Restore the obligation list (and its length counter) to a snapshot.
 restorePendingObls : List (String, List String, Ty, Mono, Option Loc) -> Int -> Unit
@@ -12744,10 +12996,14 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- compare so there was no collision; universal default specialization exposes it.
     let _ = setRef perRun.value.currentFn mname
     let _ = setRef perRun.value.currentImplBody True
+    let _ = setRef perRun.value.bodyLocalSchemesRef []
+    let _ = setRef perRun.value.inRigidityBodyRef True
+    let schemeOblsSnap = perRun.value.schemeObligationsRef.value
     -- #518: window this body's newly-added obligations, exactly as processLetGroup /
     -- checkProgramSeeded do for a let-group, so the Num defaulting below is scoped to
     -- THIS method and can never touch an already-generalized outer var.
     let oblN0 = perRun.value.pendingImplObligationsN.value
+    let callN0 = perRun.value.pendingCallObligationsN.value
     -- build the method type's tv map explicitly (instead of expectedMethodType,
     -- which hides it) so the impl method's OWN method-level constraint vars
     -- (`Thenable m => …`) can be registered into activeDictVars below.
@@ -12762,8 +13018,10 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- (`<Stdout>`) or PURE (`<>`) declared row still yields a closed row, so a genuine
     -- impl-body effect leak past a non-var bound is still enforced (#782).  The free-var
     -- laundering at the CALL site remains #784's concern.
-    let expected = fromAstTypeE (freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))) (baseMap ++ extraMap) mty
+    let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))
+    let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
     let actual = inferClauses env [(pats, body)]
+    let launderLoc = orElseLoc (implBodyLoc body) (firstTyConLoc mty)
     -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
     -- DECLARED return by the effect the method declares at that same arrow — inspected
     -- BEFORE `unify expected actual`.  An effect an impl legitimately performs by USING an
@@ -12782,8 +13040,40 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- effrowLabels no longer sees it.  Argument-contributed effects need no explicit set:
     -- at impl-check they are variables, never concrete atoms, so they are structurally
     -- exempt at every arrow.
-    let _ = checkImplEffectLaunder iface mname expected actual (orElseLoc (implBodyLoc body) (firstTyConLoc mty))
+    let errN0 = listLen perRun.value.typeErrors.value
+    let _ = checkImplEffectLaunder iface mname expected actual launderLoc
+    -- True iff the per-arrow #803 walk just flagged this body — the post-unify
+    -- effect-atom half below then stays quiet (same defect, one report).
+    let launderFlagged = listLen perRun.value.typeErrors.value > errN0
     let _ = unify expected actual
+    -- #814 (S0): W3 method-scheme fidelity (DICT-SEMANTICS §3).  The method's
+    -- non-head quantified variables — type AND effect — belong to the CALLER
+    -- (every use site re-instantiates them freshly), so the body must be checked
+    -- at full generality.  [extraMap]/[effMap] were fresh flexible vars for the
+    -- unify above; verifying they SURVIVED unification as distinct unbound
+    -- variables (types) / atom-free rows with distinct tails (effects) is
+    -- equivalent to having checked the body against skolems, at the cost of one
+    -- post-unify inspection (the same discipline as checkAnnotTooGeneral's C3).
+    -- Without it an impl can pin `b` in `mk : a -> b` — to Int (caller
+    -- instantiates b := String, evaluation crashes) or to an effect-bearing
+    -- arrow, alone or nested in a tuple/data arg (caller pins b to the pure
+    -- arrow: a certified-pure value performs IO — the #814 laundering vein the
+    -- per-arrow #803 walk above is structurally blind to).  Runs BEFORE
+    -- defaultBodyLocalNum so a body-local Num default can never mask a pin.
+    -- [addedObls] (this body's obligation window, also fed to defaultBodyLocalNum
+    -- below) carries the CONSTRAINT axis: a body whose pin is a *constrained
+    -- var* rather than a constructed type (`mk d = 42` pins b to a Num-obligated
+    -- var, still a TVar) escapes the distinctness check, but its obligation on a
+    -- caller-owned var is the same lie — gen-sig's `Q_sig ⊩ P'` on the impl side.
+    let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
+    -- ALSO the CALL-obligation window: a predicate reaching a scheme var through
+    -- a constrained HELPER call (`hh : Num x => x -> x`; body `meth d x = hh x`)
+    -- is recorded by recordCallObligations, never by recordImplObligation — the
+    -- adversarial review's break 2: without this window the Num rides a channel
+    -- the survivor check never read, and `check` stayed green on a program whose
+    -- built binary printed garbage.
+    let addedCallObls = takeFirst (perRun.value.pendingCallObligationsN.value - callN0) perRun.value.pendingCallObligations.value
+    let _ = checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -12809,7 +13099,6 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- exitLevel, but this function has no enterLevel/exitLevel at all, so the level it
     -- would compute here is meaningless.  It is also orthogonal to #518 (oblDispatchMonos
     -- returns [] for Num).  Tracked as #564.
-    let addedObls = takeFirst (perRun.value.pendingImplObligationsN.value - oblN0) perRun.value.pendingImplObligations.value
     let _ = defaultBodyLocalNum addedObls expected
     -- Eval-path method-dict threading (parity with inferDefaultMethod's
     -- registerMethodDictSlots): an impl method with its OWN method-level constraint
@@ -12823,6 +13112,8 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the route, so register the var → dict-param mapping here (AFTER body inference,
     -- so each var is its surviving union-find root, mirroring registerMethodDictSlots).
     let _ = registerImplMethodDicts mname ifaceParams mty extraMap
+    let _ = setRef perRun.value.schemeObligationsRef schemeOblsSnap
+    let _ = setRef perRun.value.inRigidityBodyRef False
     let _ = setRef perRun.value.currentImplBody False
     setRef perRun.value.currentFn ""
 -- G4: mark binop sites recorded while inferring this impl body so resolveBinopSite
@@ -12887,6 +13178,335 @@ implBodyLoc _ = None
 
 effectLaunderMsg : String -> String -> List Atom -> String
 effectLaunderMsg iface mname escaping = "Effect laundering in impl of '\{mname}' for interface '\{iface}': the body performs <\{renderAtoms escaping}>, which is not sourced from any argument and is not declared by the method's effect row, so a caller can instantiate the method's effect variable to <> and a function typed pure would then silently perform it. Either declare the effect as a concrete label in the method's return row (e.g. `<\{renderAtoms escaping}>`), or perform it only through an argument (a callback carrying `<e>`) so the caller sees it."
+
+-- #814 (S0): W3 method-scheme fidelity — the post-unify rigidity check.  The
+-- method scheme's non-head quantifiers are re-instantiated freshly by every
+-- caller, so the impl body may not constrain them.  Having unified the body
+-- against fresh flexible vars, rigidity holds iff each survived untouched:
+--   · every [extraMap] type var still normalizes to a TVar (not pinned to a
+--     constructed type), and all their ids are pairwise distinct and disjoint
+--     from the impl-head vars' ids (not identified with each other or with a
+--     head variable);
+--   · every [effMap] effect var's row carries no concrete atom beyond what the
+--     declared row at EVERY occurrence of that var in [mty] already covers
+--     (IO-expanded, as the §5 escape check) — an atom unification poured into
+--     the var from a position whose declared row lacks it is an intrinsic
+--     effect the caller erases by instantiating the var to <>; and the vars'
+--     tails are pairwise distinct (aliasing an INSTANCE-HEAD row param is
+--     admitted — the #817 carve-out; see checkImplEffVarRigidity).
+-- Union-find bindings are monotone, so a var unbound-and-distinct AFTER unify
+-- was never constrained DURING it: this is observationally the skolem check.
+-- All lists here are the handful of quantified vars of one method signature.
+checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Bool -> Option Loc -> Unit
+checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged loc =
+  let subject = implSubject iface mname
+  let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
+  let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
+  else
+    let survivors = sigTvarIds (map snd extraMap)
+    if hasDupI survivors || anyContainsI survivors (flatMap monoTyvarIds headMonos) then
+      pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (collapsesTyvarsMsg subject mty)
+    else
+      ()
+  let _ = checkSurvivorObligations subject iface [] mty extraMap addedObls loc
+  let _ = checkSurvivorCallObligations subject iface [] mty extraMap addedCallObls loc
+  checkImplEffVarRigidity subject mty effMap launderFlagged loc
+
+-- B1 (adversarial review): the GENERIC default-method path is the checking seam
+-- for a cross-module impl that inherits an interface default (fillImplDefaults
+-- is same-module only, deliberately), and it had NO rigidity guard — a default
+-- `mk d = "not-a-b"` under `mk : a -> b` sailed through and the importer's
+-- built binary reinterpreted the String as Int.  Same W3 rule, two twists:
+--   * ALL the signature's quantified vars are survivors here — the interface
+--     typarams too (the default must be parametric in the receiver);
+--   * an obligation on a RECEIVER typaram is entailed by the interface ITSELF
+--     plus its requires-closure (Ord's default `lt` calling `compare` infers
+--     `Ord a` — self-entailed; a Thenable default's `pure` infers the super
+--     `Applicative m`), not by method-level `=>` constraints.
+-- [tvs] is sigToSchemeTvs' name→scheme-var map; [subst] instantiateTracked's
+-- scheme-var-id→fresh-mono subst — crossing them recovers each declared name's
+-- post-unify mono, the same shape inferImplMethod's extraMap has.
+checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Option Loc -> Unit
+checkDefaultMethodRigidity iface typarams mname mty tvs subst addedObls addedCallObls loc =
+  let subject = defaultSubject iface mname
+  let extraMap = defaultSurvivorMap tvs subst
+  let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
+  let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
+  else
+    let survivors = sigTvarIds (map snd extraMap)
+    if hasDupI survivors then
+      pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (collapsesTyvarsMsg subject mty)
+    else
+      ()
+  let _ = checkSurvivorObligations subject iface typarams mty extraMap addedObls loc
+  checkSurvivorCallObligations
+    subject
+    iface
+    typarams
+    mty
+    extraMap
+    addedCallObls
+    loc
+
+defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
+defaultSurvivorMap [] _ = []
+defaultSurvivorMap ((name, m)::rest) subst = match lookupAssocI (monoTyvarId m) subst
+  Some fm => (name, fm) :: defaultSurvivorMap rest subst
+  None => defaultSurvivorMap rest subst
+
+implSubject : String -> String -> String
+implSubject iface mname = "Impl of '\{mname}' for interface '\{iface}'"
+
+defaultSubject : String -> String -> String
+defaultSubject iface mname =
+  "Default body of '\{mname}' in interface '\{iface}'"
+
+-- the constraint axis of W3: a predicate the body records on a method-scheme
+-- var must be entailed by a DECLARED method-level constraint on that var,
+-- closed under `requires` (`foldMap : Monoid m => …` whose body's `++` infers
+-- `Semigroup m` is entailed; `mk : a -> b` whose body's `42` infers `Num b` is
+-- not — a caller instantiates b to a type with no Num impl and evaluation
+-- dispatches into nothing).  Obligations on non-scheme vars (body-local
+-- literals, impl-head `requires` vars, ground receivers) are skipped — the
+-- existing checkImplObligations/defaulting machinery owns those.  [ownTyparams]
+-- is non-empty only on the default path: an obligation on one of those
+-- (receiver) vars is entailed by the interface itself + requires-closure.
+checkSurvivorObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (String, List String, Ty, Mono, Option Loc) -> Option Loc -> Unit
+checkSurvivorObligations _ _ _ _ _ [] _ = ()
+checkSurvivorObligations subject ownIface ownTyparams mty extraMap ((oiface, otyparams, omty, occ, _)::rest) loc =
+  -- the obligation's [occ] is the FULL instantiated occurrence type (`Int -> a`
+  -- for a literal's `fromInt`); the constrained position is extracted by the
+  -- same declared-type walk checkImplObligations uses.  Dispatch (receiver)
+  -- typarams only, per the F0 stance: a non-receiver typaram is impl-determined.
+  let _ = checkSurvivorDispatchMonos
+    subject
+    ownIface
+    ownTyparams
+    mty
+    extraMap
+    oiface
+    (dispatchMonosOf (dispatchTyparams otyparams) omty occ)
+    loc
+  checkSurvivorObligations subject ownIface ownTyparams mty extraMap rest loc
+
+-- the CALL-obligation half of the constraint axis: recordCallObligations pushes
+-- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
+-- discharges at a call site, so the monos here are the dispatch monos directly
+-- (no declared-type walk needed).  Same rule as checkSurvivorObligations: a
+-- predicate landing on a method-scheme var must be entailed by a declared
+-- method-level constraint under requires-closure.
+checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (String, List Mono, Option Loc) -> Option Loc -> Unit
+checkSurvivorCallObligations _ _ _ _ _ [] _ = ()
+checkSurvivorCallObligations subject ownIface ownTyparams mty extraMap ((oiface, monos, _)::rest) loc =
+  let _ = checkSurvivorDispatchMonos subject ownIface ownTyparams mty extraMap oiface monos loc
+  checkSurvivorCallObligations
+    subject
+    ownIface
+    ownTyparams
+    mty
+    extraMap
+    rest
+    loc
+
+checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
+checkSurvivorDispatchMonos _ _ _ _ _ _ [] _ = ()
+checkSurvivorDispatchMonos subject ownIface ownTyparams mty extraMap oiface (dm::rest) loc =
+  let _ = match survivorNameOf dm extraMap
+    Some vname =>
+      if survivorObligationEntailed ownIface ownTyparams oiface vname mty then
+        ()
+      else
+        pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (undeclaredConstraintMsg subject mty oiface vname)
+    None => ()
+  checkSurvivorDispatchMonos
+    subject
+    ownIface
+    ownTyparams
+    mty
+    extraMap
+    oiface
+    rest
+    loc
+
+-- entailment base per var kind: a RECEIVER typaram (default path only) is
+-- entailed by the owning interface itself + requires-closure; a method-level
+-- var by its declared `=>` constraints + requires-closure.
+survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
+survivorObligationEntailed ownIface ownTyparams oiface vname mty
+  | contains vname ownTyparams = contains oiface (ifaceSelfAndSupers ownIface)
+  | otherwise = entailedByDeclared oiface vname mty
+
+-- the method-scheme var name whose post-unify root [omono] resolves to, if any
+survivorNameOf : Mono -> List (String, Mono) -> Option String
+survivorNameOf omono extraMap = match normalize omono
+  TVar cell => survivorNameOfId (tyvarId cell) extraMap
+  _ => None
+
+survivorNameOfId : Int -> List (String, Mono) -> Option String
+survivorNameOfId _ [] = None
+survivorNameOfId id ((n, m)::rest) = match normalize m
+  TVar cell => if tyvarId cell == id then Some n else survivorNameOfId id rest
+  _ => survivorNameOfId id rest
+
+-- is [oiface] within the `requires`-closure of the method-level constraints
+-- declared on var [vname] in [mty]?  ifaceSelfAndSupers — NOT expandSupersPairs,
+-- whose WS-1b user-iface guard deliberately skips prelude chains (a dict-SLOT
+-- policy), while entailment here must see them (`Monoid m =>` entails the
+-- prelude `Semigroup m`).
+entailedByDeclared : String -> String -> Ty -> Bool
+entailedByDeclared oiface vname mty =
+  contains oiface (flatMap ifaceSelfAndSupers (declaredIfacesOn vname mty))
+
+-- the interfaces the method's own signature constrains [vname] with
+declaredIfacesOn : String -> Ty -> List String
+declaredIfacesOn vname (TyConstrained cs t) = map constraintIface (filterList (c => contains vname (constraintVarNames c)) cs)
+  ++ declaredIfacesOn vname t
+declaredIfacesOn vname (TyEffect _ _ t) = declaredIfacesOn vname t
+declaredIfacesOn _ _ = []
+
+constraintIface : Constraint -> String
+constraintIface (Constraint n _) = n
+
+constraintVarNames : Constraint -> List String
+constraintVarNames (Constraint _ args) = flatMap tyVarNames args
+
+isUnboundTvar : Mono -> Bool
+isUnboundTvar m = match normalize m
+  TVar _ => True
+  _ => False
+
+-- a binding introduced INSIDE the body currently being inferred: monomorphic
+-- (a lambda/pattern var, scheme `Forall [] []`), or a name this body itself
+-- generalized (a local `let`/`where` helper — tracked by bodyLocalSchemesRef at
+-- the registerLocalScheme sites; round-2 adversarial break 3: `let p =
+-- (y => True)` generalizes, so a mono-only test missed it and a phantom
+-- obligation was recorded for the method name it shadows).  Either way the
+-- occurrence denotes the local, and recording a method obligation for it
+-- would invent a predicate on whatever the local's vars unify with.
+-- keyed by BINDING IDENTITY, not bare name (round-3 adversarial breaks C1/C4):
+-- an entry matches only when the occurrence resolved to the SAME generalized
+-- scheme (its quantified-id list — generalization mints globally fresh ids, so
+-- id-list equality identifies the scheme).  A stale entry from a dead nested
+-- scope, or a sibling SCC member's where-helper, can then never blind a
+-- GENUINE method occurrence: the method scheme's ids differ.  No lifetime
+-- management needed — out-of-scope locals cannot be resolved-to anymore.
+isBodyLocalScheme : String -> Scheme -> Bool
+isBodyLocalScheme _ (Forall [] [] _) = True
+isBodyLocalScheme name sch = anyList
+  (p => fst p == name && eqIdList (snd p) (schemeIds sch))
+  perRun.value.bodyLocalSchemesRef.value
+
+eqIdList : List Int -> List Int -> Bool
+eqIdList [] [] = True
+eqIdList (x::xs) (y::ys) = x == y && eqIdList xs ys
+eqIdList _ _ = False
+
+-- any member of [xs] present in [ys] (tiny per-method var lists)
+anyContainsI : List Int -> List Int -> Bool
+anyContainsI [] _ = False
+anyContainsI (x::xs) ys = containsI x ys || anyContainsI xs ys
+
+-- the effect half of the rigidity check: atom containment per declared
+-- occurrence, then tail distinctness among the METHOD's own effect vars.
+-- ⚠️ #817 carve-out: a method effect var unifying with an INSTANCE-HEAD row
+-- parameter (`impl Mappable (Async e)`, whose Suspend arm stores the callback
+-- and so forces method `e'` ~ head `e`) is deliberately ADMITTED — the
+-- impl-head types' row tails are NOT in the dup set.  It is a real residual
+-- laundering channel (verified: a pure-typed thunk returned through `Async`
+-- performs Stdout when forced — issue #817), but rejecting it would outlaw
+-- Async v1's shipped Mappable/Thenable impls, which cannot be written
+-- otherwise: the sound result row `e ⊔ e'` is inexpressible with `f` fixed to
+-- `Async e`.  Resolution is design-scoped (#817); until then this check
+-- preserves main's behavior for that channel exactly.  (The TYPE-var half has
+-- no such carve-out: a method type var may never alias an impl-head type var.)
+checkImplEffVarRigidity : String -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
+checkImplEffVarRigidity subject mty effMap launderFlagged loc =
+  let occs = effVarOccAtoms mty ++ map (n => (n, [])) (rowArgNames mty)
+  let _ = if launderFlagged then
+    ()
+  else
+    checkEffVarAtoms subject occs effMap loc
+  -- ⚠️ DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
+  -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
+  -- that applies its <e>-callback inside a value whose declared row is pure
+  -- (`act d k = (u => k ())` under `-> <e> (Unit -> Unit)`) closes e := <>,
+  -- and a caller's effectful callback then runs inside a pure-typed thunk.
+  -- Rejecting it here is CORRECT but outlaws the compiler's own Parser monad
+  -- (`impl Mappable Parser` stores the callback under Parser's pure arrows —
+  -- the identical shape, latent because the compiler only passes pure
+  -- callbacks) and every pure-container deferred-application impl with it.
+  -- Like #817, the honest result type needs grading (`Parser e a`, #820), so
+  -- the channel is admitted for now and owned by #825 (pinned).
+  if hasDupI (effVarTailIds effMap) then
+    pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (collapsesEffvarsMsg subject mty)
+  else
+    ()
+
+checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
+checkEffVarAtoms _ _ [] _ = ()
+checkEffVarAtoms subject occs ((n, cell)::rest) loc =
+  let esc = effVarOccEscape n (effrowLabels (EffRow [] (Some cell))) occs
+  let _ = if isNonEmptyL esc then
+    pushTypeErrorOnceAt "T-EFFECT-LAUNDER" loc (effVarLaunderMsg subject n esc)
+  else
+    ()
+  checkEffVarAtoms subject occs rest loc
+
+-- the first occurrence of var [n] whose declared atoms fail to cover
+-- [instAtoms]: laundering demands EVERY occurrence cover the instantiation,
+-- since the caller reads the var's row at each of them independently.
+effVarOccEscape : String -> List Atom -> List (String, List Atom) -> List Atom
+effVarOccEscape _ [] _ = []
+effVarOccEscape _ _ [] = []
+effVarOccEscape n instAtoms ((m, declAtoms)::rest) =
+  if m == n && isNonEmptyL (atomsEscape instAtoms declAtoms) then
+    atomsEscape instAtoms declAtoms
+  else
+    effVarOccEscape n instAtoms rest
+
+-- (name, written atoms) for each named-tail row occurrence in a method's AST
+-- type — every TyEffect node, on the arrow spine or nested (tuples, callback
+-- rows, data-arg rows).  Bare row-kinded ctor-arg slots (`Async e a`) carry no
+-- written atoms and are contributed by rowArgNames at the call site.
+effVarOccAtoms : Ty -> List (String, List Atom)
+effVarOccAtoms (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: effVarOccAtoms t
+effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
+effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
+effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
+effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
+effVarOccAtoms (TyConstrained _ t) = effVarOccAtoms t
+effVarOccAtoms _ = []
+
+-- the still-open tail id of each method effect var's row, post-unify (a closed
+-- row contributes nothing: closing a var to the empty row performs LESS than
+-- any caller instantiation — the safe direction, not a pin).
+effVarTailIds : List (String, Ref Effvar) -> List Int
+effVarTailIds [] = []
+effVarTailIds ((_, cell)::rest) = match effrowNorm (EffRow [] (Some cell))
+  EffRow _ (Some t) => effvarId t :: effVarTailIds rest
+  EffRow _ None => effVarTailIds rest
+
+quotedNames : List String -> String
+quotedNames names = joinWith ", " (map (n => "'" ++ n ++ "'") names)
+
+pinsTyvarMsg : String -> Ty -> List String -> String
+pinsTyvarMsg subject mty pinned = "\{subject} pins the method's quantified type variable(s) \{quotedNames pinned}: the declared type '\{ppTy mty}' promises every caller its own choice of \{quotedNames pinned}, but this body fixes them to specific types. A caller instantiating them differently would get a value of the wrong type — or, if the pinned type carries an effect row, a value typed pure that silently performs effects. Make the body parametric in \{quotedNames pinned}, or name the intended concrete type in the method's signature."
+
+undeclaredConstraintMsg : String -> Ty -> String -> String -> String
+undeclaredConstraintMsg subject mty oiface vname = "\{subject} requires '\{oiface}' on the method's quantified type variable '\{vname}', but the declared type '\{ppTy mty}' does not: every caller instantiates '\{vname}' freely (including to a type with no '\{oiface}' impl), so the body may not assume it. Add the constraint to the method's signature (`\{oiface} \{vname} => …`), or make the body parametric in '\{vname}'."
+
+collapsesTyvarsMsg : String -> Ty -> String
+collapsesTyvarsMsg subject mty = "\{subject} identifies quantified type variables that the declared type '\{ppTy mty}' keeps distinct (two method variables forced equal, or a method variable forced equal to an impl-head variable). Every caller may instantiate each independently, so the body must keep them independent."
+
+defaultEffectLaunderMsg : String -> List Atom -> String
+defaultEffectLaunderMsg subject escaping = "\{subject} launders an effect: the body performs <\{renderAtoms escaping}>, which is not sourced from any argument and is not declared by the method's effect row, so a caller can instantiate the method's effect variable to <> and a value typed pure would silently perform it. Declare the effect as a concrete label in the method's row, or perform it only through an argument so the caller sees it."
+
+collapsesEffvarsMsg : String -> Ty -> String
+collapsesEffvarsMsg subject mty = "\{subject} identifies effect variables that the declared type '\{ppTy mty}' keeps distinct. Every caller instantiates each independently, so unifying them lets an effect flow to a row the caller pinned to <>. Keep the body's effects on the variable the signature declares at that position."
+
+effVarLaunderMsg : String -> String -> List Atom -> String
+effVarLaunderMsg subject evar escaping = "\{subject} launders an effect: the body performs <\{renderAtoms escaping}> inside the method's effect variable <\{evar}>, at a position whose declared row does not include it, so a caller can instantiate <\{evar}> to <> and a value typed pure would silently perform it. Declare the effect as a concrete label at that position in the method's signature, or perform it only through an argument (a callback carrying <\{evar}>) so the caller sees it."
 
 -- Register an impl method's OWN method-level constraints (`Thenable m => …`) into
 -- activeDictVars, one slot per constraint, so a return-position method in the impl
@@ -13544,7 +14164,17 @@ processSCC env sigs grouped members =
   -- them (`neq x y = not (eq x y)` under `neq : Eq a => …`) is seen as a DISPATCH and
   -- not monomorphised to the shadowing standalone's declared domain.
   let _ = setRef perRun.value.groupConstraintMonosRef (flatMap snd regs)
+  let _ = setRef perRun.value.bodyLocalSchemesRef []
+  -- registerLocalScheme entries are NAME-KEYED and body-scoped: a prelude
+  -- where-helper named `g` (core's `find`) must not leak obligations onto an
+  -- unrelated top-level `g` in a later body (it put a phantom `Num a =>` on
+  -- types/numlit_bidir's signed fn).  Restore the table once this group's
+  -- bodies finish — uses of a local are always within its body, and this
+  -- group's OWN member registration below reads the window deltas, not the
+  -- table.
+  let schemeOblsSnap = perRun.value.schemeObligationsRef.value
   let _ = inferMembers env2 sigs grouped placeholders
+  let _ = setRef perRun.value.schemeObligationsRef schemeOblsSnap
   let _ = setRef perRun.value.groupConstraintMonosRef []
   let _ = checkSigsTooGeneral sigTvMaps
   let _ = registerConstraintRegs regs

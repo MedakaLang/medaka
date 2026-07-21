@@ -1,0 +1,11 @@
+interface Act a where
+  act : a -> (Unit -> <e> Unit) -> <e> (Unit -> Unit)
+data Dog = Dog
+impl Act Dog where
+  act d k = (u => k ())
+mkPure : Unit -> <Stdout> (Unit -> Unit)
+mkPure v = act Dog (u2 => putStr "LAUNDERED ")
+main =
+  let thunk = mkPure ()
+  let _ = thunk ()
+  println "done"

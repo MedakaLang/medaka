@@ -1,0 +1,11 @@
+interface Act a where
+  act : a -> (Unit -> <e> Unit) -> <e> (Unit -> Unit)
+data Dog = Dog
+impl Act Dog where
+  act d k =
+    let _ = k ()
+    (u => ())
+main =
+  let thunk = act Dog (u2 => putStr "EAGER ")
+  let _ = thunk ()
+  println "done"

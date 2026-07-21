@@ -430,6 +430,26 @@ below: the alternative of lower-bounding a return-only effect var by the *dispat
 impl's latent effect was rejected because it would make the effect depend on
 dispatch, violating that orthogonality.
 
+**The dual condition: argument-occurrence coverage (ENFORCED).** Option A constrains
+where a *return*-row variable must also appear; its dual constrains what an
+*argument*-position occurrence may carry. An effect variable's argument occurrences
+(a callback's row, a row-kinded argument) are rows an impl can **perform** by using
+that argument — so the method's own rows must account for them, at declaration:
+
+- **argument-only** — `use : a → (Unit →^e Unit) → Int`, where `e` appears in *no*
+  non-argument row: an impl applying the callback performs `e` with no row charging
+  it (a pure-typed wrapper silently prints; verified). Ill-formed.
+- **uncovered atoms** — `act1 : a → (Unit →^{Stdout ⊔ e} Unit) →^e Unit`: the
+  callback's concrete `Stdout` pours into a row declared bare `⟨e⟩`, which a caller
+  instantiates to `⟨ ⟩` (verified launder). Ill-formed unless **every** non-argument
+  occurrence of `e` covers (IO-expanded) the union of `e`'s argument-side atoms —
+  `⟨Stdout ⊔ e⟩` at both callback and return is fine, as is an `⟨IO ⊔ e⟩` return.
+
+Like Option A this is decided from the declared signature alone (dispatch never
+consulted). It must live at the declaration: once unification runs, the same-tail
+row arm (`⟨e⟩ ∼ ⟨Stdout ⊔ e⟩`) succeeds without recording the atom anywhere, so no
+post-hoc inspection can recover the loss.
+
 **Scope of Option A, and the impl-body bound that completes it (#803, ENFORCED).**
 Option A's side condition is a *necessary* well-formedness rule about the shape of the
 **declared signature**; on its own it does **not** bound the **impl body's** latent
@@ -491,7 +511,72 @@ the method's arguments*: the caller sees `e` in the call's type, and — with th
 the instantiation **cannot lie**, because the dispatched impl can perform on that row only
 what its arguments justify or its signature declares. Together, Option A (signature shape)
 and this impl-body bound close the laundering hole for effect-variable interface methods.
-(Was tracked as #803.)
+(Was tracked as #803.) They do **not** yet close the *type-variable* channel — an impl can
+still smuggle a row inside the instantiation of a quantified **type** variable, off the
+arrow spine the bound walks. That channel is closed by method-scheme rigidity, next.
+
+**Method-scheme rigidity (the instantiation channel; #814).** The two rules above
+constrain the *signature's shape* and the *declared arrows*. The remaining laundering
+channel is the **instantiation of the method's quantified variables themselves**: with the
+body checked against the method type via ordinary (flexible) unification, an impl of
+`mk : a → b` can pin `b := Unit →^⟨Stdout⟩ String` — or a tuple or data type containing
+such an arrow — while every caller instantiates `b` freshly and may pin it to the *pure*
+arrow: a certified-pure value performs IO, and no arrow of the declared spine ever carried
+an atom for the #803 bound to see. The same flexibility is a **type**-soundness hole with
+no effects involved at all (`mk d = 42` pinned `b := Int`; a caller instantiates
+`b := String` and evaluation crashes), which is why the fix is not effect-specific.
+
+The rule (the effect reading of `DICT-SEMANTICS.md` §3 **W3**, which owns the formal
+statement): an impl or default method body is checked against the method's declared type
+with every quantified variable not bound by the interface head — **type variables and
+effect variables alike** — held **rigid**. For a type variable, rigid means what it means
+in any skolem check: it may not be instantiated to a constructed type, identified with
+another method variable, or identified with an instance-head variable. For an effect
+variable `μ`, rigid means the row it stands for may acquire **no concrete atom beyond
+what the declared row at each of `μ`'s occurrences already carries** (IO-expanded,
+exactly as §5's escape check), and two distinct declared effect variables may not be
+identified — an atom that reaches `μ` from nowhere in the signature is precisely an
+intrinsic effect the caller can erase by instantiating `μ := ⟨ ⟩`.
+
+Consequences, and the division of labour with the #803 bound:
+
+- pinning `b` is rejected *outright* — effectful, pure, nested in tuples or data-type
+  arguments, it makes no difference, so the tuple/data-nesting variants need no
+  variance-aware descent: there is nothing to descend into once `b` cannot be pinned;
+- an intrinsic atom poured into an argument-pinned `e` at a position **off the arrow
+  spine** (e.g. a method returning `(Unit →^e Unit, Int)`, the atom inside the tuple) is
+  caught by the effect-variable half — the one laundering shape the per-arrow #803 walk
+  is structurally blind to;
+- the #803 per-arrow bound remains the *diagnostic* seam for spine positions (it names
+  the offending arrow pre-unification); in the idealized semantics it is subsumed by
+  rigidity — a rigid `μ` on a declared arrow cannot absorb an intrinsic atom.
+
+**Known residual (#817).** One identification is *deliberately admitted*: a method
+effect variable unifying with an **instance-head row parameter** (`impl Mappable
+(Async e)`, whose `Suspend` arm stores the callback and thereby forces the method's
+`e'` ≈ the head's `e`). It is a real laundering channel — the callback's effect is
+charged at *build* time but performed at *force* time, so a pure-typed thunk obtained
+through the container performs the deferred effect (verified; tracked as #817) — but
+the sound result row `e ⊔ e'` is inexpressible while the instance head fixes the
+container's row, so rejecting the identification would outlaw effect-polymorphic
+data's shipped functor/monad instances outright. The resolution is design-scoped and
+owned by #817; the type-variable half has **no** such exception (a method type
+variable may never alias an instance-head type variable).
+
+Two deliberate design notes. **First**, rigidity is an over-approximation in one corner:
+an atom entering a rigid `μ` at a *purely contravariant* occurrence (the impl returns a
+function that merely *demands* a more-effectful callback than the caller need supply)
+cannot actually be performed, yet is rejected. That is the §4 stance transposed —
+over-rejection is a completeness gap, never a soundness hole — and the corner is
+unreachable anyway for honestly-shaped signatures. **Second**, the alternative that was
+considered and **rejected**: keeping the flexible instantiation and adding a
+variance-aware structural walk of the (declared, inferred) type pair that hunts effect
+atoms in covariant positions of the pinned types. It would have needed per-datatype
+variance machinery the type system does not track, and — decisively — it *presumes the
+pinning survives*, which the `b := Int` crash shows is unsound independently of effects.
+Rigidity closes both axes with no new machinery, and is the standard obligation of the
+dictionary translation besides (an instance method must inhabit the method's scheme at
+the instance head — Wadler–Blott; `DICT-SEMANTICS.md` §3 W3).
 
 **Effect-polymorphic data (effects as type-constructor arguments).** A row may
 occupy a **type-constructor argument** position, so a data type can be parameterized
