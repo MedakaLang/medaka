@@ -148,8 +148,7 @@ checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkIfaceMethodEffs : String -> List IfaceMethod -> Unit
 checkImplCompleteness : List Decl -> List Decl -> Unit
 checkImplCompletenessMap : Map String (List String) -> List Decl -> Unit
-checkImplEffectLaunder : String -> String -> Ty -> List (String, Ref Effvar) -> Expr -> Unit
-checkImplEffectLaunderGo : String -> String -> List Atom -> Option Loc -> List (String, Ref Effvar) -> Unit
+checkImplEffectLaunder : String -> String -> Ty -> Int -> Mono -> Expr -> Unit
 checkImplObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 checkImplObligationsU : ImplUniverse -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 checkInterfaceCycles : List Decl -> Unit
@@ -840,6 +839,7 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
+monoBodyEffect : Int -> Mono -> Option EffRow
 monoConcrete : Mono -> Bool
 monoHeadCon : Mono -> Option String
 monoIsApp : Mono -> Bool
