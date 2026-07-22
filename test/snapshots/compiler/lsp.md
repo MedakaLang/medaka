@@ -1,5 +1,5 @@
 # META
-source_lines=1670
+source_lines=1704
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -67,6 +67,7 @@ import frontend.parser.{
   DeclPos,
   declPosLine,
   declPosEndLine,
+  declPosNameLoc,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import support.char.{isIdentChar, isDigit}
@@ -189,6 +190,13 @@ wholeDocRange src = jRange 0 0 (countLines src) 0
 rangeOfLoc : String -> Option Loc -> Json
 rangeOfLoc src (Some (Loc _ sl sc el ec)) = jRange (sl - 1) sc (el - 1) ec
 rangeOfLoc src None = wholeDocRange src
+
+-- A bare (non-Option) `Loc` to an LSP range — same line/col convention as
+-- `rangeOfLoc`'s `Some` arm, factored out for the #331 decl-NAME-span callers
+-- (`renderSymbol`/`defZip`), which have their own decl-range fallback (NOT
+-- `wholeDocRange`) when there is no name `Loc`.
+jRangeOfLoc : Loc -> Json
+jRangeOfLoc (Loc _ sl sc el ec) = jRange (sl - 1) sc (el - 1) ec
 
 -- Map one analyze Diag onto an LSP diagnostic JSON, using its captured span
 -- (B.10.2b) for an expr-level range, falling back to whole-document for
@@ -350,31 +358,41 @@ occToHighlight arr nlen off = match posOfOffset arr off
 -- one DocumentSymbol per decl: { name, kind, range, selectionRange, children }.
 -- Consecutive same-name decls (a signature + its clauses, or a multi-clause
 -- function) COLLAPSE to a single outline symbol spanning them (#300 part 3), so a
--- 2-clause `dirGo` is one entry, not three.  Range/selectionRange are decl-level:
--- (line-1, 0)..(end_line-1, 0).  The compiler AST is location-stripped of columns
--- (#331), so symbol ranges are line-granular (character always 0; the
--- column-precise spans are the ELoc slice).  SymbolKind codes are
--- the LSP spec integers (Struct=23, Method=6, Field=8, Enum=10, EnumMember=22,
--- Interface=11, Class=5, Function=12, Variable=13, TypeParameter=26, Event=24).
--- Mirrors symbol_of_decl's kind mapping + child nesting.
+-- 2-clause `dirGo` is one entry, not three.  `range` is decl-level: (line-1,
+-- 0)..(end_line-1, 0).  `selectionRange` is the decl's real NAME-token span
+-- (#331, `DeclPos`'s third field / `declPosNameLoc`) when the parser's
+-- name-finder resolved one, else the same col-0 `range` (e.g. `DImpl` — no
+-- single name, F4/increment 5).  Child symbols (variant ctors/fields/methods/
+-- let-binds) still reuse the parent's `range` for both — their own name spans
+-- are increment 2.  SymbolKind codes are the LSP spec integers (Struct=23,
+-- Method=6, Field=8, Enum=10, EnumMember=22, Interface=11, Class=5,
+-- Function=12, Variable=13, TypeParameter=26, Event=24).  Mirrors
+-- symbol_of_decl's kind mapping + child nesting.
 
 -- Strip a DAttrib wrapper to the inner decl (mirror inner_decl).
 innerDecl : Decl -> Decl
 innerDecl (DAttrib _ d) = innerDecl d
 innerDecl d = d
 
-jSymbol : String -> Int -> Json -> List Json -> Json
-jSymbol name kind range children = jObject
+-- `range` = the decl's whole line span; `selRange` = the LSP `selectionRange`
+-- (#331: the decl's real NAME-token span when known, else the same as
+-- `range` — see `renderSymbol`). Kept as separate params (rather than always
+-- reusing `range`) so a real name span can differ from the enclosing range.
+jSymbol : String -> Int -> Json -> Json -> List Json -> Json
+jSymbol name kind range selRange children = jObject
   [
     ("name", JString name),
     ("kind", JInt kind),
     ("range", range),
-    ("selectionRange", range),
+    ("selectionRange", selRange),
     ("children", jArray children),
   ]
 
+-- Child symbols don't yet carry their own name span (that's increment 2 —
+-- variant ctors/fields/methods/let-binds, see SOURCE-POSITION-DESIGN.md), so
+-- `range` still serves as both `range` and `selectionRange` here.
 jChild : String -> Int -> Json -> Json
-jChild name kind range = jSymbol name kind range []
+jChild name kind range = jSymbol name kind range range []
 
 variantName : Variant -> String
 variantName (Variant n _) = n
@@ -477,9 +495,11 @@ documentSymbols src = match parseWithPositionsOpt src
 
 -- One outline row before collapse: name, LSP SymbolKind, 0-based start/end line,
 -- whether it's a signature/clause row (only those coalesce — see
--- symbolPartsOfDecl), and its child symbols.  A dedicated type rather than a tuple
--- because it carries 6 fields (past the tuple ceiling) and reads better.
-data SymRow = SymRow String Int Int Int Bool (List Json)
+-- symbolPartsOfDecl), its child symbols, and its NAME-token `Loc` (#331,
+-- `None` when the decl has no single name token or the finder missed — see
+-- `declNameTokIdxAt`).  A dedicated type rather than a tuple because it
+-- carries 7 fields (past the tuple ceiling) and reads better.
+data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) into
 -- SymRow rows, dropping non-outline decls.
@@ -489,8 +509,7 @@ symbolParts (d::ds) (p::ps) =
   let el = declPosEndLine p - 1
   match symbolPartsOfDecl d (jRange sl 0 el 0)
     None => symbolParts ds ps
-    Some (name, kind, clauseLike, kids) =>
-      SymRow name kind sl el clauseLike kids :: symbolParts ds ps
+    Some (name, kind, clauseLike, kids) => SymRow name kind sl el clauseLike kids (declPosNameLoc p) :: symbolParts ds ps
 symbolParts _ _ = []
 
 -- Collapse a signature+clauses run — consecutive rows that share the EXACT same
@@ -501,21 +520,23 @@ symbolParts _ _ = []
 -- `test "double"`/`prop`/`bench` (free string label, never a duplicate) from being
 -- fused into an adjacent same-named function; only sig/clause runs coalesce, and
 -- only adjacent ones, so decls that merely share a prefix are never merged either.
+-- The collapsed row keeps the FIRST clause's name `Loc` (`nl0`) — it pairs with
+-- the kept start line `s0`, same as the OCaml/line-based fields already do.
 collapseSymbols : List SymRow -> List SymRow
 collapseSymbols [] = []
 collapseSymbols (x::xs) = collapseGo x xs
 
 collapseGo : SymRow -> List SymRow -> List SymRow
 collapseGo cur [] = [cur]
-collapseGo (SymRow n0 k0 s0 e0 cl0 c0) ((SymRow n1 k1 s1 e1 cl1 c1)::rest) =
-  if n0 == n1 && cl0 && cl1 then
-    collapseGo (SymRow n0 k1 s0 e1 True (c0 ++ c1)) rest
-  else
-    SymRow n0 k0 s0 e0 cl0 c0 :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1) rest
+collapseGo (SymRow n0 k0 s0 e0 cl0 c0 nl0) ((SymRow n1 k1 s1 e1 cl1 c1 nl1)::rest) = if n0 == n1 && cl0 && cl1 then collapseGo (SymRow n0 k1 s0 e1 True (c0 ++ c1) nl0) rest else SymRow n0 k0 s0 e0 cl0 c0 nl0 :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1 nl1) rest
 
 renderSymbol : SymRow -> Json
-renderSymbol (SymRow name kind sl el _ kids) =
-  jSymbol name kind (jRange sl 0 el 0) kids
+renderSymbol (SymRow name kind sl el _ kids nameLoc) =
+  let range = jRange sl 0 el 0
+  let selRange = match nameLoc
+    Some l => jRangeOfLoc l
+    None => range
+  jSymbol name kind range selRange kids
 
 -- ── textDocument/definition ─────────────────────────────────────────────────
 -- identifier-at-cursor → first decl that DEFINES that name → its DeclPos range
@@ -552,10 +573,14 @@ definitionRange src name = match parseWithPositionsOpt src
   None => None
   Some (decls, positions) => defZip decls (positionsDecls positions) name
 
+-- #331: prefer the decl's real NAME-token span (`declPosNameLoc`) for the
+-- go-to-definition range; fall back to the old (line, 0)..(end_line, 0) whole-
+-- decl range when there is none (e.g. `DImpl` — no single name, F4).
 defZip : List Decl -> List DeclPos -> String -> Option Json
 defZip (d::ds) (p::ps) name
-  | declDefines d name =
-    Some (jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0)
+  | declDefines d name = Some (match declPosNameLoc p
+    Some l => jRangeOfLoc l
+    None => jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0)
   | otherwise = defZip ds ps name
 defZip _ _ _ = None
 
@@ -846,10 +871,10 @@ handleCompletion runtimeSrc coreSrc idJson params docs =
 -- binds a value (DFunDef, or the first name of a DLetGroup) AND has no explicit
 -- DTypeSig in the program AND is in the typecheck env, emit one hint at the
 -- column right after its name on its start line, labelled `: <ppScheme>` with
--- paddingLeft.  The self-host DeclPos has no column (the AST is location-
--- stripped), but every top-level decl starts at column 0, so the name-end column
--- is found by scanning the decl's start line from char 0 over identifier chars
--- (mirror column_after_name with loc.col = 0).
+-- paddingLeft.  #331: now placed from the decl's real NAME-token `Loc`
+-- (`declPosNameLoc` — end column is exact, no scanning) when available;
+-- `columnAfterName`'s col-0 leading-identifier scan survives only as the
+-- fallback for the (should-not-happen for `DFunDef`/`DLetGroup`) `None` case.
 
 -- The binding name a decl introduces a value hint for, or None (mirror
 -- decl_binding_name: only DFunDef + DLetGroup-first).
@@ -870,6 +895,7 @@ hasExplicitSig (d::rest) name = match innerDecl d
 
 -- Column right after the name on the decl's start line (0-based `line`).  Scan
 -- from char 0 over identifier chars; None if the line has no leading identifier.
+-- Intentionally kept (not retired) as `inlayNamePos`'s `None` fallback — full F5 retirement stays deferred.
 columnAfterName : String -> Int -> Option Int
 columnAfterName src line =
   let arr = stringToChars src
@@ -898,6 +924,14 @@ inlayHints runtimeSrc coreSrc src = match docSchemes runtimeSrc coreSrc src
     Some (decls, positions) =>
       inlayZip src decls decls (positionsDecls positions) env
 
+-- The (0-based line, col) right after a decl's name: the real name `Loc`'s end
+-- position (#331) when there is one, else the old `columnAfterName` heuristic
+-- over the decl's start line.
+inlayNamePos : String -> DeclPos -> Option (Int, Int)
+inlayNamePos src p = match declPosNameLoc p
+  Some (Loc _ sl _ _ ec) => Some (sl - 1, ec)
+  None => map (col => (declPosLine p - 1, col)) (columnAfterName src (declPosLine p - 1))
+
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
 inlayZip : String -> List Decl -> List Decl -> List DeclPos -> List (String, Scheme) -> List Json
 inlayZip src allDecls (d::ds) (p::ps) env = match declBindingName d
@@ -905,9 +939,9 @@ inlayZip src allDecls (d::ds) (p::ps) env = match declBindingName d
   Some name => if hasExplicitSig allDecls name then inlayZip src allDecls ds ps env
   else match lookupSchemeL name env
     None => inlayZip src allDecls ds ps env
-    Some sch => match columnAfterName src (declPosLine p - 1)
+    Some sch => match inlayNamePos src p
       None => inlayZip src allDecls ds ps env
-      Some col => jInlayHint (declPosLine p - 1) col (stringConcat [": ", ppSchemeNamed name sch]) :: inlayZip src allDecls ds ps env
+      Some (line, col) => jInlayHint line col (stringConcat [": ", ppSchemeNamed name sch]) :: inlayZip src allDecls ds ps env
 inlayZip _ _ _ _ _ = []
 
 -- One InlayHint { position, label, paddingLeft } (mirror the OCaml create).
@@ -1676,7 +1710,7 @@ unit = ()
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" false) (mem "SevError" false) (mem "SevWarning" false) (mem "analyzeLocated" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
@@ -1711,6 +1745,8 @@ unit = ()
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))
 (DFunDef false "rangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
 (DFunDef false "rangeOfLoc" ((PVar "src") (PCon "None")) (EApp (EVar "wholeDocRange") (EVar "src")))
+(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "Loc") (TyCon "Json")))
+(DFunDef false "jRangeOfLoc" ((PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
 (DTypeSig false "diagToJson" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json"))))
 (DFunDef false "diagToJson" ((PVar "src") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PVar "loc") PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EApp (EApp (EVar "rangeOfLoc") (EVar "src")) (EVar "loc"))) (EVar "msg")))
 (DTypeSig false "diagnosticsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))))
@@ -1753,10 +1789,10 @@ unit = ()
 (DTypeSig false "innerDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "innerDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "innerDecl") (EVar "d")))
 (DFunDef false "innerDecl" ((PVar "d")) (EVar "d"))
-(DTypeSig false "jSymbol" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json"))))))
-(DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "range")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
+(DTypeSig false "jSymbol" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json")))))))
+(DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "selRange") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "selRange")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
 (DTypeSig false "jChild" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "jChild" ((PVar "name") (PVar "kind") (PVar "range")) (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EListLit)))
+(DFunDef false "jChild" ((PVar "name") (PVar "kind") (PVar "range")) (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "range")) (EListLit)))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
@@ -1779,18 +1815,18 @@ unit = ()
 (DFunDef false "implLabel" ((PVar "iface")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "impl ")) (EVar "iface"))))
 (DTypeSig true "documentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EVar "map") (EVar "renderSymbol")) (EApp (EVar "collapseSymbols") (EApp (EApp (EVar "symbolParts") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))))))))
-(DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json"))))) ())
+(DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig false "symbolParts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "SymRow")))))
-(DFunDef false "symbolParts" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))))))))
+(DFunDef false "symbolParts" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))))))))
 (DFunDef false "symbolParts" (PWild PWild) (EListLit))
 (DTypeSig false "collapseSymbols" (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow"))))
 (DFunDef false "collapseSymbols" ((PList)) (EListLit))
 (DFunDef false "collapseSymbols" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "collapseGo") (EVar "x")) (EVar "xs")))
 (DTypeSig false "collapseGo" (TyFun (TyCon "SymRow") (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
 (DFunDef false "collapseGo" ((PVar "cur") (PList)) (EListLit (EVar "cur")))
-(DFunDef false "collapseGo" ((PCon "SymRow" (PVar "n0") (PVar "k0") (PVar "s0") (PVar "e0") (PVar "cl0") (PVar "c0")) (PCons (PCon "SymRow" (PVar "n1") (PVar "k1") (PVar "s1") (PVar "e1") (PVar "cl1") (PVar "c1")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n0") (EVar "n1")) (EVar "cl0")) (EVar "cl1")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k1")) (EVar "s0")) (EVar "e1")) (EVar "True")) (EBinOp "++" (EVar "c0") (EVar "c1")))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k0")) (EVar "s0")) (EVar "e0")) (EVar "cl0")) (EVar "c0")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n1")) (EVar "k1")) (EVar "s1")) (EVar "e1")) (EVar "cl1")) (EVar "c1"))) (EVar "rest")))))
+(DFunDef false "collapseGo" ((PCon "SymRow" (PVar "n0") (PVar "k0") (PVar "s0") (PVar "e0") (PVar "cl0") (PVar "c0") (PVar "nl0")) (PCons (PCon "SymRow" (PVar "n1") (PVar "k1") (PVar "s1") (PVar "e1") (PVar "cl1") (PVar "c1") (PVar "nl1")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n0") (EVar "n1")) (EVar "cl0")) (EVar "cl1")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k1")) (EVar "s0")) (EVar "e1")) (EVar "True")) (EBinOp "++" (EVar "c0") (EVar "c1"))) (EVar "nl0"))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k0")) (EVar "s0")) (EVar "e0")) (EVar "cl0")) (EVar "c0")) (EVar "nl0")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n1")) (EVar "k1")) (EVar "s1")) (EVar "e1")) (EVar "cl1")) (EVar "c1")) (EVar "nl1"))) (EVar "rest")))))
 (DTypeSig false "renderSymbol" (TyFun (TyCon "SymRow") (TyCon "Json")))
-(DFunDef false "renderSymbol" ((PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids"))) (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (EVar "kids")))
+(DFunDef false "renderSymbol" ((PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids") (PVar "nameLoc"))) (EBlock (DoLet false false (PVar "range") (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (DoLet false false (PVar "selRange") (EMatch (EVar "nameLoc") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EVar "range")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "selRange")) (EVar "kids")))))
 (DTypeSig false "declDefines" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "declDefines" ((PVar "d") (PVar "name")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DExtern" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DFunDef" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (EVar "name"))) (arm (PCon "DData" PWild (PVar "n") PWild (PVar "vs") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EVar "name"))) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "flatMap") (EVar "variantFieldNames")) (EVar "vs"))) (EVar "name")))) (arm (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "ms"))) (EVar "name")))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "ms"))) (EVar "name"))) (arm (PCon "DTypeAlias" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DNewtype" PWild (PVar "n") PWild (PVar "c") PWild PWild) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "==" (EVar "c") (EVar "name")))) (arm (PCon "DUse" PWild PWild PWild) () (EVar "False")) (arm (PCon "DProp" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DTest" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DBench" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DEffect" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DAttrib" PWild PWild) () (EVar "False"))))
 (DTypeSig false "anyName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1799,7 +1835,7 @@ unit = ()
 (DTypeSig false "definitionRange" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Json")))))
 (DFunDef false "definitionRange" ((PVar "src") (PVar "name")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EVar "defZip") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "name")))))
 (DTypeSig false "defZip" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Json"))))))
-(DFunDef false "defZip" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "name")) (EIf (EApp (EApp (EVar "declDefines") (EVar "d")) (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "defZip") (EVar "ds")) (EVar "ps")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "defZip" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "name")) (EIf (EApp (EApp (EVar "declDefines") (EVar "d")) (EVar "name")) (EApp (EVar "Some") (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0)))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "defZip") (EVar "ds")) (EVar "ps")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "defZip" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "unwrapDecls") (EApp (EVar "parseResult") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "unwrapDecls") (EApp (EVar "parseResult") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "checkProgramSchemesWithRuntime") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls"))))))))
@@ -1871,8 +1907,10 @@ unit = ()
 (DFunDef false "identRunLen" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "acc") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "inlayHints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "inlayHints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EMatch (EApp (EApp (EApp (EVar "docSchemes") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "env")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "decls")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "env")))))))
+(DTypeSig false "inlayNamePos" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "inlayNamePos" ((PVar "src") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "sl") PWild PWild (PVar "ec"))) () (EApp (EVar "Some") (ETuple (EBinOp "-" (EVar "sl") (ELit (LInt 1))) (EVar "ec")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "columnAfterName") (EVar "src")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
 (DTypeSig false "inlayZip" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Json"))))))))
-(DFunDef false "inlayZip" ((PVar "src") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EVar "columnAfterName") (EVar "src")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EApp (EVar "ppSchemeNamed") (EVar "name")) (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
+(DFunDef false "inlayZip" ((PVar "src") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EVar "inlayNamePos") (EVar "src")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EVar "line")) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EApp (EVar "ppSchemeNamed") (EVar "name")) (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
 (DFunDef false "inlayZip" (PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "jInlayHint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "jInlayHint" ((PVar "line") (PVar "col") (PVar "label")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col"))) (ETuple (ELit (LString "label")) (EApp (EVar "JString") (EVar "label"))) (ETuple (ELit (LString "paddingLeft")) (EApp (EVar "JBool") (EVar "True"))))))
@@ -2082,7 +2120,7 @@ unit = ()
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" false) (mem "SevError" false) (mem "SevWarning" false) (mem "analyzeLocated" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
@@ -2117,6 +2155,8 @@ unit = ()
 (DTypeSig false "rangeOfLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))
 (DFunDef false "rangeOfLoc" ((PVar "src") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
 (DFunDef false "rangeOfLoc" ((PVar "src") (PCon "None")) (EApp (EVar "wholeDocRange") (EVar "src")))
+(DTypeSig false "jRangeOfLoc" (TyFun (TyCon "Loc") (TyCon "Json")))
+(DFunDef false "jRangeOfLoc" ((PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec")))
 (DTypeSig false "diagToJson" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json"))))
 (DFunDef false "diagToJson" ((PVar "src") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PVar "loc") PWild PWild)) (EApp (EApp (EApp (EVar "jDiagnostic") (EApp (EVar "severityCode") (EVar "sev"))) (EApp (EApp (EVar "rangeOfLoc") (EVar "src")) (EVar "loc"))) (EVar "msg")))
 (DTypeSig false "diagnosticsFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))))
@@ -2159,10 +2199,10 @@ unit = ()
 (DTypeSig false "innerDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "innerDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "innerDecl") (EVar "d")))
 (DFunDef false "innerDecl" ((PVar "d")) (EVar "d"))
-(DTypeSig false "jSymbol" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json"))))))
-(DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "range")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
+(DTypeSig false "jSymbol" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json")))))))
+(DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "selRange") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "selRange")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
 (DTypeSig false "jChild" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "jChild" ((PVar "name") (PVar "kind") (PVar "range")) (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EListLit)))
+(DFunDef false "jChild" ((PVar "name") (PVar "kind") (PVar "range")) (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "range")) (EListLit)))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
@@ -2185,18 +2225,18 @@ unit = ()
 (DFunDef false "implLabel" ((PVar "iface")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "impl ")) (EVar "iface"))))
 (DTypeSig true "documentSymbols" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "documentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EMethodRef "map") (EVar "renderSymbol")) (EApp (EVar "collapseSymbols") (EApp (EApp (EVar "symbolParts") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))))))))
-(DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json"))))) ())
+(DData Private "SymRow" () ((variant "SymRow" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig false "symbolParts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyApp (TyCon "List") (TyCon "SymRow")))))
-(DFunDef false "symbolParts" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))))))))
+(DFunDef false "symbolParts" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBlock (DoLet false false (PVar "sl") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (DoLet false false (PVar "el") (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (DoExpr (EMatch (EApp (EApp (EVar "symbolPartsOfDecl") (EVar "d")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (arm (PCon "None") () (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "kind") (PVar "clauseLike") (PVar "kids"))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "name")) (EVar "kind")) (EVar "sl")) (EVar "el")) (EVar "clauseLike")) (EVar "kids")) (EApp (EVar "declPosNameLoc") (EVar "p"))) (EApp (EApp (EVar "symbolParts") (EVar "ds")) (EVar "ps"))))))))
 (DFunDef false "symbolParts" (PWild PWild) (EListLit))
 (DTypeSig false "collapseSymbols" (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow"))))
 (DFunDef false "collapseSymbols" ((PList)) (EListLit))
 (DFunDef false "collapseSymbols" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "collapseGo") (EVar "x")) (EVar "xs")))
 (DTypeSig false "collapseGo" (TyFun (TyCon "SymRow") (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
 (DFunDef false "collapseGo" ((PVar "cur") (PList)) (EListLit (EVar "cur")))
-(DFunDef false "collapseGo" ((PCon "SymRow" (PVar "n0") (PVar "k0") (PVar "s0") (PVar "e0") (PVar "cl0") (PVar "c0")) (PCons (PCon "SymRow" (PVar "n1") (PVar "k1") (PVar "s1") (PVar "e1") (PVar "cl1") (PVar "c1")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n0") (EVar "n1")) (EVar "cl0")) (EVar "cl1")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k1")) (EVar "s0")) (EVar "e1")) (EVar "True")) (EBinOp "++" (EVar "c0") (EVar "c1")))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k0")) (EVar "s0")) (EVar "e0")) (EVar "cl0")) (EVar "c0")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n1")) (EVar "k1")) (EVar "s1")) (EVar "e1")) (EVar "cl1")) (EVar "c1"))) (EVar "rest")))))
+(DFunDef false "collapseGo" ((PCon "SymRow" (PVar "n0") (PVar "k0") (PVar "s0") (PVar "e0") (PVar "cl0") (PVar "c0") (PVar "nl0")) (PCons (PCon "SymRow" (PVar "n1") (PVar "k1") (PVar "s1") (PVar "e1") (PVar "cl1") (PVar "c1") (PVar "nl1")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n0") (EVar "n1")) (EVar "cl0")) (EVar "cl1")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k1")) (EVar "s0")) (EVar "e1")) (EVar "True")) (EBinOp "++" (EVar "c0") (EVar "c1"))) (EVar "nl0"))) (EVar "rest")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n0")) (EVar "k0")) (EVar "s0")) (EVar "e0")) (EVar "cl0")) (EVar "c0")) (EVar "nl0")) (EApp (EApp (EVar "collapseGo") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SymRow") (EVar "n1")) (EVar "k1")) (EVar "s1")) (EVar "e1")) (EVar "cl1")) (EVar "c1")) (EVar "nl1"))) (EVar "rest")))))
 (DTypeSig false "renderSymbol" (TyFun (TyCon "SymRow") (TyCon "Json")))
-(DFunDef false "renderSymbol" ((PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids"))) (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (EVar "kids")))
+(DFunDef false "renderSymbol" ((PCon "SymRow" (PVar "name") (PVar "kind") (PVar "sl") (PVar "el") PWild (PVar "kids") (PVar "nameLoc"))) (EBlock (DoLet false false (PVar "range") (EApp (EApp (EApp (EApp (EVar "jRange") (EVar "sl")) (ELit (LInt 0))) (EVar "el")) (ELit (LInt 0)))) (DoLet false false (PVar "selRange") (EMatch (EVar "nameLoc") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EVar "range")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "range")) (EVar "selRange")) (EVar "kids")))))
 (DTypeSig false "declDefines" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "declDefines" ((PVar "d") (PVar "name")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DExtern" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DFunDef" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (EVar "name"))) (arm (PCon "DData" PWild (PVar "n") PWild (PVar "vs") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EVar "name"))) (EApp (EApp (EVar "anyName") (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldNames")) (EVar "vs"))) (EVar "name")))) (arm (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "ms"))) (EVar "name")))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "ms"))) (EVar "name"))) (arm (PCon "DTypeAlias" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DNewtype" PWild (PVar "n") PWild (PVar "c") PWild PWild) () (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "==" (EVar "c") (EVar "name")))) (arm (PCon "DUse" PWild PWild PWild) () (EVar "False")) (arm (PCon "DProp" PWild (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DTest" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DBench" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DEffect" PWild (PVar "n") PWild) () (EBinOp "==" (EVar "n") (EVar "name"))) (arm (PCon "DAttrib" PWild PWild) () (EVar "False"))))
 (DTypeSig false "anyName" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -2205,7 +2245,7 @@ unit = ()
 (DTypeSig false "definitionRange" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Json")))))
 (DFunDef false "definitionRange" ((PVar "src") (PVar "name")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EVar "defZip") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "name")))))
 (DTypeSig false "defZip" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Json"))))))
-(DFunDef false "defZip" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "name")) (EIf (EApp (EApp (EVar "declDefines") (EVar "d")) (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "defZip") (EVar "ds")) (EVar "ps")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "defZip" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "name")) (EIf (EApp (EApp (EVar "declDefines") (EVar "d")) (EVar "name")) (EApp (EVar "Some") (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0)))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "defZip") (EVar "ds")) (EVar "ps")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "defZip" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "unwrapDecls") (EApp (EVar "parseResult") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "unwrapDecls") (EApp (EVar "parseResult") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "checkProgramSchemesWithRuntime") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls"))))))))
@@ -2277,8 +2317,10 @@ unit = ()
 (DFunDef false "identRunLen" ((PVar "arr") (PVar "len") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "acc") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EVar "identRunLen") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "inlayHints" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "inlayHints" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EMatch (EApp (EApp (EApp (EVar "docSchemes") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "env")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "decls")) (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "positions"))) (EVar "env")))))))
+(DTypeSig false "inlayNamePos" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "inlayNamePos" ((PVar "src") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PCon "Loc" PWild (PVar "sl") PWild PWild (PVar "ec"))) () (EApp (EVar "Some") (ETuple (EBinOp "-" (EVar "sl") (ELit (LInt 1))) (EVar "ec")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "col")) (ETuple (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))) (EVar "col")))) (EApp (EApp (EVar "columnAfterName") (EVar "src")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1))))))))
 (DTypeSig false "inlayZip" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Json"))))))))
-(DFunDef false "inlayZip" ((PVar "src") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EVar "columnAfterName") (EVar "src")) (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EApp (EVar "ppSchemeNamed") (EVar "name")) (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
+(DFunDef false "inlayZip" ((PVar "src") (PVar "allDecls") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps")) (PVar "env")) (EMatch (EApp (EVar "declBindingName") (EVar "d")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "name")) () (EIf (EApp (EApp (EVar "hasExplicitSig") (EVar "allDecls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")) (EMatch (EApp (EApp (EVar "lookupSchemeL") (EVar "name")) (EVar "env")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PVar "sch")) () (EMatch (EApp (EApp (EVar "inlayNamePos") (EVar "src")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env"))) (arm (PCon "Some" (PTuple (PVar "line") (PVar "col"))) () (EBinOp "::" (EApp (EApp (EApp (EVar "jInlayHint") (EVar "line")) (EVar "col")) (EApp (EVar "stringConcat") (EListLit (ELit (LString ": ")) (EApp (EApp (EVar "ppSchemeNamed") (EVar "name")) (EVar "sch"))))) (EApp (EApp (EApp (EApp (EApp (EVar "inlayZip") (EVar "src")) (EVar "allDecls")) (EVar "ds")) (EVar "ps")) (EVar "env")))))))))))
 (DFunDef false "inlayZip" (PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "jInlayHint" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "jInlayHint" ((PVar "line") (PVar "col") (PVar "label")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "position")) (EApp (EApp (EVar "jPosition") (EVar "line")) (EVar "col"))) (ETuple (ELit (LString "label")) (EApp (EVar "JString") (EVar "label"))) (ETuple (ELit (LString "paddingLeft")) (EApp (EVar "JBool") (EVar "True"))))))

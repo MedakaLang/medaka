@@ -3360,8 +3360,15 @@ parseProgram = do
 -- decl is parsed with its start/end token index captured via `getPos`; lines
 -- come from the parallel line array; variant start lines are re-derived from the
 -- decl's token span (the data-body's depth-0 `=`/`|` separators).
+-- Third field (#331, increment 1): the decl's NAME-token span, `None` when the
+-- decl has no single name token (e.g. `DImpl`'s head — see F4/increment 5) or
+-- when the name-finder can't locate one.  Additive — every existing consumer
+-- reads only `declPosLine`/`declPosEndLine` (never a positional match on
+-- `DeclPos`), so this is snapshot-invisible (`snapshot.mdk:renderDeclPos`
+-- reads accessors only) and requires no change anywhere but this file and the
+-- LSP consumers that want the real span.
 public export data DeclPos =
-  | DeclPos Int Int  -- (line, end_line), 1-based
+  | DeclPos Int Int (Option Loc)  -- (line, end_line), 1-based; name Loc
 public export data Positions =
   | Positions (List DeclPos) (List Int) Int (List (List Int))
 -- decl positions, variant start lines, last_content_line, per-decl reflow-unit
@@ -3386,10 +3393,16 @@ export positionsChainLines : Positions -> List (List Int)
 positionsChainLines (Positions _ _ _ cl) = cl
 
 export declPosLine : DeclPos -> Int
-declPosLine (DeclPos l _) = l
+declPosLine (DeclPos l _ _) = l
 
 export declPosEndLine : DeclPos -> Int
-declPosEndLine (DeclPos _ e) = e
+declPosEndLine (DeclPos _ e _) = e
+
+-- The decl's NAME-token `Loc` (#331), or `None` for a decl with no single name
+-- token or where the name-finder couldn't resolve one — callers fall back to
+-- the (line, 0)..(end_line, 0) range built from `declPosLine`/`declPosEndLine`.
+export declPosNameLoc : DeclPos -> Option Loc
+declPosNameLoc (DeclPos _ _ nl) = nl
 
 -- Parse one decl, capturing the (startTokIdx, endTokIdx) span around it.
 declWithSpan : Parser (Decl, Int, Int)
@@ -3433,13 +3446,141 @@ lineAt lines i
   | i < arrayLength lines = arrayGetUnsafe i lines
   | otherwise = 0
 
+-- ── decl NAME span (#331, increment 1) ──────────────────────────────────────
+-- `declPosOf` (below) gives every decl a LINE-only range; the LSP's
+-- `selectionRange` / definition range wants the decl's real NAME-token span
+-- (`SOURCE-POSITION-DESIGN.md`, Increment 1). The parser already knows each
+-- decl's kind and is positioned at its name token as it builds the node, so —
+-- rather than re-deriving "where's the name" from source TEXT
+-- (`columnAfterName`'s fragile approach, `lsp.mdk`) — scan the token KINDS
+-- from the decl's start index over its known leading modifier/keyword tokens
+-- to the name-role token, and mint a `Loc` for it via the same
+-- `offsetToLineColFast` service `locOfSpan` uses. No lexer change: the
+-- (start,end) offset pairs already exist (`tokenizeWithOffsetPairs`); this
+-- only adds a name-token FINDER over token kinds already produced.
+
+-- `Loc` for a [startIdx, endIdx) token span, given an EXPLICIT offset-pairs
+-- array — deliberately NOT `setLocState` + `locOfSpan`: that reads/writes the
+-- `locOffsRef`/`locLineStartsRef` globals, which would also retroactively
+-- prime `located`'s placeholder `ELoc`s inside every decl this pass returns,
+-- widening `parseWithPositionsOpt`'s contract (unifying the two positions
+-- entry points is increment 3 / I6 — out of scope here). Same arithmetic as
+-- `locOfSpan`, just parameterized instead of global-state-based.
+locOfSpanWith : Array (Int, Int) -> Array Int -> Int -> Int -> Loc
+locOfSpanWith offs lineStarts startIdx endIdx =
+  let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
+  let startOff = tokOffsetAtArr offs startIdx
+  let endOff = tokEndOffsetAtArr offs lastIdx
+  match offsetToLineColFast lineStarts startOff
+    (sl, sc) => match offsetToLineColFast lineStarts endOff
+      (el, ec) => Loc "" sl sc el ec
+
+-- start/end char offset of token `i` in an explicit offset-pairs array (0 when
+-- out of range) — the non-global-state twin of `tokOffsetAt`/`tokEndOffsetAt`.
+tokOffsetAtArr : Array (Int, Int) -> Int -> Int
+tokOffsetAtArr offs i =
+  if i >= 0 && i < arrayLength offs then
+    fst (arrayGetUnsafe i offs)
+  else
+    0
+
+tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
+tokEndOffsetAtArr offs i =
+  if i >= 0 && i < arrayLength offs then
+    snd (arrayGetUnsafe i offs)
+  else
+    0
+
+-- Leading tokens that can precede a decl's own head keyword/name: visibility
+-- modifiers (`public`, `export`), the `default` marker (legal only before
+-- `interface`, but harmless to skip generically — a stray `default` elsewhere
+-- is a parse error, so no successfully-parsed `Decl` can have one out of
+-- place), and layout noise (NEWLINE/INDENT/DEDENT — `afterExport`/
+-- `afterPublic` both call `skipNewlines` after consuming their own keyword, so
+-- noise can in principle appear between two modifiers).
+isLeadingModifierTok : Token -> Bool
+isLeadingModifierTok TPublic = True
+isLeadingModifierTok TExport = True
+isLeadingModifierTok TDefault = True
+isLeadingModifierTok t = isNoiseTok t
+
+-- Skip forward over leading modifier/noise tokens to the decl's own head token.
+skipLeadingModifiers : Array Token -> Int -> Int
+skipLeadingModifiers toks i
+  | i < arrayLength toks && isLeadingModifierTok (arrayGetUnsafe i toks) =
+    skipLeadingModifiers toks (i + 1)
+  | otherwise = i
+
+isTStringTok : Token -> Bool
+isTStringTok (TString _) = True
+isTStringTok _ = False
+
+tokIdxOrNone : Array Token -> Int -> Option Int
+tokIdxOrNone toks i = if i >= 0 && i < arrayLength toks then Some i else None
+
+-- The decl's NAME-token index, given `i` already past any leading modifiers:
+-- for kinds with a head keyword (`data`/`extern`/`prop`/`test`/`bench`/
+-- `interface`/`type`/`newtype`/`let rec`), skip it (skipping any further
+-- noise) and land on the name; for kinds with no head keyword (`DTypeSig`/
+-- `DFunDef`), `i` IS already the name. `None` for kinds with no single name
+-- token — `DImpl`'s head (F4, deferred to increment 5 — see
+-- SOURCE-POSITION-DESIGN.md §6) and `DUse` (never surfaces in the LSP
+-- outline/definition paths, `symbolPartsOfDecl`/`declDefines`, so it needs no
+-- span here).
+declNameTokIdxAt : Array Token -> Decl -> Int -> Option Int
+declNameTokIdxAt toks (DAttrib _ inner) i =
+  -- `@name ["arg"]` NEWLINE* — mirrors `parseAttrib`. A stacked attribute
+  -- (`DAttrib` wrapping another `DAttrib`) recurses via `declNameTokIdx`,
+  -- which re-skips modifiers/noise before dispatching on the inner decl kind.
+  let i1 = i + 1  -- '@'
+  let i2 = i1 + 1  -- attribute name ident
+  let i3 = if i2 < arrayLength toks && isTStringTok (arrayGetUnsafe i2 toks) then i2 + 1 else i2
+  declNameTokIdx toks inner i3
+declNameTokIdxAt toks (DTypeSig _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DFunDef _ _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DExtern _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DData _ _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DEffect _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DProp _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DTest _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DBench _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DInterface { ... }) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DTypeAlias _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DNewtype _ _ _ _ _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
+declNameTokIdxAt toks (DLetGroup _ _) i =
+  tokIdxOrNone toks (skipLeadingModifiers toks (i + 2))  -- `let` `rec`
+declNameTokIdxAt toks (DImpl { ... }) i = None  -- F4, increment 5
+declNameTokIdxAt toks (DUse _ _ _) i = None
+
+-- Entry point: skip leading modifiers, then dispatch on decl kind.
+declNameTokIdx : Array Token -> Decl -> Int -> Option Int
+declNameTokIdx toks d i = declNameTokIdxAt toks d (skipLeadingModifiers toks i)
+
+-- The decl's NAME-token `Loc` (#331), or `None` — see `declNameTokIdxAt`.
+declNameSpanOf : Array Token -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> Option Loc
+declNameSpanOf toks offs lineStarts (d, s, _e) = map
+  (nameIdx => locOfSpanWith offs lineStarts nameIdx (nameIdx + 1))
+  (declNameTokIdx toks d s)
+
 -- Build a DeclPos from a captured (start, end) token span: start line is the
 -- line of the first token; end line is the line of the last *content* token in
 -- the span (mirrors lib/parser_state.record_decl_pos's last_content_line fixup,
--- which pins end_line to the decl's final non-trivia token).
-declPosOf : Array Token -> Array Int -> (Decl, Int, Int) -> DeclPos
-declPosOf toks lines (_, s, e) =
-  DeclPos (lineAt lines s) (lineAt lines (lastContentIdx toks s (e - 1)))
+-- which pins end_line to the decl's final non-trivia token). The third field
+-- is the decl's NAME-token span (#331, additive — see `declNameSpanOf`).
+declPosOf : Array Token -> Array Int -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> DeclPos
+declPosOf toks lines offs lineStarts (d, s, e) = DeclPos
+  (lineAt lines s)
+  (lineAt lines (lastContentIdx toks s (e - 1)))
+  (declNameSpanOf toks offs lineStarts (d, s, e))
 
 -- Re-derive a data decl's variant start lines from its token span.  Within a
 -- `data` body the only `|` at delimiter-depth 0 are variant separators (the
@@ -3722,17 +3863,26 @@ parseWithPositionsOpt src = match tokenizeWithLines src
   (tokList, lineList) =>
     let toks = arrayFromList tokList
     let lines = arrayFromList lineList
-    match runP programWithSpans toks 0
-      PErr _ _ => None
-      PFatal _ _ => None
-      POk spans pos => if peekTok toks pos == TEof then
-        let decls = map ((d, _s, _e) => d) spans
-        let dps = map (declPosOf toks lines) spans
-        let vls = allVariantLines toks lines spans
-        let lcl = lastContentLineOf toks lines spans
-        let cls = allChainLines toks lines spans
-        Some (decls, Positions dps vls lcl cls)
-      else None
+    -- #331: a second tokenize pass for the (start,end) offset pairs the decl
+    -- NAME-span finder needs (`declNameSpanOf`).  Its token stream is
+    -- byte-identical to `tokenizeWithLines`'s (both documented as such), so
+    -- the indices line up with `toks`/`spans` below.  Deliberately does NOT
+    -- call `setLocState` — see `locOfSpanWith`'s header for why.
+    match tokenizeWithOffsetPairs src
+      (_, offPairList) =>
+        let offs = arrayFromList offPairList
+        let nameLineStarts = lineStartsOf src
+        match runP programWithSpans toks 0
+          PErr _ _ => None
+          PFatal _ _ => None
+          POk spans pos => if peekTok toks pos == TEof then
+            let decls = map ((d, _s, _e) => d) spans
+            let dps = map (declPosOf toks lines offs nameLineStarts) spans
+            let vls = allVariantLines toks lines spans
+            let lcl = lastContentLineOf toks lines spans
+            let cls = allChainLines toks lines spans
+            Some (decls, Positions dps vls lcl cls)
+          else None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 -- Mirrors lib/loader.ml: raises Failure "Parse error" on Parser.Error or Failure.
