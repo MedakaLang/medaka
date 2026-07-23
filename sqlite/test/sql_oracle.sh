@@ -390,6 +390,11 @@ REJECTS=(
   #    inner scan resolves only its own tables, so the outer ref is a clean
   #    unknown-column error, never a wrong answer:
   "SELECT name FROM users WHERE id IN (SELECT uid FROM orders WHERE amount = users.age)"
+  #  * an IN (SELECT …) subquery in an UPDATE/DELETE WHERE is refused, not executed
+  #    (only SELECT materializes subqueries).  This SELECT-only demo catches it at
+  #    the statement parser; the mutate-path message + byte-unchanged DB is asserted
+  #    directly in test/dml_oracle.sh:
+  "UPDATE users SET age = 1 WHERE id IN (SELECT uid FROM orders)"
   # unsupported expression syntax: the ESCAPE clause, GLOB/MATCH/REGEXP,
   # COLLATE, JSON arrows, an unknown scalar function, malformed CASE/IN
   "SELECT name FROM users WHERE name LIKE 'a%' ESCAPE '\\'"

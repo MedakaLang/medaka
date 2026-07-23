@@ -2273,6 +2273,39 @@ containsAgg es = match concatAggs es
   [] => False
   _ => True
 
+-- | Does this expression tree contain an `EInSubquery` anywhere?  Only the SELECT
+--   pipeline materializes subqueries (`materializeSelect`), so `lib.mutate` uses
+--   this to reject `IN (SELECT …)` in an UPDATE/DELETE WHERE with a clean message
+--   rather than reaching `compileTri`'s internal-error arm.
+export containsInSubquery : SqlExpr -> Bool
+containsInSubquery (ECol _) = False
+containsInSubquery (ELit _) = False
+containsInSubquery (EAgg _ operand) = match operand
+  None => False
+  Some e => containsInSubquery e
+containsInSubquery (EBin _ l r) = containsInSubquery l || containsInSubquery r
+containsInSubquery (EArith _ l r) = containsInSubquery l || containsInSubquery r
+containsInSubquery (EConcat l r) = containsInSubquery l || containsInSubquery r
+containsInSubquery (EAnd l r) = containsInSubquery l || containsInSubquery r
+containsInSubquery (EOr l r) = containsInSubquery l || containsInSubquery r
+containsInSubquery (ENot e) = containsInSubquery e
+containsInSubquery (EIsNull e) = containsInSubquery e
+containsInSubquery (ENotNull e) = containsInSubquery e
+containsInSubquery (ELike x p) = containsInSubquery x || containsInSubquery p
+containsInSubquery (EIn x vs) = containsInSubquery x
+  || any containsInSubquery vs
+containsInSubquery (EInSubquery _ _) = True
+containsInSubquery (ECase whens els) = any subInPair whens || subInOpt els
+containsInSubquery (ECoalesce es) = any containsInSubquery es
+containsInSubquery (EFn _ args) = any containsInSubquery args
+
+subInPair : (SqlExpr, SqlExpr) -> Bool
+subInPair (c, r) = containsInSubquery c || containsInSubquery r
+
+subInOpt : Option SqlExpr -> Bool
+subInOpt None = False
+subInOpt (Some e) = containsInSubquery e
+
 -- Compile each aggregate to a `group rows -> Cell` reducer.
 compileAggs : (String -> Option Int) -> List SqlExpr -> Result String (List (List (List Cell) -> Cell))
 compileAggs _ [] = Ok []

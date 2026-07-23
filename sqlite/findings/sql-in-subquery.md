@@ -10,7 +10,7 @@ through the existing three-valued `IN` evaluator so SQLite's NULL rules match ex
 Explicitly OUT of scope (each a clean error, never a wrong answer): **correlated**
 subqueries, scalar `= (SELECT …)`, and `EXISTS`.
 
-Verified differentially against `sqlite3` 3.46.1: `test/sql_oracle.sh` now runs **206
+Verified differentially against `sqlite3` 3.46.1: `sqlite/test/sql_oracle.sh` now runs **206
 queries / 0 diffs** (14 new subquery rows), **37 rejections** (multi-column + correlated
 + CTE), round-trip 87/87. The three-valued NULL cases were each checked against `sqlite3`
 by hand first (see the corpus comments).
@@ -19,8 +19,8 @@ by hand first (see the corpus comments).
 
 ## F1. THE parse cycle — and why the "obvious" fix was unavailable
 
-`expr IN (SELECT …)` means the **expression** grammar (`lib/sqlparse.mdk`) must parse a
-**SELECT** — but the SELECT grammar lives in `lib/sqlstmt.mdk`, which already
+`expr IN (SELECT …)` means the **expression** grammar (`sqlite/lib/sqlparse.mdk`) must parse a
+**SELECT** — but the SELECT grammar lives in `sqlite/lib/sqlstmt.mdk`, which already
 `import`s `sqlExpr` FROM `sqlparse`. That is a genuine module-level mutual recursion, and
 the loader forbids an import cycle. There is no way around injecting the sqlstmt-side
 parser into sqlparse at **run time** — either as a threaded parameter or through a hole.
@@ -154,11 +154,24 @@ column reference is a clean `unknown column` error.
   worktree"*). Every verification here was run as plain, separate commands with the absolute
   worktree path hardcoded (or via a script file). No `MEDAKA_ROOT="$(pwd)"` — write the path.
 
-## F5. Deferred / not done
+## F5. `UPDATE/DELETE … WHERE x IN (SELECT …)` — a clean rejection
 
-- **Correlated subqueries, scalar `= (SELECT …)`, `EXISTS`** — out of scope by design.
-- **`UPDATE/DELETE … WHERE x IN (SELECT …)`** now PARSES (the WHERE slot shares `sqlExpr`),
-  but `lib.mutate` compiles its predicate without `materializeSelect`, so execution reaches
-  `compileTri (EInSubquery …)` → a clean `internal:` error, not a wrong answer. Supporting it
-  is a `lib.mutate` change (not an owned file here). Not gated by any oracle; documented so the
-  next person knows it is a loud stub, not silently broken.
+The WHERE slot shares `sqlExpr`, so an `IN (SELECT …)` there now PARSES — but only the
+SELECT pipeline runs `materializeSelect`; `lib.mutate` compiles its WHERE straight to a
+per-row predicate, which would reach `compileTri`'s internal-error arm. Rather than expose
+an `internal:`-labelled error on parseable SQL (which reads as a compiler bug), `lib.mutate`
+now guards it: `deleteRows`/`updateRows` call `refuseSubquery` (a `containsInSubquery` tree
+walk, exported from `lib.select`) BEFORE compiling, returning
+
+> `IN (SELECT …) subqueries are not supported in UPDATE/DELETE (only in SELECT)`
+
+with no partial write. Gated by `sqlite/test/dml_oracle.sh` (the CLI → mutate path): the two
+statements are in its REJECTS corpus, which asserts a clean `error:` AND a byte-unchanged
+database. `sqlite/test/sql_oracle.sh` (a SELECT-only demo) also carries one, caught earlier
+at its statement parser. Full materialization inside mutate is deliberately NOT done — a
+clean rejection is the intended behaviour.
+
+## F6. Deferred / not done
+
+- **Correlated subqueries, scalar `= (SELECT …)`, `EXISTS`** — out of scope by design; each
+  is a clean error (unknown-column / operand), never a wrong answer.
