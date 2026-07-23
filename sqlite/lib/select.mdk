@@ -128,13 +128,21 @@ deriving (Eq, Debug)
 --   found (SQL LEFT [OUTER] JOIN).
 public export data JoinKind = JInner | JLeft deriving (Eq, Debug)
 
--- | A single JOIN clause: the joined table, its kind, and its ON predicate.
---   The ON expression references columns by qualified name (`table.column`) or
---   by an unambiguous bare column name; it is compiled over the COMBINED row
---   (all tables concatenated, `from`-table columns first, then each join's
---   columns in `joins` order).
+-- | A single JOIN clause: the joined table, its kind, its optional alias, and
+--   its ON predicate.  The ON expression references columns by qualified name
+--   (`table.column`, or `alias.column` when the table is aliased) or by an
+--   unambiguous bare column name; it is compiled over the COMBINED row (all
+--   tables concatenated, `from`-table columns first, then each join's columns in
+--   `joins` order).  `alias` is `None` for `JOIN orders …` and `Some "o"` for
+--   `JOIN orders o …` / `JOIN orders AS o …`; when set, qualified references to
+--   this table MUST use the alias (SQLite's rule — the real name is then hidden).
 public export data Join =
-  | Join { table : String, kind : JoinKind, on : SqlExpr }
+  | Join {
+      table : String,
+      kind : JoinKind,
+      alias : Option String,
+      on : SqlExpr,
+    }
 deriving (Eq, Debug)
 
 -- | A whole SELECT — the single query ADT.  One `Select`, one executor
@@ -177,9 +185,20 @@ deriving (Eq, Debug)
 --   *execution* dedups on the DECODED projected values, which needs `Eq a`,
 --   so it lives in the separate `queryDistinct` entry point below. Plain
 --   `query` MUST stay unconstrained — don't add `Eq a` here.
+--   `fromAlias` is the optional alias of the `from` table (`FROM users u` /
+--   `FROM users AS u`).  When `Some`, qualified column references to the `from`
+--   table MUST use the alias (`u.name`), not the real name — SQLite's rule.
+--
+--   `columnAliases` is a per-projection output name (`SELECT a AS x` ⇒ `Some
+--   "x"`), positionally parallel to `columns`: the alias at index `i` names the
+--   projection at index `i`.  It is `[]` when nothing is aliased (and may be
+--   shorter than `columns`, in which case the missing tail is all-`None`).  The
+--   executor ignores it entirely — it affects only rendering and
+--   `selectColumnNames` (output-column naming), never the computed cells.
 public export data Select =
   | Select {
       from : String,
+      fromAlias : Option String,
       joins : List Join,
       where_ : Option SqlExpr,
       groupBy : List SqlExpr,
@@ -189,6 +208,7 @@ public export data Select =
       offset : Option Int,
       distinct : Bool,
       columns : List SqlExpr,
+      columnAliases : List (Option String),
     }
 deriving (Eq, Debug)
 
@@ -417,8 +437,14 @@ aMax e = MkExpr (EAgg FnMax (Some (unExpr e)))
 -- | A bare SELECT over a table: no WHERE, no GROUP BY, no ORDER BY, no
 --   limit/offset.
 export selectFrom : String -> Select
-selectFrom tbl = Select {
+selectFrom tbl = selectFromAs tbl None
+
+-- | A bare SELECT over a table with an optional alias (`FROM tbl AS a`).
+--   `selectFrom tbl` is `selectFromAs tbl None`.
+export selectFromAs : String -> Option String -> Select
+selectFromAs tbl alias = Select {
   from = tbl,
+  fromAlias = alias,
   joins = [],
   where_ = None,
   groupBy = [],
@@ -428,16 +454,28 @@ selectFrom tbl = Select {
   offset = None,
   distinct = False,
   columns = [],
+  columnAliases = [],
 }
+
+-- | Attach an alias to the `from` table of an existing `Select`.
+export withFromAlias : Option String -> Select -> Select
+withFromAlias alias sel = { sel | fromAlias = alias }
 
 -- | Append an INNER JOIN of `tbl` with the type-safe `on` predicate.  Joins are
 --   applied in call order (each appends), so the combined row lays out the
 --   `from` columns first, then each joined table's columns in this order.  The
 --   phantom `Expr Bool` is stripped here, exactly like `withWhere`.
 export innerJoin : String -> Expr Bool -> Select -> Select
-innerJoin tbl onExpr sel = { sel | joins = sel.joins ++ [Join {
+innerJoin tbl onExpr sel = innerJoinAs tbl None onExpr sel
+
+-- | Append an INNER JOIN with an optional table alias (`JOIN tbl AS a ON …`).
+--   `innerJoin` is `innerJoinAs tbl None`.  When aliased, the `on` predicate (and
+--   the rest of the query) references this table's columns through the alias.
+export innerJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+innerJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JInner,
+    alias = alias,
     on = unExpr onExpr,
   }] }
 
@@ -447,9 +485,15 @@ innerJoin tbl onExpr sel = { sel | joins = sel.joins ++ [Join {
 --   row.  Decode a LEFT-joined table's columns via `tOption` (see
 --   `lib.rowtype`) since they may be `CNull` when unmatched.
 export leftJoin : String -> Expr Bool -> Select -> Select
-leftJoin tbl onExpr sel = { sel | joins = sel.joins ++ [Join {
+leftJoin tbl onExpr sel = leftJoinAs tbl None onExpr sel
+
+-- | Append a LEFT [OUTER] JOIN with an optional table alias.  `leftJoin` is
+--   `leftJoinAs tbl None`.
+export leftJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+leftJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JLeft,
+    alias = alias,
     on = unExpr onExpr,
   }] }
 
@@ -519,7 +563,17 @@ withDistinct sel = { sel | distinct = True }
 --
 --   Example: `withColumns [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]`.
 export withColumns : List SqlExpr -> Select -> Select
-withColumns cols sel = { sel | columns = cols }
+withColumns cols sel =
+  { sel | columns = cols, columnAliases = map (_ => None) cols }
+
+-- | Set the PROJECTION column list WITH per-column output aliases (`SELECT e1 AS
+--   x, e2 FROM …`).  Each element is `(expr, Some name)` for an aliased column or
+--   `(expr, None)` for an unaliased one; the alias flows into rendering and
+--   `selectColumnNames` but the executor treats the projection exactly as
+--   `withColumns` would.
+export withColumnsAliased : List (SqlExpr, Option String) -> Select -> Select
+withColumnsAliased cols sel =
+  { sel | columns = map fst cols, columnAliases = map snd cols }
 
 -- ---------------------------------------------------------------------------
 -- render : injection-safe SQL projection
@@ -531,11 +585,12 @@ withColumns cols sel = { sel | columns = cols }
 --   Identifiers (table + column names) are charset-asserted (`[A-Za-z0-9_]`);
 --   an illegal identifier yields `Err`.
 export render : Select -> Result String (String, List Literal)
-render (Select { from = tbl, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = of_, distinct = dst, columns = cols }) =
+render (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = of_, distinct = dst, columns = cols, columnAliases = cas }) =
   if not (validIdent tbl) then Err "render: invalid table name: \{tbl}"
   else do
+    fromAliasSql <- renderAliasSuffix fa
     (joinSql, joinBinds) <- renderJoins js
-    (colSql, colBinds) <- renderColumns cols
+    (colSql, colBinds) <- renderColumnsA cols cas
     (whereSql, binds) <- renderWhere w
     (grpSql, grpBinds) <- renderGroupBy gb
     (havSql, havBinds) <- renderHaving h
@@ -543,7 +598,7 @@ render (Select { from = tbl, joins = js, where_ = w, groupBy = gb, having = h, o
     let limOff = renderLimitOffset lm of_
     let distPfx = if dst then "SELECT DISTINCT " else "SELECT "
     let selectSql = "\{distPfx}\{colSql}"
-    let sql = "\{selectSql} FROM \{tbl}\{joinSql}\{whereSql}\{grpSql}\{havSql}\{ordSql}\{limOffSql limOff}"
+    let sql = "\{selectSql} FROM \{tbl}\{fromAliasSql}\{joinSql}\{whereSql}\{grpSql}\{havSql}\{ordSql}\{limOffSql limOff}"
     Ok
       (
         sql,
@@ -563,12 +618,40 @@ renderHaving None = Ok ("", [])
 renderHaving (Some e) =
   map ((sql, binds) => (" HAVING \{sql}", binds)) (renderExpr e)
 
--- Render the projection column list.  Empty ⇒ `*` (SELECT *); non-empty ⇒ each
--- expr rendered via `renderExpr`, comma-joined, binds accumulated left-to-right.
-renderColumns : List SqlExpr -> Result String (String, List Literal)
-renderColumns [] = Ok ("*", [])
-renderColumns cols =
-  map ((parts, binds) => (join ", " parts, binds)) (renderColumnParts cols)
+-- Alias-aware projection render: each column may carry a `Some name` output
+-- alias, rendered as `<expr> AS <name>`.  `cas` is positionally parallel to
+-- `cols` and may be shorter (missing tail ⇒ no alias).  Empty `cols` ⇒ `*`.
+renderColumnsA : List SqlExpr -> List (Option String) -> Result String (String, List Literal)
+renderColumnsA [] _ = Ok ("*", [])
+renderColumnsA cols cas = map
+  ((parts, binds) => (join ", " parts, binds))
+  (renderColumnAliasedParts (zipAliases cols cas))
+
+renderColumnAliasedParts : List (SqlExpr, Option String) -> Result String (List String, List Literal)
+renderColumnAliasedParts [] = Ok ([], [])
+renderColumnAliasedParts ((e, a)::rest) = do
+  (sql, binds) <- renderExpr e
+  suffix <- renderAliasSuffix a
+  (restParts, restBinds) <- renderColumnAliasedParts rest
+  Ok ("\{sql}\{suffix}"::restParts, binds ++ restBinds)
+
+-- Pair each expression with its alias, padding a short/empty alias list with
+-- `None` so the two lists need not be kept in lockstep by every caller.
+zipAliases : List SqlExpr -> List (Option String) -> List (SqlExpr, Option String)
+zipAliases [] _ = []
+zipAliases (e::es) [] = (e, None) :: zipAliases es []
+zipAliases (e::es) (a::arest) = (e, a) :: zipAliases es arest
+
+-- Render an optional alias as a ` AS <name>` suffix.  The name is identifier-
+-- charset-asserted, exactly like a table/column name, so an illegal alias is an
+-- `Err` rather than injected verbatim.
+renderAliasSuffix : Option String -> Result String String
+renderAliasSuffix None = Ok ""
+renderAliasSuffix (Some a) =
+  if validIdent a then
+    Ok " AS \{a}"
+  else
+    Err "render: invalid alias: \{a}"
 
 renderColumnParts : List SqlExpr -> Result String (List String, List Literal)
 renderColumnParts [] = Ok ([], [])
@@ -582,12 +665,17 @@ renderColumnParts (e::rest) = do
 -- ON-expression binds left-to-right.  Empty ⇒ no clause.
 renderJoins : List Join -> Result String (String, List Literal)
 renderJoins [] = Ok ("", [])
-renderJoins ((Join { table = t, kind = k, on = e })::rest) =
+renderJoins ((Join { table = t, kind = k, alias = a, on = e })::rest) =
   if not (validIdent t) then Err "render: invalid join table name: \{t}"
   else do
+    aliasSql <- renderAliasSuffix a
     (onSql, onBinds) <- renderExpr e
     (restSql, restBinds) <- renderJoins rest
-    Ok (" \{joinKindSql k} \{t} ON \{onSql}\{restSql}", onBinds ++ restBinds)
+    Ok
+      (
+        " \{joinKindSql k} \{t}\{aliasSql} ON \{onSql}\{restSql}",
+        onBinds ++ restBinds,
+      )
 
 joinKindSql : JoinKind -> String
 joinKindSql JInner = "INNER JOIN"
@@ -1452,8 +1540,8 @@ selOffset sel = sel.offset
 -- The shared engine: source rows → WHERE → (grouped | flat) → ordered, projected
 -- cell rows.  Everything except DISTINCT, LIMIT/OFFSET, and decode.
 runPipeline : Db -> Select -> Result String (List (List Cell))
-runPipeline db (Select { from = tbl, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) = do
-  (lookup, rawRows) <- sourceRows db tbl js
+runPipeline db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) = do
+  (lookup, rawRows) <- sourceRows db tbl fa js
   pred <- compileWhere lookup w
   let kept = filter pred rawRows
   if isAggregate gb h ob cols then
@@ -1465,17 +1553,27 @@ runPipeline db (Select { from = tbl, joins = js, where_ = w, groupBy = gb, havin
 -- The no-join case keeps its own single-table lookup (`columnIndex` over the one
 -- CREATE TABLE) rather than routing through the join machinery, so a plain
 -- single-table query behaves exactly as it did before joins existed.
-sourceRows : Db -> String -> List Join -> Result String (String -> Option Int, List (List Cell))
-sourceRows db tbl [] = do
+--
+-- An aliased `from` table with NO joins still routes through the join machinery
+-- (a one-table `mkJoinLookup`) so that `alias.column` resolves and the real name
+-- is hidden — matching SQLite.  The fast single-table path is reserved for the
+-- un-aliased, un-joined common case, keeping its resolution byte-identical.
+sourceRows : Db -> String -> Option String -> List Join -> Result String (String -> Option Int, List (List Cell))
+sourceRows db tbl None [] = do
   entry <- findTable db tbl
   let lookup = mkLookup (schemaSql entry)
   (pkIdx, rows) <- scanTableRowsIpk db tbl
   Ok (lookup, map (rowCellsWithIpk pkIdx) rows)
-sourceRows db tbl js = do
-  infos <- gatherJoinInfos db (tbl :: map joinTable js) 0 []
+sourceRows db tbl fromAlias js = do
+  let fromRef = (tbl, optOr fromAlias tbl)
+  infos <- gatherJoinInfos db (fromRef :: map joinRefPair js) 0 []
   let lookup = mkJoinLookup (map infoLookup infos)
   joined <- runJoins lookup infos js
   Ok (lookup, joined)
+
+-- (real table name to scan, effective name to resolve qualified references by).
+joinRefPair : Join -> (String, String)
+joinRefPair j = (joinTable j, joinEffName j)
 
 -- | Is this an aggregate query?  SQL's rule: yes if there is a GROUP BY, OR a
 --   HAVING (a HAVING with no GROUP BY still collapses the table to one group),
@@ -1894,6 +1992,18 @@ joinOn (Join { on = e }) = e
 joinKind : Join -> JoinKind
 joinKind (Join { kind = k }) = k
 
+joinAlias : Join -> Option String
+joinAlias (Join { alias = a }) = a
+
+-- The name a table is REFERENCED by in qualified column lookups: its alias when
+-- aliased, else its real name (SQLite's rule).
+optOr : Option String -> String -> String
+optOr (Some a) _ = a
+optOr None d = d
+
+joinEffName : Join -> String
+joinEffName j = optOr (joinAlias j) (joinTable j)
+
 -- Drop `offset` elements then keep at most `limit`, over the DECODED list —
 -- the DISTINCT path's slicer, which must run after `nub`.
 dropTakeList : Option Int -> Option Int -> List a -> List a
@@ -1923,19 +2033,23 @@ compileWhere lookup (Some e) = compilePred lookup e
 -- combined row.  `width` is derived from the schema's column count (NOT
 -- `length (head rows)`), so it's correct even when the table has zero rows —
 -- needed to null-pad a LEFT JOIN's unmatched right side.
-gatherJoinInfos : Db -> List String -> Int -> List (String, String, List (List Cell), Int, Int) -> Result String (List (String, String, List (List Cell), Int, Int))
+-- Each input is `(realName, effName)`: the table is SCANNED by `realName`
+-- (`findTable`/`scanTableRowsIpk`/`columnNames`) but its info tuple stores
+-- `effName` in the name slot, so `mkJoinLookup` matches qualified references
+-- against the alias (when present) rather than the real name.
+gatherJoinInfos : Db -> List (String, String) -> Int -> List (String, String, List (List Cell), Int, Int) -> Result String (List (String, String, List (List Cell), Int, Int))
 gatherJoinInfos _ [] _ acc = Ok (reverse acc)
-gatherJoinInfos db (name::rest) off acc = do
-  entry <- findTable db name
-  (pkIdx, rows) <- scanTableRowsIpk db name
-  cols <- columnNames db name
+gatherJoinInfos db ((real, eff)::rest) off acc = do
+  entry <- findTable db real
+  (pkIdx, rows) <- scanTableRowsIpk db real
+  cols <- columnNames db real
   let width = length cols
   let cellsRows = map (rowCellsWithIpk pkIdx) rows
   gatherJoinInfos
     db
     rest
     (off + width)
-    ((name, schemaSql entry, cellsRows, off, width)::acc)
+    ((eff, schemaSql entry, cellsRows, off, width)::acc)
 
 -- Project a full info tuple to the (name, createSql, offset) triple the lookup needs.
 infoLookup : (String, String, List (List Cell), Int, Int) -> (String, String, Int)
@@ -2098,6 +2212,17 @@ decodeCells rt (cells::rest) acc = do
 --
 -- > renderShow (render (selectFrom "notes"))
 -- "SELECT * FROM notes ## []"
+--
+-- A table alias renders as ` AS <name>`, and a per-column output alias too; the
+-- literal is still a `?` bind, never inlined.
+--
+-- > renderShow (render (withWhere (eGt (eCol "u.age") (eLitI 20)) (withColumnsAliased [(unExpr (eColText "name"), Some "who")] (selectFromAs "users" (Some "u")))))
+-- "SELECT name AS who FROM users AS u WHERE (u.age > ?) ## [LInt 20]"
+--
+-- An invalid alias is rejected exactly like any other identifier.
+--
+-- > renderShow (render (withColumnsAliased [(unExpr (eColText "name"), Some "bad name")] (selectFrom "users")))
+-- "ERR render: invalid alias: bad name"
 --
 -- An invalid identifier is rejected (never inlined).
 --

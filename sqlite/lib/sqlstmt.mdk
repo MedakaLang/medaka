@@ -21,15 +21,20 @@
 -- stmt    := select | insert | update | delete | create
 --
 -- select  := SELECT [DISTINCT] selList
---            FROM ident
+--            FROM tableRef
 --            join*
 --            [WHERE expr]
 --            [GROUP BY expr (',' expr)*]
 --            [HAVING expr]
 --            [ORDER BY orderKey (',' orderKey)*]
 --            [LIMIT int] [OFFSET int]
--- selList  := '*' | expr (',' expr)*
--- join     := [INNER | LEFT [OUTER]] JOIN ident ON expr
+-- selList  := '*' | selItem (',' selItem)*
+-- selItem  := expr [alias]                        -- optional output-column alias
+-- tableRef := ident [alias]                       -- optional table alias
+-- alias    := [AS] ident                          -- AS optional; a bare ident
+--                                                  --   after the expr/table is
+--                                                  --   the alias (as in SQLite)
+-- join     := [INNER | LEFT [OUTER]] JOIN tableRef ON expr
 -- orderKey := expr [ASC | DESC]
 --
 -- insert  := INSERT INTO ident [ '(' ident (',' ident)* ')' ]
@@ -52,10 +57,10 @@
 -- clause.  Concretely rejected, each with a message:
 --
 --   * set operations — `UNION` / `INTERSECT` / `EXCEPT`
---   * sub-queries, CTEs (`WITH`), `AS` aliases (column or table)
+--   * sub-queries, CTEs (`WITH`)
 --   * `RIGHT` / `FULL` / `CROSS` / `NATURAL` joins, `USING (...)`
---   * `LIKE` / `IN` / `BETWEEN` / `CASE` / `||`, non-aggregate function calls,
---     `TRUE` / `FALSE`, quoted `"identifiers"`  (all inherited from `lib.sqlparse`)
+--   * non-aggregate/non-scalar function calls, quoted `"identifiers"`  (inherited
+--     from `lib.sqlparse`)
 --   * an aggregate in WHERE or in a JOIN's ON — SQL forbids it, and so do we, at
 --     PARSE time (the executor rejects it too, but later)
 --   * `SELECT *, expr` (the mixed star-and-columns form)
@@ -97,6 +102,7 @@ import lib.sqlparse.{
   symbol,
   lexeme,
   word,
+  isReserved,
   hasAgg,
   renderSqlExpr,
 }
@@ -110,13 +116,14 @@ import lib.schemadef.{
 import lib.select.{
   Select,
   SqlExpr,
+  ECol,
   Join,
   JoinKind,
   JInner,
   JLeft,
-  selectFrom,
-  innerJoin,
-  leftJoin,
+  selectFromAs,
+  innerJoinAs,
+  leftJoinAs,
   withWhere,
   withGroupExprs,
   withHavingPred,
@@ -124,14 +131,14 @@ import lib.select.{
   withLimit,
   withOffset,
   withDistinct,
-  withColumns,
+  withColumnsAliased,
   mkE,
   query,
   queryDistinct,
 }
 import lib.sqlite.{Db}
 import lib.rowtype.{RowType}
-import string.{toInt, fromChars, contains, join}
+import string.{toInt, toUpper, fromChars, contains, join}
 
 -- ---------------------------------------------------------------------------
 -- Entry point
@@ -155,10 +162,45 @@ import string.{toInt, fromChars, contains, join}
 -- > map renderSelect (parseSelect "select a from t where a is not null;")
 -- Ok "SELECT a FROM t WHERE (a IS NOT NULL)"
 --
+-- Column aliases (`AS` optional — a bare word after the expression is the alias);
+-- the alias round-trips, canonicalized with `AS`:
+--
+-- > map renderSelect (parseSelect "SELECT a AS x, b y, count(*) AS n FROM t")
+-- Ok "SELECT a AS x, b AS y, count(*) AS n FROM t"
+--
+-- Table alias in FROM (`AS` optional) with the alias resolving the qualified ref:
+--
+-- > map renderSelect (parseSelect "SELECT u.name FROM users AS u WHERE u.age > 20")
+-- Ok "SELECT u.name FROM users AS u WHERE (u.age > 20)"
+--
+-- An aliased JOIN, alias-qualified on both sides of the ON:
+--
+-- > map renderSelect (parseSelect "SELECT o.amount FROM users u JOIN orders o ON u.id = o.uid")
+-- Ok "SELECT o.amount FROM users AS u INNER JOIN orders AS o ON (u.id = o.uid)"
+--
+-- Column and table aliases together round-trip idempotently (canonical form
+-- re-parses to itself):
+--
+-- > map renderSelect (parseSelect "SELECT u.name AS who, count(*) AS c FROM users AS u GROUP BY u.name")
+-- Ok "SELECT u.name AS who, count(*) AS c FROM users AS u GROUP BY u.name"
+--
 -- A construct we cannot represent is an `Err`, not a dropped clause:
 --
 -- > parseSelect "SELECT a FROM t UNION SELECT b FROM u"
 -- Err "unsupported SQL: 'UNION' at 22"
+--
+-- A non-reserved clause keyword after a table is NOT swallowed as its alias — an
+-- unsupported join modifier stays a loud rejection (a `RIGHT`/`CROSS`/`FULL` join,
+-- `UNION`, etc.):
+--
+-- > parseSelect "SELECT a FROM t RIGHT JOIN u ON t.x = u.y"
+-- Err "unsupported SQL: 'RIGHT' at 22"
+--
+-- `JOIN … USING (...)` is named explicitly rather than surfacing a bare "expected
+-- keyword 'ON'":
+--
+-- > parseSelect "SELECT a FROM t JOIN u USING (x)"
+-- Err "JOIN ... USING (...) is not supported — use an explicit ON predicate at 29"
 --
 -- An aggregate in WHERE is rejected at parse time (SQL forbids it):
 --
@@ -200,7 +242,7 @@ selectStmt = do
   dist <- optional (keyword "DISTINCT")
   cols <- selectList
   _ <- keyword "FROM"
-  tbl <- tableName
+  (tbl, tblAlias) <- tableRef
   js <- joinClauses
   w <- afterKeyword "WHERE" (predicate "WHERE")
   gb <- groupByClause
@@ -208,19 +250,102 @@ selectStmt = do
   ob <- orderByClause
   lm <- afterKeyword "LIMIT" intLit
   off <- afterKeyword "OFFSET" intLit
-  pure (assemble tbl js (isSome dist) cols w gb h ob lm off)
+  pure (assemble tbl tblAlias js (isSome dist) cols w gb h ob lm off)
 
--- `SELECT *` (⇒ the empty projection list) or a comma-separated expression list.
+-- `SELECT *` (⇒ the empty projection list) or a comma-separated list of projection
+-- items, each an expression with an OPTIONAL output alias (`expr [AS] name`).
 -- The mixed `SELECT *, expr` form is NOT accepted: `starList` succeeds on the
 -- `*`, and the `,` then fails against `FROM`.  That is a deliberate rejection —
 -- the `Select` ADT has no way to say "all columns AND these extras".
-selectList : Parser (List SqlExpr)
-selectList = orElse starList (commaSep1 sqlExpr)
+selectList : Parser (List (SqlExpr, Option String))
+selectList = orElse starList (commaSep1 selItem)
 
-starList : Parser (List SqlExpr)
+starList : Parser (List (SqlExpr, Option String))
 starList = do
   _ <- symbol "*"
   pure []
+
+-- One projection item: an expression, then an optional output alias.  `AS` is
+-- optional — a bare identifier after the expression is the alias (`count(*) n`),
+-- exactly as in SQLite.
+selItem : Parser (SqlExpr, Option String)
+selItem = do
+  e <- sqlExpr
+  a <- aliasOpt
+  pure (e, a)
+
+-- ---------------------------------------------------------------------------
+-- Aliases (shared by projection items, the FROM table, and each JOIN table)
+--
+-- `AS` is OPTIONAL: `x AS y` and `x y` both alias `x` as `y`.  Parsed with the
+-- codebase's "optional HEAD, then MANDATORY tail" discipline so a committed `AS`
+-- with a missing alias is a real error rather than a silent backtrack:
+--
+--   * if `AS` is present, an alias identifier is MANDATORY (`aliasWord`, no
+--     `orElse` fallback beneath it, so its failure propagates);
+--   * if `AS` is absent, the alias is a speculative bare word — `aliasWord` is
+--     `attempt`-wrapped, so a reserved word / clause keyword (`WHERE`, `JOIN`,
+--     `FROM`, `ON`, …) or punctuation backtracks cleanly to "no alias".
+-- ---------------------------------------------------------------------------
+
+aliasOpt : Parser (Option String)
+aliasOpt = do
+  hasAs <- optional (keyword "AS")
+  aliasAfterAs hasAs
+
+aliasAfterAs : Option Unit -> Parser (Option String)
+aliasAfterAs (Some _) = map Some aliasWord
+aliasAfterAs None = optional aliasWord
+
+-- A bare, unqualified, non-reserved identifier used as an alias.  `attempt` keeps
+-- a reserved-word failure non-consuming so `optional aliasWord` can decline it.
+aliasWord : Parser String
+aliasWord = label
+  "expected an alias name"
+  (attempt (lexeme
+    (do
+      w <- word
+      aliasCheck w)))
+
+aliasCheck : String -> Parser String
+aliasCheck w =
+  if isReserved w then
+    failWith "'\{w}' is a reserved word and cannot be an alias"
+  else if isNonAliasKeyword w then
+    failWith "'\{w}' introduces an unsupported clause and cannot be an alias"
+  else
+    pure w
+
+-- SQL keywords that `lib.sqlparse.isReserved` does NOT cover (they belong to
+-- constructs this engine rejects — set operators, unsupported join modifiers,
+-- `USING`, CTEs) but which must still never be swallowed as a table/column
+-- alias.  Without this, `FROM a RIGHT JOIN b` would silently parse as `a` aliased
+-- `RIGHT` INNER-joined to `b`, and `... UNION SELECT ...` would eat `UNION` as an
+-- alias — turning a loud "unsupported SQL" into a wrong parse.  Kept here (not in
+-- the expression grammar's reserved set) so a column literally named `union` in
+-- an expression is unaffected.
+isNonAliasKeyword : String -> Bool
+isNonAliasKeyword w = elem
+  (toUpper w)
+  [
+    "UNION",
+    "INTERSECT",
+    "EXCEPT",
+    "USING",
+    "NATURAL",
+    "CROSS",
+    "FULL",
+    "RIGHT",
+    "WITH",
+  ]
+
+-- A table reference: a table name with an optional alias (`users`, `users u`,
+-- `users AS u`).
+tableRef : Parser (String, Option String)
+tableRef = do
+  tbl <- tableName
+  a <- aliasOpt
+  pure (tbl, a)
 
 -- A table name: a bare, unqualified, non-reserved identifier.  A schema-qualified
 -- `main.users` is rejected — `Select.from` is a single table name and the engine
@@ -256,19 +381,32 @@ predicateCheck slot e =
 -- JOIN clauses (a committed loop)
 -- ---------------------------------------------------------------------------
 
-joinClauses : Parser (List (JoinKind, String, SqlExpr))
+joinClauses : Parser (List (JoinKind, String, Option String, SqlExpr))
 joinClauses = do
   k <- optional joinHead
   joinClausesStep k
 
-joinClausesStep : Option JoinKind -> Parser (List (JoinKind, String, SqlExpr))
+joinClausesStep : Option JoinKind -> Parser (List (JoinKind, String, Option String, SqlExpr))
 joinClausesStep None = pure []
 joinClausesStep (Some k) = do
-  tbl <- tableName
-  _ <- keyword "ON"
+  (tbl, alias) <- tableRef
+  _ <- joinOnKeyword
   e <- predicate "a JOIN's ON"
   rest <- joinClauses
-  pure ((k, tbl, e)::rest)
+  pure ((k, tbl, alias, e)::rest)
+
+-- A join's condition keyword.  Only `ON` is supported; a `USING (...)` clause is
+-- named EXPLICITLY as unsupported (as `RIGHT`/`FULL`/`CROSS` are), rather than
+-- surfacing the bare "expected keyword 'ON'".  `usingReject` consumes `USING`
+-- before failing, so its (deeper) message wins `orElse`'s farthest-failure race.
+joinOnKeyword : Parser Unit
+joinOnKeyword = orElse usingReject (keyword "ON")
+
+usingReject : Parser Unit
+usingReject = do
+  _ <- keyword "USING"
+  failWith
+    "JOIN ... USING (...) is not supported — use an explicit ON predicate"
 
 -- `[INNER | LEFT [OUTER]] JOIN`.  A bare `JOIN` is an INNER join, as in SQL.
 -- `attempt` rewinds the reported position so that "no join here" does not
@@ -377,10 +515,10 @@ intOf s = match toInt s
 -- single owner of the record's shape (a new field gets a default from
 -- `selectFrom` instead of a type error here), and it keeps this module clear of
 -- the cross-module record-field hazards the earlier stages logged.
-assemble : String -> List (JoinKind, String, SqlExpr) -> Bool -> List SqlExpr -> Option SqlExpr -> List SqlExpr -> Option SqlExpr -> List (SqlExpr, Bool) -> Option Int -> Option Int -> Select
-assemble tbl js dist cols w gb h ob lm off = selectFrom tbl
+assemble : String -> Option String -> List (JoinKind, String, Option String, SqlExpr) -> Bool -> List (SqlExpr, Option String) -> Option SqlExpr -> List SqlExpr -> Option SqlExpr -> List (SqlExpr, Bool) -> Option Int -> Option Int -> Select
+assemble tbl tblAlias js dist cols w gb h ob lm off = selectFromAs tbl tblAlias
   |> addJoins js
-  |> withColumns cols
+  |> withColumnsAliased cols
   |> applyDistinct dist
   |> applyOpt (e sel => withWhere (mkE e) sel) w
   |> withGroupExprs gb
@@ -389,12 +527,12 @@ assemble tbl js dist cols w gb h ob lm off = selectFrom tbl
   |> applyOpt withLimit lm
   |> applyOpt withOffset off
 
-addJoins : List (JoinKind, String, SqlExpr) -> Select -> Select
+addJoins : List (JoinKind, String, Option String, SqlExpr) -> Select -> Select
 addJoins js sel = fold (acc j => addJoin j acc) sel js
 
-addJoin : (JoinKind, String, SqlExpr) -> Select -> Select
-addJoin (JInner, tbl, e) sel = innerJoin tbl (mkE e) sel
-addJoin (JLeft, tbl, e) sel = leftJoin tbl (mkE e) sel
+addJoin : (JoinKind, String, Option String, SqlExpr) -> Select -> Select
+addJoin (JInner, tbl, alias, e) sel = innerJoinAs tbl alias (mkE e) sel
+addJoin (JLeft, tbl, alias, e) sel = leftJoinAs tbl alias (mkE e) sel
 
 addOrderKeys : List (SqlExpr, Bool) -> Select -> Select
 addOrderKeys ob sel = fold (acc (e, asc) => withOrderByExpr e asc acc) sel ob
@@ -429,20 +567,64 @@ applyOpt f (Some x) sel = f x sel
 -- > map renderSelect (parseSelect "SELECT count(*) FROM t")
 -- Ok "SELECT count(*) FROM t"
 export renderSelect : Select -> String
-renderSelect (Select { from = tbl, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = off, distinct = dist, columns = cols }) =
+renderSelect (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = off, distinct = dist, columns = cols, columnAliases = cas }) =
   let kw = if dist then "SELECT DISTINCT" else "SELECT"
-  "\{kw} \{renderCols cols} FROM \{tbl}\{renderJoinList js}\{renderOpt " WHERE " w}\{renderGroup gb}\{renderOpt " HAVING " h}\{renderOrder ob}\{renderInt " LIMIT " lm}\{renderInt " OFFSET " off}"
+  "\{kw} \{renderCols cols cas} FROM \{tbl}\{renderAliasText fa}\{renderJoinList js}\{renderOpt " WHERE " w}\{renderGroup gb}\{renderOpt " HAVING " h}\{renderOrder ob}\{renderInt " LIMIT " lm}\{renderInt " OFFSET " off}"
 
-renderCols : List SqlExpr -> String
-renderCols [] = "*"
-renderCols cols = join ", " (map renderSqlExpr cols)
+-- Render the projection list, each item with its optional `AS <name>` output
+-- alias.  Empty ⇒ `*`.  `cas` is positionally parallel to `cols` and may be
+-- short/empty (missing tail ⇒ no alias).
+renderCols : List SqlExpr -> List (Option String) -> String
+renderCols [] _ = "*"
+renderCols cols cas = join ", " (map renderColItem (zipCols cols cas))
+
+renderColItem : (SqlExpr, Option String) -> String
+renderColItem (e, a) = "\{renderSqlExpr e}\{renderAliasText a}"
+
+zipCols : List SqlExpr -> List (Option String) -> List (SqlExpr, Option String)
+zipCols [] _ = []
+zipCols (e::es) [] = (e, None) :: zipCols es []
+zipCols (e::es) (a::arest) = (e, a) :: zipCols es arest
+
+-- An alias as a canonical ` AS <name>` suffix (round-trips: the parser accepts
+-- the optional `AS`, this always emits it).
+renderAliasText : Option String -> String
+renderAliasText None = ""
+renderAliasText (Some a) = " AS \{a}"
+
+-- | The output column names of a parsed `SELECT`, honouring aliases — this is
+--   where a column alias BECOMES the result column's name.  Each projection
+--   column is named by its `AS` alias when present, else by the column name for a
+--   bare `ECol`, else by the rendered expression text (SQLite's own default
+--   naming).  `SELECT *` (the empty projection) yields `[]`, since the names then
+--   come from the table schema, which a bare `Select` does not carry.
+--
+-- > map selectColumnNames (parseSelect "SELECT a AS x, b y, count(*) AS n FROM t")
+-- Ok ["x", "y", "n"]
+--
+-- Unaliased columns keep their own name; a computed column with no alias is
+-- named by its rendered text, exactly as `sqlite3` names it:
+--
+-- > map selectColumnNames (parseSelect "SELECT name, age + 1 FROM users")
+-- Ok ["name", "(age + 1)"]
+--
+-- > map selectColumnNames (parseSelect "SELECT * FROM t")
+-- Ok []
+export selectColumnNames : Select -> List String
+selectColumnNames (Select { columns = cols, columnAliases = cas }) =
+  map colName (zipCols cols cas)
+
+colName : (SqlExpr, Option String) -> String
+colName (_, Some a) = a
+colName (ECol name, None) = name
+colName (e, None) = renderSqlExpr e
 
 renderJoinList : List Join -> String
 renderJoinList js = join "" (map renderJoin js)
 
 renderJoin : Join -> String
-renderJoin (Join { table = tbl, kind = k, on = e }) =
-  " \{joinKindText k} \{tbl} ON \{renderSqlExpr e}"
+renderJoin (Join { table = tbl, kind = k, alias = a, on = e }) =
+  " \{joinKindText k} \{tbl}\{renderAliasText a} ON \{renderSqlExpr e}"
 
 joinKindText : JoinKind -> String
 joinKindText JInner = "INNER JOIN"
