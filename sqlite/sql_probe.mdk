@@ -73,6 +73,14 @@ corpus = [
   "SELECT users.name FROM users JOIN orders ON users.id = orders.uid",
   "SELECT users.name, orders.amount FROM users LEFT JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id",
   "SELECT users.name FROM users LEFT OUTER JOIN orders ON users.id = orders.uid",
+  -- the rest of the JOIN family (RIGHT / FULL / CROSS) — `OUTER` is dropped and
+  -- CROSS renders with no ON, so each still round-trips to a canonical fixpoint
+  "SELECT users.name FROM users RIGHT JOIN orders ON users.id = orders.uid",
+  "SELECT users.name FROM users RIGHT OUTER JOIN orders ON users.id = orders.uid",
+  "SELECT users.name FROM users FULL JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id",
+  "SELECT users.name FROM users FULL OUTER JOIN orders ON users.id = orders.uid",
+  "SELECT users.name, orders.amount FROM users CROSS JOIN orders ORDER BY users.id, orders.id",
+  "SELECT a.x FROM a CROSS JOIN b",
   "SELECT a.x FROM a INNER JOIN b ON a.i = b.i INNER JOIN c ON b.j = c.j",
   -- AS aliases: column (AS + bare) and table (FROM + JOIN, AS + bare + implicit)
   "SELECT name AS n FROM users",
@@ -193,11 +201,9 @@ rejects = [
   "SELECT \"name\" FROM users",
   "SELECT CASE END FROM users",
   "SELECT age IN () FROM users",
-  -- unsupported joins
-  "SELECT users.name FROM users CROSS JOIN orders",
+  -- unsupported joins (NATURAL and USING remain unsupported; INNER/LEFT/RIGHT/
+  -- FULL/CROSS are now accepted and live in the round-trip corpus above)
   "SELECT users.name FROM users NATURAL JOIN orders",
-  "SELECT users.name FROM users RIGHT JOIN orders ON users.id = orders.uid",
-  "SELECT users.name FROM users FULL OUTER JOIN orders ON users.id = orders.uid",
   "SELECT users.name FROM users JOIN orders USING (uid)",
   "SELECT users.name FROM users JOIN orders",
   -- an aggregate in a per-row position: SQL forbids it, and so do we, AT PARSE TIME
@@ -249,6 +255,17 @@ shapeCases = [
     "SELECT * FROM a LEFT OUTER JOIN b ON a.i = b.i",
     "SELECT * FROM a LEFT JOIN b ON (a.i = b.i)",
   ),
+  -- `RIGHT OUTER` / `FULL OUTER` canonicalize to `RIGHT` / `FULL` (SQLite's form).
+  (
+    "SELECT * FROM a RIGHT OUTER JOIN b ON a.i = b.i",
+    "SELECT * FROM a RIGHT JOIN b ON (a.i = b.i)",
+  ),
+  (
+    "SELECT * FROM a FULL OUTER JOIN b ON a.i = b.i",
+    "SELECT * FROM a FULL JOIN b ON (a.i = b.i)",
+  ),
+  -- CROSS JOIN carries NO ON predicate — it renders without one.
+  ("SELECT * FROM a CROSS JOIN b", "SELECT * FROM a CROSS JOIN b"),
   -- ORDER BY direction defaults to ASC.
   ("SELECT * FROM t ORDER BY a", "SELECT * FROM t ORDER BY a ASC"),
   -- Clause order is canonical, regardless of how much whitespace came in.

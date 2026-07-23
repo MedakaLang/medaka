@@ -37,7 +37,8 @@
 -- alias    := [AS] ident                          -- AS optional; a bare ident
 --                                                  --   after the expr/table is
 --                                                  --   the alias (as in SQLite)
--- join     := [INNER | LEFT [OUTER]] JOIN tableRef ON expr
+-- join     := [INNER | LEFT [OUTER] | RIGHT [OUTER] | FULL [OUTER]] JOIN tableRef ON expr
+--           | CROSS JOIN tableRef                     -- no ON (cartesian product)
 -- orderKey := expr [ASC | DESC]
 --
 -- insert  := INSERT INTO ident [ '(' ident (',' ident)* ')' ]
@@ -64,7 +65,8 @@
 --     `parseQuery` → `Compound` + `runCompound` for the compound form)
 --   * sub-queries, CTEs (`WITH`), and a set-op arm with no FROM (`... UNION
 --     SELECT 1`) — `selectCore` requires a FROM clause
---   * `RIGHT` / `FULL` / `CROSS` / `NATURAL` joins, `USING (...)`
+--   * `NATURAL` joins and `JOIN ... USING (...)` (but `INNER` / `LEFT` / `RIGHT`
+--     / `FULL` `[OUTER]` and `CROSS` joins ARE supported — see the join grammar)
 --   * non-aggregate/non-scalar function calls, quoted `"identifiers"`  (inherited
 --     from `lib.sqlparse`)
 --   * an aggregate in WHERE or in a JOIN's ON — SQL forbids it, and so do we, at
@@ -123,10 +125,16 @@ import lib.select.{
   Select,
   SqlExpr,
   ECol,
+  ELit,
+  Literal,
+  LInt,
   Join,
   JoinKind,
   JInner,
   JLeft,
+  JRight,
+  JFull,
+  JCross,
   SetOp,
   OpUnion,
   OpUnionAll,
@@ -138,6 +146,9 @@ import lib.select.{
   selectFromAs,
   innerJoinAs,
   leftJoinAs,
+  rightJoinAs,
+  fullJoinAs,
+  crossJoinAs,
   withWhere,
   withGroupExprs,
   withHavingPred,
@@ -203,12 +214,25 @@ import string.{toInt, toUpper, fromChars, contains, join}
 -- > parseSelect "SELECT a FROM t UNION SELECT b FROM u"
 -- Err "unsupported SQL: 'UNION' at 22"
 --
--- A non-reserved clause keyword after a table is NOT swallowed as its alias — an
--- unsupported join modifier stays a loud rejection (a `RIGHT`/`CROSS`/`FULL` join,
--- `UNION`, etc.):
+-- The full JOIN family round-trips to SQLite's canonical spelling — `RIGHT` /
+-- `FULL` `[OUTER]` collapse to `RIGHT` / `FULL`, and `CROSS JOIN` renders with no
+-- `ON`:
 --
--- > parseSelect "SELECT a FROM t RIGHT JOIN u ON t.x = u.y"
--- Err "unsupported SQL: 'RIGHT' at 22"
+-- > map renderSelect (parseSelect "SELECT a FROM t RIGHT JOIN u ON t.x = u.y")
+-- Ok "SELECT a FROM t RIGHT JOIN u ON (t.x = u.y)"
+--
+-- > map renderSelect (parseSelect "SELECT a FROM t FULL OUTER JOIN u ON t.x = u.y")
+-- Ok "SELECT a FROM t FULL JOIN u ON (t.x = u.y)"
+--
+-- > map renderSelect (parseSelect "SELECT a FROM t CROSS JOIN u")
+-- Ok "SELECT a FROM t CROSS JOIN u"
+--
+-- A non-reserved clause keyword after a table is NOT swallowed as its alias — an
+-- unsupported join modifier stays a loud rejection (a `NATURAL` join, `UNION`,
+-- etc.):
+--
+-- > parseSelect "SELECT a FROM t NATURAL JOIN u ON t.x = u.y"
+-- Err "unsupported SQL: 'NATURAL' at 24"
 --
 -- `JOIN … USING (...)` is named explicitly rather than surfacing a bare "expected
 -- keyword 'ON'":
@@ -538,13 +562,23 @@ joinClausesStep : Option JoinKind -> Parser (List (JoinKind, String, Option Stri
 joinClausesStep None = pure []
 joinClausesStep (Some k) = do
   (tbl, alias) <- tableRef
-  _ <- joinOnKeyword
-  e <- predicate "a JOIN's ON"
+  e <- joinCondition k
   rest <- joinClauses
   pure ((k, tbl, alias, e)::rest)
 
+-- A join's condition.  Every kind but CROSS requires an `ON` predicate; a CROSS
+-- join takes NONE (SQL's unconditional cartesian product), so it parses no `ON`
+-- and carries a placeholder `1` that the executor and renderers both ignore.  A
+-- stray `ON` after `CROSS JOIN tbl` is then left unconsumed and surfaces as a
+-- loud parse error downstream, rather than being silently accepted.
+joinCondition : JoinKind -> Parser SqlExpr
+joinCondition JCross = pure (ELit (LInt 1))
+joinCondition _ = do
+  _ <- joinOnKeyword
+  predicate "a JOIN's ON"
+
 -- A join's condition keyword.  Only `ON` is supported; a `USING (...)` clause is
--- named EXPLICITLY as unsupported (as `RIGHT`/`FULL`/`CROSS` are), rather than
+-- named EXPLICITLY as unsupported (as `NATURAL` is), rather than
 -- surfacing the bare "expected keyword 'ON'".  `usingReject` consumes `USING`
 -- before failing, so its (deeper) message wins `orElse`'s farthest-failure race.
 joinOnKeyword : Parser Unit
@@ -556,11 +590,14 @@ usingReject = do
   failWith
     "JOIN ... USING (...) is not supported — use an explicit ON predicate"
 
--- `[INNER | LEFT [OUTER]] JOIN`.  A bare `JOIN` is an INNER join, as in SQL.
--- `attempt` rewinds the reported position so that "no join here" does not
--- out-rank a real failure further along.
+-- `[INNER | LEFT [OUTER] | RIGHT [OUTER] | FULL [OUTER] | CROSS] JOIN`.  A bare
+-- `JOIN` is an INNER join, as in SQL; SQLite canonicalizes `RIGHT OUTER`/`FULL
+-- OUTER` to `RIGHT`/`FULL`, so `OUTER` is parsed and discarded.  `attempt`
+-- rewinds the reported position so that "no join here" does not out-rank a real
+-- failure further along.
 joinHead : Parser JoinKind
-joinHead = attempt (choice [innerHead, leftHead, plainHead])
+joinHead = attempt (choice
+  [innerHead, leftHead, rightHead, fullHead, crossHead, plainHead])
 
 innerHead : Parser JoinKind
 innerHead = do
@@ -574,6 +611,26 @@ leftHead = do
   _ <- optional (keyword "OUTER")
   _ <- keyword "JOIN"
   pure JLeft
+
+rightHead : Parser JoinKind
+rightHead = do
+  _ <- keyword "RIGHT"
+  _ <- optional (keyword "OUTER")
+  _ <- keyword "JOIN"
+  pure JRight
+
+fullHead : Parser JoinKind
+fullHead = do
+  _ <- keyword "FULL"
+  _ <- optional (keyword "OUTER")
+  _ <- keyword "JOIN"
+  pure JFull
+
+crossHead : Parser JoinKind
+crossHead = do
+  _ <- keyword "CROSS"
+  _ <- keyword "JOIN"
+  pure JCross
 
 plainHead : Parser JoinKind
 plainHead = do
@@ -678,6 +735,9 @@ addJoins js sel = fold (acc j => addJoin j acc) sel js
 addJoin : (JoinKind, String, Option String, SqlExpr) -> Select -> Select
 addJoin (JInner, tbl, alias, e) sel = innerJoinAs tbl alias (mkE e) sel
 addJoin (JLeft, tbl, alias, e) sel = leftJoinAs tbl alias (mkE e) sel
+addJoin (JRight, tbl, alias, e) sel = rightJoinAs tbl alias (mkE e) sel
+addJoin (JFull, tbl, alias, e) sel = fullJoinAs tbl alias (mkE e) sel
+addJoin (JCross, tbl, alias, _) sel = crossJoinAs tbl alias sel
 
 addOrderKeys : List (SqlExpr, Bool) -> Select -> Select
 addOrderKeys ob sel = fold (acc (e, asc) => withOrderByExpr e asc acc) sel ob
@@ -793,11 +853,19 @@ renderJoinList js = join "" (map renderJoin js)
 
 renderJoin : Join -> String
 renderJoin (Join { table = tbl, kind = k, alias = a, on = e }) =
-  " \{joinKindText k} \{tbl}\{renderAliasText a} ON \{renderSqlExpr e}"
+  " \{joinKindText k} \{tbl}\{renderAliasText a}\{renderJoinOnText k e}"
+
+-- A CROSS join renders with NO `ON`; every other kind renders `ON <expr>`.
+renderJoinOnText : JoinKind -> SqlExpr -> String
+renderJoinOnText JCross _ = ""
+renderJoinOnText _ e = " ON \{renderSqlExpr e}"
 
 joinKindText : JoinKind -> String
 joinKindText JInner = "INNER JOIN"
 joinKindText JLeft = "LEFT JOIN"
+joinKindText JRight = "RIGHT JOIN"
+joinKindText JFull = "FULL JOIN"
+joinKindText JCross = "CROSS JOIN"
 
 renderOpt : String -> Option SqlExpr -> String
 renderOpt _ None = ""

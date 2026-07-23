@@ -124,10 +124,26 @@ public export data SqlExpr =
   | EFn String (List SqlExpr)
 deriving (Eq, Debug)
 
--- | The join kind: `JInner` drops unmatched left rows (SQL INNER JOIN);
---   `JLeft` keeps every left row, null-padding the right side when no match is
---   found (SQL LEFT [OUTER] JOIN).
-public export data JoinKind = JInner | JLeft deriving (Eq, Debug)
+-- | The join kind, selecting WHICH rows of the nested loop survive (the combined
+--   column layout — `from`-cols then join-cols — is identical for every kind):
+--
+--     * `JInner` — keep only matched pairs (SQL INNER JOIN); unmatched rows drop.
+--     * `JLeft`  — keep every left row, null-padding the RIGHT side when no match
+--                  is found (SQL LEFT [OUTER] JOIN).
+--     * `JRight` — mirror of `JLeft`: keep every right row, null-padding the LEFT
+--                  side when no match is found (SQL RIGHT [OUTER] JOIN).
+--     * `JFull`  — union of `JLeft` and `JRight`: matched pairs, plus each
+--                  unmatched left (right null) and unmatched right (left null),
+--                  once each (SQL FULL [OUTER] JOIN).
+--     * `JCross` — the unconditional cartesian product (SQL CROSS JOIN); it has
+--                  NO `ON` predicate (the stored `on` is an unused placeholder).
+public export data JoinKind =
+  | JInner
+  | JLeft
+  | JRight
+  | JFull
+  | JCross
+deriving (Eq, Debug)
 
 -- | A single JOIN clause: the joined table, its kind, its optional alias, and
 --   its ON predicate.  The ON expression references columns by qualified name
@@ -531,6 +547,58 @@ leftJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     on = unExpr onExpr,
   }] }
 
+-- | Append a RIGHT [OUTER] JOIN of `tbl` with the type-safe `on` predicate.
+--   The mirror of `leftJoin`: every row of `tbl` is kept, and when no row of the
+--   accumulated left side matches `on`, the LEFT columns are null-padded instead
+--   of dropping the row.  The combined column layout is unchanged (`from` columns
+--   first, then this table's) — only which side goes NULL differs from `leftJoin`.
+export rightJoin : String -> Expr Bool -> Select -> Select
+rightJoin tbl onExpr sel = rightJoinAs tbl None onExpr sel
+
+-- | Append a RIGHT [OUTER] JOIN with an optional table alias.  `rightJoin` is
+--   `rightJoinAs tbl None`.
+export rightJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+rightJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
+    table = tbl,
+    kind = JRight,
+    alias = alias,
+    on = unExpr onExpr,
+  }] }
+
+-- | Append a FULL [OUTER] JOIN of `tbl` with the type-safe `on` predicate — the
+--   union of `leftJoin` and `rightJoin`: matched pairs, every unmatched left row
+--   (right null-padded), and every unmatched right row (left null-padded), once
+--   each.  Combined column layout is unchanged.
+export fullJoin : String -> Expr Bool -> Select -> Select
+fullJoin tbl onExpr sel = fullJoinAs tbl None onExpr sel
+
+-- | Append a FULL [OUTER] JOIN with an optional table alias.  `fullJoin` is
+--   `fullJoinAs tbl None`.
+export fullJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+fullJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
+    table = tbl,
+    kind = JFull,
+    alias = alias,
+    on = unExpr onExpr,
+  }] }
+
+-- | Append a CROSS JOIN of `tbl` — the unconditional cartesian product, with NO
+--   `ON` predicate.  A placeholder `on` (`ELit (LInt 1)`) is stored but never
+--   evaluated (the executor produces the full product for `JCross`) and never
+--   rendered (the SQL/round-trip renderers omit `ON` for a CROSS join).
+export crossJoin : String -> Select -> Select
+crossJoin tbl sel = crossJoinAs tbl None sel
+
+-- | Append a CROSS JOIN with an optional table alias.  `crossJoin` is
+--   `crossJoinAs tbl None`.
+export crossJoinAs : String -> Option String -> Select -> Select
+crossJoinAs tbl alias sel = { sel | joins = sel.joins ++ [Join {
+    table = tbl,
+    kind = JCross,
+    alias = alias,
+    on = ELit (LInt 1),
+  }] }
+
 -- | Attach a typed `Expr Bool` predicate as the WHERE clause.  The phantom
 --   wrapper is stripped here — this is the type-safe boundary at which an
 --   `Expr Bool` becomes an untyped `SqlExpr`.
@@ -703,17 +771,28 @@ renderJoins ((Join { table = t, kind = k, alias = a, on = e })::rest) =
   if not (validIdent t) then Err "render: invalid join table name: \{t}"
   else do
     aliasSql <- renderAliasSuffix a
-    (onSql, onBinds) <- renderExpr e
+    (onSql, onBinds) <- renderJoinOn k e
     (restSql, restBinds) <- renderJoins rest
     Ok
       (
-        " \{joinKindSql k} \{t}\{aliasSql} ON \{onSql}\{restSql}",
+        " \{joinKindSql k} \{t}\{aliasSql}\{onSql}\{restSql}",
         onBinds ++ restBinds,
       )
+
+-- The ON clause of a rendered join: empty for CROSS (no predicate), " ON <expr>"
+-- otherwise.  The leading space is included so the caller concatenates uniformly.
+renderJoinOn : JoinKind -> SqlExpr -> Result String (String, List Literal)
+renderJoinOn JCross _ = Ok ("", [])
+renderJoinOn _ e = do
+  (onSql, onBinds) <- renderExpr e
+  Ok (" ON \{onSql}", onBinds)
 
 joinKindSql : JoinKind -> String
 joinKindSql JInner = "INNER JOIN"
 joinKindSql JLeft = "LEFT JOIN"
+joinKindSql JRight = "RIGHT JOIN"
+joinKindSql JFull = "FULL JOIN"
+joinKindSql JCross = "CROSS JOIN"
 
 -- The limit/offset clause is rendered as text + its (ordered) binds.  We keep
 -- the placeholders parameterized too (LIMIT ? / OFFSET ?) for uniformity.
@@ -2366,13 +2445,19 @@ colOrRowid sql col = match columnIndex sql col
 
 -- Nested-loop the tables left-to-right: start with the `from` table's rows,
 -- then for each join apply its ON predicate (compiled over the COMBINED lookup)
--- as a cross-product filter (INNER) or cross-product-with-null-pad (LEFT) with
--- the next table's rows.  The `infos` head is the `from` table; the tail pairs
--- 1:1 with `joins`.
+-- against the next table's rows, keeping the rows its kind selects (INNER: matched
+-- only; LEFT/RIGHT/FULL: matched plus the null-padded unmatched side; CROSS: the
+-- whole product).  The `infos` head is the `from` table; the tail pairs 1:1 with
+-- `joins`.  The accumulated LEFT width is threaded so RIGHT/FULL can null-pad the
+-- left side even when the left side is empty.
 runJoins : (String -> Option Int) -> List (String, String, List (List Cell), Int, Int) -> List Join -> Result String (List (List Cell))
 runJoins _ [] _ = Ok []
 runJoins lookup (headInfo::tailInfos) js =
-  nestLoop lookup (infoCells headInfo) (zipJoins js tailInfos)
+  nestLoop
+    lookup
+    (infoCells headInfo)
+    (infoWidth headInfo)
+    (zipJoins js tailInfos)
 
 -- Pair each join with its table's cells + width (parallel lists; over-length is dropped).
 zipJoins : List Join -> List (String, String, List (List Cell), Int, Int) -> List (Join, List (List Cell), Int)
@@ -2381,28 +2466,83 @@ zipJoins _ [] = []
 zipJoins (j::js) (info::infos) =
   (j, infoCells info, infoWidth info) :: zipJoins js infos
 
-nestLoop : (String -> Option Int) -> List (List Cell) -> List (Join, List (List Cell), Int) -> Result String (List (List Cell))
-nestLoop _ left [] = Ok left
-nestLoop lookup left ((j, right, w)::rest) = do
-  onPred <- compilePred lookup (joinOn j)
-  nestLoop lookup (crossFilter (joinKind j) w onPred left right) rest
+nestLoop : (String -> Option Int) -> List (List Cell) -> Int -> List (Join, List (List Cell), Int) -> Result String (List (List Cell))
+nestLoop _ left _ [] = Ok left
+nestLoop lookup left lw ((j, right, w)::rest) = do
+  onPred <- joinPred lookup j
+  nestLoop
+    lookup
+    (crossFilter (joinKind j) lw w onPred left right)
+    (lw + w)
+    rest
 
--- For each left row, for each right row, keep `left ++ right` iff `onPred` holds
--- on the combined cells.  Preserves left-major, right-minor order.  For a
--- `JLeft` join, a left row with ZERO matches still emits one row, null-padded
--- with `w` `CNull` cells on the right (SQL LEFT JOIN semantics); `JInner`
--- unmatched left rows simply vanish, unchanged from before.
-crossFilter : JoinKind -> Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
-crossFilter _ _ _ [] _ = []
-crossFilter kind w onPred (l::lefts) rights = crossOne kind w onPred l rights
-  ++ crossFilter kind w onPred lefts rights
+-- The ON predicate to apply for one join.  CROSS has no predicate — the product
+-- is unconditional — so its stored placeholder `on` is never compiled; every
+-- other kind compiles its real ON over the combined lookup.
+joinPred : (String -> Option Int) -> Join -> Result String (List Cell -> Bool)
+joinPred lookup j = match joinKind j
+  JCross => Ok (_ => True)
+  _ => compilePred lookup (joinOn j)
 
-crossOne : JoinKind -> Int -> (List Cell -> Bool) -> List Cell -> List (List Cell) -> List (List Cell)
-crossOne kind w onPred l rights =
-  let matches = crossOneMatches onPred l rights
-  match (kind, matches)
-    (JLeft, []) => [l ++ nullPad w]
-    _ => matches
+-- Combine the accumulated LEFT rows with one join table's RIGHT rows, keeping the
+-- rows the join kind selects.  The combined row is always `left ++ right` (layout
+-- is kind-independent); `lw`/`w` are the LEFT/RIGHT widths used to null-pad the
+-- absent side of an unmatched outer row.
+--
+--   * JInner — matched pairs only.
+--   * JLeft  — matched pairs; each left row with ZERO matches emits `l ++ nullPad w`.
+--   * JRight — matched pairs; each right row with ZERO matches emits `nullPad lw ++ r`.
+--   * JFull  — JLeft's rows PLUS the JRight-only unmatched-right rows (each row once).
+--   * JCross — the unconditional product (`onPred` is the constant `True`).
+--
+-- Left-major, right-minor order is preserved for the matched/left-padded rows;
+-- the unmatched-right rows are appended after (row order is unspecified in SQL,
+-- and every oracle query pins it with ORDER BY).
+crossFilter : JoinKind -> Int -> Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+crossFilter JInner _ _ onPred lefts rights = matchedRows onPred lefts rights
+crossFilter JCross _ _ onPred lefts rights = matchedRows onPred lefts rights
+crossFilter JLeft _ w onPred lefts rights = leftPaddedRows w onPred lefts rights
+crossFilter JRight lw _ onPred lefts rights = matchedRows onPred lefts rights
+  ++ unmatchedRightRows lw onPred lefts rights
+crossFilter JFull lw w onPred lefts rights = leftPaddedRows w onPred lefts rights
+  ++ unmatchedRightRows lw onPred lefts rights
+
+-- Matched pairs, left-major.  (For JCross `onPred` is constant `True`, so this is
+-- the full cartesian product.)
+matchedRows : (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+matchedRows _ [] _ = []
+matchedRows onPred (l::lefts) rights = crossOneMatches onPred l rights
+  ++ matchedRows onPred lefts rights
+
+-- LEFT-join rows: matched pairs, but a left row with ZERO matches emits one
+-- right-null-padded row (`l ++ nullPad w`) instead of vanishing.
+leftPaddedRows : Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+leftPaddedRows _ _ [] _ = []
+leftPaddedRows w onPred (l::lefts) rights = crossOneLeft w onPred l rights
+  ++ leftPaddedRows w onPred lefts rights
+
+crossOneLeft : Int -> (List Cell -> Bool) -> List Cell -> List (List Cell) -> List (List Cell)
+crossOneLeft w onPred l rights = match crossOneMatches onPred l rights
+  [] => [l ++ nullPad w]
+  ms => ms
+
+-- RIGHT-join extra rows: each right row that NO left row matches, emitted with
+-- the left side null-padded (`nullPad lw ++ r`).  Right-row order preserved.
+unmatchedRightRows : Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+unmatchedRightRows _ _ _ [] = []
+unmatchedRightRows lw onPred lefts (r::rights) =
+  if anyLeftMatches onPred lefts r then
+    unmatchedRightRows lw onPred lefts rights
+  else
+    nullPad lw ++ r :: unmatchedRightRows lw onPred lefts rights
+
+anyLeftMatches : (List Cell -> Bool) -> List (List Cell) -> List Cell -> Bool
+anyLeftMatches _ [] _ = False
+anyLeftMatches onPred (l::lefts) r =
+  if onPred (l ++ r) then
+    True
+  else
+    anyLeftMatches onPred lefts r
 
 crossOneMatches : (List Cell -> Bool) -> List Cell -> List (List Cell) -> List (List Cell)
 crossOneMatches _ _ [] = []
