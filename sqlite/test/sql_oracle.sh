@@ -57,6 +57,17 @@ sqlite3 "$DB" "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGE
   INSERT INTO users VALUES (1,'ada',30,'pdx'),(2,'bob',NULL,'nyc'),(3,'cyd',24,'pdx'),(4,'dee',30,NULL); \
   INSERT INTO orders VALUES (1,1,100,2),(2,1,200,3),(3,2,150,1),(4,3,75,5),(5,3,NULL,2),(6,1,300,1);"
 
+# Two small tables with orphans on BOTH sides, for the RIGHT/FULL/CROSS join
+# family: keys l={1,2,3}, r={2,3,4} — k=2,3 match; l.k=1 is unmatched-left; r.k=4
+# is unmatched-right.  So one canonical scenario exercises INNER (2 rows), LEFT
+# (+ orphan-left, right NULL), RIGHT (+ orphan-right, left NULL), FULL (both
+# orphans), and CROSS (3x3 product).  r.rv on k=4 is NULL to probe a NULL travelling
+# through the right side of an outer join alongside the null-padding.
+sqlite3 "$DB" "CREATE TABLE l (k INTEGER, lv TEXT); \
+  CREATE TABLE r (k INTEGER, rv TEXT); \
+  INSERT INTO l VALUES (1,'a'),(2,'b'),(3,'c'); \
+  INSERT INTO r VALUES (2,'x'),(3,'y'),(4,NULL);"
+
 "$MEDAKA" build sqlite/sql_demo.mdk -o "$BIN" >"$TMP/build.err" 2>&1 || {
   echo "FAIL: build sql_demo"; cat "$TMP/build.err"; exit 1; }
 "$MEDAKA" build sqlite/sql_probe.mdk -o "$PROBE" >"$TMP/pbuild.err" 2>&1 || {
@@ -110,6 +121,28 @@ QUERIES=(
   "SELECT users.name, orders.amount FROM users LEFT JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id"
   "SELECT users.name, orders.id FROM users LEFT OUTER JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id"
   "SELECT users.name FROM users LEFT JOIN orders ON users.id = orders.uid WHERE orders.id IS NULL"
+  # -- JOIN FAMILY: CROSS / RIGHT [OUTER] / FULL [OUTER] -----------------------
+  # Outer-join row order is unspecified, so EVERY query pins it with ORDER BY;
+  # NULLs sort first in both engines.  The l/r tables give orphans on both sides
+  # (l.k=1 orphan-left, r.k=4 orphan-right; k=2,3 match).
+  # CROSS JOIN — the unconditional cartesian product (NO ON):
+  "SELECT l.k, l.lv, r.k, r.rv FROM l CROSS JOIN r ORDER BY l.k, r.k"
+  "SELECT count(*) FROM users CROSS JOIN orders"
+  "SELECT l.lv, r.rv FROM l CROSS JOIN r WHERE l.k = r.k ORDER BY l.k"
+  "SELECT a.k, b.k FROM l a CROSS JOIN l b WHERE a.k < b.k ORDER BY a.k, b.k"
+  "SELECT u.name, o.id FROM users u CROSS JOIN orders o WHERE o.amount > 250 ORDER BY u.id, o.id"
+  # RIGHT [OUTER] JOIN — keep every RIGHT row; unmatched right ⇒ LEFT cols NULL:
+  "SELECT l.k, l.lv, r.k, r.rv FROM l RIGHT JOIN r ON l.k = r.k ORDER BY r.k"
+  "SELECT l.lv, r.rv FROM l RIGHT OUTER JOIN r ON l.k = r.k ORDER BY r.k"
+  "SELECT r.k FROM l RIGHT JOIN r ON l.k = r.k WHERE l.k IS NULL ORDER BY r.k"
+  "SELECT o.amount, u.name FROM orders o RIGHT JOIN users u ON o.uid = u.id ORDER BY u.id, o.id"
+  "SELECT u.name FROM orders o RIGHT JOIN users u ON o.uid = u.id WHERE o.id IS NULL ORDER BY u.id"
+  # FULL [OUTER] JOIN — matched pairs + unmatched-left (right NULL) + unmatched-right (left NULL):
+  "SELECT l.k, l.lv, r.k, r.rv FROM l FULL JOIN r ON l.k = r.k ORDER BY l.k, r.k"
+  "SELECT l.lv, r.rv FROM l FULL OUTER JOIN r ON l.k = r.k ORDER BY l.k, r.k"
+  "SELECT l.k, r.k FROM l FULL JOIN r ON l.k = r.k WHERE l.k IS NULL OR r.k IS NULL ORDER BY l.k, r.k"
+  "SELECT u.name, o.amount FROM users u FULL JOIN orders o ON u.id = o.uid ORDER BY u.id, o.id"
+  "SELECT count(*) FROM l FULL JOIN r ON l.k = r.k"
   # -- AS aliases: table alias (FROM + JOIN, AS + bare + implicit), column alias -
   "SELECT u.name, u.age FROM users u WHERE u.age > 25 ORDER BY u.id"
   "SELECT u.name, u.city FROM users AS u WHERE u.city = 'pdx' ORDER BY u.id"
@@ -329,10 +362,9 @@ REJECTS=(
   "SELECT foo(name) FROM users"
   "SELECT CASE END FROM users"
   "SELECT name FROM users WHERE age IN ()"
-  # unsupported joins
-  "SELECT users.name FROM users CROSS JOIN orders"
+  # unsupported joins (NATURAL and USING; INNER/LEFT/RIGHT/FULL/CROSS are supported
+  # and exercised row-for-row in the JOIN FAMILY section of the query corpus)
   "SELECT users.name FROM users NATURAL JOIN orders"
-  "SELECT users.name FROM users RIGHT JOIN orders ON users.id = orders.uid"
   "SELECT users.name FROM users JOIN orders USING (uid)"
   # aggregate in a per-row position (SQL forbids it; so do we, at PARSE time)
   "SELECT name FROM users WHERE count(*) > 1"
