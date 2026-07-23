@@ -110,6 +110,17 @@ QUERIES=(
   "SELECT users.name, orders.amount FROM users LEFT JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id"
   "SELECT users.name, orders.id FROM users LEFT OUTER JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id"
   "SELECT users.name FROM users LEFT JOIN orders ON users.id = orders.uid WHERE orders.id IS NULL"
+  # -- AS aliases: table alias (FROM + JOIN, AS + bare + implicit), column alias -
+  "SELECT u.name, u.age FROM users u WHERE u.age > 25 ORDER BY u.id"
+  "SELECT u.name, u.city FROM users AS u WHERE u.city = 'pdx' ORDER BY u.id"
+  "SELECT name AS who, age AS years FROM users WHERE age IS NOT NULL ORDER BY id"
+  "SELECT id, age + 1 AS next FROM users WHERE age IS NOT NULL ORDER BY id"
+  "SELECT * FROM users u ORDER BY u.id"
+  "SELECT u.name, o.amount FROM users u INNER JOIN orders o ON u.id = o.uid ORDER BY o.id"
+  "SELECT u.name AS who, o.amount AS amt FROM users u JOIN orders o ON u.id = o.uid ORDER BY o.id"
+  "SELECT u.name, o.amount FROM users AS u LEFT JOIN orders AS o ON u.id = o.uid ORDER BY u.id, o.id"
+  "SELECT o.uid, count(*) AS c FROM orders o GROUP BY o.uid ORDER BY o.uid"
+  "SELECT o.uid, sum(o.amount) AS total FROM orders o GROUP BY o.uid HAVING sum(o.amount) > 100 ORDER BY o.uid"
   # -- GROUP BY + aggregates + HAVING ----------------------------------------
   "SELECT count(*) FROM users"
   "SELECT count(*), count(age), sum(age), min(age), max(age), avg(age) FROM users"
@@ -228,9 +239,6 @@ REJECTS=(
   "SELECT a FROM t UNION SELECT b FROM u"
   "SELECT a FROM t INTERSECT SELECT b FROM u"
   "SELECT id FROM users WHERE id IN (SELECT uid FROM orders)"
-  # aliases
-  "SELECT name AS n FROM users"
-  "SELECT u.name FROM users u"
   # unsupported expression syntax: the ESCAPE clause, GLOB/MATCH/REGEXP,
   # COLLATE, JSON arrows, an unknown scalar function, malformed CASE/IN
   "SELECT name FROM users WHERE name LIKE 'a%' ESCAPE '\\'"
@@ -265,7 +273,6 @@ REJECTS=(
   "SELECT * FROM main.users"
   "SELECT *, name FROM users"
   "SELECT sum(*) FROM orders"
-  "SELECT * FROM users EXTRA"
   # a real engine error (not a parse error): unknown column, cleanly reported
   "SELECT nosuch FROM users"
   "SELECT * FROM nosuchtable"

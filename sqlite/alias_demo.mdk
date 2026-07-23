@@ -1,0 +1,68 @@
+-- | sqlite.alias_demo — end-to-end demo of AS aliases through the in-memory
+--   query path: a table alias (`FROM users u`) with an alias-qualified column
+--   reference (`u.age`), a column alias (`SELECT name AS n`), and an aliased
+--   JOIN (`users u JOIN orders o ON u.id = o.uid`) with alias-qualified columns
+--   on both sides.  Built entirely in memory (`buildDatabaseMulti` → `fromBytes`,
+--   no file I/O) so it runs on both the native and WasmGC engines.
+--
+--   NOT enrolled in any gate's fixture list (see `test/wasm/diff_sqlite.sh`,
+--   which names its probes explicitly) — it is a runnable dogfood demo; the
+--   alias regression backbone is the round-trip doctests in `lib.sqlstmt`.
+
+-- The in-memory `specs` fixture is deliberately the same shape every sqlite probe
+-- builds; sharing it across probes would couple unrelated demos.
+-- lint-disable-file rule-duplicate-body
+
+import lib.dbwriter.{buildDatabaseMulti}
+import lib.sqlite.{Db, fromBytes}
+import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.rowtype.{tCells}
+import lib.sqlstmt.{queryStringDistinct}
+import demo_support.{printRows, showCellRow}
+
+usersSql : String
+usersSql = "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+
+usersRows : List (List Cell)
+usersRows = [
+  [CInt 1, CText "Alice", CInt 30],
+  [CInt 2, CText "Bob", CNull],
+  [CInt 3, CText "Carol", CInt 25],
+]
+
+ordersSql : String
+ordersSql =
+  "CREATE TABLE orders(oid INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER)"
+
+ordersRows : List (List Cell)
+ordersRows = [
+  [CInt 10, CInt 1, CInt 100],
+  [CInt 11, CInt 1, CInt 40],
+  [CInt 12, CInt 3, CInt 70],
+]
+
+specs : List (String, String, Option Int, List (List Cell))
+specs = [
+  ("users", usersSql, Some 0, usersRows),
+  ("orders", ordersSql, Some 0, ordersRows),
+]
+
+-- Run one aliased query and print its rows under a caption.
+runQ : Db -> String -> String -> <IO> Unit
+runQ db caption sql =
+  let _ = println caption
+  match queryStringDistinct db sql tCells
+    Err e => println "  error: \{e}"
+    Ok rows => printRows showCellRow rows
+
+main = match buildDatabaseMulti specs
+  Err e => println "build error: \{e}"
+  Ok bytes => match fromBytes bytes
+    Err e => println "fromBytes error: \{e}"
+    Ok db =>
+      let _ = runQ db "-- table alias + alias-qualified ref + column alias --" "SELECT name AS n FROM users u WHERE u.age > 20"
+      let _ = runQ db "-- table alias, alias.col projected --" "SELECT u.name, u.age FROM users AS u WHERE u.age IS NOT NULL"
+      runQ
+        db
+        "-- aliased JOIN, alias-qualified on both sides + column alias --"
+        "SELECT u.name AS who, o.amount AS amt FROM users u JOIN orders o ON u.id = o.uid"

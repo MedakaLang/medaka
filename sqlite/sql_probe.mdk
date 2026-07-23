@@ -74,6 +74,15 @@ corpus = [
   "SELECT users.name, orders.amount FROM users LEFT JOIN orders ON users.id = orders.uid ORDER BY users.id, orders.id",
   "SELECT users.name FROM users LEFT OUTER JOIN orders ON users.id = orders.uid",
   "SELECT a.x FROM a INNER JOIN b ON a.i = b.i INNER JOIN c ON b.j = c.j",
+  -- AS aliases: column (AS + bare) and table (FROM + JOIN, AS + bare + implicit)
+  "SELECT name AS n FROM users",
+  "SELECT age x, name y FROM users",
+  "SELECT count(*) AS n FROM users",
+  "SELECT u.name FROM users u",
+  "SELECT u.name FROM users AS u WHERE u.age > 20",
+  "SELECT * FROM users EXTRA",
+  "SELECT u.name AS who, o.amount AS amt FROM users u JOIN orders o ON u.id = o.uid",
+  "SELECT u.name FROM users u LEFT JOIN orders AS o ON u.id = o.uid ORDER BY u.id",
   -- aggregates, GROUP BY, HAVING
   "SELECT count(*) FROM users",
   "SELECT count(*), count(age), sum(age), min(age), max(age), avg(age) FROM users",
@@ -173,10 +182,6 @@ rejects = [
   "SELECT a FROM t EXCEPT SELECT b FROM u",
   "WITH x AS (SELECT 1) SELECT * FROM x",
   "SELECT id FROM users WHERE id IN (SELECT uid FROM orders)",
-  -- aliases (column and table)
-  "SELECT name AS n FROM users",
-  "SELECT u.name FROM users u",
-  "SELECT name FROM users AS u",
   -- unsupported expression syntax
   "SELECT name FROM users WHERE name LIKE 'a%' ESCAPE '\\'",
   "SELECT name FROM users WHERE name GLOB 'a*'",
@@ -213,7 +218,6 @@ rejects = [
   "SELECT * FROM users LIMIT",
   "SELECT * FROM users LIMIT 'x'",
   "SELECT * FROM users OFFSET",
-  "SELECT * FROM users EXTRA",
   "SELECT *, name FROM users",
   "SELECT * FROM main.users",
   "SELECT count(name FROM users",
