@@ -142,19 +142,19 @@ binder-keyed reference index.** Everything else is plumbing that already runs.
 A `BinderKey` is a **String** (so it is a `hash_map` key for free), formed canonically:
 
 - **Top-level / exported value or type or ctor or field or method** →
-  `"<definingModuleId> <namespace> <name>"`, where `namespace ∈ {val,ty,ctor,field,method}`.
+  `"<definingModuleId>\t<namespace>\t<name>"`, where `namespace ∈ {val,ty,ctor,field,method}`.
   The **defining module** is resolved through the import graph (origin, not alias — see §5),
   so a use of `A.f`, a use of `f` under `import m.{f}`, and the def of `f` in `m` all map to
   the **same** key. Re-exports collapse to the true origin via `reexportOrigins`
   (`resolve.mdk:2401`).
 - **Local binder (let / lambda param / match pattern / where)** →
-  `"<moduleId> local <name> <binderLine>:<binderCol>"`. The binder's own `Loc`
+  `"<moduleId>\tlocal\t<name>\t<binderLine>:<binderCol>"`. The binder's own `Loc`
   makes it **unique and shadow-correct**: an inner `x` and an outer `x` produce **different
   keys**, so a click on the inner `x` never returns the outer `x`'s uses. This is precisely
   the bug a string scan has (`highlightRanges`/`occurrences`, `lsp.mdk:342-346`, matches by
   substring and is wrong under shadowing).
 
-The ` ` (NUL) separator is safe because identifiers cannot contain it; it prevents
+The `\t` (TAB, `\t`) separator is safe because identifiers cannot contain it; it prevents
 `("m","foo")` colliding with `("m.foo", "")`. (Note the fmt-wrote-NUL grep-blindness trap
 is about *source files*; this NUL lives only in in-memory keys, never written to disk.)
 
@@ -244,13 +244,13 @@ click-location to the **single clicked file**, so it is O(that file), never O(pr
 
 | Hazard | Why a string scan is wrong | How BinderKey indexing fixes it |
 |--------|---------------------------|--------------------------------|
-| **Shadowing** | inner `let x` and outer `x` share the spelling; `occurrences`/`highlightRanges` (`lsp.mdk:342`) return both | inner binder → distinct `local x L:C` key; occurrence resolves via innermost frame first (`stampExpr` shape) |
-| **Import alias `import m as A`; `A.f`** | `A.f` and `f` spell differently | `rewriteDecls` canonicalizes `A.f`→`f`@origin (`loader.mdk:559`, `ast.mdk:342`); both map to `m val f` |
-| **Selective `import m.{f as g}`** | local `g` ≠ origin `f` | module env maps `g → m val f` (origin), via `reexportBindings` alias handling (`resolve.mdk:2398-2402`) |
+| **Shadowing** | inner `let x` and outer `x` share the spelling; `occurrences`/`highlightRanges` (`lsp.mdk:342`) return both | inner binder → distinct `local\tx\tL:C` key; occurrence resolves via innermost frame first (`stampExpr` shape) |
+| **Import alias `import m as A`; `A.f`** | `A.f` and `f` spell differently | `rewriteDecls` canonicalizes `A.f`→`f`@origin (`loader.mdk:559`, `ast.mdk:342`); both map to `m\tval\tf` |
+| **Selective `import m.{f as g}`** | local `g` ≠ origin `f` | module env maps `g → m\tval\tf` (origin), via `reexportBindings` alias handling (`resolve.mdk:2398-2402`) |
 | **Re-export chains** | `f` visible through B but defined in A | `reexportOrigins` walks to the true origin (`resolve.mdk:2401-2430`) → single key |
 | **Same name, different modules** | `map` in `map.mdk` vs a user `map` | key is prefixed by defining module id → no collision (the exact `installConsts` last-write-wins hazard, `compiler/AGENTS.md`, avoided structurally) |
 | **Value vs type vs ctor namespace clash** | `List` the type vs a `List` value | `namespace` field in the key separates them |
-| **Operator / method names** | `(+)` / interface methods dispatch per-impl | key `method <name>` groups the method; per-impl definitions are distinct binder Locs (v2 can split by impl-head — see fork F4) |
+| **Operator / method names** | `(+)` / interface methods dispatch per-impl | key `method\t<name>` groups the method; per-impl definitions are distinct binder Locs (v2 can split by impl-head — see fork F4) |
 | **`main`-style top-level not applied / lazy nullary** | n/a for references | no special case needed — it is a top-level value binder like any other |
 
 The unifying point: **a `BinderKey` is derived from resolution (scopes + import origin), not
