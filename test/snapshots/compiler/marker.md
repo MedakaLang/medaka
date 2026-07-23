@@ -369,12 +369,12 @@ mapLitPairVars (k, v) = collectVars k ++ collectVars v
 -- to resolve them, exactly as the OCaml oracle does.
 
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 patBindings _ = []
 
@@ -685,12 +685,12 @@ markerFor preludeProg =
 (DTypeSig false "mapLitPairVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "collectVars") (EVar "k")) (EApp (EVar "collectVars") (EVar "v"))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DFunDef false "patBindings" (PWild) (EListLit))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -941,12 +941,12 @@ markerFor preludeProg =
 (DTypeSig false "mapLitPairVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "collectVars") (EVar "k")) (EApp (EVar "collectVars") (EVar "v"))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DFunDef false "patBindings" (PWild) (EListLit))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))

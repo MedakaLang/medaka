@@ -190,14 +190,14 @@ headIsUpper s = match arrayGet 0 (stringToChars s)
 
 -- names bound by a pattern (each becomes a DISTINCT local binder / key).
 patBinderNames : Pat -> List String
-patBinderNames (PVar x) = [x]
+patBinderNames (PVar x _) = [x]
 patBinderNames PWild = []
 patBinderNames (PLit _) = []
 patBinderNames (PCon _ ps) = flatMap patBinderNames ps
 patBinderNames (PCons a b) = patBinderNames a ++ patBinderNames b
 patBinderNames (PTuple ps) = flatMap patBinderNames ps
 patBinderNames (PList ps) = flatMap patBinderNames ps
-patBinderNames (PAs x p) = x :: patBinderNames p
+patBinderNames (PAs x _ p) = x :: patBinderNames p
 patBinderNames (PRng _ _ _) = []
 patBinderNames (PRec _ fields _) = flatMap recFieldBinderNames fields
 

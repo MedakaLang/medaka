@@ -271,14 +271,14 @@ ownersOf field ((f, owner)::rest)
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
@@ -364,7 +364,7 @@ checkPat cur env (PCon c ps) = (if omHasKey c env.ctors || omHasKey c env.import
 checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
 checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
-checkPat cur env (PAs _ p) = checkPat cur env p
+checkPat cur env (PAs _ _ p) = checkPat cur env p
 checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
 checkPat _ _ _ = []
 
@@ -742,7 +742,7 @@ keepBetter c d (Some (bc, bd))
   | otherwise = Some (bc, bd)
 
 checkLet : Option Loc -> Env -> List String -> Bool -> Pat -> Expr -> Expr -> List ResError
-checkLet cur env scope True (PVar f) e1 e2 = checkExpr cur env (f::scope) e1
+checkLet cur env scope True (PVar f _) e1 e2 = checkExpr cur env (f::scope) e1
   ++ checkExpr cur env (f::scope) e2
 -- non-recursive (or rec with non-var pat): the bound names are NOT in scope on
 -- the RHS.  An UnboundVariable for one of them ⇒ the user likely forgot `rec`,
@@ -2685,9 +2685,9 @@ stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
 stampLet : List (List (String, Int)) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-stampLet env m True (PVar f) e1 e2 =
+stampLet env m True (PVar f fl) e1 e2 =
   let inner = zeroFrame [f] :: env
-  ELet m True (PVar f) (stampExpr inner e1) (stampExpr inner e2)
+  ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)
 stampLet env m isRec pat e1 e2 =
   ELet
     m
@@ -2844,14 +2844,14 @@ stampBindingIds decls =
 (DFunDef false "ownersOf" (PWild (PList)) (EListLit))
 (DFunDef false "ownersOf" ((PVar "field") (PCons (PTuple (PVar "f") (PVar "owner")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "f") (EVar "field")) (EBinOp "::" (EVar "owner") (EApp (EApp (EVar "ownersOf") (EVar "field")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ownersOf") (EVar "field")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2880,7 +2880,7 @@ stampBindingIds decls =
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "checkPat" (PWild PWild PWild) (EListLit))
 (DTypeSig false "checkRecPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyCon "ResError")))))))
@@ -3003,7 +3003,7 @@ stampBindingIds decls =
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "None")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "Some" (PTuple (PVar "bc") (PVar "bd")))) (EIf (EBinOp "<" (EVar "d") (EVar "bd")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "bd")) (EBinOp "<" (EVar "c") (EVar "bc"))) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EVar "otherwise") (EApp (EVar "Some") (ETuple (EVar "bc") (EVar "bd"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "checkLet" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))))))
-(DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e2"))))
+(DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e2"))))
 (DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") PWild (PVar "pat") (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBindings") (EVar "pat"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "pat")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "pat")))) (EApp (EApp (EVar "map") (EApp (EVar "rewriteNonRec") (EVar "bound"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e1")))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "++" (EVar "bound") (EVar "scope"))) (EVar "e2"))))))
 (DTypeSig false "rewriteNonRec" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ResError") (TyCon "ResError"))))
 (DFunDef false "rewriteNonRec" ((PVar "bound") (PCon "UnboundVariable" (PVar "n") (PVar "l") (PVar "s"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "NonRecursiveValueLet") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "UnboundVariable") (EVar "n")) (EVar "l")) (EVar "s"))))
@@ -3758,7 +3758,7 @@ stampBindingIds decls =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DTypeSig false "stampLet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
-(DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EApp (EVar "zeroFrame") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EVar "PVar") (EVar "f"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
+(DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EApp (EVar "zeroFrame") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EBinOp "::" (EApp (EVar "zeroFrame") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "env"))) (EVar "e2"))))
 (DTypeSig false "stampLetGroup" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "stampLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "groupScope") (EBinOp "::" (EApp (EVar "zeroFrame") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (EVar "env"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EVar "stampLetBind") (EVar "groupScope"))) (EVar "binds"))) (EApp (EApp (EVar "stampExpr") (EVar "groupScope")) (EVar "body"))))))
@@ -3856,14 +3856,14 @@ stampBindingIds decls =
 (DFunDef false "ownersOf" (PWild (PList)) (EListLit))
 (DFunDef false "ownersOf" ((PVar "field") (PCons (PTuple (PVar "f") (PVar "owner")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "f") (EVar "field")) (EBinOp "::" (EVar "owner") (EApp (EApp (EVar "ownersOf") (EVar "field")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ownersOf") (EVar "field")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -3892,7 +3892,7 @@ stampBindingIds decls =
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps")))
-(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
+(DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "p")))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EApp (EVar "checkRecPat") (EVar "cur")) (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "checkPat" (PWild PWild PWild) (EListLit))
 (DTypeSig false "checkRecPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyCon "ResError")))))))
@@ -4015,7 +4015,7 @@ stampBindingIds decls =
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "None")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "Some" (PTuple (PVar "bc") (PVar "bd")))) (EIf (EBinOp "<" (EVar "d") (EVar "bd")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "bd")) (EBinOp "<" (EVar "c") (EVar "bc"))) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EVar "otherwise") (EApp (EVar "Some") (ETuple (EVar "bc") (EVar "bd"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "checkLet" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))))))
-(DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e2"))))
+(DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "::" (EVar "f") (EVar "scope"))) (EVar "e2"))))
 (DFunDef false "checkLet" ((PVar "cur") (PVar "env") (PVar "scope") PWild (PVar "pat") (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "patBindings") (EVar "pat"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "pat")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EVar "cur")) (ELit (LString "pattern"))) (EListLit (EVar "pat")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteNonRec") (EVar "bound"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e1")))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EBinOp "++" (EVar "bound") (EVar "scope"))) (EVar "e2"))))))
 (DTypeSig false "rewriteNonRec" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ResError") (TyCon "ResError"))))
 (DFunDef false "rewriteNonRec" ((PVar "bound") (PCon "UnboundVariable" (PVar "n") (PVar "l") (PVar "s"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "NonRecursiveValueLet") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "UnboundVariable") (EVar "n")) (EVar "l")) (EVar "s"))))
@@ -4770,7 +4770,7 @@ stampBindingIds decls =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DTypeSig false "stampLet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
-(DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EApp (EVar "zeroFrame") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EVar "PVar") (EVar "f"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
+(DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EApp (EVar "zeroFrame") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EBinOp "::" (EApp (EVar "zeroFrame") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "env"))) (EVar "e2"))))
 (DTypeSig false "stampLetGroup" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "stampLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "groupScope") (EBinOp "::" (EApp (EVar "zeroFrame") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (EVar "env"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampLetBind") (EVar "groupScope"))) (EVar "binds"))) (EApp (EApp (EVar "stampExpr") (EVar "groupScope")) (EVar "body"))))))

@@ -154,12 +154,12 @@ bindName (CBind name _) = name
 
 -- the variables a pattern binds.
 export patVars : Pat -> List String
-patVars (PVar x) = [x]
+patVars (PVar x _) = [x]
 patVars (PCon _ args) = patVarsList args
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PTuple ps) = patVarsList ps
 patVars (PList ps) = patVarsList ps
-patVars (PAs x p) = x :: patVars p
+patVars (PAs x _ p) = x :: patVars p
 patVars _ = []
 
 export patVarsList : List Pat -> List String
@@ -717,7 +717,7 @@ export dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x)::_) _) = dispIsDictParamName x
+dispClauseHasLeadingDict (CClause ((PVar x _)::_) _) = dispIsDictParamName x
 dispClauseHasLeadingDict _ = False
 
 dispIsDictParamName : String -> Bool
@@ -745,7 +745,7 @@ dictCountUniformGo n (pats::rest) = leadingDictCount pats == n
 
 -- count of leading `$dict…` params in one clause's param list.
 export leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x)::rest) =
+leadingDictCount ((PVar x _)::rest) =
   if dispIsDictParamName x then
     1 + leadingDictCount rest
   else
@@ -1031,7 +1031,7 @@ dispLeavesOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> List
 dispLeavesOk cf isFn fa fnNames root acc (CIf _ t f) found = match dispLeavesOk cf isFn fa fnNames root acc t found
   None => None
   Some f2 => dispLeavesOk cf isFn fa fnNames root acc f f2
-dispLeavesOk cf isFn fa fnNames root acc (CLet False (PVar _) _ b) found =
+dispLeavesOk cf isFn fa fnNames root acc (CLet False (PVar _ _) _ b) found =
   dispLeavesOk cf isFn fa fnNames root acc b found
 dispLeavesOk cf isFn fa fnNames root acc (CLet False PWild _ b) found =
   dispLeavesOk cf isFn fa fnNames root acc b found
@@ -1106,7 +1106,7 @@ dispNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> 
 dispNonTailHeads cf isFn fa members (CIf c t f) = allCallHeads cf c
   ++ dispNonTailHeads cf isFn fa members t
   ++ dispNonTailHeads cf isFn fa members f
-dispNonTailHeads cf isFn fa members (CLet False (PVar _) rhs b) = allCallHeads cf rhs
+dispNonTailHeads cf isFn fa members (CLet False (PVar _ _) rhs b) = allCallHeads cf rhs
   ++ dispNonTailHeads cf isFn fa members b
 dispNonTailHeads cf isFn fa members (CLet False PWild rhs b) = allCallHeads cf rhs
   ++ dispNonTailHeads cf isFn fa members b
@@ -1217,12 +1217,12 @@ anyListM p (x::rest) =
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild)) (EVar "name"))
 (DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVars" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patVars" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVars" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsList") (EVar "args")))
 (DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
 (DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
+(DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
 (DFunDef false "patVars" (PWild) (EListLit))
 (DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsList" ((PList)) (EListLit))
@@ -1450,7 +1450,7 @@ anyListM p (x::rest) =
 (DTypeSig true "dispNonDict" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dispNonDict" ((PVar "clauses")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "dispClauseHasLeadingDict")) (EVar "clauses"))))
 (DTypeSig false "dispClauseHasLeadingDict" (TyFun (TyCon "CClause") (TyCon "Bool")))
-(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x")) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
+(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x") PWild) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
 (DFunDef false "dispClauseHasLeadingDict" (PWild) (EVar "False"))
 (DTypeSig false "dispIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "dispIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
@@ -1461,7 +1461,7 @@ anyListM p (x::rest) =
 (DFunDef false "dictCountUniformGo" (PWild (PList)) (EVar "True"))
 (DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictCount") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "leadingDictCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x")) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingDictCount" (PWild) (ELit (LInt 0)))
 (DTypeSig true "dictUniformClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dictUniformClauses" ((PVar "clauses")) (EApp (EVar "dictCountUniform") (EApp (EApp (EVar "map") (EVar "clausePatsOf")) (EVar "clauses"))))
@@ -1560,7 +1560,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispClausesGo" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCons (PCon "CClause" PWild (PVar "body")) (PVar "rest")) (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "body")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispClausesGo") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "rest")) (EVar "found2")))))
 (DTypeSig false "dispLeavesOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CIf" PWild (PVar "t") (PVar "f")) (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "t")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "f2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "f")) (EVar "f2")))))
-(DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PVar" PWild) PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
+(DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PVar" PWild PWild) PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PWild") PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CBlock" (PVar "stmts")) (PVar "found")) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "ex")) (EVar "found"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CDecision" PWild (PVar "arms") PWild) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "arms")) (EVar "found")))
@@ -1580,7 +1580,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispMemberNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "binds") (PVar "members") (PVar "m")) (EMatch (EApp (EApp (EVar "dispFindBind") (EVar "binds")) (EVar "m")) (arm (PCon "Some" (PCon "CBind" PWild (PVar "clauses"))) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "dispNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "t"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "f"))))
-(DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PVar" PWild) (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
+(DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PVar" PWild PWild) (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PWild") (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispStmtNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "stmts")))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "dispArmNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "a")))) (EVar "arms"))))
@@ -1667,12 +1667,12 @@ anyListM p (x::rest) =
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindName" ((PCon "CBind" (PVar "name") PWild)) (EVar "name"))
 (DTypeSig true "patVars" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVars" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patVars" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVars" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsList") (EVar "args")))
 (DFunDef false "patVars" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "h")) (EApp (EVar "patVars") (EVar "t"))))
 (DFunDef false "patVars" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
 (DFunDef false "patVars" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsList") (EVar "ps")))
-(DFunDef false "patVars" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
+(DFunDef false "patVars" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVars") (EVar "p"))))
 (DFunDef false "patVars" (PWild) (EListLit))
 (DTypeSig true "patVarsList" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsList" ((PList)) (EListLit))
@@ -1900,7 +1900,7 @@ anyListM p (x::rest) =
 (DTypeSig true "dispNonDict" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dispNonDict" ((PVar "clauses")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "dispClauseHasLeadingDict")) (EVar "clauses"))))
 (DTypeSig false "dispClauseHasLeadingDict" (TyFun (TyCon "CClause") (TyCon "Bool")))
-(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x")) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
+(DFunDef false "dispClauseHasLeadingDict" ((PCon "CClause" (PCons (PCon "PVar" (PVar "x") PWild) PWild) PWild)) (EApp (EVar "dispIsDictParamName") (EVar "x")))
 (DFunDef false "dispClauseHasLeadingDict" (PWild) (EVar "False"))
 (DTypeSig false "dispIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "dispIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
@@ -1911,7 +1911,7 @@ anyListM p (x::rest) =
 (DFunDef false "dictCountUniformGo" (PWild (PList)) (EVar "True"))
 (DFunDef false "dictCountUniformGo" ((PVar "n") (PCons (PVar "pats") (PVar "rest"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "leadingDictCount") (EVar "pats")) (EVar "n")) (EApp (EApp (EVar "dictCountUniformGo") (EVar "n")) (EVar "rest"))))
 (DTypeSig true "leadingDictCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x")) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
+(DFunDef false "leadingDictCount" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EVar "dispIsDictParamName") (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingDictCount") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingDictCount" (PWild) (ELit (LInt 0)))
 (DTypeSig true "dictUniformClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
 (DFunDef false "dictUniformClauses" ((PVar "clauses")) (EApp (EVar "dictCountUniform") (EApp (EApp (EMethodRef "map") (EVar "clausePatsOf")) (EVar "clauses"))))
@@ -2010,7 +2010,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispClausesGo" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCons (PCon "CClause" PWild (PVar "body")) (PVar "rest")) (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "body")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispClausesGo") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "rest")) (EVar "found2")))))
 (DTypeSig false "dispLeavesOk" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CIf" PWild (PVar "t") (PVar "f")) (PVar "found")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "t")) (EVar "found")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "f2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "f")) (EVar "f2")))))
-(DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PVar" PWild) PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
+(DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PVar" PWild PWild) PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CLet" (PCon "False") (PCon "PWild") PWild (PVar "b")) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "b")) (EVar "found")))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CBlock" (PVar "stmts")) (PVar "found")) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispLeavesOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "ex")) (EVar "found"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "dispLeavesOk" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "fnNames") (PVar "root") (PVar "acc") (PCon "CDecision" PWild (PVar "arms") PWild) (PVar "found")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispArmsOk") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "fnNames")) (EVar "root")) (EVar "acc")) (EVar "arms")) (EVar "found")))
@@ -2030,7 +2030,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispMemberNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "binds") (PVar "members") (PVar "m")) (EMatch (EApp (EApp (EVar "dispFindBind") (EVar "binds")) (EVar "m")) (arm (PCon "Some" (PCon "CBind" PWild (PVar "clauses"))) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "dispNonTailHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "t"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "f"))))
-(DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PVar" PWild) (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
+(DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PVar" PWild PWild) (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CLet" (PCon "False") (PCon "PWild") (PVar "rhs") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "rhs")) (EApp (EApp (EApp (EApp (EApp (EVar "dispNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "b"))))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispStmtNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "stmts")))
 (DFunDef false "dispNonTailHeads" ((PVar "cf") (PVar "isFn") (PVar "fa") (PVar "members") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "dispArmNonTailHeads") (EVar "cf")) (EVar "isFn")) (EVar "fa")) (EVar "members")) (EVar "a")))) (EVar "arms"))))

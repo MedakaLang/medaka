@@ -191,7 +191,8 @@ derivedImpl iface tyName methods = DImpl {
 
 -- two-parameter impl method: `m a b = body`
 binMethod : String -> String -> String -> Expr -> ImplMethod
-binMethod m a b body = ImplMethod m [PVar a, PVar b] body
+binMethod m a b body =
+  ImplMethod m [PVar a (Loc "" 0 0 0 0), PVar b (Loc "" 0 0 0 0)] body
 
 -- ── Pass: desugar_sugar (guards / function / sections / interpolation) ────
 -- Mirror of lib/desugar.ml's rewrite_sugar, applied bottom-up by mapProg.
@@ -257,10 +258,13 @@ armChain ((GBind p e)::qs) body els =
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
-sectionToCore (SecBare op) =
-  ELam [PVar "_a", PVar "_b"] (binOp op (EVar "_a") (EVar "_b"))
-sectionToCore (SecRight op e) = ELam [PVar "_s"] (binOp op (EVar "_s") e)
-sectionToCore (SecLeft e op) = ELam [PVar "_s"] (binOp op e (EVar "_s"))
+sectionToCore (SecBare op) = ELam
+  [PVar "_a" (Loc "" 0 0 0 0), PVar "_b" (Loc "" 0 0 0 0)]
+  (binOp op (EVar "_a") (EVar "_b"))
+sectionToCore (SecRight op e) =
+  ELam [PVar "_s" (Loc "" 0 0 0 0)] (binOp op (EVar "_s") e)
+sectionToCore (SecLeft e op) =
+  ELam [PVar "_s" (Loc "" 0 0 0 0)] (binOp op e (EVar "_s"))
 
 -- `"a\{e}b"` → `"a" ++ display e ++ "b"` (left-associated `++`)
 interpToCore : List InterpPart -> Expr
@@ -331,11 +335,11 @@ lowerDo _ = fallthrough
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
 doCont : Pat -> Expr -> Expr
 doCont pat body
-  | isRefutable pat = ELam [PVar "__do_x"] (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
+  | isRefutable pat = ELam [PVar "__do_x" (Loc "" 0 0 0 0)] (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
   | otherwise = ELam [pat] body
 
 isRefutable : Pat -> Bool
-isRefutable (PVar _) = False
+isRefutable (PVar _ _) = False
 isRefutable PWild = False
 isRefutable (PLit _) = True
 isRefutable (PCon _ _) = True
@@ -344,7 +348,7 @@ isRefutable (PList _) = True
 isRefutable (PRng _ _ _) = True
 isRefutable (PRec _ _ _) = True
 isRefutable (PTuple ps) = anyRefutable ps
-isRefutable (PAs _ p) = isRefutable p
+isRefutable (PAs _ _ p) = isRefutable p
 
 anyRefutable : List Pat -> Bool
 anyRefutable [] = False
@@ -540,7 +544,8 @@ genVarsGo prefix i n
 -- VRecord, which a positional `PCon` cannot match (only `PRec` can), whereas the
 -- emitter accepts both — so PRec makes the derived match work in BOTH pipelines.
 conBindPat : Variant -> List String -> Pat
-conBindPat (Variant cname (ConPos _)) vars = PCon cname (map PVar vars)
+conBindPat (Variant cname (ConPos _)) vars =
+  PCon cname (map (v => PVar v (Loc "" 0 0 0 0)) vars)
 conBindPat (Variant cname (ConNamed fs _)) vars =
   PRec cname (recPatFields fs vars) False
 
@@ -548,7 +553,7 @@ recPatFields : List Field -> List String -> List RecPatField
 recPatFields [] _ = []
 recPatFields _ [] = []
 recPatFields ((Field n _)::fs) (v::vs) =
-  RecPatField n (Some (PVar v)) :: recPatFields fs vs
+  RecPatField n (Some (PVar v (Loc "" 0 0 0 0))) :: recPatFields fs vs
 
 -- Debug and Display share the rendering ("Con " ++ <call> a0 ++ " " ++ …);
 -- only the interface + method-call name differ.
@@ -557,7 +562,7 @@ deriveShowData iface callName name variants = derivedImpl
   iface
   name
   [
-    ImplMethod callName [PVar "__x"] (EMatch (EVar "__x") (map (showArm callName) variants))
+    ImplMethod callName [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map (showArm callName) variants))
   ]
 
 showArm : String -> Variant -> Arm
@@ -704,7 +709,7 @@ lexCompareExprs ((ea, eb)::rest) = EMatch
   (callBin "compare" ea eb)
   [
     Arm (PCon "Eq" []) [] (lexCompareExprs rest),
-    Arm (PVar "__c") [] (EVar "__c"),
+    Arm (PVar "__c" (Loc "" 0 0 0 0)) [] (EVar "__c"),
   ]
 
 -- Hashable: the djb2-style fold core.mdk's `Hashable` doc specifies — seed the
@@ -725,7 +730,7 @@ deriveHashData name variants = derivedImpl
   "Hashable"
   name
   [
-    ImplMethod "hash" [PVar "__x"] (EMatch (EVar "__x") (map hashArm (indexFrom 0 variants)))
+    ImplMethod "hash" [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map hashArm (indexFrom 0 variants)))
   ]
 
 hashArm : (Int, Variant) -> Arm
@@ -748,7 +753,7 @@ deriveGenericData name variants = derivedImpl
   "Generic"
   name
   [
-    ImplMethod "to_rep" [PVar "__x"] (EMatch (EVar "__x") (map genericArm variants))
+    ImplMethod "to_rep" [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map genericArm variants))
   ]
 
 genericArm : Variant -> Arm

@@ -62,14 +62,14 @@ litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 
 export patSexp : Pat -> String
-patSexp (PVar x) = node "PVar" [escStr x]
+patSexp (PVar x _) = node "PVar" [escStr x]
 patSexp PWild = "PWild"
 patSexp (PLit l) = node "PLit" [litSexp l]
 patSexp (PCon c ps) = node "PCon" (escStr c :: map patSexp ps)
 patSexp (PCons a b) = node "PCons" [patSexp a, patSexp b]
 patSexp (PTuple ps) = node "PTuple" (map patSexp ps)
 patSexp (PList ps) = node "PList" (map patSexp ps)
-patSexp (PAs x q) = node "PAs" [escStr x, patSexp q]
+patSexp (PAs x _ q) = node "PAs" [escStr x, patSexp q]
 patSexp (PRng lo hi incl) = node "PRng" [litSexp lo, litSexp hi, boolStr incl]
 patSexp (PRec name fields rest) =
   node "PRec" [escStr name, slist (map recPatFieldSexp fields), boolStr rest]

@@ -365,12 +365,12 @@ mapLitPairVars (k, v) = collectVars k ++ collectVars v
 -- to resolve them, exactly as the OCaml oracle does.
 
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 patBindings _ = []
 

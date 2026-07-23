@@ -12,6 +12,7 @@
 
 import frontend.ast.{
   Lit(..),
+  Loc(..),
   Pat(..),
   RecPatField(..),
   Expr(..),
@@ -166,8 +167,9 @@ lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag
 
 -- (f >> g) ≡ \x -> g (f x).  composeLam first second ≡ \x -> second (first x).
 composeLam : CExpr -> CExpr -> CExpr
-composeLam first second =
-  CLam [PVar composeVar] (CApp second (CApp first (CVar composeVar AGlobal)))
+composeLam first second = CLam
+  [PVar composeVar (Loc "" 0 0 0 0)]
+  (CApp second (CApp first (CVar composeVar AGlobal)))
 
 lowerArm : Arm -> CArm
 lowerArm (Arm pat guards body) = CArm pat (map lowerGuard guards) (lower body)
@@ -199,13 +201,13 @@ armTreeable (Arm pat _ _) = treeablePat pat
 -- ordered semantics exactly.
 treeablePat : Pat -> Bool
 treeablePat PWild = True
-treeablePat (PVar _) = True
+treeablePat (PVar _ _) = True
 treeablePat (PLit _) = True
 treeablePat (PCon _ args) = allList treeablePat args
 treeablePat (PCons h t) = treeablePat h && treeablePat t
 treeablePat (PList ps) = allList treeablePat ps
 treeablePat (PTuple ps) = allList treeablePat ps
-treeablePat (PAs _ p) = treeablePat p
+treeablePat (PAs _ _ p) = treeablePat p
 treeablePat (PRng _ _ _) = True
 treeablePat (PRec _ _ _) = True
 
@@ -226,7 +228,7 @@ patNeedsGuard (PCon _ args) = anyList patNeedsGuard args
 patNeedsGuard (PCons h t) = patNeedsGuard h || patNeedsGuard t
 patNeedsGuard (PList ps) = anyList patNeedsGuard ps
 patNeedsGuard (PTuple ps) = anyList patNeedsGuard ps
-patNeedsGuard (PAs _ p) = patNeedsGuard p
+patNeedsGuard (PAs _ _ p) = patNeedsGuard p
 patNeedsGuard _ = False
 
 -- one matrix row per arm: its (canonicalised) pattern as a single column, paired
@@ -324,7 +326,7 @@ unitName = "__unit__"
 -- into the matrix form before `compileTree` (same as `initialRows` does for match
 -- arms) — part of the shared backend-neutral decision-tree pass (Axis-1).
 export canonPat : Pat -> Pat
-canonPat (PVar _) = PWild
+canonPat (PVar _ _) = PWild
 canonPat PWild = PWild
 canonPat (PLit (LBool True)) = PCon "True" []
 canonPat (PLit (LBool False)) = PCon "False" []
@@ -335,7 +337,7 @@ canonPat (PCon c args) = PCon c (map canonPat args)
 canonPat (PCons h t) = PCon consName [canonPat h, canonPat t]
 canonPat (PList []) = PCon nilName []
 canonPat (PList (h::r)) = PCon consName [canonPat h, canonPat (PList r)]
-canonPat (PAs _ p) = canonPat p
+canonPat (PAs _ _ p) = canonPat p
 canonPat (PRng _ _ _) = PWild
 canonPat (PRec _ _ _) = PWild
 
@@ -524,7 +526,7 @@ rewritePat fo (PCon c args) = PCon c (map (rewritePat fo) args)
 rewritePat fo (PCons h t) = PCons (rewritePat fo h) (rewritePat fo t)
 rewritePat fo (PTuple ps) = PTuple (map (rewritePat fo) ps)
 rewritePat fo (PList ps) = PList (map (rewritePat fo) ps)
-rewritePat fo (PAs x p) = PAs x (rewritePat fo p)
+rewritePat fo (PAs x l p) = PAs x l (rewritePat fo p)
 rewritePat _ p = p
 
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
@@ -533,7 +535,7 @@ rewritePat _ p = p
 recPatForLabel : List (String, List String) -> List RecPatField -> String -> Pat
 recPatForLabel fo recFields label = match findRecField label recFields
   Some (RecPatField _ (Some sub)) => rewritePat fo sub
-  Some (RecPatField _ None) => PVar label
+  Some (RecPatField _ None) => PVar label (Loc "" 0 0 0 0)
   None => PWild
 
 findRecField : String -> List RecPatField -> Option RecPatField

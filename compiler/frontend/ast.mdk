@@ -96,14 +96,14 @@ public export data Route =
 public export data Addr = ALocal Int Int | AGlobal
 
 public export data Pat =
-  | PVar String
+  | PVar String Loc
   | PWild
   | PLit Lit
   | PCon String (List Pat)
   | PCons Pat Pat
   | PTuple (List Pat)
   | PList (List Pat)
-  | PAs String Pat
+  | PAs String Loc Pat
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
 

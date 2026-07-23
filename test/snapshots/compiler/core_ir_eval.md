@@ -1,5 +1,5 @@
 # META
-source_lines=584
+source_lines=588
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- values eval.mdk installs); `CMethod`/`CDict` arms consume the elaborated routes
 -- on the typed lowering path.
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -105,7 +105,7 @@ ceval _ (CLit l) = litValue l
 ceval env (CVar x _) = if startsWithAt x then VUnit else lookupEnv env x
 ceval env (CApp f x) = applyValue (ceval env f) (ceval env x)
 ceval env (CLam pats body) = VClosureF env pats (e => ceval e body)
-ceval env (CLet True (PVar f) e1 e2) = cevalRecLet env f e1 e2
+ceval env (CLet True (PVar f _) e1 e2) = cevalRecLet env f e1 e2
 ceval env (CLet _ pat e1 e2) = cevalLet env pat e1 e2
 ceval env (CLetGroup binds body) = cevalLetGroup env binds body
 ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
@@ -297,7 +297,10 @@ cevalSwitchOn env root arms v rest ((CTBranch head sub)::more) dft = match headE
 headExtract : CHead -> Value e -> Option (List (Value e))
 headExtract (HCon c a) v = extractWith (PCon c (cBinders a)) v
 headExtract (HTuple n) v = extractWith (PTuple (cBinders n)) v
-headExtract HCons v = extractWith (PCons (PVar "$d0") (PVar "$d1")) v
+headExtract HCons v =
+  extractWith
+    (PCons (PVar "$d0" (Loc "" 0 0 0 0)) (PVar "$d1" (Loc "" 0 0 0 0)))
+    v
 headExtract HNil v = extractWith (PList []) v
 headExtract HUnit v = extractWith (PLit LUnit) v
 headExtract (HLit l) v = extractWith (PLit l) v
@@ -314,7 +317,8 @@ cBinders n = cBindersGo 0 n
 cBindersGo : Int -> Int -> List Pat
 cBindersGo i n
   | i >= n = []
-  | otherwise = PVar ("$d" ++ intToString i) :: cBindersGo (i + 1) n
+  | otherwise =
+    PVar ("$d" ++ intToString i) (Loc "" 0 0 0 0) :: cBindersGo (i + 1) n
 
 nthArm : List CArm -> Int -> Option CArm
 nthArm (a::_) 0 = Some a
@@ -440,7 +444,7 @@ cImplBodyValue env (CImplDefault pats body) = cImplMethodValue env [] pats body
 cImplMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> CExpr -> Value e
 cImplMethodValue env positions [] body
   | isEmptyL positions = VThunk (_ => ceval env body)
-  | otherwise = VClosureF env [PVar "$eta"] (e => ceval e (CApp body (CVar "$eta" AGlobal)))
+  | otherwise = VClosureF env [PVar "$eta" (Loc "" 0 0 0 0)] (e => ceval e (CApp body (CVar "$eta" AGlobal)))
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
 
 cBindName : CBind -> String
@@ -587,7 +591,7 @@ cevalModulesOutput preludeDecls modules =
   let _ = cRunMainForEffect binds
   outputRef.value
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false))))
@@ -597,7 +601,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "applyValue") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "f"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "x"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CLet" (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "ceval" ((PVar "env") (PCon "CLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLet" PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalLet") (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "cevalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
@@ -679,7 +683,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "headExtract" (TyFun (TyCon "CHead") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "headExtract" ((PCon "HCon" (PVar "c") (PVar "a")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EVar "cBinders") (EVar "a")))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HTuple" (PVar "n")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PTuple") (EApp (EVar "cBinders") (EVar "n")))) (EVar "v")))
-(DFunDef false "headExtract" ((PCon "HCons") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCons") (EApp (EVar "PVar") (ELit (LString "$d0")))) (EApp (EVar "PVar") (ELit (LString "$d1"))))) (EVar "v")))
+(DFunDef false "headExtract" ((PCon "HCons") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "PVar") (ELit (LString "$d0"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EApp (EApp (EVar "PVar") (ELit (LString "$d1"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HNil") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PList") (EListLit))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HUnit") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PLit") (EVar "LUnit"))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HLit" (PVar "l")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PLit") (EVar "l"))) (EVar "v")))
@@ -688,7 +692,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cBinders" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "cBinders" ((PVar "n")) (EApp (EApp (EVar "cBindersGo") (ELit (LInt 0))) (EVar "n")))
 (DTypeSig false "cBindersGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")))))
-(DFunDef false "cBindersGo" ((PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "PVar") (EBinOp "++" (ELit (LString "$d")) (EApp (EVar "intToString") (EVar "i")))) (EApp (EApp (EVar "cBindersGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cBindersGo" ((PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "PVar") (EBinOp "++" (ELit (LString "$d")) (EApp (EVar "intToString") (EVar "i")))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EVar "cBindersGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
 (DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
 (DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
@@ -735,7 +739,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cImplBodyValue" ((PVar "env") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "positions") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "tag")) (EVar "key")) (EVar "positions")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "cImplMethodValue") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body"))))
 (DFunDef false "cImplBodyValue" ((PVar "env") (PCon "CImplDefault" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "cImplMethodValue") (EVar "env")) (EListLit)) (EVar "pats")) (EVar "body")))
 (DTypeSig false "cImplMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "cImplMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EListLit (EApp (EVar "PVar") (ELit (LString "$eta"))))) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EApp (EApp (EVar "CApp") (EVar "body")) (EApp (EApp (EVar "CVar") (ELit (LString "$eta"))) (EVar "AGlobal")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cImplMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EApp (EApp (EVar "CApp") (EVar "body")) (EApp (EApp (EVar "CVar") (ELit (LString "$eta"))) (EVar "AGlobal")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cImplMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))))
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild)) (EVar "n"))
@@ -769,7 +773,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig true "cevalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
 (DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EFieldAccess (EVar "outputRef") "value"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false))))
@@ -779,7 +783,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "x"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "applyValue") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "f"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "x"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CLet" (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "ceval" ((PVar "env") (PCon "CLet" (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLet" PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "cevalLet") (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "cevalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "cevalMatch") (EVar "env")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
@@ -861,7 +865,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "headExtract" (TyFun (TyCon "CHead") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "headExtract" ((PCon "HCon" (PVar "c") (PVar "a")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EVar "cBinders") (EVar "a")))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HTuple" (PVar "n")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PTuple") (EApp (EVar "cBinders") (EVar "n")))) (EVar "v")))
-(DFunDef false "headExtract" ((PCon "HCons") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCons") (EApp (EVar "PVar") (ELit (LString "$d0")))) (EApp (EVar "PVar") (ELit (LString "$d1"))))) (EVar "v")))
+(DFunDef false "headExtract" ((PCon "HCons") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "PVar") (ELit (LString "$d0"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EApp (EApp (EVar "PVar") (ELit (LString "$d1"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HNil") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PList") (EListLit))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HUnit") (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PLit") (EVar "LUnit"))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HLit" (PVar "l")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PLit") (EVar "l"))) (EVar "v")))
@@ -870,7 +874,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cBinders" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat"))))
 (DFunDef false "cBinders" ((PVar "n")) (EApp (EApp (EVar "cBindersGo") (ELit (LInt 0))) (EVar "n")))
 (DTypeSig false "cBindersGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")))))
-(DFunDef false "cBindersGo" ((PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "PVar") (EBinOp "++" (ELit (LString "$d")) (EApp (EVar "intToString") (EVar "i")))) (EApp (EApp (EVar "cBindersGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cBindersGo" ((PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "PVar") (EBinOp "++" (ELit (LString "$d")) (EApp (EVar "intToString") (EVar "i")))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EVar "cBindersGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
 (DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
 (DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
@@ -917,7 +921,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cImplBodyValue" ((PVar "env") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "positions") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "tag")) (EVar "key")) (EVar "positions")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "cImplMethodValue") (EVar "env")) (EVar "positions")) (EVar "pats")) (EVar "body"))))
 (DFunDef false "cImplBodyValue" ((PVar "env") (PCon "CImplDefault" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "cImplMethodValue") (EVar "env")) (EListLit)) (EVar "pats")) (EVar "body")))
 (DTypeSig false "cImplMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "cImplMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EListLit (EApp (EVar "PVar") (ELit (LString "$eta"))))) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EApp (EApp (EVar "CApp") (EVar "body")) (EApp (EApp (EVar "CVar") (ELit (LString "$eta"))) (EVar "AGlobal")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cImplMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EApp (EApp (EVar "CApp") (EVar "body")) (EApp (EApp (EVar "CVar") (ELit (LString "$eta"))) (EVar "AGlobal")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cImplMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))))
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild)) (EVar "n"))

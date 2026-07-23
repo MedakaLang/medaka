@@ -475,14 +475,14 @@ exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
 -- (parenResult/leftSectionOrExpr); recover it as a cons pattern (mirrors the
 -- reference `expr_to_pat`'s `SecLeft (a, "::")` case).
 exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
-exprToPat (EAsPat x sub) = PAs x (exprToPat sub)
+exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) (exprToPat sub)
 exprToPat (EApp f x) = appToPat (EApp f x)
 exprToPat _ = PWild
 
 ctorOrVar : String -> Pat
 ctorOrVar x
   | isCtorName x = PCon x []
-  | otherwise = PVar x
+  | otherwise = PVar x (Loc "" 0 0 0 0)
 
 -- constructor-application pattern: the spine head must be uppercase
 appToPat : Expr -> Pat
@@ -1322,33 +1322,34 @@ functionRemovedMsg = "`function` is not a keyword — use `x => match x { … }`
 -- `let x : ty = e`, or plain `let x = e`, each followed by `in e2`
 letIdentExpr : String -> Parser Expr
 letIdentExpr name = do
+  s <- getPos
   advance
   params <- many parseParamPat
   t <- peekP
-  letIdentExprRest name params t
+  letIdentExprRest name (locOfSpan s (s + 1)) params t
 
-letIdentExprRest : String -> List Pat -> Token -> Parser Expr
-letIdentExprRest name [] TColon = do
+letIdentExprRest : String -> Loc -> List Pat -> Token -> Parser Expr
+letIdentExprRest name nameLoc [] TColon = do
   advance
   ty <- parseTy
   expectTok TEqual
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False False (PVar name) (EAnnot e1 ty) e2)
-letIdentExprRest name [] TEqual = do
+  pure (ELet False False (PVar name nameLoc) (EAnnot e1 ty) e2)
+letIdentExprRest name nameLoc [] TEqual = do
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False False (PVar name) e1 e2)
-letIdentExprRest name params TEqual = do
+  pure (ELet False False (PVar name nameLoc) e1 e2)
+letIdentExprRest name nameLoc params TEqual = do
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False True (PVar name) (curryLam params e1) e2)
-letIdentExprRest _ _ _ = failP "expected : or = in let"
+  pure (ELet False True (PVar name nameLoc) (curryLam params e1) e2)
+letIdentExprRest _ _ _ _ = failP "expected : or = in let"
 
 -- non-IDENT pattern: `let (a, b) = e in e2`, `let Some x = e in e2`, …
 letPatExpr : Parser Expr
@@ -1449,10 +1450,12 @@ parsePat = parsePatCons
 -- does NOT swallow a following `::` tail.
 parseAsPat : Parser Pat
 parseAsPat = do
+  s <- getPos
   x <- identNameP
+  q <- getPos
   expectTok TAsAt
   sub <- parsePatApp
-  pure (PAs x sub)
+  pure (PAs x (locOfSpan s q) sub)
 
 parsePatCons : Parser Pat
 parsePatCons = do
@@ -1603,7 +1606,10 @@ parsePatAtom : Parser Pat
 parsePatAtom = do
   t <- peekP
   match t
-    TIdent x => emit (PVar x)
+    TIdent x => do
+      s <- getPos
+      advance
+      pure (PVar x (locOfSpan s (s + 1)))
     TUnderscore => emit PWild
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
     TInt n _ => intPatRest (LInt n)
@@ -1636,10 +1642,12 @@ parseParamPat = orElse parseParamAsPat parsePatAtom
 
 parseParamAsPat : Parser Pat
 parseParamAsPat = do
+  s <- getPos
   x <- identNameP
+  q <- getPos
   expectTok TAsAt
   sub <- parsePatAtom
-  pure (PAs x sub)
+  pure (PAs x (locOfSpan s q) sub)
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
@@ -3261,51 +3269,54 @@ letKind _ = letPat
 letRecStmt : Parser DoStmt
 letRecStmt = do
   expectTok TRec
+  s <- getPos
   name <- identNameP
+  q <- getPos
   pats <- many parseParamPat
   expectTok TEqual
   e1 <- parseRhsExpr
   t <- peekP
-  letFunTailFor name pats e1 t
+  letFunTailFor name (locOfSpan s q) pats e1 t
 
 -- IDENT-led: function-let `let f a… = e` (params present), annotated
 -- `let x : ty = e`, or plain `let x = e [in/else]`
 letIdent : String -> Parser DoStmt
 letIdent name = do
+  s <- getPos
   advance
   pats <- many parseParamPat
   t <- peekP
-  letIdentBody name pats t
+  letIdentBody name (locOfSpan s (s + 1)) pats t
 
 -- annotation (`: ty`) only on the no-params case, mirroring the let-in path
-letIdentBody : String -> List Pat -> Token -> Parser DoStmt
-letIdentBody name [] TColon = do
+letIdentBody : String -> Loc -> List Pat -> Token -> Parser DoStmt
+letIdentBody name nameLoc [] TColon = do
   advance
   ty <- parseTy
   expectTok TEqual
   e1 <- parseRhsExpr
-  letIdentRest name [] (EAnnot e1 ty)
-letIdentBody name pats _ = do
+  letIdentRest name nameLoc [] (EAnnot e1 ty)
+letIdentBody name nameLoc pats _ = do
   expectTok TEqual
   e1 <- parseRhsExpr
-  letIdentRest name pats e1
+  letIdentRest name nameLoc pats e1
 
-letIdentRest : String -> List Pat -> Expr -> Parser DoStmt
-letIdentRest name [] e1 = do
+letIdentRest : String -> Loc -> List Pat -> Expr -> Parser DoStmt
+letIdentRest name nameLoc [] e1 = do
   t <- peekP
-  letTailFor (PVar name) e1 t
-letIdentRest name pats e1 = do
+  letTailFor (PVar name nameLoc) e1 t
+letIdentRest name nameLoc pats e1 = do
   t <- peekP
-  letFunTailFor name pats e1 t
+  letFunTailFor name nameLoc pats e1 t
 
 -- `let f params = e1 in e2` → DoExpr (ELet); without `in` → DoLet (stmt)
-letFunTailFor : String -> List Pat -> Expr -> Token -> Parser DoStmt
-letFunTailFor name pats e1 TIn = do
+letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> Parser DoStmt
+letFunTailFor name nameLoc pats e1 TIn = do
   advance
   e2 <- parseExpr
-  pure (DoExpr (ELet False True (PVar name) (curryLam pats e1) e2))
-letFunTailFor name pats e1 _ =
-  pure (DoLet False True (PVar name) (curryLam pats e1))
+  pure (DoExpr (ELet False True (PVar name nameLoc) (curryLam pats e1) e2))
+letFunTailFor name nameLoc pats e1 _ =
+  pure (DoLet False True (PVar name nameLoc) (curryLam pats e1))
 
 -- non-IDENT-led pattern: `let (a, b) = e`, `let Some v = e`, …
 letPat : Parser DoStmt
@@ -3358,8 +3369,10 @@ bindStmts lhs rhs = match stripLoc lhs
 
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindAnnot inner ty rhs = match stripLoc inner
-  EVar x =>
-    [DoBind (PVar x) rhs, DoLet False False (PVar x) (EAnnot (EVar x) ty)]
+  EVar x => [
+    DoBind (PVar x (Loc "" 0 0 0 0)) rhs,
+    DoLet False False (PVar x (Loc "" 0 0 0 0)) (EAnnot (EVar x) ty),
+  ]
   other => [DoBind (exprToPat other) rhs]
 
 -- a `lhs = rhs` statement: bare var → DoAssign, field path → DoFieldAssign

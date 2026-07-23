@@ -674,7 +674,7 @@ alpha lets (EVar x) = match lookupAssoc x lets
 alpha lets (EVarId x _) = match lookupAssoc x lets
   Some rhs => alpha lets rhs
   None => Unknown
-alpha lets (ELet _ _ (PVar x) e1 e2) = alpha ((x, e1)::lets) e2
+alpha lets (ELet _ _ (PVar x _) e1 e2) = alpha ((x, e1)::lets) e2
 alpha lets (ELet _ _ _ _ e2) = alpha lets e2
 alpha lets (ELetGroup binds body) = alpha (alphaCollectBinds binds lets) body
 alpha lets (EIf _ t f) = match alpha lets t
@@ -3880,7 +3880,7 @@ monoScheme t = Forall [] [] t
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
-inferPat _ (PVar x) =
+inferPat _ (PVar x _) =
   let v = freshVar ()
   let _ = recordLocalBind x v
   (v, [(x, monoScheme v)])
@@ -3890,7 +3890,7 @@ inferPat env (PCon name pats) = inferPatCon env name pats
 inferPat env (PTuple pats) = inferPatTuple env pats
 inferPat env (PCons h t) = inferPatCons env h t
 inferPat env (PList pats) = inferPatList env pats
-inferPat env (PAs x p) = inferPatAs env x p
+inferPat env (PAs x _ p) = inferPatAs env x p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat _ (PRng lo hi _) = inferPatRng lo hi
 inferPat _ _ = panic "typecheck: unsupported pattern (slice 1)"
@@ -4657,7 +4657,7 @@ inferStmt : TcEnv -> DoStmt -> TcEnv
 inferStmt env (DoExpr e) =
   let _ = infer env e
   env
-inferStmt env (DoLet _ True (PVar x) e) = blockRecLet env x e
+inferStmt env (DoLet _ True (PVar x _) e) = blockRecLet env x e
 inferStmt env (DoLet _ _ pat e) = blockLet env pat e
 inferStmt env (DoAssign x e) = extendLocalVar env x (monoScheme (infer env e))
 -- A `<-` bind (DoBind) reaching a bare block is a user error: `<-` is
@@ -4696,7 +4696,7 @@ blockRecLet env x e =
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
 
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
-blockLet env (PVar x) e =
+blockLet env (PVar x _) e =
   let _ = enterLevel ()
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
@@ -7275,7 +7275,7 @@ inferLam env pats body =
 inferLet : TcEnv -> Bool -> Bool -> Pat -> Expr -> Expr -> Mono
 inferLet env _ isFun pat e1 e2
   | isFun = match pat
-    PVar x => inferRecLet env x e1 e2
+    PVar x _ => inferRecLet env x e1 e2
     _ => inferLetSimple env pat e1 e2
   | otherwise = inferLetSimple env pat e1 e2
 
@@ -7351,7 +7351,7 @@ inferLetSimple env pat e1 e2 =
   inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
 
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
-inferLetBody env (PVar x) t1 e1 e2 oblN0 callN0 dictN0 =
+inferLetBody env (PVar x _) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
   let sch = genRestricted (isNonexpansive e1) t1
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
@@ -9043,12 +9043,12 @@ letBindNameTc (LetBind n _) = n
 -- the variables a pattern binds (local copy; llvm_emit's patVars isn't importable
 -- here, and this one also covers PRec field/pun binders).
 patVarsTc : Pat -> List String
-patVarsTc (PVar x) = [x]
+patVarsTc (PVar x _) = [x]
 patVarsTc (PCon _ args) = patVarsListTc args
 patVarsTc (PCons h t) = patVarsTc h ++ patVarsTc t
 patVarsTc (PTuple ps) = patVarsListTc ps
 patVarsTc (PList ps) = patVarsListTc ps
-patVarsTc (PAs x p) = x :: patVarsTc p
+patVarsTc (PAs x _ p) = x :: patVarsTc p
 patVarsTc (PRec _ fields _) = flatMap recPatFieldVarsTc fields
 patVarsTc _ = []
 
@@ -11699,7 +11699,8 @@ dictParams n k = dictParamsGo n 0 k
 dictParamsGo : String -> Int -> Int -> List Pat
 dictParamsGo n slot k
   | slot >= k = []
-  | otherwise = PVar (dictParamName n slot) :: dictParamsGo n (slot + 1) k
+  | otherwise =
+    PVar (dictParamName n slot) (Loc "" 0 0 0 0) :: dictParamsGo n (slot + 1) k
 
 -- [count] dict params for [n] starting at slot [start]: $dict_n_start ..
 -- $dict_n_(start+count-1).  Used for impl-`requires` element-dict params, which
@@ -11707,8 +11708,7 @@ dictParamsGo n slot k
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsFrom n start count
   | count <= 0 = []
-  | otherwise =
-    PVar (dictParamName n start) :: dictParamsFrom n (start + 1) (count - 1)
+  | otherwise = PVar (dictParamName n start) (Loc "" 0 0 0 0) :: dictParamsFrom n (start + 1) (count - 1)
 
 dictParamName : String -> Int -> String
 dictParamName fn slot = "$dict_\{fn}_\{intToString slot}"

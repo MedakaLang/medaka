@@ -825,12 +825,12 @@ letBindNamesPM binds = map letBindName binds
 
 -- ── pattern variables (local copy; covers PRec field/pun binders) ─────────────
 patVarsPM : Pat -> List String
-patVarsPM (PVar x) = [x]
+patVarsPM (PVar x _) = [x]
 patVarsPM (PCon _ args) = patVarsListPM args
 patVarsPM (PCons h t) = patVarsPM h ++ patVarsPM t
 patVarsPM (PTuple ps) = patVarsListPM ps
 patVarsPM (PList ps) = patVarsListPM ps
-patVarsPM (PAs x p) = x :: patVarsPM p
+patVarsPM (PAs x _ p) = x :: patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
 patVarsPM _ = []
 
@@ -847,7 +847,7 @@ renamePat rm (PCon n args) = PCon (renameDefName rm n) (map (renamePat rm) args)
 renamePat rm (PCons h t) = PCons (renamePat rm h) (renamePat rm t)
 renamePat rm (PTuple ps) = PTuple (map (renamePat rm) ps)
 renamePat rm (PList ps) = PList (map (renamePat rm) ps)
-renamePat rm (PAs x p) = PAs x (renamePat rm p)
+renamePat rm (PAs x l p) = PAs x l (renamePat rm p)
 renamePat rm (PRec n fields open) =
   PRec (renameDefName rm n) (map (renameRecPatField rm) fields) open
 renamePat _ p = p
