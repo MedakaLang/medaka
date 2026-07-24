@@ -1,5 +1,5 @@
 # META
-source_lines=442
+source_lines=451
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -37,6 +37,15 @@ public export data Ty =
   | TyTuple (List Ty)
   | TyEffect (List (String, Option String)) (Option String) Ty
   | TyConstrained (List Constraint) Ty
+  -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
+  -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
+  -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
+  -- Stdout") — because a bare row-argument atom wraps nothing: there is no
+  -- inner type to distinguish "no wrapped type" from "wrapped type happens
+  -- to be Unit", so a real constructor is required rather than a filler Ty
+  -- (a filler is print-ambiguous with a genuine wrapped type of the same
+  -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
+  | TyRow (List (String, Option String)) (Option String) (Option Loc)
 
 -- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
 public export data Constraint = Constraint String (List Ty)
@@ -448,7 +457,7 @@ public export data Decl =
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
-(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty")))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
@@ -493,7 +502,7 @@ public export data Decl =
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
-(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty")))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())

@@ -1,5 +1,5 @@
 # META
-source_lines=2937
+source_lines=2942
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -358,6 +358,10 @@ checkType cur env (TyEffect labels _ t) = flatMap (checkEffect cur env) (map fst
   ++ checkType cur env t
 checkType cur env (TyConstrained cs t) = flatMap (checkConstraint cur env) cs
   ++ checkType cur env t
+-- A bare row atom (#997) wraps no inner type, but its labels are the same
+-- written effect labels a `TyEffect` carries — validate them the same way.
+checkType cur env (TyRow labels _ _) =
+  flatMap (checkEffect cur env) (map fst labels)
 
 builtInEffects : List String
 builtInEffects = [
@@ -1543,6 +1547,7 @@ firstTyLoc (TyFun f x) = orElseLocL (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyTuple ts) = firstTyLocList ts
 firstTyLoc (TyEffect _ _ t) = firstTyLoc t
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
+firstTyLoc (TyRow _ _ l) = l
 
 firstTyLocList : List Ty -> Option Loc
 firstTyLocList [] = None
@@ -3016,6 +3021,7 @@ stampBindingIds decls =
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "ts")))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "labels"))) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkConstraint") (EVar "cur")) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
+(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "labels"))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -3485,6 +3491,7 @@ stampBindingIds decls =
 (DFunDef false "firstTyLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyLocList") (EVar "ts")))
 (DFunDef false "firstTyLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
 (DFunDef false "firstTyLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
 (DTypeSig false "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLocL") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
@@ -4048,6 +4055,7 @@ stampBindingIds decls =
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "ts")))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "labels"))) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkConstraint") (EVar "cur")) (EVar "env"))) (EVar "cs")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
+(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkEffect") (EVar "cur")) (EVar "env"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "labels"))))
 (DTypeSig false "builtInEffects" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtInEffects" () (EListLit (ELit (LString "IO")) (ELit (LString "Rand")) (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -4517,6 +4525,7 @@ stampBindingIds decls =
 (DFunDef false "firstTyLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyLocList") (EVar "ts")))
 (DFunDef false "firstTyLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
 (DFunDef false "firstTyLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
 (DTypeSig false "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
 (DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLocL") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))

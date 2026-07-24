@@ -161,6 +161,23 @@ Two things that are easy to get wrong:
   `update-branch` kicks are obsolete — the queue handles staleness. If a doc tells you to babysit
   a `BEHIND` branch, that doc is stale.
 
+  ⚠️ **`gh pr merge --auto --merge` prints `! The merge strategy for main is set by the merge
+  queue` on success — but its EXIT CODE carries no signal either way, so read back the state,
+  never the return code.** Observed on two separate successful calls: one exited **1** (an
+  orchestrator read that as a failed action, re-ran the command, and got back "already queued
+  to merge" for the PR it had just declared failed); another exited **0** (auto-merge armed,
+  PR not yet queue-eligible because required checks were still running). Same warning both
+  times, opposite exit codes, both successes — don't infer anything from which one you get.
+  Don't trust `autoMergeRequest` either — it reads `null` while queued, indistinguishable from
+  "never armed". The real signal is `isInMergeQueue` via GraphQL (not in this `gh`'s `--json` fields):
+  ```sh
+  gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){isInMergeQueue state}}}' --jq '.data.repository.pullRequest'
+  ```
+  This repo has hit both directions in one session — a tool reporting *success* while nothing
+  happened (a silently no-op'd `gh` write, a blanked message body), and here a tool reporting
+  *failure* while the action happened. The fix for both is the same: verify the resulting
+  state, not the return code.
+
 **Where the backlog and the orchestration rules live** — none of this is reachable from
 anywhere else, so it is listed here:
 

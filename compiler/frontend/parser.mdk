@@ -2034,7 +2034,30 @@ parseTyAtom = do
       pure (TyCon c (Some (locOfSpan s q)))
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
+    TLt => parseBareEffectAtom
     _ => failP "expected type atom"
+
+-- A row/grade written directly in a type-ARGUMENT slot (#997), e.g.
+-- `Async <Stdout> Unit` — unlike the prefix `tyFor TLt` form
+-- (`<Stdout> Unit -> Int`), there is no following type for the row to wrap:
+-- `Unit` here is `Async`'s *next* argument, parsed separately by the `many
+-- parseTyAtom` loop in `parseTyApp`. Reuses `effectBody` — the same
+-- row-parsing helper `parseEffectTy` uses — so both spellings agree on what
+-- a row means. Produces `TyRow`, NOT a filler-wrapped `TyEffect`: a bare row
+-- atom wraps no inner type, and a filler (e.g. `TyCon "Unit"`) would be
+-- print-ambiguous with a genuine wrapped type of the same shape (see
+-- `TyRow`'s doc comment, ast.mdk).
+parseBareEffectAtom : Parser Ty
+parseBareEffectAtom = do
+  s <- getPos
+  expectTok TLt
+  body <- effectBody
+  expectTok TGt
+  q <- getPos
+  pure (mkRow body (locOfSpan s q))
+
+mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow (labels, tail) loc = TyRow labels tail (Some loc)
 
 tyTupleOrSingle : List Ty -> Ty
 tyTupleOrSingle [t] = t

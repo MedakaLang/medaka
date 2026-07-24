@@ -354,6 +354,10 @@ checkType cur env (TyEffect labels _ t) = flatMap (checkEffect cur env) (map fst
   ++ checkType cur env t
 checkType cur env (TyConstrained cs t) = flatMap (checkConstraint cur env) cs
   ++ checkType cur env t
+-- A bare row atom (#997) wraps no inner type, but its labels are the same
+-- written effect labels a `TyEffect` carries — validate them the same way.
+checkType cur env (TyRow labels _ _) =
+  flatMap (checkEffect cur env) (map fst labels)
 
 builtInEffects : List String
 builtInEffects = [
@@ -1539,6 +1543,7 @@ firstTyLoc (TyFun f x) = orElseLocL (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyTuple ts) = firstTyLocList ts
 firstTyLoc (TyEffect _ _ t) = firstTyLoc t
 firstTyLoc (TyConstrained _ t) = firstTyLoc t
+firstTyLoc (TyRow _ _ l) = l
 
 firstTyLocList : List Ty -> Option Loc
 firstTyLocList [] = None

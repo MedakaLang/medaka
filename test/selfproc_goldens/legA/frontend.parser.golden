@@ -308,6 +308,7 @@ mkAttr : String -> Option String -> Attr
 mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
+mkRow : (List (String, Option String), Option String) -> Loc -> Ty
 namedImplRemovedMsg : String
 negIntPat : Parser Pat
 negIntRng : Lit -> Parser Pat
@@ -351,6 +352,7 @@ parseAssign : Parser Expr
 parseAtom : Parser Expr
 parseAtomRaw : Parser Expr
 parseAttrib : Parser Decl
+parseBareEffectAtom : Parser Ty
 parseBench : Bool -> Parser Decl
 parseBody : Parser Expr
 parseBodyExpr : Parser Expr
