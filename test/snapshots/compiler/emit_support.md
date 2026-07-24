@@ -1,5 +1,5 @@
 # META
-source_lines=587
+source_lines=601
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -239,6 +239,20 @@ insertReach (n::rest) reached acc =
 export bindEagerReach : OrdMap (List String) -> CBind -> List String
 bindEagerReach rm (CBind name [CClause [] _]) = fromOption [] (omLookup name rm)
 bindEagerReach _ _ = []
+
+-- #623: the value-init topo sort used to carry the SAME binding list twice — as
+-- `all : List CBind` (scanned linearly by a `findBind` per dep) and as
+-- `names : List String` (scanned by `contains` per dep).  Both collapse into ONE
+-- name→bind map, shared by both emitters.
+--
+-- ⚠️ Built RIGHT-to-LEFT ON PURPOSE: `omInsert` is last-write-wins, so recursing
+-- first and inserting `b` afterwards makes an EARLIER binding overwrite a later
+-- one of the same name — exactly the FIRST-match semantics the linear `findBind`
+-- had.  Its key SET is `map bindName binds`, so `omHasKey n` is the same test as
+-- the old `contains n names`.
+export bindNameMap : List CBind -> OrdMap CBind
+bindNameMap [] = omEmpty
+bindNameMap (b::rest) = omInsert (bindName b) b (bindNameMap rest)
 
 -- ── #561 PR-A: lazy-global classification (native fast-path predicate) ────────
 -- The topo sort (Stage B, above) makes eager init CORRECT wherever a static init
@@ -678,6 +692,9 @@ rngBound _ = 0
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DFunDef false "bindEagerReach" (PWild PWild) (EListLit))
+(DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
+(DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
+(DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild PWild PWild)) (EVar "True"))
@@ -889,6 +906,9 @@ rngBound _ = 0
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DFunDef false "bindEagerReach" (PWild PWild) (EListLit))
+(DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
+(DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
+(DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild PWild PWild)) (EVar "True"))

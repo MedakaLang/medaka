@@ -63,7 +63,6 @@ dbName : ResError -> String
 declBindNames : Decl -> List String
 declLoc : Decl -> Option Loc
 dedupResErrors : List ResError -> List ResError
-dedupResErrorsGo : List ResError -> List String -> List ResError
 deleteAllStr : List String -> Map String Unit -> Map String Unit
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
@@ -219,6 +218,7 @@ recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
 resErrorCode : ResError -> String
+resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
 resErrorLoc : ResError -> Option Loc
 resErrorSexp : ResError -> String

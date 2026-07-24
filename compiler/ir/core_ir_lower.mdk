@@ -73,6 +73,8 @@ import support.util.{
   isNonEmptyL,
   reverseL,
   startsWith,
+  dedupBy,
+  lenKey,
 }
 
 -- a synthetic binder for the lowered composition operators; constructed
@@ -919,7 +921,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     let _ = setRef allMemoKeysRef keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
-    let refs = dedupPairs (reverseL memoRefsRef.value) []
+    let refs = dedupPairs (reverseL memoRefsRef.value)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
@@ -927,16 +929,15 @@ memoCafBind (tag, method) = CBind
   (memoBindName tag method)
   [CClause [] (CMethod method (RKey tag []) [] [])]
 
-dedupPairs : List (String, String) -> List (String, String) -> List (String, String)
-dedupPairs [] _ = []
-dedupPairs (p::rest) seen
-  | pairMember p seen = dedupPairs rest seen
-  | otherwise = p :: dedupPairs rest (p::seen)
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
+-- Strings, so the key length-prefixes the first — a bare separator would not be
+-- injective.  Same first-occurrence order, so the memo-CAF binds are unchanged.
+dedupPairs : List (String, String) -> List (String, String)
+dedupPairs ps = dedupBy memoRefKey ps
 
-pairMember : (String, String) -> List (String, String) -> Bool
-pairMember _ [] = False
-pairMember (a, b) ((a2, b2)::rest) = a == a2 && b == b2
-  || pairMember (a, b) rest
+memoRefKey : (String, String) -> String
+memoRefKey (tag, method) = lenKey tag ++ method
 
 hoistBind : List (String, String) -> CBind -> CBind
 hoistBind keys (CBind n clauses) = CBind n (map (hoistClause keys) clauses)

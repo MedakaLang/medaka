@@ -72,6 +72,8 @@ import support.util.{
   splitOnChar,
   joinNl,
   anyList,
+  dedupBy,
+  lenKey,
 }
 
 -- ── public types ───────────────────────────────────────────────────────────
@@ -641,28 +643,19 @@ collectKept ((None, _)::rest) = collectKept rest
 collectKept ((Some a, _)::rest) = a :: collectKept rest
 
 -- Order-preserving dedupe (keep first) — a rename can make two atoms identical.
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  Both the label and the payload are
+-- unconstrained Strings, so the label is length-prefixed and the `Option` is
+-- tagged — the encoding is injective, matching the old `atomEq` exactly.
 dedupeAtoms : List (String, Option String) -> List (String, Option String)
-dedupeAtoms xs = dedupeGo xs []
+dedupeAtoms xs = dedupBy atomKey xs
 
-dedupeGo : List (String, Option String) -> List (String, Option String) -> List (String, Option String)
-dedupeGo [] _ = []
-dedupeGo (a::rest) seen =
-  if atomElem a seen then
-    dedupeGo rest seen
-  else
-    a :: dedupeGo rest (a::seen)
+atomKey : (String, Option String) -> String
+atomKey (label, dom) = lenKey label ++ domKey dom
 
-atomElem : (String, Option String) -> List (String, Option String) -> Bool
-atomElem _ [] = False
-atomElem a (b::bs) = atomEq a b || atomElem a bs
-
-atomEq : (String, Option String) -> (String, Option String) -> Bool
-atomEq (l1, d1) (l2, d2) = l1 == l2 && domEq d1 d2
-
-domEq : Option String -> Option String -> Bool
-domEq None None = True
-domEq (Some x) (Some y) = x == y
-domEq _ _ = False
+domKey : Option String -> String
+domKey None = "N"
+domKey (Some x) = "S\{x}"
 
 -- Advisory warnings: a `DEffect` that DECLARES a targeted label is left
 -- untouched (the codemod only rewrites row USES), so flag it for the operator.

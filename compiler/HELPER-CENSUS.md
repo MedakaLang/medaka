@@ -77,7 +77,7 @@ copy (or `support/`) should become the single definition. File:line is the
 | **`init`/dropLast** (`List a -> List a`) | typecheck.mdk:6697 `dropLast` (String) · eval.mdk:2149 `initList` · resolve.mdk:618 `initList` · loader.mdk:26 `initL` · private_mangle.mdk:385 `initListU` | IDENTICAL | new `support` `initList` | 5 copies, 4 names. private_mangle/resolve are O(n²)-ish via append in mirror. |
 | **`anyList`/`allList`** | util.mdk:30/35 (canonical) · typecheck.mdk:1134/1128 | IDENTICAL | `support/util.mdk` | typecheck still keeps both local copies despite support export. |
 | **`lookupAssoc`** (String key) | util.mdk:41 `lookupAssoc` (canonical) · typecheck.mdk:987 `lookupAssocS` · private_mangle.mdk:806 `lookupPM` · diagnostics.mdk:216 `cacheLookup` | IDENTICAL | `support/util.mdk` `lookupAssoc` | linear assoc scan. (Int-key variant `lookupAssocI` is a separate small cluster.) |
-| **`dedup`/nub** (first-occurrence dedup) | typecheck.mdk:1333 `dedupS` (**OrdMap, O(n·log n)**) · eval.mdk:1533 `nub` (O(n²)) · resolve.mdk:697 `findDups` · private_mangle.mdk:810 `dedupPM` (O(n²)) · typecheck.mdk:1188 `dedupI` (Int, O(n²)) | **DRIFTED** | **promote typecheck's OrdMap `dedupS`** | typecheck's is the fast one (uses `support.ordmap`); all others are naive O(n²) list-scan. High-value perf promotion. |
+| **`dedup`/nub** (first-occurrence dedup) | ✅ **CONSOLIDATED (#242).** Canonical: `support/util.mdk` `dedupBy` / `dedup` (OrdMap). ⚠️ This row's site list was STALE and is deliberately NOT replaced with another one — **derive it with the command in the note below the table.** | RESOLVED | — | See the note below the table for what stayed a `List` scan, and why. |
 | **`sortUniqS`** (sorted+dedup String) | typecheck.mdk:145 `sortUniqS` (+`sortUniqSGo`/`sortInsertS`) | (singleton, but stdlib-shaped) | leave or move | O(n²) insertion sort; candidate to move to support proactively. |
 | **`zipL`** (`List a -> List b -> List (a,b)`) | typecheck.mdk:1007 `zipL` · prop_runner.mdk:180 `zipL` | IDENTICAL | promote to `support/util.mdk` | 2 copies, same name. |
 | **`maxI`/`minI`** (`Int -> Int -> Int`) | lsp.mdk:191 `maxI` · fuzz_gen_main.mdk:369 `maxI` · typecheck.mdk:5320 `minI` | IDENTICAL | promote `maxI`/`minI` to support | trivial. |
@@ -86,6 +86,42 @@ copy (or `support/`) should become the single definition. File:line is the
 | **trim/whitespace** | build_cmd.mdk:42 `trimWS` (+trimLeft/trimRight) · repl.mdk:422 `stringTrim` (+Left/Right) · doctest.mdk:92 `trimStr` | DRIFTED (build_cmd O(n²) slice-recursion vs repl array-scan) | promote repl's array-scan version | repl's `stringTrim` scans the char array (O(n)); build_cmd recurses on `stringSlice` (O(n²)). |
 | **`utf8Len`/`utf8CharWidth`** | lsp.mdk:778/790 · lsp_harness.mdk:134/124 | IDENTICAL | promote pair to support | 2 copies each, byte-identical. |
 | **`isSome`/`mapOption`/`orElseOpt`** (Option) | typecheck.mdk:2491 `isSome` · eval.mdk:1637 `mapOption` · exhaust.mdk:278 `orElseOpt` | IDENTICAL | promote to support Option helpers | each a singleton today but obviously stdlib. |
+
+### Note — the `dedup`/nub row (#242): derive the sites, don't read them
+
+The site list this row used to carry had rotted (of the five it named, **three** —
+`typecheck.dedupS`, `eval.nub`, `private_mangle.dedupPM` — no longer exist under any name).
+It is deliberately not replaced with another list. Run this:
+
+```sh
+grep -rn -iE '^(export )?(dedup|nub|uniq)[A-Za-z0-9_]*[[:space:]]*(:|[a-z])' \
+  --include='*.mdk' compiler stdlib | sort
+```
+
+⚠️ **This command lives in a fenced block, NOT in a table cell, ON PURPOSE.** The first version of
+this note was written inline in the row above, where the `|` alternations had to be escaped as
+`\|` to survive the markdown table — and `grep -E` reads `\|` as a **literal pipe**, so the
+"derivation" matched nothing and silently answered *"there are no dedup helpers anywhere."* A
+recipe that fails OPEN is worse than the stale list it replaced. **If you move this back into a
+table, you break it.**
+
+Two sites stay a `List` scan **by design**, both because the `dedupBy` key would have to be
+*manufactured* and `support.ordmap` is String-keyed, so a synthesized key is a heap allocation per
+element (`check` is the GC-bound stage — `compiler/AGENTS.md`):
+
+- **`typecheck.dedupI`** (`List Int`) — the projection would be `intToString`. Its five call sites
+  are `generalize` (:3189/:3190, over one type's free tyvars) and the Num-obligation lists
+  (:8229/:8246/:8281 `numConstrainedIds obls`, :15511 `inferredConstraintIds`), which scale with
+  the binding group rather than one type. The scan is still right at both scales: `seen` grows only
+  with **distinct** ids, so the inner scan is bounded by the *result* size, not the input's.
+- **`llvm_emit.dedupS`** — a different reason entirely: it keeps the **LAST** occurrence, so it is
+  not `dedup` (first) and wraps it in a double reverse instead.
+
+⚠️ **Consolidating onto `dedupBy` is a DEBT win, not automatically a perf win.** Where the key must
+be built (`lenKey …`), the OrdMap form allocates ~9–15× more per call than the `List` scan it
+replaced — the scan is O(n²) in *comparisons* but only O(n) in *allocation*. Measured aggregate
+cost on `check` is under 0.5% (see PR #1010), which is why those sites were kept; but do not
+describe such a migration as "faster" without measuring the aggregate.
 
 ---
 
