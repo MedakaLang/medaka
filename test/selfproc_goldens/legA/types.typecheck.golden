@@ -170,7 +170,7 @@ checkMatchExhaustive : Mono -> List Arm -> Unit
 checkMatchRedundant : Mono -> List Arm -> Unit
 checkMatchToLines : List Decl -> List Decl -> String
 checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool) -> Option Loc -> Unit
-checkMissingFields : String -> List (String, Mono) -> List FieldAssign -> Unit
+checkMissingFields : String -> List String -> Map String Unit -> Unit
 checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModuleFullImpl : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> List (String, Scheme)
@@ -474,9 +474,9 @@ extendPropParams : TcEnv -> List PropParam -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externSchemes : List Decl -> List (String, Scheme)
-fieldAssignContains : String -> List FieldAssign -> Bool
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
 fieldAssignEVars : FieldAssign -> List String
+fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldOwnerNames : String -> List String
@@ -747,6 +747,7 @@ insertMethodIfaceParams : List Decl -> (Map String (String, List String, Ty), Ma
 insertUnivImpl : ImplUniverse -> (String, List Ty, List Require) -> ImplUniverse
 instantiate : Scheme -> Mono
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
+instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)
 instantiateSigTracked : Ty -> (Mono, List (String, Mono))
 instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateVarTrackedId : String -> Int -> Scheme -> Mono
@@ -1043,6 +1044,8 @@ recordArithSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List String -> List Mono -> Unit
 recordDoMonadError : Loc -> Unit
+recordFieldMap : RecordInfo -> Map String Mono
+recordFieldNames : RecordInfo -> List String
 recordIfaceObligation : String -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
@@ -1335,8 +1338,8 @@ unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyAllNumlit : Mono -> List Mono -> Unit
 unifyClauses : TcEnv -> Mono -> List (List Pat, Expr) -> Unit
-unifyFieldAssign : TcEnv -> String -> List (String, Mono) -> String -> Expr -> Unit
-unifyFieldAssigns : TcEnv -> String -> List (String, Mono) -> List FieldAssign -> Unit
+unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> String -> Expr -> Unit
+unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> List FieldAssign -> Unit
 unifyN : Mono -> Mono -> Unit
 unifyParamsExpected : List Mono -> List Mono -> Unit
 unifyRow : EffRow -> EffRow -> Unit

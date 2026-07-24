@@ -1,5 +1,5 @@
 # META
-source_lines=17554
+source_lines=17598
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -1342,7 +1342,17 @@ declaredEffects _ = []
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
 -- update / patterns can look records up without threading an env field.
-public export data RecordInfo = RecordInfo (List Int) Mono (List (String, Mono))
+-- `RecordInfo params result fields fieldIndex`.  `fields` keeps DECLARATION ORDER
+-- (record construction / exhaustiveness / owner rendering read it); `fieldIndex`
+-- is a name→raw-Mono OrdMap built ONCE at registration so the hot per-access read
+-- paths (field access + record update) do an O(log N) lookup instead of an O(N)
+-- `lookupAssoc` scan, and instantiate ONLY the accessed field rather than rebuilding
+-- all N fields per access (issue #980 — the typecheck sibling of resolve's ownersOf
+-- record quadratic).  The two views are kept in lockstep by the sole constructor
+-- site (`registerRecordInfoKeyed`); on a duplicate field name the OrdMap is built
+-- from the REVERSED list so the FIRST declared entry wins, matching `lookupAssoc`.
+public export data RecordInfo =
+  | RecordInfo (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Keyed indices over `recordsRef` — so the hot per-field-access read paths never walk the
 -- full registry (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
@@ -4726,41 +4736,55 @@ inferRecordCreate env name fields = match lookupRecordByName name
   None => unknownRecordFresh name
   Some ri => inferRecordCreateWith env name ri fields
 
+-- Record CREATE.  A construction supplies EVERY field, so a single `R { … }` with
+-- N fields is itself O(N x N): each supplied field did a `lookupAssoc fn` over the N
+-- declared field types.  Same fix as the access/update paths (issue #980): instantiate
+-- the result + each supplied field via the O(log N) index, and check missing fields
+-- against the declared NAME list.  `checkMissingFields` walks declared order (identical
+-- to the old `snd ir` order, which is `map fst fields`), so the missing-field errors are
+-- pushed in the same order; the per-supplied-field unify is byte-identical (same subst).
 inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> Mono
 inferRecordCreateWith env rname ri fields =
-  let ir = instantiateRecord ri
-  let _ = checkMissingFields rname (snd ir) fields
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = checkMissingFields rname (recordFieldNames ri) (omFromPairs (map fieldAssignNamePair fields) omEmpty)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
-unifyFieldAssigns : TcEnv -> String -> List (String, Mono) -> List FieldAssign -> Unit
-unifyFieldAssigns _ _ _ [] = ()
-unifyFieldAssigns env rname fieldTypes ((FieldAssign fn val)::rest) =
-  let _ = unifyFieldAssign env rname fieldTypes fn val
-  unifyFieldAssigns env rname fieldTypes rest
+fieldAssignNamePair : FieldAssign -> (String, Unit)
+fieldAssignNamePair (FieldAssign fn _) = (fn, ())
 
-unifyFieldAssign : TcEnv -> String -> List (String, Mono) -> String -> Expr -> Unit
-unifyFieldAssign env rname fieldTypes fn val = match lookupAssoc fn fieldTypes
+-- Index-based field-assignment unify for the record CREATE and UPDATE paths: instead of
+-- instantiating all N declared fields and linearly `lookupAssoc`-ing each supplied
+-- field, look the supplied field up in the record's O(log N) index and instantiate
+-- ONLY it with the shared param substitution (issue #980).  Byte-identical: same field
+-- Mono (same `subst`, same `substMono`), same error + order (per supplied field, in
+-- supplied order), `infer env val` is still the only fresh-var allocator in each step.
+unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> List FieldAssign -> Unit
+unifyFieldAssignsIdx _ _ _ _ [] = ()
+unifyFieldAssignsIdx env rname ri subst ((FieldAssign fn val)::rest) =
+  let _ = unifyFieldAssignIdx env rname ri subst fn val
+  unifyFieldAssignsIdx env rname ri subst rest
+
+unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> String -> Expr -> Unit
+unifyFieldAssignIdx env rname ri subst fn val = match omLookup fn (recordFieldMap ri)
   None => pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fn rname)
-  Some ft => unify (infer env val) ft
+  Some fm => unify (infer env val) (substMono subst [] fm)
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
 -- construction (mirrors lib/typecheck.ml ERecordCreate "Every declared field
 -- must be supplied" loop).  Walk `declaredFields`, check each name is present
 -- among the supplied `FieldAssign` list; push MissingField for any absent one.
-checkMissingFields : String -> List (String, Mono) -> List FieldAssign -> Unit
+-- `supplied` is the SET of supplied field names (built once by the caller), so the
+-- membership test is O(log N) instead of a per-declared-field O(N) list scan — a single
+-- N-field construction was O(N x N) here (issue #980).  Declared order is still walked
+-- in order, so the missing-field errors are pushed in exactly the old order.
+checkMissingFields : String -> List String -> OrdMap Unit -> Unit
 checkMissingFields _ [] _ = ()
-checkMissingFields rname ((fname, _)::rest) supplied
-  | fieldAssignContains fname supplied = checkMissingFields rname rest supplied
+checkMissingFields rname (fname::rest) supplied
+  | omHasKey fname supplied = checkMissingFields rname rest supplied
   | otherwise =
     let _ = pushTypeError "T-MISSING-FIELD" (missingFieldMsg fname rname)
     checkMissingFields rname rest supplied
-
-fieldAssignContains : String -> List FieldAssign -> Bool
-fieldAssignContains _ [] = False
-fieldAssignContains fname ((FieldAssign fn _)::rest)
-  | fname == fn = True
-  | otherwise = fieldAssignContains fname rest
 
 -- Phase 72 / TYPECHECK-AUDIT C2: receiver-directed field resolution.  Infer the
 -- receiver FIRST, then pick the owning record by its head tycon when known; if
@@ -4798,11 +4822,11 @@ inferValueField env e =
 -- which raises UnknownField with the resolved record name).
 inferFieldOfRecord : Mono -> String -> RecordInfo -> String -> Mono
 inferFieldOfRecord te rname ri fname =
-  let ir = instantiateRecord ri
-  let _ = unify te (fst ir)
-  match lookupAssoc fname (snd ir)
-    Some ft => ft
-    None => unknownFieldFresh fname rname (map fst (snd ir))
+  let sr = instantiateRecordShared ri
+  let _ = unify te (snd sr)
+  match omLookup fname (recordFieldMap ri)
+    Some fm => substMono (fst sr) [] fm
+    None => unknownFieldFresh fname rname (recordFieldNames ri)
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
@@ -5045,17 +5069,17 @@ inferRecordUpdateField env base fields fn r =
 
 inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdatePicked rname bt env fields ri =
-  let ir = instantiateRecord ri
-  let _ = unify bt (fst ir)
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = unify bt (snd sr)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdateWith env rname base fields ri =
-  let ir = instantiateRecord ri
-  let _ = unify (infer env base) (fst ir)
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = unify (infer env base) (snd sr)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
 -- operators infer by SHAPE (the typeclass constraint they carry — Num/Eq/… — is
 -- tracked at the value level but never rendered in a scheme, so it's irrelevant
@@ -7659,7 +7683,7 @@ registerRecordInfoKeyed key typeName params fields =
   let tvs = zipL params paramVars
   let result = applyParams (TCon typeName) paramVars
   let fieldMonos = map (recFieldMono tvs) fields
-  let ri = RecordInfo (map monoTyvarId paramVars) result fieldMonos
+  let ri = RecordInfo (map monoTyvarId paramVars) result fieldMonos (omFromPairs (reverseL fieldMonos) omEmpty)
   let _ = setRef perRun.value.recordsRef ((key, ri)::perRun.value.recordsRef.value)
   let _ = setRef perRun.value.recordByNameRef (omInsert key ri perRun.value.recordByNameRef.value)
   setRef
@@ -7680,11 +7704,31 @@ recFieldMono tvs (Field fn ty) = (fn, fromAstType tvs ty)
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordByName name = omLookup name perRun.value.recordByNameRef.value
 
--- instantiate a record's quantified params with fresh vars
+-- instantiate a record's quantified params with fresh vars.  Rebuilds ALL fields —
+-- used by the record-CREATE and record-PATTERN paths, which must see every declared
+-- field (missing-field check / binding each pattern field).  The single-field access
+-- and record-update paths use `instantiateRecordShared` + the field index instead so
+-- they never rebuild all N fields per access (issue #980).
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
-instantiateRecord (RecordInfo paramIds result fields) =
+instantiateRecord (RecordInfo paramIds result fields _) =
   let subst = freshSubst paramIds
   (substMono subst [] result, map (substField subst) fields)
+
+-- Instantiate ONLY the result type, returning the shared param substitution so the
+-- caller can instantiate individual fields on demand (via the field index).  The
+-- fresh-var allocation is identical to `instantiateRecord` (both call `freshSubst
+-- paramIds`); only the per-field `substMono` trees for UNACCESSED fields are skipped,
+-- and those allocate no fresh tyvars, so tyvar numbering is byte-identical.
+instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)
+instantiateRecordShared (RecordInfo paramIds result _ _) =
+  let subst = freshSubst paramIds
+  (subst, substMono subst [] result)
+
+recordFieldMap : RecordInfo -> OrdMap Mono
+recordFieldMap (RecordInfo _ _ _ idx) = idx
+
+recordFieldNames : RecordInfo -> List String
+recordFieldNames (RecordInfo _ _ fields _) = map fst fields
 
 substField : List (Int, Mono) -> (String, Mono) -> (String, Mono)
 substField subst (fn, fm) = (fn, substMono subst [] fm)
@@ -17965,7 +18009,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
-(DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))) ())
+(DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
@@ -18645,24 +18689,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordCreate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono")))))
 (DFunDef false "inferRecordCreate" ((PVar "env") (PVar "name") (PVar "fields")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "name")) (arm (PCon "None") () (EApp (EVar "unknownRecordFresh") (EVar "name"))) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EVar "inferRecordCreateWith") (EVar "env")) (EVar "name")) (EVar "ri")) (EVar "fields")))))
 (DTypeSig false "inferRecordCreateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono"))))))
-(DFunDef false "inferRecordCreateWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
-(DTypeSig false "unifyFieldAssigns" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit"))))))
-(DFunDef false "unifyFieldAssigns" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "unifyFieldAssigns" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PCons (PCon "FieldAssign" (PVar "fn") (PVar "val")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssign") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fn")) (EVar "val"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "rest")))))
-(DTypeSig false "unifyFieldAssign" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit")))))))
-(DFunDef false "unifyFieldAssign" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "fn") (PVar "val")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fn")) (EVar "fieldTypes")) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-FIELD"))) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fn")) (EVar "rname")))) (arm (PCon "Some" (PVar "ft")) () (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "val"))) (EVar "ft")))))
-(DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit")))))
+(DFunDef false "inferRecordCreateWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "fieldAssignNamePair")) (EVar "fields"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
+(DTypeSig false "fieldAssignNamePair" (TyFun (TyCon "FieldAssign") (TyTuple (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "fieldAssignNamePair" ((PCon "FieldAssign" (PVar "fn") PWild)) (ETuple (EVar "fn") (ELit LUnit)))
+(DTypeSig false "unifyFieldAssignsIdx" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit")))))))
+(DFunDef false "unifyFieldAssignsIdx" (PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "unifyFieldAssignsIdx" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "subst") (PCons (PCon "FieldAssign" (PVar "fn") (PVar "val")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EVar "subst")) (EVar "fn")) (EVar "val"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EVar "subst")) (EVar "rest")))))
+(DTypeSig false "unifyFieldAssignIdx" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
+(DFunDef false "unifyFieldAssignIdx" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "subst") (PVar "fn") (PVar "val")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-FIELD"))) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fn")) (EVar "rname")))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "val"))) (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))))
+(DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PTuple (PVar "fname") PWild) (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "fieldAssignContains") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "fieldAssignContains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Bool"))))
-(DFunDef false "fieldAssignContains" (PWild (PList)) (EVar "False"))
-(DFunDef false "fieldAssignContains" ((PVar "fname") (PCons (PCon "FieldAssign" (PVar "fn") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "fname") (EVar "fn")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldAssignContains") (EVar "fname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
 (DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "TCon") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
-(DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "fst") (EVar "ir")))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EApp (EVar "snd") (EVar "ir"))) (arm (PCon "Some" (PVar "ft")) () (EVar "ft")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "snd") (EVar "ir")))))))))
+(DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EApp (EVar "substMono") (EApp (EVar "fst") (EVar "sr"))) (EListLit)) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -18728,9 +18771,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "fst") (EVar "ir")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
+(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "fst") (EVar "ir")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
+(DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferBinopE" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))))
 (DFunDef false "inferBinopE" ((PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "dref")) (EBlock (DoLet false false (PVar "lt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "l"))) (DoLet false false (PVar "rt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "r"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "binopSpanLoc") (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "sp")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "sp")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordBinopSite") (EVar "op")) (EVar "dref")) (EVar "lt"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArithSite") (EVar "op")) (EVar "dref")) (EVar "lt"))) (DoExpr (EApp (EApp (EApp (EVar "inferBinop") (EVar "op")) (EVar "lt")) (EVar "rt")))))
 (DTypeSig false "binopSpanLoc" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
@@ -19202,7 +19245,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerData" ((PVar "env") (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit"))))))
-(DFunDef false "registerRecordInfoKeyed" ((PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EVar "TCon") (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EVar "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EVar "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef")) (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
+(DFunDef false "registerRecordInfoKeyed" ((PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EVar "TCon") (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EVar "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EVar "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "fieldMonos"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef")) (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "addFieldOwners" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "addFieldOwners" (PWild (PList) (PVar "m")) (EVar "m"))
 (DFunDef false "addFieldOwners" ((PVar "key") (PCons (PVar "fn") (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EBinOp "::" (EVar "key") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "m"))))) (EVar "m"))))
@@ -19211,7 +19254,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo"))))
 (DFunDef false "lookupRecordByName" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))
 (DTypeSig false "instantiateRecord" (TyFun (TyCon "RecordInfo") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
-(DFunDef false "instantiateRecord" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") (PVar "fields"))) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result")) (EApp (EApp (EVar "map") (EApp (EVar "substField") (EVar "subst"))) (EVar "fields"))))))
+(DFunDef false "instantiateRecord" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") (PVar "fields") PWild)) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result")) (EApp (EApp (EVar "map") (EApp (EVar "substField") (EVar "subst"))) (EVar "fields"))))))
+(DTypeSig false "instantiateRecordShared" (TyFun (TyCon "RecordInfo") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Mono"))))
+(DFunDef false "instantiateRecordShared" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") PWild PWild)) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EVar "subst") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result"))))))
+(DTypeSig false "recordFieldMap" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "OrdMap") (TyCon "Mono"))))
+(DFunDef false "recordFieldMap" ((PCon "RecordInfo" PWild PWild PWild (PVar "idx"))) (EVar "idx"))
+(DTypeSig false "recordFieldNames" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordFieldNames" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fields")))
 (DTypeSig false "substField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyTuple (TyCon "String") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "substField" ((PVar "subst") (PTuple (PVar "fn") (PVar "fm"))) (ETuple (EVar "fn") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))
 (DTypeSig false "registerVariants" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "TcEnv"))))))
@@ -21927,7 +21976,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
-(DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))) ())
+(DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
@@ -22607,24 +22656,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordCreate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono")))))
 (DFunDef false "inferRecordCreate" ((PVar "env") (PVar "name") (PVar "fields")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "name")) (arm (PCon "None") () (EApp (EVar "unknownRecordFresh") (EVar "name"))) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EVar "inferRecordCreateWith") (EVar "env")) (EVar "name")) (EVar "ri")) (EVar "fields")))))
 (DTypeSig false "inferRecordCreateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono"))))))
-(DFunDef false "inferRecordCreateWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
-(DTypeSig false "unifyFieldAssigns" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit"))))))
-(DFunDef false "unifyFieldAssigns" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "unifyFieldAssigns" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PCons (PCon "FieldAssign" (PVar "fn") (PVar "val")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssign") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fn")) (EVar "val"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "rest")))))
-(DTypeSig false "unifyFieldAssign" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit")))))))
-(DFunDef false "unifyFieldAssign" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "fn") (PVar "val")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fn")) (EVar "fieldTypes")) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-FIELD"))) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fn")) (EVar "rname")))) (arm (PCon "Some" (PVar "ft")) () (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "val"))) (EVar "ft")))))
-(DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit")))))
+(DFunDef false "inferRecordCreateWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "fieldAssignNamePair")) (EVar "fields"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
+(DTypeSig false "fieldAssignNamePair" (TyFun (TyCon "FieldAssign") (TyTuple (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "fieldAssignNamePair" ((PCon "FieldAssign" (PVar "fn") PWild)) (ETuple (EVar "fn") (ELit LUnit)))
+(DTypeSig false "unifyFieldAssignsIdx" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Unit")))))))
+(DFunDef false "unifyFieldAssignsIdx" (PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "unifyFieldAssignsIdx" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "subst") (PCons (PCon "FieldAssign" (PVar "fn") (PVar "val")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EVar "subst")) (EVar "fn")) (EVar "val"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EVar "subst")) (EVar "rest")))))
+(DTypeSig false "unifyFieldAssignIdx" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))))))
+(DFunDef false "unifyFieldAssignIdx" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "subst") (PVar "fn") (PVar "val")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-FIELD"))) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fn")) (EVar "rname")))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "val"))) (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))))
+(DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PTuple (PVar "fname") PWild) (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "fieldAssignContains") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "fieldAssignContains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Bool"))))
-(DFunDef false "fieldAssignContains" (PWild (PList)) (EVar "False"))
-(DFunDef false "fieldAssignContains" ((PVar "fname") (PCons (PCon "FieldAssign" (PVar "fn") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "fname") (EVar "fn")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldAssignContains") (EVar "fname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
 (DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "TCon") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
-(DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "fst") (EVar "ir")))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EApp (EVar "snd") (EVar "ir"))) (arm (PCon "Some" (PVar "ft")) () (EVar "ft")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "snd") (EVar "ir")))))))))
+(DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EApp (EVar "substMono") (EApp (EVar "fst") (EVar "sr"))) (EListLit)) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -22690,9 +22738,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "fst") (EVar "ir")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
+(DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "ir") (EApp (EVar "instantiateRecord") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "fst") (EVar "ir")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "unifyFieldAssigns") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))) (DoExpr (EApp (EVar "fst") (EVar "ir")))))
+(DFunDef false "inferRecordUpdateWith" ((PVar "env") (PVar "rname") (PVar "base") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base"))) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferBinopE" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))))
 (DFunDef false "inferBinopE" ((PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "dref")) (EBlock (DoLet false false (PVar "lt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "l"))) (DoLet false false (PVar "rt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "r"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "binopSpanLoc") (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "sp")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "sp")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordBinopSite") (EVar "op")) (EVar "dref")) (EMethodRef "lt"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordArithSite") (EVar "op")) (EVar "dref")) (EMethodRef "lt"))) (DoExpr (EApp (EApp (EApp (EVar "inferBinop") (EVar "op")) (EMethodRef "lt")) (EVar "rt")))))
 (DTypeSig false "binopSpanLoc" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))))
@@ -23164,7 +23212,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerData" ((PVar "env") (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit"))))))
-(DFunDef false "registerRecordInfoKeyed" ((PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EVar "TCon") (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EMethodRef "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EMethodRef "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef")) (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
+(DFunDef false "registerRecordInfoKeyed" ((PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EVar "TCon") (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EMethodRef "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EMethodRef "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "fieldMonos"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef")) (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "addFieldOwners" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "addFieldOwners" (PWild (PList) (PVar "m")) (EVar "m"))
 (DFunDef false "addFieldOwners" ((PVar "key") (PCons (PVar "fn") (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EBinOp "::" (EVar "key") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "m"))))) (EVar "m"))))
@@ -23173,7 +23221,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo"))))
 (DFunDef false "lookupRecordByName" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))
 (DTypeSig false "instantiateRecord" (TyFun (TyCon "RecordInfo") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))))
-(DFunDef false "instantiateRecord" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") (PVar "fields"))) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result")) (EApp (EApp (EMethodRef "map") (EApp (EVar "substField") (EVar "subst"))) (EVar "fields"))))))
+(DFunDef false "instantiateRecord" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") (PVar "fields") PWild)) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result")) (EApp (EApp (EMethodRef "map") (EApp (EVar "substField") (EVar "subst"))) (EVar "fields"))))))
+(DTypeSig false "instantiateRecordShared" (TyFun (TyCon "RecordInfo") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Mono"))))
+(DFunDef false "instantiateRecordShared" ((PCon "RecordInfo" (PVar "paramIds") (PVar "result") PWild PWild)) (EBlock (DoLet false false (PVar "subst") (EApp (EVar "freshSubst") (EVar "paramIds"))) (DoExpr (ETuple (EVar "subst") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "result"))))))
+(DTypeSig false "recordFieldMap" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "OrdMap") (TyCon "Mono"))))
+(DFunDef false "recordFieldMap" ((PCon "RecordInfo" PWild PWild PWild (PVar "idx"))) (EVar "idx"))
+(DTypeSig false "recordFieldNames" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordFieldNames" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fields")))
 (DTypeSig false "substField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyTuple (TyCon "String") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "substField" ((PVar "subst") (PTuple (PVar "fn") (PVar "fm"))) (ETuple (EVar "fn") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))
 (DTypeSig false "registerVariants" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "TcEnv"))))))

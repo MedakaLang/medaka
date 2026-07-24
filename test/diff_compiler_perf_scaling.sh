@@ -1393,7 +1393,6 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
-widerecords:typecheck
 "
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
@@ -1416,21 +1415,17 @@ widerecords:typecheck
 # ratio drops under 2.30 and this row PROMOTES (retire the quadratic allowance). Deterministic
 # (GC bytes), so this absorbs only compiler-source drift, not runner noise.
 KNOWN_ACEIL_reexports_resolve="4.0"; KNOWN_AFIXED_reexports_resolve="2.30"
-# widerecords:typecheck — an O(record-fields x field-accesses) quadratic in typecheck's
-# record-field inference (inferFieldOfRecord's `instantiateRecord ri` + `lookupAssoc fname
-# (snd ir)` per access; inferRecordUpdatePicked/-With the same on updates — the typecheck
-# sibling of resolve's `ownersOf` record scan this widerecords shape was built to stress).
-# It was op-count-superlinear on main ALREADY (r1=2.89 r2=3.33, climbing) but read `ok` under
-# the 3.0 bar because a LINEAR op-dilution term in the SAME stage held the ratio down —
-# buildDefinerShadows' `contains n methodNames` scan (a constant prelude-method set x the 2N
-# record funcs). #973 (PR #977) indexed that scan to an uncounted OrdMap, removing the
-# dilution and surfacing the true ratio (r1=3.65 r2=3.88; absolute op is LOWER at every N —
-# proof it is an UNMASK, not a regression), exactly as #907 unmasked manyifaces:typecheck.
-# Ledgered here (not a regression: op count fell): ceiling 4.3 clears the observed r2=3.88 by
-# ~11% (the file's headroom convention); OFIXED 2.60 — drops under it when the record-field
-# instantiate+scan is indexed. Underlying quadratic tracked in #980 (ws:perf); drain this row
-# when it lands.
-KNOWN_OCEIL_widerecords_typecheck="4.3"; KNOWN_OFIXED_widerecords_typecheck="2.60"
+# widerecords:typecheck was HERE (op ceiling 4.3) — an O(record-fields x field-accesses)
+# quadratic in typecheck's record-field inference: inferFieldOfRecord re-`instantiateRecord`d
+# ALL N fields and `lookupAssoc`-scanned the N-field assoc list per access, and
+# inferRecordUpdatePicked/-With did the same per update (the typecheck sibling of resolve's
+# `ownersOf` record scan this shape was built to stress). #980 FIXED it: RecordInfo
+# now carries an O(log N) name→Mono field INDEX built once at registration, the access/update
+# paths instantiate ONLY the result + the accessed field (via the shared param subst) instead
+# of rebuilding all N, and the field lookup is an uncounted `omLookup`. So the counted-op work
+# on these paths is gone and typecheck reads LINEAR on this shape — byte-identical inference
+# (same schemes, same error set + order; verified against the fixpoint + typecheck_compiler_
+# source). Row drained; the widerecords shape still runs as a linear regression guard.
 
 is_known_ops() {
   for k in $KNOWN_SLOW_OPS; do [ "$k" = "$1" ] && return 0; done
