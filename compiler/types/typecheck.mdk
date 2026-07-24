@@ -1338,7 +1338,17 @@ declaredEffects _ = []
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
 -- update / patterns can look records up without threading an env field.
-public export data RecordInfo = RecordInfo (List Int) Mono (List (String, Mono))
+-- `RecordInfo params result fields fieldIndex`.  `fields` keeps DECLARATION ORDER
+-- (record construction / exhaustiveness / owner rendering read it); `fieldIndex`
+-- is a name→raw-Mono OrdMap built ONCE at registration so the hot per-access read
+-- paths (field access + record update) do an O(log N) lookup instead of an O(N)
+-- `lookupAssoc` scan, and instantiate ONLY the accessed field rather than rebuilding
+-- all N fields per access (issue #980 — the typecheck sibling of resolve's ownersOf
+-- record quadratic).  The two views are kept in lockstep by the sole constructor
+-- site (`registerRecordInfoKeyed`); on a duplicate field name the OrdMap is built
+-- from the REVERSED list so the FIRST declared entry wins, matching `lookupAssoc`.
+public export data RecordInfo =
+  | RecordInfo (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Keyed indices over `recordsRef` — so the hot per-field-access read paths never walk the
 -- full registry (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
@@ -4722,41 +4732,55 @@ inferRecordCreate env name fields = match lookupRecordByName name
   None => unknownRecordFresh name
   Some ri => inferRecordCreateWith env name ri fields
 
+-- Record CREATE.  A construction supplies EVERY field, so a single `R { … }` with
+-- N fields is itself O(N x N): each supplied field did a `lookupAssoc fn` over the N
+-- declared field types.  Same fix as the access/update paths (issue #980): instantiate
+-- the result + each supplied field via the O(log N) index, and check missing fields
+-- against the declared NAME list.  `checkMissingFields` walks declared order (identical
+-- to the old `snd ir` order, which is `map fst fields`), so the missing-field errors are
+-- pushed in the same order; the per-supplied-field unify is byte-identical (same subst).
 inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> Mono
 inferRecordCreateWith env rname ri fields =
-  let ir = instantiateRecord ri
-  let _ = checkMissingFields rname (snd ir) fields
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = checkMissingFields rname (recordFieldNames ri) (omFromPairs (map fieldAssignNamePair fields) omEmpty)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
-unifyFieldAssigns : TcEnv -> String -> List (String, Mono) -> List FieldAssign -> Unit
-unifyFieldAssigns _ _ _ [] = ()
-unifyFieldAssigns env rname fieldTypes ((FieldAssign fn val)::rest) =
-  let _ = unifyFieldAssign env rname fieldTypes fn val
-  unifyFieldAssigns env rname fieldTypes rest
+fieldAssignNamePair : FieldAssign -> (String, Unit)
+fieldAssignNamePair (FieldAssign fn _) = (fn, ())
 
-unifyFieldAssign : TcEnv -> String -> List (String, Mono) -> String -> Expr -> Unit
-unifyFieldAssign env rname fieldTypes fn val = match lookupAssoc fn fieldTypes
+-- Index-based field-assignment unify for the record CREATE and UPDATE paths: instead of
+-- instantiating all N declared fields and linearly `lookupAssoc`-ing each supplied
+-- field, look the supplied field up in the record's O(log N) index and instantiate
+-- ONLY it with the shared param substitution (issue #980).  Byte-identical: same field
+-- Mono (same `subst`, same `substMono`), same error + order (per supplied field, in
+-- supplied order), `infer env val` is still the only fresh-var allocator in each step.
+unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> List FieldAssign -> Unit
+unifyFieldAssignsIdx _ _ _ _ [] = ()
+unifyFieldAssignsIdx env rname ri subst ((FieldAssign fn val)::rest) =
+  let _ = unifyFieldAssignIdx env rname ri subst fn val
+  unifyFieldAssignsIdx env rname ri subst rest
+
+unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> String -> Expr -> Unit
+unifyFieldAssignIdx env rname ri subst fn val = match omLookup fn (recordFieldMap ri)
   None => pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fn rname)
-  Some ft => unify (infer env val) ft
+  Some fm => unify (infer env val) (substMono subst [] fm)
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
 -- construction (mirrors lib/typecheck.ml ERecordCreate "Every declared field
 -- must be supplied" loop).  Walk `declaredFields`, check each name is present
 -- among the supplied `FieldAssign` list; push MissingField for any absent one.
-checkMissingFields : String -> List (String, Mono) -> List FieldAssign -> Unit
+-- `supplied` is the SET of supplied field names (built once by the caller), so the
+-- membership test is O(log N) instead of a per-declared-field O(N) list scan — a single
+-- N-field construction was O(N x N) here (issue #980).  Declared order is still walked
+-- in order, so the missing-field errors are pushed in exactly the old order.
+checkMissingFields : String -> List String -> OrdMap Unit -> Unit
 checkMissingFields _ [] _ = ()
-checkMissingFields rname ((fname, _)::rest) supplied
-  | fieldAssignContains fname supplied = checkMissingFields rname rest supplied
+checkMissingFields rname (fname::rest) supplied
+  | omHasKey fname supplied = checkMissingFields rname rest supplied
   | otherwise =
     let _ = pushTypeError "T-MISSING-FIELD" (missingFieldMsg fname rname)
     checkMissingFields rname rest supplied
-
-fieldAssignContains : String -> List FieldAssign -> Bool
-fieldAssignContains _ [] = False
-fieldAssignContains fname ((FieldAssign fn _)::rest)
-  | fname == fn = True
-  | otherwise = fieldAssignContains fname rest
 
 -- Phase 72 / TYPECHECK-AUDIT C2: receiver-directed field resolution.  Infer the
 -- receiver FIRST, then pick the owning record by its head tycon when known; if
@@ -4794,11 +4818,11 @@ inferValueField env e =
 -- which raises UnknownField with the resolved record name).
 inferFieldOfRecord : Mono -> String -> RecordInfo -> String -> Mono
 inferFieldOfRecord te rname ri fname =
-  let ir = instantiateRecord ri
-  let _ = unify te (fst ir)
-  match lookupAssoc fname (snd ir)
-    Some ft => ft
-    None => unknownFieldFresh fname rname (map fst (snd ir))
+  let sr = instantiateRecordShared ri
+  let _ = unify te (snd sr)
+  match omLookup fname (recordFieldMap ri)
+    Some fm => substMono (fst sr) [] fm
+    None => unknownFieldFresh fname rname (recordFieldNames ri)
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
@@ -5041,17 +5065,17 @@ inferRecordUpdateField env base fields fn r =
 
 inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdatePicked rname bt env fields ri =
-  let ir = instantiateRecord ri
-  let _ = unify bt (fst ir)
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = unify bt (snd sr)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdateWith env rname base fields ri =
-  let ir = instantiateRecord ri
-  let _ = unify (infer env base) (fst ir)
-  let _ = unifyFieldAssigns env rname (snd ir) fields
-  fst ir
+  let sr = instantiateRecordShared ri
+  let _ = unify (infer env base) (snd sr)
+  let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
+  snd sr
 
 -- operators infer by SHAPE (the typeclass constraint they carry — Num/Eq/… — is
 -- tracked at the value level but never rendered in a scheme, so it's irrelevant
@@ -7655,7 +7679,7 @@ registerRecordInfoKeyed key typeName params fields =
   let tvs = zipL params paramVars
   let result = applyParams (TCon typeName) paramVars
   let fieldMonos = map (recFieldMono tvs) fields
-  let ri = RecordInfo (map monoTyvarId paramVars) result fieldMonos
+  let ri = RecordInfo (map monoTyvarId paramVars) result fieldMonos (omFromPairs (reverseL fieldMonos) omEmpty)
   let _ = setRef perRun.value.recordsRef ((key, ri)::perRun.value.recordsRef.value)
   let _ = setRef perRun.value.recordByNameRef (omInsert key ri perRun.value.recordByNameRef.value)
   setRef
@@ -7676,11 +7700,31 @@ recFieldMono tvs (Field fn ty) = (fn, fromAstType tvs ty)
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordByName name = omLookup name perRun.value.recordByNameRef.value
 
--- instantiate a record's quantified params with fresh vars
+-- instantiate a record's quantified params with fresh vars.  Rebuilds ALL fields —
+-- used by the record-CREATE and record-PATTERN paths, which must see every declared
+-- field (missing-field check / binding each pattern field).  The single-field access
+-- and record-update paths use `instantiateRecordShared` + the field index instead so
+-- they never rebuild all N fields per access (issue #980).
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
-instantiateRecord (RecordInfo paramIds result fields) =
+instantiateRecord (RecordInfo paramIds result fields _) =
   let subst = freshSubst paramIds
   (substMono subst [] result, map (substField subst) fields)
+
+-- Instantiate ONLY the result type, returning the shared param substitution so the
+-- caller can instantiate individual fields on demand (via the field index).  The
+-- fresh-var allocation is identical to `instantiateRecord` (both call `freshSubst
+-- paramIds`); only the per-field `substMono` trees for UNACCESSED fields are skipped,
+-- and those allocate no fresh tyvars, so tyvar numbering is byte-identical.
+instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)
+instantiateRecordShared (RecordInfo paramIds result _ _) =
+  let subst = freshSubst paramIds
+  (subst, substMono subst [] result)
+
+recordFieldMap : RecordInfo -> OrdMap Mono
+recordFieldMap (RecordInfo _ _ _ idx) = idx
+
+recordFieldNames : RecordInfo -> List String
+recordFieldNames (RecordInfo _ _ fields _) = map fst fields
 
 substField : List (Int, Mono) -> (String, Mono) -> (String, Mono)
 substField subst (fn, fm) = (fn, substMono subst [] fm)
