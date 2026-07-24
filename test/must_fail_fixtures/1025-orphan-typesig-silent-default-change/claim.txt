@@ -1,0 +1,35 @@
+issue: 1025
+what: A `DTypeSig`'s name token is recorded as neither a def nor a use in the reference
+what: index (compiler/tools/refindex.mdk), and separately — the SAME root defect,
+what: observable through the actual checker/evaluator — an ORPHANED type signature
+what: (its name no longer matches any binding) is silently ignored end to end rather
+what: than erroring. Renaming a signed binding but leaving its old signature behind
+what: leaves the signature orphaned: the declared type is dropped (the RHS re-defaults
+what: from Float to Int) and the `export` is lost, all with ZERO diagnostics.
+cmd: run main.mdk
+exit: 0
+stdout: 0
+control: run control.mdk
+why-fixture: main.mdk is `export half : Float` sitting above `halfRenamed = 1 / 2`
+why-fixture: (the signature's own name was never updated when the binding was
+why-fixture: renamed from `half` to `halfRenamed`). `1 / 2` has no signature to pin it
+why-fixture: to Float, so it defaults to Int and `println halfRenamed` prints `0`
+why-fixture: instead of `0.5` — with `medaka check --json` reporting `diagnostics: []`
+why-fixture: at exit 0 (verified by hand against this exact fixture; not asserted by
+why-fixture: this row itself, since `cmd:` can only grade one verb — the WRONG RUNTIME
+why-fixture: VALUE is the sharper, single-verb-provable half of the silent-wrongness
+why-fixture: claim, and it is what #1025 calls out as the S0-via-rename consequence).
+why-control: control.mdk is BYTE-IDENTICAL except the signature's name matches the
+why-control: binding (`export halfRenamed : Float`), isolating the bug to the
+why-control: name-mismatch (orphan signature) case rather than to `1 / 2`'s literal
+why-control: defaulting or `println`/`run` being broken in general. It prints `0.5`.
+why-note: This is the fourth instance of the same root shape catalogued in #1025:
+why-note: "one name, several tokens, the index knows one" (#964 multi-clause fn
+why-note: heads, #1002 impl-method heads, #1013 interface-method def span, now the
+why-note: DTypeSig name token). Filed as the HIGHEST-SEVERITY arm because it is the
+why-note: only one of the four that produces a program that both compiles AND lies.
+why-note: The reference-index half of the defect (`references` never listing the
+why-note: signature in its own binding's use/def set) is NOT independently pinnable
+why-note: by this harness — see test/MUST-FAIL-NOT-PINNABLE.txt for the sibling
+why-note: index-only rows (#1013/#1014/#1026/#1027/#1003) and why. This row pins the
+why-note: CLI-observable half: the silent behavior change via `medaka run`.
