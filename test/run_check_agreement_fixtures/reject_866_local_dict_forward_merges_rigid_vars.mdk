@@ -1,0 +1,34 @@
+-- #866 / PR #1021 — THE PIN MUST REJECT, NOT UNIFY.
+--
+-- #1021's pin declines to generalize a dict-forwarding local, which leaves it
+-- MONOMORPHIC. In a multi-constraint signature that is dangerous in a specific way: the
+-- local's single type variable can unify with BOTH declared variables in turn and merge
+-- them. `useTwo` below declares two independent, rigid variables (`Ord a, Ord b`) and
+-- calls the where-local `h` once at each. If the merge were silent, `useTwo` would
+-- compile with ONE `$dict` param for a TWO-constraint signature — a dropped dict slot
+-- and a wrong answer with exit 0 on every engine.
+--
+-- It is NOT silent: the signature-generality check catches it and names the violation
+-- ("claims type variables that are the same type after inference"), and the call site
+-- adds its own mismatch. check, run and build all reject.
+--
+-- WHY THIS FIXTURE EXISTS: the sibling method-channel probe (#1040/#1043) DOES merge
+-- silently for the analogous `where`-local, because `pendingArgStamps` is fed via
+-- `argDispatchOf`, documented EMIT-ONLY at typecheck.mdk:4297 — so on the CHECK path
+-- `methodConstrainedIds()` is empty, the local generalizes at check, and no rigidity
+-- violation is ever visible where a diagnostic could fire. #1021's function channel
+-- reads the CALL-OBLIGATION window, which IS populated on the check path, so the merge
+-- happens where the rigidity checker can see it. That contrast is the load-bearing
+-- argument for #1021's dual-channel read, and this fixture is what pins it: delete the
+-- call-obligation half and this program stops being rejected at check.
+--
+-- Verdict: REJECT.
+needsOrd : Ord a => a -> a -> Bool
+needsOrd x y = x < y
+
+useTwo : (Ord a, Ord b) => a -> a -> b -> b -> Bool
+useTwo w x y z = h w x && h y z
+  where
+    h p q = needsOrd p q
+
+main = println (useTwo 1 2 "a" "b")
