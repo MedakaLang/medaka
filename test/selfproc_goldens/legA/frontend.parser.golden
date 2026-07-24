@@ -351,6 +351,7 @@ parseAssign : Parser Expr
 parseAtom : Parser Expr
 parseAtomRaw : Parser Expr
 parseAttrib : Parser Decl
+parseBareEffectAtom : Parser Ty
 parseBench : Bool -> Parser Decl
 parseBody : Parser Expr
 parseBodyExpr : Parser Expr
