@@ -92,6 +92,8 @@ SYM	UserPromptSubmit	AGENTS.md names the Claude Code hook event UserPromptSubmit
 
 # ── SYM: real external symbol, but external to this repo ───────────────────
 SYM	GC_malloc_kind	AGENTS.md/PERF.md reference this ONLY as the Boehm GC internal allocation-tag function `perf script` attributes samples to for profiling — it is part of libgc, never defined in this repo's compiler/stdlib/runtime source
+SYM	autoMergeRequest	AGENTS.md's merge-queue trap references this as a GitHub GraphQL PullRequest field (reads `null` while a PR is queued, not a reliable signal) — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
+SYM	isInMergeQueue	AGENTS.md's merge-queue trap references this as the GitHub GraphQL PullRequest field that IS the reliable "queued" signal — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
 
 # ── SYM: naming-convention shorthand / meta-syntactic placeholder, not a literal citation ─
 SYM	Msg	harden-typechecker/SKILL.md's "an existing `Msg` builder" is prose shorthand for the "*Msg"-suffixed message-builder naming convention (effectLeakMsg, ambiguousImplMsg, …) — those real names are cited separately; "Msg" alone was never claimed to be a standalone identifier
