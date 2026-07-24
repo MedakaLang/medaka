@@ -1,0 +1,14 @@
+-- #1002 fixture, module 1 of 2 — the interface plus an impl in the SAME module
+-- as the interface. `main.mdk` adds impls in a DIFFERENT module; every head must
+-- land on the ONE key `iface<TAB>method<TAB>sizeOf`.
+export interface Sized a where
+  sizeOf : a -> Int
+
+public export data Box =
+  | Small
+  | Big
+
+-- S0-1: a MULTI-CLAUSE impl method. Both heads must appear as def sites.
+export impl Sized Box where
+  sizeOf Small = 1
+  sizeOf Big = 100
