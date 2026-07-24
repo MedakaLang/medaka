@@ -669,17 +669,25 @@ as an argument-only effect variable, not accepted as a graded signature. Standin
 up the kind is exactly #822's content, so graded-lite is *gated on* #822, not a
 shortcut around it.
 
-The "mildly over-approximate" characterization also does not survive contact with
-a real functor impl. Against the eager shape `stdlib/async.mdk` uses today for
-`map`/`pure` (`gmap g (Done a) = Done (g a)`), collapsing every grade to one
-shared variable does not widen the input index — it **collapses the method's own
-grade to the unit `⟨ ⟩`**, because graded-lite charges the shared variable on the
-method's own arrow while `g a` is evaluated inline, and an eager arm then rejects
-every effectful callback outright. Only a *deferred* arm
-(`gmap g (Done a) = Susp (u => Done (g a))`) keeps the grade open under
-graded-lite — trading eagerness for graded soundness, which is an Async
-operational-semantics change and an open design question, not a mechanical
-migration.
+Whether the "mildly over-approximate" characterization survives contact with a
+real functor impl is an **open question for #823, not yet established** — and
+what follows is analytically derived, not empirically verified: real graded-lite
+cannot be expressed on today's binary at all (interface parameters have no
+kinds — #822's content again), so no probe of "what graded-lite does to an eager
+arm" is possible before #822 lands. What IS known: `stdlib/async.mdk`'s
+`map`/`pure` apply the callback **eagerly**, inline in the constructor arm
+(`gmap g (Done a) = Done (g a)`), and whether that arm survives graded typing
+turns on how the join's cost gets distributed — a choice #823 has not made yet.
+Two candidate resolutions, named neutrally, with no verdict between them here:
+
+- **defer the arm** (`gmap g (Done a) = Susp (u => Done (g a))`), keeping
+  construction pure per the discharge-at-`grun` story above, at the cost of an
+  operational-semantics change to Async's eager fast path; or
+- **keep the arm eager** and charge the callback's row on the method's own
+  arrow instead of only its result index, which changes the signature
+  discipline described above rather than the impl.
+
+#823 must settle this before migrating Async.
 
 The full family with independent grades remains the ideal; graded-lite is a
 narrower first surface realized *within* it once the kind exists, not a
