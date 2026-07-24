@@ -1,5 +1,5 @@
 # META
-source_lines=44
+source_lines=54
 stages=TYPES_USER
 # SOURCE
 -- Capability-effects v2 Stage 2a: PARAMETERIZED effect surface syntax.
@@ -46,6 +46,16 @@ seqIO (Suspend t) k = Suspend (u => seqIO (t u) k)
 
 main : <IO> Unit
 main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
+
+-- #997 follow-up regression guard: a WRITTEN literal row (`<IO | e>`, not a
+-- bare tyvar) in the SAME KRow argument slot must share `e` with the
+-- callback's own row exactly like the bare-tyvar `liftIO` above.  Proves
+-- `rowArgOf`/`effTailNames`'s `TyRow` arms are live: delete either locally
+-- and this gate reds (delete `effTailNames`'s arm and the compiler's own
+-- non-exhaustive match panics on this line; delete `rowArgOf`'s and the
+-- written `IO` label silently vanishes).
+liftIO2 : (Unit -> <IO | e> a) -> Async <IO | e> a
+liftIO2 act = Suspend (u => Done (act u))
 # TYPES_USER
 netGet : String -> <Net "a.com/foo"> String
 fetch : String -> <Net "a.com/foo"> String
@@ -54,3 +64,4 @@ liftIO : (Unit -> a) -> Async b a
 yld : Async a Unit
 seqIO : Async a b -> (b -> Async a c) -> Async a c
 main : Unit
+liftIO2 : (Unit -> <IO> a) -> Async <IO | b> a
