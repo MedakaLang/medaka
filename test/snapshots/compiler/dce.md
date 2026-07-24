@@ -1,5 +1,5 @@
 # META
-source_lines=151
+source_lines=171
 stages=DESUGAR,MARK
 # SOURCE
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
@@ -83,6 +83,14 @@ definedFnNames decls =
 
 definedFnNamesInto : List Decl -> HashMap String Unit -> Unit
 definedFnNamesInto [] _ = ()
+-- #1037: `@deprecated "…"` written directly on a DEFINITION (no separate signature
+-- line) parses to `DAttrib attrs (DFunDef …)`, which these two walks skipped —
+-- so the fn was neither in `defined` nor in the call graph, and a helper it alone
+-- called was DCE'd: `medaka build` died with `unbound variable '<helper>'` on a
+-- program `check` and `medaka run` both accept.  (Write the attribute above a
+-- SIGNATURE instead and it wraps the DSig, leaving the DFunDef bare — which is why
+-- this only reproduces on the no-signature form.)
+definedFnNamesInto ((DAttrib _ d)::rest) s = definedFnNamesInto (d::rest) s
 definedFnNamesInto ((DFunDef _ n _ _)::rest) s =
   let _ = set n () s
   definedFnNamesInto rest s
@@ -113,6 +121,9 @@ funGraph defined decls =
 
 funGraphInto : HashMap String Unit -> List Decl -> HashMap String (List String) -> Unit
 funGraphInto _ [] _ = ()
+-- #1037: see definedFnNamesInto — an attributed definition must still contribute
+-- its call-graph edges.
+funGraphInto defined ((DAttrib _ d)::rest) g = funGraphInto defined (d::rest) g
 funGraphInto defined ((DFunDef _ n ps body)::rest) g =
   let _ = set n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
   funGraphInto defined rest g
@@ -132,7 +143,16 @@ emittingRoots (d::rest)
 -- DImpl / DInterface lower to emitted code among the non-DFunDef decls.
 -- DLetGroup also lowers to emitted code (funClausesOf/lowerGroups in core_ir_lower)
 -- so its refs must seed reachability, or DFunDefs called only from a let-group are DCE'd.
+--
+-- #1037: a decl ATTRIBUTE wraps the decl (`DAttrib attrs <impl>`), and this said
+-- False for it — so an attributed impl's method bodies seeded NO roots and any
+-- helper called only from there was DCE'd out from under the emitter.  That was
+-- latent while `lowerDeclImpl` skipped attributed impls entirely (no body was
+-- emitted to dangle); the moment it stopped skipping them, an un-rooted attributed
+-- impl would have become `unbound variable '<helper>'` at build time.  `declRefs`
+-- (marker.mdk) already peels DAttrib, so this is the only half that was missing.
 isEmittingDecl : Decl -> Bool
+isEmittingDecl (DAttrib _ d) = isEmittingDecl d
 isEmittingDecl (DImpl { ... }) = True
 isEmittingDecl (DInterface { ... }) = True
 isEmittingDecl (DLetGroup _ _) = True
@@ -169,6 +189,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "definedFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "definedFnNamesInto") (EVar "decls")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "definedFnNamesInto" ((PList) PWild) (ELit LUnit))
+(DFunDef false "definedFnNamesInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "s")))
 (DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
 (DFunDef false "definedFnNamesInto" ((PCons PWild (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))
 (DTypeSig false "reachableNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
@@ -177,12 +198,14 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "funGraph" ((PVar "defined") (PVar "decls")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "decls")) (EVar "g"))) (DoExpr (EVar "g"))))
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
 (DFunDef false "emittingRoots" ((PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isEmittingDecl") (EVar "d")) (EBinOp "++" (EApp (EVar "declRefs") (EVar "d")) (EApp (EVar "emittingRoots") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "emittingRoots") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isEmittingDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isEmittingDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isEmittingDecl") (EVar "d")))
 (DFunDef false "isEmittingDecl" ((PRec "DImpl" () true)) (EVar "True"))
 (DFunDef false "isEmittingDecl" ((PRec "DInterface" () true)) (EVar "True"))
 (DFunDef false "isEmittingDecl" ((PCon "DLetGroup" PWild PWild)) (EVar "True"))
@@ -208,6 +231,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "definedFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "definedFnNamesInto") (EVar "decls")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "definedFnNamesInto" ((PList) PWild) (ELit LUnit))
+(DFunDef false "definedFnNamesInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "s")))
 (DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
 (DFunDef false "definedFnNamesInto" ((PCons PWild (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))
 (DTypeSig false "reachableNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
@@ -216,12 +240,14 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "funGraph" ((PVar "defined") (PVar "decls")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "decls")) (EVar "g"))) (DoExpr (EVar "g"))))
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
 (DFunDef false "emittingRoots" ((PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isEmittingDecl") (EVar "d")) (EBinOp "++" (EApp (EVar "declRefs") (EVar "d")) (EApp (EVar "emittingRoots") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "emittingRoots") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isEmittingDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isEmittingDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isEmittingDecl") (EVar "d")))
 (DFunDef false "isEmittingDecl" ((PRec "DImpl" () true)) (EVar "True"))
 (DFunDef false "isEmittingDecl" ((PRec "DInterface" () true)) (EVar "True"))
 (DFunDef false "isEmittingDecl" ((PCon "DLetGroup" PWild PWild)) (EVar "True"))
