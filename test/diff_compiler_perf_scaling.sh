@@ -194,6 +194,16 @@ COMMENTS_N="${PERF_COMMENTS_N:-1000}"
 # stage this shape exists to grade. Sized for ~3x floor headroom instead.
 MANYDEFS_N="${PERF_MANYDEFS_N:-4000}"
 
+# `matchlits` (issue #988) is DEEP-only and graded in its own block below, on the
+# TYPECHECK-STAGE net allocation (where exhaust runs) — NOT the total-alloc arm,
+# which the wide match's large LINEAR emit cost dilutes below the ceiling (measured:
+# even at 4000 the total r2 is only ~2.5 while the typecheck-STAGE net r2 is ~3.65).
+# The band is sized so the fixed (linear) state reads a clean r≈2.0 and the reverted
+# (quadratic) state clears the 3.0 ceiling with margin: net typecheck alloc, base
+# ~7 MB subtracted, FIXED 6.6→13.1→26.1 (r1 1.99 r2 2.00), REVERTED 21.8→74.1→270.2
+# (r1 3.40 r2 3.65). Alloc is deterministic, so ONE run per size suffices.
+MATCHLITS_N="${PERF_MATCHLITS_N:-1000}"
+
 # `manyifaces` / `widerecords` (issue #883) run at the DEFAULT N band (250/500/1000).
 # Both are OP-ONLY (deterministic, no min-of-K), so the band is chosen for the OP arm,
 # not a TIME floor: at 250/500/1000 `manyifaces` clears mark op r1>3 (3.07/3.54) with R=8
@@ -400,6 +410,26 @@ gen_match() {
   # Rooting `toInt` puts that one big decl on the live path, where DCE cannot touch
   # it, which is exactly where a per-decl blowup in the emitter would show.
   printf 'main = println (toInt C0)\n' >> "$f"
+}
+
+gen_matchlits() {
+  n=$1; f=$2; : > "$f"
+  # The LITERAL sibling of gen_match (issue #988). One match with N arms over N
+  # distinct INTEGER LITERALS (0..N-1) + a wildcard default (an Int-literal match
+  # needs one to be exhaustive). Where gen_match drives exhaust's CONSTRUCTOR
+  # matrix (specializeCon), this drives the LITERAL matrix — specializeLit /
+  # specLitRow in compiler/frontend/exhaust.mdk. specLitRow compared literals with
+  # the derived `Eq Lit`, which ALLOCATES per call, so exhaustiveness-checking this
+  # shape ran O(arms^2) ALLOCATION in the typecheck stage (#970/#978 was the same
+  # root cause in core_ir_lower's LOWERING path; this is the EXHAUST path, ungated
+  # until now — the untyped eval_scaling bigmatch_lits never runs typecheck/exhaust).
+  # #988 replaced it with an alloc-free `litEq` (identical Bool as `Eq Lit`).
+  printf 'classify : Int -> Int\nclassify v = match v\n' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do printf '  %s => %s\n' "$i" "$i"; i=$((i+1)); done >> "$f"
+  printf '  _ => 0\n' >> "$f"
+  # main CALLS classify — same reason gen_match roots toInt: `main = println 1`
+  # roots nothing, so DCE prunes classify and the exhaust work never runs.
+  printf 'main = println (classify 0)\n' >> "$f"
 }
 
 gen_listlit() {
@@ -917,6 +947,14 @@ alloc_from() {
 # whitespace split lands inside it and reads garbage. See support/timer.mdk:emitPhaseAO.
 ops_from() {
   awk -F'\t' '/^\[perf\] / { split($1, a, " "); print a[2], $5 }' "$1"
+}
+
+# tc_alloc_from: the TYPECHECK-STAGE allocated MB, from a saved profile_run output.
+# The exhaustiveness pass (checkMatchExhaustive) runs INSIDE typecheck, so this is
+# where a literal-pattern-matrix quadratic shows (issue #988 — the `matchlits` block).
+# Per-stage lines are tab-delimited; field 3 is "<MB>MB" (see ops_from's field-4 warning).
+tc_alloc_from() {
+  awk -F'\t' '/^\[perf\] typecheck\t/ { gsub(/MB/,"",$3); print $3; exit }' "$1"
 }
 
 # ⚠️ THE BASELINE MUST BE SUBTRACTED, OR THIS GATE IS BLIND.
@@ -2658,6 +2696,73 @@ else
   pass=$((pass+1))
   printf '%-12s %8s  resolve-ops %s -> %s  (drained; < OP_FLOOR %s — #78 scope set held; band N=%s->%s)\n' \
     scoperefs "$scn1" "$scro1" "$scro2" "$OP_FLOOR" "$scn1" "$scn2"
+fi
+
+# ── matchlits — EXHAUSTIVENESS over a wide LITERAL match (issue #988) ─────────
+# The literal sibling of the main-loop `match` shape. It grades the TYPECHECK-STAGE
+# net allocation, NOT the total-alloc arm: exhaust's literal-pattern-matrix rescan
+# (specializeLit/specLitRow) allocated O(arms^2) via the derived `Eq Lit`, but the
+# wide match's LINEAR emit cost dilutes that quadratic below the total-alloc ceiling
+# (measured: total r2 ~2.5 even at N=4000, while the typecheck-STAGE net r2 is ~3.65).
+# So this block reads the typecheck stage's own [perf] alloc figure and grades ITS
+# ratio — the same per-stage discipline as the eval_scaling gate, applied to the
+# stage exhaust actually runs in. #970/#978 fixed the identical root cause in the
+# Core-IR LOWERING path (core_ir_lower); the untyped eval_scaling `bigmatch_lits`
+# shape drives that lowering but NEVER runs typecheck/exhaust, so this path was
+# ungated until now.
+#
+# DEEP-only (like manydefs): it costs three full-pipeline runs at 1000/2000/4000 and
+# adds no per-PR cost. Alloc is deterministic, so one run per size suffices (no
+# min-of-K / heap-pin / floor). Reverting #988's `litEq` to `l2 == l` reddens it
+# (net typecheck r1 3.40 r2 3.65 >= 3.0); the fixed state reads r1 1.99 r2 2.00.
+if [ "$PERF_DEEP" = "1" ]; then
+  mln1="$MATCHLITS_N"; mln2=$((MATCHLITS_N * 2)); mln3=$((MATCHLITS_N * 4))
+  mlf1="$WORK/matchlits_$mln1.mdk"; mlf2="$WORK/matchlits_$mln2.mdk"; mlf3="$WORK/matchlits_$mln3.mdk"
+  gen_matchlits "$mln1" "$mlf1"; gen_matchlits "$mln2" "$mlf2"; gen_matchlits "$mln3" "$mlf3"
+  MLR1="$WORK/matchlits_r1"; MLR2="$WORK/matchlits_r2"; MLR3="$WORK/matchlits_r3"
+  profile_run "$mlf1" > "$MLR1"; profile_run "$mlf2" > "$MLR2"; profile_run "$mlf3" > "$MLR3"
+  # baseline typecheck-stage alloc: the fixed prelude-typecheck constant (~7 MB), which
+  # dominates the raw figure at small N. Same BASE_FIX ("main = println 1") the total
+  # arm uses; subtracting it is what makes the exhaust quadratic legible (see the
+  # baseline note above).
+  BASE_TC="$WORK/_baseline_tc"; profile_run "$BASE_FIX" > "$BASE_TC"
+  mlb="$(tc_alloc_from "$BASE_TC")"
+  mla1="$(tc_alloc_from "$MLR1")"; mla2="$(tc_alloc_from "$MLR2")"; mla3="$(tc_alloc_from "$MLR3")"
+  # A missing figure is a HARNESS failure, never a silent pass (the silent-green class
+  # this suite is built against). Check each value individually.
+  ml_bad=0
+  for _v in "$mlb" "$mla1" "$mla2" "$mla3"; do
+    case "$_v" in ''|*[!0-9.]*) ml_bad=1 ;; esac
+  done
+  if [ "$ml_bad" = "1" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** NO TYPECHECK-ALLOC MEASUREMENT from the profiler (harness bug — base=%s N=%s 2N=%s 4N=%s) **\n' \
+      matchlits "$mln1" "$mlb" "$mla1" "$mla2" "$mla3"
+  else
+    ml_verdict="$(awk -v a1="$mla1" -v a2="$mla2" -v a3="$mla3" -v b="$mlb" -v th="$THRESH" 'BEGIN{
+      d1=a1-b; d2=a2-b; d3=a3-b
+      if (d1 < 1.0) { printf "%.1f %.1f %.1f - - TOOSMALL", d1, d2, d3; exit }
+      r1=d2/d1; r2=d3/d2
+      climbing=(r2 > r1 * 1.15 && r2 > 2.45)
+      printf "%.1f %.1f %.1f %.2f %.2f %s", d1, d2, d3, r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok") }')"
+    md1="$(printf '%s' "$ml_verdict" | cut -d' ' -f1)"; md2="$(printf '%s' "$ml_verdict" | cut -d' ' -f2)"
+    md3="$(printf '%s' "$ml_verdict" | cut -d' ' -f3)"; mr1="$(printf '%s' "$ml_verdict" | cut -d' ' -f4)"
+    mr2="$(printf '%s' "$ml_verdict" | cut -d' ' -f5)"; mword="$(printf '%s' "$ml_verdict" | cut -d' ' -f6)"
+    if [ "$mword" = "TOOSMALL" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s  ** N TOO SMALL — raise PERF_MATCHLITS_N (net typecheck-alloc %s MB < 1.0) **\n' matchlits "$mln1" "$md1"
+    elif [ "$mword" = "QUADRATIC" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s  ** SUPERLINEAR (typecheck-alloc) ** net %s -> %s -> %s MB  r1=%s r2=%s (>= %s) — exhaust literal-matrix quadratic (specLitRow `Eq Lit`? see #988)\n' \
+        matchlits "$mln1" "$md1" "$md2" "$md3" "$mr1" "$mr2" "$THRESH"
+    else
+      pass=$((pass+1))
+      printf '%-12s %8s  typecheck-alloc net %s -> %s -> %s MB  r1=%s r2=%s  (LINEAR — exhaust litEq alloc-free, #988; band N=%s->%s->%s)\n' \
+        matchlits "$mln1" "$md1" "$md2" "$md3" "$mr1" "$mr2" "$mln1" "$mln2" "$mln3"
+    fi
+  fi
+else
+  echo "NOTE: QUICK mode — matchlits SKIPPED (DEEP-only, #988 exhaust literal-matrix alloc detector). Runs in nightly.yml."
 fi
 
 printf -- '---------------------------------------------------------------------\n'

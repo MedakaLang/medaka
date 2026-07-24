@@ -285,9 +285,26 @@ specializeLit l (row::rest) = match specLitRow l row
 
 specLitRow : Lit -> List Pat -> Option (List Pat)
 specLitRow _ [] = None
-specLitRow l ((PLit l2)::rest) = if l2 == l then Some rest else None
+specLitRow l ((PLit l2)::rest) = if litEq l2 l then Some rest else None
 specLitRow _ (PWild::rest) = Some rest
 specLitRow _ _ = None
+
+-- Alloc-free literal equality (#988, mirroring `litEq` in core_ir_lower.mdk from
+-- #970/#978). The derived `Eq Lit` (`l2 == l`) ALLOCATES on every call, so the
+-- per-branch matrix rescan in `specializeLit`/`specLitRow` ran O(arms^2) allocation
+-- when exhaustiveness-checking a wide literal `match`. Comparing the primitive
+-- fields directly allocates nothing and returns the IDENTICAL Bool as `Eq Lit`
+-- (verified in #978, incl. NaN / -0.0 edges — Float uses the same `==`). Kept local
+-- rather than imported: exhaust runs in `frontend` (inside typecheck) and nothing in
+-- `frontend` depends on `ir/`, so sharing across that layer boundary is not clean.
+litEq : Lit -> Lit -> Bool
+litEq (LInt a) (LInt b) = a == b
+litEq (LFloat a) (LFloat b) = a == b
+litEq (LString a) (LString b) = a == b
+litEq (LChar a) (LChar b) = a == b
+litEq (LBool a) (LBool b) = a == b
+litEq LUnit LUnit = True
+litEq _ _ = False
 
 defaultMatrix : List (List Pat) -> List (List Pat)
 defaultMatrix [] = []
