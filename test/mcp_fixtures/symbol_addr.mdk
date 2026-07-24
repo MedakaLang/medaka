@@ -1,0 +1,18 @@
+-- #849 fixture: line-number-or-symbol addressing for medaka_type_at and
+-- medaka_definition.  `total total extra = total + extra` — is the star of
+-- the show: `total` appears at cols 0, 6, 20 (param name, shadowing param,
+-- and the addition operand — three matches, the ambiguous case) and `extra`
+-- appears at cols 12, 28 (two matches).  `bump` below is unique on its own
+-- line (the unambiguous single-match case) — named to
+-- avoid colliding with the prelude's own `count` (core.mdk), which would
+-- otherwise shadow this fixture's local binding and make the golden read as
+-- a #849 bug when it's really an unrelated hover/shadowing quirk.  `missing`
+-- never appears anywhere, exercising the absent-symbol hint.  (0-based line
+-- numbers below are re-verified with `cat -n` — do not hand-count comments.)
+total : Int -> Int -> Int
+total total extra = total + extra
+
+bump : Int -> Int
+bump n = n + 1
+
+main = println (total (bump 1) 2)

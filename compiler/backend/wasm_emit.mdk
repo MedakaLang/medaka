@@ -211,6 +211,7 @@ import support.util.{
   listLen,
   maxI,
   noneHeadTag,
+  dedupBy,
 }
 import backend.trmc_analysis.{
   SelfRef(..),
@@ -240,6 +241,7 @@ import backend.private_mangle.{hashName, sanitizeId}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
+  bindNameMap,
   lazyGlobalNames,
   methodIfaceTableRef,
   setMethodIfaceTable,
@@ -1812,16 +1814,10 @@ scanRecFieldsStmt (CSLet _ _ e) = scanRecFields e
 scanRecFieldsStmt _ = []
 
 -- dedup by ctor name (first entry wins; all entries for one ctor agree).
+-- #242: the ctor name is already a String, so this is the canonical
+-- `support.util.dedupBy` verbatim (was an O(n²) lookupAssoc + rescan).
 dedupRecEntries : List (String, List String) -> List (String, List String)
-dedupRecEntries [] = []
-dedupRecEntries ((n, fs)::rest) =
-  if isSome (lookupAssoc n rest) then
-    (n, fs) :: dedupRecEntries (filterList (e => not (eqStr (recEntryName e) n)) rest)
-  else
-    (n, fs) :: dedupRecEntries rest
-
-recEntryName : (String, List String) -> String
-recEntryName (n, _) = n
+dedupRecEntries entries = dedupBy fst entries
 
 bindUsesClosures : List String -> List (String, Int) -> List (String, Int) -> CBind -> Bool
 bindUsesClosures fnNames fnArs ctorArs (CBind _ clauses) = multiOrPatternClauses clauses
@@ -2693,46 +2689,44 @@ topoSortValBinds : List CBind -> List CBind -> List CBind
 -- lint-disable-next-line rule-duplicate-body
 topoSortValBinds allBinds binds =
   let rm = eagerReachMap allBinds
-  let names = map bindName binds
-  let (_, ordered) = topoValGo rm binds names binds [] []
-  ordered
+  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
+  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
+  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Mirrors
+  -- the LLVM emitter's fix exactly.  Output order unchanged.
+  let bm = bindNameMap binds
+  let (_, ordered) = topoValGo rm bm binds omEmpty []
+  reverseL ordered
 
 -- DFS post-order: visit each binding's value-global EAGER deps first, appending the
 -- binding after them.  `visiting` guards cycles (a back-edge is skipped).  `rm` is
 -- the eager-reachability map (Stage B of #553): a binding's edges are the value
 -- globals it eagerly reaches THROUGH calls, not merely the ones its body names.
-topoValGo : OrdMap (List String) -> List CBind -> List String -> List CBind -> List String -> List CBind -> (List String, List CBind)
-topoValGo _ _ _ [] done acc = (done, acc)
+topoValGo : OrdMap (List String) -> OrdMap CBind -> List CBind -> OrdMap Unit -> List CBind -> (OrdMap Unit, List CBind)
+topoValGo _ _ [] done acc = (done, acc)
 -- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-topoValGo rm all names (b::rest) done acc =
-  let (done2, acc2) = topoValVisit rm all names b done acc []
-  topoValGo rm all names rest done2 acc2
+topoValGo rm bm (b::rest) done acc =
+  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
+  topoValGo rm bm rest done2 acc2
 
-topoValVisit : OrdMap (List String) -> List CBind -> List String -> CBind -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisit rm all names b done acc visiting
-  | contains (bindName b) done = (done, acc)
-  | contains (bindName b) visiting = (done, acc)
+topoValVisit : OrdMap (List String) -> OrdMap CBind -> CBind -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisit rm bm b done acc visiting
+  | omHasKey (bindName b) done = (done, acc)
+  | omHasKey (bindName b) visiting = (done, acc)
   | otherwise =
-    let deps = filterList (n => contains n names) (dedupKeep (bindEagerReach rm b))
-    let (done2, acc2) = topoValVisitDeps rm all names deps done acc (bindName b :: visiting)
-    (bindName b :: done2, acc2 ++ [b])
+    let deps = filterList (n => omHasKey n bm) (dedupKeep (bindEagerReach rm b))
+    let (done2, acc2) = topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
+    (omInsert (bindName b) () done2, b::acc2)
 
-topoValVisitDeps : OrdMap (List String) -> List CBind -> List String -> List String -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisitDeps _ _ _ [] done acc _ = (done, acc)
-topoValVisitDeps rm all names (d::rest) done acc visiting = match findBindByName d all
+topoValVisitDeps : OrdMap (List String) -> OrdMap CBind -> List String -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisitDeps _ _ [] done acc _ = (done, acc)
+-- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- lint-disable-next-line rule-duplicate-body
+topoValVisitDeps rm bm (d::rest) done acc visiting = match omLookup d bm
   Some db =>
-    let (done2, acc2) = topoValVisit rm all names db done acc visiting
-    topoValVisitDeps rm all names rest done2 acc2 visiting
-  None => topoValVisitDeps rm all names rest done acc visiting
-
-findBindByName : String -> List CBind -> Option CBind
-findBindByName _ [] = None
-findBindByName name (b::rest) =
-  if bindName b == name then
-    Some b
-  else
-    findBindByName name rest
+    let (done2, acc2) = topoValVisit rm bm db done acc visiting
+    topoValVisitDeps rm bm rest done2 acc2 visiting
+  None => topoValVisitDeps rm bm rest done acc visiting
 
 -- `eagerVars` (eager free-var / strictness analysis) and its transitive closure
 -- `eagerReachMap`/`bindEagerReach` (Stage B of #553) live in

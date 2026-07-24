@@ -194,6 +194,7 @@ import support.util.{
   startsWith,
   fallthroughName,
   noneHeadTag,
+  dedup,
 }
 import backend.llvm_preamble.{preambleLines}
 import support.ordmap.{
@@ -245,6 +246,7 @@ import backend.private_mangle.{hashName, safeChar}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
+  bindNameMap,
   lazyGlobalNames,
   methodIfaceTableRef,
   setMethodIfaceTable,
@@ -6723,9 +6725,15 @@ envHasKey : List (String, (String, LTy)) -> String -> Bool
 envHasKey [] _ = False
 envHasKey ((n, _)::rest) k = if n == k then True else envHasKey rest k
 
+-- #242/#623: order-preserving dedup keeping the LAST occurrence of each name —
+-- NOT the same function as `support.util.dedup`, which keeps the FIRST (#623's
+-- "`dedup` could replace `dedupS` directly" is WRONG: on [a,b,a] this yields
+-- [b,a] and `dedup` yields [a,b], and the order feeds emitted-definition order).
+-- Reversing on both sides turns last-wins into first-wins, so the O(n²)
+-- `contains`-per-element scan routes through the canonical O(n·log n)
+-- OrdMap-backed `dedup` with the result byte-identical.
 dedupS : List String -> List String
-dedupS [] = []
-dedupS (x::xs) = if contains x xs then dedupS xs else x :: dedupS xs
+dedupS xs = reverseL (dedup (reverseL xs))
 
 -- ── ADT constructors + pattern matching ───────────────────────────
 -- VALUE REPRESENTATION (RUNTIME-DESIGN.md §8.4 "Option A", extended from the
@@ -8943,9 +8951,14 @@ orderedValBinds : List CBind -> List CBind -> List CBind
 -- lint-disable-next-line rule-duplicate-body
 orderedValBinds allBinds binds =
   let rm = eagerReachMap allBinds
-  let names = map bindName binds
-  let (_, ordered) = topoValGo rm binds names binds [] []
-  ordered
+  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
+  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
+  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Every one
+  -- of those was a `List` used as a set (or an O(left) `++` inside a fold) over
+  -- the transitive reach sets #553 Stage B enlarged.  Output order unchanged.
+  let bm = bindNameMap binds
+  let (_, ordered) = topoValGo rm bm binds omEmpty []
+  reverseL ordered
 
 -- DFS post-order: visit each binding's value-global dependencies first, appending
 -- the binding after them.  `visiting` guards against cycles (a back-edge is
@@ -8953,30 +8966,32 @@ orderedValBinds allBinds binds =
 -- (done-names, ordered-binds) accumulators.  `rm` is the eager-reachability map
 -- (Stage B of #553): a binding's edges are the value globals it eagerly reaches
 -- THROUGH calls, not merely the ones its own body names directly.
-topoValGo : OrdMap (List String) -> List CBind -> List String -> List CBind -> List String -> List CBind -> (List String, List CBind)
-topoValGo _ _ _ [] done acc = (done, acc)
+topoValGo : OrdMap (List String) -> OrdMap CBind -> List CBind -> OrdMap Unit -> List CBind -> (OrdMap Unit, List CBind)
+topoValGo _ _ [] done acc = (done, acc)
 -- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-topoValGo rm all names (b::rest) done acc =
-  let (done2, acc2) = topoValVisit rm all names b done acc []
-  topoValGo rm all names rest done2 acc2
+topoValGo rm bm (b::rest) done acc =
+  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
+  topoValGo rm bm rest done2 acc2
 
-topoValVisit : OrdMap (List String) -> List CBind -> List String -> CBind -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisit rm all names b done acc visiting
-  | contains (bindName b) done = (done, acc)
-  | contains (bindName b) visiting = (done, acc)
+topoValVisit : OrdMap (List String) -> OrdMap CBind -> CBind -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisit rm bm b done acc visiting
+  | omHasKey (bindName b) done = (done, acc)
+  | omHasKey (bindName b) visiting = (done, acc)
   | otherwise =
-    let deps = intersectStr (dedupS (bindEagerReach rm b)) names
-    let (done2, acc2) = topoValVisitDeps rm all names deps done acc (bindName b :: visiting)
-    (bindName b :: done2, acc2 ++ [b])
+    let deps = filterList (n => omHasKey n bm) (dedupS (bindEagerReach rm b))
+    let (done2, acc2) = topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
+    (omInsert (bindName b) () done2, b::acc2)
 
-topoValVisitDeps : OrdMap (List String) -> List CBind -> List String -> List String -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisitDeps _ _ _ [] done acc _ = (done, acc)
-topoValVisitDeps rm all names (d::rest) done acc visiting = match findBind d all
+topoValVisitDeps : OrdMap (List String) -> OrdMap CBind -> List String -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisitDeps _ _ [] done acc _ = (done, acc)
+-- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- lint-disable-next-line rule-duplicate-body
+topoValVisitDeps rm bm (d::rest) done acc visiting = match omLookup d bm
   Some db =>
-    let (done2, acc2) = topoValVisit rm all names db done acc visiting
-    topoValVisitDeps rm all names rest done2 acc2 visiting
-  None => topoValVisitDeps rm all names rest done acc visiting
+    let (done2, acc2) = topoValVisit rm bm db done acc visiting
+    topoValVisitDeps rm bm rest done2 acc2 visiting
+  None => topoValVisitDeps rm bm rest done acc visiting
 
 -- the value-global names a binding's rhs references EAGERLY (at init time) — i.e.
 -- references NOT inside a lambda body — TRANSITIVELY through calls, are supplied by
@@ -8989,20 +9004,10 @@ topoValVisitDeps rm all names (d::rest) done acc visiting = match findBind d all
 -- other solely through their closures (`stmtsLoop = orElse stmtsCons (pure [])` ←
 -- eager; `stmtsCons = do … stmtsLoop` ← back-ref inside a `do` closure, lazy).
 
-findBind : String -> List CBind -> Option CBind
-findBind _ [] = None
-findBind name (b::rest) =
-  if bindName b == name then
-    Some b
-  else
-    findBind name rest
-
--- the elements of `xs` that also appear in `ys` (membership, order from xs).
-intersectStr : List String -> List String -> List String
-intersectStr [] _ = []
-intersectStr (x::rest) ys
-  | contains x ys = x :: intersectStr rest ys
-  | otherwise = intersectStr rest ys
+-- #623: `findBind` (linear scan of `all`) and `intersectStr` (`contains` per
+-- element against `names`) were the only two consumers of the topo sort's two
+-- `List` views of the same bindings.  `bindNameMap` + `omHasKey`/`omLookup`
+-- replace both, so they are gone.
 
 -- the initial globals registry: every value binding's name registered
 -- UNinitialised (`False`) with a placeholder LTy.  The `@main` init prologue flips

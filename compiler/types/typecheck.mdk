@@ -98,6 +98,8 @@ import support.util.{
   isSome,
   zipL,
   dedup,
+  dedupBy,
+  lenKey,
   sortUniqS,
   startsWith,
   escStr,
@@ -1662,7 +1664,7 @@ routeLocalSym _ = ""
 --     impls / parse fixtures are the only corpus sources), but MUST be kept: dropping
 --     them would change `implMatches` from True to False on such a program.--   • iface name → SET of its impls' concrete head tags (headless impls contribute no
 --     tag, exactly as `implHeadTagsFromHeads` skipped them).  `implCountForIfaceU`
---     reads its omSize — byte-identical to `listLen (dedupStr (implHeadTagsFromHeads …))`.
+--     reads its omSize — byte-identical to `listLen (dedup (implHeadTagsFromHeads …))`.
 -- #154 PR-A: PERSISTENT per-run DATA-universe accumulators for the multi-module path.
 -- checkBodyImpl's Module arm used to `registerAllData initialEnv (accData ++ prog0)`,
 -- RE-REGISTERING every earlier module's public data (and RE-MINTING its tyvars) once per
@@ -4710,15 +4712,14 @@ dropPairs n xs
     _::rest => dropPairs (n - 1) rest
 
 -- dedup (iface, id) pairs, keeping first occurrence (so declared slots stay leading).
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed so the
+-- key is injective for ANY name content.
 dedupPairs : List (String, Int) -> List (String, Int)
-dedupPairs xs = dedupPairsGo xs []
+dedupPairs xs = dedupBy slotKey xs
 
-dedupPairsGo : List (String, Int) -> List (String, Int) -> List (String, Int)
-dedupPairsGo [] _ = []
-dedupPairsGo (p::rest) seen
-  | anyList (q => fst q == fst p && snd q == snd p) seen =
-    dedupPairsGo rest seen
-  | otherwise = p :: dedupPairsGo rest (p::seen)
+slotKey : (String, Int) -> String
+slotKey (iface, id) = lenKey iface ++ intToString id
 
 -- the type a method ultimately returns (strip its argument arrows); the impl is
 -- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
@@ -11226,7 +11227,7 @@ reportAmbiguousImpl iface =
 -- twice via multi-module loading doesn't read as ambiguous.
 implHeadTagsForIface : List Decl -> String -> List String
 implHeadTagsForIface prog iface =
-  dedupStr (flatMap (implHeadTagForIface iface) prog)
+  dedup (flatMap (implHeadTagForIface iface) prog)
 
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
@@ -11238,15 +11239,6 @@ implHeadTagForIface want (DImpl { iface, tys, ... })
     [] => []
   | otherwise = []
 implHeadTagForIface _ _ = []
-
-dedupStr : List String -> List String
-dedupStr xs = dedupStrGo [] xs
-
-dedupStrGo : List String -> List String -> List String
-dedupStrGo _ [] = []
-dedupStrGo seen (x::rest)
-  | contains x seen = dedupStrGo seen rest
-  | otherwise = x :: dedupStrGo (x::seen) rest
 
 ambiguousImplMsg : String -> String
 ambiguousImplMsg iface = "Ambiguous instance for `"
@@ -15371,15 +15363,18 @@ lookupSigTvMap m ((n, ty, tvMap)::rest)
   | m == n = Some (ty, tvMap)
   | otherwise = lookupSigTvMap m rest
 
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed and
+-- the id VECTOR is comma-joined — ints carry no comma, so the encoding is
+-- injective over both components.
 dedupVecObls : List (String, List Int) -> List (String, List Int)
-dedupVecObls xs = dedupVecOblsGo xs []
+dedupVecObls xs = dedupBy vecOblKey xs
 
-dedupVecOblsGo : List (String, List Int) -> List (String, List Int) -> List (String, List Int)
-dedupVecOblsGo [] _ = []
-dedupVecOblsGo (p::rest) seen
-  | containsVecObl p seen = dedupVecOblsGo rest seen
-  | otherwise = p :: dedupVecOblsGo rest (p::seen)
+vecOblKey : (String, List Int) -> String
+vecOblKey (iface, ids) = lenKey iface ++ joinWith "," (map intToString ids)
 
+-- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
+-- dedup, and the declared set is a handful of entries, so it stays a scan.
 containsVecObl : (String, List Int) -> List (String, List Int) -> Bool
 containsVecObl _ [] = False
 containsVecObl (i, ids) ((i2, ids2)::rest) = i == i2 && eqIntList ids ids2

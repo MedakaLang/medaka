@@ -36,13 +36,24 @@ one-line version (positions are 0-based, LSP-style).
 | Tool | Args | What it does |
 |------|------|---------------|
 | `medaka_check` | `file` \| `source` | Type-check and return structured diagnostics — same JSON as `medaka check --json` |
-| `medaka_type_at` | `file`, `line`, `col` | Infer the type/scheme at a position (stateless hover) |
+| `medaka_type_at` | `file`, `line`, `col` \| `symbol` | Infer the type/scheme at a position (stateless hover) |
 | `medaka_symbols` | `file` | List top-level declarations with source ranges (document outline) |
-| `medaka_definition` | `file`, `line`, `col` | Find the declaration defining the identifier at a position (intra-file only) |
+| `medaka_definition` | `file`, `line`, `col` \| `symbol` | Find the declaration defining the identifier at a position (intra-file only) |
 | `medaka_references` | `file`, `line`, `col`, `includeDeclaration?` | Find every use of the identifier at a position, project-wide — resolves by binder identity, not spelling |
 | `medaka_fmt` | `file` \| `source`, `check?` | Format source with the canonical formatter; never writes to disk |
 | `medaka_lint` | `paths`, `deny?`, `only?`, `disable?` | Run the style linter over one or more files |
 | `medaka_test` | `file` | Run a file's doctests (and property tests, if any) |
+
+**`medaka_type_at`/`medaka_definition` addressing (#849):** give `line` plus
+EXACTLY ONE of `col` (0-based, LSP-style — the original form, unchanged) or
+`symbol` (a name to locate on that line, so a caller that can't reliably
+count characters doesn't have to). `symbol` is resolved server-side by
+scanning the queried line's own text; a name matching more than one
+identifier on the line reports each match rather than guessing. Any miss —
+an off-identifier `col`, a `symbol` absent from the line, or a `line` past
+EOF — is a clean, actionable result naming the identifiers actually on that
+line (never a bare empty/`null` result indistinguishable from "there's
+nothing here").
 
 ## 3. How to enable it
 
@@ -128,7 +139,8 @@ Two traps this creates:
 - ⚠️ **`medaka_symbols`/`medaka_definition` ranges are LINE-granular** —
   `character` is always 0 (#331 tracks true name-column fidelity).
 - ⚠️ **`medaka_definition` is INTRA-FILE ONLY.** A use of a name defined in
-  another file returns an empty result, not a wrong location.
+  another file returns a miss note (empty `matches` plus the identifiers on
+  that line, #849) rather than a wrong location.
 
 ## 5. The dogfooding ask
 

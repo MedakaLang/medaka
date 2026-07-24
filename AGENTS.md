@@ -356,6 +356,36 @@ If `run_gates.sh` reports gates FAILED with *"phantom skip: oracle/binary not bu
 that is **not a regression**, you just have no oracles. (They count as FAILED, not skipped,
 on purpose: a gate that ran nothing must never report green.)
 
+🚨 **ONE CARVE-OUT, and it has bitten twice: a phantom-skipped `diff_compiler_selfproc` on a
+compiler-source change is NOT dismissible.** The rule above is right in general and wrong
+here, and the combination is a genuine blind spot rather than an oversight:
+`test/preflight.sh` *correctly* selects `diff_compiler_selfproc` for any `compiler/*/*.mdk`
+diff — but in a fresh worktree it has no `test/bin/check_all_main`, so it exits 2, becomes
+`FAIL* (phantom skip)`, and the paragraph above tells you to ignore it. **A correct gate plus
+a correct-in-general dismissal rule = shipping the break.** That gate is the *only* local
+signal for the moved selfproc **LEG A** scheme golden (see the snapshot/LEG A trap under
+Traps), and it reds in the CI `backend` shard when you skip it. Two PRs have burned a CI
+round-trip this way; on #1005 the deterministic red was then misread as a shared-runner
+flake and blind-retried.
+
+So when your diff touches a LEG A module — `frontend.{ast,desugar,exhaust,lexer,marker,parser,resolve}`,
+`types.{annotate,typecheck}`, `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check` — make
+it actually grade instead of dismissing it:
+
+```sh
+for o in check_all_main eval_modules_main eval_typed_modules_main; do
+  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one "$o"
+done
+sh test/diff_compiler_selfproc.sh        # must read "N ok, 0 failing" — not exit 2
+```
+
+**Cheapest possible discriminator, no build at all** — if you added or renamed a top-level
+binding, it must already be in the golden:
+
+```sh
+grep '<newBinding>' test/selfproc_goldens/legA/<module>.golden || echo "STALE — re-bless"
+```
+
 ### The gates
 
 ```sh
@@ -543,6 +573,34 @@ narrative lives at the link.
   duplicate names**, so any flat frame keyed by *bare name* across modules inherits it (e.g.
   `map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin` collapse into one cell). The fix shape is a
   per-module **local** ctor frame that shadows the global.
+- 🚨 **ADDING A PROGRAM-GLOBAL TABLE OR A NEW AST CONSTRUCTOR? The required fixture is
+  "feature + UNRELATED code still behaves", NOT "feature works".** This is the single most
+  expensive shape in this tree, and it is invisible to every gate: on **2026-07-24 alone it
+  was the root cause of an S0, an S1, and a def-site regression across four different PRs —
+  every one of them 12/12 green.**
+
+  Two forms, one failure:
+  - **A new AST constructor** is silently swallowed by every `_ =>` wildcard arm in every
+    pass that does not yet know about it. Exhaustiveness checking is a *floor*, not a
+    guarantee — a wildcard is exhaustive and wrong. Audit the arms as a **SET**.
+  - **A program-global table** (a universe accumulator, a kind/type registry, a rename map)
+    is keyed by something, and if that key has **no scope**, entries collide across modules
+    that have no import relationship at all. Real example: a graded-interface kind table
+    keyed on a bare type-param name re-kinded *every* arity-matching application in the whole
+    module graph, so `f Int a -> f String a` was **silently accepted** (`meowmeow` for
+    `meowwoof`, exit 0, no diagnostic), and one 4-line file turned 1 clean diagnostic into 45.
+
+  **Why the gates cannot help you.** A fixture that exercises your feature passes. The
+  goldens you blessed pin the output you expected. Nothing in the suite asks *"is the code
+  that has nothing to do with this change still correct?"* — so the failure mode is
+  specifically that **your feature works perfectly and something unrelated breaks.**
+
+  **What to write instead:** a fixture where the new construct is present but the assertion
+  is about code that does not use it. A module that never imports your feature. A binding
+  whose type mentions none of your new machinery. The prelude. If your change adds a table,
+  ask *what happens to a program that never touches it* — and if the answer is "nothing, it
+  is keyed per-X", **prove the key is scoped** rather than asserting it (`<iface>@<slot>`,
+  never a program-global bare name).
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**

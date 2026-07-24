@@ -76,6 +76,7 @@ import support.util.{
   filterList,
   anyList,
   dedup,
+  dedupBy,
 }
 
 -- ── Errors (mirror lib/resolve.ml's `error`) ──────────────────────────────
@@ -1673,17 +1674,15 @@ locKey (Some (Loc f sl sc el ec)) = "\{f}:\{intToString sl}:\{intToString sc}:\{
 -- constructor), NOT `resErrorSexp`. (`resErrorSexp` is now itself total —
 -- including an `InternalExternAccess` arm — but the human `ppResError` key is
 -- kept here since it carries the actionable message text.)
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  Same key string, same first-occurrence
+-- order, so the emitted diagnostic list is unchanged.
 dedupResErrors : List ResError -> List ResError
-dedupResErrors es = dedupResErrorsGo es []
+dedupResErrors es = dedupBy resErrorDedupKey es
 
-dedupResErrorsGo : List ResError -> List String -> List ResError
-dedupResErrorsGo [] _ = []
-dedupResErrorsGo (e::es) seen =
-  let key = "\{resErrorCode e}|\{ppResError e}|\{locKey (resErrorLoc e)}"
-  if contains key seen then
-    dedupResErrorsGo es seen
-  else
-    e :: dedupResErrorsGo es (key::seen)
+resErrorDedupKey : ResError -> String
+resErrorDedupKey e =
+  "\{resErrorCode e}|\{ppResError e}|\{locKey (resErrorLoc e)}"
 
 -- ── resolve_program ───────────────────────────────────────────────────────
 -- runtimeDecls = runtime.mdk externs; preludeDecls = core.mdk; prog = target.

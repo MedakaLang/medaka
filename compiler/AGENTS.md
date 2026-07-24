@@ -46,6 +46,41 @@ Precedents to copy, both in this tree: `55d20ff9` (resolve's `contigGo`) and **#
 dict-passed fold+closure. Doing this to `support/util.mdk`'s hottest helpers cost
 **+56% self-compile.** Keep hot inner-loop helpers **monomorphic and short-circuiting**.
 
+### The exception that IS one: 🚨 when the KEY PROJECTION allocates
+**The rule above stands — the swap is right by default. But it is a win on COMPARISONS, and
+it can be a large constant-factor LOSS on ALLOCATION, which is what the GC-bound `check`
+stage is actually paying.**
+
+A naive `contains`-per-element `List` dedup is O(n²) in *comparisons* but only **O(n) in
+allocation**. Route it through `util.dedupBy` and you get O(n log n) comparisons — plus the
+`OrdMap` nodes, plus **a fresh `String` per element whenever the key projection allocates**
+(a composite key built with `lenKey`, an `intToString`, any `++`). Measured with `allocBytes`
+on PR #1010:
+
+| n | old `List` scan | new `dedupBy` | ratio |
+|---|---|---|---|
+| 3 | 288 B/call | 2688 B/call | 9.33× |
+| 100 | 9600 B/call | 129183 B/call | 13.46× |
+| 400 | 38399 B/call | 574622 B/call | 14.96× |
+
+**No crossover at any n.** Non-allocating keys (`fst`, `identity`, an already-built String)
+are unaffected — those are genuine wins.
+
+⚠️ **BOTH perf arms are structurally blind to this, so CI will call it an improvement:**
+- the **alloc** arm grades a *growth ratio* (≈2.0 linear / ≈4.0 quadratic), and a constant
+  factor at fixed n cannot move a ratio;
+- the **op** arm counts the `contains` steps via `opBump` — exactly what you removed — so the
+  op count goes **DOWN**.
+
+All 12 required checks stayed green. **"The gates pass" is evidence behavior did not change;
+it is NOT evidence a perf claim is true.**
+
+**So:** before migrating a scan whose key projection allocates, A/B `allocBytes` per call at
+several n (deterministic and machine-independent, unlike wall-clock), then measure the
+**aggregate** share of stage allocation — per-call ratios alone cannot tell you whether it
+matters. If you keep such a site for consolidation reasons, **say so in the commit** rather
+than labelling it `perf:`. Caught by adversarial review, not by the author and not by CI.
+
 ---
 
 ## 🔴 THE SECOND RULE — the one that actually bit us

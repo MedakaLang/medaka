@@ -335,11 +335,7 @@ decodeSetParam : String -> List String
 dedupI : List Int -> List Int
 dedupIGo : List Int -> List Int -> List Int
 dedupPairs : List (String, Int) -> List (String, Int)
-dedupPairsGo : List (String, Int) -> List (String, Int) -> List (String, Int)
-dedupStr : List String -> List String
-dedupStrGo : List String -> List String -> List String
 dedupVecObls : List (String, List Int) -> List (String, List Int)
-dedupVecOblsGo : List (String, List Int) -> List (String, List Int) -> List (String, List Int)
 defaultAmbiguousNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
 defaultBodyLocalNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
 defaultEachMember : List (String, List String, Ty, Mono, Option Loc) -> List (String, Mono) -> Unit
@@ -1225,6 +1221,7 @@ singleTyparamIfaceMethod : String -> Bool
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : Ref (List Route) -> List String
 sitesFor : String -> Map String (List a) -> List a
+slotKey : (String, Int) -> String
 sortAxes : List (String, Param) -> List (String, Param)
 spineFirstArg : Expr -> Option Expr
 spineHeadIsApp : Expr -> Bool
@@ -1368,6 +1365,7 @@ usePathModuleId : UsePath -> String
 usesImplDict : String -> Int -> Expr -> Bool
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 variantFieldTailNames : Variant -> List String
+vecOblKey : (String, List Int) -> String
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit
