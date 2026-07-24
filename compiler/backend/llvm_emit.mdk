@@ -246,6 +246,7 @@ import backend.emit_support.{
   bindEagerReach,
   lazyGlobalNames,
   methodIfaceTableRef,
+  setMethodIfaceTable,
   methodIfaceOf,
   methodArityOf,
   isDictParamName,
@@ -506,7 +507,7 @@ lookupSelfFnParams iface method (((i, m), p)::rest)
 -- `backend.emit_support` (shared with the WasmGC emitter); `installMethodIface`
 -- stays here as the LLVM-side install entry point the emit drivers import.
 export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setRef methodIfaceTableRef t
+installMethodIface t = setMethodIfaceTable t
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint, the interface

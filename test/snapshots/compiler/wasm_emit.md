@@ -1,5 +1,5 @@
 # META
-source_lines=9326
+source_lines=9327
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -246,6 +246,7 @@ import backend.emit_support.{
   bindEagerReach,
   lazyGlobalNames,
   methodIfaceTableRef,
+  setMethodIfaceTable,
   methodArityOf,
   methodIfaceOf,
   isDictParamName,
@@ -350,7 +351,7 @@ progImpls (Prog _ _ _ _ _ _ _ _ impls) = impls
 -- `backend.emit_support` (shared with the LLVM emitter); `installMethodIface`
 -- stays here as the WasmGC-side install entry point the emit drivers import.
 export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setRef methodIfaceTableRef t
+installMethodIface t = setMethodIfaceTable t
 
 -- C4 (SHARED-FLOAT-RESIDUAL-DESIGN §6): hint from the driver: True when typecheck
 -- resolved main's inferred return type to Float (e.g. via a polymorphic HOF like
@@ -9336,7 +9337,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "sanitizeId" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -9351,7 +9352,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "progImpls" (TyFun (TyCon "Prog") (TyApp (TyCon "List") (TyCon "CImplEntry"))))
 (DFunDef false "progImpls" ((PCon "Prog" PWild PWild PWild PWild PWild PWild PWild PWild (PVar "impls"))) (EVar "impls"))
 (DTypeSig true "installMethodIface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t")))
+(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EVar "setMethodIfaceTable") (EVar "t")))
 (DTypeSig false "mainIsFloatHintRef" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "mainIsFloatHintRef" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig true "installMainIsFloatHint" (TyFun (TyCon "Bool") (TyCon "Unit")))
@@ -11578,7 +11579,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "sanitizeId" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -11593,7 +11594,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "progImpls" (TyFun (TyCon "Prog") (TyApp (TyCon "List") (TyCon "CImplEntry"))))
 (DFunDef false "progImpls" ((PCon "Prog" PWild PWild PWild PWild PWild PWild PWild PWild (PVar "impls"))) (EVar "impls"))
 (DTypeSig true "installMethodIface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t")))
+(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EVar "setMethodIfaceTable") (EVar "t")))
 (DTypeSig false "mainIsFloatHintRef" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "mainIsFloatHintRef" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig true "installMainIsFloatHint" (TyFun (TyCon "Bool") (TyCon "Unit")))

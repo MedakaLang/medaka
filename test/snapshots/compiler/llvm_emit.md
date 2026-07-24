@@ -1,5 +1,5 @@
 # META
-source_lines=10606
+source_lines=10607
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -250,6 +250,7 @@ import backend.emit_support.{
   bindEagerReach,
   lazyGlobalNames,
   methodIfaceTableRef,
+  setMethodIfaceTable,
   methodIfaceOf,
   methodArityOf,
   isDictParamName,
@@ -510,7 +511,7 @@ lookupSelfFnParams iface method (((i, m), p)::rest)
 -- `backend.emit_support` (shared with the WasmGC emitter); `installMethodIface`
 -- stays here as the LLVM-side install entry point the emit drivers import.
 export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setRef methodIfaceTableRef t
+installMethodIface t = setMethodIfaceTable t
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint, the interface
@@ -10617,7 +10618,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "safeChar" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "methodIfaceOf" false) (mem "methodArityOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodIfaceOf" false) (mem "methodArityOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DTypeSig false "gapRecordEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "gapRecordEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -10679,7 +10680,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "lookupSelfFnParams" (PWild PWild (PList)) (EListLit))
 (DFunDef false "lookupSelfFnParams" ((PVar "iface") (PVar "method") (PCons (PTuple (PTuple (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "m") (EVar "method"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupSelfFnParams") (EVar "iface")) (EVar "method")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "installMethodIface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t")))
+(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EVar "setMethodIfaceTable") (EVar "t")))
 (DTypeSig false "methodConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfacesRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "installMethodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))
@@ -12808,7 +12809,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "safeChar" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "methodIfaceOf" false) (mem "methodArityOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodIfaceOf" false) (mem "methodArityOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DTypeSig false "gapRecordEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "gapRecordEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "gapLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
@@ -12870,7 +12871,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "lookupSelfFnParams" (PWild PWild (PList)) (EListLit))
 (DFunDef false "lookupSelfFnParams" ((PVar "iface") (PVar "method") (PCons (PTuple (PTuple (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "m") (EVar "method"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupSelfFnParams") (EVar "iface")) (EVar "method")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "installMethodIface" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t")))
+(DFunDef false "installMethodIface" ((PVar "t")) (EApp (EVar "setMethodIfaceTable") (EVar "t")))
 (DTypeSig false "methodConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfacesRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "installMethodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))

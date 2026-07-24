@@ -242,6 +242,7 @@ import backend.emit_support.{
   bindEagerReach,
   lazyGlobalNames,
   methodIfaceTableRef,
+  setMethodIfaceTable,
   methodArityOf,
   methodIfaceOf,
   isDictParamName,
@@ -346,7 +347,7 @@ progImpls (Prog _ _ _ _ _ _ _ _ impls) = impls
 -- `backend.emit_support` (shared with the LLVM emitter); `installMethodIface`
 -- stays here as the WasmGC-side install entry point the emit drivers import.
 export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setRef methodIfaceTableRef t
+installMethodIface t = setMethodIfaceTable t
 
 -- C4 (SHARED-FLOAT-RESIDUAL-DESIGN §6): hint from the driver: True when typecheck
 -- resolved main's inferred return type to Float (e.g. via a polymorphic HOF like
