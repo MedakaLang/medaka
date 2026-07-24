@@ -96,4 +96,14 @@ check_project "$ROOT/test/references_fixtures/multiclause" \
 check_project "$ROOT/test/references_fixtures/dup_field_def" \
   "reference-index def dedup (#964: a shared record field is ONE DEF site, not K)"
 
+# #1002: an `impl`'s method clause heads are DEF SITES, on the INTERFACE's key.
+# They used to be recorded as neither def nor use (defsOfDecl returned [] for
+# DImpl; walkImplMethods discarded the method name), so `references` on a method
+# missed every impl and a rename would have orphaned them all. The fixture pins
+# the keying from three directions: same module as the interface, a different
+# module (resolved through the import, NOT the impl's own module id), and two
+# impls of one interface for different types.
+check_project "$ROOT/test/references_fixtures/impl_method" \
+  "reference-index impl-method heads (#1002: every impl clause head is a DEF site)"
+
 exit "$rc"

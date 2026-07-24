@@ -1,0 +1,54 @@
+-- #1002 regression fixture — an `impl`'s method clause heads are DEF SITES.
+--
+-- Read test/references_fixtures/impl_method/expected.golden as the assertion: the
+-- `iface|method|sizeOf` row must list the interface declaration AND every impl
+-- clause head across BOTH modules. Before #1002, `defsOfDecl` returned `[]` for
+-- `DImpl` and `walkImplMethods` discarded the method NAME, so an impl's heads were
+-- recorded as neither a def nor a use — invisible to the whole index. `references`
+-- on an interface method returned the declaration and the call sites but none of
+-- the impls, and a rename off that set would rename the method while leaving every
+-- `impl` defining the OLD name: the #964 failure mode, one namespace over.
+--
+-- KEYING is the load-bearing decision (see `recordImplHeads`, refindex.mdk): heads
+-- join the INTERFACE's key, never an impl-qualified one, because renaming the
+-- method must edit all of them. This fixture pins that from three directions at
+-- once — same module as the interface (iface.mdk), a different module (here), and
+-- two impls of the same interface for DIFFERENT types (here).
+import iface.{Sized, sizeOf, Box, Small, Big}
+
+-- S0-2: an impl in a DIFFERENT module from its interface. Resolving through the
+-- import must yield `iface`'s key, NOT `main`'s — a regression that keyed on the
+-- impl's own module id would split this off into `main|method|sizeOf`.
+data Crate =
+  | Crate
+
+impl Sized Crate where
+  sizeOf Crate = 7
+
+-- S0-3: a SECOND impl of the SAME interface for a DIFFERENT type, in the same
+-- module as the one above. Both heads must coexist under the one key at distinct
+-- Locs — `pushDef`'s dedup must NOT collapse them (it only drops an identical
+-- (uri, span)), because a rename has to edit both.
+data Pallet =
+  | Pallet
+
+impl Sized Pallet where
+  sizeOf Pallet = 9
+
+-- S0-4: an impl of a PRELUDE interface. The head joins `core|method|eq` — a
+-- project-local location under a prelude key, which is F1-correct (it is inside
+-- the project) and is what makes `references` on `eq` show the user's own impls.
+data Tag =
+  | Tag
+
+impl Eq Tag where
+  eq Tag Tag = True
+
+-- Control: `describeBox` is an ordinary single-clause top-level fn, so its ONE
+-- def site proves the golden distinguishes "impl heads recorded" from "extra
+-- entries appearing everywhere".
+export describeBox : Box -> Int
+describeBox b = sizeOf b
+
+export total : Int
+total = sizeOf Small + sizeOf Crate + sizeOf Pallet

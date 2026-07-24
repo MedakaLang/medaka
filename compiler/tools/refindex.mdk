@@ -88,6 +88,7 @@ import frontend.parser.{
   positionsDecls,
   DeclPos,
   declPosNameLoc,
+  declPosChildLocs,
 }
 import driver.loader.{
   loadProgramFilesLocatedCached,
@@ -134,7 +135,11 @@ mkKey modId ns name = modId ++ sep ++ ns ++ sep ++ name
 
 -- an EXTERNAL (prelude / out-of-project / unresolved) fallback key.  Still keyed
 -- by (ns, name) so uses of the SAME external name group under one key; carries no
--- def site (defsOf returns []), which is exactly right for F1 intra-project scope.
+-- def site of its OWN (defsOf returns [] for it), which is exactly right for F1
+-- intra-project scope.  One exception, and it is deliberate: a project-local
+-- `impl` of an interface this fallback could not resolve still records its method
+-- clause heads here (#1002) — those heads ARE inside the project, so reporting
+-- them is F1-correct; what stays unrecorded is the out-of-project declaration.
 extKey : String -> String -> String
 extKey ns name = "?ext\{sep}\{ns}\{sep}\{name}"
 
@@ -301,8 +306,13 @@ pushDefFresh ctx key uri loc = match hmGetC ctx ctx.defs key
     r := (uri, loc)::r.value
   None => hmSetC ctx ctx.defs key (Ref [(uri, loc)])
 
--- The identity of a def SITE: its binder key plus its exact (uri, span).  `sep` is
--- a TAB, which can appear in none of these components, so this is injective.
+-- The identity of a def SITE: its binder key plus its exact (uri, span).  Joined
+-- on `sep` (TAB), which separates cleanly for every identifier, namespace tag and
+-- integer here.  A `uri` (or the module id inside `key`) is a filesystem path and
+-- CAN in principle contain a TAB, so this is injective for every path that does
+-- not — the same bound `mkKey` already lives with, and a collision would need two
+-- def sites whose TAB-containing paths re-split identically.  Pre-existing parity,
+-- not a new assumption; if `mkKey` ever gains a stricter separator, this follows.
 defSiteId : String -> String -> Loc -> String
 defSiteId key uri (Loc _ sl sc el ec) = "\{key}\{sep}\{uri}\{sep}\{intToString sl}\{sep}\{intToString sc}\{sep}\{intToString el}\{sep}\{intToString ec}"
 
@@ -352,6 +362,19 @@ resolveField : W -> String -> String
 resolveField (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsField ++ sep ++ name)
   Some k => k
   None => extKey nsField name
+
+-- An IMPL method head resolves under `nsMethod` ONLY — never `nsVal`, never the
+-- local scope (#1002).  `impl Sized Box where sizeOf … ` is a definition OF the
+-- interface's `sizeOf`, so it must land on the INTERFACE's origin key even when
+-- a same-named top-level value is in scope; going through `useEnv` (rather than
+-- `mkKey mid nsMethod n`, which would use the IMPL's module) is what makes an
+-- impl in a DIFFERENT module than its interface still join the interface's key,
+-- via the same import/re-export threading a method CALL already resolves through
+-- (`importNs`/`reExportNs`, both of which cover `nsMethod`).
+resolveMethod : W -> String -> String
+resolveMethod (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsMethod ++ sep ++ name)
+  Some k => k
+  None => extKey nsMethod name
 
 -- ── the expression walk (mirrors resolve.mdk stampExpr's frame-stack shape) ──
 -- `curLoc` is the location of the nearest enclosing `ELoc` wrapper — the parser
@@ -736,11 +759,80 @@ ctorsPub VisPublic = True
 ctorsPub _ = False
 
 -- ── body walk over decls (uses the assembled useEnv) ─────────────────────────
+-- `recordImplHeads` runs HERE, not in `defsOfDecl`, for two reasons: it needs the
+-- assembled `useEnv` (only available in this phase — `collectDefs` runs before
+-- `processImports`) to reach the interface's origin key, and it needs the decl's
+-- CHILD name `Loc`s, which `walkDeclBody` is not handed.  See `recordImplHeads`.
 walkDecls : W -> List (Decl, DeclPos) -> Unit
 walkDecls _ [] = ()
 walkDecls w ((d, p)::rest) =
-  let _ = walkDeclBody w d (nameLocOf (uriOf w) p)
+  let loc = nameLocOf (uriOf w) p
+  let _ = recordImplHeads w d loc (childLocsOf (uriOf w) p)
+  let _ = walkDeclBody w d loc
   walkDecls w rest
+
+-- A decl's CHILD name-token `Loc`s (one per interface/impl method clause head,
+-- per data variant, …), re-based onto this module's uri.  `None` where the
+-- parser could not pin a token (`declChildSpansOf` is defensively partial).
+childLocsOf : String -> DeclPos -> List (Option Loc)
+childLocsOf uri p = map (mapChildLoc uri) (declPosChildLocs p)
+
+mapChildLoc : String -> Option Loc -> Option Loc
+mapChildLoc _ None = None
+mapChildLoc uri (Some l) = Some (withUri uri l)
+
+-- ── impl-method clause heads (#1002) ────────────────────────────────────────
+-- An `impl`'s method heads used to be recorded as NEITHER a def nor a use — the
+-- def pass returns `[]` for `DImpl` and the body walk discards the method NAME —
+-- so `impl Sized Box where sizeOf Small = 1 / sizeOf Big = 100` put nothing at
+-- all in the index.  `references` on `sizeOf` therefore returned the interface
+-- declaration and the call sites but NOT the impls, and a rename off that set
+-- would rename the interface method while leaving every `impl` defining the OLD
+-- name — the #964 failure mode, one namespace over.
+--
+-- KEYING (the decision that makes rename correct): a head lands on the SAME
+-- BinderKey as the interface's method declaration, NOT an impl-qualified key.
+-- An impl method is not an independent binder; it is a definition OF that
+-- method, and renaming the method must edit every one of them or the program
+-- silently changes meaning.  It is also what `references` should return — the
+-- LSP convention is that find-references on an interface method includes its
+-- implementations.  Distinguishing WHICH impl a head belongs to (F4) stays
+-- expressible from the head's own `Loc`, which is inside exactly one `impl`.
+--
+-- Accumulating (post-#964): K impls × N clauses each all coexist under the one
+-- key at K×N distinct `Loc`s, and `pushDef`'s dedup only ever collapses two
+-- records of the SAME (uri, span) — which distinct clause heads never are.
+--
+-- Runs for the DImpl arm only; every other decl is a no-op.  `DAttrib` is peeled
+-- because `declChildNameIdxs` itself derives child spans from the INNER decl.
+recordImplHeads : W -> Decl -> Loc -> List (Option Loc) -> Unit
+recordImplHeads w (DAttrib _ inner) loc childLocs =
+  recordImplHeads w inner loc childLocs
+recordImplHeads w (DImpl { methods, ... }) loc childLocs =
+  implHeadsGo w loc methods childLocs
+recordImplHeads _ _ _ _ = ()
+
+-- Zip methods with child `Loc`s POSITIONALLY: `methodNameIdxs` (parser.mdk)
+-- emits one index per clause line of the `where` body, and `ImplMethod` is one
+-- CLAUSE (`ImplMethod String (List Pat) Expr` — no clause list), so the two run
+-- 1:1.  Defensive on a short/absent child list — fall back to the decl's own
+-- `Loc` rather than dropping the head, so a parser gap costs precision, never
+-- the whole entry (the same posture `zipFieldIdxs` takes).
+implHeadsGo : W -> Loc -> List ImplMethod -> List (Option Loc) -> Unit
+implHeadsGo _ _ [] _ = ()
+implHeadsGo w loc ((ImplMethod n _ _)::rest) [] =
+  let _ = recordImplHead w n loc
+  implHeadsGo w loc rest []
+implHeadsGo w loc ((ImplMethod n _ _)::rest) (c::cs) =
+  let _ = recordImplHead w n (childLocOr loc c)
+  implHeadsGo w loc rest cs
+
+childLocOr : Loc -> Option Loc -> Loc
+childLocOr fb None = fb
+childLocOr _ (Some l) = l
+
+recordImplHead : W -> String -> Loc -> Unit
+recordImplHead w n loc = recordDef (ctxOf w) (resolveMethod w n) (uriOf w) loc
 
 walkDeclBody : W -> Decl -> Loc -> Unit
 walkDeclBody w (DFunDef _ _ pats body) loc =
@@ -943,8 +1035,11 @@ importWildGo ctx useEnv ((ns, name, originKey)::rest) =
 
 -- ── prelude seeding (core + runtime): export origins WITHOUT def recording ───
 -- F1: intra-project scope.  Prelude names resolve to stable `core`/`runtime`
--- origin keys so uses group, but no def site is recorded (defsOf → []), and we
--- never walk prelude bodies.
+-- origin keys so uses group, but the PRELUDE's own decls record no def site, and
+-- we never walk prelude bodies.  A project-local `impl Eq MyType` DOES record its
+-- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
+-- location joining a prelude key, not a descent into stdlib, and it is what makes
+-- `references` on a prelude method show the impls the user actually wrote.
 seedPrelude : Ctx -> String -> String -> Unit
 seedPrelude ctx mid src = match parseWithPositionsOpt src
   None => ()
@@ -1290,11 +1385,19 @@ export buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
 buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
   buildRefIndexProject noOverride projectRoot runtimeSrc coreSrc
 
--- EVERY definition site of a binder, in source order; `[]` if it is not defined
--- inside the project.  Usually one, but a MULTI-CLAUSE top-level function has one
--- per clause head, all under the same key (#964 — see the module header).
--- Duplicate-free by construction (`pushDef`).  O(#def sites for the key), i.e.
--- O(#clauses), never project-sized.
+-- EVERY definition site of a binder; `[]` if it is not defined inside the
+-- project.  Usually one, but a MULTI-CLAUSE top-level function has one per clause
+-- head (#964) and an interface METHOD has one per impl clause head on top of its
+-- declaration (#1002) — all under the same key (see the module header).
+-- Duplicate-free by construction (`pushDef`).  O(#def sites for the key), never
+-- project-sized.
+--
+-- ORDER is RECORD order, which is source order for the clause heads of one
+-- function but interface-declaration-then-impl-heads for a method (the def pass
+-- runs over a module before the body walk does, and modules are indexed
+-- dependency-first).  It is deterministic, but a caller that needs positional
+-- order must sort — `referenceLocations` (lsp.mdk) already sorts by
+-- (path, line, col) before emitting, which is why the tool output is stable.
 --
 -- There is deliberately NO single-site `defOf` companion.  It had zero callers,
 -- and the shorter, more obvious name returning ONE head is exactly the footgun
