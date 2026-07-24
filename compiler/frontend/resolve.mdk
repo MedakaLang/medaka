@@ -57,7 +57,9 @@ import support.ordmap.{
   omFromPairs,
   omKeys,
   omSize,
+  omMapValues,
 }
+import support.opcount.{opBump}
 import support.util.{
   contains,
   editDistance,
@@ -227,15 +229,21 @@ public export data Env = Env {
     ctors : OrdMap Unit,
     fields : List String,
     fieldOwners : List (String, String),
-    interfaces : List String,
-    ifaceMethods : List (String, List String),
-    effects : List String,
-    imported : OrdMap Unit,
-    importedModuleValues : List (String, List String),  -- (modId, expValues) pairs for every non-`core` module this file `import`s
-    ambiguous : List (String, List String),  -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
-    ctorAmbiguous : List (String, List String),  -- #674: CONSTRUCTOR name → its ≥2 explicitly-importing module ids (ctor peer of `ambiguous`)
-    internalGuard : OrdMap Unit,  -- `checkVar` recognize an unbound name that's an export of an ALREADY
+    fieldOwnersIdx : OrdMap (List String),  -- `fieldOwners` indexed by field name (built ONCE, see `buildFieldOwnerIndex`):
+    interfaces : List String,  -- field -> its owners in registration order.  `ownersOf` probes this in
+    ifaceMethods : List (String, List String),  -- O(log fields) instead of the O(fields) linear scan of `fieldOwners` it used
+    effects : List String,  -- to do per field mention — the wide-record resolve quadratic (#984).  The
+    imported : OrdMap Unit,  -- plain `fieldOwners` list is kept only for the rare `ownsAnyField` error path.
+    importedModuleValues : List (String, List String),
+    ambiguous : List (String, List String),
+    ctorAmbiguous : List (String, List String),
+    internalGuard : OrdMap Unit,
   }  -- imported module (needs a selective import, not a typo fix; audit #5).
+-- (modId, expValues) pairs for every non-`core` module this file `import`s
+-- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
+-- #674: CONSTRUCTOR name → its ≥2 explicitly-importing module ids (ctor peer of `ambiguous`)
+-- `checkVar` recognize an unbound name that's an export of an ALREADY
+
 -- use-time ambiguity (MAP-SET-AMBIGUITY-DESIGN.md): name → the ≥2 distinct
 -- non-`core` module ids that export it unqualified
 
@@ -260,12 +268,34 @@ export internalGuardFor : Bool -> List String
 internalGuardFor True = []
 internalGuardFor False = internalExterns
 
--- the owners registered for a field name in the field-owner multimap
-ownersOf : String -> List (String, String) -> List String
-ownersOf _ [] = []
-ownersOf field ((f, owner)::rest)
-  | f == field = owner :: ownersOf field rest
-  | otherwise = ownersOf field rest
+-- Build the field-name -> owners index from the flat (field, owner) multimap.
+-- Owners are PREPENDED per bucket (O(1)) then every bucket is reversed once
+-- (`omMapValues reverseL`), so `ownersOf` yields owners in the SAME registration
+-- order the old linear `ownersOf field fieldOwners` scan did — the field-ambiguity
+-- diagnostics (`FieldNotInRecord`, and `contains owner owners` in `fieldVerdict`)
+-- are therefore byte-identical.  Built ONCE per `Env`; #984.
+buildFieldOwnerIndex : List (String, String) -> OrdMap (List String)
+buildFieldOwnerIndex pairs = omMapValues reverseL (indexOwners pairs omEmpty)
+
+indexOwners : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
+indexOwners [] m = m
+indexOwners ((f, owner)::rest) m = match omLookup f m
+  Some os => indexOwners rest (omInsert f (owner::os) m)
+  None => indexOwners rest (omInsert f [owner] m)
+
+-- the owners registered for a field name in the field-owner multimap.
+-- O(log fields) index probe (see `buildFieldOwnerIndex`), NOT the per-mention
+-- O(fields) scan it used to be (#984).  `opBump` makes this probe VISIBLE to the
+-- perf gate's op-count arm (#884): the `widerecords` shape's resolve-op grade now
+-- covers `ownersOf` — one counted op per field mention, so the FIXED path reads
+-- LINEAR, while a regression that scans (or returns a superlinear owners list)
+-- lifts the resolve-op ratio superlinear and the gate goes red (#880).
+ownersOf : String -> OrdMap (List String) -> List String
+ownersOf field idx =
+  let _ = opBump ()
+  match omLookup field idx
+    Some owners => owners
+    None => []
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
 patBindings : Pat -> List String
@@ -383,7 +413,7 @@ checkRecField cur env owner (RecPatField fname _ popt) = fieldCheck cur env owne
 
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldCheck cur env owner fname =
-  let owners = ownersOf fname env.fieldOwners
+  let owners = ownersOf fname env.fieldOwnersIdx
   fieldVerdict cur env owner fname owners
 
 -- No record in scope declares `fname`.  If the pattern head `owner` IS a known
@@ -928,7 +958,7 @@ recCreateHead cur env name fs
 
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
 recCreateField cur env owner (FieldAssign fname _) =
-  fieldVerdict cur env owner fname (ownersOf fname env.fieldOwners)
+  fieldVerdict cur env owner fname (ownersOf fname env.fieldOwnersIdx)
 
 -- record update `{ e | f = v, … }`: the receiver's type isn't pinned, so only
 -- flag a field unknown to *every* record (no FieldNotInRecord here)
@@ -942,7 +972,7 @@ recUpdateField cur env scope (FieldAssign fname v) = checkExpr cur env scope v
 
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
 fieldKnownErr cur env fname =
-  recUpdateVerdict cur fname (ownersOf fname env.fieldOwners)
+  recUpdateVerdict cur fname (ownersOf fname env.fieldOwnersIdx)
 
 recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 recUpdateVerdict cur fname [] = [UnknownField fname cur]
@@ -1209,6 +1239,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     ctors = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog) omEmpty,
     fields = map fst pFieldOwners ++ map fst (fieldOwnersOf prog),
     fieldOwners = pFieldOwners ++ fieldOwnersOf prog,
+    fieldOwnersIdx = buildFieldOwnerIndex (pFieldOwners ++ fieldOwnersOf prog),
     interfaces = map fst pIfaces ++ map fst uIfaces,
     ifaceMethods = pIfaces ++ uIfaces,
     effects = effectNames prog,
@@ -2247,6 +2278,7 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
     ctors = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog ++ adds.iaCtors) omEmpty,
     fields = map fst pFieldOwners ++ map fst (fieldOwnersOf prog) ++ map fst adds.iaFieldOwners,
     fieldOwners = pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners,
+    fieldOwnersIdx = buildFieldOwnerIndex (pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners),
     interfaces = baseIfaces,
     ifaceMethods = pIfaces ++ uIfaces ++ impIfaceMethods,
     effects = effectNames prog ++ impEffects,

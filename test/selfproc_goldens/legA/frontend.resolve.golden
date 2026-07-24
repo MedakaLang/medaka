@@ -9,6 +9,7 @@ buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
+buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
 checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
@@ -130,6 +131,7 @@ importedIfaceMethods : Map String ModuleExports -> List Decl -> List String -> L
 importedModuleValueSets : Map String ModuleExports -> List Decl -> List (String, List String)
 importedNames : List Decl -> List String
 importedNamesMM : UsePath -> ModuleExports -> (List String, List ResError)
+indexOwners : List (String, String) -> Map String (List String) -> Map String (List String)
 interfaceList : List Decl -> List (String, List String)
 internalExterns : List String
 internalGuardFor : Bool -> List String
@@ -169,7 +171,7 @@ orElseLocL : Option Loc -> Option Loc -> Option Loc
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
 ownersForTypes : List String -> List (String, String) -> List (String, String)
-ownersOf : String -> List (String, String) -> List String
+ownersOf : String -> Map String (List String) -> List String
 ownsAnyField : String -> List (String, String) -> Bool
 paramZeroFrames : List Pat -> List BScope
 patBindings : Pat -> List String
