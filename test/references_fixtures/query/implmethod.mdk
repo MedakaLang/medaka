@@ -1,0 +1,38 @@
+-- #1002 fixture — `medaka_references` on an interface method must report every
+-- `impl`'s clause heads, not just the declaration and the call sites.
+--
+-- Before #1002 an impl's method heads were recorded as NEITHER a def nor a use
+-- (`defsOfDecl` returned `[]` for `DImpl`; `walkImplMethods` discarded the method
+-- NAME), so find-references on `weigh` returned the interface declaration plus the
+-- two call sites and NONE of the four impl heads. A rename off that set renames
+-- the method and leaves every `impl` defining the OLD name.
+--
+-- implmethod.jsonl clicks the FIRST impl clause head — a position that resolved to
+-- nothing at all before the fix, because the head was not even an occurrence.
+--
+-- Line/col pairs are NOT hand-counted; the golden is captured from the tool.
+-- Re-derive a click position with:
+--   grep -n 'weigh' test/references_fixtures/query/implmethod.mdk
+-- (grep prints 1-based lines; the MCP `line` argument is 0-based.)
+interface Weighed a where
+  weigh : a -> Int
+
+data Rock =
+  | Pebble
+  | Boulder
+
+data Feather =
+  | Feather
+
+-- Two clauses, one impl.
+impl Weighed Rock where
+  weigh Pebble = 1
+  weigh Boulder = 500
+
+-- A second impl, different type — its head joins the SAME key, so it must show up
+-- in a query launched from the first impl.
+impl Weighed Feather where
+  weigh Feather = 0
+
+export heaviest : Int
+heaviest = weigh Boulder + weigh Feather

@@ -64,21 +64,47 @@ M=12
 N=40
 
 # gen <dir> <N> <M> : emit a synthetic project.
-#   base.mdk   — defines `gbase` (the shared referenced symbol). No imports.
-#   m<i>.mdk    — import base.{gbase}; M functions, each references gbase twice.
+#   base.mdk   — defines `gbase` (the shared referenced symbol) and the `Scaled`
+#                INTERFACE. No imports.
+#   m<i>.mdk    — import base.{gbase, Scaled}; a data type, an `impl Scaled` with
+#                 TWO method clauses, and M functions each referencing gbase twice.
 #   main.mdk    — the ENTRY: import base.{gbase} + bare-import every m<i> (so the
 #                 loader pulls them into the graph) + M FIXED functions. Its own
 #                 occurrence count does not depend on N (imports add no refs).
+#
+# ⚠️ THE `impl`/`interface` CONTENT IS LOAD-BEARING, NOT DECORATION (#1002).
+# This corpus originally contained NEITHER, so when impl-method clause heads
+# became def sites the new code path (`recordImplHeads`/`ifaceModId`) was NEVER
+# EXERCISED by this gate — the ratio came back unchanged because nothing new ran,
+# which reads exactly like "the new path is linear". A vacuous green. Each module
+# now contributes 2 impl heads, so the impl-head work grows with N and IS graded.
+# If you shrink this corpus, keep an `impl` in the per-module template.
+#
+# `scale` is deliberately NOT in the import list: writing an impl requires only
+# the INTERFACE name, and that spelling is the one that used to collapse every
+# impl onto a single `?ext` key. Importing the method name here would hide it.
 gen() {
   d="$1"; n="$2"; m="$3"
   mkdir -p "$d"
-  printf 'export gbase : Int -> Int\ngbase x = x + 1\n' > "$d/base.mdk"
+  {
+    echo 'export gbase : Int -> Int'
+    echo 'gbase x = x + 1'
+    echo ''
+    echo 'export interface Scaled a where'
+    echo '  scale : a -> Int'
+  } > "$d/base.mdk"
 
   # modules m1..mN
   i=1
   while [ "$i" -le "$n" ]; do
     {
-      echo 'import base.{gbase}'
+      echo 'import base.{gbase, Scaled}'
+      echo "data T${i} ="
+      echo "  | A${i}"
+      echo "  | B${i}"
+      echo "impl Scaled T${i} where"
+      echo "  scale A${i} = 1"
+      echo "  scale B${i} = 2"
       j=0
       while [ "$j" -lt "$m" ]; do
         echo "f${i}_${j} x = gbase (gbase x)"
