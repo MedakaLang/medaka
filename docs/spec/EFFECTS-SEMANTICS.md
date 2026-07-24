@@ -651,14 +651,43 @@ positions of graded method signatures; unification never *decomposes* a join —
 instantiation is checked by grade **subsumption** (`e ≤ e₁ ⊔ e₂` per §2.4's order),
 the direction the escape check already decides. This is the same discipline that
 keeps the parameter domains decidable (§2.3): expressiveness bounded exactly where
-decidability demands it. A **degenerate form is admissible today** ("graded-lite"):
-all grades in a signature collapsed to one shared variable
-(`gandThen : f e a → (a →^e f e b) → f e b`), realizing the join by unification —
-sound, requiring no new machinery, mildly over-approximate (input indices widen to
-the join, which is safe: an index is an upper bound). The full family with
-independent grades is the ideal; an implementation may realize the graded-lite
-prefix first. Design driver and phased plan: #820 (algebra #821, graded heads
-#822, stdlib/Async migration #823, `do`-notation routing #824).
+decidability demands it. A **degenerate form is the right first destination**
+("graded-lite"): all grades in a signature collapsed to one shared variable
+(`gandThen : f e a → (a →^e f e b) → f e b`), realizing the join by unification.
+Its *semantics* is sound — when the grade is genuinely a row and genuinely shared
+across the signature, it rejects the #817 and #825 deferred-effect laundering at
+the correct site, the same discipline the full family gives.
+
+**It is not admissible today, though.** The surface above still needs an
+interface head of kind `Row → Type → Type`, and interface-parameter kinds don't
+exist yet in any form: kind inference for a declaration's own parameters
+(`registerData`) has arms for data/type-alias/newtype and no interface arm, and
+row-kindedness is today only ever inferred from a variant field's effect
+tail — a bare `interface` declaration has no variant to infer from. Concretely,
+the spec's own example above, run as written, does not typecheck: it is rejected
+as an argument-only effect variable, not accepted as a graded signature. Standing
+up the kind is exactly #822's content, so graded-lite is *gated on* #822, not a
+shortcut around it.
+
+The "mildly over-approximate" characterization also does not survive contact with
+a real functor impl. Against the eager shape `stdlib/async.mdk` uses today for
+`map`/`pure` (`gmap g (Done a) = Done (g a)`), collapsing every grade to one
+shared variable does not widen the input index — it **collapses the method's own
+grade to the unit `⟨ ⟩`**, because graded-lite charges the shared variable on the
+method's own arrow while `g a` is evaluated inline, and an eager arm then rejects
+every effectful callback outright. Only a *deferred* arm
+(`gmap g (Done a) = Susp (u => Done (g a))`) keeps the grade open under
+graded-lite — trading eagerness for graded soundness, which is an Async
+operational-semantics change and an open design question, not a mechanical
+migration.
+
+The full family with independent grades remains the ideal; graded-lite is a
+narrower first surface realized *within* it once the kind exists, not a
+free-standing shortcut. Design driver and phased plan: #820 (interface heads /
+kinds first — #822 — then the graded-lite surface; stdlib/Async migration #823;
+`do`-notation routing #824; the independent-grade algebra of #821 — a
+multi-tail `EffRow` join, today unrepresentable — sequenced last, behind the
+same surface).
 
 **Orthogonality to dictionaries (restated).** When an interface method's signature
 carries an effect variable (`andThen : m a → (a →^e m b) →^e m b`), the effect var
