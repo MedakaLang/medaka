@@ -588,10 +588,12 @@ gen_marksweep() {
 # across several stages, most now fixed:
 #   * mark — FIXED (#975); was `manyifaces:mark`.
 #   * resolve — FIXED (#969, findDups -> OrdMap); was `manyifaces:resolve` (r1=3.68 r2=3.83).
-#   * typecheck — ledgered `manyifaces:typecheck` (r1=3.27 r2=3.60). It read `ok` on main
-#     (r1=2.65) only because the #907 stampBindingIds op-quadratic (typecheck's checkBodyImpl)
-#     DILUTED it; fixing #907 removed that masking term and surfaced the true ratio, exactly
-#     the "future source change lifting r1 over 3 forces a ledger decision" this note predicted.
+#   * typecheck — FIXED (#973, three flat-path List-as-set scans -> OrdMap: buildDefinerShadows,
+#     dropSchemesNamed, checkInterfaceCycles' `done`); was `manyifaces:typecheck` (r1=3.27 r2=3.60,
+#     now r1=1.58 r2=1.74 LINEAR). It had read `ok` on main (r1=2.65) only because the #907
+#     stampBindingIds op-quadratic (typecheck's checkBodyImpl) DILUTED it; fixing #907 removed that
+#     masking term and surfaced the true ratio, exactly the "future source change lifting r1 over 3
+#     forces a ledger decision" this note predicted — then #973 drained it.
 # elaborate (op r1=2.71 r2=3.21) still CLIMBs but stays r1<3, so it reads `ok` and is NOT
 # ledgered (WATCH: a future source change lifting r1 over 3 will correctly fail and force a
 # ledger decision then, exactly as the comments:typecheck note warns).
@@ -1391,20 +1393,8 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
-manyifaces:typecheck
+widerecords:typecheck
 "
-# manyifaces:typecheck — an O(interfaces^2) interface-registration quadratic in the typecheck
-# stage (the interface-method scheme/constraint registration scanning the growing interface
-# list once per interface — the #954 class, the typecheck-stage sibling of resolve's findDups
-# which #969 fixed). It was ALREADY quadratic on main but DILUTED under the sustained-both-
-# doublings rule (r1=2.65 r2=3.09, read `ok`) by the #907 stampBindingIds op-quadratic that
-# ran in typecheck's checkBodyImpl. Fixing #907 removed that masking term — the absolute op
-# count DROPPED while the underlying interface quadratic's true ratio surfaced (r1=3.27
-# r2=3.60), exactly the "future source change lifting r1 over 3 forces a ledger decision" the
-# gen_manyifaces note predicted. Ledgered here (not a regression: op count fell): ceiling 4.3
-# clears the observed r2=3.60 by ~19% (the file's headroom convention); OFIXED 2.60 — drops
-# under it when the typecheck-side interface-method scan is indexed.
-KNOWN_OCEIL_manyifaces_typecheck="4.3"; KNOWN_OFIXED_manyifaces_typecheck="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
 # scans are OrdMap-set membership now (uncounted) and `findExports`/provenance are Maps, so
@@ -1426,6 +1416,21 @@ KNOWN_OCEIL_manyifaces_typecheck="4.3"; KNOWN_OFIXED_manyifaces_typecheck="2.60"
 # ratio drops under 2.30 and this row PROMOTES (retire the quadratic allowance). Deterministic
 # (GC bytes), so this absorbs only compiler-source drift, not runner noise.
 KNOWN_ACEIL_reexports_resolve="4.0"; KNOWN_AFIXED_reexports_resolve="2.30"
+# widerecords:typecheck — an O(record-fields x field-accesses) quadratic in typecheck's
+# record-field inference (inferFieldOfRecord's `instantiateRecord ri` + `lookupAssoc fname
+# (snd ir)` per access; inferRecordUpdatePicked/-With the same on updates — the typecheck
+# sibling of resolve's `ownersOf` record scan this widerecords shape was built to stress).
+# It was op-count-superlinear on main ALREADY (r1=2.89 r2=3.33, climbing) but read `ok` under
+# the 3.0 bar because a LINEAR op-dilution term in the SAME stage held the ratio down —
+# buildDefinerShadows' `contains n methodNames` scan (a constant prelude-method set x the 2N
+# record funcs). #973 (PR #977) indexed that scan to an uncounted OrdMap, removing the
+# dilution and surfacing the true ratio (r1=3.65 r2=3.88; absolute op is LOWER at every N —
+# proof it is an UNMASK, not a regression), exactly as #907 unmasked manyifaces:typecheck.
+# Ledgered here (not a regression: op count fell): ceiling 4.3 clears the observed r2=3.88 by
+# ~11% (the file's headroom convention); OFIXED 2.60 — drops under it when the record-field
+# instantiate+scan is indexed. Underlying quadratic tracked in #980 (ws:perf); drain this row
+# when it lands.
+KNOWN_OCEIL_widerecords_typecheck="4.3"; KNOWN_OFIXED_widerecords_typecheck="2.60"
 
 is_known_ops() {
   for k in $KNOWN_SLOW_OPS; do [ "$k" = "$1" ] && return 0; done
