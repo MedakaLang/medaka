@@ -114,6 +114,7 @@ import support.util.{
   initList,
   joinDot,
   dedup,
+  dedupBy,
 }
 -- The per-unit rename map is applied to EVERY reference in the unit (one lookup
 -- per EVar / def-name / pattern ctor). Backing it with the String-keyed
@@ -195,16 +196,10 @@ reexportOne srcExports n = match lookupDefiner n srcExports
 
 -- keep the FIRST occurrence of each name — locals are prepended, so a locally
 -- defined pub fn wins over a re-export of the same name.
+-- #242: the name key is already a String, so this is the canonical
+-- `support.util.dedupBy` verbatim (was a private O(n²) `List`-as-a-set scan).
 dedupPairsByName : List (String, String) -> List (String, String)
-dedupPairsByName pairs = dedupPairsGo pairs []
-
-dedupPairsGo : List (String, String) -> List String -> List (String, String)
-dedupPairsGo [] _ = []
-dedupPairsGo ((n, d)::rest) seen =
-  if contains n seen then
-    dedupPairsGo rest seen
-  else
-    (n, d) :: dedupPairsGo rest (n::seen)
+dedupPairsByName pairs = dedupBy fst pairs
 
 lookupDefiner : String -> List (String, String) -> Option String
 lookupDefiner _ [] = None

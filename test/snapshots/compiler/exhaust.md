@@ -1,5 +1,5 @@
 # META
-source_lines=898
+source_lines=915
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — Stage 4 port of `lib/exhaust.ml`'s standalone
@@ -289,9 +289,26 @@ specializeLit l (row::rest) = match specLitRow l row
 
 specLitRow : Lit -> List Pat -> Option (List Pat)
 specLitRow _ [] = None
-specLitRow l ((PLit l2)::rest) = if l2 == l then Some rest else None
+specLitRow l ((PLit l2)::rest) = if litEq l2 l then Some rest else None
 specLitRow _ (PWild::rest) = Some rest
 specLitRow _ _ = None
+
+-- Alloc-free literal equality (#988, mirroring `litEq` in core_ir_lower.mdk from
+-- #970/#978). The derived `Eq Lit` (`l2 == l`) ALLOCATES on every call, so the
+-- per-branch matrix rescan in `specializeLit`/`specLitRow` ran O(arms^2) allocation
+-- when exhaustiveness-checking a wide literal `match`. Comparing the primitive
+-- fields directly allocates nothing and returns the IDENTICAL Bool as `Eq Lit`
+-- (verified in #978, incl. NaN / -0.0 edges — Float uses the same `==`). Kept local
+-- rather than imported: exhaust runs in `frontend` (inside typecheck) and nothing in
+-- `frontend` depends on `ir/`, so sharing across that layer boundary is not clean.
+litEq : Lit -> Lit -> Bool
+litEq (LInt a) (LInt b) = a == b
+litEq (LFloat a) (LFloat b) = a == b
+litEq (LString a) (LString b) = a == b
+litEq (LChar a) (LChar b) = a == b
+litEq (LBool a) (LBool b) = a == b
+litEq LUnit LUnit = True
+litEq _ _ = False
 
 defaultMatrix : List (List Pat) -> List (List Pat)
 defaultMatrix [] = []
@@ -1000,9 +1017,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "specializeLit" ((PVar "l") (PCons (PVar "row") (PVar "rest"))) (EMatch (EApp (EApp (EVar "specLitRow") (EVar "l")) (EVar "row")) (arm (PCon "Some" (PVar "r")) () (EBinOp "::" (EVar "r") (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rest")))))
 (DTypeSig false "specLitRow" (TyFun (TyCon "Lit") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))
 (DFunDef false "specLitRow" (PWild (PList)) (EVar "None"))
-(DFunDef false "specLitRow" ((PVar "l") (PCons (PCon "PLit" (PVar "l2")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l2") (EVar "l")) (EApp (EVar "Some") (EVar "rest")) (EVar "None")))
+(DFunDef false "specLitRow" ((PVar "l") (PCons (PCon "PLit" (PVar "l2")) (PVar "rest"))) (EIf (EApp (EApp (EVar "litEq") (EVar "l2")) (EVar "l")) (EApp (EVar "Some") (EVar "rest")) (EVar "None")))
 (DFunDef false "specLitRow" (PWild (PCons (PCon "PWild") (PVar "rest"))) (EApp (EVar "Some") (EVar "rest")))
 (DFunDef false "specLitRow" (PWild PWild) (EVar "None"))
+(DTypeSig false "litEq" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyCon "Bool"))))
+(DFunDef false "litEq" ((PCon "LInt" (PVar "a")) (PCon "LInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
+(DFunDef false "litEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "defaultMatrix" ((PList)) (EListLit))
 (DFunDef false "defaultMatrix" ((PCons (PVar "row") (PVar "rest"))) (EMatch (EApp (EVar "defRow") (EVar "row")) (arm (PCon "Some" (PVar "r")) () (EBinOp "::" (EVar "r") (EApp (EVar "defaultMatrix") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "defaultMatrix") (EVar "rest")))))
@@ -1374,9 +1399,17 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "specializeLit" ((PVar "l") (PCons (PVar "row") (PVar "rest"))) (EMatch (EApp (EApp (EVar "specLitRow") (EVar "l")) (EVar "row")) (arm (PCon "Some" (PVar "r")) () (EBinOp "::" (EVar "r") (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rest")))))
 (DTypeSig false "specLitRow" (TyFun (TyCon "Lit") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))
 (DFunDef false "specLitRow" (PWild (PList)) (EVar "None"))
-(DFunDef false "specLitRow" ((PVar "l") (PCons (PCon "PLit" (PVar "l2")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "l2") (EVar "l")) (EApp (EVar "Some") (EVar "rest")) (EVar "None")))
+(DFunDef false "specLitRow" ((PVar "l") (PCons (PCon "PLit" (PVar "l2")) (PVar "rest"))) (EIf (EApp (EApp (EVar "litEq") (EVar "l2")) (EVar "l")) (EApp (EVar "Some") (EVar "rest")) (EVar "None")))
 (DFunDef false "specLitRow" (PWild (PCons (PCon "PWild") (PVar "rest"))) (EApp (EVar "Some") (EVar "rest")))
 (DFunDef false "specLitRow" (PWild PWild) (EVar "None"))
+(DTypeSig false "litEq" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyCon "Bool"))))
+(DFunDef false "litEq" ((PCon "LInt" (PVar "a")) (PCon "LInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
+(DFunDef false "litEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "defaultMatrix" ((PList)) (EListLit))
 (DFunDef false "defaultMatrix" ((PCons (PVar "row") (PVar "rest"))) (EMatch (EApp (EVar "defRow") (EVar "row")) (arm (PCon "Some" (PVar "r")) () (EBinOp "::" (EVar "r") (EApp (EVar "defaultMatrix") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "defaultMatrix") (EVar "rest")))))

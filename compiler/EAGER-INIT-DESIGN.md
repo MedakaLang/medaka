@@ -191,8 +191,11 @@ orderedValBinds …` is cited at `:9882` and is **actually `:9879`** — both dr
 `-- lint-disable-next-line rule-duplicate-body` with the comment *"Intentional cross-file
 duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper /
 divergent-by-design backend pair)"*. `topoValGo`/`topoValVisit`/`topoValVisitDeps` are duplicated
-**verbatim** in both files, differing only in `intersectStr (dedupS …)` (native) vs
-`filterList (n => contains n names) (dedupKeep …)` (wasm), and `findBind` vs `findBindByName`.
+**verbatim** in both files, differing only in the dedup helper: `dedupS` (native — **LAST**
+occurrence wins) vs `dedupKeep` (wasm — **FIRST** occurrence wins). ⚠️ **That difference is real
+and predates #623**; it is why `support.util.dedup` (first-wins) is NOT a drop-in for `dedupS`.
+Everything else — the `names`/`all` split and its `findBind`/`intersectStr` scans — is gone (#623,
+below).
 
 ⇒ **Any fix that lives in the SORT must be written twice, and can drift.** Any fix that lives in
 `eagerVars` is written once and lands on both backends simultaneously. **This is the argument
@@ -206,8 +209,11 @@ for §3's placement decision.**
 antipattern list: `contains x xs`, `lookupAssoc k pairs`, **`xs ++ [x]` inside a fold — "O(n²) BY
 ITSELF: `++` is O(left)"**.
 
-**The EXISTING `topoValVisit` — in BOTH backends, today, before anyone adds a closure — is all
-three at once:**
+✅ **RESOLVED (#623).** All four shapes below are FIXED in both backends; this block is kept as
+the statement of what the defect WAS, because it is the clearest census of the four shapes and
+because the fix is only legible against it.
+
+**The `topoValVisit` this section was written about — in BOTH backends — was all three at once:**
 
 ```medaka
 topoValVisit all names b done acc visiting
@@ -221,11 +227,25 @@ topoValVisit all names b done acc visiting
 plus `findBind : String -> List CBind -> Option CBind` — **a linear scan of ALL binds, per
 dependency edge** = (4) **List as a MAP**, the single most-cited shape in `AGENTS.md`.
 
-**So the topo sort is already O(n²)** in the number of value globals, with `n` ≈ **583**
+**How each was closed** (`llvm_emit.mdk` / `wasm_emit.mdk`, same shape in both):
+1. `done`/`visiting` are `OrdMap Unit` — `omHasKey`/`omInsert`, not `contains`/`::`.
+2. `names : List String` and `all : List CBind` — the SAME bindings carried twice — collapse into
+   ONE `bindNameMap : OrdMap CBind` (`emit_support.mdk`, shared). `omHasKey` replaces
+   `intersectStr`/`contains`; `omLookup` replaces `findBind`, so (4) goes with (2).
+   ⚠️ `bindNameMap` is built RIGHT-to-LEFT so an earlier bind overwrites a later one of the same
+   name — `omInsert` is last-write-wins, and `findBind` was FIRST-match.
+3. `acc` is built by PREPEND with ONE `reverseL` at the top of `orderedValBinds`/
+   `topoSortValBinds`, so `acc ++ [b]` is gone. Same output list.
+
+The per-binding `dedupS`/`dedupKeep` remain — but both are now O(n·log n): `dedupKeep` was already
+`OrdMap`-backed, and `dedupS` routes through `support.util.dedup` via a double reverse (its
+last-wins order is preserved; see §2).
+
+**So the topo sort WAS O(n²)** in the number of value globals, with `n` ≈ **583**
 candidate top-level nullary binds across `compiler/` + `stdlib/`
 (`grep -rhn '^[a-z][a-zA-Z0-9_]* = ' compiler/ stdlib/ --include=*.mdk | wc -l` → 583; an
 upper bound — the post-DCE `filterList isValBind` set is smaller). n² ≈ 3·10⁵ `contains` steps
-— **currently tolerable, which is exactly why nobody has noticed.**
+— **tolerable, which is exactly why nobody noticed until #623.** It is O(n·log n) now.
 
 ### 3.1 Why this is the whole perf story
 
@@ -425,7 +445,7 @@ the actual reason #553 is S0 rather than S1: not that the order is wrong, but th
 is silent**.
 
 The information is **already there**: both sorts already **detect** the condition — `topoValVisit`
-has `| contains (bindName b) visiting = (done, acc)` — a **back-edge**, i.e. a genuine eager
+has `| omHasKey (bindName b) visiting = (done, acc)` — a **back-edge**, i.e. a genuine eager
 cycle — and **silently falls back to source order**. `llvm_emit.mdk:1412` even says out loud:
 *"eager same-init forward ref: orderedValBinds topologically sorts eager…"*, and per WP10 the
 native comment continues *"a surviving eager forward ref is a genuine value cycle … and the cell

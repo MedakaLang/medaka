@@ -1,0 +1,18 @@
+main|ctor|A  DEF main.mdk:21:12  USES 1  main.mdk:38:8
+main|ctor|B  DEF main.mdk:21:12  USES 0  
+main|ctor|U1  DEF main.mdk:26:12  USES 0  
+main|ctor|U2  DEF main.mdk:26:12  USES 0  
+main|ctor|U3  DEF main.mdk:26:12  USES 0  
+main|ctor|V1  DEF main.mdk:33:12  USES 0  
+main|ctor|V2  DEF main.mdk:33:12  USES 0  
+main|field|only  DEF main.mdk:33:12  USES 0  
+main|field|other  DEF main.mdk:33:12  USES 0  
+main|field|tag  DEF main.mdk:26:12  USES 0  
+main|field|x  DEF main.mdk:21:12  USES 1  main.mdk:41:0
+main|local|n|1  DEF main.mdk:38:4  USES 1  main.mdk:38:16
+main|local|t|2  DEF main.mdk:41:5  USES 1  main.mdk:41:9
+main|ty|T  DEF main.mdk:21:12  USES 2  main.mdk:37:20 main.mdk:40:14
+main|ty|U  DEF main.mdk:26:12  USES 0  
+main|ty|V  DEF main.mdk:33:12  USES 0  
+main|val|getX  DEF main.mdk:41:0  USES 0  
+main|val|mkA  DEF main.mdk:38:0  USES 0  

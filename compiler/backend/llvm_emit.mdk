@@ -194,6 +194,7 @@ import support.util.{
   startsWith,
   fallthroughName,
   noneHeadTag,
+  dedup,
 }
 import backend.llvm_preamble.{preambleLines}
 import support.ordmap.{
@@ -203,6 +204,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
   omEmpty,
 }
 -- backend-agnostic TRMC eligibility analysis (lifted out per WASMGC-TRMC-DESIGN §5/§7-Stage-0;
@@ -244,6 +246,7 @@ import backend.private_mangle.{hashName, safeChar}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
+  bindNameMap,
   lazyGlobalNames,
   methodIfaceTableRef,
   setMethodIfaceTable,
@@ -390,15 +393,33 @@ gDispBindsRef = Ref []
 gDispArsRef : Ref (List (String, Int))
 gDispArsRef = Ref []
 
+-- #990: the (fn-name -> arity) table above indexed into an OrdMap, built once beside
+-- `gDispArsRef` in emitProgram.  `detectDispatchGroups` (the TMC group detection run
+-- inside emitProgram) calls `gDispIsFn`/`gDispFnArity` PER referenced fn name, and each
+-- `lookupAssoc` scanned the WHOLE O(fns) list — O(refs·fns) = O(N²) `emit`-stage
+-- OP-COUNT on dispatch-heavy code (the residual LLVM-side emit-op quadratic #986 isolated
+-- from methodArityOf, ~3.77×/doubling; #990).  The map returns the SAME first-match value
+-- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name, matching
+-- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
+-- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
+gDispArMapRef : Ref (Option (OrdMap Int))
+gDispArMapRef = Ref None
+
 gDispIsFn : String -> Bool
-gDispIsFn n = match lookupAssoc n gDispArsRef.value
-  Some _ => True
-  None => False
+gDispIsFn n = match gDispArMapRef.value
+  Some m => omHasKey n m
+  None => match lookupAssoc n gDispArsRef.value
+    Some _ => True
+    None => False
 
 gDispFnArity : String -> Int
-gDispFnArity n = match lookupAssoc n gDispArsRef.value
-  Some a => a
-  None => 0 - 1
+gDispFnArity n = match gDispArMapRef.value
+  Some m => match omLookup n m
+    Some a => a
+    None => 0 - 1
+  None => match lookupAssoc n gDispArsRef.value
+    Some a => a
+    None => 0 - 1
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : String -> Bool
@@ -1069,10 +1090,71 @@ recFieldTable e = e.recFields.value
 implEntriesOf : Emit -> List CImplEntry
 implEntriesOf e = e.implEntries.value
 
+-- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
+-- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
+-- filters it by the interface METHOD name: `implsOf`/`filterTagged`, `defaultFor`/
+-- `findDefault`, and `implFnSymOf`→`headTagUnique`→`distinctKeysAtHead` (the C7 collision
+-- count) + `implEntryRouteKey`.  The LLVM emitter resolves an RKey call site directly
+-- (`emitMethod`'s `implFor` + `implFnSymOf` per site) and outlines one dispatcher per
+-- method, so on dispatch-heavy code (many interfaces × many sites) each per-site scan is
+-- O(impls) ⇒ O(sites·impls) = O(N²) `emit`-stage work (measured `emit` op-ratio ~3.77×/
+-- doubling; #986/#990).  Grouping the entries by method name ONCE — ORIGINAL ORDER
+-- preserved in each bucket — makes every one of those scans O(bucket): restricting a
+-- scan that already filters by method to just that method's entries yields the IDENTICAL
+-- first-match / flat-map / distinct-key result, so the emitted IR is byte-for-byte
+-- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in emitProgram/
+-- emitProgramGaps; a helper reaching the routing below without an install (a probe that
+-- never called emitProgram) FALLS BACK to the full list, which — being filtered by method
+-- downstream — gives the same output either way.  Mirrors wasm_emit's `implsByMethodW`.
+implsByMethodRef : Ref (Option (OrdMap (List CImplEntry)))
+implsByMethodRef = Ref None
+
+-- the interface method an impl entry implements (field 0).
+implEntryMethodOf : CImplEntry -> String
+implEntryMethodOf (CImplEntry n _ _) = n
+
+orEmptyEntries : Option (List CImplEntry) -> List CImplEntry
+orEmptyEntries (Some xs) = xs
+orEmptyEntries None = []
+
+-- one LEFT fold prepending each entry to its method's bucket (O(1) per entry), then
+-- `omMapValues reverseL` restores ORIGINAL order in each bucket — total O(entries).
+-- (A right-append build would be O(bucket²) on a many-impl method; prepend+reverse is
+-- linear, the same discipline the ctor/sig tables use.)
+groupImplsByMethod : List CImplEntry -> OrdMap (List CImplEntry)
+groupImplsByMethod entries =
+  omMapValues reverseL (foldImplsByMethod entries omEmpty)
+
+foldImplsByMethod : List CImplEntry -> OrdMap (List CImplEntry) -> OrdMap (List CImplEntry)
+foldImplsByMethod [] m = m
+foldImplsByMethod (e::rest) m =
+  let k = implEntryMethodOf e
+  foldImplsByMethod rest (omInsert k (e :: orEmptyEntries (omLookup k m)) m)
+
+installImplIndex : List CImplEntry -> Unit
+installImplIndex entries =
+  setRef implsByMethodRef (Some (groupImplsByMethod entries))
+
+-- [method]'s impl entries from the index (original order); [fallback] (the full entry
+-- list) is used only when the index is uninstalled — downstream filters by method, so
+-- the answer is identical.  Every whole-`implEntries` per-method scan routes through this.
+methodEntries : Emit -> String -> List CImplEntry
+methodEntries e method = match implsByMethodRef.value
+  Some m => orEmptyEntries (omLookup method m)
+  None => filterMethod method (implEntriesOf e)
+
+-- fallback-only: entries of [method] from the full list, ANY variant (tagged/default),
+-- in program order — the same subset the index bucket holds, so the two paths agree.
+filterMethod : String -> List CImplEntry -> List CImplEntry
+filterMethod _ [] = []
+filterMethod method (e::rest)
+  | implEntryMethodOf e == method = e :: filterMethod method rest
+  | otherwise = filterMethod method rest
+
 -- the impls of a method, in program order — only the CImplTagged ones (an
 -- untagged CImplDefault is the arg-tag fallback, never a static-dispatch target).
 implsOf : Emit -> String -> List CImplEntry
-implsOf e method = filterTagged method (implEntriesOf e)
+implsOf e method = filterTagged method (methodEntries e method)
 
 filterTagged : String -> List CImplEntry -> List CImplEntry
 filterTagged _ [] = []
@@ -1101,7 +1183,7 @@ findByTag tag (_::rest) = findByTag tag rest
 -- interface declared and the type's `impl` did not override.  None ⇒ no default
 -- (the method has no default body — a genuine missing-impl error).
 defaultFor : Emit -> String -> Option CImplEntry
-defaultFor e method = findDefault method (implEntriesOf e)
+defaultFor e method = findDefault method (methodEntries e method)
 
 findDefault : String -> List CImplEntry -> Option CImplEntry
 findDefault _ [] = None
@@ -1166,6 +1248,13 @@ implFnSymOf entries method (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =
   implFnSymTag entries method t k
 implFnSymOf _ _ _ = ""
 
+-- #990: the index-backed form of `implFnSymOf (implEntriesOf e) method ent`.  The C7
+-- collision count (`headTagUnique`→`distinctKeysAtHead`) only ever accumulates entries
+-- whose method == [method], so passing [method]'s bucket instead of the whole list is
+-- byte-identical — just O(bucket) not O(impls) per RKey site.
+implFnSymE : Emit -> String -> CImplEntry -> String
+implFnSymE e method ent = implFnSymOf (methodEntries e method) method ent
+
 -- sanitize a canonical impl key to a valid LLVM identifier (mirrors
 -- private_mangle.mdk's sanitizeId: anything outside [A-Za-z0-9_] → `_`).
 safeIdent : String -> String
@@ -1192,8 +1281,26 @@ taggedMethodNames ((CImplEntry m _ (CImplTagged _ _ _ _ _ _))::rest) =
   m :: taggedMethodNames rest
 taggedMethodNames (_::rest) = taggedMethodNames rest
 
+-- #990: the tagged-impl method NAMES as an OrdMap membership set, built once in
+-- emitProgram.  `isImplMethod` (emitVar/emitApp, PER bare-CVar / saturated-app site)
+-- called `contains name (implMethodNames e)`, which REBUILT the O(N) `dedupS` (itself
+-- O(N²)) on every call — O(sites · N²) on dispatch-heavy code.  `omFromNames` dedups
+-- via map insertion (O(N log N)); membership is then O(log N) and the deduped rebuild
+-- is gone.  Same set as `contains … (dedupS (taggedMethodNames …))`, so byte-identical.
+-- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
+implMethodSetRef : Ref (Option (OrdMap Unit))
+implMethodSetRef = Ref None
+
+installImplMethodSet : List CImplEntry -> Unit
+installImplMethodSet entries =
+  setRef
+    implMethodSetRef
+    (Some (omFromNames (taggedMethodNames entries) omEmpty))
+
 isImplMethod : Emit -> String -> Bool
-isImplMethod e name = contains name (implMethodNames e)
+isImplMethod e name = match implMethodSetRef.value
+  Some m => omHasKey name m
+  None => contains name (implMethodNames e)
 
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
@@ -1229,6 +1336,13 @@ implEntryRouteKey entries (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
     k
 implEntryRouteKey _ _ = ""
 
+-- #990: the index-backed form of `implEntryRouteKey (implEntriesOf e) ent`.  The route
+-- key's `headTagUnique` count filters by the entry's own method (field 0), so [ent]'s
+-- method bucket gives the byte-identical result — O(bucket) not O(impls) per arm.
+implEntryRouteKeyE : Emit -> CImplEntry -> String
+implEntryRouteKeyE e ent =
+  implEntryRouteKey (methodEntries e (implEntryMethodOf ent)) ent
+
 -- ── ctor→type map ─────────────────────────────────────────────────
 -- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
 -- dispatch loads the discriminating argument's constructor tag at run time; this
@@ -1237,6 +1351,29 @@ implEntryRouteKey _ _ = ""
 -- hashName of each.
 ctorTypeTable : Emit -> List (String, String)
 ctorTypeTable e = e.ctorTypes.value
+
+-- #990: the ctor→type table indexed into an OrdMap, built once in emitProgram.  `cellTag`
+-- (the composite ctor tag, run on EVERY ctor alloc AND every ctor tag-test) computes
+-- `ctorTypeId × shift + ctorOrdinal`, and BOTH did `lookupAssoc name (ctorTypeTable e)`
+-- over the WHOLE O(types) list; `ctorHasSiblings` (refutable-let, per PCon) does the same.
+-- On dispatch-heavy code — many single-ctor data types, one per interface — that is
+-- O(ctors·types) = O(N²) `emit`-stage OP-COUNT (this is the residual LLVM emit-op
+-- quadratic #986 measured INDEPENDENT of methodArityOf; #990).  The map returns the SAME
+-- first-match (`omFromPairs (reverseL …)` = first pair wins on a duplicate ctor name,
+-- matching lookupAssoc), so the composite tag — and the emitted IR — is byte-identical.
+-- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
+ctorTypeMapRef : Ref (Option (OrdMap String))
+ctorTypeMapRef = Ref None
+
+installCtorTypeMap : List (String, String) -> Unit
+installCtorTypeMap t =
+  setRef ctorTypeMapRef (Some (omFromPairs (reverseL t) omEmpty))
+
+-- the type name owning constructor [name], index-backed (fallback: the raw list scan).
+ctorTypeOf : Emit -> String -> Option String
+ctorTypeOf e name = match ctorTypeMapRef.value
+  Some m => omLookup name m
+  None => lookupAssoc name (ctorTypeTable e)
 
 -- ── globals registry ────────────────────────────────────────────
 -- the top-level value/`Ref` globals registry ref: `name -> (initialised?, LTy)`.
@@ -3659,7 +3796,7 @@ refutableCsLet _ _ = False
 -- (so a pattern on `c` can fail to match).  Unknown ctors (absent from the
 -- ctor→type table — e.g. the built-in list Cons/Nil) are conservatively refutable.
 ctorHasSiblings : Emit -> String -> Bool
-ctorHasSiblings e c = match lookupAssoc c (ctorTypeTable e)
+ctorHasSiblings e c = match ctorTypeOf e c
   Some ty => listLen (ctorsOfType e ty) > 1
   None => True
 
@@ -3914,7 +4051,7 @@ emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor 
     let resTy = if methodReturnsSelf (implEntryIface entry) name then tagToLTy headTag else LTInt
     emitImplCallSat
       e
-      (implFnName (implFnSymOf (implEntriesOf e) name entry) name)
+      (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
       (methodArityOf name + lengthS dictWords)
       resTy
@@ -4220,7 +4357,7 @@ emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag no
       LTInt
     emitImplCallSat
       e
-      (implFnName (implFnSymOf (implEntriesOf e) name entry) name)
+      (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
       (methodArityOf name + lengthS dictWords)
       resTy
@@ -4465,7 +4602,7 @@ emitMethodDispatch e env name d methRoutes argOps = match soleImplDirectSite e n
     -- stays ungrounded → the caller passes a NULL dict), would dereference null → the
     -- run≠build SIGTRAP.  Concrete-grounded callers (a real dict) are unaffected: the
     -- direct call is the same impl the tag-dispatch chain would have selected.
-    let symTag = implFnSymOf (implEntriesOf e) name ent
+    let symTag = implFnSymE e name ent
     emitImplCall e (implFnName symTag name) argOps LTInt
   None => emitMethodDispatchChain e env name d methRoutes argOps
 
@@ -4754,7 +4891,7 @@ emitDispatcherDefine e fname name nmw nargs =
 emitDispatcherBody : Emit -> String -> Int -> Int -> (String, LTy)
 emitDispatcherBody e name nmw nargs = match soleImplDirect e name
   Some ent =>
-    let symTag = implFnSymOf (implEntriesOf e) name ent
+    let symTag = implFnSymE e name ent
     emitImplCall e (implFnName symTag name) (dispWordNames "%arg" nargs 0) LTInt
   None => emitDispatchBody e name "%dict" (dispWordNames "%mw" nmw 0) (dispWordNames "%arg" nargs 0)
 
@@ -4883,7 +5020,7 @@ loadReqDicts e dictPtr n i
 -- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
 emitDispatchArm : Emit -> String -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
 emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
-  let routeKey = implEntryRouteKey (implEntriesOf e) ent
+  let routeKey = implEntryRouteKeyE e ent
   let cmp = freshReg e
   let _ = emit e "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName routeKey)}"
   let n = intToString (freshLocal e)
@@ -4900,7 +5037,7 @@ emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
 -- and jump to the dispatcher exit.
 emitDispatchArmBody : Emit -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
 emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
-  let symTag = implFnSymOf (implEntriesOf e) name ent
+  let symTag = implFnSymE e name ent
   -- #747: a nullary/return-position/no-requires impl reached through this runtime
   -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
   -- synthesized a `$memo_<symTag>_<name>` lazy global for it (a LAZY value global —
@@ -6588,9 +6725,15 @@ envHasKey : List (String, (String, LTy)) -> String -> Bool
 envHasKey [] _ = False
 envHasKey ((n, _)::rest) k = if n == k then True else envHasKey rest k
 
+-- #242/#623: order-preserving dedup keeping the LAST occurrence of each name —
+-- NOT the same function as `support.util.dedup`, which keeps the FIRST (#623's
+-- "`dedup` could replace `dedupS` directly" is WRONG: on [a,b,a] this yields
+-- [b,a] and `dedup` yields [a,b], and the order feeds emitted-definition order).
+-- Reversing on both sides turns last-wins into first-wins, so the O(n²)
+-- `contains`-per-element scan routes through the canonical O(n·log n)
+-- OrdMap-backed `dedup` with the result byte-identical.
 dedupS : List String -> List String
-dedupS [] = []
-dedupS (x::xs) = if contains x xs then dedupS xs else x :: dedupS xs
+dedupS xs = reverseL (dedup (reverseL xs))
 
 -- ── ADT constructors + pattern matching ───────────────────────────
 -- VALUE REPRESENTATION (RUNTIME-DESIGN.md §8.4 "Option A", extended from the
@@ -6707,7 +6850,7 @@ cellTag e name =
 -- list.  The built-in list Cons/Nil are not user-declared (absent from the
 -- ctor→type table) → reserved ordinals 0/1 of the synthetic list type.
 ctorOrdinal : Emit -> String -> Int
-ctorOrdinal e name = match lookupAssoc name (ctorTypeTable e)
+ctorOrdinal e name = match ctorTypeOf e name
   Some ty => orZero (indexOfStr name (ctorsOfType e ty))
   None => if name == "Nil" then 1 else 0
 
@@ -6716,7 +6859,7 @@ ctorOrdinal e name = match lookupAssoc name (ctorTypeTable e)
 -- any name not in the ctor→type table) gets a reserved id one past the user types,
 -- so its composite tags can never collide with a user type's.
 ctorTypeId : Emit -> String -> Int
-ctorTypeId e name = match lookupAssoc name (ctorTypeTable e)
+ctorTypeId e name = match ctorTypeOf e name
   Some ty => orZero (indexOfStr ty (distinctTypeNames e))
   None => lengthS (distinctTypeNames e)
 
@@ -6750,17 +6893,22 @@ orZero : Option Int -> Int
 orZero (Some i) = i
 orZero None = 0
 
--- dedup a list of strings, preserving first-occurrence order.
+-- dedup a list of strings, preserving first-occurrence order.  #990: the seen-set is an
+-- OrdMap (membership O(log k)) instead of a `contains`-scanned list (O(k)) — so the nub
+-- is O(N log N) not O(N²).  `distinctTypeNames` memoizes the result, but the one-time
+-- computation was itself O(types²) and thus a QUADRATIC `emit`-op contributor as the type
+-- count grows (one-per-interface on dispatch-heavy code).  Output order is unchanged
+-- (first occurrence kept), so every downstream type-id / ordinal is byte-identical.
 nubStr : List String -> List String
-nubStr xs = nubStrAcc xs []
+nubStr xs = nubStrAcc xs omEmpty
 
-nubStrAcc : List String -> List String -> List String
+nubStrAcc : List String -> OrdMap Unit -> List String
 nubStrAcc [] _ = []
 nubStrAcc (x::xs) seen =
-  if contains x seen then
+  if omHasKey x seen then
     nubStrAcc xs seen
   else
-    x :: nubStrAcc xs (x::seen)
+    x :: nubStrAcc xs (omInsert x () seen)
 
 -- allocate a constructor cell {tag, field…}; the field words are already emitted.
 -- Result is the cell pointer as an i64 word, typed LTCon.  A NULLARY constructor
@@ -8803,9 +8951,14 @@ orderedValBinds : List CBind -> List CBind -> List CBind
 -- lint-disable-next-line rule-duplicate-body
 orderedValBinds allBinds binds =
   let rm = eagerReachMap allBinds
-  let names = map bindName binds
-  let (_, ordered) = topoValGo rm binds names binds [] []
-  ordered
+  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
+  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
+  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Every one
+  -- of those was a `List` used as a set (or an O(left) `++` inside a fold) over
+  -- the transitive reach sets #553 Stage B enlarged.  Output order unchanged.
+  let bm = bindNameMap binds
+  let (_, ordered) = topoValGo rm bm binds omEmpty []
+  reverseL ordered
 
 -- DFS post-order: visit each binding's value-global dependencies first, appending
 -- the binding after them.  `visiting` guards against cycles (a back-edge is
@@ -8813,30 +8966,32 @@ orderedValBinds allBinds binds =
 -- (done-names, ordered-binds) accumulators.  `rm` is the eager-reachability map
 -- (Stage B of #553): a binding's edges are the value globals it eagerly reaches
 -- THROUGH calls, not merely the ones its own body names directly.
-topoValGo : OrdMap (List String) -> List CBind -> List String -> List CBind -> List String -> List CBind -> (List String, List CBind)
-topoValGo _ _ _ [] done acc = (done, acc)
+topoValGo : OrdMap (List String) -> OrdMap CBind -> List CBind -> OrdMap Unit -> List CBind -> (OrdMap Unit, List CBind)
+topoValGo _ _ [] done acc = (done, acc)
 -- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-topoValGo rm all names (b::rest) done acc =
-  let (done2, acc2) = topoValVisit rm all names b done acc []
-  topoValGo rm all names rest done2 acc2
+topoValGo rm bm (b::rest) done acc =
+  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
+  topoValGo rm bm rest done2 acc2
 
-topoValVisit : OrdMap (List String) -> List CBind -> List String -> CBind -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisit rm all names b done acc visiting
-  | contains (bindName b) done = (done, acc)
-  | contains (bindName b) visiting = (done, acc)
+topoValVisit : OrdMap (List String) -> OrdMap CBind -> CBind -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisit rm bm b done acc visiting
+  | omHasKey (bindName b) done = (done, acc)
+  | omHasKey (bindName b) visiting = (done, acc)
   | otherwise =
-    let deps = intersectStr (dedupS (bindEagerReach rm b)) names
-    let (done2, acc2) = topoValVisitDeps rm all names deps done acc (bindName b :: visiting)
-    (bindName b :: done2, acc2 ++ [b])
+    let deps = filterList (n => omHasKey n bm) (dedupS (bindEagerReach rm b))
+    let (done2, acc2) = topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
+    (omInsert (bindName b) () done2, b::acc2)
 
-topoValVisitDeps : OrdMap (List String) -> List CBind -> List String -> List String -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisitDeps _ _ _ [] done acc _ = (done, acc)
-topoValVisitDeps rm all names (d::rest) done acc visiting = match findBind d all
+topoValVisitDeps : OrdMap (List String) -> OrdMap CBind -> List String -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisitDeps _ _ [] done acc _ = (done, acc)
+-- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- lint-disable-next-line rule-duplicate-body
+topoValVisitDeps rm bm (d::rest) done acc visiting = match omLookup d bm
   Some db =>
-    let (done2, acc2) = topoValVisit rm all names db done acc visiting
-    topoValVisitDeps rm all names rest done2 acc2 visiting
-  None => topoValVisitDeps rm all names rest done acc visiting
+    let (done2, acc2) = topoValVisit rm bm db done acc visiting
+    topoValVisitDeps rm bm rest done2 acc2 visiting
+  None => topoValVisitDeps rm bm rest done acc visiting
 
 -- the value-global names a binding's rhs references EAGERLY (at init time) — i.e.
 -- references NOT inside a lambda body — TRANSITIVELY through calls, are supplied by
@@ -8849,20 +9004,10 @@ topoValVisitDeps rm all names (d::rest) done acc visiting = match findBind d all
 -- other solely through their closures (`stmtsLoop = orElse stmtsCons (pure [])` ←
 -- eager; `stmtsCons = do … stmtsLoop` ← back-ref inside a `do` closure, lazy).
 
-findBind : String -> List CBind -> Option CBind
-findBind _ [] = None
-findBind name (b::rest) =
-  if bindName b == name then
-    Some b
-  else
-    findBind name rest
-
--- the elements of `xs` that also appear in `ys` (membership, order from xs).
-intersectStr : List String -> List String -> List String
-intersectStr [] _ = []
-intersectStr (x::rest) ys
-  | contains x ys = x :: intersectStr rest ys
-  | otherwise = intersectStr rest ys
+-- #623: `findBind` (linear scan of `all`) and `intersectStr` (`contains` per
+-- element against `names`) were the only two consumers of the topo sort's two
+-- `List` views of the same bindings.  `bindNameMap` + `omHasKey`/`omLookup`
+-- replace both, so they are gone.
 
 -- the initial globals registry: every value binding's name registered
 -- UNinitialised (`False`) with a placeholder LTy.  The `@main` init prologue flips
@@ -10237,8 +10382,16 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   -- stays on the byte-identical eager prologue.
   let _ = installLazyGlobalMap (lazyGlobalNames groups)
   let _ = installCtorMap ctorArs
+  -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
+  -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
+  let _ = installCtorTypeMap ctorTypes
   let _ = installSigMap (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
+  -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
+  -- dispatch scan (implsOf/defaultFor/implFnSymE/implEntryRouteKeyE) is O(bucket) not
+  -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
+  let _ = installImplIndex implEntries
+  let _ = installImplMethodSet implEntries
   -- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
   -- before any fn emit, so emitFn can route group members/roots.  Hooks: the LLVM
   -- canonFnName + a clause-derived fn-arity table with wasm's progFnArity contract
@@ -10248,7 +10401,11 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   -- that eta-saturation would re-arity (deficit > 0 — such a member's inlined
   -- clause-arity body would diverge from the ordinary define's ABI); dropped
   -- groups fall back to ordinary codegen, no transform, no regression.
-  let _ = setRef gDispArsRef (gDispFnArsOf (fnBinds groups))
+  let gDispArs = gDispFnArsOf (fnBinds groups)
+  let _ = setRef gDispArsRef gDispArs
+  -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
+  -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
+  let _ = setRef gDispArMapRef (Some (omFromPairs (reverseL gDispArs) omEmpty))
   let _ = setRef gDispBindsRef (fnBinds groups)
   let dispGroups0 = detectDispatchGroups
     (n => canonFnName e n)
@@ -10563,8 +10720,15 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   -- cannot leak into the census.
   let _ = installLazyGlobalMap []
   let _ = installCtorMap ctorArs
+  -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
+  -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
+  let _ = installCtorTypeMap ctorTypes
   let _ = installSigMap (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
+  -- #990: install the by-method impl index (see emitProgram) — resets any prior
+  -- program's index so a same-process re-emit can never route through a stale bucket.
+  let _ = installImplIndex implEntries
+  let _ = installImplMethodSet implEntries
   let _ = setRef floatFwSetRef (collectFloatFw e (fnBinds groups))
   let _ = setRef floatClosureFnsRef (collectFloatClosureFns e (fnBinds groups))
   -- the gap census emits every bind ORDINARILY — reset the (b′) groups so a prior

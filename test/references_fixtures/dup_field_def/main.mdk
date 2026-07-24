@@ -1,0 +1,41 @@
+-- #964 regression fixture — the def list is a SET of sites, never a bag.
+--
+-- Read test/references_fixtures/dup_field_def/expected.golden as the assertion:
+-- NO `DEF` column here may list the same `main.mdk:<line>:<col>` twice.
+--
+-- Why this is not hypothetical. `defsOfDecl` (compiler/tools/refindex.mdk) records
+-- a record FIELD once PER VARIANT, every one at the enclosing `data` decl's single
+-- name `Loc`, and every one under `mkKey mid nsField fn` — which carries NO variant
+-- discriminator. So a field name shared by K variants is recorded K times at
+-- byte-identical spans. `frontend/ast.mdk`'s own `Decl` does exactly this: its
+-- `DInterface` and `DImpl` variants each declare `pub` and `methods`.
+--
+-- The last-write-wins `hmSet` this fixture's sibling (#964) replaced happened to be
+-- idempotent under that, so accumulating def sites re-exposed it. It matters because
+-- two edits over an IDENTICAL range in one LSP `WorkspaceEdit` are rejected by strict
+-- clients and DOUBLE-APPLIED by lenient ones (`labellabel`) — silent source
+-- corruption, the class #964 exists to close.
+
+-- S0-1: `x` is declared by BOTH variants, at one decl Loc, under one field key.
+-- Its DEF column must hold exactly ONE site.
+export data T =
+  | A { x : Int }
+  | B { x : Int }
+
+-- S0-2: three variants sharing `tag` — a bag would show the site three times.
+export data U =
+  | U1 { tag : String }
+  | U2 { tag : String }
+  | U3 { tag : String }
+
+-- Control: `only` belongs to a single variant, so its ONE def site proves the
+-- golden distinguishes "deduplicated" from "collapsed to one no matter what".
+export data V =
+  | V1 { only : Int }
+  | V2 { other : Int }
+
+export mkA : Int -> T
+mkA n = A { x = n }
+
+export getX : T -> Int
+getX t = t.x

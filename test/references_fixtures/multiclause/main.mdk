@@ -1,0 +1,29 @@
+-- #964 regression fixture — the DEF MODEL must hold EVERY clause head.
+--
+-- Read test/references_fixtures/multiclause/expected.golden as the assertion:
+-- the `main|val|<name>` line of each multi-clause binder must list one DEF site
+-- PER CLAUSE HEAD, in source order. Before #964, `recordDef` was a plain
+-- `hmSet` on the def key, so N clause heads collapsed to the LAST one and the
+-- golden showed a single DEF — under-reporting `references`, and (via a rename
+-- driven off the same set) silently orphaning every earlier clause under the
+-- OLD name, which still compiles and changes runtime behaviour.
+
+-- S0-1: three clause heads, one BinderKey. All three DEF sites must appear.
+export describe : Int -> String
+describe 0 = "zero"
+describe 1 = "one"
+describe n = "many"
+
+export usesDescribe : String
+usesDescribe = describe 0
+
+-- S0-2: a two-clause fn whose LAST clause is the one with a binder — proves the
+-- surviving head really is per-clause and not "whichever clause bound a param".
+export firstOr : Int -> List Int -> Int
+firstOr d [] = d
+firstOr _ (x::_) = x
+
+-- Control: a single-clause fn must still report exactly ONE def site, so the
+-- golden distinguishes "accumulates per clause" from "accumulates per anything".
+export single : Int -> Int
+single x = x + 1

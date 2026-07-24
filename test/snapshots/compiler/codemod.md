@@ -1,5 +1,5 @@
 # META
-source_lines=685
+source_lines=678
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -76,6 +76,8 @@ import support.util.{
   splitOnChar,
   joinNl,
   anyList,
+  dedupBy,
+  lenKey,
 }
 
 -- ── public types ───────────────────────────────────────────────────────────
@@ -645,28 +647,19 @@ collectKept ((None, _)::rest) = collectKept rest
 collectKept ((Some a, _)::rest) = a :: collectKept rest
 
 -- Order-preserving dedupe (keep first) — a rename can make two atoms identical.
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  Both the label and the payload are
+-- unconstrained Strings, so the label is length-prefixed and the `Option` is
+-- tagged — the encoding is injective, matching the old `atomEq` exactly.
 dedupeAtoms : List (String, Option String) -> List (String, Option String)
-dedupeAtoms xs = dedupeGo xs []
+dedupeAtoms xs = dedupBy atomKey xs
 
-dedupeGo : List (String, Option String) -> List (String, Option String) -> List (String, Option String)
-dedupeGo [] _ = []
-dedupeGo (a::rest) seen =
-  if atomElem a seen then
-    dedupeGo rest seen
-  else
-    a :: dedupeGo rest (a::seen)
+atomKey : (String, Option String) -> String
+atomKey (label, dom) = lenKey label ++ domKey dom
 
-atomElem : (String, Option String) -> List (String, Option String) -> Bool
-atomElem _ [] = False
-atomElem a (b::bs) = atomEq a b || atomElem a bs
-
-atomEq : (String, Option String) -> (String, Option String) -> Bool
-atomEq (l1, d1) (l2, d2) = l1 == l2 && domEq d1 d2
-
-domEq : Option String -> Option String -> Bool
-domEq None None = True
-domEq (Some x) (Some y) = x == y
-domEq _ _ = False
+domKey : Option String -> String
+domKey None = "N"
+domKey (Some x) = "S\{x}"
 
 -- Advisory warnings: a `DEffect` that DECLARES a targeted label is left
 -- untouched (the codemod only rewrites row USES), so flag it for the operator.
@@ -692,7 +685,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))
@@ -886,19 +879,12 @@ declEffectWarn _ _ = []
 (DFunDef false "collectKept" ((PCons (PTuple (PCon "None") PWild) (PVar "rest"))) (EApp (EVar "collectKept") (EVar "rest")))
 (DFunDef false "collectKept" ((PCons (PTuple (PCon "Some" (PVar "a")) PWild) (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "collectKept") (EVar "rest"))))
 (DTypeSig false "dedupeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "dedupeAtoms" ((PVar "xs")) (EApp (EApp (EVar "dedupeGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupeGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "dedupeGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupeGo" ((PCons (PVar "a") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "atomElem") (EVar "a")) (EVar "seen")) (EApp (EApp (EVar "dedupeGo") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "a") (EApp (EApp (EVar "dedupeGo") (EVar "rest")) (EBinOp "::" (EVar "a") (EVar "seen"))))))
-(DTypeSig false "atomElem" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool"))))
-(DFunDef false "atomElem" (PWild (PList)) (EVar "False"))
-(DFunDef false "atomElem" ((PVar "a") (PCons (PVar "b") (PVar "bs"))) (EBinOp "||" (EApp (EApp (EVar "atomEq") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "atomElem") (EVar "a")) (EVar "bs"))))
-(DTypeSig false "atomEq" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "Bool"))))
-(DFunDef false "atomEq" ((PTuple (PVar "l1") (PVar "d1")) (PTuple (PVar "l2") (PVar "d2"))) (EBinOp "&&" (EBinOp "==" (EVar "l1") (EVar "l2")) (EApp (EApp (EVar "domEq") (EVar "d1")) (EVar "d2"))))
-(DTypeSig false "domEq" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "domEq" ((PCon "None") (PCon "None")) (EVar "True"))
-(DFunDef false "domEq" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EBinOp "==" (EVar "x") (EVar "y")))
-(DFunDef false "domEq" (PWild PWild) (EVar "False"))
+(DFunDef false "dedupeAtoms" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "atomKey")) (EVar "xs")))
+(DTypeSig false "atomKey" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "atomKey" ((PTuple (PVar "label") (PVar "dom"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "label")) (EApp (EVar "domKey") (EVar "dom"))))
+(DTypeSig false "domKey" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
+(DFunDef false "domKey" ((PCon "None")) (ELit (LString "N")))
+(DFunDef false "domKey" ((PCon "Some" (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "S")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))))
 (DTypeSig false "warnEffectLabels" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "warnEffectLabels" ((PVar "args") (PVar "decls")) (EMatch (EApp (EApp (EVar "parseEffectArgs") (EVar "args")) (EListLit)) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "acts")) () (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "decls")))))
 (DTypeSig false "declEffectWarns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -913,7 +899,7 @@ declEffectWarn _ _ = []
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "listLen" false) (mem "lookupAssoc" false) (mem "splitOnChar" false) (mem "joinNl" false) (mem "anyList" false) (mem "dedupBy" false) (mem "lenKey" false))))
 (DData Public "Codemod" () ((variant "Codemod" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "argHelp" (TyCon "String")) (field "mk" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))) (field "warn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))))) ())
 (DTypeSig true "allCodemods" (TyApp (TyCon "List") (TyCon "Codemod")))
 (DFunDef false "allCodemods" () (EListLit (EVar "effectLabelsCodemod")))
@@ -1107,19 +1093,12 @@ declEffectWarn _ _ = []
 (DFunDef false "collectKept" ((PCons (PTuple (PCon "None") PWild) (PVar "rest"))) (EApp (EVar "collectKept") (EVar "rest")))
 (DFunDef false "collectKept" ((PCons (PTuple (PCon "Some" (PVar "a")) PWild) (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "collectKept") (EVar "rest"))))
 (DTypeSig false "dedupeAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "dedupeAtoms" ((PVar "xs")) (EApp (EApp (EVar "dedupeGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupeGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "dedupeGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupeGo" ((PCons (PVar "a") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "atomElem") (EVar "a")) (EVar "seen")) (EApp (EApp (EVar "dedupeGo") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "a") (EApp (EApp (EVar "dedupeGo") (EVar "rest")) (EBinOp "::" (EVar "a") (EVar "seen"))))))
-(DTypeSig false "atomElem" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool"))))
-(DFunDef false "atomElem" (PWild (PList)) (EVar "False"))
-(DFunDef false "atomElem" ((PVar "a") (PCons (PVar "b") (PVar "bs"))) (EBinOp "||" (EApp (EApp (EVar "atomEq") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "atomElem") (EVar "a")) (EVar "bs"))))
-(DTypeSig false "atomEq" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "Bool"))))
-(DFunDef false "atomEq" ((PTuple (PVar "l1") (PVar "d1")) (PTuple (PVar "l2") (PVar "d2"))) (EBinOp "&&" (EBinOp "==" (EVar "l1") (EVar "l2")) (EApp (EApp (EVar "domEq") (EVar "d1")) (EVar "d2"))))
-(DTypeSig false "domEq" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "domEq" ((PCon "None") (PCon "None")) (EVar "True"))
-(DFunDef false "domEq" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EBinOp "==" (EVar "x") (EVar "y")))
-(DFunDef false "domEq" (PWild PWild) (EVar "False"))
+(DFunDef false "dedupeAtoms" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "atomKey")) (EVar "xs")))
+(DTypeSig false "atomKey" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "atomKey" ((PTuple (PVar "label") (PVar "dom"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "label")) (EApp (EVar "domKey") (EVar "dom"))))
+(DTypeSig false "domKey" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
+(DFunDef false "domKey" ((PCon "None")) (ELit (LString "N")))
+(DFunDef false "domKey" ((PCon "Some" (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "S")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))))
 (DTypeSig false "warnEffectLabels" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "warnEffectLabels" ((PVar "args") (PVar "decls")) (EMatch (EApp (EApp (EVar "parseEffectArgs") (EVar "args")) (EListLit)) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "acts")) () (EApp (EApp (EVar "declEffectWarns") (EVar "acts")) (EVar "decls")))))
 (DTypeSig false "declEffectWarns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
