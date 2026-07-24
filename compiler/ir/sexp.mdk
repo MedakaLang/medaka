@@ -86,6 +86,8 @@ tySexp (TyFun a b) = node "TyFun" [tySexp a, tySexp b]
 tySexp (TyTuple ts) = node "TyTuple" (map tySexp ts)
 tySexp (TyEffect labels tail t) =
   node "TyEffect" [slist (map effAtomSexp labels), optStrSexp tail, tySexp t]
+tySexp (TyRow labels tail _) =
+  node "TyRow" [slist (map effAtomSexp labels), optStrSexp tail]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 

@@ -1000,6 +1000,7 @@ ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArgFmt : String -> String -> String
 ppEffAtomTy : (String, Option String) -> String
+ppEffInsideTy : List (String, Option String) -> Option String -> String
 ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
 ppMono : Mono -> String
@@ -1203,7 +1204,11 @@ rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
 rowArgOf : List (String, Ref Effvar) -> Ty -> EffRow
 rowFreeEffvars : EffRow -> List Int
+<<<<<<< HEAD
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
+=======
+rowKindMismatchMsg : List (String, Option String) -> Option String -> String
+>>>>>>> origin/main
 runFinalChecks : List Decl -> List Decl -> Unit
 sameRootId : Int -> Mono -> Bool
 sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)

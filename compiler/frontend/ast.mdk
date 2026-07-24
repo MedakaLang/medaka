@@ -33,6 +33,15 @@ public export data Ty =
   | TyTuple (List Ty)
   | TyEffect (List (String, Option String)) (Option String) Ty
   | TyConstrained (List Constraint) Ty
+  -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
+  -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
+  -- always WRAPS an inner type (`<Stdout> Unit` meaning "Unit, performing
+  -- Stdout") — because a bare row-argument atom wraps nothing: there is no
+  -- inner type to distinguish "no wrapped type" from "wrapped type happens
+  -- to be Unit", so a real constructor is required rather than a filler Ty
+  -- (a filler is print-ambiguous with a genuine wrapped type of the same
+  -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
+  | TyRow (List (String, Option String)) (Option String) (Option Loc)
 
 -- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
 public export data Constraint = Constraint String (List Ty)

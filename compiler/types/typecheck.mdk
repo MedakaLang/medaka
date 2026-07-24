@@ -1123,6 +1123,18 @@ argPerformableOccs : Bool -> Ty -> List (String, List Atom)
 argPerformableOccs perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
   ++ argPerformableOccs perf t
 argPerformableOccs perf (TyEffect _ None t) = argPerformableOccs perf t
+-- A bare row atom (#997) carries its own tail var + labels directly (no
+-- wrapped type to recurse into) — same treatment as the `TyEffect` arms
+-- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
+-- (as opposed to a bare `Box e Int`) was invisible to this collector, which
+-- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
+-- `effVarOccAtoms` below, which shares this gap).
+argPerformableOccs perf (TyRow labels (Some n) _) =
+  if perf then
+    [(n, atomsOfWritten labels)]
+  else
+    []
+argPerformableOccs perf (TyRow _ None _) = []
 argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
   ++ argPerformableOccs perf b
 argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
@@ -1205,6 +1217,7 @@ firstTyConLoc (TyFun a b) = orElseLoc (firstTyConLoc a) (firstTyConLoc b)
 firstTyConLoc (TyTuple ts) = firstTyConLocList ts
 firstTyConLoc (TyEffect _ _ t) = firstTyConLoc t
 firstTyConLoc (TyConstrained _ t) = firstTyConLoc t
+firstTyConLoc (TyRow _ _ l) = l
 firstTyConLoc _ = None
 
 firstTyConLocList : List Ty -> Option Loc
@@ -1332,6 +1345,13 @@ checkEffectParamsTy (TyTuple ts) = checkEffectParamsTys ts
 checkEffectParamsTy (TyEffect labels _ t) =
   let _ = checkEffectAtoms labels
   checkEffectParamsTy t
+-- A bare row atom (#997) carries written effect params exactly like
+-- `TyEffect` above (`Async <Net "example.com"> Unit` must be domain-checked
+-- the same as the degenerate `Async (<Net "example.com"> Unit) Unit`) —
+-- without this arm the bare spelling silently skipped `T-EFFECT-PARAM`
+-- domain validation entirely (S1: a way to mint an invalid `Net` capability
+-- no other spelling admits).
+checkEffectParamsTy (TyRow labels _ _) = checkEffectAtoms labels
 checkEffectParamsTy (TyConstrained _ t) = checkEffectParamsTy t
 checkEffectParamsTy _ = ()
 
@@ -3622,6 +3642,10 @@ tyVarNames (TyFun a b) = tyVarNames a ++ tyVarNames b
 tyVarNames (TyTuple ts) = flatMap tyVarNames ts
 tyVarNames (TyEffect _ _ t) = tyVarNames t
 tyVarNames (TyConstrained _ t) = tyVarNames t
+-- A bare row atom (#997) wraps no inner type, so it carries no ordinary
+-- type-variable occurrence (its own tail var, if any, is a row-namespace
+-- name captured by `effTailNames`/`rowArgNames`, not this one).
+tyVarNames (TyRow _ _ _) = []
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
 -- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
@@ -3657,6 +3681,7 @@ tyConNamesInTy (TyApp a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyFun a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyTuple ts) = flatMap tyConNamesInTy ts
 tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
+tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyConstrained cs t) = flatMap tyConNamesInConstraint cs
   ++ tyConNamesInTy t
 
@@ -3786,6 +3811,22 @@ effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
 effTailNames (TyEffect _ tail t) = tailNameList tail ++ effTailNames t
 effTailNames (TyConstrained _ t) = effTailNames t
+-- A bare row atom (#997) carries its own tail var directly (no wrapped type
+-- to recurse into) — same tail-var-sharing contract as `TyEffect`'s arm
+-- above (see the `effect_param.mdk` regression guard for why this matters:
+-- a KRow arg's tail var must resolve to the SAME shared effvar cell
+-- wherever it recurs in a signature).
+-- ⚠️ Deliberately NAME-based, matching the pre-existing `TyEffect` arm above
+-- (NOT new to this arm — a `TyEffect` nested in a non-KRow argument slot,
+-- e.g. `List (<e> T)`, has always had the identical property): this walker
+-- has no kind context, so it cannot tell a row sitting in a genuinely
+-- KRow-kinded slot from one sitting in a Type-kinded slot that merely LOOKS
+-- like a row syntactically (`List <e>`, `List (<e> T)`). `undeterminedRetEffVars`
+-- (below) is documented as needing a KIND-AWARE argument-carrier test for
+-- exactly this reason and pairs this with the actually-kind-aware
+-- `rowArgNames`; this arm's over-counting is a residual channel of the same
+-- shape as that pre-existing gap, not a new one — see #784.
+effTailNames (TyRow _ tail _) = tailNameList tail
 
 tailNameList : Option String -> List String
 tailNameList None = []
@@ -3847,6 +3888,25 @@ fromAstTypeE etbl tvs (TyFun a b) =
 fromAstTypeE etbl tvs (TyTuple ts) = tupleMono (map (fromAstTypeE etbl tvs) ts)
 fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
+-- A bare row atom (#997) reached here means it landed in an ordinary
+-- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
+-- normally consumes a `TyRow`, routing it through `rowArgOf` instead. Unlike
+-- a misplaced `TyEffect` (which unwraps to a REAL user-written type and can
+-- keep inferring silently), a `TyRow` has no wrapped type at all — inventing
+-- one from nothing would turn what used to be a parse error (`List <Stdout>`,
+-- `data Holder = Holder <Stdout>`) into a silent mistype (`List Unit`).  Push
+-- a real diagnostic; `TCon "Unit"` is POST-ERROR RECOVERY ONLY, so inference
+-- can keep going, not a value anything should rely on.
+fromAstTypeE etbl tvs (TyRow labels tail loc) =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  TCon "Unit"
+
+-- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
+-- visible yet at this point in the file, so render the row body directly with
+-- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
+-- forward reference, fine: this module is resolved as a whole, not top-down).
+rowKindMismatchMsg : List (String, Option String) -> Option String -> String
+rowKindMismatchMsg labels tail = "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
 -- A type alias applied to the wrong number of arguments — over-applied,
 -- under-applied, or (got=0) used unapplied.  v1 requires a parameterized alias
@@ -3958,6 +4018,15 @@ rowArgOf etbl (TyVar n) = match lookupAssoc n etbl
   None => pureRow
 rowArgOf etbl (TyEffect labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
+-- The primary shape #997 exists for: `Async <Stdout> Unit`'s `<Stdout>` IS a
+-- `TyRow`, not a `TyEffect` — this arm is what makes the bare row spelling
+-- carry the SAME effect information as the pre-existing degenerate spelling
+-- `Async (<Stdout> Unit) Unit` (a `TyEffect`, caught by the arm above).
+-- Without it, a written row here would silently fall through to the
+-- catch-all `pureRow` below and every bare-row-written effect would be
+-- DISCARDED for dict-passing purposes.
+rowArgOf etbl (TyRow labels tail _) =
+  EffRow (atomsOfWritten labels) (tailCell etbl tail)
 rowArgOf _ _ = pureRow
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
@@ -3999,6 +4068,13 @@ krowArgVarNames : List Kind -> List Ty -> List String
 krowArgVarNames [] _ = []
 krowArgVarNames _ [] = []
 krowArgVarNames (KRow::ks) ((TyVar n)::as2) = n :: krowArgVarNames ks as2
+-- A KRow slot filled with a WRITTEN row carrying an open tail var (#997,
+-- `Box <Stdout | e> Int`) pins `e` exactly like a bare `Box e Int` does —
+-- same var-name contribution, just spelled with labels attached. A CLOSED
+-- written row (`Box <Stdout> Int`, no tail var) pins no name and falls
+-- through to the catch-all below, same as any other non-`TyVar` arg.
+krowArgVarNames (KRow::ks) ((TyRow _ (Some n) _)::as2) =
+  n :: krowArgVarNames ks as2
 krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── environment ───────────────────────────────────────────────────────────
@@ -10032,6 +10108,7 @@ tyFirstLoc (TyFun f x) = orElseLoc (tyFirstLoc f) (tyFirstLoc x)
 tyFirstLoc (TyTuple ts) = implHeadLoc ts
 tyFirstLoc (TyEffect _ _ t) = tyFirstLoc t
 tyFirstLoc (TyConstrained _ t) = tyFirstLoc t
+tyFirstLoc (TyRow _ _ l) = l
 
 -- the impl's head args → monos under ONE shared fresh-var map (so a var reused
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
@@ -10623,6 +10700,11 @@ tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
 tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
 tyIsConcrete (TyEffect _ _ t) = tyIsConcrete t
 tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
+-- Same "effect rows are transparent" treatment as `TyEffect` above (the
+-- comment on this function): a row's own tail var never counts against
+-- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
+-- wrapped type at all — is vacuously concrete too.
+tyIsConcrete (TyRow _ _ _) = True
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
 -- concrete is fully ground).  Mirror of lib/typecheck.ml's mono_matches.
@@ -10946,7 +11028,11 @@ tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
 -- AST-space step: rigid structural, NO normalize (raw AST patterns).  A TyEffect/
 -- TyConstrained wrapper on the general side is transparent — recurse into its body
 -- with the specific side's own wrappers stripped (stripTyWrap), preserving the old
--- tySubsumeGo behaviour.  Exhaustive over Ty's 7 constructors, so no catch-all.
+-- tySubsumeGo behaviour.  Exhaustive over every `Ty` constructor (ast.mdk), so
+-- no catch-all — a new constructor must add an arm here, not rely on a
+-- wildcard (a hand-maintained count here would rot; see `TyRow`'s own arm
+-- below for why: a bare row atom has no wrapped type to recurse into, so it
+-- vacuously matches anything in this position).
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStep (TyVar gn) _ = MVar gn
 tyStep (TyCon a _) (TyCon b _) = if a == b then MOk else MFail
@@ -10963,6 +11049,11 @@ tyStep (TyTuple ts1) (TyTuple ts2) =
 tyStep (TyTuple _) _ = MFail
 tyStep (TyEffect _ _ t1) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
+-- Same "rows are transparent" treatment used throughout this specificity
+-- engine (a `TyEffect`'s row never participates — only its wrapped type
+-- does). A bare row atom has no wrapped type to recurse into, so it
+-- vacuously matches anything in this position.
+tyStep (TyRow _ _ _) _ = MOk
 
 eqStr : String -> String -> Bool
 eqStr a b = a == b
@@ -13426,6 +13517,10 @@ substTyVars sub (TyFun a b) = TyFun (substTyVars sub a) (substTyVars sub b)
 substTyVars sub (TyTuple ts) = TyTuple (map (substTyVars sub) ts)
 substTyVars sub (TyEffect es eff t) = TyEffect es eff (substTyVars sub t)
 substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
+-- No wrapped type to recurse into, and (like `TyEffect`'s `eff` above,
+-- untouched by this substitution) a row's tail var is never one of `sub`'s
+-- ordinary type-var names — a bare row atom substitutes to itself.
+substTyVars _ (TyRow es eff l) = TyRow es eff l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
 -- un-implementable for an ordinary interface (no `impl Display (a -> b)` exists).
@@ -13488,6 +13583,15 @@ reqTyToMono sub (TyTuple ts) =
   tupleSpineOf (TCon (tupleHeadTagTc (listLen ts))) (map (reqTyToMono sub) ts)
 reqTyToMono sub (TyEffect _ _ t) = reqTyToMono sub t
 reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
+-- Same diagnostic + recovery as `fromAstTypeE`'s `TyRow` arm: `reqTyToMono`
+-- has no kind-directed KRow branch at all (its `TyApp` arm is unconditional),
+-- so a row written in a `requires` clause's type argument was ALREADY a
+-- silent `Unit` mistype before #997 for the degenerate spelling — push the
+-- same diagnostic rather than let #997's new syntax spelling reach it in
+-- silence too.
+reqTyToMono _ (TyRow labels tail loc) =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  TCon "Unit"
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
@@ -14394,6 +14498,14 @@ effVarOccAtoms : Ty -> List (String, List Atom)
 effVarOccAtoms (TyEffect labels (Some n) t) =
   (n, atomsOfWritten labels) :: effVarOccAtoms t
 effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
+-- A bare row atom (#997) is a named-tail row occurrence exactly like
+-- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
+-- ctor-arg written as `Box <Stdout | e> Int` was invisible to
+-- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
+-- check over-fired ("not sourced from any argument") on an argument that
+-- demonstrably DOES declare the atom.
+effVarOccAtoms (TyRow labels (Some n) _) = [(n, atomsOfWritten labels)]
+effVarOccAtoms (TyRow _ None _) = []
 effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
@@ -15469,20 +15581,28 @@ ppTy (TyVar n) = n
 ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
-ppTy (TyEffect effs tail t) =
+ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
+-- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
+-- wrapped type it has none of.
+ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
+ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
+
+-- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
+-- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
+-- rule-duplicate-body would flag an inlined copy).
+ppEffInsideTy : List (String, Option String) -> Option String -> String
+ppEffInsideTy effs tail =
   let labs = map ppEffAtomTy effs
-  let inside = match tail
+  match tail
     None => joinWith ", " labs
     Some v => match effs
       [] => v
       _ => "\{joinWith ", " labs} | \{v}"
-  "<\{inside}> \{ppTy t}"
-ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String
 ppEffAtomTy (l, None) = l
--- Intentional cross-file duplicate of the same helper in doc.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- Intentional cross-file duplicate of the same helper in doc.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
 -- lint-disable-next-line rule-duplicate-body
 ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 

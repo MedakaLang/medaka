@@ -1,5 +1,5 @@
 # META
-source_lines=1835
+source_lines=1858
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -358,6 +358,8 @@ printType (TyTuple ts) =
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
   Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+printType (TyRow es tail _) =
+  Cat (text "<") (Cat (effectInside es tail) (text ">"))
 printType (TyConstrained cs t) =
   let csDoc = match cs
     [c] => printConstraint c
@@ -383,6 +385,24 @@ printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon n _) = text (tyConSurface n)
 printTypeAtom (TyVar n) = text n
 printTypeAtom (TyTuple ts) = printType (TyTuple ts)
+-- A bare row atom is already a complete atom (`<Stdout>`) — print it bare,
+-- like `TyCon`/`TyVar`/`TyTuple` above, not parenthesized like the generic
+-- fallback below (#997: that fallback is exactly what used to turn
+-- `Async <Stdout> Unit` into `Async (<Stdout> Unit) Unit` on every
+-- `fmt --write`, so the new syntax could never survive the formatter).
+printTypeAtom (TyRow es tail loc) = printType (TyRow es tail loc)
+-- ⚠️ Deliberately NOT normalizing the pre-#997 degenerate spelling
+-- (`Async (<Stdout> Unit) Unit`, a `TyEffect` in argument position) toward
+-- the new bare form here. A `TyEffect`'s wrapped type can be a GENUINE
+-- payload type (`Foo (<Stdout> Int)` is legal today and means something —
+-- `Int`, not filler), and nothing in the AST distinguishes that from a
+-- pre-#997 `Unit` filler wrapping the SAME shape — that ambiguity is
+-- exactly why `TyRow` exists as its own constructor instead of reusing
+-- `TyEffect`. Printing every argument-position `TyEffect` bare would
+-- SILENTLY DROP a real wrapped type for the (indistinguishable) filler
+-- case — the #604/#932 class of formatter data loss. So `TyEffect` keeps
+-- its existing parenthesized rendering unconditionally; only a `TyRow`
+-- (which never had a wrapped type to lose) prints bare.
 printTypeAtom t = Cat (text "(") (Cat (printType t) (text ")"))
 
 printTypeFunLhs : Ty -> Doc
@@ -1789,6 +1809,9 @@ ppTyPrec p (TyEffect effs tail t) =
   let inside = ppEffInside effs tail
   let s = "<\{inside}> \{ppTyPrec 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
+-- `TyEffect` above — it never needs precedence-parens at any `p`.
+ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c
@@ -1948,6 +1971,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printType" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeFunLhs") (EVar "a"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " -> ")))) (EApp (EVar "printType") (EVar "b")))))
 (DFunDef false "printType" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "printType")) (EVar "ts")))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printType" ((PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EVar "inside")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "> ")))) (EApp (EVar "printTypeAppLhs") (EVar "t"))))))))
+(DFunDef false "printType" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (EApp (EVar "text") (ELit (LString ">"))))))
 (DFunDef false "printType" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csDoc") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "printConstraint") (EVar "c"))) (arm PWild () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "printConstraint")) (EVar "cs")))) (EApp (EVar "text") (ELit (LString ")")))))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "csDoc")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EVar "printType") (EVar "t")))))))
 (DTypeSig false "effectInside" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Doc"))))
 (DFunDef false "effectInside" ((PVar "es") (PCon "None")) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "effAtomDoc")) (EVar "es"))))
@@ -1962,6 +1986,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printTypeAtom" ((PCon "TyCon" (PVar "n") PWild)) (EApp (EVar "text") (EApp (EVar "tyConSurface") (EVar "n"))))
 (DFunDef false "printTypeAtom" ((PCon "TyVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printTypeAtom" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "printType") (EApp (EVar "TyTuple") (EVar "ts"))))
+(DFunDef false "printTypeAtom" ((PCon "TyRow" (PVar "es") (PVar "tail") (PVar "loc"))) (EApp (EVar "printType") (EApp (EApp (EApp (EVar "TyRow") (EVar "es")) (EVar "tail")) (EVar "loc"))))
 (DFunDef false "printTypeAtom" ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "printTypeFunLhs" (TyFun (TyCon "Ty") (TyCon "Doc")))
 (DFunDef false "printTypeFunLhs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -2475,6 +2500,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 1))) (EVar "f")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "x")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 1))) (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "b")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail"))) (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "inside"))) (ELit (LString "> "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csStr") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "ppConstr") (EVar "c"))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppConstr")) (EVar "cs")))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "csStr"))) (ELit (LString " => "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ""))))))
 (DTypeSig false "ppEffInside" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInside" ((PVar "effs") (PCon "None")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppEffAtom")) (EVar "effs"))))
@@ -2610,6 +2636,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printType" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printTypeFunLhs") (EVar "a"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " -> ")))) (EApp (EVar "printType") (EVar "b")))))
 (DFunDef false "printType" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "printType")) (EVar "ts")))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printType" ((PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EVar "inside")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "> ")))) (EApp (EVar "printTypeAppLhs") (EVar "t"))))))))
+(DFunDef false "printType" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "<")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "effectInside") (EVar "es")) (EVar "tail"))) (EApp (EVar "text") (ELit (LString ">"))))))
 (DFunDef false "printType" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csDoc") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "printConstraint") (EVar "c"))) (arm PWild () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "printConstraint")) (EVar "cs")))) (EApp (EVar "text") (ELit (LString ")")))))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "csDoc")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EVar "printType") (EVar "t")))))))
 (DTypeSig false "effectInside" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Doc"))))
 (DFunDef false "effectInside" ((PVar "es") (PCon "None")) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "effAtomDoc")) (EVar "es"))))
@@ -2624,6 +2651,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printTypeAtom" ((PCon "TyCon" (PVar "n") PWild)) (EApp (EVar "text") (EApp (EVar "tyConSurface") (EVar "n"))))
 (DFunDef false "printTypeAtom" ((PCon "TyVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printTypeAtom" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "printType") (EApp (EVar "TyTuple") (EVar "ts"))))
+(DFunDef false "printTypeAtom" ((PCon "TyRow" (PVar "es") (PVar "tail") (PVar "loc"))) (EApp (EVar "printType") (EApp (EApp (EApp (EVar "TyRow") (EVar "es")) (EVar "tail")) (EVar "loc"))))
 (DFunDef false "printTypeAtom" ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EVar "t"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "printTypeFunLhs" (TyFun (TyCon "Ty") (TyCon "Doc")))
 (DFunDef false "printTypeFunLhs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printType") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -3137,6 +3165,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 1))) (EVar "f")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 2))) (EVar "x")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 1))) (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "b")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
 (DFunDef false "ppTyPrec" ((PVar "p") (PCon "TyEffect" (PVar "effs") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PVar "inside") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail"))) (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "inside"))) (ELit (LString "> "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 1))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
+(DFunDef false "ppTyPrec" (PWild (PCon "TyRow" (PVar "effs") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInside") (EVar "effs")) (EVar "tail")))) (ELit (LString ">"))))
 (DFunDef false "ppTyPrec" (PWild (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PVar "csStr") (EMatch (EVar "cs") (arm (PList (PVar "c")) () (EApp (EVar "ppConstr") (EVar "c"))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppConstr")) (EVar "cs")))) (ELit (LString ")")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "csStr"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))) (ELit (LString ""))))))
 (DTypeSig false "ppEffInside" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "ppEffInside" ((PVar "effs") (PCon "None")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppEffAtom")) (EVar "effs"))))

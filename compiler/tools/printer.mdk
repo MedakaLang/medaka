@@ -354,6 +354,8 @@ printType (TyTuple ts) =
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
   Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+printType (TyRow es tail _) =
+  Cat (text "<") (Cat (effectInside es tail) (text ">"))
 printType (TyConstrained cs t) =
   let csDoc = match cs
     [c] => printConstraint c
@@ -379,6 +381,24 @@ printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon n _) = text (tyConSurface n)
 printTypeAtom (TyVar n) = text n
 printTypeAtom (TyTuple ts) = printType (TyTuple ts)
+-- A bare row atom is already a complete atom (`<Stdout>`) — print it bare,
+-- like `TyCon`/`TyVar`/`TyTuple` above, not parenthesized like the generic
+-- fallback below (#997: that fallback is exactly what used to turn
+-- `Async <Stdout> Unit` into `Async (<Stdout> Unit) Unit` on every
+-- `fmt --write`, so the new syntax could never survive the formatter).
+printTypeAtom (TyRow es tail loc) = printType (TyRow es tail loc)
+-- ⚠️ Deliberately NOT normalizing the pre-#997 degenerate spelling
+-- (`Async (<Stdout> Unit) Unit`, a `TyEffect` in argument position) toward
+-- the new bare form here. A `TyEffect`'s wrapped type can be a GENUINE
+-- payload type (`Foo (<Stdout> Int)` is legal today and means something —
+-- `Int`, not filler), and nothing in the AST distinguishes that from a
+-- pre-#997 `Unit` filler wrapping the SAME shape — that ambiguity is
+-- exactly why `TyRow` exists as its own constructor instead of reusing
+-- `TyEffect`. Printing every argument-position `TyEffect` bare would
+-- SILENTLY DROP a real wrapped type for the (indistinguishable) filler
+-- case — the #604/#932 class of formatter data loss. So `TyEffect` keeps
+-- its existing parenthesized rendering unconditionally; only a `TyRow`
+-- (which never had a wrapped type to lose) prints bare.
 printTypeAtom t = Cat (text "(") (Cat (printType t) (text ")"))
 
 printTypeFunLhs : Ty -> Doc
@@ -1785,6 +1805,9 @@ ppTyPrec p (TyEffect effs tail t) =
   let inside = ppEffInside effs tail
   let s = "<\{inside}> \{ppTyPrec 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
+-- `TyEffect` above — it never needs precedence-parens at any `p`.
+ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
 ppTyPrec _ (TyConstrained cs t) =
   let csStr = match cs
     [c] => ppConstr c
