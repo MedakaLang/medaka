@@ -324,6 +324,8 @@ deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List String -> UseMember -> UseMember
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
+declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
+declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declIfaceMethods : Decl -> List (String, Scheme)
 declMethodNames : List Decl -> List String
 declMethodNamesOf : Decl -> List String
@@ -678,9 +680,9 @@ inferClauseEff : TcEnv -> Option Mono -> (List Pat, Expr) -> (Mono, List Atom)
 inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
 inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
-inferDefaultMethod : TcEnv -> String -> List String -> IfaceMethod -> Unit
+inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
-inferDefaultMethods : TcEnv -> String -> List String -> List IfaceMethod -> Unit
+inferDefaultMethods : TcEnv -> String -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
 inferDefinerStandaloneVarApp : TcEnv -> String -> Expr -> Expr -> Mono -> Option Loc -> Mono

@@ -1039,7 +1039,7 @@ checkUndeterminedRetEffVars (d::rest) =
 
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, methods, ... }) =
-  checkIfaceMethodEffs name (gradedScopeOf name typarams) methods
+  checkIfaceMethodEffs name (declGradedScope typarams methods) methods
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
 checkUndeterminedRetEffVarsDecl _ = ()
@@ -8021,12 +8021,28 @@ insertIfaceParamKinds iface i _ kinds =
 ifaceSlotKey : String -> Int -> String
 ifaceSlotKey iface i = "\{iface}@\{intToString i}"
 
--- The GRADED SCOPE: [iface]'s graded typarams as a bare-name → slot-kinds map, for
--- the seams that are elaborating one of ITS method signatures.  This is the whole
+-- The GRADED SCOPE: an interface's graded typarams as a bare-name → slot-kinds map,
+-- for the seams that are elaborating one of ITS method signatures.  This is the whole
 -- scoping mechanism — a seam that does not know which interface it is looking at
 -- passes nothing and gets exactly the pre-#822 behaviour, so a seam MISSED here
 -- degrades the feature rather than leaking kinds into unrelated types.
 -- Empty for every non-graded interface (only graded slots are ever recorded).
+--
+-- PREFER `declGradedScope`: it derives the scope from the DECLARATION in hand, so
+-- there is no key and nothing to collide over.  `gradedScopeOf` is the fallback for
+-- the ONE seam without the declaration — inferImplMethod, which reaches its method
+-- type through `ifaceMethodTyResolved` and would need an `allProg` scan per impl
+-- method to recover the interface's sibling methods.
+--
+-- A `<iface>@<slot>` key is not forgeable in a program that compiles.  Two graded
+-- interfaces CAN share a name across modules, but: (i) each module registers its own
+-- interfaces as a FRONT overlay during its own pass and `lookupAssoc` is first-match,
+-- so a module always wins its own key — the same ordering invariant the data-kind
+-- universe has relied on since #154 — and (ii) the one shape that could defeat that,
+-- a module declaring its own `GT` while implementing an IMPORTED `GT`, resolves the
+-- impl head to the LOCAL interface and is rejected before kinds are consulted
+-- ("Method 'm1meth' is not part of interface 'GT'").  Both probed on this build; the
+-- same-name-two-modules case elaborates each interface correctly.
 gradedScopeOf : String -> List String -> List (String, List Kind)
 gradedScopeOf iface typarams = gradedScopeGo iface 0 typarams
 
@@ -8035,6 +8051,22 @@ gradedScopeGo _ _ [] = []
 gradedScopeGo iface i (p::ps) = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
   Some kinds => (p, kinds) :: gradedScopeGo iface (i + 1) ps
   None => gradedScopeGo iface (i + 1) ps
+
+-- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
+-- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
+-- built.  No name, no table, no lookup — structurally unforgeable.
+declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
+declGradedScope [] _ = []
+declGradedScope (p::ps) methods =
+  declGradedScopeAdd
+    p
+    (ifaceParamKindsOf p methods)
+    (declGradedScope ps methods)
+
+declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
+declGradedScopeAdd p kinds rest
+  | anyKRow kinds = (p, kinds)::rest
+  | otherwise = rest
 
 -- Slot kinds of interface typaram [p].  Arity is the FIRST application's; an
 -- application at any other arity is ignored (every lookup site guards on the arity
@@ -12782,15 +12814,19 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
 inferOneIfaceDefaults env (DInterface { name, typarams, methods, ... }) =
-  let ifaceSchemes = methodSchemesPure (gradedScopeOf name typarams) methods
-  inferDefaultMethods (extendVars env ifaceSchemes) name typarams methods
+  -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
+  -- threaded down so the default bodies see the same Row slots the schemes were built
+  -- with.  Computed ONCE per interface rather than per method.
+  let dscope = declGradedScope typarams methods
+  let ifaceSchemes = methodSchemesPure dscope methods
+  inferDefaultMethods (extendVars env ifaceSchemes) name dscope typarams methods
 inferOneIfaceDefaults _ _ = ()
 
-inferDefaultMethods : TcEnv -> String -> List String -> List IfaceMethod -> Unit
-inferDefaultMethods _ _ _ [] = ()
-inferDefaultMethods env iface typarams (m::rest) =
-  let _ = inferDefaultMethod env iface typarams m
-  inferDefaultMethods env iface typarams rest
+inferDefaultMethods : TcEnv -> String -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
+inferDefaultMethods _ _ _ _ [] = ()
+inferDefaultMethods env iface dscope typarams (m::rest) =
+  let _ = inferDefaultMethod env iface dscope typarams m
+  inferDefaultMethods env iface dscope typarams rest
 
 -- C8b: type-check ALL interface default bodies, unconditionally.
 --
@@ -12812,12 +12848,11 @@ inferDefaultMethods env iface typarams (m::rest) =
 --
 -- Double-error guard: snapshot typeErrors length before body inference; skip the
 -- outer unify if new errors were added (matches the oracle's single-error raise).
-inferDefaultMethod : TcEnv -> String -> List String -> IfaceMethod -> Unit
-inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
-  -- #822: same graded scope the method's own scheme was built under (see
-  -- declIfaceMethods / methodSchemesPure) — a DEFAULT body of a graded method must
-  -- see its Row slots as rows, not as tyvars.
-  let dscope = gradedScopeOf iface typarams
+inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
+inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
+  -- #822: [dscope] is the same declaration-derived graded scope the method's own
+  -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
+  -- body of a graded method must see its Row slots as rows, not as tyvars.
   let st = sigToSchemeTvsIn dscope mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
   let _ = setRef perRun.value.currentFn ""
@@ -12891,7 +12926,7 @@ inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefaul
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
   registerMethodDictSlots mname 0 ids (snd inst)
-inferDefaultMethod _ _ _ _ = ()
+inferDefaultMethod _ _ _ _ _ = ()
 
 -- Infer a default method body against [expectedTy], suppressing the outer
 -- unify if the body itself already pushed a type error (prevents duplicates
@@ -14665,7 +14700,7 @@ ifaceMethodSchemes (d::rest) = declIfaceMethods d ++ ifaceMethodSchemes rest
 
 declIfaceMethods : Decl -> List (String, Scheme)
 declIfaceMethods (DInterface { name, typarams, methods, ... }) =
-  methodSchemes (gradedScopeOf name typarams) typarams methods
+  methodSchemes (declGradedScope typarams methods) typarams methods
 declIfaceMethods _ = []
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)

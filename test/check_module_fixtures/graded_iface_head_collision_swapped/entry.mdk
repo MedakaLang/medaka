@@ -1,0 +1,15 @@
+-- #822: the IMPORT-ORDER twin of graded_iface_head_collision_modules.  Same two
+-- modules, same two graded interfaces spelling their head `f` with the Row in
+-- different slots — the ONLY difference from its sibling is that these two import
+-- lines are swapped.
+--
+-- A symmetric single-file fixture cannot see this class of bug and is what hid it the
+-- first time: with a program-global bare-name key, whichever module compiled first
+-- kept the entry, so swapping these two lines flipped WHICH interface was rejected
+-- (`GB` in one order, `GA` in the other — both reproduced on the pre-fix compiler).
+-- The pair must now agree, and agree with the clean answer.
+import gb.{GB, gb}
+import ga.{GA, ga}
+
+export both : Int
+both = 1
