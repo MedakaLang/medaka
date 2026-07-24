@@ -25,6 +25,7 @@ import support.util.{
   fallthroughName,
   dedup,
   filterList,
+  reverseL,
 }
 import support.ordmap.{
   OrdMap,
@@ -33,6 +34,7 @@ import support.ordmap.{
   omLookup,
   omHasKey,
   omFromNames,
+  omFromPairs,
 }
 import support.scc.{tarjanSCCs}
 
@@ -434,17 +436,46 @@ lazyGlobalNames binds =
 export methodIfaceTableRef : Ref (List (String, (String, Int)))
 methodIfaceTableRef = Ref []
 
+-- ── method→iface INDEX (perf #986 — the #971/#985 memo model) ─────────────────
+-- `methodIfaceOf`/`methodArityOf` `lookupAssoc`'d the program-growing table above on
+-- EVERY dispatch call site → O(sites · methods) in BOTH backends and ON the
+-- self-compile fixpoint path (#382/#985).  This memo holds the SAME table as an
+-- O(log n) OrdMap keyed by method name (value = (interface, declared-arity)), built
+-- ONCE when the table is installed (`setMethodIfaceTable`, both backends).
+-- `omFromPairs (reverseL t)` reproduces `lookupAssoc`'s FIRST-match exactly
+-- (`omFromPairs` folds left / last-write-wins, so reversing keeps the first pair for a
+-- duplicate method) — the same discipline as the fn-index / impl-index memos.  When the
+-- memo is None (a probe that installs nothing) both readers FALL BACK to the linear
+-- `lookupAssoc` over the raw table, so every emitted byte is identical either way.
+export methodIfaceIndexRef : Ref (Option (OrdMap (String, Int)))
+methodIfaceIndexRef = Ref None
+
+-- install point shared by both backends' `installMethodIface`: sets the raw table (still
+-- read whole by `restampIfaceDicts`/`restampCrossIface`) AND its method-name index.
+export setMethodIfaceTable : List (String, (String, Int)) -> Unit
+setMethodIfaceTable t =
+  let _ = setRef methodIfaceTableRef t
+  setRef methodIfaceIndexRef (Some (omFromPairs (reverseL t) omEmpty))
+
 -- the interface a method name belongs to ("" = not an interface method).
 export methodIfaceOf : String -> String
-methodIfaceOf method = match lookupAssoc method methodIfaceTableRef.value
-  Some (iface, _) => iface
-  None => ""
+methodIfaceOf method = match methodIfaceIndexRef.value
+  Some m => match omLookup method m
+    Some (iface, _) => iface
+    None => ""
+  None => match lookupAssoc method methodIfaceTableRef.value
+    Some (iface, _) => iface
+    None => ""
 
 -- the declared full arity of an interface method (0 = not found).
 export methodArityOf : String -> Int
-methodArityOf method = match lookupAssoc method methodIfaceTableRef.value
-  Some (_, arity) => arity
-  None => 0
+methodArityOf method = match methodIfaceIndexRef.value
+  Some m => match omLookup method m
+    Some (_, arity) => arity
+    None => 0
+  None => match lookupAssoc method methodIfaceTableRef.value
+    Some (_, arity) => arity
+    None => 0
 
 -- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
 -- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS

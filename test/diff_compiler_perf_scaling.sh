@@ -2103,6 +2103,19 @@ wasm_emit_alloc_of() {
     | awk '$1=="[perf]" && $2=="wasm-emit" { gsub(/MB/,"",$4); print $4; exit }'
 }
 
+# The whole tab-delimited `[perf] wasm-emit` line from ONE wasm-ON run — so a single
+# invocation feeds BOTH the wasm-emit ALLOC arm (field 4 MB, #382) and the wasm-emit
+# OP-COUNT arm (tab field 5 opDelta, #986) on the wasm-dispatch shape below. Capturing the
+# line once (rather than one run per metric) keeps the op coverage at ZERO extra profiler
+# invocations. alloc_of_wline / ops_of_wline pick the two fields back out; alloc_of_wline
+# reproduces wasm_emit_alloc_of's whitespace-split field-4 read exactly.
+wasm_emit_line_of() {
+  MEDAKA_PERF=1 MEDAKA_PERF_WASM=1 "$PROFILE" "$RUNTIME" "$CORE" "$1" 2>&1 \
+    | awk '$1=="[perf]" && $2=="wasm-emit" { print; exit }'
+}
+alloc_of_wline() { printf '%s\n' "$1" | awk '{ gsub(/MB/,"",$4); print $4 }'; }
+ops_of_wline()   { printf '%s\n' "$1" | awk -F'\t' '{ print $5 }'; }
+
 # Own baseline: the wasm-emit stage's FIXED prelude-emit cost (main = println 1, no list).
 WLBASE_ALLOC="$(wasm_emit_alloc_of "$BASE_FIX")"
 wla1="$(wasm_emit_alloc_of "$wlf1")"
@@ -2196,10 +2209,20 @@ gen_wasm_dispatch "$wdn2" "$wdf2"
 gen_wasm_dispatch "$wdn3" "$wdf3"
 
 # Own baseline: reuse the wasm-emit stage's FIXED prelude-emit cost (main = println 1).
-WDBASE_ALLOC="$(wasm_emit_alloc_of "$BASE_FIX")"
-wda1="$(wasm_emit_alloc_of "$wdf1")"
-wda2="$(wasm_emit_alloc_of "$wdf2")"
-wda3="$(wasm_emit_alloc_of "$wdf3")"
+# ONE wasm-ON run per size (captured whole), then the ALLOC arm (#382, field 4) and the
+# OP-COUNT arm (#986, tab field 5) both read it — the op coverage costs no extra run.
+WDBASE_LINE="$(wasm_emit_line_of "$BASE_FIX")"
+wdln1="$(wasm_emit_line_of "$wdf1")"
+wdln2="$(wasm_emit_line_of "$wdf2")"
+wdln3="$(wasm_emit_line_of "$wdf3")"
+WDBASE_ALLOC="$(alloc_of_wline "$WDBASE_LINE")"
+wda1="$(alloc_of_wline "$wdln1")"
+wda2="$(alloc_of_wline "$wdln2")"
+wda3="$(alloc_of_wline "$wdln3")"
+WDBASE_OPS="$(ops_of_wline "$WDBASE_LINE")"
+wdo1="$(ops_of_wline "$wdln1")"
+wdo2="$(ops_of_wline "$wdln2")"
+wdo3="$(ops_of_wline "$wdln3")"
 
 case "$WDBASE_ALLOC$wda1$wda2$wda3" in
   *[!0-9.]*|"")
@@ -2230,6 +2253,71 @@ case "$WDBASE_ALLOC$wda1$wda2$wda3" in
       pass=$((pass+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ok  (wasm-emit stage alloc)\n' \
         "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "$wdr1" "$wdr2"
+    fi ;;
+esac
+
+# ── ROW: wasm-dispatch (OP-COUNT) — the methodArityOf/methodIfaceOf scan (#986) ──
+#
+# THE HOLE THIS CLOSES: `emit_support.methodArityOf`/`methodIfaceOf` (shared by BOTH
+# backends) `lookupAssoc`'d the program-growing iface-method table on EVERY dispatch call
+# site → O(sites · methods).  It is a PURE SCAN that allocates NOTHING, so the ALLOC arm
+# above (which caught the #382 impl-scan, a REBUILDING scan) is structurally BLIND to it.
+# Only the deterministic OP-COUNT sees it: `lookupAssoc` `opBump`s once per scan step, so
+# the wasm-emit op-delta carries the O(N^2) growth that no allocation figure does.
+#
+# WHY THIS IS THE WASM-EMIT STAGE AND NOT `emit` (LLVM): #985 already indexed the wasm
+# impl-scan (implsByMethodW), so post-#985 methodArityOf is the DOMINANT remaining op
+# quadratic on wasm-emit — a clean, isolated signal.  The LLVM `emit` stage is still
+# swamped by its own UN-indexed impl-scan (the #382 LLVM residual, ~4x on this shape either
+# way), which would drown methodArityOf's delta and gate an unrelated bug — so gating `emit`
+# ops here would be neither clean nor a #986 signal.  methodArityOf is ONE shared
+# emit_support reader, though, so this wasm-emit op row catches ANY regression of it
+# regardless of which backend's call sites trip it — there is no LLVM-only copy to miss.
+#
+# Rides the SAME wasm-ON runs the ALLOC arm already made (ops_of_wline off the captured
+# line) ⇒ ZERO extra profiler invocations.  DETERMINISTIC (op counts are exact, no
+# run-to-run variance), so it needs no min-of-K / heap-pin / floor and shares WD_THRESH.
+# Net = stage op-delta − wasm baseline op-delta (the fixed prelude-emit constant), then
+# r2 > WD_THRESH (or a CLIMBING ratio) FAILS as SUPERLINEAR; a too-small net (< OP_FLOOR)
+# is a harness failure, never a silent pass.
+# MEASURED (this box), QUICK N=400/800/1600, baseline op-delta 175189:
+#   WITH the index memo (omLookup): net = 67329 -> 133729 -> 266529 (r1 1.99, r2 1.99, ok)
+#   WITHOUT it (methodArityOf/methodIfaceOf fall back to the linear lookupAssoc): net =
+#              184579 -> 511179 -> 1644379 (r1 2.77, r2 3.22, SUPERLINEAR, > 2.4) — so this
+#              row is PROVEN to go RED on the regression it guards and green with it, both
+#              at the cheap per-PR band.  Self-drains the instant the per-site iface scan
+#              regresses.
+case "$WDBASE_OPS$wdo1$wdo2$wdo3" in
+  *[!0-9.]*|"")
+    echo "FAIL wasm-dispatch (ops): profiler produced no wasm-emit op-delta figure (harness bug — MEDAKA_PERF_WASM not wiring the stage on, or the [perf] wasm-emit op column is gone)"
+    fail=$((fail+1)) ;;
+  *)
+    wdonet1="$(awk -v a="$wdo1" -v b="$WDBASE_OPS" 'BEGIN{printf "%.1f", a-b}')"
+    wdonet2="$(awk -v a="$wdo2" -v b="$WDBASE_OPS" 'BEGIN{printf "%.1f", a-b}')"
+    wdonet3="$(awk -v a="$wdo3" -v b="$WDBASE_OPS" 'BEGIN{printf "%.1f", a-b}')"
+    wdoverdict="$(awk -v n1="$wdonet1" -v n2="$wdonet2" -v n3="$wdonet3" -v th="$WD_THRESH" -v fl="$OP_FLOOR" 'BEGIN {
+      if (n1 + 0 < fl + 0) { printf "0 0 TOOSMALL"; exit }
+      r1 = n2 / n1; r2 = n3 / n2
+      climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+    }')"
+    wdor1="$(echo "$wdoverdict" | cut -d' ' -f1)"
+    wdor2="$(echo "$wdoverdict" | cut -d' ' -f2)"
+    wdoword="$(echo "$wdoverdict" | cut -d' ' -f3)"
+    if [ "$wdoword" = "TOOSMALL" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
+        "wasm-disp/op" "$wdn1" "$wdonet1" "$wdonet2" "$wdonet3" "-" "-"
+    elif [ "$wdoword" = "QUADRATIC" ]; then
+      ops_graded=$((ops_graded+1))
+      fail=$((fail+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (WASM-EMIT OPS) — methodArityOf/methodIfaceOf iface scan, #986 **\n' \
+        "wasm-disp/op" "$wdn1" "$wdonet1" "$wdonet2" "$wdonet3" "$wdor1" "$wdor2"
+    else
+      ops_graded=$((ops_graded+1))
+      pass=$((pass+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ok  (wasm-emit stage ops)\n' \
+        "wasm-disp/op" "$wdn1" "$wdonet1" "$wdonet2" "$wdonet3" "$wdor1" "$wdor2"
     fi ;;
 esac
 
