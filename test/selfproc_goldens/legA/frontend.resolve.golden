@@ -10,41 +10,41 @@ buildEnvMM : List Decl -> List Decl -> Map String ModuleExports -> List Decl -> 
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 builtInEffects : List String
-checkArm : Option Loc -> Env -> List String -> Arm -> List ResError
-checkArmGuards : Option Loc -> Env -> List String -> List Guard -> (List ResError, List String)
+checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
+checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
 checkDecl : Env -> Decl -> List ResError
 checkEffect : Option Loc -> Env -> String -> List ResError
-checkExpr : Option Loc -> Env -> List String -> Expr -> List ResError
-checkFieldAssign : Option Loc -> Env -> List String -> FieldAssign -> List ResError
+checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
+checkFieldAssign : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
 checkFieldType : Env -> Field -> List ResError
-checkFunClause : Option Loc -> Env -> List String -> FunClause -> List ResError
-checkGuard : Option Loc -> Env -> List String -> Guard -> List ResError
-checkGuardArm : Option Loc -> Env -> List String -> GuardArm -> List ResError
+checkFunClause : Option Loc -> Env -> Scope -> FunClause -> List ResError
+checkGuard : Option Loc -> Env -> Scope -> Guard -> List ResError
+checkGuardArm : Option Loc -> Env -> Scope -> GuardArm -> List ResError
 checkIfaceMethod : Env -> IfaceMethod -> List ResError
 checkImplDecl : Env -> String -> List Ty -> List Require -> List ImplMethod -> List ResError
 checkImplIface : Env -> String -> List ImplMethod -> List ResError
 checkImplMethod : Env -> ImplMethod -> List ResError
 checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
-checkInterp : Option Loc -> Env -> List String -> InterpPart -> List ResError
-checkLet : Option Loc -> Env -> List String -> Bool -> Pat -> Expr -> Expr -> List ResError
-checkLetBind : Option Loc -> Env -> List String -> LetBind -> List ResError
-checkLetGroup : Option Loc -> Env -> List String -> List LetBind -> Expr -> List ResError
+checkInterp : Option Loc -> Env -> Scope -> InterpPart -> List ResError
+checkLet : Option Loc -> Env -> Scope -> Bool -> Pat -> Expr -> Expr -> List ResError
+checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
+checkLetGroup : Option Loc -> Env -> Scope -> List LetBind -> Expr -> List ResError
 checkMethodMember : String -> List String -> ImplMethod -> List ResError
 checkPat : Option Loc -> Env -> Pat -> List ResError
 checkProp : Env -> List PropParam -> Expr -> List ResError
 checkPropParamTy : Env -> PropParam -> List ResError
 checkRecField : Option Loc -> Env -> String -> RecPatField -> List ResError
 checkRecPat : Option Loc -> Env -> String -> List RecPatField -> List ResError
-checkRecordCreate : Option Loc -> Env -> List String -> String -> List FieldAssign -> List ResError
-checkRecordUpdate : Option Loc -> Env -> List String -> Expr -> List FieldAssign -> List ResError
+checkRecordCreate : Option Loc -> Env -> Scope -> String -> List FieldAssign -> List ResError
+checkRecordUpdate : Option Loc -> Env -> Scope -> Expr -> List FieldAssign -> List ResError
 checkRequire : Env -> Require -> List ResError
-checkSection : Option Loc -> Env -> List String -> Section -> List ResError
-checkStmt : Option Loc -> Env -> List String -> DoStmt -> (List ResError, List String)
-checkStmts : Option Loc -> Env -> List String -> List DoStmt -> List ResError
+checkSection : Option Loc -> Env -> Scope -> Section -> List ResError
+checkStmt : Option Loc -> Env -> Scope -> DoStmt -> (List ResError, Scope)
+checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
 checkSuper : Env -> Super -> List ResError
 checkType : Option Loc -> Env -> Ty -> List ResError
-checkVar : Option Loc -> Env -> List String -> String -> List ResError
+checkVar : Option Loc -> Env -> Scope -> String -> List ResError
 checkVariant : Env -> Variant -> List ResError
 closeMissing : List String -> List String -> Map String Unit -> Map String Unit
 collectImports : Map String ModuleExports -> List Decl -> ImportAdds
@@ -78,6 +78,7 @@ duplicateErrors : List Decl -> List Decl -> List ResError
 dvbName : ResError -> String
 effectNames : List Decl -> List String
 emptyAdds : ImportAdds
+emptyScope : Scope
 expCtorsDirect : List Decl -> List String
 expEffectsDirect : List Decl -> List String
 expFieldOwnersDirect : List Decl -> List (String, String)
@@ -152,9 +153,10 @@ locKey : Option Loc -> String
 localOfExpanded : (String, String, Loc) -> String
 localsExportedFrom : List String -> List (String, String) -> List String
 lookupBindId : List BScope -> String -> Int
-lookupValue : Env -> List String -> String -> Bool
+lookupValue : Env -> Scope -> String -> Bool
 matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
+mkScope : List String -> Scope
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 numberFrom : Int -> List String -> List (String, Int)
@@ -209,7 +211,7 @@ recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
 recFieldBindings : RecPatField -> List String
 recFieldSub : Option Loc -> Env -> Option Pat -> List ResError
 recPatHead : Option Loc -> Env -> String -> List ResError
-recUpdateField : Option Loc -> Env -> List String -> FieldAssign -> List ResError
+recUpdateField : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
 recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
@@ -234,6 +236,10 @@ resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List Re
 resolveToLines : List Decl -> List Decl -> List Decl -> String
 rewriteNonRec : List String -> ResError -> ResError
 sameCaseClass : String -> String -> Bool
+scopeAdd : String -> Scope -> Scope
+scopeExtend : List String -> Scope -> Scope
+scopeMem : String -> Scope -> Bool
+scopeNames : Scope -> List String
 selfBinding : String -> (String, String)
 singleFileImportErrors : List Decl -> List ResError
 stampArm : List BScope -> Arm -> Arm
@@ -257,14 +263,14 @@ startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
 suggestCtor : String -> Option String
-suggestName : Env -> List String -> String -> Option String
-suggestNameFuzzy : Env -> List String -> String -> Option String
+suggestName : Env -> Scope -> String -> Option String
+suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
 suggestTypeFuzzy : Env -> String -> Option String
 topBinderNames : List Decl -> List String
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
-unboundVarErrors : Option Loc -> Env -> List String -> String -> List ResError
+unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
 useImportNames : UsePath -> List String
 useModId : UsePath -> String
