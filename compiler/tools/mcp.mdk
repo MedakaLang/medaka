@@ -30,6 +30,7 @@ import json.{
   JInt,
   JString,
   JBool,
+  JObject,
   jObject,
   jArray,
   stringify,
@@ -220,6 +221,59 @@ logMcpCall method name args = match getEnv "MEDAKA_MCP_LOG"
     match appendFile path line
       Ok _ => unit
       Err e => logMcp (stringConcat ["log write failed: ", e])
+
+-- ── staleness signal (#846) ──────────────────────────────────────────────────
+--
+-- A subagent never starts its own MCP server — it inherits the orchestrator's,
+-- which `exec`'d the orchestrator's `./medaka` binary at session launch (see
+-- docs/ops/MCP.md §4).  For an agent editing `compiler/*.mdk`/`stdlib/core.mdk`
+-- in its OWN worktree, every tool answer here is silently the WRONG compiler's
+-- semantics.  The full fix (a per-worktree server) is a harness feature outside
+-- this repo; the repo-controllable minimum is a STALENESS SIGNAL so a caller
+-- can detect (not just be told in a doc to assume) that this server's binary
+-- has drifted from the compiler source at its own MEDAKA_ROOT — the same
+-- fingerprint check `checkSourceStaleness` already uses for the CLI startup
+-- warning (medaka_cli.mdk's `sourceStalenessVerdict`), reused here rather than
+-- reimplemented and threaded down as a closure (mcp.mdk cannot import
+-- medaka_cli — it is the top of the graph and already imports tools.mcp).
+--
+-- Recomputed on every `tools/call` (~15ms: one `perl` pass + a hash tool over
+-- `compiler/*.mdk`), not cached at server start, so it also catches the
+-- documented "parent rebuilt mid-session, forgot to /mcp reconnect" trap, not
+-- just launch-time staleness.  Cheap in TOKENS either way: adds nothing to a
+-- fresh-binary response, and one short field on a stale one — never a verbose
+-- per-response note.
+
+-- Splice a compact `staleBinary` field onto an already-built tool result
+-- (always a `JObject` — every mcpTools handler returns one via
+-- `toolTextResult`) ONLY when the live compiler source has diverged from what
+-- this binary was built from.  Fresh/unknown ⇒ `result` is returned
+-- UNCHANGED — zero added tokens in the common case.
+attachStaleness : (Unit -> <IO> Option String) -> Json -> <IO> Json
+attachStaleness stalenessCheck result = match stalenessCheck ()
+  None => result
+  Some compilerDir => jsonObjectAppend "staleBinary" (JString (stringConcat [
+    "this server's binary predates the compiler source at ",
+    compilerDir,
+    " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
+  ])) result
+
+-- Append one (key, value) pair onto a `JObject`'s own Array-backed pairs,
+-- preserving insertion order (json.mdk's own invariant).  A total fallback
+-- for any non-JObject `j` (never actually hit — every handler's result is a
+-- JObject — but this stays a total function rather than assuming it).
+jsonObjectAppend : String -> Json -> Json -> Json
+jsonObjectAppend key value (JObject pairs) =
+  JObject (arrayFromList (jsonPairsToList pairs ++ [(key, value)]))
+jsonObjectAppend _ _ other = other
+
+jsonPairsToList : Array (String, Json) -> List (String, Json)
+jsonPairsToList arr = jsonPairsToListGo arr 0 (arrayLength arr)
+
+jsonPairsToListGo : Array (String, Json) -> Int -> Int -> List (String, Json)
+jsonPairsToListGo arr i n
+  | i >= n = []
+  | otherwise = arrayGetUnsafe i arr :: jsonPairsToListGo arr (i + 1) n
 
 -- ── handshake result values ──────────────────────────────────────────────────
 
@@ -995,8 +1049,8 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
-handleToolsCall : String -> String -> String -> Json -> Json -> <IO> Unit
-handleToolsCall runtimeSrc coreSrc stdlibDir idJson params = match fieldStr "name" params
+handleToolsCall : String -> String -> String -> Json -> Json -> (Unit -> <IO> Option String) -> <IO> Unit
+handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck = match fieldStr "name" params
   None =>
     writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
   Some name =>
@@ -1004,7 +1058,9 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params = match fieldStr "nam
     let _ = logMcpCall "tools/call" name (stringify args)
     match callTool runtimeSrc coreSrc stdlibDir name args
       None => writeMessage (errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name]))
-      Some result => writeMessage (responseMsg idJson result)
+      Some result =>
+        let augmented = attachStaleness stalenessCheck result
+        writeMessage (responseMsg idJson augmented)
 
 -- ── request dispatch ─────────────────────────────────────────────────────────
 
@@ -1018,8 +1074,8 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params = match fieldStr "nam
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : String -> String -> String -> Json -> <IO> Unit
-dispatchMsg runtimeSrc coreSrc stdlibDir msg = match asArray msg
+dispatchMsg : String -> String -> String -> Json -> (Unit -> <IO> Option String) -> <IO> Unit
+dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck = match asArray msg
   Some _ => writeMessage
     (errorMsg JNull (0 - 32600) "Invalid Request: batch requests are not supported")
   None => match methodOf msg
@@ -1043,7 +1099,7 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg = match asArray msg
                 if meth == "tools/list" then writeMessage (responseMsg idJson toolsListResult)
                 else
                   if meth == "tools/call" then
-                    handleToolsCall runtimeSrc coreSrc stdlibDir idJson params
+                    handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck
                   else writeMessage
                     (errorMsg idJson (0 - 32601) (stringConcat ["Method not found: ", meth]))
 
@@ -1051,29 +1107,31 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg = match asArray msg
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : String -> String -> String -> String -> <IO> Unit
-handleLine runtimeSrc coreSrc stdlibDir raw =
+handleLine : String -> String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
+handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck =
   let line = stripCR raw
   if line == "" then unit
   else match parse line
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
-    Ok msg => dispatchMsg runtimeSrc coreSrc stdlibDir msg
+    Ok msg => dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : String -> String -> String -> <IO> Unit
-serveLoop runtimeSrc coreSrc stdlibDir = match readLineOpt ()
+serveLoop : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
+serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck = match readLineOpt ()
   None => unit
   Some raw =>
-    let _ = handleLine runtimeSrc coreSrc stdlibDir raw
-    serveLoop runtimeSrc coreSrc stdlibDir
+    let _ = handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck
+    serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
 -- (e.g. medaka_check resolves a `file` target's imports against stdlibDir).
-export runMcpServer : String -> String -> String -> <IO> Unit
-runMcpServer runtimeSrc coreSrc stdlibDir =
+-- `stalenessCheck` is medaka_cli.mdk's `sourceStalenessVerdict`, threaded down
+-- as a closure (#846) — see the "staleness signal" section above.
+export runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
+runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck =
   let _ = logMcp "medaka mcp server start"
-  serveLoop runtimeSrc coreSrc stdlibDir
+  serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck
 
 unit : Unit
 unit = ()
