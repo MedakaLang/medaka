@@ -1,5 +1,5 @@
 # META
-source_lines=9327
+source_lines=9321
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -215,6 +215,7 @@ import support.util.{
   listLen,
   maxI,
   noneHeadTag,
+  dedupBy,
 }
 import backend.trmc_analysis.{
   SelfRef(..),
@@ -244,6 +245,7 @@ import backend.private_mangle.{hashName, sanitizeId}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
+  bindNameMap,
   lazyGlobalNames,
   methodIfaceTableRef,
   setMethodIfaceTable,
@@ -1816,16 +1818,10 @@ scanRecFieldsStmt (CSLet _ _ e) = scanRecFields e
 scanRecFieldsStmt _ = []
 
 -- dedup by ctor name (first entry wins; all entries for one ctor agree).
+-- #242: the ctor name is already a String, so this is the canonical
+-- `support.util.dedupBy` verbatim (was an O(n²) lookupAssoc + rescan).
 dedupRecEntries : List (String, List String) -> List (String, List String)
-dedupRecEntries [] = []
-dedupRecEntries ((n, fs)::rest) =
-  if isSome (lookupAssoc n rest) then
-    (n, fs) :: dedupRecEntries (filterList (e => not (eqStr (recEntryName e) n)) rest)
-  else
-    (n, fs) :: dedupRecEntries rest
-
-recEntryName : (String, List String) -> String
-recEntryName (n, _) = n
+dedupRecEntries entries = dedupBy fst entries
 
 bindUsesClosures : List String -> List (String, Int) -> List (String, Int) -> CBind -> Bool
 bindUsesClosures fnNames fnArs ctorArs (CBind _ clauses) = multiOrPatternClauses clauses
@@ -2697,46 +2693,44 @@ topoSortValBinds : List CBind -> List CBind -> List CBind
 -- lint-disable-next-line rule-duplicate-body
 topoSortValBinds allBinds binds =
   let rm = eagerReachMap allBinds
-  let names = map bindName binds
-  let (_, ordered) = topoValGo rm binds names binds [] []
-  ordered
+  -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
+  -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
+  -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Mirrors
+  -- the LLVM emitter's fix exactly.  Output order unchanged.
+  let bm = bindNameMap binds
+  let (_, ordered) = topoValGo rm bm binds omEmpty []
+  reverseL ordered
 
 -- DFS post-order: visit each binding's value-global EAGER deps first, appending the
 -- binding after them.  `visiting` guards cycles (a back-edge is skipped).  `rm` is
 -- the eager-reachability map (Stage B of #553): a binding's edges are the value
 -- globals it eagerly reaches THROUGH calls, not merely the ones its body names.
-topoValGo : OrdMap (List String) -> List CBind -> List String -> List CBind -> List String -> List CBind -> (List String, List CBind)
-topoValGo _ _ _ [] done acc = (done, acc)
+topoValGo : OrdMap (List String) -> OrdMap CBind -> List CBind -> OrdMap Unit -> List CBind -> (OrdMap Unit, List CBind)
+topoValGo _ _ [] done acc = (done, acc)
 -- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-topoValGo rm all names (b::rest) done acc =
-  let (done2, acc2) = topoValVisit rm all names b done acc []
-  topoValGo rm all names rest done2 acc2
+topoValGo rm bm (b::rest) done acc =
+  let (done2, acc2) = topoValVisit rm bm b done acc omEmpty
+  topoValGo rm bm rest done2 acc2
 
-topoValVisit : OrdMap (List String) -> List CBind -> List String -> CBind -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisit rm all names b done acc visiting
-  | contains (bindName b) done = (done, acc)
-  | contains (bindName b) visiting = (done, acc)
+topoValVisit : OrdMap (List String) -> OrdMap CBind -> CBind -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisit rm bm b done acc visiting
+  | omHasKey (bindName b) done = (done, acc)
+  | omHasKey (bindName b) visiting = (done, acc)
   | otherwise =
-    let deps = filterList (n => contains n names) (dedupKeep (bindEagerReach rm b))
-    let (done2, acc2) = topoValVisitDeps rm all names deps done acc (bindName b :: visiting)
-    (bindName b :: done2, acc2 ++ [b])
+    let deps = filterList (n => omHasKey n bm) (dedupKeep (bindEagerReach rm b))
+    let (done2, acc2) = topoValVisitDeps rm bm deps done acc (omInsert (bindName b) () visiting)
+    (omInsert (bindName b) () done2, b::acc2)
 
-topoValVisitDeps : OrdMap (List String) -> List CBind -> List String -> List String -> List String -> List CBind -> List String -> (List String, List CBind)
-topoValVisitDeps _ _ _ [] done acc _ = (done, acc)
-topoValVisitDeps rm all names (d::rest) done acc visiting = match findBindByName d all
+topoValVisitDeps : OrdMap (List String) -> OrdMap CBind -> List String -> OrdMap Unit -> List CBind -> OrdMap Unit -> (OrdMap Unit, List CBind)
+topoValVisitDeps _ _ [] done acc _ = (done, acc)
+-- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- lint-disable-next-line rule-duplicate-body
+topoValVisitDeps rm bm (d::rest) done acc visiting = match omLookup d bm
   Some db =>
-    let (done2, acc2) = topoValVisit rm all names db done acc visiting
-    topoValVisitDeps rm all names rest done2 acc2 visiting
-  None => topoValVisitDeps rm all names rest done acc visiting
-
-findBindByName : String -> List CBind -> Option CBind
-findBindByName _ [] = None
-findBindByName name (b::rest) =
-  if bindName b == name then
-    Some b
-  else
-    findBindByName name rest
+    let (done2, acc2) = topoValVisit rm bm db done acc visiting
+    topoValVisitDeps rm bm rest done2 acc2 visiting
+  None => topoValVisitDeps rm bm rest done acc visiting
 
 -- `eagerVars` (eager free-var / strictness analysis) and its transitive closure
 -- `eagerReachMap`/`bindEagerReach` (Stage B of #553) live in
@@ -9334,10 +9328,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "sanitizeId" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -9740,10 +9734,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanRecFieldsStmt" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "scanRecFields") (EVar "e")))
 (DFunDef false "scanRecFieldsStmt" (PWild) (EListLit))
 (DTypeSig false "dedupRecEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dedupRecEntries" ((PList)) (EListLit))
-(DFunDef false "dedupRecEntries" ((PCons (PTuple (PVar "n") (PVar "fs")) (PVar "rest"))) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "fs")) (EApp (EVar "dedupRecEntries") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "eqStr") (EApp (EVar "recEntryName") (EVar "e"))) (EVar "n"))))) (EVar "rest")))) (EBinOp "::" (ETuple (EVar "n") (EVar "fs")) (EApp (EVar "dedupRecEntries") (EVar "rest")))))
-(DTypeSig false "recEntryName" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "recEntryName" ((PTuple (PVar "n") PWild)) (EVar "n"))
+(DFunDef false "dedupRecEntries" ((PVar "entries")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "entries")))
 (DTypeSig false "bindUsesClosures" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CBind") (TyCon "Bool"))))))
 (DFunDef false "bindUsesClosures" ((PVar "fnNames") (PVar "fnArs") (PVar "ctorArs") (PCon "CBind" PWild (PVar "clauses"))) (EBinOp "||" (EApp (EVar "multiOrPatternClauses") (EVar "clauses")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "clauseUsesClosures") (EVar "fnNames")) (EVar "fnArs")) (EVar "ctorArs"))) (EVar "clauses"))))
 (DTypeSig false "multiOrPatternClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
@@ -9956,18 +9947,15 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitReservedCtorStruct" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitReservedCtorStruct" ((PVar "ty") (PVar "ctor")) (EIf (EBinOp "==" (EApp (EVar "reservedCtorArity") (EVar "ctor")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "replicate") (EApp (EVar "reservedCtorArity") (EVar "ctor"))) (ELit (LString " (field (ref eq))"))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " (sub $"))) (EApp (EVar "display") (EApp (EVar "typeRootName") (EVar "ty")))) (ELit (LString " (struct (field i32)"))) (EApp (EVar "display") (EVar "fields"))) (ELit (LString ")))"))))))))
 (DTypeSig false "topoSortValBinds" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CBind")))))
-(DFunDef false "topoSortValBinds" ((PVar "allBinds") (PVar "binds")) (EBlock (DoLet false false (PVar "rm") (EApp (EVar "eagerReachMap") (EVar "allBinds"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds"))) (DoLet false false (PTuple PWild (PVar "ordered")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "binds")) (EVar "names")) (EVar "binds")) (EListLit)) (EListLit))) (DoExpr (EVar "ordered"))))
-(DTypeSig false "topoValGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
-(DFunDef false "topoValGo" (PWild PWild PWild (PList) (PVar "done") (PVar "acc")) (ETuple (EVar "done") (EVar "acc")))
-(DFunDef false "topoValGo" ((PVar "rm") (PVar "all") (PVar "names") (PCons (PVar "b") (PVar "rest")) (PVar "done") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "b")) (EVar "done")) (EVar "acc")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "rest")) (EVar "done2")) (EVar "acc2")))))
-(DTypeSig false "topoValVisit" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind")))))))))))
-(DFunDef false "topoValVisit" ((PVar "rm") (PVar "all") (PVar "names") (PVar "b") (PVar "done") (PVar "acc") (PVar "visiting")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "bindName") (EVar "b"))) (EVar "done")) (ETuple (EVar "done") (EVar "acc")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "bindName") (EVar "b"))) (EVar "visiting")) (ETuple (EVar "done") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "deps") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "bindEagerReach") (EVar "rm")) (EVar "b"))))) (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "deps")) (EVar "done")) (EVar "acc")) (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EVar "visiting")))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EVar "done2")) (EBinOp "++" (EVar "acc2") (EListLit (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "topoValVisitDeps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind")))))))))))
-(DFunDef false "topoValVisitDeps" (PWild PWild PWild (PList) (PVar "done") (PVar "acc") PWild) (ETuple (EVar "done") (EVar "acc")))
-(DFunDef false "topoValVisitDeps" ((PVar "rm") (PVar "all") (PVar "names") (PCons (PVar "d") (PVar "rest")) (PVar "done") (PVar "acc") (PVar "visiting")) (EMatch (EApp (EApp (EVar "findBindByName") (EVar "d")) (EVar "all")) (arm (PCon "Some" (PVar "db")) () (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "db")) (EVar "done")) (EVar "acc")) (EVar "visiting"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "rest")) (EVar "done2")) (EVar "acc2")) (EVar "visiting"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "all")) (EVar "names")) (EVar "rest")) (EVar "done")) (EVar "acc")) (EVar "visiting")))))
-(DTypeSig false "findBindByName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "Option") (TyCon "CBind")))))
-(DFunDef false "findBindByName" (PWild (PList)) (EVar "None"))
-(DFunDef false "findBindByName" ((PVar "name") (PCons (PVar "b") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "bindName") (EVar "b")) (EVar "name")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "findBindByName") (EVar "name")) (EVar "rest"))))
+(DFunDef false "topoSortValBinds" ((PVar "allBinds") (PVar "binds")) (EBlock (DoLet false false (PVar "rm") (EApp (EVar "eagerReachMap") (EVar "allBinds"))) (DoLet false false (PVar "bm") (EApp (EVar "bindNameMap") (EVar "binds"))) (DoLet false false (PTuple PWild (PVar "ordered")) (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "bm")) (EVar "binds")) (EVar "omEmpty")) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EVar "ordered")))))
+(DTypeSig false "topoValGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind")))))))))
+(DFunDef false "topoValGo" (PWild PWild (PList) (PVar "done") (PVar "acc")) (ETuple (EVar "done") (EVar "acc")))
+(DFunDef false "topoValGo" ((PVar "rm") (PVar "bm") (PCons (PVar "b") (PVar "rest")) (PVar "done") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "bm")) (EVar "b")) (EVar "done")) (EVar "acc")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done2")) (EVar "acc2")))))
+(DTypeSig false "topoValVisit" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
+(DFunDef false "topoValVisit" ((PVar "rm") (PVar "bm") (PVar "b") (PVar "done") (PVar "acc") (PVar "visiting")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "bindName") (EVar "b"))) (EVar "done")) (ETuple (EVar "done") (EVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "bindName") (EVar "b"))) (EVar "visiting")) (ETuple (EVar "done") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "deps") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bm")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "bindEagerReach") (EVar "rm")) (EVar "b"))))) (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "deps")) (EVar "done")) (EVar "acc")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "visiting")))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "done2")) (EBinOp "::" (EVar "b") (EVar "acc2"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "topoValVisitDeps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
+(DFunDef false "topoValVisitDeps" (PWild PWild (PList) (PVar "done") (PVar "acc") PWild) (ETuple (EVar "done") (EVar "acc")))
+(DFunDef false "topoValVisitDeps" ((PVar "rm") (PVar "bm") (PCons (PVar "d") (PVar "rest")) (PVar "done") (PVar "acc") (PVar "visiting")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "d")) (EVar "bm")) (arm (PCon "Some" (PVar "db")) () (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "bm")) (EVar "db")) (EVar "done")) (EVar "acc")) (EVar "visiting"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done2")) (EVar "acc2")) (EVar "visiting"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done")) (EVar "acc")) (EVar "visiting")))))
 (DTypeSig false "oneGlobalState" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "oneGlobalState" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "  (global $gs_")) (EApp (EVar "gname") (EVar "n"))) (ELit (LString " (mut i32) (i32.const 0))"))))
 (DTypeSig false "emitRefInit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -11576,10 +11564,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "sanitizeId" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "methodIfaceTableRef" false) (mem "setMethodIfaceTable" false) (mem "methodArityOf" false) (mem "methodIfaceOf" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
 (DData Private "Prog" () ((variant "Prog" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "Bool") (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
@@ -11982,10 +11970,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanRecFieldsStmt" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "scanRecFields") (EVar "e")))
 (DFunDef false "scanRecFieldsStmt" (PWild) (EListLit))
 (DTypeSig false "dedupRecEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dedupRecEntries" ((PList)) (EListLit))
-(DFunDef false "dedupRecEntries" ((PCons (PTuple (PVar "n") (PVar "fs")) (PVar "rest"))) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "fs")) (EApp (EVar "dedupRecEntries") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "eqStr") (EApp (EVar "recEntryName") (EVar "e"))) (EVar "n"))))) (EVar "rest")))) (EBinOp "::" (ETuple (EVar "n") (EVar "fs")) (EApp (EVar "dedupRecEntries") (EVar "rest")))))
-(DTypeSig false "recEntryName" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
-(DFunDef false "recEntryName" ((PTuple (PVar "n") PWild)) (EVar "n"))
+(DFunDef false "dedupRecEntries" ((PVar "entries")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "entries")))
 (DTypeSig false "bindUsesClosures" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "CBind") (TyCon "Bool"))))))
 (DFunDef false "bindUsesClosures" ((PVar "fnNames") (PVar "fnArs") (PVar "ctorArs") (PCon "CBind" PWild (PVar "clauses"))) (EBinOp "||" (EApp (EVar "multiOrPatternClauses") (EVar "clauses")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "clauseUsesClosures") (EVar "fnNames")) (EVar "fnArs")) (EVar "ctorArs"))) (EVar "clauses"))))
 (DTypeSig false "multiOrPatternClauses" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
@@ -12198,18 +12183,15 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitReservedCtorStruct" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitReservedCtorStruct" ((PVar "ty") (PVar "ctor")) (EIf (EBinOp "==" (EApp (EVar "reservedCtorArity") (EVar "ctor")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "fields") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "replicate") (EApp (EVar "reservedCtorArity") (EVar "ctor"))) (ELit (LString " (field (ref eq))"))))) (DoExpr (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    (type $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " (sub $"))) (EApp (EMethodRef "display") (EApp (EVar "typeRootName") (EVar "ty")))) (ELit (LString " (struct (field i32)"))) (EApp (EMethodRef "display") (EVar "fields"))) (ELit (LString ")))"))))))))
 (DTypeSig false "topoSortValBinds" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CBind")))))
-(DFunDef false "topoSortValBinds" ((PVar "allBinds") (PVar "binds")) (EBlock (DoLet false false (PVar "rm") (EApp (EVar "eagerReachMap") (EVar "allBinds"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds"))) (DoLet false false (PTuple PWild (PVar "ordered")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "binds")) (EVar "names")) (EVar "binds")) (EListLit)) (EListLit))) (DoExpr (EVar "ordered"))))
-(DTypeSig false "topoValGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
-(DFunDef false "topoValGo" (PWild PWild PWild (PList) (PVar "done") (PVar "acc")) (ETuple (EVar "done") (EVar "acc")))
-(DFunDef false "topoValGo" ((PVar "rm") (PVar "all") (PVar "names") (PCons (PVar "b") (PVar "rest")) (PVar "done") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "b")) (EVar "done")) (EVar "acc")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "rest")) (EVar "done2")) (EVar "acc2")))))
-(DTypeSig false "topoValVisit" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind")))))))))))
-(DFunDef false "topoValVisit" ((PVar "rm") (PVar "all") (PVar "names") (PVar "b") (PVar "done") (PVar "acc") (PVar "visiting")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "bindName") (EVar "b"))) (EVar "done")) (ETuple (EVar "done") (EVar "acc")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "bindName") (EVar "b"))) (EVar "visiting")) (ETuple (EVar "done") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "deps") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "bindEagerReach") (EVar "rm")) (EVar "b"))))) (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "deps")) (EVar "done")) (EVar "acc")) (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EVar "visiting")))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "bindName") (EVar "b")) (EVar "done2")) (EBinOp "++" (EVar "acc2") (EListLit (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "topoValVisitDeps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CBind")))))))))))
-(DFunDef false "topoValVisitDeps" (PWild PWild PWild (PList) (PVar "done") (PVar "acc") PWild) (ETuple (EVar "done") (EVar "acc")))
-(DFunDef false "topoValVisitDeps" ((PVar "rm") (PVar "all") (PVar "names") (PCons (PVar "d") (PVar "rest")) (PVar "done") (PVar "acc") (PVar "visiting")) (EMatch (EApp (EApp (EVar "findBindByName") (EVar "d")) (EDictApp "all")) (arm (PCon "Some" (PVar "db")) () (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "db")) (EVar "done")) (EVar "acc")) (EVar "visiting"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "rest")) (EVar "done2")) (EVar "acc2")) (EVar "visiting"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EDictApp "all")) (EVar "names")) (EVar "rest")) (EVar "done")) (EVar "acc")) (EVar "visiting")))))
-(DTypeSig false "findBindByName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "Option") (TyCon "CBind")))))
-(DFunDef false "findBindByName" (PWild (PList)) (EVar "None"))
-(DFunDef false "findBindByName" ((PVar "name") (PCons (PVar "b") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "bindName") (EVar "b")) (EVar "name")) (EApp (EVar "Some") (EVar "b")) (EApp (EApp (EVar "findBindByName") (EVar "name")) (EVar "rest"))))
+(DFunDef false "topoSortValBinds" ((PVar "allBinds") (PVar "binds")) (EBlock (DoLet false false (PVar "rm") (EApp (EVar "eagerReachMap") (EVar "allBinds"))) (DoLet false false (PVar "bm") (EApp (EVar "bindNameMap") (EVar "binds"))) (DoLet false false (PTuple PWild (PVar "ordered")) (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "bm")) (EVar "binds")) (EVar "omEmpty")) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EVar "ordered")))))
+(DTypeSig false "topoValGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind")))))))))
+(DFunDef false "topoValGo" (PWild PWild (PList) (PVar "done") (PVar "acc")) (ETuple (EVar "done") (EVar "acc")))
+(DFunDef false "topoValGo" ((PVar "rm") (PVar "bm") (PCons (PVar "b") (PVar "rest")) (PVar "done") (PVar "acc")) (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "bm")) (EVar "b")) (EVar "done")) (EVar "acc")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "topoValGo") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done2")) (EVar "acc2")))))
+(DTypeSig false "topoValVisit" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
+(DFunDef false "topoValVisit" ((PVar "rm") (PVar "bm") (PVar "b") (PVar "done") (PVar "acc") (PVar "visiting")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "bindName") (EVar "b"))) (EVar "done")) (ETuple (EVar "done") (EVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "bindName") (EVar "b"))) (EVar "visiting")) (ETuple (EVar "done") (EVar "acc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "deps") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bm")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "bindEagerReach") (EVar "rm")) (EVar "b"))))) (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "deps")) (EVar "done")) (EVar "acc")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "visiting")))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (ELit LUnit)) (EVar "done2")) (EBinOp "::" (EVar "b") (EVar "acc2"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "topoValVisitDeps" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "CBind"))))))))))
+(DFunDef false "topoValVisitDeps" (PWild PWild (PList) (PVar "done") (PVar "acc") PWild) (ETuple (EVar "done") (EVar "acc")))
+(DFunDef false "topoValVisitDeps" ((PVar "rm") (PVar "bm") (PCons (PVar "d") (PVar "rest")) (PVar "done") (PVar "acc") (PVar "visiting")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "d")) (EVar "bm")) (arm (PCon "Some" (PVar "db")) () (EBlock (DoLet false false (PTuple (PVar "done2") (PVar "acc2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisit") (EVar "rm")) (EVar "bm")) (EVar "db")) (EVar "done")) (EVar "acc")) (EVar "visiting"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done2")) (EVar "acc2")) (EVar "visiting"))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "topoValVisitDeps") (EVar "rm")) (EVar "bm")) (EVar "rest")) (EVar "done")) (EVar "acc")) (EVar "visiting")))))
 (DTypeSig false "oneGlobalState" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "oneGlobalState" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "  (global $gs_")) (EApp (EVar "gname") (EVar "n"))) (ELit (LString " (mut i32) (i32.const 0))"))))
 (DTypeSig false "emitRefInit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))

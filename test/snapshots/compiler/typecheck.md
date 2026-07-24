@@ -1,5 +1,5 @@
 # META
-source_lines=17598
+source_lines=17593
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -102,6 +102,8 @@ import support.util.{
   isSome,
   zipL,
   dedup,
+  dedupBy,
+  lenKey,
   sortUniqS,
   startsWith,
   escStr,
@@ -1646,7 +1648,7 @@ routeLocalSym _ = ""
 --     impls / parse fixtures are the only corpus sources), but MUST be kept: dropping
 --     them would change `implMatches` from True to False on such a program.--   • iface name → SET of its impls' concrete head tags (headless impls contribute no
 --     tag, exactly as `implHeadTagsFromHeads` skipped them).  `implCountForIfaceU`
---     reads its omSize — byte-identical to `listLen (dedupStr (implHeadTagsFromHeads …))`.
+--     reads its omSize — byte-identical to `listLen (dedup (implHeadTagsFromHeads …))`.
 -- #154 PR-A: PERSISTENT per-run DATA-universe accumulators for the multi-module path.
 -- checkBodyImpl's Module arm used to `registerAllData initialEnv (accData ++ prog0)`,
 -- RE-REGISTERING every earlier module's public data (and RE-MINTING its tyvars) once per
@@ -4638,15 +4640,14 @@ dropPairs n xs
     _::rest => dropPairs (n - 1) rest
 
 -- dedup (iface, id) pairs, keeping first occurrence (so declared slots stay leading).
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed so the
+-- key is injective for ANY name content.
 dedupPairs : List (String, Int) -> List (String, Int)
-dedupPairs xs = dedupPairsGo xs []
+dedupPairs xs = dedupBy slotKey xs
 
-dedupPairsGo : List (String, Int) -> List (String, Int) -> List (String, Int)
-dedupPairsGo [] _ = []
-dedupPairsGo (p::rest) seen
-  | anyList (q => fst q == fst p && snd q == snd p) seen =
-    dedupPairsGo rest seen
-  | otherwise = p :: dedupPairsGo rest (p::seen)
+slotKey : (String, Int) -> String
+slotKey (iface, id) = lenKey iface ++ intToString id
 
 -- the type a method ultimately returns (strip its argument arrows); the impl is
 -- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
@@ -11139,7 +11140,7 @@ reportAmbiguousImpl iface =
 -- twice via multi-module loading doesn't read as ambiguous.
 implHeadTagsForIface : List Decl -> String -> List String
 implHeadTagsForIface prog iface =
-  dedupStr (flatMap (implHeadTagForIface iface) prog)
+  dedup (flatMap (implHeadTagForIface iface) prog)
 
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
@@ -11151,15 +11152,6 @@ implHeadTagForIface want (DImpl { iface, tys, ... })
     [] => []
   | otherwise = []
 implHeadTagForIface _ _ = []
-
-dedupStr : List String -> List String
-dedupStr xs = dedupStrGo [] xs
-
-dedupStrGo : List String -> List String -> List String
-dedupStrGo _ [] = []
-dedupStrGo seen (x::rest)
-  | contains x seen = dedupStrGo seen rest
-  | otherwise = x :: dedupStrGo (x::seen) rest
 
 ambiguousImplMsg : String -> String
 ambiguousImplMsg iface = "Ambiguous instance for `"
@@ -15255,15 +15247,18 @@ lookupSigTvMap m ((n, ty, tvMap)::rest)
   | m == n = Some (ty, tvMap)
   | otherwise = lookupSigTvMap m rest
 
+-- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
+-- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed and
+-- the id VECTOR is comma-joined — ints carry no comma, so the encoding is
+-- injective over both components.
 dedupVecObls : List (String, List Int) -> List (String, List Int)
-dedupVecObls xs = dedupVecOblsGo xs []
+dedupVecObls xs = dedupBy vecOblKey xs
 
-dedupVecOblsGo : List (String, List Int) -> List (String, List Int) -> List (String, List Int)
-dedupVecOblsGo [] _ = []
-dedupVecOblsGo (p::rest) seen
-  | containsVecObl p seen = dedupVecOblsGo rest seen
-  | otherwise = p :: dedupVecOblsGo rest (p::seen)
+vecOblKey : (String, List Int) -> String
+vecOblKey (iface, ids) = lenKey iface ++ joinWith "," (map intToString ids)
 
+-- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
+-- dedup, and the declared set is a handful of entries, so it stays a scan.
 containsVecObl : (String, List Int) -> List (String, List Int) -> Bool
 containsVecObl _ [] = False
 containsVecObl (i, ids) ((i2, ids2)::rest) = i == i2 && eqIntList ids ids2
@@ -17611,7 +17606,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
@@ -18660,10 +18655,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "dropPairs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "dropPairs" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "xs") (EIf (EVar "otherwise") (EMatch (EVar "xs") (arm (PList) () (EListLit)) (arm (PCons PWild (PVar "rest")) () (EApp (EApp (EVar "dropPairs") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "dedupPairs" ((PVar "xs")) (EApp (EApp (EVar "dedupPairsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupPairsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "dedupPairsGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupPairsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "q")) (EApp (EVar "fst") (EVar "p"))) (EBinOp "==" (EApp (EVar "snd") (EVar "q")) (EApp (EVar "snd") (EVar "p")))))) (EVar "seen")) (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupPairs" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "slotKey")) (EVar "xs")))
+(DTypeSig false "slotKey" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "slotKey" ((PTuple (PVar "iface") (PVar "id"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "iface")) (EApp (EVar "intToString") (EVar "id"))))
 (DTypeSig false "stripArrows" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "stripArrows" ((PCon "TFun" PWild PWild (PVar "b"))) (EApp (EVar "stripArrows") (EVar "b")))
 (DFunDef false "stripArrows" ((PVar "t")) (EVar "t"))
@@ -20188,16 +20182,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "reportAmbiguousImpl" (TyFun (TyCon "String") (TyCon "Route")))
 (DFunDef false "reportAmbiguousImpl" ((PVar "iface")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EApp (EVar "ambiguousImplMsg") (EVar "iface")))) (DoExpr (EVar "RNone"))))
 (DTypeSig false "implHeadTagsForIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedupStr") (EApp (EApp (EVar "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
+(DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
 (DTypeSig false "implHeadTagForIface" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implHeadTagForIface") (EVar "want")) (EVar "d")))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implHeadTagForIface" (PWild PWild) (EListLit))
-(DTypeSig false "dedupStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dedupStr" ((PVar "xs")) (EApp (EApp (EVar "dedupStrGo") (EListLit)) (EVar "xs")))
-(DTypeSig false "dedupStrGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "dedupStrGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupStrGo" ((PVar "seen") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EApp (EVar "dedupStrGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "dedupStrGo") (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
 (DTypeSig false "routesOfMonos" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))
@@ -21137,10 +21126,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupSigTvMap" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSigTvMap" ((PVar "m") (PCons (PTuple (PVar "n") (PVar "ty") (PVar "tvMap")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "Some") (ETuple (EVar "ty") (EVar "tvMap"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupSigTvMap") (EVar "m")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dedupVecObls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "dedupVecObls" ((PVar "xs")) (EApp (EApp (EVar "dedupVecOblsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupVecOblsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "dedupVecOblsGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupVecOblsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "containsVecObl") (EVar "p")) (EVar "seen")) (EApp (EApp (EVar "dedupVecOblsGo") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "dedupVecOblsGo") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupVecObls" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "vecOblKey")) (EVar "xs")))
+(DTypeSig false "vecOblKey" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "String")))
+(DFunDef false "vecOblKey" ((PTuple (PVar "iface") (PVar "ids"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "iface")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "ids")))))
 (DTypeSig false "containsVecObl" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyCon "Bool"))))
 (DFunDef false "containsVecObl" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsVecObl" ((PTuple (PVar "i") (PVar "ids")) (PCons (PTuple (PVar "i2") (PVar "ids2")) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "i2")) (EApp (EApp (EVar "eqIntList") (EVar "ids")) (EVar "ids2"))) (EApp (EApp (EVar "containsVecObl") (ETuple (EVar "i") (EVar "ids"))) (EVar "rest"))))
@@ -21578,7 +21566,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
@@ -22627,10 +22615,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "dropPairs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "dropPairs" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "xs") (EIf (EVar "otherwise") (EMatch (EVar "xs") (arm (PList) () (EListLit)) (arm (PCons PWild (PVar "rest")) () (EApp (EApp (EVar "dropPairs") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "dedupPairs" ((PVar "xs")) (EApp (EApp (EVar "dedupPairsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupPairsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "dedupPairsGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupPairsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "q")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "q")) (EApp (EVar "fst") (EVar "p"))) (EBinOp "==" (EApp (EVar "snd") (EVar "q")) (EApp (EVar "snd") (EVar "p")))))) (EVar "seen")) (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "dedupPairsGo") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupPairs" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "slotKey")) (EVar "xs")))
+(DTypeSig false "slotKey" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "slotKey" ((PTuple (PVar "iface") (PVar "id"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "iface")) (EApp (EVar "intToString") (EVar "id"))))
 (DTypeSig false "stripArrows" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "stripArrows" ((PCon "TFun" PWild PWild (PVar "b"))) (EApp (EVar "stripArrows") (EVar "b")))
 (DFunDef false "stripArrows" ((PVar "t")) (EVar "t"))
@@ -24155,16 +24142,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "reportAmbiguousImpl" (TyFun (TyCon "String") (TyCon "Route")))
 (DFunDef false "reportAmbiguousImpl" ((PVar "iface")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EApp (EVar "ambiguousImplMsg") (EVar "iface")))) (DoExpr (EVar "RNone"))))
 (DTypeSig false "implHeadTagsForIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedupStr") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
+(DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
 (DTypeSig false "implHeadTagForIface" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implHeadTagForIface") (EVar "want")) (EVar "d")))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implHeadTagForIface" (PWild PWild) (EListLit))
-(DTypeSig false "dedupStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dedupStr" ((PVar "xs")) (EApp (EApp (EVar "dedupStrGo") (EListLit)) (EVar "xs")))
-(DTypeSig false "dedupStrGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "dedupStrGo" (PWild (PList)) (EListLit))
-(DFunDef false "dedupStrGo" ((PVar "seen") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EApp (EVar "dedupStrGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "dedupStrGo") (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
 (DTypeSig false "routesOfMonos" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))
@@ -25104,10 +25086,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupSigTvMap" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSigTvMap" ((PVar "m") (PCons (PTuple (PVar "n") (PVar "ty") (PVar "tvMap")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "n")) (EApp (EVar "Some") (ETuple (EVar "ty") (EVar "tvMap"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupSigTvMap") (EVar "m")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dedupVecObls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "dedupVecObls" ((PVar "xs")) (EApp (EApp (EVar "dedupVecOblsGo") (EVar "xs")) (EListLit)))
-(DTypeSig false "dedupVecOblsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "dedupVecOblsGo" ((PList) PWild) (EListLit))
-(DFunDef false "dedupVecOblsGo" ((PCons (PVar "p") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "containsVecObl") (EVar "p")) (EVar "seen")) (EApp (EApp (EVar "dedupVecOblsGo") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "p") (EApp (EApp (EVar "dedupVecOblsGo") (EVar "rest")) (EBinOp "::" (EVar "p") (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedupVecObls" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "vecOblKey")) (EVar "xs")))
+(DTypeSig false "vecOblKey" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyCon "String")))
+(DFunDef false "vecOblKey" ((PTuple (PVar "iface") (PVar "ids"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "iface")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "ids")))))
 (DTypeSig false "containsVecObl" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyCon "Bool"))))
 (DFunDef false "containsVecObl" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsVecObl" ((PTuple (PVar "i") (PVar "ids")) (PCons (PTuple (PVar "i2") (PVar "ids2")) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "i2")) (EApp (EApp (EVar "eqIntList") (EVar "ids")) (EVar "ids2"))) (EApp (EApp (EVar "containsVecObl") (ETuple (EVar "i") (EVar "ids"))) (EVar "rest"))))

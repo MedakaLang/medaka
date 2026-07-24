@@ -1,5 +1,5 @@
 # META
-source_lines=461
+source_lines=494
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -100,19 +100,52 @@ joinDot xs = joinWith "." xs
 -- This is the shared migration target other stages route their dedup/dedupBy
 -- clones through.  Keep it monomorphic (no prelude Foldable delegation) — `dedup`
 -- runs on HOT paths.
+--
+-- ⚠️⚠️ ROUTING A CLONE THROUGH THIS IS A DEBT WIN, NOT AUTOMATICALLY A PERF WIN.
+-- The naive `List`-scan clones are O(n²) in COMPARISONS but only O(n) in
+-- ALLOCATION — a `contains` scan allocates NOTHING.  This allocates a tree node
+-- per distinct element, plus whatever the key projection builds.  Measured
+-- (#242, per call, vs the scan it replaced): ~9x more bytes at n=3, ~15x at
+-- n=400, with NO crossover in that range.  `check` is the GC-BOUND stage
+-- (compiler/AGENTS.md), so that is the metric that matters there.
+--   * key is `identity` / `fst` — nothing new is allocated for the key: fine.
+--   * key must be BUILT (`lenKey …`, `intToString …`) — you are adding
+--     allocation to buy comparisons.  MEASURE THE AGGREGATE before calling it an
+--     improvement; the four such sites in #242 cost <0.5% of total `check`
+--     allocation, which is why they were kept, but they are not "faster".
+-- ⚠️ Neither CI perf arm can see this: the alloc arm grades a growth RATIO (a
+-- constant factor at fixed n never moves it) and the op arm counts `contains`
+-- steps via opBump, which this makes go DOWN.  Green gates are not evidence.
+--
+-- ⚠️ `key x` is bound ONCE (`let k`), not called in both the `omLookup` and the
+-- `omInsert`.  Medaka is strict, so the two-call form evaluated the projection
+-- TWICE for every KEPT element — free when the key is `identity`/`fst`, but a
+-- doubled heap allocation for any key that BUILDS a string (`lenKey …`,
+-- `intToString …`).  Every such projection is on a `check`-path caller.
 export dedupBy : (a -> String) -> List a -> List a
 dedupBy key xs = dedupByGo key xs omEmpty
 
 dedupByGo : (a -> String) -> List a -> OrdMap Unit -> List a
 dedupByGo _ [] _ = []
-dedupByGo key (x::xs) seen = match omLookup (key x) seen
-  Some _ => dedupByGo key xs seen
-  None => x :: dedupByGo key xs (omInsert (key x) () seen)
+dedupByGo key (x::xs) seen =
+  let k = key x
+  match omLookup k seen
+    Some _ => dedupByGo key xs seen
+    None => x :: dedupByGo key xs (omInsert k () seen)
 
 -- canonical for #242/#243: the String-identity specialization of `dedupBy`.
 -- Kept so existing `dedup` callers are unchanged.
 export dedup : List String -> List String
 dedup xs = dedupBy identity xs
+
+-- #242: length-prefix a String field so COMPOSITE `dedupBy` keys concatenate
+-- INJECTIVELY.  A bare separator (`a ++ "|" ++ b`) is not injective over two
+-- unconstrained Strings — ("a|b", "c") and ("a", "b|c") collide, which would
+-- silently merge two elements the naive `List`-scan clones kept distinct.
+-- Length-prefixing makes the split point unambiguous for ANY content, so no
+-- character has to be reserved.
+export lenKey : String -> String
+lenKey s = "\{intToString (stringLength s)}:\{s}"
 
 -- Split a list into its leading prefix and final element: Some (init, last),
 -- or None for the empty list.  (Was duplicated byte-identically across ~10
@@ -503,9 +536,11 @@ noneHeadTag = "__none__"
 (DFunDef false "dedupBy" ((PVar "key") (PVar "xs")) (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "omEmpty")))
 (DTypeSig false "dedupByGo" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "dedupByGo" (PWild (PList) PWild) (EListLit))
-(DFunDef false "dedupByGo" ((PVar "key") (PCons (PVar "x") (PVar "xs")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "key") (EVar "x"))) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "key") (EVar "x"))) (ELit LUnit)) (EVar "seen")))))))
+(DFunDef false "dedupByGo" ((PVar "key") (PCons (PVar "x") (PVar "xs")) (PVar "seen")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "key") (EVar "x"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen")))))))))
 (DTypeSig true "dedup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dedup" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "identity")) (EVar "xs")))
+(DTypeSig true "lenKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "lenKey" ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "stringLength") (EVar "s"))))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "s"))) (ELit (LString ""))))
 (DTypeSig true "splitLast" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyVar "a")))))
 (DFunDef false "splitLast" ((PList)) (EVar "None"))
 (DFunDef false "splitLast" ((PList (PVar "x"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "x"))))
@@ -662,9 +697,11 @@ noneHeadTag = "__none__"
 (DFunDef false "dedupBy" ((PVar "key") (PVar "xs")) (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "omEmpty")))
 (DTypeSig false "dedupByGo" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "dedupByGo" (PWild (PList) PWild) (EListLit))
-(DFunDef false "dedupByGo" ((PVar "key") (PCons (PVar "x") (PVar "xs")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "key") (EVar "x"))) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "key") (EVar "x"))) (ELit LUnit)) (EVar "seen")))))))
+(DFunDef false "dedupByGo" ((PVar "key") (PCons (PVar "x") (PVar "xs")) (PVar "seen")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "key") (EVar "x"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "dedupByGo") (EVar "key")) (EVar "xs")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ELit LUnit)) (EVar "seen")))))))))
 (DTypeSig true "dedup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dedup" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "identity")) (EVar "xs")))
+(DTypeSig true "lenKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "lenKey" ((PVar "s")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "stringLength") (EVar "s"))))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ""))))
 (DTypeSig true "splitLast" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyVar "a")))))
 (DFunDef false "splitLast" ((PList)) (EVar "None"))
 (DFunDef false "splitLast" ((PList (PVar "x"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "x"))))
