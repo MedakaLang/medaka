@@ -2308,6 +2308,74 @@ case "$WDBASE_OPS$wdo1$wdo2$wdo3" in
     fi ;;
 esac
 
+# ── ROW: llvm-dispatch (OP-COUNT) — the LLVM `emit` residual scan (#990) ──────────
+#
+# THE HOLE THIS CLOSES: the #986 wasm-disp/op row above deliberately gated wasm-emit and
+# NOT the LLVM `emit` stage, noting the LLVM residual (~4x on this shape either way) would
+# have drowned methodArityOf's signal. THIS row closes that residual. Post-#986 the LLVM
+# `emit` op-count on the SAME dispatch shape was still ~3.77x/doubling (SUPERLINEAR) from
+# per-emit scans that NEITHER the alloc arm (they allocate O(1)) NOR the wasm arm (LLVM-only
+# call sites) grade:
+#   • `implMethodNames` — an O(N^2) `dedupS` of every tagged impl's method name, rebuilt per
+#     `isImplMethod` (emitVar/emitApp) call site — the LLVM twin of the #382 impl scan;
+#   • `nubStr`/`distinctTypeNames` — a one-time O(types^2) ctor->type nub;
+#   • `cellTag`'s `ctorTypeId`/`ctorOrdinal` — an O(types) ctor->type `lookupAssoc` per ctor.
+# #990 indexes each into an OrdMap memo built ONCE (implMethodSetRef / ctorTypeMapRef /
+# nubStr's OrdMap seen-set). A pure SCAN that allocates nothing but `opBump`s once per step,
+# so ONLY the deterministic OP-COUNT sees it — exactly the axis #986 established for its twin.
+#
+# Reads the LLVM `emit` op-delta (tab-field 5) from a fresh wasm-OFF profile_run over the
+# SAME gen_wasm_dispatch fixtures the wasm rows already generated (wdf1/wdf2/wdf3) ⇒ only 4
+# extra single-file profiler invocations (3 + the BASE_FIX prelude constant), ~3 s, per-PR
+# cheap. DETERMINISTIC (exact op counts, no run-to-run variance) ⇒ no min-of-K / heap-pin /
+# floor; a dedicated 2.5 threshold is SAFE where no time gate could be. Net = emit op-delta -
+# baseline prelude op-delta, then r2 > LD_THRESH (or a CLIMBING ratio) FAILS as SUPERLINEAR.
+# MEASURED (this box), QUICK N=400/800/1600, baseline emit op-delta ~20841:
+#   WITH the #990 indexes:  net = 6692 -> 13092 -> 25892 op   (r1 1.96, r2 1.98, LINEAR, ok)
+#   WITHOUT them (origin/main + #986, impl/ctor/nub scans un-indexed): net =
+#              766653 -> 2807053 -> 10727853 op (r1 3.66, r2 3.82, SUPERLINEAR, > 2.5) — so
+#              this row is PROVEN RED on the regression it guards, GREEN with the fix, both at
+#              the cheap per-PR band. Self-drains the instant a per-site LLVM emit scan regresses.
+LD_THRESH="${PERF_LLVM_DISPATCH_THRESH:-2.5}"
+LDBASE_OP="$(profile_run "$BASE_FIX" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
+ldo1="$(profile_run "$wdf1" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
+ldo2="$(profile_run "$wdf2" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
+ldo3="$(profile_run "$wdf3" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
+
+case "$LDBASE_OP$ldo1$ldo2$ldo3" in
+  *[!0-9.]*|"")
+    echo "FAIL llvm-dispatch (ops): profiler produced no LLVM emit op-delta figure (harness bug — the [perf] emit op column is gone)"
+    fail=$((fail+1)) ;;
+  *)
+    ldonet1="$(awk -v a="$ldo1" -v b="$LDBASE_OP" 'BEGIN{printf "%.1f", a-b}')"
+    ldonet2="$(awk -v a="$ldo2" -v b="$LDBASE_OP" 'BEGIN{printf "%.1f", a-b}')"
+    ldonet3="$(awk -v a="$ldo3" -v b="$LDBASE_OP" 'BEGIN{printf "%.1f", a-b}')"
+    ldoverdict="$(awk -v n1="$ldonet1" -v n2="$ldonet2" -v n3="$ldonet3" -v th="$LD_THRESH" -v fl="$OP_FLOOR" 'BEGIN {
+      if (n1 + 0 < fl + 0) { printf "0 0 TOOSMALL"; exit }
+      r1 = n2 / n1; r2 = n3 / n2
+      climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+    }')"
+    ldor1="$(echo "$ldoverdict" | cut -d' ' -f1)"
+    ldor2="$(echo "$ldoverdict" | cut -d' ' -f2)"
+    ldoword="$(echo "$ldoverdict" | cut -d' ' -f3)"
+    if [ "$ldoword" = "TOOSMALL" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
+        "llvm-disp/op" "$wdn1" "$ldonet1" "$ldonet2" "$ldonet3" "-" "-"
+    elif [ "$ldoword" = "QUADRATIC" ]; then
+      ops_graded=$((ops_graded+1))
+      fail=$((fail+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (LLVM-EMIT OPS) — impl/ctor/nub scan, #990 **\n' \
+        "llvm-disp/op" "$wdn1" "$ldonet1" "$ldonet2" "$ldonet3" "$ldor1" "$ldor2"
+    else
+      ops_graded=$((ops_graded+1))
+      pass=$((pass+1))
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ok  (llvm-emit stage ops)\n' \
+        "llvm-disp/op" "$wdn1" "$ldonet1" "$ldonet2" "$ldonet3" "$ldor1" "$ldor2"
+    fi ;;
+esac
+
 # ── SHAPE: modules — the O(modules^2) family (issue #153) ─────────────────────
 #
 # This is the WHOLE POINT of #153: the five shapes above are single-file, so they
