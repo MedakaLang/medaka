@@ -1259,7 +1259,7 @@ checkGradedImplHeadCon iface n loc nApplied want
   -- saturation is already policed by T-ALIAS-ARITY — a kind complaint here would be a
   -- second, worse-worded report of the same defect.
   | isSome (lookupAssoc n perRun.value.aliasTableRef.value) = ()
-  | otherwise = checkGradedImplHeadKinds iface n loc want (headRemainingKinds n nApplied)
+  | otherwise = checkGradedImplHeadKinds iface n loc nApplied want (headRemainingKinds n nApplied)
 
 -- The head constructor's declared parameter kinds MINUS the ones the head already
 -- applies (`impl I (Async e)` supplies one).  A head that is not a user data
@@ -1270,10 +1270,10 @@ headRemainingKinds n nApplied = match lookupAssoc n perRun.value.dataParamKindsR
   Some ctorKinds => dropFirst nApplied ctorKinds
   None => []
 
-checkGradedImplHeadKinds : String -> String -> Option Loc -> List Kind -> List Kind -> Unit
-checkGradedImplHeadKinds iface n loc want got
+checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
+checkGradedImplHeadKinds iface n loc nApplied want got
   | kindsEq got want = ()
-  | otherwise = pushTypeErrorOnceAt "T-IMPL-KIND-MISMATCH" loc (implKindMismatchMsg iface n want got)
+  | otherwise = pushTypeErrorOnceAt "T-IMPL-KIND-MISMATCH" loc (implKindMismatchMsg iface n nApplied want got)
 
 renderKindArrow : List Kind -> String
 renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
@@ -1282,8 +1282,17 @@ kindName : Kind -> String
 kindName KType = "Type"
 kindName KRow = "Row"
 
-implKindMismatchMsg : String -> String -> List Kind -> List Kind -> String
-implKindMismatchMsg iface ctor want got = "Instance head `\{ctor}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but `\{ctor}` has kind `\{renderKindArrow got}`, so the grade the methods index by has nowhere to live and every index a caller reads off a result would be fabricated. A graded interface binds the whole row-indexed family (`impl \{iface} \{ctor}`, never a fixed row like `\{ctor} <>`). Give `\{ctor}` a parameter used in an effect position (e.g. a field `Unit -> <e> a`) at each `Row` slot, or implement a non-graded interface for it."
+implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String
+implKindMismatchMsg iface ctor nApplied want got = "Instance head has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but \{implHeadKindClause ctor nApplied got}, so the grade the methods index by has nowhere to live and every index a caller reads off a result would be fabricated. A graded interface binds the whole row-indexed FAMILY: write `impl \{iface} \{ctor}`, never a fixed-row application. If `\{ctor}` has no `Row` parameter at all, give it one — a field that uses that parameter in an effect position, e.g. `Unit -> <e> a` — or implement a non-graded interface for it instead."
+
+-- The "but …" clause: an UNAPPLIED head states its own kind; a partially applied one
+-- (`impl I (Async e)` — the fixed-row shape a graded interface forbids) must say so,
+-- because the leftover kind is NOT the constructor's kind and reporting it as such is
+-- simply false (`Async` is `Row -> Type -> Type`; `Async e` is `Type -> Type`).
+implHeadKindClause : String -> Int -> List Kind -> String
+implHeadKindClause ctor nApplied got
+  | nApplied <= 0 = "`\{ctor}` has kind `\{renderKindArrow got}`"
+  | otherwise = "this head already applies \{intToString nApplied} argument(s) to `\{ctor}`, leaving kind `\{renderKindArrow got}`"
 
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTy (TyFun a b) =

@@ -160,7 +160,7 @@ checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
 checkGradedImplHeadDecl : Decl -> Unit
-checkGradedImplHeadKinds : String -> String -> Option Loc -> List Kind -> List Kind -> Unit
+checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : List Decl -> Unit
 checkGradedImplTys : String -> Int -> List Ty -> Unit
 checkIfaceMethodEffs : String -> List IfaceMethod -> Unit
@@ -628,6 +628,7 @@ implEntryOf : Decl -> List ImplEntry
 implExistsForHead : Map String (List KeyEntry) -> String -> String -> Bool
 implExistsForHeadGo : List KeyEntry -> String -> String -> Bool
 implHeadGround : Decl -> Bool
+implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLoc : List Ty -> Option Loc
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadParametric : Decl -> Bool
@@ -636,7 +637,7 @@ implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagsForIface : List Decl -> String -> List String
 implKeyTc : String -> List Ty -> String
-implKindMismatchMsg : String -> String -> List Kind -> List Kind -> String
+implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String
 implMatchesArgsU : ImplUniverse -> String -> List Mono -> Bool
 implMatchesReceiverU : ImplUniverse -> String -> Mono -> Bool
 implMatchesSuper : String -> List Ty -> Decl -> Bool
