@@ -198,6 +198,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
   omEmpty,
 }
 import support.util.{
@@ -370,18 +371,39 @@ installMainIsFloatHint b = setRef mainIsFloatHintRef b
 declRetTypesRef : Ref (List (String, (List String, String)))
 declRetTypesRef = Ref []
 
+-- perf #382: the SAME (paramTys, retTy) table as an O(log n) OrdMap.  `declRetTypeOf`/
+-- `declParamTypesOf`/`fnReturnsFloat` are consulted per CApp reached by `cexprIsFloat`,
+-- and each `lookupAssoc name declRetTypesRef.value` is O(#decls), so on decl-count ×
+-- float-arith-density code the Float analysis degrades to O(nodes · decls) (#382, the
+-- #351 twin).  Built ONCE in `installDeclRetTypes` (the single writer), keyed the same
+-- first-match way as `lookupAssoc`: `omFromPairs (reverseL t)` so a duplicate name keeps
+-- its FIRST value (omFromPairs folds left / last-write-wins).  None ⇒ the table was never
+-- installed (a prelude-free entry) ⇒ each lookup falls back to the original list scan, so
+-- the answer — Int vs Float, and thus every emitted byte — is identical either way.
+declRetTypesMapW : Ref (Option (OrdMap (List String, String)))
+declRetTypesMapW = Ref None
+
 export installDeclRetTypes : List (String, (List String, String)) -> Unit
-installDeclRetTypes t = setRef declRetTypesRef t
+installDeclRetTypes t =
+  let _ = setRef declRetTypesRef t
+  setRef declRetTypesMapW (Some (omFromPairs (reverseL t) omEmpty))
+
+-- (paramTys, retTy) for a top-level binding, via the memo (falls back to the list scan
+-- when the table is uninstalled) — the SAME first-match answer as `lookupAssoc`.
+declRetLookupW : String -> Option (List String, String)
+declRetLookupW name = match declRetTypesMapW.value
+  Some m => omLookup name m
+  None => lookupAssoc name declRetTypesRef.value
 
 -- the declared return type-head name of a top-level binding ("" = unknown).
 declRetTypeOf : String -> String
-declRetTypeOf name = match lookupAssoc name declRetTypesRef.value
+declRetTypeOf name = match declRetLookupW name
   Some (_, ret) => ret
   None => ""
 
 -- W-SQLITE-4: the declared param type-head names of a top-level fn ([] = unknown).
 declParamTypesOf : String -> List String
-declParamTypesOf name = match lookupAssoc name declRetTypesRef.value
+declParamTypesOf name = match declRetLookupW name
   Some (ps, _) => ps
   None => []
 
@@ -391,7 +413,7 @@ declParamTypesOf name = match lookupAssoc name declRetTypesRef.value
 -- recognized even with no co-located Float literal — the analog of the native
 -- emitter's `declRetLTy`.  Additive: an unknown/Int-returning fn stays the Int path.
 fnReturnsFloat : String -> Bool
-fnReturnsFloat name = match lookupAssoc name declRetTypesRef.value
+fnReturnsFloat name = match declRetLookupW name
   Some (_, ret) => ret == "Float"
   None => False
 
@@ -453,6 +475,59 @@ arityOfW fnArs f = match fnArMapW.value
     None => -1
   None => arityOf fnArs f
 
+-- ── impl INDEX by method name (perf #382 — the #350/#349 twins) ───────────────
+-- The `Prog` carries every impl clause as one flat `List CImplEntry` (`progImpls`),
+-- and the emitter scans the WHOLE list per RKey/RDict dispatch site: `implForW`,
+-- `defaultForW`, `implSymTagW`, `methodImpls`, `implArityFor`, `implLeadingDictCountW`,
+-- `methodReturnsBoolW`, and the `emitImplFns`/`gatherImplGroup` group builder all do
+-- `findByTagW`/`flatMap implClauseFor`/`flatMap methodImplKey` over `progImpls prog`.
+-- EVERY one of those first filters by the METHOD name (`n == method`) — so restricting
+-- the scan to just that method's entries yields the IDENTICAL first-match/flat-map
+-- result, only faster.  Wasm inlines a dispatch chain PER call site (llvm outlines one
+-- dispatcher), so these per-site scans multiply → O(sites · impls) on dispatch-heavy
+-- code (#382).  `implsByMethodW` groups the entries by method name ONCE (in emitProgram/
+-- emitProgramGaps, via installImplIndexW) into an OrdMap of per-method lists, ORIGINAL
+-- ORDER preserved (so a multi-clause impl's first clause still wins findByTagW).  Every
+-- per-method scan below routes through `methodEntriesW`; when the index is uninstalled
+-- (a probe reaching a helper without emitProgram) it FALLS BACK to the full list — which,
+-- being filtered by method downstream, gives byte-identical output either way.
+implsByMethodW : Ref (Option (OrdMap (List CImplEntry)))
+implsByMethodW = Ref None
+
+-- method name of an impl entry (field 1 — the interface method it implements).
+implEntryMethod : CImplEntry -> String
+implEntryMethod (CImplEntry n _ _) = n
+
+orEmptyEntriesW : Option (List CImplEntry) -> List CImplEntry
+orEmptyEntriesW (Some xs) = xs
+orEmptyEntriesW None = []
+
+-- one LEFT fold prepending each entry to its method's bucket (O(1) per entry), then
+-- `omMapValues reverseL` restores original order in each bucket — total O(entries).
+-- (A right-append build would be O(bucket²) on a many-impl method; prepend+reverse is
+-- linear, the same discipline the fn-index / ctor tables use.)
+groupImplsByMethodW : List CImplEntry -> OrdMap (List CImplEntry)
+groupImplsByMethodW entries =
+  omMapValues reverseL (foldImplsByMethodW entries omEmpty)
+
+foldImplsByMethodW : List CImplEntry -> OrdMap (List CImplEntry) -> OrdMap (List CImplEntry)
+foldImplsByMethodW [] m = m
+foldImplsByMethodW (e::rest) m =
+  let k = implEntryMethod e
+  foldImplsByMethodW rest (omInsert k (e :: orEmptyEntriesW (omLookup k m)) m)
+
+installImplIndexW : List CImplEntry -> Unit
+installImplIndexW entries =
+  setRef implsByMethodW (Some (groupImplsByMethodW entries))
+
+-- [method]'s impl entries from the index (original order); `fallback` (a full entry list)
+-- is used only when the index is uninstalled — downstream filters by method, so the
+-- answer is identical.  Every whole-`progImpls` per-site scan routes through this.
+methodEntriesW : List CImplEntry -> String -> List CImplEntry
+methodEntriesW fallback method = match implsByMethodW.value
+  Some m => orEmptyEntriesW (omLookup method m)
+  None => fallback
+
 -- the declared arity (param count) of a top-level function, or -1 if not a fn.
 progFnArity : Prog -> String -> Int
 progFnArity prog n = match fnArMapW.value
@@ -503,6 +578,17 @@ liftedNamesRef = Ref []
 
 funcRefsRef : Ref (List String)
 funcRefsRef = Ref []
+
+-- perf #382: companion OrdMap SETS for the two `contains`-per-insert registries above
+-- (`addLiftedNamed`/`noteFuncRef` deduped by a linear list scan on EVERY insert ⇒ O(refs ·
+-- distinct)).  Membership now routes through these O(log n) sets; the lists still carry
+-- insertion order (`funcRefsRef` is drained in order at emit end).  Reset to `omEmpty`
+-- alongside their lists in emitProgram/emitProgramGaps so no set leaks across a re-emit.
+liftedNamesSetW : Ref (OrdMap Unit)
+liftedNamesSetW = Ref omEmpty
+
+funcRefsSetW : Ref (OrdMap Unit)
+funcRefsSetW = Ref omEmpty
 
 -- ── W6 string state ──────────────────────────────────────────────────────────
 -- `useStrRef` records whether the program uses any String/Char literal, the
@@ -899,16 +985,17 @@ addLifted def = setRef liftedFnsRef (def::liftedFnsRef.value)
 -- lifts its (func …) exactly once.
 addLiftedNamed : String -> List String -> Unit
 addLiftedNamed name def =
-  if contains name liftedNamesRef.value then ()
+  if omHasKey name liftedNamesSetW.value then ()
   else
+    let _ = setRef liftedNamesSetW (omInsert name () liftedNamesSetW.value)
     let _ = setRef liftedNamesRef (name::liftedNamesRef.value)
     addLifted def
 
 noteFuncRef : String -> Unit
 noteFuncRef nm =
-  if contains nm funcRefsRef.value then
-    ()
+  if omHasKey nm funcRefsSetW.value then ()
   else
+    let _ = setRef funcRefsSetW (omInsert nm () funcRefsSetW.value)
     setRef funcRefsRef (nm::funcRefsRef.value)
 
 export emitProgram : CProgram -> String
@@ -916,9 +1003,12 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef lamIdRef 0
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
+  let _ = setRef liftedNamesSetW omEmpty
   let _ = setRef emittedDefaultsWRef []
+  let _ = setRef emittedDefaultsSetW omEmpty
   let _ = setRef defaultDefsWRef []
   let _ = setRef funcRefsRef []
+  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   let _ = setRef strSegsRef []
   let _ = setRef strSegIdRef 0
@@ -962,7 +1052,11 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   -- perf #382/#664: index the fn/val name sets + arity map ONCE, before the whole-program
   -- scans below (and every later emit) route their membership/arity lookups through it.
   let _ = installFnIndexW fnNames valNames fnArs
-  let _ = setRef fnsUsedAsValuesRef (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
+  -- perf #382: index the impl entries by method name ONCE, so every per-RKey/RDict
+  -- dispatch scan (implForW / methodImpls / implArityFor / gatherImplGroup / …) walks
+  -- only that method's entries instead of the whole `progImpls` list per site.
+  let _ = installImplIndexW impls
+  let _ = setFnsUsedAsValuesW (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
   let useClos = programUsesClosures groups ctorArs
   -- closures force the uniform (ref eq) rep (a closure captures heterogeneous
   -- values); so does ANY dispatch — an impl method / method occurrence threads
@@ -998,9 +1092,12 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef lamIdRef 0
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
+  let _ = setRef liftedNamesSetW omEmpty
   let _ = setRef emittedDefaultsWRef []
+  let _ = setRef emittedDefaultsSetW omEmpty
   let _ = setRef defaultDefsWRef []
   let _ = setRef funcRefsRef []
+  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   let _ = setRef strSegsRef []
   let _ = setRef strSegIdRef 0
@@ -1039,7 +1136,11 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   -- perf #382/#664: index the fn/val name sets + arity map ONCE, before the whole-program
   -- scans below (and every later emit) route their membership/arity lookups through it.
   let _ = installFnIndexW fnNames valNames fnArs
-  let _ = setRef fnsUsedAsValuesRef (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
+  -- perf #382: index the impl entries by method name ONCE, so every per-RKey/RDict
+  -- dispatch scan (implForW / methodImpls / implArityFor / gatherImplGroup / …) walks
+  -- only that method's entries instead of the whole `progImpls` list per site.
+  let _ = installImplIndexW impls
+  let _ = setFnsUsedAsValuesW (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
   let useClos = programUsesClosures groups ctorArs
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = distinctTypeNames ctorTypes
@@ -2895,7 +2996,7 @@ refMainKind prog other = WInt
 -- `println`/`display` (`True`/`False`).  Conservative: no impls (not a method) or any
 -- non-Bool clause ⇒ False, so the caller keeps the existing WInt fallback.
 methodReturnsBoolW : Prog -> String -> Bool
-methodReturnsBoolW prog fn = match implBodiesForW fn (progImpls prog)
+methodReturnsBoolW prog fn = match implBodiesForW fn (methodEntriesW (progImpls prog) fn)
   [] => False
   bodies => allWBoolW prog bodies
 
@@ -3369,8 +3470,13 @@ clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 -- when noted via noteFuncRef during emission — but a value-ref to a fn that's never
 -- emitted-as-value wouldn't note it.  So instead: wrap a fn iff its name appears as
 -- a value-ref somewhere (detected by the same exprUsesClosures value-position rule).
+-- perf #382: membership via the OrdMap set (built once with the list), so `needsClosWrapper`
+-- — called per emitted fn — is O(log n) not O(fns-used-as-values).  Falls back to the list
+-- scan when the set is uninstalled (a probe path); same answer either way.
 needsClosWrapper : Prog -> String -> Bool
-needsClosWrapper prog name = contains name fnsUsedAsValuesRef.value
+needsClosWrapper prog name = match fnsUsedAsValuesSetW.value
+  Some m => omHasKey name m
+  None => contains name fnsUsedAsValuesRef.value
 
 -- a module-level set of top-level fn names used as values, populated during body
 -- emission (emitVarRef / emitAppRef note a fn-as-value here).  Because fns are
@@ -3380,6 +3486,17 @@ needsClosWrapper prog name = contains name fnsUsedAsValuesRef.value
 -- fn-value uses up front in emitProgram and seed this set.
 fnsUsedAsValuesRef : Ref (List String)
 fnsUsedAsValuesRef = Ref []
+
+-- perf #382: the SAME set as an OrdMap for O(log n) membership in `needsClosWrapper`;
+-- (re)built by `setFnsUsedAsValuesW` every time the list is set, so it never leaks across
+-- a same-process re-emit.
+fnsUsedAsValuesSetW : Ref (Option (OrdMap Unit))
+fnsUsedAsValuesSetW = Ref None
+
+setFnsUsedAsValuesW : List String -> Unit
+setFnsUsedAsValuesW names =
+  let _ = setRef fnsUsedAsValuesRef names
+  setRef fnsUsedAsValuesSetW (Some (omFromNames names omEmpty))
 
 -- the closure wrapper for a top-level fn: `$mdk_w_<name>` is a $codety that unpacks
 -- the args array and calls $name; `$name__clos` is built by `mkFnClos` at each value
@@ -3631,7 +3748,9 @@ implReqDictCount prog method tag _userArgs =
 
 implArityFor : Prog -> String -> String -> Int
 implArityFor prog method tag =
-  implGroupArity (flatMap (implClauseFor method tag) (progImpls prog))
+  implGroupArity (flatMap
+    (implClauseFor method tag)
+    (methodEntriesW (progImpls prog) method))
 
 -- the number of leading dict params the CONCRETE impl define at [tag] actually declares:
 -- the first clause's leading `$dict_*` pat count — EXACTLY what gatherImplGroup/
@@ -3643,7 +3762,7 @@ implLeadingDictCountW : Prog -> String -> String -> Int
 implLeadingDictCountW prog method tag =
   wLeadingDictPats (firstImplClausePats (flatMap
     (implClauseFor method tag)
-    (progImpls prog)))
+    (methodEntriesW (progImpls prog) method)))
 
 -- `take n` for a route list (no stdlib `take` in scope here).
 takeRoutesW : Int -> List Route -> List Route
@@ -3851,9 +3970,9 @@ implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 -- head-uniqueness rule to its (head, key).  No entry (a defaulted method has its own
 -- $mdk_default_* path, never this) ⇒ sanitize the raw tag defensively.
 implSymTagW : Prog -> String -> String -> String
-implSymTagW prog method tag = match findByTagW method tag (progImpls prog)
+implSymTagW prog method tag = match findByTagW method tag (methodEntriesW (progImpls prog) method)
   Some (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =>
-    implFnSymTagW (progImpls prog) method t k
+    implFnSymTagW (methodEntriesW (progImpls prog) method) method t k
   _ => sanitizeId tag
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
@@ -3946,27 +4065,39 @@ implKeyOf : CImplEntry -> List (String, String)
 implKeyOf (CImplEntry m _ (CImplTagged _ key _ _ _ _)) = [(m, key)]
 implKeyOf _ = []
 
--- dedup a (method, tag) key list, first-seen order (dedupKeep is String-only).
+-- dedup a (method, tag) key list, first-seen order (dedupKeep is String-only).  perf
+-- #382: the old `containsPair p acc` was O(kept) per element ⇒ O(k²) — quadratic in
+-- distinct impl keys, run once per program by `distinctImplKeys` and once per RDict site
+-- by `methodImpls`.  An OrdMap seen-set makes membership O(log k); `acc` still carries
+-- the reversed first-seen order (identical output), and `seen` is seeded from the initial
+-- `acc` so the 2-arg contract is preserved for any caller.  `pairKey` joins on a SPACE:
+-- the method (field 1) is always a bare identifier — space-free — so `m ++ " " ++ tag` is
+-- injective (the first space delimits method from tag), i.e. two distinct pairs never
+-- collide on a key.
 dedupPairs : List (String, String) -> List (String, String) -> List (String, String)
-dedupPairs [] acc = reverseL acc
-dedupPairs (p::rest) acc =
-  if containsPair p acc then
-    dedupPairs rest acc
-  else
-    dedupPairs rest (p::acc)
+dedupPairs pairs acc = dedupPairsGo pairs (seedPairSeen acc omEmpty) acc
 
-containsPair : (String, String) -> List (String, String) -> Bool
-containsPair _ [] = False
-containsPair (a, b) ((c, dd)::rest) =
-  if a == c && b == dd then
-    True
+pairKey : (String, String) -> String
+pairKey (a, b) = "\{a} \{b}"
+
+seedPairSeen : List (String, String) -> OrdMap Unit -> OrdMap Unit
+seedPairSeen [] m = m
+seedPairSeen (p::rest) m = seedPairSeen rest (omInsert (pairKey p) () m)
+
+dedupPairsGo : List (String, String) -> OrdMap Unit -> List (String, String) -> List (String, String)
+dedupPairsGo [] _ acc = reverseL acc
+dedupPairsGo (p::rest) seen acc =
+  let k = pairKey p
+  if omHasKey k seen then
+    dedupPairsGo rest seen acc
   else
-    containsPair (a, b) rest
+    dedupPairsGo rest (omInsert k () seen) (p::acc)
 
 gatherImplGroup : List CImplEntry -> (String, String) -> ImplG
 gatherImplGroup entries (m, key) =
-  let headTag = headTagForKeyW m key entries
-  let clauses = flatMap (implClauseFor m key) entries
+  let mEntries = methodEntriesW entries m
+  let headTag = headTagForKeyW m key mEntries
+  let clauses = flatMap (implClauseFor m key) mEntries
   -- W9b: eta-expand a POINT-FREE / under-applied impl (`length = fold g 0`, clause
   -- arity 0) to the method's full DECLARED arity (methodArityOf), so the lifted
   -- $mdk_impl_<tag>_<method> takes every call-site arg.  maxI keeps a multi-clause
@@ -4289,9 +4420,8 @@ emitClausesImpl prog fnName params arity clauses =
 -- bare head tag IS the key (sole impl per head), so symTag == routeKey == tag.
 methodImpls : Prog -> String -> List (String, String)
 methodImpls prog method =
-  dedupPairs
-    (flatMap (methodImplKey (progImpls prog) method) (progImpls prog))
-    []
+  let mEntries = methodEntriesW (progImpls prog) method
+  dedupPairs (flatMap (methodImplKey mEntries method) mEntries) []
 
 -- one (symTag, routeKey) candidate per impl entry of [method].  #324: symTag is the
 -- CALL symbol tag (bare head when unique, else the SANITIZED canonical key); routeKey
@@ -4323,7 +4453,8 @@ methodImplKey _ _ _ = []
 -- the CONCRETE tagged impl entry for (method, tag), if one exists (mirror of
 -- llvm_emit's implFor/findByTag).  None ⇒ the type did not override the method.
 implForW : Prog -> String -> String -> Option CImplEntry
-implForW prog method tag = findByTagW method tag (progImpls prog)
+implForW prog method tag =
+  findByTagW method tag (methodEntriesW (progImpls prog) method)
 
 findByTagW : String -> String -> List CImplEntry -> Option CImplEntry
 findByTagW _ _ [] = None
@@ -4336,7 +4467,8 @@ findByTagW method tag (_::rest) = findByTagW method tag rest
 -- the interface DEFAULT entry (CImplDefault) for a method (mirror of defaultFor/
 -- findDefault).  None ⇒ no default body ⇒ a genuine missing-impl error.
 defaultForW : Prog -> String -> Option CImplEntry
-defaultForW prog method = findDefaultW method (progImpls prog)
+defaultForW prog method =
+  findDefaultW method (methodEntriesW (progImpls prog) method)
 
 findDefaultW : String -> List CImplEntry -> Option CImplEntry
 findDefaultW _ [] = None
@@ -4365,7 +4497,7 @@ defaultFnNameW tag method = "mdk_default_\{gname method}_\{gname tag}"
 -- Concrete impls still win via the implForW check in the caller.  This mirrors llvm's
 -- emitGeneralRKey→emitDefaultRKey→gap chain and the forwarded path's general tail.
 emitDefaultRKeyRef : Prog -> List String -> List String -> String -> String -> List String
-emitDefaultRKeyRef prog dictWords argInstrs name tag = match findByTagW name noneHeadTag (progImpls prog)
+emitDefaultRKeyRef prog dictWords argInstrs name tag = match findByTagW name noneHeadTag (methodEntriesW (progImpls prog) name)
   Some _ => dictWords
     ++ argInstrs
     ++ ["call $" ++ implFnSym prog noneHeadTag name]
@@ -4382,14 +4514,20 @@ emitDefaultRKeyRef prog dictWords argInstrs name tag = match findByTagW name non
 emittedDefaultsWRef : Ref (List String)
 emittedDefaultsWRef = Ref []
 
+-- perf #382: companion O(log n) membership set for the `contains`-per-insert registry
+-- above; reset alongside `emittedDefaultsWRef` in the emit drivers.
+emittedDefaultsSetW : Ref (OrdMap Unit)
+emittedDefaultsSetW = Ref omEmpty
+
 defaultDefsWRef : Ref (List (List String))
 defaultDefsWRef = Ref []
 
 defaultAlreadyEmittedW : String -> Bool
-defaultAlreadyEmittedW name = contains name emittedDefaultsWRef.value
+defaultAlreadyEmittedW name = omHasKey name emittedDefaultsSetW.value
 
 markDefaultEmittedW : String -> Unit
 markDefaultEmittedW name =
+  let _ = setRef emittedDefaultsSetW (omInsert name () emittedDefaultsSetW.value)
   setRef emittedDefaultsWRef (name::emittedDefaultsWRef.value)
 
 addDefaultDefW : List String -> Unit
@@ -9085,16 +9223,22 @@ gname n =
 notIn : List String -> String -> Bool
 notIn xs x = not (contains x xs)
 
+-- perf #382: dedup a String list keeping FIRST-seen order.  The old `contains x acc`
+-- membership was O(kept) per element ⇒ O(k²), and `dedupKeep` is called ~20× across
+-- emit (locals/free-var/num-poly/impl-value-use collection) — several on lists that grow
+-- with program size, so the quadratic surfaced as superlinear wasm-emit OP counts on
+-- dispatch-heavy code.  An OrdMap seen-set makes membership O(log k); `acc` still carries
+-- the reversed first-seen order, so the deduped list is BYTE-IDENTICAL to the old result.
 dedupKeep : List String -> List String
-dedupKeep xs = reverseL (dedupGo xs [])
+dedupKeep xs = reverseL (dedupGo xs omEmpty [])
 
-dedupGo : List String -> List String -> List String
-dedupGo [] acc = acc
-dedupGo (x::xs) acc =
-  if contains x acc then
-    dedupGo xs acc
+dedupGo : List String -> OrdMap Unit -> List String -> List String
+dedupGo [] _ acc = acc
+dedupGo (x::xs) seen acc =
+  if omHasKey x seen then
+    dedupGo xs seen acc
   else
-    dedupGo xs (x::acc)
+    dedupGo xs (omInsert x () seen) (x::acc)
 
 fst : (a, b) -> a
 fst (x, _) = x

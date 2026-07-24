@@ -434,6 +434,36 @@ gen_wasm_listlit() {
   printf ']\nmain = println (length xs)\n' >> "$f"
 }
 
+gen_wasm_dispatch() {
+  # DISPATCH-HEAVY shape for the wasm-dispatch ALLOC row below (#382, the #349/#350 twins).
+  # N interfaces each with ONE method + ONE impl for a distinct type, and `total` sums the
+  # N method results through a LIST-LITERAL fold. Two properties matter:
+  #   * every `shI CI` element is a distinct RKey/RDict dispatch site, so the number of
+  #     dispatch sites AND the number of impls both grow with N. wasm_emit inlines a
+  #     dispatch chain per call site (llvm outlines one), and each site scanned the WHOLE
+  #     `progImpls` list (implForW / methodImpls / implArityFor / gatherImplGroup) → the
+  #     per-site scan is O(impls) ⇒ O(N^2) allocation as those flatMaps rebuild per site;
+  #   * the results are combined by a LIST LITERAL + fold, NOT an N-wide `+` chain — so
+  #     emitBinRef / the arithmetic-chain path does NOT confound the dispatch signal
+  #     (emitListRef is linear post-#522). `main` REFERENCES `total`, so DCE keeps it all
+  #     and wasm-emit actually renders every dispatch site.
+  n=$1; f=$2; : > "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf 'data T%s = C%s\n' "$i" "$i"
+    printf 'interface Sh%s a where\n  sh%s : a -> Int\n' "$i" "$i"
+    printf 'impl Sh%s T%s where\n  sh%s _ = %s\n' "$i" "$i" "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
+  printf 'sumL : List Int -> Int\nsumL xs = fold (a b => a + b) 0 xs\n' >> "$f"
+  printf 'total : Int\ntotal = sumL [' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    [ "$i" -gt 0 ] && printf ', '
+    printf 'sh%s C%s' "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
+  printf ']\nmain = println total\n' >> "$f"
+}
+
 gen_nesting() {
   n=$1; f=$2; : > "$f"
   # N-deep let nesting: stresses recursion depth in every tree-walking pass
@@ -2111,6 +2141,95 @@ case "$WLBASE_ALLOC$wla1$wla2$wla3" in
       pass=$((pass+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ok  (wasm-emit stage alloc)\n' \
         "wasm-listlit" "$wln1" "$wlnet1" "$wlnet2" "$wlnet3" "$wlr1" "$wlr2"
+    fi ;;
+esac
+
+# ── ROW: wasm-dispatch — WASM-EMIT ALLOCATION over a dispatch-heavy program (#382) ──
+#
+# THE HOLE THIS CLOSES: wasm_emit inlines a typeclass dispatch chain PER call site (the
+# LLVM backend outlines one dispatcher per method), and each site scanned the WHOLE flat
+# `progImpls` list — implForW / methodImpls / implArityFor / gatherImplGroup all
+# `flatMap`/`findByTagW` over every impl entry per RKey/RDict site. On code with many
+# interfaces × many dispatch sites that is O(sites · impls) ⇒ O(N^2), and the flatMaps
+# REBUILD an O(impls) list per site ⇒ superlinear wasm-emit ALLOCATION. The ALLOC arm
+# above strips wasm (`env -u MEDAKA_PERF_WASM`) and the wasm TIME arm grades only the
+# xref/match shapes (whose live decls declare NO impls), so this dispatch-scan allocation
+# was graded by NOTHING (#382, the #349/#350 twins — peers of the native audit).
+#
+# A DEDICATED wasm-ON alloc row, ISOLATED so it perturbs no other shape. It reads the
+# `wasm-emit` STAGE allocation (per-stage MB, field 4 — NOT `total`, so the fixed
+# ~235 MB wasm-prelude-emit constant stays out of the ratio and the signal is pinned to
+# the dispatch scans) from a fresh MEDAKA_PERF_WASM=1 run. DETERMINISTIC ⇒ ONE run per
+# size, no min-of-K / heap-pin / floor (same contract as wasm-listlit and the alloc arm).
+# Cost: 3 wasm-ON single-file compiles at N=400/800/1600 (+ the shared wasm baseline),
+# ~4 s on this box — per-PR-cheap. NO time-based shape is added.
+# gen_wasm_dispatch sums the N dispatch results through a LIST-LITERAL fold (NOT an N-wide
+# `+` chain), so emitBinRef / the arithmetic-chain allocation does not confound the signal.
+#
+# ⚠️ WHY A DEDICATED 2.4 THRESHOLD (not the global 3.0): the per-site impl scan is a
+# TIME quadratic that allocates only WEAKLY — findByTagW / methodImpls traverse O(impls)
+# per site but allocate O(1) (only the matching entry), so the alloc ratio saturates
+# toward the quadratic 4.0 SLOWLY and, at the cheap per-PR N, PLATEAUS around 2.6 without
+# the fix rather than blowing past 3.0 (it only clears 3.0 at N>=~1000, too costly per
+# PR — that band runs under PERF_DEEP below). ALLOCATION IS DETERMINISTIC (byte-exact GC
+# counts, zero run-to-run variance), so a tight threshold is SAFE here in a way no TIME
+# gate could be, and the shape is dedicated (its wasm-emit alloc is driven ONLY by the
+# dispatch-scan + linear list/fold/impl-fn emission), so a reading over 2.4 on THIS shape
+# is a genuine dispatch-scan regression, never noise. Graded like the other alloc rows:
+# net = stage - wasm baseline, then r2 > WD_THRESH (or a CLIMBING ratio) FAILS as
+# SUPERLINEAR; a too-small net is a harness failure, never a silent pass.
+# MEASURED (this box), QUICK N=400/800/1600:
+#   WITH the impl-index memo:  net = 27.9 -> 56.0 -> 113.2 MB   (r1 2.01, r2 2.02, ok)
+#   WITHOUT it (installImplIndexW removed ⇒ methodEntriesW falls back to the full
+#              progImpls list per site): net = 77.8 -> 185.1 -> 488.3 MB (r1 2.38, r2 2.64,
+#              SUPERLINEAR, > 2.4) — so this row is PROVEN to go RED on the regression it
+#              guards, and green with it, both at the cheap per-PR band.
+#   PERF_DEEP N=1000/2000/4000 without the memo: net = 249.9 -> 684.1 -> 2103.9 MB
+#              (r1 2.74, r2 3.08) — the same regression, past even the global 3.0 at the
+#              nightly band. Self-drains the instant the per-site impl scans regress.
+WD_THRESH="${PERF_WASM_DISPATCH_THRESH:-2.4}"
+if [ "$PERF_DEEP" = "1" ]; then WD_N="${PERF_WASM_DISPATCH_N:-1000}"; else WD_N="${PERF_WASM_DISPATCH_N:-400}"; fi
+wdn1="$WD_N"; wdn2=$((WD_N * 2)); wdn3=$((WD_N * 4))
+wdf1="$WORK/wasm_dispatch_$wdn1.mdk"; wdf2="$WORK/wasm_dispatch_$wdn2.mdk"; wdf3="$WORK/wasm_dispatch_$wdn3.mdk"
+gen_wasm_dispatch "$wdn1" "$wdf1"
+gen_wasm_dispatch "$wdn2" "$wdf2"
+gen_wasm_dispatch "$wdn3" "$wdf3"
+
+# Own baseline: reuse the wasm-emit stage's FIXED prelude-emit cost (main = println 1).
+WDBASE_ALLOC="$(wasm_emit_alloc_of "$BASE_FIX")"
+wda1="$(wasm_emit_alloc_of "$wdf1")"
+wda2="$(wasm_emit_alloc_of "$wdf2")"
+wda3="$(wasm_emit_alloc_of "$wdf3")"
+
+case "$WDBASE_ALLOC$wda1$wda2$wda3" in
+  *[!0-9.]*|"")
+    echo "FAIL wasm-dispatch: profiler produced no wasm-emit allocation figure (harness bug — MEDAKA_PERF_WASM not wiring the stage on, or the [perf] wasm-emit line is gone)"
+    fail=$((fail+1)) ;;
+  *)
+    wdnet1="$(awk -v a="$wda1" -v b="$WDBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
+    wdnet2="$(awk -v a="$wda2" -v b="$WDBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
+    wdnet3="$(awk -v a="$wda3" -v b="$WDBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
+    wdverdict="$(awk -v n1="$wdnet1" -v n2="$wdnet2" -v n3="$wdnet3" -v th="$WD_THRESH" 'BEGIN {
+      if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL"; exit }
+      r1 = n2 / n1; r2 = n3 / n2
+      climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+    }')"
+    wdr1="$(echo "$wdverdict" | cut -d' ' -f1)"
+    wdr2="$(echo "$wdverdict" | cut -d' ' -f2)"
+    wdword="$(echo "$wdverdict" | cut -d' ' -f3)"
+    if [ "$wdword" = "TOOSMALL" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
+        "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "-" "-"
+    elif [ "$wdword" = "QUADRATIC" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** SUPERLINEAR (WASM-EMIT ALLOC) — per-site impl scan, #382 **\n' \
+        "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "$wdr1" "$wdr2"
+    else
+      pass=$((pass+1))
+      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ok  (wasm-emit stage alloc)\n' \
+        "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "$wdr1" "$wdr2"
     fi ;;
 esac
 
