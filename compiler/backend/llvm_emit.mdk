@@ -183,7 +183,7 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
-import ir.core_ir_lower.{compileTree, canonPat}
+import ir.core_ir_lower.{compileTree, canonPat, ifaceImplHeadTags}
 import support.util.{
   reverseL,
   joinNl,
@@ -194,6 +194,7 @@ import support.util.{
   startsWith,
   fallthroughName,
   noneHeadTag,
+  isNonEmptyL,
 }
 import backend.llvm_preamble.{preambleLines}
 import support.ordmap.{
@@ -4611,8 +4612,26 @@ emitMethodDispatch e env name d methRoutes argOps = match soleImplDirectSite e n
 -- tag-switching chain (which reads the dict).
 soleImplDirect : Emit -> String -> Option CImplEntry
 soleImplDirect e name = match implsOf e name
-  [ent] => if implReqCount e name ent <= 0 then Some ent else None
+  [ent] =>
+    if implReqCount e name ent <= 0 && not (defaultReachesOtherTags e name ent) then
+      Some ent
+    else
+      None
   _ => None
+
+-- #948: "exactly one TAGGED impl" is not "exactly one possible callee".  When the
+-- interface owns a DEFAULT body for [name], every impl head the sole tagged entry
+-- does NOT cover reaches that default instead — so a dict carrying one of those
+-- tags must go through the chain (which grows a `@mdk_default_<name>_<tag>` arm
+-- per uncovered tag), not a direct call to the one impl that happens to exist.
+-- Taking the shortcut there compiled `use Dog` — a `Dog` inheriting the default —
+-- into a direct call to `Cat`'s override: no crash, just the wrong answer.
+-- Pre-#948 this could not be SEEN (the uncovered impl contributed no entry, so
+-- `ifaceTags` did not list its tag); the two halves of the fix are one bug.
+defaultReachesOtherTags : Emit -> String -> CImplEntry -> Bool
+defaultReachesOtherTags e name ent = match defaultFor e name
+  None => False
+  Some _ => isNonEmptyL (tagsMinus (ifaceTags e (methodIfaceOf name)) (implEntryTags [ent]))
 
 -- The SITE-level form of the same test.  In prelude-object mode a dict-routed
 -- site must NOT bake an impl decision into its enclosing define, because that
@@ -4946,8 +4965,27 @@ emitDispatchBody e name dictPtr methWords argOps =
 -- tagged impl entry whose interface equals `iface`, deduped.  These are exactly
 -- the runtime element tags a generic `iface a` dict-word may hold, so the default
 -- dispatch chain enumerates one default-synthesis arm per tag.
+--
+-- #948: the entries alone are NOT the whole answer.  `lowerDeclImpl` projects a
+-- `DImpl` to one entry per method the impl DEFINES, so a cross-module impl that
+-- overrides NOTHING (every method inherited from an interface default —
+-- `fillImplDefaults` specializes same-module only) contributes ZERO entries and
+-- its tag was missing here: the default-synthesis chain then had no arm for it
+-- and fell straight to `unreachable` → SIGSEGV on a check-green, eval-correct
+-- program.  `ifaceImplHeadTags` reads the tag off the impl DECLS, which cannot
+-- lose it: it is a SUPERSET of the entry-derived tags (same tag computation, same
+-- decl arms), equal to them exactly when no impl is method-less.
+--
+-- ⚠️ The head tags go FIRST, and that is load-bearing: `dedupS` keeps the LAST
+-- occurrence of a repeat (`if contains x xs then dedupS xs else x :: …`).  With
+-- the decls first, every tag the entries already had keeps its OLD entry-derived
+-- position, and only genuinely new tags are prepended — so a program with no
+-- method-less impl emits its arms in exactly the pre-#948 order and its IR is
+-- byte-identical.  Entries-first would silently reorder every dispatch chain in
+-- the tree into decl order.
 ifaceTags : Emit -> String -> List String
-ifaceTags e iface = dedupS (ifaceTagsGo iface (implEntriesOf e))
+ifaceTags e iface =
+  dedupS (ifaceImplHeadTags iface ++ ifaceTagsGo iface (implEntriesOf e))
 
 ifaceTagsGo : String -> List CImplEntry -> List String
 ifaceTagsGo _ [] = []

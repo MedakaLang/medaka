@@ -1141,7 +1141,60 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 lowerImpls : List Decl -> List CImplEntry
-lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
+lowerImpls prog =
+  let _ = installIfaceImplHeads (ifaceImplHeadTable prog)
+  lowerImplsWith (installDispatchTables prog) prog
+
+-- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
+-- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
+-- an impl that defines NONE of the interface's methods — every method inherited
+-- from an interface DEFAULT — reaches the Core IR as literally nothing.  The
+-- native emitter's `ifaceTags` derives "the tags an `iface` dict can carry" from
+-- those entries, so such an impl was INVISIBLE to it: a dict-routed call to the
+-- inherited method emitted an ARM-LESS dispatcher ending in `unreachable`
+-- (SIGSEGV), and a method with exactly one tagged impl elsewhere took the
+-- `soleImplDirect` shortcut straight into the WRONG impl (silent wrongness).
+-- Only the CROSS-MODULE case is affected: desugar's `fillImplDefaults` is
+-- same-module only, so a same-module impl gets a specialized (and therefore
+-- tagged, and therefore visible) clause for each inherited default.
+--
+-- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
+-- (`fromOption noneHeadTag (headTyconHead tys)`), and the decl set is matched
+-- arm-for-arm with `lowerDeclImpl` — including NOT unwrapping `DAttrib`, whose
+-- inner impl `lowerDeclImpl` also skips.  So this table is a strict SUPERSET of
+-- the tags the entries already yield: for every program that has no method-less
+-- impl the emitter's tag set (and its emitted IR) is unchanged.
+--
+-- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
+-- one chokepoint every emit path funnels through with the WHOLE program's decls
+-- (`lowerProgramEmit allDecls`), and it already installs `installDispatchTables`
+-- the same way.  A per-driver `install*` call — the shape the other side tables
+-- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
+-- is exactly the segfault this fixes.
+ifaceImplHeadsRef : Ref (List (String, String))
+ifaceImplHeadsRef = Ref []
+
+export installIfaceImplHeads : List (String, String) -> Unit
+installIfaceImplHeads t = setRef ifaceImplHeadsRef t
+
+export ifaceImplHeadTable : List Decl -> List (String, String)
+ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
+
+ifaceImplHeadEntries : Decl -> List (String, String)
+ifaceImplHeadEntries (DImpl { iface = ifaceName, tys = typeArgs, ... }) =
+  [(ifaceName, fromOption noneHeadTag (headTyconHead typeArgs))]
+ifaceImplHeadEntries _ = []
+
+-- the declared impl head tags for [iface], in declaration order (the caller
+-- dedups — `ifaceTags` already runs the union through `dedupS`).
+export ifaceImplHeadTags : String -> List String
+ifaceImplHeadTags iface = ifaceImplHeadTagsGo iface ifaceImplHeadsRef.value
+
+ifaceImplHeadTagsGo : String -> List (String, String) -> List String
+ifaceImplHeadTagsGo _ [] = []
+ifaceImplHeadTagsGo iface ((i, tag)::rest)
+  | i == iface = tag :: ifaceImplHeadTagsGo iface rest
+  | otherwise = ifaceImplHeadTagsGo iface rest
 
 -- lowerImpls against a PRE-BUILT dispatch table — the multi-module driver builds
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
