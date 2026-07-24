@@ -1,0 +1,79 @@
+-- #1036 (S0 silent wrongness): two impls whose types share a HEAD TYCON but differ in
+-- TYPE ARGUMENTS (`Box Int` / `Box String`), one overriding and one inheriting the
+-- interface default.  The native binary dispatched the INHERITING type into the
+-- OVERRIDING type's impl: `useSpeak (Box "s")` printed "boxint", exit 0, no diagnostic.
+--
+-- Two blind spots, one bug:
+--
+--   * `defaultReachesOtherTags` / the mixed default+impls chain diffed HEAD TAGS.
+--     `Box String`'s head is "Box", which the `Box Int` entry already covers, so
+--     nothing looked uncovered — `soleImplDirect` took the sole-impl shortcut and
+--     compiled every dict-routed `speak` into `call @mdk_impl_Box_speak`, never
+--     reading the dict.
+--
+--   * even without that shortcut no arm could have fired: the emitter derived this
+--     impl's route key from `headTagUnique` over CImplEntries — and the inheriting
+--     impl produces NONE — so it hashed the bare head "Box", while typecheck's
+--     INTERFACE-keyed `keyForSiteByIface` (which does see a method-less impl) stamped
+--     the canonical key `Speak|(Box Int)|` into the caller's dict cell.  Different
+--     words for the same impl.
+--
+-- The CONSTRAINED FORWARDER is required: a direct `speak (Box 1)` resolves RKey and
+-- takes emitDefaultRKey, which was always correct.
+--
+-- Speak  — override declared FIRST, two inheriting siblings after it.
+-- Loud   — the inheriting sibling declared FIRST (arm/dedup ORDER is load-bearing:
+--          `ifaceTags` unions decl-derived keys ahead of entry-derived ones and
+--          `dedupS` keeps the LAST occurrence).
+-- Both   — the CONTROL: both siblings OVERRIDE, so C7 already keyed them correctly
+--          before this fix.  It must still print bi/bs.
+--
+-- Must print:  boxint / woof / woof / BOXINT / WOOF / bi / bs
+import tface.{Speak(..), speak, Loud(..), loud, Both(..), both}
+
+data Box a = Box a
+
+impl Speak (Box Int) where
+  speak _ = "boxint"
+
+-- INHERITS `speak`: same head tycon "Box", different type argument.
+impl Speak (Box String) where
+
+
+-- A SECOND inheriting sibling — the chain needs one default arm per uncovered key,
+-- not just one.
+impl Speak (Box Bool) where
+
+
+-- INHERITS `loud`, and is declared BEFORE the override.
+impl Loud (Box String) where
+
+
+impl Loud (Box Int) where
+  loud _ = "BOXINT"
+
+-- CONTROL: neither inherits.
+impl Both (Box Int) where
+  both _ = "bi"
+
+impl Both (Box String) where
+  both _ = "bs"
+
+useSpeak : Speak a => a -> String
+useSpeak x = speak x
+
+useLoud : Loud a => a -> String
+useLoud x = loud x
+
+useBoth : Both a => a -> String
+useBoth x = both x
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (useSpeak (Box 1))
+  let _ = putStrLn (useSpeak (Box "s"))
+  let _ = putStrLn (useSpeak (Box True))
+  let _ = putStrLn (useLoud (Box 2))
+  let _ = putStrLn (useLoud (Box "t"))
+  let _ = putStrLn (useBoth (Box 3))
+  putStrLn (useBoth (Box "u"))

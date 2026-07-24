@@ -79,6 +79,14 @@ definedFnNames decls =
 
 definedFnNamesInto : List Decl -> HashMap String Unit -> Unit
 definedFnNamesInto [] _ = ()
+-- #1037: `@deprecated "…"` written directly on a DEFINITION (no separate signature
+-- line) parses to `DAttrib attrs (DFunDef …)`, which these two walks skipped —
+-- so the fn was neither in `defined` nor in the call graph, and a helper it alone
+-- called was DCE'd: `medaka build` died with `unbound variable '<helper>'` on a
+-- program `check` and `medaka run` both accept.  (Write the attribute above a
+-- SIGNATURE instead and it wraps the DSig, leaving the DFunDef bare — which is why
+-- this only reproduces on the no-signature form.)
+definedFnNamesInto ((DAttrib _ d)::rest) s = definedFnNamesInto (d::rest) s
 definedFnNamesInto ((DFunDef _ n _ _)::rest) s =
   let _ = set n () s
   definedFnNamesInto rest s
@@ -109,6 +117,9 @@ funGraph defined decls =
 
 funGraphInto : HashMap String Unit -> List Decl -> HashMap String (List String) -> Unit
 funGraphInto _ [] _ = ()
+-- #1037: see definedFnNamesInto — an attributed definition must still contribute
+-- its call-graph edges.
+funGraphInto defined ((DAttrib _ d)::rest) g = funGraphInto defined (d::rest) g
 funGraphInto defined ((DFunDef _ n ps body)::rest) g =
   let _ = set n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
   funGraphInto defined rest g
@@ -128,7 +139,16 @@ emittingRoots (d::rest)
 -- DImpl / DInterface lower to emitted code among the non-DFunDef decls.
 -- DLetGroup also lowers to emitted code (funClausesOf/lowerGroups in core_ir_lower)
 -- so its refs must seed reachability, or DFunDefs called only from a let-group are DCE'd.
+--
+-- #1037: a decl ATTRIBUTE wraps the decl (`DAttrib attrs <impl>`), and this said
+-- False for it — so an attributed impl's method bodies seeded NO roots and any
+-- helper called only from there was DCE'd out from under the emitter.  That was
+-- latent while `lowerDeclImpl` skipped attributed impls entirely (no body was
+-- emitted to dangle); the moment it stopped skipping them, an un-rooted attributed
+-- impl would have become `unbound variable '<helper>'` at build time.  `declRefs`
+-- (marker.mdk) already peels DAttrib, so this is the only half that was missing.
 isEmittingDecl : Decl -> Bool
+isEmittingDecl (DAttrib _ d) = isEmittingDecl d
 isEmittingDecl (DImpl { ... }) = True
 isEmittingDecl (DInterface { ... }) = True
 isEmittingDecl (DLetGroup _ _) = True

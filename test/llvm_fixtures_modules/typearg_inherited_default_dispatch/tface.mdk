@@ -1,0 +1,15 @@
+-- #1036: three interfaces, each owning a DEFAULT body, imported by entry.mdk.  The
+-- default is what lets an `impl` override NOTHING — and, cross-module, what makes it
+-- reach the Core IR as zero `CImplEntry` (desugar's `fillImplDefaults` specializes
+-- same-module only), which is the precondition for the bug.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "woof"
+
+export interface Loud a where
+  loud : a -> String
+  loud _ = "WOOF"
+
+export interface Both a where
+  both : a -> String
+  both _ = "neither"

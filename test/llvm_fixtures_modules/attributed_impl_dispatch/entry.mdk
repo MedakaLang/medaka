@@ -1,0 +1,72 @@
+-- #1037 (S0 silent wrongness + SIGSEGV): a decl ATTRIBUTE on an `impl` made the impl
+-- VANISH.  `parseAttrib` wraps ANY decl in `DAttrib attrs <decl>`; `lowerDeclImpl`
+-- (core_ir_lower) and `declImplEntries` (eval) both matched `DImpl` and fell through
+-- everything else to `_ => []`, so an attributed impl contributed NO entry at all.
+-- The interpreter then answered from the interface DEFAULT (wrong value, exit 0) and
+-- the native binary segfaulted through #948's arm-less dispatcher.
+--
+-- An attribute is METADATA.  It must never change which impls exist, and this fixture
+-- pins that for every axis the bug had:
+--
+--   Cat  @deprecated, OVERRIDES, reached through a CONSTRAINED FORWARDER (dict-routed)
+--   Dog  no attribute, INHERITS — the sibling whose presence made Cat's loss silent
+--   Fox  @inline, OVERRIDES, reached by a DIRECT call (the RKey path, not the chain)
+--   Owl  @must_use, OVERRIDES — a THIRD attribute name: the defect was never about
+--        `deprecated`, it was about the `DAttrib` wrapper
+--
+-- `catNoise` also pins the DCE half: an attributed impl's method body must seed
+-- reachability roots (`isEmittingDecl` said False for `DAttrib`), or the helper it
+-- alone calls is dropped and the emitter aborts `unbound variable 'catNoise'`.  That
+-- was latent only because the impl emitted no body to dangle; making the impl exist
+-- is exactly what would have armed it.
+--
+-- `shout` pins the sibling case: an attribute written directly on a DEFINITION (with
+-- NO separate signature line) wraps the DFunDef itself, and `funGraphInto` /
+-- `definedFnNamesInto` skipped it — so `shoutBody`, called only from there, was DCE'd
+-- and `medaka build` died with `unbound variable 'shoutBody'` on a check-green,
+-- run-correct program.  (Write the attribute above a SIGNATURE and it wraps the DSig
+-- instead, leaving the DFunDef bare — which is why only this form reproduces.)
+--
+-- Must print:  meow / woof / fox / owl / shouted
+import aface.{Speak(..), speak}
+
+data Cat = Cat
+data Dog = Dog
+data Fox = Fox
+data Owl = Owl
+
+catNoise : Unit -> String
+catNoise _ = "meow"
+
+shoutBody : Unit -> String
+shoutBody _ = "shouted"
+
+@deprecated "old"
+impl Speak Cat where
+  speak _ = catNoise ()
+
+-- INHERITS `speak`, alongside Cat's attributed override.
+impl Speak Dog where
+
+
+@inline
+impl Speak Fox where
+  speak _ = "fox"
+
+@must_use
+impl Speak Owl where
+  speak _ = "owl"
+
+@inline
+shout = shoutBody ()
+
+useSpeak : Speak a => a -> String
+useSpeak x = speak x
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (useSpeak Cat)
+  let _ = putStrLn (useSpeak Dog)
+  let _ = putStrLn (speak Fox)
+  let _ = putStrLn (useSpeak Owl)
+  putStrLn shout

@@ -1751,6 +1751,8 @@ buildIfaceDispatch : List Decl -> List ((String, String), List Int)
 buildIfaceDispatch prog = flatMap ifaceDispatchEntries prog
 
 ifaceDispatchEntries : Decl -> List ((String, String), List Int)
+-- #1037: an attribute on an `interface` must not delete its dispatch positions.
+ifaceDispatchEntries (DAttrib _ d) = ifaceDispatchEntries d
 ifaceDispatchEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (ifaceMethodEntry ifaceName typeParams) methods
 ifaceDispatchEntries _ = []
 
@@ -1816,6 +1818,14 @@ seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
 declImplEntries : EvalEnv (Value e) -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value e))
+-- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+-- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
+-- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
+-- contributed no VTypedImpl at all, so `speak Cat` silently answered from the
+-- interface DEFAULT (wrong value, exit 0).  Fixed in LOCKSTEP with
+-- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
+-- decl set and a fix to one is silently absent from the other (AGENTS.md).
+declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 declImplEntries env disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (implMethodEntry env disp ifaceName typeArgs) methods
 declImplEntries env _ (DInterface { typarams = typeParams, methods, ... }) =
   flatMap (defaultEntry env typeParams) methods
@@ -1872,6 +1882,8 @@ export implMethodNames : List Decl -> List String
 implMethodNames prog = dedup (flatMap implDeclNames prog)
 
 implDeclNames : Decl -> List String
+-- #1037
+implDeclNames (DAttrib _ d) = implDeclNames d
 implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 implDeclNames (DInterface { methods, ... }) = flatMap defaultName methods
 implDeclNames _ = []

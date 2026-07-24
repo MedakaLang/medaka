@@ -1,0 +1,6 @@
+-- #1037: an interface owning a DEFAULT body, imported by entry.mdk.  The default is
+-- what makes the discarded-impl failure SILENT rather than an unbound-method error:
+-- with the attributed impl gone, the call still resolves — to the wrong body.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "woof"

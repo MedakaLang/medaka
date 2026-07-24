@@ -1160,11 +1160,29 @@ lowerImpls prog =
 -- tagged, and therefore visible) clause for each inherited default.
 --
 -- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
--- (`fromOption noneHeadTag (headTyconHead tys)`), and the decl set is matched
--- arm-for-arm with `lowerDeclImpl` — including NOT unwrapping `DAttrib`, whose
--- inner impl `lowerDeclImpl` also skips.  So this table is a strict SUPERSET of
--- the tags the entries already yield: for every program that has no method-less
--- impl the emitter's tag set (and its emitted IR) is unchanged.
+-- (`fromOption noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
+-- computes an entry's key (`implKeyOf iface tys None`), and the decl set is matched
+-- arm-for-arm with `lowerDeclImpl` — including its `DAttrib` unwrapping (#1037).  So
+-- this table is a strict SUPERSET of the (tag, key) pairs the entries already yield:
+-- for every program that has no method-less impl the emitter's tag set (and its
+-- emitted IR) is unchanged.
+--
+-- ── #1036: the row carries the CANONICAL KEY too, not just the head tag ──────
+-- A head tag is TYPE-ARGUMENT-BLIND: `Box Int` and `Box String` both head at "Box".
+-- Recording only the head made a method-less `impl Speak (Box String)` look
+-- COVERED by its `impl Speak (Box Int)` sibling, so `defaultReachesOtherTags` saw
+-- nothing uncovered and `soleImplDirect` compiled every dict-routed `speak` into a
+-- direct call to the `Box Int` body — `use (Box "s")` printed "boxint".
+--
+-- It is also what the emitter needs to AGREE WITH THE TYPECHECKER on the runtime
+-- dict word.  typecheck's `keyForSiteByIface`/`headCollidesByIface` are INTERFACE-
+-- keyed and count every DECLARED impl (`matchingEntriesByIface` filters on the
+-- impl's iface, not on method-name membership — "so a specific impl that inherits a
+-- method via a DEFAULT is still seen"), so it stamps the canonical key
+-- `Speak|(Box Int)|` into the caller's dict cell.  The emitter's `headTagUnique`
+-- counts CImplEntries, which the method-less impl never produced, so it derived the
+-- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
+-- sides compute the same collision verdict from the same facts.
 --
 -- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
 -- one chokepoint every emit path funnels through with the WHOLE program's decls
@@ -1172,30 +1190,63 @@ lowerImpls prog =
 -- the same way.  A per-driver `install*` call — the shape the other side tables
 -- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
 -- is exactly the segfault this fixes.
-ifaceImplHeadsRef : Ref (List (String, String))
+-- one row per DECLARED impl: (iface, head tag, canonical impl key).
+ifaceImplHeadsRef : Ref (List (String, String, String))
 ifaceImplHeadsRef = Ref []
 
-export installIfaceImplHeads : List (String, String) -> Unit
+export installIfaceImplHeads : List (String, String, String) -> Unit
 installIfaceImplHeads t = setRef ifaceImplHeadsRef t
 
-export ifaceImplHeadTable : List Decl -> List (String, String)
+export ifaceImplHeadTable : List Decl -> List (String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 
-ifaceImplHeadEntries : Decl -> List (String, String)
-ifaceImplHeadEntries (DImpl { iface = ifaceName, tys = typeArgs, ... }) =
-  [(ifaceName, fromOption noneHeadTag (headTyconHead typeArgs))]
+ifaceImplHeadEntries : Decl -> List (String, String, String)
+-- #1037: matched arm-for-arm with `lowerDeclImpl`, which now unwraps `DAttrib` too.
+ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
+ifaceImplHeadEntries (DImpl { iface = ifaceName, tys = typeArgs, ... }) = [
+  (
+    ifaceName,
+    fromOption noneHeadTag (headTyconHead typeArgs),
+    implKeyOf ifaceName typeArgs None,
+  )
+]
 ifaceImplHeadEntries _ = []
 
--- the declared impl head tags for [iface], in declaration order (the caller
--- dedups — `ifaceTags` already runs the union through `dedupS`).
-export ifaceImplHeadTags : String -> List String
-ifaceImplHeadTags iface = ifaceImplHeadTagsGo iface ifaceImplHeadsRef.value
+-- #1036: the ROUTE KEY each declared impl of [iface] is dispatched under at run
+-- time, in declaration order (the caller dedups — `ifaceTags` already runs the
+-- union through `dedupS`).  Mirrors typecheck's `keyForSiteByIface`: the bare head
+-- tag when that head is unique among the interface's declared impls (so every
+-- existing program's dict words and dispatch arms are byte-identical), else the
+-- canonical full-type key — the same word `keyForSiteByIface` stamps into the
+-- caller's dict cell.
+export ifaceImplRouteKeys : String -> List String
+ifaceImplRouteKeys iface = ifaceRouteKeysGo iface ifaceImplHeadsRef.value
 
-ifaceImplHeadTagsGo : String -> List (String, String) -> List String
-ifaceImplHeadTagsGo _ [] = []
-ifaceImplHeadTagsGo iface ((i, tag)::rest)
-  | i == iface = tag :: ifaceImplHeadTagsGo iface rest
-  | otherwise = ifaceImplHeadTagsGo iface rest
+ifaceRouteKeysGo : String -> List (String, String, String) -> List String
+ifaceRouteKeysGo _ [] = []
+ifaceRouteKeysGo iface ((i, tag, key)::rest)
+  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique i tag) :: ifaceRouteKeysGo iface rest
+  | otherwise = ifaceRouteKeysGo iface rest
+
+declRouteKey : String -> String -> Bool -> String
+declRouteKey tag key unique = if unique then tag else key
+
+-- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
+-- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
+-- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
+-- typecheck's `countHeadByIface`.  An UNINSTALLED table answers True — the
+-- pre-#1036 bare-head behaviour — so a driver that never lowered through
+-- `lowerImpls` degrades to today's output rather than mis-keying.
+export ifaceDeclHeadUnique : String -> String -> Bool
+ifaceDeclHeadUnique iface tag =
+  listLen (declKeysAtHead ifaceImplHeadsRef.value iface tag []) <= 1
+
+declKeysAtHead : List (String, String, String) -> String -> String -> List String -> List String
+declKeysAtHead [] _ _ acc = acc
+declKeysAtHead ((i, t, k)::rest) iface tag acc
+  | i == iface && t == tag && not (contains k acc) =
+    declKeysAtHead rest iface tag (k::acc)
+  | otherwise = declKeysAtHead rest iface tag acc
 
 -- lowerImpls against a PRE-BUILT dispatch table — the multi-module driver builds
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
@@ -1205,6 +1256,14 @@ export lowerImplsWith : List ((String, String), List Int) -> List Decl -> List C
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
 lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
+-- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+-- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
+-- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
+-- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED
+-- from the program's impl set.  Native then had an impl-less interface-with-default
+-- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
+-- same shape and silently answered from the interface default instead.
+lowerDeclImpl disp (DAttrib _ d) = lowerDeclImpl disp d
 lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp ifaceName typeArgs) methods
 lowerDeclImpl _ (DInterface { typarams = typeParams, methods, ... }) =
   flatMap (lowerDefault typeParams) methods
@@ -1240,6 +1299,8 @@ export returnsSelfTable : List Decl -> List ((String, String), Bool)
 returnsSelfTable prog = flatMap ifaceReturnsSelfEntries prog
 
 ifaceReturnsSelfEntries : Decl -> List ((String, String), Bool)
+-- #1037: an attribute on an `interface` must not delete it from this table either.
+ifaceReturnsSelfEntries (DAttrib _ d) = ifaceReturnsSelfEntries d
 ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (m => ifaceReturnsSelfEntry ifaceName typeParams m) methods
 ifaceReturnsSelfEntries _ = []
 
@@ -1298,6 +1359,8 @@ export selfFnParamTable : List Decl -> List ((String, String), List Int)
 selfFnParamTable prog = flatMap ifaceSelfFnParamEntries prog
 
 ifaceSelfFnParamEntries : Decl -> List ((String, String), List Int)
+-- #1037
+ifaceSelfFnParamEntries (DAttrib _ d) = ifaceSelfFnParamEntries d
 ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (m => ifaceSelfFnParamEntry ifaceName typeParams m) methods
 ifaceSelfFnParamEntries _ = []
 
@@ -1327,6 +1390,8 @@ export methodIfaceTable : List Decl -> List (String, (String, Int))
 methodIfaceTable prog = flatMap ifaceMethodArityEntries prog
 
 ifaceMethodArityEntries : Decl -> List (String, (String, Int))
+-- #1037
+ifaceMethodArityEntries (DAttrib _ d) = ifaceMethodArityEntries d
 ifaceMethodArityEntries (DInterface { name = ifaceName, methods, ... }) =
   map (m => ifaceMethodArityEntry ifaceName m) methods
 ifaceMethodArityEntries _ = []
@@ -1350,6 +1415,8 @@ export methodConstraintIfaces : List Decl -> List (String, List String)
 methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
 
 methodConstraintIfaceEntries : Decl -> List (String, List String)
+-- #1037
+methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
 methodConstraintIfaceEntries (DInterface { typarams, methods, ... }) =
   flatMap (m => methodConstraintIfaceEntry typarams m) methods
 methodConstraintIfaceEntries _ = []
