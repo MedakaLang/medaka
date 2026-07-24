@@ -356,6 +356,36 @@ If `run_gates.sh` reports gates FAILED with *"phantom skip: oracle/binary not bu
 that is **not a regression**, you just have no oracles. (They count as FAILED, not skipped,
 on purpose: a gate that ran nothing must never report green.)
 
+🚨 **ONE CARVE-OUT, and it has bitten twice: a phantom-skipped `diff_compiler_selfproc` on a
+compiler-source change is NOT dismissible.** The rule above is right in general and wrong
+here, and the combination is a genuine blind spot rather than an oversight:
+`test/preflight.sh` *correctly* selects `diff_compiler_selfproc` for any `compiler/*/*.mdk`
+diff — but in a fresh worktree it has no `test/bin/check_all_main`, so it exits 2, becomes
+`FAIL* (phantom skip)`, and the paragraph above tells you to ignore it. **A correct gate plus
+a correct-in-general dismissal rule = shipping the break.** That gate is the *only* local
+signal for the moved selfproc **LEG A** scheme golden (see the snapshot/LEG A trap under
+Traps), and it reds in the CI `backend` shard when you skip it. Two PRs have burned a CI
+round-trip this way; on #1005 the deterministic red was then misread as a shared-runner
+flake and blind-retried.
+
+So when your diff touches a LEG A module — `frontend.{ast,desugar,exhaust,lexer,marker,parser,resolve}`,
+`types.{annotate,typecheck}`, `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check` — make
+it actually grade instead of dismissing it:
+
+```sh
+for o in check_all_main eval_modules_main eval_typed_modules_main; do
+  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one "$o"
+done
+sh test/diff_compiler_selfproc.sh        # must read "N ok, 0 failing" — not exit 2
+```
+
+**Cheapest possible discriminator, no build at all** — if you added or renamed a top-level
+binding, it must already be in the golden:
+
+```sh
+grep '<newBinding>' test/selfproc_goldens/legA/<module>.golden || echo "STALE — re-bless"
+```
+
 ### The gates
 
 ```sh
