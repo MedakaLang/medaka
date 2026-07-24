@@ -2743,11 +2743,15 @@ fi
 # op counter sees them exactly. This block grades the emit-stage and mangle-stage op
 # ratios on the one shape that grows those tables (gen_emittables).
 #
-# ⚠️ THE PRELUDE OP CONSTANT MUST BE SUBTRACTED, for the same reason the alloc arm
-# subtracts BASE_ALLOC: `emit` pays ~20k counted ops rendering core.mdk before the
-# fixture is looked at, and at N=250 that constant pulls a genuine 3.5x DOWN to 3.43 /
-# a 3.9x down to 3.36. Raw ratios would have read r1 UNDER the 3.0 threshold on both
-# stages and the sustained-both-doublings rule would have called the bug "ok".
+# THE PRELUDE OP CONSTANT IS SUBTRACTED HERE, and that is this file's OWN established
+# rule applied to the op arm — see "⚠️ THE BASELINE MUST BE SUBTRACTED, OR THIS GATE IS
+# BLIND" above (the note beside BASE_ALLOC), which is why the alloc arm has subtracted a
+# baseline all along. Concretely for these two stages: `emit` pays ~20k counted ops
+# rendering core.mdk before the fixture is looked at, so at N=250 that constant pulls
+# THIS shape's genuine 3.5x down to 3.43 and its 3.9x down to 3.36 — raw, r1 would sit
+# UNDER the 3.0 threshold and the sustained-both-doublings rule would read the bug "ok".
+# (A statement about THIS shape's constant only; it says nothing about the calibration
+# of any other shape or row.)
 #
 # SEEN RED — measured on this box against the pre-#352 emitter, band N=250->500->1000,
 # net of the baseline (this is the state the block must fail in, and does):
