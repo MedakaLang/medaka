@@ -1,5 +1,5 @@
 # META
-source_lines=860
+source_lines=888
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -124,7 +124,15 @@ import support.util.{
 -- per EVar / def-name / pattern ctor). Backing it with the String-keyed
 -- weight-balanced tree (support.ordmap) makes each lookup O(log n) instead of an
 -- O(map) linear `lookupAssoc` scan — the map is built once per unit in mangleUnitU.
-import support.ordmap.{OrdMap, omLookup, omFromPairs, omEmpty, omSize}
+import support.ordmap.{
+  OrdMap,
+  omLookup,
+  omFromPairs,
+  omFromNames,
+  omHasKey,
+  omEmpty,
+  omSize,
+}
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 -- Given the core unit and every (mid, decls) module, module-qualify EVERY
@@ -520,12 +528,32 @@ lookupExports k ((m, ns)::rest) =
 -- DFunDef — mirroring resolve.mdk's `expValuesDirect`).  We also count pub
 -- DLetGroup binders.  Restricted to names that are ALSO defined as functions in
 -- this unit (a pub DTypeSig with no body isn't an emittable symbol).
+-- #352: `defined` is a MEMBERSHIP SET, and it was a `List` scanned once per pub name
+-- — O(pubNames × unitFns) per unit, which on a unit whose pub names are most of its
+-- functions is O(unitFns²).  Measured through profile_main's `mangle` stage on a
+-- one-unit shape of N `export`ed fns, net of the prelude baseline: counted-op ratio
+-- r1=3.99 r2=3.99 per doubling at N=500/1000/2000 (2,003,000 net scan steps at
+-- N=2000) — textbook quadratic.  After: 500 -> 1000 -> 2000, r=2.00/2.00.
+-- `filterList` keeps the SAME order and the SAME duplicates — only the membership
+-- test changes — so every downstream export list, and therefore every mangled symbol,
+-- is byte-identical (fixpoint C3a/C3b).
+-- ⚠️ TWO corrections to what #352 filed, both measured, both worth keeping:
+--   * "(ALLOCATES — gate-visible)" is WRONG. The scan is PURE; the `mangle` allocation
+--     ratio on this shape is r1=2.12 r2=2.11 net / 1.84/1.96 raw — linear BEFORE the
+--     fix as well as after. It is visible on the OP arm, not the alloc arm.
+--   * This swap is NOT allocation-free either, and that cuts the other way from the
+--     #1010 trap in compiler/AGENTS.md. The key projection IS the identity on an
+--     already-built String, so nothing allocates PER PROBE — but the one-time set
+--     costs O(unitFns log unitFns) nodes, measured at +15% mangle-stage allocation at
+--     N=2000 on this shape (net 12.1 -> 13.9 MB) and +5% on a mixed shape. Still a
+--     clear win (op count falls 1000x, and mangle is ~15 MB of a ~2 GB compile), but
+--     it is a TRADE, not a free one.
 pubFnNames : List Decl -> List String
 pubFnNames decls =
-  let defined = unitDefNames ("", decls)
+  let defined = omFromNames (unitDefNames ("", decls)) omEmpty
   let pubSigs = pubSigNames decls
   let pubDefs = pubDefNames decls
-  filterList (n => contains n defined) (pubSigs ++ pubDefs)
+  filterList (n => omHasKey n defined) (pubSigs ++ pubDefs)
 
 -- names whose DFunDef / DLetGroup binder is itself `pub = True`.
 pubDefNames : List Decl -> List String
@@ -865,7 +893,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omEmpty" false) (mem "omSize" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
 (DTypeSig false "buildExportsPerUnit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
@@ -990,7 +1018,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "lookupExports" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupExports" ((PVar "k") (PCons (PTuple (PVar "m") (PVar "ns")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "m")) (EApp (EVar "Some") (EVar "ns")) (EApp (EApp (EVar "lookupExports") (EVar "k")) (EVar "rest"))))
 (DTypeSig false "pubFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "decls")))) (DoLet false false (PVar "pubSigs") (EApp (EVar "pubSigNames") (EVar "decls"))) (DoLet false false (PVar "pubDefs") (EApp (EVar "pubDefNames") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "defined")))) (EBinOp "++" (EVar "pubSigs") (EVar "pubDefs"))))))
+(DFunDef false "pubFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "pubSigs") (EApp (EVar "pubSigNames") (EVar "decls"))) (DoLet false false (PVar "pubDefs") (EApp (EVar "pubDefNames") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "defined")))) (EBinOp "++" (EVar "pubSigs") (EVar "pubDefs"))))))
 (DTypeSig false "pubDefNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubDefNames" ((PList)) (EListLit))
 (DFunDef false "pubDefNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubDefNames") (EVar "rest"))))
@@ -1147,7 +1175,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omEmpty" false) (mem "omSize" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
 (DTypeSig false "buildExportsPerUnit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
@@ -1272,7 +1300,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "lookupExports" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupExports" ((PVar "k") (PCons (PTuple (PVar "m") (PVar "ns")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "m")) (EApp (EVar "Some") (EVar "ns")) (EApp (EApp (EVar "lookupExports") (EVar "k")) (EVar "rest"))))
 (DTypeSig false "pubFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "pubFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "decls")))) (DoLet false false (PVar "pubSigs") (EApp (EVar "pubSigNames") (EVar "decls"))) (DoLet false false (PVar "pubDefs") (EApp (EVar "pubDefNames") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "defined")))) (EBinOp "++" (EVar "pubSigs") (EVar "pubDefs"))))))
+(DFunDef false "pubFnNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitDefNames") (ETuple (ELit (LString "")) (EVar "decls")))) (EVar "omEmpty"))) (DoLet false false (PVar "pubSigs") (EApp (EVar "pubSigNames") (EVar "decls"))) (DoLet false false (PVar "pubDefs") (EApp (EVar "pubDefNames") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "defined")))) (EBinOp "++" (EVar "pubSigs") (EVar "pubDefs"))))))
 (DTypeSig false "pubDefNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubDefNames" ((PList)) (EListLit))
 (DFunDef false "pubDefNames" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubDefNames") (EVar "rest"))))
