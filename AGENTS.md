@@ -573,6 +573,34 @@ narrative lives at the link.
   duplicate names**, so any flat frame keyed by *bare name* across modules inherits it (e.g.
   `map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin` collapse into one cell). The fix shape is a
   per-module **local** ctor frame that shadows the global.
+- 🚨 **ADDING A PROGRAM-GLOBAL TABLE OR A NEW AST CONSTRUCTOR? The required fixture is
+  "feature + UNRELATED code still behaves", NOT "feature works".** This is the single most
+  expensive shape in this tree, and it is invisible to every gate: on **2026-07-24 alone it
+  was the root cause of an S0, an S1, and a def-site regression across four different PRs —
+  every one of them 12/12 green.**
+
+  Two forms, one failure:
+  - **A new AST constructor** is silently swallowed by every `_ =>` wildcard arm in every
+    pass that does not yet know about it. Exhaustiveness checking is a *floor*, not a
+    guarantee — a wildcard is exhaustive and wrong. Audit the arms as a **SET**.
+  - **A program-global table** (a universe accumulator, a kind/type registry, a rename map)
+    is keyed by something, and if that key has **no scope**, entries collide across modules
+    that have no import relationship at all. Real example: a graded-interface kind table
+    keyed on a bare type-param name re-kinded *every* arity-matching application in the whole
+    module graph, so `f Int a -> f String a` was **silently accepted** (`meowmeow` for
+    `meowwoof`, exit 0, no diagnostic), and one 4-line file turned 1 clean diagnostic into 45.
+
+  **Why the gates cannot help you.** A fixture that exercises your feature passes. The
+  goldens you blessed pin the output you expected. Nothing in the suite asks *"is the code
+  that has nothing to do with this change still correct?"* — so the failure mode is
+  specifically that **your feature works perfectly and something unrelated breaks.**
+
+  **What to write instead:** a fixture where the new construct is present but the assertion
+  is about code that does not use it. A module that never imports your feature. A binding
+  whose type mentions none of your new machinery. The prelude. If your change adds a table,
+  ask *what happens to a program that never touches it* — and if the answer is "nothing, it
+  is keyed per-X", **prove the key is scoped** rather than asserting it (`<iface>@<slot>`,
+  never a program-global bare name).
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**
