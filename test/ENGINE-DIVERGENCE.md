@@ -286,6 +286,24 @@ cause** in `compiler/backend/wasm_emit.mdk`. Filed separately (#729) because the
 a **prelude function every user can call**, with a one-line reproducer, not a synthetic
 impl body or lists+HOF program. Native LLVM handles it correctly; the defect is WasmGC-only.
 
+### 3.7 `#948` — the first `llvmM/` row: wasm's RDict chain has no interface-DEFAULT arms
+
+`test/llvm_fixtures_modules/inherited_default_dict_dispatch/` was added as the regression
+gate for #948 (native). It is the **first ledger row keyed on the module corpus**
+(`llvmM/`), and unlike §3.4–§3.6 the wasm arm here **`ran`** — the module assembles and
+validates; it traps at run time on a reachable `unreachable`. So the signature is
+`eq:ne:ne:ran:ran:ran`, not the `…:na` shape of a build failure.
+
+| fixture | eval == native | wasm | issue | diagnosis |
+|---|---|---|---|---|
+| `llvmM/inherited_default_dict_dispatch` | `woof` / `MEOW` / `WOOF` | **trap: `instantiate failed: unreachable`** | #1020 (S1) | A CROSS-MODULE `impl` that overrides none of an interface's methods lowers to ZERO `CImplEntry` (`lowerDeclImpl` emits one entry per method the impl *defines*; desugar's `fillImplDefaults` specializes same-module only). `emitMethodDispatchRef` (`compiler/backend/wasm_emit.mdk`) builds its if-chain from `methodImpls` — tagged entries only — and has no default-synthesis arms at all, i.e. no peer of `llvm_emit.mdk`'s `emitDefaultDispatchChain` / `emitDispatchChainDefaulted`. No arm matches the receiver's dict tag, so the chain falls through to the trailing `unreachable`. |
+
+The wasm backend already owns the per-tag default machinery (`defaultForW`,
+`defaultFnNameW`, `ensureDefaultEmittedW`, `restampIfaceDictsW`) and uses it on the RKey
+path in `emitDefaultRKeyRef`; what is missing is wiring it into the RDict chain. Note the
+gap is wider than the method-less impl #948 turned on — the derived-Ord ADT inheriting
+`max`/`min` is exactly what `emitDispatchChainDefaulted` exists for on the LLVM side.
+
 ---
 
 ## 4. The engine-unavailability categories

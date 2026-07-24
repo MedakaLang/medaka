@@ -1,0 +1,10 @@
+-- #948: two interfaces, each owning a DEFAULT body, imported by entry.mdk.  The
+-- default is what makes an `impl` that overrides NOTHING legal — and, cross-module,
+-- invisible to the emitter's impl table before the fix.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "woof"
+
+export interface Loud a where
+  loud : a -> String
+  loud _ = "WOOF"
