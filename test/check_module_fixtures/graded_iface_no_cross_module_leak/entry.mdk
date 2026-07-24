@@ -1,0 +1,16 @@
+-- #822 S0 REGRESSION PIN, CROSS-MODULE half (adversarial review of PR #1011).
+--
+-- The first cut of #822 stored graded kinds under the bare type-parameter NAME in
+-- `universeIfaceParamKinds`, which is a GLOBAL data-universe accumulator and is NOT
+-- import-scoped.  So merely compiling `gradedmod` in the same run re-kinded every
+-- `g e a` in every other module of the graph — including `plainmod`, which imports
+-- nothing from it — turning `e` into a row that erases to `<>`.
+--
+-- `held` below is the observable: with the leak it prints `held : a <> b -> a <> b`
+-- (the Row slot erased); correctly scoped it prints three independent variables.
+-- The gate diffs the entry's schemes, so the golden IS the discriminator.
+import gradedmod.{GThenable}
+import plainmod.{keep}
+
+export held : g e a -> g e a
+held x = keep x

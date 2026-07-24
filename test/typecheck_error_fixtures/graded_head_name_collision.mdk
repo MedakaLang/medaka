@@ -1,10 +1,13 @@
--- #822: the graded-head lookup is keyed by the type-parameter NAME, because a
--- `TyVar h` spine head carries no interface context.  Two graded interfaces that
--- spell their head the same way with DIFFERENT slot kinds (`f e a` vs `f a e`)
--- therefore POISON that name, and both degrade to the pre-#822 opaque abstract
--- head — i.e. both are REJECTED by T-EFFECT-ARG-UNCOVERED rather than one of them
--- silently adopting the other's kinds.  Loud degradation is the point: this pins
--- that the ambiguity can never be resolved by accident of declaration order.
+-- #822: two graded interfaces that spell their row-indexed head the SAME way (`f`)
+-- but put the Row in DIFFERENT slots.  Both must declare cleanly and independently.
+--
+-- ⚠️ This fixture asserted the OPPOSITE until the adversarial review of PR #1011.
+-- The first cut of #822 keyed the graded kinds by the bare type-parameter NAME, so
+-- the two collided; the fixture pinned that they then "degrade loudly" and called
+-- that degradation deliberate.  It was not deliberate, it was a symptom — and the
+-- claim was false anyway: ACROSS MODULES the loser depended on the order of two
+-- import lines in a third file.  The scope now travels as an argument
+-- (gradedScopeOf), so there is no shared key left to collide over.
 interface GA f where
   ga : f e a -> (a -> <e> f e b) -> f e b
 

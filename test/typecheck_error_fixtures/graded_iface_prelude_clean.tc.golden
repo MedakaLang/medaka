@@ -48,8 +48,7 @@ arbitrary : Unit -> <Rand> a
 shrink : a -> List a
 to_rep : a -> Rep
 from_rep : Rep -> a
-ga : a b c -> (c -> a b d) -> a b d
-gb : a b c -> (b -> a b c) -> a b c
+h : a b -> Int
 not : Bool -> Bool
 neq : Eq a => a -> a -> Bool
 clamp : Ord a => a -> a -> a -> a

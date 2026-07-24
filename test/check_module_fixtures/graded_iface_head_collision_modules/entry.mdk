@@ -1,0 +1,17 @@
+-- #822, CROSS-MODULE half of the head-collision pin (adversarial review of PR
+-- #1011).  Two graded interfaces in SEPARATE modules spelling their row-indexed head
+-- the same way, with the Row in different slots.
+--
+-- Under the first cut of #822 the bare-name key made these fight: whichever module
+-- was compiled first kept the entry and the other was rejected with
+-- T-EFFECT-ARG-UNCOVERED — so the verdict flipped when the two import lines below
+-- were swapped.  Both must now declare cleanly, in either order, because each
+-- interface's kinds travel with it instead of living in a shared table.
+--
+-- (The same-file case is pinned by typecheck_error_fixtures/graded_head_name_collision.mdk;
+-- this is the multi-module path that file's earlier claim was FALSE on.)
+import ga.{GA, ga}
+import gb.{GB, gb}
+
+export both : Int
+both = 1

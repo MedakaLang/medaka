@@ -1,0 +1,6 @@
+-- A module with NO import relationship to `gradedmod` whatsoever.  Its `g` is an
+-- ordinary higher-kinded type variable, applied at the same arity as GThenable's
+-- row-indexed head and with a first argument spelled `e` — every coincidence the
+-- leak needed, and none of the meaning.
+export keep : g e a -> g e a
+keep x = x

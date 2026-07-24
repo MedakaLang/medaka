@@ -1,0 +1,18 @@
+-- #822 S0 REGRESSION PIN (adversarial review of PR #1011).  Declaring a graded
+-- interface must not change how ANY other type in the program is elaborated.
+--
+-- `bad` is ill-typed and has nothing to do with `G`: its `f` is an ordinary type
+-- variable that happens to be spelled like `G`'s row-indexed head, at the same
+-- arity.  The first cut of #822 keyed graded kinds by the bare parameter name, so
+-- `bad`'s `f` adopted `G`'s `[KRow, KType]`; `Int` and `String` both landed in the
+-- Row slot, where a non-row argument erases to `<>` (rowArgOf's catch-all), the two
+-- arguments became identical, and this program TYPE-CHECKED — exit 0, scheme printed
+-- as `bad : a <> b -> a <> b`.
+--
+-- Delete the interface and the same file is correctly rejected on any build, which is
+-- what makes this discriminating: the ONLY thing that can flip it is kind leakage.
+interface G f where
+  g : f e a -> (a -> <e> f e b) -> f e b
+
+bad : f Int a -> f String a
+bad x = x

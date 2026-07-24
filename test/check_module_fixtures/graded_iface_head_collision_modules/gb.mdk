@@ -1,0 +1,3 @@
+-- graded head ALSO spelled `f`, but Row in slot 1
+export interface GB f where
+  gb : f a e -> (a -> <e> f a e) -> f a e
