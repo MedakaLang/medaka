@@ -96,4 +96,22 @@ check_project "$ROOT/test/references_fixtures/multiclause" \
 check_project "$ROOT/test/references_fixtures/dup_field_def" \
   "reference-index def dedup (#964: a shared record field is ONE DEF site, not K)"
 
+# #1002: an `impl`'s method clause heads are DEF SITES, on the INTERFACE's key.
+# They used to be recorded as neither def nor use (defsOfDecl returned [] for
+# DImpl; walkImplMethods discarded the method name), so `references` on a method
+# missed every impl and a rename would have orphaned them all. The fixture pins
+# the keying from three directions: same module as the interface, a different
+# module (resolved through the import, NOT the impl's own module id), and two
+# impls of one interface for different types.
+check_project "$ROOT/test/references_fixtures/impl_method" \
+  "reference-index impl-method heads (#1002: every impl clause head is a DEF site)"
+
+# #1002 F1: TWO interfaces declaring the same method name. Each impl's heads must
+# land on ITS OWN interface's key. Keying by the bare method name through useEnv
+# merged them (one slot per `method<TAB><name>`, no interface identity), which
+# attributed one interface's impl to the other — a rename would then edit the
+# wrong impl. A regression back to method-name keying collapses these two rows.
+check_project "$ROOT/test/references_fixtures/iface_collide" \
+  "reference-index method keying (#1002 F1: same method name, two interfaces stay distinct)"
+
 exit "$rc"

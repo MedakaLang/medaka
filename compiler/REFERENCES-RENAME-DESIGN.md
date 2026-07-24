@@ -233,10 +233,10 @@ let a frame become a per-file accumulator.
   `HashMap`/`Ref`-list. Runs once per project load (cached in a `Ref`, same pattern as
   `projectCache`, `lsp.mdk:736`).
 - **`references` query:** locate click = O(size of the *clicked file*) worst case (one
-  file's occurrence scan) + **one O(1) `hmGet`** + **O(#uses)** to emit ranges. Independent
-  of project size except through #uses (which is inherent — you must return them all).
-  **Total: O(clicked-file-size + #uses).**
-- **`rename`:** same lookup, then **O(#uses)** to map each `Loc` to a
+  file's occurrence scan) + **two O(1) `hmGet`s** + **O(#def sites + #uses)** to emit ranges.
+  Independent of project size except through #def sites and #uses (which is inherent — you
+  must return them all). **Total: O(clicked-file-size + #def sites + #uses).**
+- **`rename`:** same lookup, then **O(#def sites + #uses)** to map each `Loc` to a
   `{ range, replacement }` edit. **Total: O(#uses + #def sites).** No file is re-walked; the
   def sites are `#def sites` more edits from `defIndex` — **every** clause head, not one
   (#964).

@@ -1,0 +1,18 @@
+core|method|eq  DEF main.mdk:52:2  USES 0  
+iface|ctor|Big  DEF iface.mdk:7:19  USES 0  
+iface|ctor|Small  DEF iface.mdk:7:19  USES 2  noimport.mdk:24:7 main.mdk:61:15
+iface|method|sizeOf  DEF iface.mdk:4:17 iface.mdk:13:2 iface.mdk:14:2 noimport.mdk:21:2 main.mdk:33:2 main.mdk:43:2  USES 4  main.mdk:58:16 main.mdk:61:8 main.mdk:61:23 main.mdk:61:38
+iface|ty|Box  DEF iface.mdk:7:19  USES 3  iface.mdk:12:18 noimport.mdk:23:14 main.mdk:57:21
+iface|ty|Sized  DEF iface.mdk:4:17  USES 0  
+main|ctor|Crate  DEF main.mdk:29:5  USES 1  main.mdk:61:30
+main|ctor|Pallet  DEF main.mdk:39:5  USES 1  main.mdk:61:45
+main|ctor|Tag  DEF main.mdk:48:5  USES 0  
+main|local|b|1  DEF main.mdk:58:12  USES 1  main.mdk:58:23
+main|ty|Crate  DEF main.mdk:29:5  USES 1  main.mdk:32:11
+main|ty|Pallet  DEF main.mdk:39:5  USES 1  main.mdk:42:11
+main|ty|Tag  DEF main.mdk:48:5  USES 1  main.mdk:51:8
+main|val|describeBox  DEF main.mdk:58:0  USES 0  
+main|val|total  DEF main.mdk:61:0  USES 0  
+noimport|ctor|Sack  DEF noimport.mdk:17:5  USES 0  
+noimport|ty|Sack  DEF noimport.mdk:17:5  USES 1  noimport.mdk:20:11
+noimport|val|aBox  DEF noimport.mdk:24:0  USES 0  

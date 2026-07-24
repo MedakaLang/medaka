@@ -1,0 +1,24 @@
+-- #1002 fixture, module 4 of 4 — the ORDINARY IMPL SPELLING.
+--
+-- Note the import list: `iface.{Sized, Box, Small}` — the INTERFACE, not the
+-- method. Writing an impl never requires importing the method name, and this is
+-- the spelling most real code uses.
+--
+-- This is the F2 regression the #1007 review caught: keying an impl head by the
+-- bare method name through `useEnv` MISSED here (nothing bound `sizeOf` locally),
+-- so the head fell through to `?ext|method|sizeOf` — every impl written this way
+-- collapsing onto one key, detached from its interface. `main.mdk` only avoided
+-- it by also CALLING the method and therefore having to import the name.
+--
+-- The head below must land on `iface|method|sizeOf`, same as every other impl of
+-- `Sized`, with no method import anywhere in this file.
+import iface.{Sized, Box, Small}
+
+data Sack =
+  | Sack
+
+impl Sized Sack where
+  sizeOf Sack = 3
+
+export aBox : Box
+aBox = Small

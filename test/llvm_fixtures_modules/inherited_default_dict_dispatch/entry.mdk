@@ -1,0 +1,52 @@
+-- #948 (S1 crash + S0 silent wrongness): a CROSS-MODULE impl that overrides NONE of
+-- an interface's methods — every one inherited from an interface DEFAULT — lowers to
+-- ZERO `CImplEntry`, because `lowerDeclImpl` projects a `DImpl` to one entry per
+-- method it DEFINES.  (Same-module the question never arises: desugar's
+-- `fillImplDefaults` specializes the default INTO the impl, which is a real, tagged
+-- entry.)  The native emitter derived "the type tags this interface's dict can carry"
+-- from those entries, so such an impl was invisible to it, in two ways:
+--
+--   Speak/Dog — Dog is the interface's ONLY impl, so `ifaceTags Speak` was EMPTY and
+--     the runtime dispatcher `@mdk_disp_speak_0_1` was emitted with no arm at all,
+--     just `unreachable`.  The dict-routed call inside `useSpeak` ran it → SIGSEGV
+--     (exit 139), on a program `check` greens and `medaka run` prints correctly.
+--
+--   Loud/Cat+Dog — Cat OVERRIDES `loud`, Dog inherits it.  `loud` then had exactly
+--     one tagged impl, so the `soleImplDirect` shortcut compiled every dict-routed
+--     call — including `useLoud Dog` — into a direct call to Cat's `@mdk_impl_Cat_loud`.
+--     No crash: `useLoud Dog` just returned "MEOW".  Silent wrongness.
+--
+-- Both halves need the CONSTRAINED FORWARDER (`useSpeak`/`useLoud`): a direct
+-- `speak Dog` in `main` resolves RKey and takes emitDefaultRKey, which was always
+-- correct (see the sibling default_method_numlit_crossmodule fixture, whose call IS
+-- direct — which is exactly why it never caught this).
+--
+-- Must print woof / MEOW / WOOF.  A crash is the Speak half regressing; a second
+-- "MEOW" on the last line is the Loud half regressing.
+import dface.{Speak(..), speak, Loud(..), loud}
+
+data Cat = Cat
+data Dog = Dog
+
+-- INHERITS `speak`: an impl with an entirely empty body.
+impl Speak Dog where
+
+
+impl Loud Cat where
+  loud _ = "MEOW"
+
+-- INHERITS `loud`, alongside Cat's override.
+impl Loud Dog where
+
+
+useSpeak : Speak a => a -> String
+useSpeak x = speak x
+
+useLoud : Loud a => a -> String
+useLoud x = loud x
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (useSpeak Dog)
+  let _ = putStrLn (useLoud Cat)
+  putStrLn (useLoud Dog)

@@ -1,5 +1,5 @@
 # META
-source_lines=1383
+source_lines=1527
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -92,13 +92,14 @@ import frontend.parser.{
   positionsDecls,
   DeclPos,
   declPosNameLoc,
+  declPosChildLocs,
 }
 import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
   importModId,
 }
-import support.util.{zipL, startsWith, endsWith}
+import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
 import list.{sort}
 import support.char.{isUpper}
@@ -138,7 +139,16 @@ mkKey modId ns name = modId ++ sep ++ ns ++ sep ++ name
 
 -- an EXTERNAL (prelude / out-of-project / unresolved) fallback key.  Still keyed
 -- by (ns, name) so uses of the SAME external name group under one key; carries no
--- def site (defsOf returns []), which is exactly right for F1 intra-project scope.
+-- def site of its own, which is exactly right for F1 intra-project scope.
+--
+-- One deliberate exception (#1002): an `impl` whose INTERFACE NAME does not
+-- resolve records its method clause heads under `mkKey "?ext" nsMethod n`, which
+-- is byte-identical to `extKey nsMethod n`.  Those heads are inside the project,
+-- so reporting them is F1-correct.  Note this is reached only when the interface
+-- itself is unresolvable — a broken program — NOT merely because the method name
+-- was not imported; `ifaceModId` keys off the interface name the impl header
+-- spells, which an impl always has in scope.  Two unknown interfaces sharing a
+-- method name do merge here; that is the degenerate case, not the ordinary one.
 extKey : String -> String -> String
 extKey ns name = "?ext\{sep}\{ns}\{sep}\{name}"
 
@@ -305,8 +315,13 @@ pushDefFresh ctx key uri loc = match hmGetC ctx ctx.defs key
     r := (uri, loc)::r.value
   None => hmSetC ctx ctx.defs key (Ref [(uri, loc)])
 
--- The identity of a def SITE: its binder key plus its exact (uri, span).  `sep` is
--- a TAB, which can appear in none of these components, so this is injective.
+-- The identity of a def SITE: its binder key plus its exact (uri, span).  Joined
+-- on `sep` (TAB), which separates cleanly for every identifier, namespace tag and
+-- integer here.  A `uri` (or the module id inside `key`) is a filesystem path and
+-- CAN in principle contain a TAB, so this is injective for every path that does
+-- not — the same bound `mkKey` already lives with, and a collision would need two
+-- def sites whose TAB-containing paths re-split identically.  Pre-existing parity,
+-- not a new assumption; if `mkKey` ever gains a stricter separator, this follows.
 defSiteId : String -> String -> Loc -> String
 defSiteId key uri (Loc _ sl sc el ec) = "\{key}\{sep}\{uri}\{sep}\{intToString sl}\{sep}\{intToString sc}\{sep}\{intToString el}\{sep}\{intToString ec}"
 
@@ -356,6 +371,46 @@ resolveField : W -> String -> String
 resolveField (W ctx _ _ useEnv _) name = match hmGetC ctx useEnv (nsField ++ sep ++ name)
   Some k => k
   None => extKey nsField name
+
+-- The defining-module id of an impl's INTERFACE, for keying its method heads
+-- (#1002).  Derived from the interface NAME the impl header itself spells —
+-- `impl Alpha P where …` names `Alpha` right there — NOT from a `useEnv` lookup
+-- of the bare METHOD name.
+--
+-- Why the method name cannot be the handle: `useEnv` has exactly one slot per
+-- `method<TAB><name>` and carries NO interface identity, so two interfaces that
+-- both declare `tag` share that slot.  Keying off it made every `impl Beta Q`
+-- head land on `Alpha`'s key — a *confidently wrong* attribution, strictly worse
+-- than the omission it replaced: `references` on `Alpha.tag` would return Beta's
+-- impl head and a rename would edit it, orphaning Beta's own method.  That is the
+-- #1002 failure mode re-created one dimension over.  It also failed the ordinary
+-- spelling: writing an impl does NOT require importing the method name (only the
+-- interface), and with `import a.{Alpha}` alone the `nsMethod` lookup missed and
+-- every impl in the file collapsed onto one `?ext` key.
+--
+-- The interface name resolves through `nsTy` — the SAME namespace the impl header
+-- is written in — so it works under selective import, `as`-alias and re-export
+-- chains (all threaded for `nsTy` by `importNs`/`reExportNs`), and it needs no
+-- import of the method name at all.  `resolveTy` yields `<mid>\t<ns>\t<name>`;
+-- the mid is its first component, and it is exactly the mid `methodDef` used when
+-- the interface's own declaration was recorded, so heads join their declaration.
+--
+-- Unresolvable interface (a genuinely broken program) → `?ext`, and
+-- `mkKey "?ext" nsMethod n` is byte-identical to `extKey nsMethod n`, so the
+-- fallback stays consistent with how a method USE of an unknown name is keyed.
+-- Two unknown interfaces sharing a method name still merge there; that is the
+-- degenerate case, not the ordinary one.
+--
+-- Cost: ONE `resolveTy` + one split per `impl` DECL (not per method), so this is
+-- O(1) per impl with a short-key constant, never per token.
+ifaceModId : W -> String -> String
+ifaceModId w ifaceName = keyModId (resolveTy w ifaceName)
+
+-- First component of a BinderKey (`<mid>\t<ns>\t<name>`).  `sep` is that TAB.
+keyModId : String -> String
+keyModId k = match splitOnChar '\t' k
+  mid::_ => mid
+  [] => k
 
 -- ── the expression walk (mirrors resolve.mdk stampExpr's frame-stack shape) ──
 -- `curLoc` is the location of the nearest enclosing `ELoc` wrapper — the parser
@@ -740,11 +795,89 @@ ctorsPub VisPublic = True
 ctorsPub _ = False
 
 -- ── body walk over decls (uses the assembled useEnv) ─────────────────────────
+-- `recordImplHeads` runs HERE, not in `defsOfDecl`, for two reasons: it needs the
+-- assembled `useEnv` (only available in this phase — `collectDefs` runs before
+-- `processImports`) to reach the interface's origin key, and it needs the decl's
+-- CHILD name `Loc`s, which `walkDeclBody` is not handed.  See `recordImplHeads`.
 walkDecls : W -> List (Decl, DeclPos) -> Unit
 walkDecls _ [] = ()
 walkDecls w ((d, p)::rest) =
-  let _ = walkDeclBody w d (nameLocOf (uriOf w) p)
+  let loc = nameLocOf (uriOf w) p
+  let _ = recordImplHeads w d loc p
+  let _ = walkDeclBody w d loc
   walkDecls w rest
+
+-- A decl's CHILD name-token `Loc`s (one per interface/impl method clause head,
+-- per data variant, …), re-based onto this module's uri.  `None` where the
+-- parser could not pin a token (`declChildSpansOf` is defensively partial).
+-- Called ONLY from the `DImpl` arm below: Medaka is strict, so computing it for
+-- every decl and discarding it for all but impls would allocate a fresh list per
+-- `data`/`interface`/`newtype` in the project for nothing.
+childLocsOf : String -> DeclPos -> List (Option Loc)
+childLocsOf uri p = map (mapChildLoc uri) (declPosChildLocs p)
+
+mapChildLoc : String -> Option Loc -> Option Loc
+mapChildLoc _ None = None
+mapChildLoc uri (Some l) = Some (withUri uri l)
+
+-- ── impl-method clause heads (#1002) ────────────────────────────────────────
+-- An `impl`'s method heads used to be recorded as NEITHER a def nor a use — the
+-- def pass returns `[]` for `DImpl` and the body walk discards the method NAME —
+-- so `impl Sized Box where sizeOf Small = 1 / sizeOf Big = 100` put nothing at
+-- all in the index.  `references` on `sizeOf` therefore returned the interface
+-- declaration and the call sites but NOT the impls, and a rename off that set
+-- would rename the interface method while leaving every `impl` defining the OLD
+-- name — the #964 failure mode, one namespace over.
+--
+-- KEYING (the decision that makes rename correct): a head lands on the SAME
+-- BinderKey as the interface's method declaration, NOT an impl-qualified key.
+-- An impl method is not an independent binder; it is a definition OF that
+-- method, and renaming the method must edit every one of them or the program
+-- silently changes meaning.  It is also what `references` should return — the
+-- LSP convention is that find-references on an interface method includes its
+-- implementations.  Distinguishing WHICH impl a head belongs to stays expressible
+-- from the head's own `Loc`, which is inside exactly one `impl`.
+--
+-- WHICH interface's key is decided by the impl header's OWN interface name via
+-- `ifaceModId` — see there for why the bare method name is not a usable handle
+-- (two interfaces declaring `tag` share one `useEnv` slot, and an impl need not
+-- import the method name at all).
+--
+-- Accumulating (post-#964): K impls × N clauses each all coexist under the one
+-- key at K×N distinct `Loc`s, and `pushDef`'s dedup only ever collapses two
+-- records of the SAME (uri, span) — which distinct clause heads never are.
+--
+-- Runs for the DImpl arm only; every other decl is a no-op.  `DAttrib` is peeled
+-- because `declChildNameIdxs` itself derives child spans from the INNER decl.
+-- The interface's module id is resolved ONCE per impl decl, not per method.
+recordImplHeads : W -> Decl -> Loc -> DeclPos -> Unit
+recordImplHeads w (DAttrib _ inner) loc p = recordImplHeads w inner loc p
+recordImplHeads w (DImpl { iface, methods, ... }) loc p =
+  implHeadsGo w (ifaceModId w iface) loc methods (childLocsOf (uriOf w) p)
+recordImplHeads _ _ _ _ = ()
+
+-- Zip methods with child `Loc`s POSITIONALLY: `methodNameIdxs` (parser.mdk)
+-- emits one index per clause line of the `where` body, and `ImplMethod` is one
+-- CLAUSE (`ImplMethod String (List Pat) Expr` — no clause list), so the two run
+-- 1:1.  Defensive on a short/absent child list — fall back to the decl's own
+-- `Loc` rather than dropping the head, so a parser gap costs precision, never
+-- the whole entry (the same posture `zipFieldIdxs` takes).
+implHeadsGo : W -> String -> Loc -> List ImplMethod -> List (Option Loc) -> Unit
+implHeadsGo _ _ _ [] _ = ()
+implHeadsGo w ifaceMid loc ((ImplMethod n _ _)::rest) [] =
+  let _ = recordImplHead w ifaceMid n loc
+  implHeadsGo w ifaceMid loc rest []
+implHeadsGo w ifaceMid loc ((ImplMethod n _ _)::rest) (c::cs) =
+  let _ = recordImplHead w ifaceMid n (childLocOr loc c)
+  implHeadsGo w ifaceMid loc rest cs
+
+childLocOr : Loc -> Option Loc -> Loc
+childLocOr fb None = fb
+childLocOr _ (Some l) = l
+
+recordImplHead : W -> String -> String -> Loc -> Unit
+recordImplHead w ifaceMid n loc =
+  recordDef (ctxOf w) (mkKey ifaceMid nsMethod n) (uriOf w) loc
 
 walkDeclBody : W -> Decl -> Loc -> Unit
 walkDeclBody w (DFunDef _ _ pats body) loc =
@@ -947,8 +1080,11 @@ importWildGo ctx useEnv ((ns, name, originKey)::rest) =
 
 -- ── prelude seeding (core + runtime): export origins WITHOUT def recording ───
 -- F1: intra-project scope.  Prelude names resolve to stable `core`/`runtime`
--- origin keys so uses group, but no def site is recorded (defsOf → []), and we
--- never walk prelude bodies.
+-- origin keys so uses group, but the PRELUDE's own decls record no def site, and
+-- we never walk prelude bodies.  A project-local `impl Eq MyType` DOES record its
+-- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
+-- location joining a prelude key, not a descent into stdlib, and it is what makes
+-- `references` on a prelude method show the impls the user actually wrote.
 seedPrelude : Ctx -> String -> String -> Unit
 seedPrelude ctx mid src = match parseWithPositionsOpt src
   None => ()
@@ -1294,11 +1430,19 @@ export buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
 buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
   buildRefIndexProject noOverride projectRoot runtimeSrc coreSrc
 
--- EVERY definition site of a binder, in source order; `[]` if it is not defined
--- inside the project.  Usually one, but a MULTI-CLAUSE top-level function has one
--- per clause head, all under the same key (#964 — see the module header).
--- Duplicate-free by construction (`pushDef`).  O(#def sites for the key), i.e.
--- O(#clauses), never project-sized.
+-- EVERY definition site of a binder; `[]` if it is not defined inside the
+-- project.  Usually one, but a MULTI-CLAUSE top-level function has one per clause
+-- head (#964) and an interface METHOD has one per impl clause head on top of its
+-- declaration (#1002) — all under the same key (see the module header).
+-- Duplicate-free by construction (`pushDef`).  O(#def sites for the key), never
+-- project-sized.
+--
+-- ORDER is RECORD order, which is source order for the clause heads of one
+-- function but interface-declaration-then-impl-heads for a method (the def pass
+-- runs over a module before the body walk does, and modules are indexed
+-- dependency-first).  It is deterministic, but a caller that needs positional
+-- order must sort — `referenceLocations` (lsp.mdk) already sorts by
+-- (path, line, col) before emitting, which is why the tool output is stable.
 --
 -- There is deliberately NO single-site `defOf` companion.  It had zero callers,
 -- and the shorter, more obvious name returning ONE head is exactly the footgun
@@ -1387,9 +1531,9 @@ splitLastL [x] = Some ([], x)
 splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosNameLoc" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
-(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -1472,6 +1616,10 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "resolveTy" ((PCon "W" (PVar "ctx") PWild PWild (PVar "useEnv") PWild) (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "nsTy") (EVar "sep")) (EVar "name"))) (arm (PCon "Some" (PVar "k")) () (EVar "k")) (arm (PCon "None") () (EApp (EApp (EVar "extKey") (EVar "nsTy")) (EVar "name")))))
 (DTypeSig false "resolveField" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "resolveField" ((PCon "W" (PVar "ctx") PWild PWild (PVar "useEnv") PWild) (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "nsField") (EVar "sep")) (EVar "name"))) (arm (PCon "Some" (PVar "k")) () (EVar "k")) (arm (PCon "None") () (EApp (EApp (EVar "extKey") (EVar "nsField")) (EVar "name")))))
+(DTypeSig false "ifaceModId" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceModId" ((PVar "w") (PVar "ifaceName")) (EApp (EVar "keyModId") (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "ifaceName"))))
+(DTypeSig false "keyModId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "keyModId" ((PVar "k")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\t"))) (EVar "k")) (arm (PCons (PVar "mid") PWild) () (EVar "mid")) (arm (PList) () (EVar "k"))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") PWild (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))) (EVar "e")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") PWild (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))) (EVar "e")))
@@ -1641,7 +1789,25 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "ctorsPub" (PWild) (EVar "False"))
 (DTypeSig false "walkDecls" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyCon "Unit"))))
 (DFunDef false "walkDecls" (PWild (PList)) (ELit LUnit))
-(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p")))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DTypeSig false "childLocsOf" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "childLocsOf" ((PVar "uri") (PVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildLoc") (EVar "uri"))) (EApp (EVar "declPosChildLocs") (EVar "p"))))
+(DTypeSig false "mapChildLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "mapChildLoc" (PWild (PCon "None")) (EVar "None"))
+(DFunDef false "mapChildLoc" ((PVar "uri") (PCon "Some" (PVar "l"))) (EApp (EVar "Some") (EApp (EApp (EVar "withUri") (EVar "uri")) (EVar "l"))))
+(DTypeSig false "recordImplHeads" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyFun (TyCon "DeclPos") (TyCon "Unit"))))))
+(DFunDef false "recordImplHeads" ((PVar "w") (PCon "DAttrib" PWild (PVar "inner")) (PVar "loc") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "inner")) (EVar "loc")) (EVar "p")))
+(DFunDef false "recordImplHeads" ((PVar "w") (PRec "DImpl" ((rf "iface" None) (rf "methods" None)) true) (PVar "loc") (PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EApp (EApp (EVar "ifaceModId") (EVar "w")) (EVar "iface"))) (EVar "loc")) (EVar "methods")) (EApp (EApp (EVar "childLocsOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))))
+(DFunDef false "recordImplHeads" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "implHeadsGo" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))))))
+(DFunDef false "implHeadsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PList)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EListLit)))))
+(DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EApp (EApp (EVar "childLocOr") (EVar "loc")) (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EVar "cs")))))
+(DTypeSig false "childLocOr" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Loc"))))
+(DFunDef false "childLocOr" ((PVar "fb") (PCon "None")) (EVar "fb"))
+(DFunDef false "childLocOr" (PWild (PCon "Some" (PVar "l"))) (EVar "l"))
+(DTypeSig false "recordImplHead" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
+(DFunDef false "recordImplHead" ((PVar "w") (PVar "ifaceMid") (PVar "n") (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "recordDef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EApp (EVar "mkKey") (EVar "ifaceMid")) (EVar "nsMethod")) (EVar "n"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "loc")))
 (DTypeSig false "walkDeclBody" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTypeSig" PWild PWild (PVar "ty")) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
@@ -1856,9 +2022,9 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "splitLastL" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "pre") (PVar "last"))) (ETuple (EBinOp "::" (EVar "x") (EVar "pre")) (EVar "last")))) (EApp (EVar "splitLastL") (EVar "rest"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosNameLoc" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
-(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -1941,6 +2107,10 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "resolveTy" ((PCon "W" (PVar "ctx") PWild PWild (PVar "useEnv") PWild) (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "nsTy") (EVar "sep")) (EVar "name"))) (arm (PCon "Some" (PVar "k")) () (EVar "k")) (arm (PCon "None") () (EApp (EApp (EVar "extKey") (EVar "nsTy")) (EVar "name")))))
 (DTypeSig false "resolveField" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "resolveField" ((PCon "W" (PVar "ctx") PWild PWild (PVar "useEnv") PWild) (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "nsField") (EVar "sep")) (EVar "name"))) (arm (PCon "Some" (PVar "k")) () (EVar "k")) (arm (PCon "None") () (EApp (EApp (EVar "extKey") (EVar "nsField")) (EVar "name")))))
+(DTypeSig false "ifaceModId" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceModId" ((PVar "w") (PVar "ifaceName")) (EApp (EVar "keyModId") (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "ifaceName"))))
+(DTypeSig false "keyModId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "keyModId" ((PVar "k")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\t"))) (EVar "k")) (arm (PCons (PVar "mid") PWild) () (EVar "mid")) (arm (PList) () (EVar "k"))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") PWild (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))) (EVar "e")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") PWild (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l"))) (EVar "e")))
@@ -2110,7 +2280,25 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "ctorsPub" (PWild) (EVar "False"))
 (DTypeSig false "walkDecls" (TyFun (TyCon "W") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyCon "Unit"))))
 (DFunDef false "walkDecls" (PWild (PList)) (ELit LUnit))
-(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p")))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DFunDef false "walkDecls" ((PVar "w") (PCons (PTuple (PVar "d") (PVar "p")) (PVar "rest"))) (EBlock (DoLet false false (PVar "loc") (EApp (EApp (EVar "nameLocOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "d")) (EVar "loc")) (EVar "p"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkDeclBody") (EVar "w")) (EVar "d")) (EVar "loc"))) (DoExpr (EApp (EApp (EVar "walkDecls") (EVar "w")) (EVar "rest")))))
+(DTypeSig false "childLocsOf" (TyFun (TyCon "String") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "childLocsOf" ((PVar "uri") (PVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildLoc") (EVar "uri"))) (EApp (EVar "declPosChildLocs") (EVar "p"))))
+(DTypeSig false "mapChildLoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "mapChildLoc" (PWild (PCon "None")) (EVar "None"))
+(DFunDef false "mapChildLoc" ((PVar "uri") (PCon "Some" (PVar "l"))) (EApp (EVar "Some") (EApp (EApp (EVar "withUri") (EVar "uri")) (EVar "l"))))
+(DTypeSig false "recordImplHeads" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyFun (TyCon "DeclPos") (TyCon "Unit"))))))
+(DFunDef false "recordImplHeads" ((PVar "w") (PCon "DAttrib" PWild (PVar "inner")) (PVar "loc") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "recordImplHeads") (EVar "w")) (EVar "inner")) (EVar "loc")) (EVar "p")))
+(DFunDef false "recordImplHeads" ((PVar "w") (PRec "DImpl" ((rf "iface" None) (rf "methods" None)) true) (PVar "loc") (PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EApp (EApp (EVar "ifaceModId") (EVar "w")) (EVar "iface"))) (EVar "loc")) (EVar "methods")) (EApp (EApp (EVar "childLocsOf") (EApp (EVar "uriOf") (EVar "w"))) (EVar "p"))))
+(DFunDef false "recordImplHeads" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "implHeadsGo" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))))))
+(DFunDef false "implHeadsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PList)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EListLit)))))
+(DFunDef false "implHeadsGo" ((PVar "w") (PVar "ifaceMid") (PVar "loc") (PCons (PCon "ImplMethod" (PVar "n") PWild PWild) (PVar "rest")) (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordImplHead") (EVar "w")) (EVar "ifaceMid")) (EVar "n")) (EApp (EApp (EVar "childLocOr") (EVar "loc")) (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "implHeadsGo") (EVar "w")) (EVar "ifaceMid")) (EVar "loc")) (EVar "rest")) (EVar "cs")))))
+(DTypeSig false "childLocOr" (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Loc"))))
+(DFunDef false "childLocOr" ((PVar "fb") (PCon "None")) (EVar "fb"))
+(DFunDef false "childLocOr" (PWild (PCon "Some" (PVar "l"))) (EVar "l"))
+(DTypeSig false "recordImplHead" (TyFun (TyCon "W") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
+(DFunDef false "recordImplHead" ((PVar "w") (PVar "ifaceMid") (PVar "n") (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "recordDef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EApp (EVar "mkKey") (EVar "ifaceMid")) (EVar "nsMethod")) (EVar "n"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "loc")))
 (DTypeSig false "walkDeclBody" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body")) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTypeSig" PWild PWild (PVar "ty")) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
