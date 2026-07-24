@@ -4,8 +4,18 @@
 -- turns the loader's dependency-ordered `(modId, path, decls)` list into two
 -- binder-keyed hash maps —
 --
---   defIndex : BinderKey -> (uri, defLoc)                    -- where it is defined
+--   defIndex : BinderKey -> Ref (List (uri, defLoc))         -- where it is defined
 --   refIndex : BinderKey -> Ref (List (uri, useLoc))         -- everywhere it is used
+--
+-- `defIndex` is a LIST, not a single entry, because one binder can have MANY def
+-- sites: a multi-clause top-level function is N separate `DFunDef` decls that all
+-- share one `mkKey mid nsVal n`, so `describe 0 = … / describe 1 = … / describe n
+-- = …` contributes THREE clause heads under one key.  Holding only the last (what
+-- a plain `hmSet` does) under-reports `references` and would let a rename orphan
+-- every earlier clause under the OLD name — which still compiles, and silently
+-- changes runtime behaviour (#964).  `defsOf` returns them all in source order;
+-- `defOf` returns the FIRST, for a caller that wants the single go-to-definition
+-- location.
 --
 -- plus an `occIndex : uri -> Ref (List (useLoc, BinderKey))` so a click at a
 -- (uri, line, col) resolves to a `BinderKey` by scanning ONLY the clicked file.
@@ -129,7 +139,7 @@ extKey ns name = "?ext\{sep}\{ns}\{sep}\{name}"
 -- ── the index + the build context ───────────────────────────────────────────
 export data RefIndex =
   | RefIndex {
-      defs : HashMap String (String, Loc),
+      defs : HashMap String (Ref (List (String, Loc))),
       refs : HashMap String (Ref (List (String, Loc))),
       occ : HashMap String (Ref (List (Loc, String))),
       ops : Int,
@@ -142,7 +152,7 @@ export data RefIndex =
 --   fresh    : monotonic local-binder id source
 data Ctx =
   | Ctx {
-      defs : HashMap String (String, Loc),
+      defs : HashMap String (Ref (List (String, Loc))),
       refs : HashMap String (Ref (List (String, Loc))),
       occ : HashMap String (Ref (List (Loc, String))),
       originOf : HashMap String String,
@@ -236,13 +246,25 @@ assocFind ctx n ((k, v)::rest) =
 -- ── record: def site, use site, occurrence ──────────────────────────────────
 recordDef : Ctx -> String -> String -> Loc -> Unit
 recordDef ctx key uri loc =
-  let _ = hmSetC ctx ctx.defs key (uri, loc)
+  let _ = pushDef ctx key uri loc
   pushOcc ctx uri loc key
 
 recordRef : Ctx -> String -> String -> Loc -> Unit
 recordRef ctx key uri loc =
   let _ = pushRef ctx key uri loc
   pushOcc ctx uri loc key
+
+-- ACCUMULATE, never last-write-wins (#964): a multi-clause top-level fn records
+-- one def per clause head under the SAME key, and dropping all but the last is a
+-- silent-wrongness bug (see the module header).  Same O(1) `Ref`-list push shape
+-- as `pushRef`/`pushOcc` — newest-first, reversed to source order on read, so N
+-- clause heads cost O(N) to record, never O(N²).
+pushDef : Ctx -> String -> String -> Loc -> Unit
+pushDef ctx key uri loc = match hmGetC ctx ctx.defs key
+  Some r =>
+    let _ = bump ctx
+    r := (uri, loc)::r.value
+  None => hmSetC ctx ctx.defs key (Ref [(uri, loc)])
 
 pushRef : Ctx -> String -> String -> Loc -> Unit
 pushRef ctx key uri loc = match hmGetC ctx ctx.refs key
@@ -1227,9 +1249,24 @@ export buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
 buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
   buildRefIndexProject noOverride projectRoot runtimeSrc coreSrc
 
--- The definition site of a binder, if it is defined inside the project.  O(1).
+-- EVERY definition site of a binder, in source order.  Usually one; a MULTI-
+-- CLAUSE top-level function has one per clause head, all under the same key
+-- (#964 — see the module header).  O(#def sites for the key), i.e. O(#clauses),
+-- never project-sized.
+export defsOf : RefIndex -> String -> List (String, Loc)
+defsOf idx key = match hmGet key idx.defs
+  Some r => reverseList r.value
+  None => []
+
+-- The FIRST definition site (source order) of a binder, if it is defined inside
+-- the project — the SINGLE location a go-to-definition-shaped caller wants.  A
+-- caller that must cover every clause head (references, rename) wants `defsOf`.
 export defOf : RefIndex -> String -> Option (String, Loc)
-defOf idx key = hmGet key idx.defs
+defOf idx key = headOf (defsOf idx key)
+
+headOf : List a -> Option a
+headOf [] = None
+headOf (x::_) = Some x
 
 -- Every use site of a binder, in source order.  O(#uses).
 export usesOf : RefIndex -> String -> List (String, Loc)

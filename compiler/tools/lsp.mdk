@@ -80,7 +80,7 @@ import types.typecheck.{
   currentSeedSchemes,
 }
 import tools.fmt.{formatSource}
-import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defOf}
+import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
   Decl,
@@ -1698,10 +1698,16 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine pa
         Some key => jArray (referenceLocations idx key (includeDeclarationOf params))
   _ => jArray []
 
--- Every recorded use of `key`, plus its def site when `includeDecl` (the def
+-- Every recorded use of `key`, plus its def site(s) when `includeDecl` (a def
 -- site is NEVER also a use — `recordDef` never pushes into `refs`, so there
--- is no duplicate to dedupe). `defOf` is `None` for an external/prelude key
+-- is no duplicate to dedupe). `defsOf` is `[]` for an external/prelude key
 -- (F1: intra-project scope), which correctly drops the declaration line.
+--
+-- `defsOf`, not `defOf` (#964): a MULTI-CLAUSE top-level function is N separate
+-- `DFunDef` decls sharing ONE BinderKey, so it has N clause-head def sites and
+-- find-references must report EVERY one. Taking just one head silently omitted
+-- the others — an incomplete result here, and a source-corrupting one for a
+-- rename built on the same set.
 --
 -- DETERMINISM: sorted by (path, start line, start char) BEFORE rendering —
 -- neither `usesOf`'s underlying `Ref`-list nor the whole-project build order
@@ -1714,10 +1720,7 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine pa
 referenceLocations : RefIndex -> String -> Bool -> List Json
 referenceLocations idx key includeDecl =
   let uses = usesOf idx key
-  let all = if includeDecl then match defOf idx key
-    Some entry => entry::uses
-    None => uses
-  else uses
+  let all = if includeDecl then defsOf idx key ++ uses else uses
   map locationJson (sortBy compareUseLoc all)
 
 -- (path, then start line, then start char) — see `referenceLocations`.

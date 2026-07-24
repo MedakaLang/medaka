@@ -1,5 +1,5 @@
 # META
-source_lines=1309
+source_lines=1346
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -8,8 +8,18 @@ stages=DESUGAR,MARK
 -- turns the loader's dependency-ordered `(modId, path, decls)` list into two
 -- binder-keyed hash maps —
 --
---   defIndex : BinderKey -> (uri, defLoc)                    -- where it is defined
+--   defIndex : BinderKey -> Ref (List (uri, defLoc))         -- where it is defined
 --   refIndex : BinderKey -> Ref (List (uri, useLoc))         -- everywhere it is used
+--
+-- `defIndex` is a LIST, not a single entry, because one binder can have MANY def
+-- sites: a multi-clause top-level function is N separate `DFunDef` decls that all
+-- share one `mkKey mid nsVal n`, so `describe 0 = … / describe 1 = … / describe n
+-- = …` contributes THREE clause heads under one key.  Holding only the last (what
+-- a plain `hmSet` does) under-reports `references` and would let a rename orphan
+-- every earlier clause under the OLD name — which still compiles, and silently
+-- changes runtime behaviour (#964).  `defsOf` returns them all in source order;
+-- `defOf` returns the FIRST, for a caller that wants the single go-to-definition
+-- location.
 --
 -- plus an `occIndex : uri -> Ref (List (useLoc, BinderKey))` so a click at a
 -- (uri, line, col) resolves to a `BinderKey` by scanning ONLY the clicked file.
@@ -133,7 +143,7 @@ extKey ns name = "?ext\{sep}\{ns}\{sep}\{name}"
 -- ── the index + the build context ───────────────────────────────────────────
 export data RefIndex =
   | RefIndex {
-      defs : HashMap String (String, Loc),
+      defs : HashMap String (Ref (List (String, Loc))),
       refs : HashMap String (Ref (List (String, Loc))),
       occ : HashMap String (Ref (List (Loc, String))),
       ops : Int,
@@ -146,7 +156,7 @@ export data RefIndex =
 --   fresh    : monotonic local-binder id source
 data Ctx =
   | Ctx {
-      defs : HashMap String (String, Loc),
+      defs : HashMap String (Ref (List (String, Loc))),
       refs : HashMap String (Ref (List (String, Loc))),
       occ : HashMap String (Ref (List (Loc, String))),
       originOf : HashMap String String,
@@ -240,13 +250,25 @@ assocFind ctx n ((k, v)::rest) =
 -- ── record: def site, use site, occurrence ──────────────────────────────────
 recordDef : Ctx -> String -> String -> Loc -> Unit
 recordDef ctx key uri loc =
-  let _ = hmSetC ctx ctx.defs key (uri, loc)
+  let _ = pushDef ctx key uri loc
   pushOcc ctx uri loc key
 
 recordRef : Ctx -> String -> String -> Loc -> Unit
 recordRef ctx key uri loc =
   let _ = pushRef ctx key uri loc
   pushOcc ctx uri loc key
+
+-- ACCUMULATE, never last-write-wins (#964): a multi-clause top-level fn records
+-- one def per clause head under the SAME key, and dropping all but the last is a
+-- silent-wrongness bug (see the module header).  Same O(1) `Ref`-list push shape
+-- as `pushRef`/`pushOcc` — newest-first, reversed to source order on read, so N
+-- clause heads cost O(N) to record, never O(N²).
+pushDef : Ctx -> String -> String -> Loc -> Unit
+pushDef ctx key uri loc = match hmGetC ctx ctx.defs key
+  Some r =>
+    let _ = bump ctx
+    r := (uri, loc)::r.value
+  None => hmSetC ctx ctx.defs key (Ref [(uri, loc)])
 
 pushRef : Ctx -> String -> String -> Loc -> Unit
 pushRef ctx key uri loc = match hmGetC ctx ctx.refs key
@@ -1231,9 +1253,24 @@ export buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
 buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
   buildRefIndexProject noOverride projectRoot runtimeSrc coreSrc
 
--- The definition site of a binder, if it is defined inside the project.  O(1).
+-- EVERY definition site of a binder, in source order.  Usually one; a MULTI-
+-- CLAUSE top-level function has one per clause head, all under the same key
+-- (#964 — see the module header).  O(#def sites for the key), i.e. O(#clauses),
+-- never project-sized.
+export defsOf : RefIndex -> String -> List (String, Loc)
+defsOf idx key = match hmGet key idx.defs
+  Some r => reverseList r.value
+  None => []
+
+-- The FIRST definition site (source order) of a binder, if it is defined inside
+-- the project — the SINGLE location a go-to-definition-shaped caller wants.  A
+-- caller that must cover every clause head (references, rename) wants `defsOf`.
 export defOf : RefIndex -> String -> Option (String, Loc)
-defOf idx key = hmGet key idx.defs
+defOf idx key = headOf (defsOf idx key)
+
+headOf : List a -> Option a
+headOf [] = None
+headOf (x::_) = Some x
 
 -- Every use site of a binder, in source order.  O(#uses).
 export usesOf : RefIndex -> String -> List (String, Loc)
@@ -1337,8 +1374,8 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "mkKey" ((PVar "modId") (PVar "ns") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "modId") (EVar "sep")) (EVar "ns")) (EVar "sep")) (EVar "name")))
 (DTypeSig false "extKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "extKey" ((PVar "ns") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "?ext")) (EApp (EVar "display") (EVar "sep"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "ns"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sep"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DData Abstract "RefIndex" () ((variant "RefIndex" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Loc")))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "ops" (TyCon "Int"))))) ())
-(DData Private "Ctx" () ((variant "Ctx" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Loc")))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "originOf" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))) (field "modExp" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))) (field "opCnt" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "fresh" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
+(DData Abstract "RefIndex" () ((variant "RefIndex" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "ops" (TyCon "Int"))))) ())
+(DData Private "Ctx" () ((variant "Ctx" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "originOf" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))) (field "modExp" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))) (field "opCnt" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "fresh" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Private "W" () ((variant "W" (ConPos (TyCon "Ctx") (TyCon "String") (TyCon "String") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))))) ())
 (DTypeSig false "bump" (TyFun (TyCon "Ctx") (TyCon "Unit")))
 (DFunDef false "bump" ((PVar "ctx")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "opCnt") "value") (ELit (LInt 1)))))
@@ -1377,9 +1414,11 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "assocFind" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "assocFind" ((PVar "ctx") (PVar "n") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EApp (EVar "assocFind") (EVar "ctx")) (EVar "n")) (EVar "rest"))))))
 (DTypeSig false "recordDef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
-(DFunDef false "recordDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (ETuple (EVar "uri") (EVar "loc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
+(DFunDef false "recordDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushDef") (EVar "ctx")) (EVar "key")) (EVar "uri")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
 (DTypeSig false "recordRef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
 (DFunDef false "recordRef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushRef") (EVar "ctx")) (EVar "key")) (EVar "uri")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
+(DTypeSig false "pushDef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
+(DFunDef false "pushDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EBinOp "::" (ETuple (EVar "uri") (EVar "loc")) (EFieldAccess (EVar "r") "value")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (EApp (EVar "Ref") (EListLit (ETuple (EVar "uri") (EVar "loc"))))))))
 (DTypeSig false "pushRef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
 (DFunDef false "pushRef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "refs")) (EVar "key")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EBinOp "::" (ETuple (EVar "uri") (EVar "loc")) (EFieldAccess (EVar "r") "value")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "refs")) (EVar "key")) (EApp (EVar "Ref") (EListLit (ETuple (EVar "uri") (EVar "loc"))))))))
 (DTypeSig false "pushOcc" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "String") (TyCon "Unit"))))))
@@ -1737,8 +1776,13 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "buildRefIndexProject" ((PVar "read") (PVar "projectRoot") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false (PVar "midPaths") (EApp (EVar "midPathsOf") (EVar "projectRoot"))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EVar "topoOrderModules") (EVar "ctx")) (EVar "read")) (EVar "midPaths"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EFieldAccess (EFieldAccess (EVar "ctx") "opCnt") "value")))))))
 (DTypeSig true "buildRefIndexProjectDisk" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex"))))))
 (DFunDef false "buildRefIndexProjectDisk" ((PVar "projectRoot") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "noOverride")) (EVar "projectRoot")) (EVar "runtimeSrc")) (EVar "coreSrc")))
+(DTypeSig true "defsOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
+(DFunDef false "defsOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "defs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EFieldAccess (EVar "r") "value"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "defOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc"))))))
-(DFunDef false "defOf" ((PVar "idx") (PVar "key")) (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "defs")))
+(DFunDef false "defOf" ((PVar "idx") (PVar "key")) (EApp (EVar "headOf") (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))
+(DTypeSig false "headOf" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
+(DFunDef false "headOf" ((PList)) (EVar "None"))
+(DFunDef false "headOf" ((PCons (PVar "x") PWild)) (EApp (EVar "Some") (EVar "x")))
 (DTypeSig true "usesOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "usesOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "refs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EFieldAccess (EVar "r") "value"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "binderAt" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))
@@ -1800,8 +1844,8 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "mkKey" ((PVar "modId") (PVar "ns") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "modId") (EVar "sep")) (EVar "ns")) (EVar "sep")) (EVar "name")))
 (DTypeSig false "extKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "extKey" ((PVar "ns") (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "?ext")) (EApp (EMethodRef "display") (EVar "sep"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "ns"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sep"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DData Abstract "RefIndex" () ((variant "RefIndex" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Loc")))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "ops" (TyCon "Int"))))) ())
-(DData Private "Ctx" () ((variant "Ctx" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Loc")))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "originOf" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))) (field "modExp" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))) (field "opCnt" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "fresh" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
+(DData Abstract "RefIndex" () ((variant "RefIndex" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "ops" (TyCon "Int"))))) ())
+(DData Private "Ctx" () ((variant "Ctx" (ConNamed (field "defs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "refs" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))) (field "occ" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String")))))) (field "originOf" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))) (field "modExp" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))) (field "opCnt" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "fresh" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DData Private "W" () ((variant "W" (ConPos (TyCon "Ctx") (TyCon "String") (TyCon "String") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String"))))) ())
 (DTypeSig false "bump" (TyFun (TyCon "Ctx") (TyCon "Unit")))
 (DFunDef false "bump" ((PVar "ctx")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "opCnt") "value") (ELit (LInt 1)))))
@@ -1840,9 +1884,11 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "assocFind" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "assocFind" ((PVar "ctx") (PVar "n") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EApp (EVar "assocFind") (EVar "ctx")) (EVar "n")) (EVar "rest"))))))
 (DTypeSig false "recordDef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
-(DFunDef false "recordDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (ETuple (EVar "uri") (EVar "loc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
+(DFunDef false "recordDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushDef") (EVar "ctx")) (EVar "key")) (EVar "uri")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
 (DTypeSig false "recordRef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
 (DFunDef false "recordRef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushRef") (EVar "ctx")) (EVar "key")) (EVar "uri")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushOcc") (EVar "ctx")) (EVar "uri")) (EVar "loc")) (EVar "key")))))
+(DTypeSig false "pushDef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
+(DFunDef false "pushDef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EBinOp "::" (ETuple (EVar "uri") (EVar "loc")) (EFieldAccess (EVar "r") "value")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "defs")) (EVar "key")) (EApp (EVar "Ref") (EListLit (ETuple (EVar "uri") (EVar "loc"))))))))
 (DTypeSig false "pushRef" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))
 (DFunDef false "pushRef" ((PVar "ctx") (PVar "key") (PVar "uri") (PVar "loc")) (EMatch (EApp (EApp (EApp (EVar "hmGetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "refs")) (EVar "key")) (arm (PCon "Some" (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EBinOp "::" (ETuple (EVar "uri") (EVar "loc")) (EFieldAccess (EVar "r") "value")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "refs")) (EVar "key")) (EApp (EVar "Ref") (EListLit (ETuple (EVar "uri") (EVar "loc"))))))))
 (DTypeSig false "pushOcc" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "String") (TyCon "Unit"))))))
@@ -2200,8 +2246,13 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "buildRefIndexProject" ((PVar "read") (PVar "projectRoot") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "newCtx") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "runtime"))) (EVar "runtimeSrc"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "seedPrelude") (EVar "ctx")) (ELit (LString "core"))) (EVar "coreSrc"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "opCnt")) (ELit (LInt 0)))) (DoLet false false (PVar "midPaths") (EApp (EVar "midPathsOf") (EVar "projectRoot"))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EVar "topoOrderModules") (EVar "ctx")) (EVar "read")) (EVar "midPaths"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "processModules") (EVar "ctx")) (EVar "read")) (EVar "mods"))) (DoExpr (ERecordCreate "RefIndex" ((fa "defs" (EFieldAccess (EVar "ctx") "defs")) (fa "refs" (EFieldAccess (EVar "ctx") "refs")) (fa "occ" (EFieldAccess (EVar "ctx") "occ")) (fa "ops" (EFieldAccess (EFieldAccess (EVar "ctx") "opCnt") "value")))))))
 (DTypeSig true "buildRefIndexProjectDisk" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "RefIndex"))))))
 (DFunDef false "buildRefIndexProjectDisk" ((PVar "projectRoot") (PVar "runtimeSrc") (PVar "coreSrc")) (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "noOverride")) (EVar "projectRoot")) (EVar "runtimeSrc")) (EVar "coreSrc")))
+(DTypeSig true "defsOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
+(DFunDef false "defsOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "defs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EFieldAccess (EVar "r") "value"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "defOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc"))))))
-(DFunDef false "defOf" ((PVar "idx") (PVar "key")) (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "defs")))
+(DFunDef false "defOf" ((PVar "idx") (PVar "key")) (EApp (EVar "headOf") (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key"))))
+(DTypeSig false "headOf" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
+(DFunDef false "headOf" ((PList)) (EVar "None"))
+(DFunDef false "headOf" ((PCons (PVar "x") PWild)) (EApp (EVar "Some") (EVar "x")))
 (DTypeSig true "usesOf" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))))))
 (DFunDef false "usesOf" ((PVar "idx") (PVar "key")) (EMatch (EApp (EApp (EVar "hmGet") (EVar "key")) (EFieldAccess (EVar "idx") "refs")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "reverseList") (EFieldAccess (EVar "r") "value"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "binderAt" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))))

@@ -1,0 +1,29 @@
+-- #964 fixture — a MULTI-CLAUSE top-level function.
+--
+-- `describe` below is THREE separate `DFunDef` decls (Medaka has no multi-clause
+-- decl node: `DFunDef Bool String (List Pat) Expr`, frontend/ast.mdk) and all
+-- three share the ONE BinderKey `multiclause<TAB>val<TAB>describe`. The
+-- reference index must therefore hold ALL THREE clause-head Locs under that key,
+-- not just the last: `references` must report every head, and any future rename
+-- driven off this set must edit every head (leaving an earlier clause under the
+-- old name still COMPILES and silently changes runtime behaviour — the S0).
+--
+-- multiclause.jsonl clicks the FIRST clause head — exactly the head that was
+-- missing from the pre-#964 result. The golden must list FOUR locations: the
+-- three clause heads (col 0-8 each) and the `describe 0` use in `usesDescribe`.
+-- Before #964 it listed two (the LAST head plus the use).
+--
+-- Line/col pairs are NOT hand-counted here — the golden is captured from the
+-- tool. Re-derive a click position with:
+--   grep -n 'describe' test/references_fixtures/query/multiclause.mdk
+-- (grep prints 1-based lines; the MCP `line` argument is 0-based.)
+export describe : Int -> String
+describe 0 = "zero"
+describe 1 = "one"
+describe n = "many"
+
+-- A use, so the query also proves def sites and use sites are merged and sorted
+-- together by (path, line, col) — not defs-first — exactly as
+-- `referenceLocations` (compiler/tools/lsp.mdk) documents.
+export usesDescribe : String
+usesDescribe = describe 0

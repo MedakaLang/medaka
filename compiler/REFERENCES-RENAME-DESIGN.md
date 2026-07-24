@@ -163,9 +163,17 @@ is about *source files*; this NUL lives only in in-memory keys, never written to
 Two mutable hash maps, built once per project load:
 
 ```
-defIndex : HashMap String (String, Loc)          -- BinderKey → (uri, defLoc)          [the def site]
+defIndex : HashMap String (Ref (List (String, Loc)))  -- BinderKey → mutable list of (uri, defLoc)
 refIndex : HashMap String (Ref (List (String, Loc)))  -- BinderKey → mutable list of (uri, useLoc)
 ```
+
+⚠️ **`defIndex` is a LIST, not one entry (#964).** One binder can have MANY def sites: a
+multi-clause top-level function is N separate `DFunDef` decls that all share one BinderKey,
+so `describe 0 = … / describe 1 = … / describe n = …` is three clause heads under one key.
+This spec said `HashMap String (String, Loc)` and the implementation duly `hmSet`-ed, i.e.
+LAST-WRITE-WINS — `references` then under-reported every earlier head, and a rename built on
+the same set left those heads under the OLD name, which still compiles and silently changes
+runtime behaviour. Accumulate, never overwrite.
 
 (`refIndex` values are `Ref (List …)` so appends are O(1) push, never `xs ++ [x]` — the
 `xs ++ [x]`-in-a-fold shape is the canonical quadratic per `compiler/AGENTS.md` and the
@@ -189,8 +197,9 @@ ordered), run one recursive walk mirroring `stampExpr`'s frame-stack shape
    these in dependency order, `resolve.mdk:2480-2489`).
 
 At each site:
-- **A binder** (decl name via #331 `Loc`, or a local binder Loc) → `hmSet defIndex key
-  (uri, loc)` and push `(name, key)` onto the appropriate frame.
+- **A binder** (decl name via #331 `Loc`, or a local binder Loc) → **PUSH** `(uri, loc)` onto
+  `defIndex[key]` (an O(1) `Ref`-list push, exactly like `refIndex` — *not* an `hmSet`, see
+  the #964 note in §3b) and push `(name, key)` onto the appropriate frame.
 - **An occurrence** `ELoc loc (EVar n)` → resolve `n` to a `BinderKey` by the frame stack
   first (shadowing), else the module env (imports), else the module's own top-level, else a
   synthetic `"?unresolved?"` bucket (dropped from results). Push `(uri, loc)` onto
@@ -212,8 +221,9 @@ let a frame become a per-file accumulator.
   of project size except through #uses (which is inherent — you must return them all).
   **Total: O(clicked-file-size + #uses).**
 - **`rename`:** same lookup, then **O(#uses)** to map each `Loc` to a
-  `{ range, replacement }` edit. **Total: O(#uses).** No file is re-walked; the def site is
-  one more edit from `defIndex`.
+  `{ range, replacement }` edit. **Total: O(#uses + #def sites).** No file is re-walked; the
+  def sites are `#def sites` more edits from `defIndex` — **every** clause head, not one
+  (#964).
 
 **Exact data structures named:** stdlib `HashMap String v` (`stdlib/hash_map.mdk`), stdlib
 `HashSet String` (for the visited/unresolved sets), and `Ref (List …)` for O(1) append
