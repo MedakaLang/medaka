@@ -267,14 +267,14 @@ ownersOf field ((f, owner)::rest)
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
@@ -360,7 +360,7 @@ checkPat cur env (PCon c ps) = (if omHasKey c env.ctors || omHasKey c env.import
 checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
 checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
-checkPat cur env (PAs _ p) = checkPat cur env p
+checkPat cur env (PAs _ _ p) = checkPat cur env p
 checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
 checkPat _ _ _ = []
 
@@ -738,7 +738,7 @@ keepBetter c d (Some (bc, bd))
   | otherwise = Some (bc, bd)
 
 checkLet : Option Loc -> Env -> List String -> Bool -> Pat -> Expr -> Expr -> List ResError
-checkLet cur env scope True (PVar f) e1 e2 = checkExpr cur env (f::scope) e1
+checkLet cur env scope True (PVar f _) e1 e2 = checkExpr cur env (f::scope) e1
   ++ checkExpr cur env (f::scope) e2
 -- non-recursive (or rec with non-var pat): the bound names are NOT in scope on
 -- the RHS.  An UnboundVariable for one of them ⇒ the user likely forgot `rec`,
@@ -2681,9 +2681,9 @@ stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
 stampLet : List (List (String, Int)) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-stampLet env m True (PVar f) e1 e2 =
+stampLet env m True (PVar f fl) e1 e2 =
   let inner = zeroFrame [f] :: env
-  ELet m True (PVar f) (stampExpr inner e1) (stampExpr inner e2)
+  ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)
 stampLet env m isRec pat e1 e2 =
   ELet
     m

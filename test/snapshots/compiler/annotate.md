@@ -69,14 +69,14 @@ import support.util.{reverseL}
 
 -- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
@@ -182,9 +182,9 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
 annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-annotateLet fr m True (PVar f) e1 e2 =
+annotateLet fr m True (PVar f fl) e1 e2 =
   let inner = [f]::fr
-  ELet m True (PVar f) (annotateExpr inner e1) (annotateExpr inner e2)
+  ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)
 annotateLet fr m isRec pat e1 e2 =
   ELet
     m
@@ -307,14 +307,14 @@ annotateProgram prog = map annotateDecl prog
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -380,7 +380,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DTypeSig false "annotateLet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
-(DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EListLit (EVar "f")) (EVar "fr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EVar "PVar") (EVar "f"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e2"))))))
+(DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EListLit (EVar "f")) (EVar "fr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EBinOp "::" (EApp (EVar "patBindings") (EVar "pat")) (EVar "fr"))) (EVar "e2"))))
 (DTypeSig false "annotateLetGroup" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "annotateLetGroup" ((PVar "fr") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "groupScope") (EBinOp "::" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")) (EVar "fr"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EVar "annotateLetBind") (EVar "groupScope"))) (EVar "binds"))) (EApp (EApp (EVar "annotateExpr") (EVar "groupScope")) (EVar "body"))))))
@@ -435,14 +435,14 @@ annotateProgram prog = map annotateDecl prog
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
 (DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
 (DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
 (DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -508,7 +508,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e"))))
 (DTypeSig false "annotateLet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
-(DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EListLit (EVar "f")) (EVar "fr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EVar "PVar") (EVar "f"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e2"))))))
+(DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EBinOp "::" (EListLit (EVar "f")) (EVar "fr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "annotateLet" ((PVar "fr") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e1"))) (EApp (EApp (EVar "annotateExpr") (EBinOp "::" (EApp (EVar "patBindings") (EVar "pat")) (EVar "fr"))) (EVar "e2"))))
 (DTypeSig false "annotateLetGroup" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "annotateLetGroup" ((PVar "fr") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "groupScope") (EBinOp "::" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")) (EVar "fr"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateLetBind") (EVar "groupScope"))) (EVar "binds"))) (EApp (EApp (EVar "annotateExpr") (EVar "groupScope")) (EVar "body"))))))

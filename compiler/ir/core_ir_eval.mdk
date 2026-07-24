@@ -25,7 +25,7 @@
 -- values eval.mdk installs); `CMethod`/`CDict` arms consume the elaborated routes
 -- on the typed lowering path.
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -101,7 +101,7 @@ ceval _ (CLit l) = litValue l
 ceval env (CVar x _) = if startsWithAt x then VUnit else lookupEnv env x
 ceval env (CApp f x) = applyValue (ceval env f) (ceval env x)
 ceval env (CLam pats body) = VClosureF env pats (e => ceval e body)
-ceval env (CLet True (PVar f) e1 e2) = cevalRecLet env f e1 e2
+ceval env (CLet True (PVar f _) e1 e2) = cevalRecLet env f e1 e2
 ceval env (CLet _ pat e1 e2) = cevalLet env pat e1 e2
 ceval env (CLetGroup binds body) = cevalLetGroup env binds body
 ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
@@ -293,7 +293,10 @@ cevalSwitchOn env root arms v rest ((CTBranch head sub)::more) dft = match headE
 headExtract : CHead -> Value e -> Option (List (Value e))
 headExtract (HCon c a) v = extractWith (PCon c (cBinders a)) v
 headExtract (HTuple n) v = extractWith (PTuple (cBinders n)) v
-headExtract HCons v = extractWith (PCons (PVar "$d0") (PVar "$d1")) v
+headExtract HCons v =
+  extractWith
+    (PCons (PVar "$d0" (Loc "" 0 0 0 0)) (PVar "$d1" (Loc "" 0 0 0 0)))
+    v
 headExtract HNil v = extractWith (PList []) v
 headExtract HUnit v = extractWith (PLit LUnit) v
 headExtract (HLit l) v = extractWith (PLit l) v
@@ -310,7 +313,8 @@ cBinders n = cBindersGo 0 n
 cBindersGo : Int -> Int -> List Pat
 cBindersGo i n
   | i >= n = []
-  | otherwise = PVar ("$d" ++ intToString i) :: cBindersGo (i + 1) n
+  | otherwise =
+    PVar ("$d" ++ intToString i) (Loc "" 0 0 0 0) :: cBindersGo (i + 1) n
 
 nthArm : List CArm -> Int -> Option CArm
 nthArm (a::_) 0 = Some a
@@ -436,7 +440,7 @@ cImplBodyValue env (CImplDefault pats body) = cImplMethodValue env [] pats body
 cImplMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> CExpr -> Value e
 cImplMethodValue env positions [] body
   | isEmptyL positions = VThunk (_ => ceval env body)
-  | otherwise = VClosureF env [PVar "$eta"] (e => ceval e (CApp body (CVar "$eta" AGlobal)))
+  | otherwise = VClosureF env [PVar "$eta" (Loc "" 0 0 0 0)] (e => ceval e (CApp body (CVar "$eta" AGlobal)))
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
 
 cBindName : CBind -> String

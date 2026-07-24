@@ -394,7 +394,7 @@ printTypeAppLhs t = printTypeAtom t
 -- ── Patterns ──────────────────────────────────────
 
 printPat : Pat -> Doc
-printPat (PVar x) = text x
+printPat (PVar x _) = text x
 printPat PWild = text "_"
 printPat (PLit l) = printLit l
 printPat (PCon c []) = text c
@@ -410,7 +410,7 @@ printPat (PTuple ps) =
   Cat (text "(") (Cat (sepBy (text ", ") (map printPatArm ps)) (text ")"))
 printPat (PList ps) =
   Cat (text "[") (Cat (sepBy (text ", ") (map printPatArm ps)) (text "]"))
-printPat (PAs x inner) = Cat (text x) (Cat (text "@") (printPatAtom inner))
+printPat (PAs x _ inner) = Cat (text x) (Cat (text "@") (printPatAtom inner))
 printPat (PRec name fields rest) =
   let fieldDocs = map recPatFieldDoc fields
   let all = if rest then fieldDocs ++ [text "..."] else fieldDocs
@@ -427,7 +427,7 @@ recPatFieldDoc (RecPatField k (Some q)) =
 -- A PRec with fields is NOT self-delimiting (`Con { .. }` binds as application),
 -- so in atom position (e.g. a function-clause arg) it must be parenthesized.
 printPatAtom : Pat -> Doc
-printPatAtom (PVar x) = printPat (PVar x)
+printPatAtom (PVar x l) = printPat (PVar x l)
 printPatAtom PWild = printPat PWild
 printPatAtom (PLit l) = printPat (PLit l)
 printPatAtom (PCon c ps) = printPat (PCon c ps)
@@ -761,7 +761,7 @@ printExprRaw (ELoc _ e) = printExprRaw e
 
 -- `let [isMut] f args = body in e2` — coalesce the lambda spine for `let f = …`.
 printELet : Bool -> Bool -> Pat -> Expr -> Expr -> Doc
-printELet isMut True (PVar f) rhs e2 =
+printELet isMut True (PVar f _) rhs e2 =
   let argsBody = unwrapLams [] rhs
   match argsBody
     (args, body) => Cat (text (if isMut then "let mut " else "let ")) (Cat (text f) (Cat (concatD (map (p => Cat (text " ") (printPatAtom p)) args)) (Cat (text " = ") (Cat (printExpr precTop body) (Cat (text " in ") (printExpr precTop e2))))))

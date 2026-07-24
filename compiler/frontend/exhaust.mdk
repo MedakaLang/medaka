@@ -216,7 +216,7 @@ oGetArity oracle c
 -- ── pattern → canonical matrix pattern ────────────────────────────────────
 export desugarPat : Oracle -> Pat -> Pat
 desugarPat _ PWild = PWild
-desugarPat _ (PVar _) = PWild
+desugarPat _ (PVar _ _) = PWild
 desugarPat _ (PLit (LBool True)) = PCon "True" []
 desugarPat _ (PLit (LBool False)) = PCon "False" []
 desugarPat _ (PLit LUnit) = PCon "Unit" []
@@ -229,7 +229,7 @@ desugarPat oracle (PCons h t) =
 desugarPat _ (PList []) = PCon "Nil" []
 desugarPat oracle (PList (h::rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
-desugarPat oracle (PAs _ p) = desugarPat oracle p
+desugarPat oracle (PAs _ _ p) = desugarPat oracle p
 desugarPat _ (PRec _ _ True) = PWild
 desugarPat oracle (PRec name fields _) =
   -- Lower a record pattern to a constructor-tagged row.
@@ -439,7 +439,7 @@ patHasRange (PCon _ args) = anyList patHasRange args
 patHasRange (PCons h t) = patHasRange h || patHasRange t
 patHasRange (PTuple ps) = anyList patHasRange ps
 patHasRange (PList ps) = anyList patHasRange ps
-patHasRange (PAs _ p) = patHasRange p
+patHasRange (PAs _ _ p) = patHasRange p
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
 patHasRange _ = False
 
@@ -552,10 +552,10 @@ parenWrapWit False s = s
 
 -- ── guard totality ────────────────────────────────────────────────────────
 isIrrefutablePat : Pat -> Bool
-isIrrefutablePat (PVar _) = True
+isIrrefutablePat (PVar _ _) = True
 isIrrefutablePat PWild = True
 isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
-isIrrefutablePat (PAs _ p) = isIrrefutablePat p
+isIrrefutablePat (PAs _ _ p) = isIrrefutablePat p
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat _ = False
 

@@ -65,14 +65,14 @@ import support.util.{reverseL}
 
 -- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
 patBindings : Pat -> List String
-patBindings (PVar x) = [x]
+patBindings (PVar x _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x p) = x :: patBindings p
+patBindings (PAs x _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
@@ -178,9 +178,9 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
 annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-annotateLet fr m True (PVar f) e1 e2 =
+annotateLet fr m True (PVar f fl) e1 e2 =
   let inner = [f]::fr
-  ELet m True (PVar f) (annotateExpr inner e1) (annotateExpr inner e2)
+  ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)
 annotateLet fr m isRec pat e1 e2 =
   ELet
     m

@@ -167,7 +167,7 @@
 --            (literals + intToString); cp_count cached so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
+import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Loc(..)}
 import ir.core_ir.{
   CExpr(..),
   CField(..),
@@ -3286,7 +3286,7 @@ emitIf e env c t f =
   (r, tty)
 
 emitLet : Emit -> List (String, (String, LTy)) -> Bool -> Pat -> CExpr -> CExpr -> (String, LTy)
-emitLet e env False (PVar x) e1 e2 =
+emitLet e env False (PVar x _) e1 e2 =
   if staticIsFloat env e1 then
     let d = emitFloatD e env e1
     emitExpr e ((x, (d, LTFloatU))::env) e2
@@ -3306,7 +3306,7 @@ emitLet e env False (PTuple ps) e1 e2 =
 -- bound to `%clos` (the leading closure pointer) inside the lifted define — a
 -- recursive self-call re-enters the same code with the same cell.  Non-recursive
 -- function-lets take the same path harmlessly (`f` simply never appears free).
-emitLet e env True (PVar f) (CLam pats body) e2 =
+emitLet e env True (PVar f _) (CLam pats body) e2 =
   let (w, ty) = emitRecLam e env f pats body
   emitExpr e ((f, (w, ty))::env) e2
 -- P0-2c: general expression-level `let pat = e1 in e2` for a non-recursive,
@@ -3557,10 +3557,10 @@ emitBlock e env ((CSExpr ex)::rest) =
 -- the exact mirror of the expression-level `emitLet _ True (PVar f) (CLam …)` arm.
 -- A non-recursive function-`let` takes this path harmlessly (`go` never appears
 -- free, so it is simply not captured).
-emitBlock e env ((CSLet _ (PVar x) (CLam pats body))::rest) =
+emitBlock e env ((CSLet _ (PVar x _) (CLam pats body))::rest) =
   let (w, ty) = emitRecLam e env x pats body
   emitBlock e ((x, (w, ty))::env) rest
-emitBlock e env ((CSLet _ (PVar x) ex)::rest) =
+emitBlock e env ((CSLet _ (PVar x _) ex)::rest) =
   if staticIsFloat env ex then
     let d = emitFloatD e env ex
     emitBlock e ((x, (d, LTFloatU))::env) rest
@@ -3648,7 +3648,7 @@ letElseHead _ = None
 -- TOP-LEVEL head is classified here — nested refutability inside fields shares
 -- emitRefutableCsLet's single-level-check limitation.
 refutableCsLet : Emit -> Pat -> Bool
-refutableCsLet e (PAs _ p) = refutableCsLet e p
+refutableCsLet e (PAs _ _ p) = refutableCsLet e p
 refutableCsLet e (PCon c _) = ctorHasSiblings e c
 refutableCsLet _ (PCons _ _) = True
 refutableCsLet _ (PList (_::_)) = True
@@ -5468,7 +5468,7 @@ innerDefaultMethodE m
 reqDictPats : Int -> Int -> List Pat
 reqDictPats n i
   | i >= n = []
-  | otherwise = PVar ("$reqdict_" ++ intToString i) :: reqDictPats n (i + 1)
+  | otherwise = PVar ("$reqdict_" ++ intToString i) (Loc "" 0 0 0 0) :: reqDictPats n (i + 1)
 
 -- `n` RDict routes forwarding the `$reqdict_<i>` params into the inner same-interface
 -- call's impl-dict slots (matching the inner impl fn's leading element-dict params).
@@ -5492,7 +5492,7 @@ etaExpand pats body arity have
   | otherwise =
     let name = "$eta" ++ intToString have
     etaExpand
-      (pats ++ [PVar name])
+      (pats ++ [PVar name (Loc "" 0 0 0 0)])
       (CApp body (CVar name AGlobal))
       arity
       (have + 1)
@@ -5740,7 +5740,7 @@ concatMapClausePVars ((pats, _)::rest) positions = pvarsAtPositions pats positio
 
 pvarsAtPositions : List Pat -> List Int -> Int -> List String
 pvarsAtPositions [] _ _ = []
-pvarsAtPositions ((PVar x)::rest) positions i
+pvarsAtPositions ((PVar x _)::rest) positions i
   | listContains positions i = x :: pvarsAtPositions rest positions (i + 1)
   | otherwise = pvarsAtPositions rest positions (i + 1)
 pvarsAtPositions (_::rest) positions i = pvarsAtPositions rest positions (i + 1)
@@ -5826,9 +5826,9 @@ patPosTys tag positions n i =
 -- bind PVar params to their %argK operands at the given LTy list.
 paramEnvByPos : List Pat -> List LTy -> Int -> List (String, (String, LTy))
 paramEnvByPos [] _ _ = []
-paramEnvByPos ((PVar x)::rest) (ty::tys) i =
+paramEnvByPos ((PVar x _)::rest) (ty::tys) i =
   (x, ("%arg" ++ intToString i, ty)) :: paramEnvByPos rest tys (i + 1)
-paramEnvByPos ((PVar x)::rest) [] i =
+paramEnvByPos ((PVar x _)::rest) [] i =
   (x, ("%arg" ++ intToString i, LTInt)) :: paramEnvByPos rest [] (i + 1)
 paramEnvByPos _ _ _ = []
 
@@ -7081,7 +7081,7 @@ emitRefutEach _ env _ _ _ _ = env
 bindPattern : Emit -> List (String, (String, LTy)) -> Pat -> String -> CExpr -> List (String, (String, LTy))
 bindPattern _ env PWild _ _ = env
 bindPattern _ env (PLit _) _ _ = env
-bindPattern e env (PVar x) v body = bindVarTy e env x v body ""
+bindPattern e env (PVar x _) v body = bindVarTy e env x v body ""
 -- A constructor pattern binds each field with the field's DECLARED type (Gap E2):
 -- a scalar declared field type (esp. Float/Bool) types the bound var directly,
 -- so `match (Rect w h) { … w * h }` does FLOAT arith on the unboxed fields rather
@@ -7098,7 +7098,7 @@ bindPattern e env (PCons h t) v body = bindFields e env [h, t] v body 0
 bindPattern _ env (PList []) _ _ = env
 -- as-pattern `x@p`: bind `x` to the WHOLE value v (same LTy lookup as PVar),
 -- then descend into `p` so its inner vars also bind.
-bindPattern e env (PAs x p) v body =
+bindPattern e env (PAs x _ p) v body =
   let env2 = bindVarTy e env x v body ""
   bindPattern e env2 p v body
 -- non-empty list-literal pattern `[p::ps]`: v is a Cons cell (the switch proved
@@ -7144,8 +7144,9 @@ bindFieldsDecl e env (p::rest) declNames v body i =
 -- bind one constructor field: a bare PVar/PAs uses its declared scalar type, any
 -- other pattern recurses through bindPattern (no scalar to apply at the top).
 bindFieldDecl : Emit -> List (String, (String, LTy)) -> Pat -> String -> String -> CExpr -> List (String, (String, LTy))
-bindFieldDecl e env (PVar x) declName f body = bindVarTy e env x f body declName
-bindFieldDecl e env (PAs x p) declName f body =
+bindFieldDecl e env (PVar x _) declName f body =
+  bindVarTy e env x f body declName
+bindFieldDecl e env (PAs x _ p) declName f body =
   let env2 = bindVarTy e env x f body declName
   bindPattern e env2 p f body
 bindFieldDecl e env p _ f body = bindPattern e env p f body
@@ -7167,8 +7168,8 @@ bindFieldDecl e env p _ f body = bindPattern e env p f body
 emitRefutMatch : Emit -> List (String, (String, LTy)) -> Pat -> String -> CExpr -> String -> List (String, (String, LTy))
 -- irrefutable: no test, just bind (delegates to bindPattern's extraction).
 emitRefutMatch e env PWild v body _ = bindPattern e env PWild v body
-emitRefutMatch e env (PVar x) v body _ = bindPattern e env (PVar x) v body
-emitRefutMatch e env (PAs x p) v body failL =
+emitRefutMatch e env (PVar x l) v body _ = bindPattern e env (PVar x l) v body
+emitRefutMatch e env (PAs x _ p) v body failL =
   let env2 = bindVarTy e env x v body ""
   emitRefutMatch e env2 p v body failL
 -- a tuple is irrefutable in SHAPE (the type fixes the arity), but its element
@@ -7435,7 +7436,7 @@ ptag : Pat -> String
 ptag (PTuple _) = "PTuple"
 ptag (PCons _ _) = "PCons"
 ptag (PList _) = "PList"
-ptag (PAs _ _) = "PAs"
+ptag (PAs _ _ _) = "PAs"
 ptag (PRng _ _ _) = "PRng"
 ptag (PRec _ _ _) = "PRec"
 ptag _ = "?"
@@ -7600,7 +7601,7 @@ sigArityDeficit e name pats =
 -- count of leading `$dict_…` parameter patterns (the dict witnesses dict_pass
 -- prepends ahead of the source value params).
 leadingDictPats : List Pat -> Int
-leadingDictPats ((PVar x)::rest) =
+leadingDictPats ((PVar x _)::rest) =
   if isDictParamName x then
     1 + leadingDictPats rest
   else
@@ -7655,7 +7656,8 @@ methodBodyDeficit e app =
 etaFreshPats : Int -> Int -> List Pat
 etaFreshPats 0 _ = []
 etaFreshPats n start =
-  PVar ("__eta_" ++ intToString start) :: etaFreshPats (n - 1) (start + 1)
+  PVar ("__eta_" ++ intToString start) (Loc "" 0 0 0 0) ::
+    etaFreshPats (n - 1) (start + 1)
 
 -- apply the fresh eta params at the body's TAIL position, threading THROUGH any
 -- enclosing `where`/`let` wrappers so the let bindings (e.g. `maximum`'s `step`
@@ -7672,7 +7674,7 @@ applyEtaArgsTail body fresh = applyEtaArgs body fresh
 -- NAME against the param env, ignoring the Addr), left to right.
 applyEtaArgs : CExpr -> List Pat -> CExpr
 applyEtaArgs body [] = body
-applyEtaArgs body ((PVar x)::rest) =
+applyEtaArgs body ((PVar x _)::rest) =
   applyEtaArgs (CApp body (CVar x AGlobal)) rest
 applyEtaArgs body (_::rest) = applyEtaArgs body rest
 
@@ -7836,7 +7838,8 @@ trmcEmitDispatch e reloaded arity clauses single singlePats aenv singleBody =
 -- clause, all-PVar params — the slice-2 ABI requirement also holds for TRMC).
 trmcRenameEnv : List Pat -> List (String, (String, LTy)) -> List (String, (String, LTy))
 trmcRenameEnv [] _ = []
-trmcRenameEnv ((PVar x)::ps) ((_, op)::rest) = (x, op) :: trmcRenameEnv ps rest
+trmcRenameEnv ((PVar x _)::ps) ((_, op)::rest) =
+  (x, op) :: trmcRenameEnv ps rest
 trmcRenameEnv (_::ps) (_::rest) = trmcRenameEnv ps rest
 trmcRenameEnv _ [] = []
 
@@ -7859,7 +7862,7 @@ emitTrmcBody e env (CIf c t f) =
   let _ = emitTrmcBody e env t
   let _ = emit e (elseL ++ ":")
   emitTrmcBody e env f
-emitTrmcBody e env (CLet False (PVar x) rhs b) =
+emitTrmcBody e env (CLet False (PVar x _) rhs b) =
   let (v, ty) = emitExpr e env rhs
   emitTrmcBody e ((x, (v, ty))::env) b
 emitTrmcBody e env (CLetGroup binds b) =
@@ -8153,7 +8156,7 @@ emitGDispBody e env (CIf c t f) =
   let _ = emitGDispBody e env t
   let _ = emit e (elseL ++ ":")
   emitGDispBody e env f
-emitGDispBody e env (CLet False (PVar x) rhs b) =
+emitGDispBody e env (CLet False (PVar x _) rhs b) =
   let (v, ty) = emitExpr e env rhs
   emitGDispBody e ((x, (v, ty))::env) b
 emitGDispBody e env (CLet False PWild rhs b) =
@@ -8189,7 +8192,7 @@ emitGDispBlock e env [CSExpr ex] = emitGDispBody e env ex
 emitGDispBlock e env ((CSExpr ex)::rest) =
   let _ = emitExpr e env ex
   emitGDispBlock e env rest
-emitGDispBlock e env ((CSLet _ (PVar x) ex)::rest) =
+emitGDispBlock e env ((CSLet _ (PVar x _) ex)::rest) =
   let (v, ty) = emitExpr e env ex
   emitGDispBlock e ((x, (v, ty))::env) rest
 emitGDispBlock e env ((CSLet _ PWild ex)::rest) =
@@ -8399,7 +8402,7 @@ floatWorkerOk self arity ex = match flattenApp ex []
 -- let-else, non-PVar pattern, non-CSExpr final) disqualifies → fall back.
 floatWorkerBlockOk : String -> Int -> List CStmt -> Bool
 floatWorkerBlockOk self arity ((CSExpr ex)::[]) = floatWorkerOk self arity ex
-floatWorkerBlockOk self arity ((CSLet _ (PVar _) rhs)::rest) = selfFreeW self rhs
+floatWorkerBlockOk self arity ((CSLet _ (PVar _ _) rhs)::rest) = selfFreeW self rhs
   && floatWorkerBlockOk self arity rest
 floatWorkerBlockOk _ _ _ = False
 
@@ -8482,7 +8485,7 @@ collectFloatClosureFns e (_::rest) = collectFloatClosureFns e rest
 -- so skipping it here never suppresses a legitimate float-worker.)
 paramEnvSafe : List Pat -> Bool
 paramEnvSafe [] = True
-paramEnvSafe ((PVar _)::rest) = paramEnvSafe rest
+paramEnvSafe ((PVar _ _)::rest) = paramEnvSafe rest
 paramEnvSafe (PWild::rest) = paramEnvSafe rest
 paramEnvSafe _ = False
 
@@ -8509,7 +8512,7 @@ recordFloatClosureResult e fname argc arity (reg, _) =
 -- param decls with `double` at the float positions, `i64` elsewhere.
 paramDeclsD : List Pat -> List Int -> Int -> String
 paramDeclsD [] _ _ = ""
-paramDeclsD ((PVar _)::rest) fp i =
+paramDeclsD ((PVar _ _)::rest) fp i =
   let ty = if elemInt i fp then "double" else "i64"
   let sep = match rest
     [] => ""
@@ -8521,10 +8524,10 @@ paramDeclsD _ _ _ = panic "llvm: float-worker params must be plain variables"
 -- double); other params keep their LTy.
 paramEnvD : List Pat -> List LTy -> List Int -> Int -> List (String, (String, LTy))
 paramEnvD [] _ _ _ = []
-paramEnvD ((PVar x)::rest) (ty::tys) fp i =
+paramEnvD ((PVar x _)::rest) (ty::tys) fp i =
   let lty = if elemInt i fp then LTFloatU else ty
   (x, ("%arg" ++ intToString i, lty)) :: paramEnvD rest tys fp (i + 1)
-paramEnvD ((PVar x)::rest) [] fp i =
+paramEnvD ((PVar x _)::rest) [] fp i =
   (x, ("%arg" ++ intToString i, LTInt)) :: paramEnvD rest [] fp (i + 1)
 paramEnvD _ _ _ _ = panic "llvm: float-worker params must be plain variables"
 
@@ -8575,7 +8578,7 @@ emitFnBodyD e env self worker fp arity other =
 emitFnBodyDBlock : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> List CStmt -> Unit
 emitFnBodyDBlock e env self worker fp arity ((CSExpr ex)::[]) =
   emitFnBodyD e env self worker fp arity ex
-emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x) rhs)::rest) =
+emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _) rhs)::rest) =
   if staticIsFloat env rhs then
     let d = emitFloatD e env rhs
     emitFnBodyDBlock e ((x, (d, LTFloatU))::env) self worker fp arity rest
@@ -8677,7 +8680,7 @@ emitFnClauseW e name pats ptys body =
 -- every parameter is a plain variable pattern (the slice-2 ABI requirement).
 allPVar : List Pat -> Bool
 allPVar [] = True
-allPVar ((PVar _)::rest) = allPVar rest
+allPVar ((PVar _ _)::rest) = allPVar rest
 allPVar _ = False
 
 sigTable : Emit -> List (String, FnSig)
@@ -8697,9 +8700,9 @@ allInt (_::rest) = LTInt :: allInt rest
 -- spurious catch-all panic if a future caller drops that gate.
 paramDecls : List Pat -> Int -> String
 paramDecls [] _ = ""
-paramDecls [PVar _] i = "i64 %arg" ++ intToString i
+paramDecls [PVar _ _] i = "i64 %arg" ++ intToString i
 paramDecls [PWild] i = "i64 %arg" ++ intToString i
-paramDecls ((PVar _)::rest) i =
+paramDecls ((PVar _ _)::rest) i =
   "i64 %arg\{intToString i}, \{paramDecls rest (i + 1)}"
 paramDecls (PWild::rest) i =
   "i64 %arg\{intToString i}, \{paramDecls rest (i + 1)}"
@@ -8709,9 +8712,9 @@ paramDecls _ _ = panic "llvm: function parameters must be plain variables"
 -- word at the ABI; the type only drives int-vs-float instruction selection).
 paramEnv : List Pat -> List LTy -> Int -> List (String, (String, LTy))
 paramEnv [] _ _ = []
-paramEnv ((PVar x)::rest) (ty::tys) i =
+paramEnv ((PVar x _)::rest) (ty::tys) i =
   (x, ("%arg" ++ intToString i, ty)) :: paramEnv rest tys (i + 1)
-paramEnv ((PVar x)::rest) [] i =
+paramEnv ((PVar x _)::rest) [] i =
   (x, ("%arg" ++ intToString i, LTInt)) :: paramEnv rest [] (i + 1)
 -- A `PWild` param binds no name: contribute NO env entry, but still consume its
 -- type slot and advance the %argN index so later `PVar` params keep their positions
@@ -8949,7 +8952,7 @@ typeOf sigs env (CBinPrim op l r _)
 typeOf _ _ (CUnOp "!" _) = LTBool
 typeOf sigs env (CUnOp "-" x) = typeOf sigs env x
 typeOf sigs env (CIf _ t _) = typeOf sigs env t
-typeOf sigs env (CLet False (PVar x) e1 e2) =
+typeOf sigs env (CLet False (PVar x _) e1 e2) =
   typeOf sigs ((x, typeOf sigs env e1)::env) e2
 typeOf sigs env (CLetGroup binds body) =
   typeOf sigs (letGroupEnv sigs env binds) body
@@ -9003,7 +9006,7 @@ letGroupEnv _ env _ = env
 blockTy : OrdMap FnSig -> List (String, LTy) -> List CStmt -> LTy
 blockTy sigs env [CSExpr ex] = typeOf sigs env ex
 blockTy sigs env ((CSExpr _)::rest) = blockTy sigs env rest
-blockTy sigs env ((CSLet _ (PVar x) ex)::rest) =
+blockTy sigs env ((CSLet _ (PVar x _) ex)::rest) =
   blockTy sigs ((x, typeOf sigs env ex)::env) rest
 -- a constructor / nested block-let (emitBlock now binds these): type its pattern
 -- vars in blockTy's env so a tail expr that uses a bound field still recurses
@@ -9228,7 +9231,7 @@ firstInformative sigs ((CClause pats body)::rest) i =
 -- pattern is uninformative (an i64 word, defaulted to Int by the caller).
 clausePatTy : OrdMap FnSig -> List Pat -> CExpr -> Int -> Option LTy
 clausePatTy sigs pats body i = match nthPat pats i
-  Some (PVar x) => paramUseTy sigs [] x body
+  Some (PVar x _) => paramUseTy sigs [] x body
   Some (PLit l) => Some (litTy l)
   _ => None
 
@@ -9256,7 +9259,7 @@ inferParamTys : OrdMap FnSig -> List Pat -> CExpr -> List LTy
 inferParamTys _ [] _ = []
 inferParamTys sigs pats body
   | isArithSectionLam pats body = mapConst LTNum pats
-inferParamTys sigs ((PVar x)::rest) body =
+inferParamTys sigs ((PVar x _)::rest) body =
   let ty = match paramUseTy sigs [] x body
     Some t => t
     None => LTInt
@@ -9277,9 +9280,7 @@ inferParamTys sigs (_::rest) body = LTInt :: inferParamTys sigs rest body
 -- an arith op over the two params in order, so only the genuine section lambda is
 -- affected — a lambda doing other work keeps its per-param inference.
 isArithSectionLam : List Pat -> CExpr -> Bool
-isArithSectionLam [PVar a, PVar b] (CBinPrim op (CVar la _) (CVar rb _) _) = isArithOp op
-  && la == a
-  && rb == b
+isArithSectionLam [PVar a _, PVar b _] (CBinPrim op (CVar la _) (CVar rb _) _) = isArithOp op && la == a && rb == b
 isArithSectionLam _ _ = False
 
 mapConst : a -> List b -> List a
@@ -9304,7 +9305,7 @@ inferParamTysSeed sigs dsig pats body i =
 -- (the G3 root cause: x's LTNum seed was read at the dict's index → missed).
 inferParamTysSeedD : OrdMap FnSig -> Option (List String, String) -> List Pat -> CExpr -> Int -> Int -> List LTy
 inferParamTysSeedD _ _ [] _ _ _ = []
-inferParamTysSeedD sigs dsig ((PVar x)::rest) body i di
+inferParamTysSeedD sigs dsig ((PVar x _)::rest) body i di
   | isDictParamName x =
     LTInt :: inferParamTysSeedD sigs dsig rest body (i + 1) di
   | otherwise =
@@ -9381,7 +9382,7 @@ anyArithArg _ [] = False
 anyArithArg p (a::rest) = paramUsedInArith p a || anyArithArg p rest
 
 zipParamEnv : List Pat -> List LTy -> List (String, LTy)
-zipParamEnv ((PVar x)::ps) (t::ts) = (x, t) :: zipParamEnv ps ts
+zipParamEnv ((PVar x _)::ps) (t::ts) = (x, t) :: zipParamEnv ps ts
 zipParamEnv (_::ps) (_::ts) = zipParamEnv ps ts
 zipParamEnv _ _ = []
 

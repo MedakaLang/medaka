@@ -829,12 +829,12 @@ letBindNamesPM binds = map letBindName binds
 
 -- ── pattern variables (local copy; covers PRec field/pun binders) ─────────────
 patVarsPM : Pat -> List String
-patVarsPM (PVar x) = [x]
+patVarsPM (PVar x _) = [x]
 patVarsPM (PCon _ args) = patVarsListPM args
 patVarsPM (PCons h t) = patVarsPM h ++ patVarsPM t
 patVarsPM (PTuple ps) = patVarsListPM ps
 patVarsPM (PList ps) = patVarsListPM ps
-patVarsPM (PAs x p) = x :: patVarsPM p
+patVarsPM (PAs x _ p) = x :: patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
 patVarsPM _ = []
 
@@ -851,7 +851,7 @@ renamePat rm (PCon n args) = PCon (renameDefName rm n) (map (renamePat rm) args)
 renamePat rm (PCons h t) = PCons (renamePat rm h) (renamePat rm t)
 renamePat rm (PTuple ps) = PTuple (map (renamePat rm) ps)
 renamePat rm (PList ps) = PList (map (renamePat rm) ps)
-renamePat rm (PAs x p) = PAs x (renamePat rm p)
+renamePat rm (PAs x l p) = PAs x l (renamePat rm p)
 renamePat rm (PRec n fields open) =
   PRec (renameDefName rm n) (map (renameRecPatField rm) fields) open
 renamePat _ p = p
@@ -1126,12 +1126,12 @@ recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 (DTypeSig false "letBindNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindNamesPM" ((PVar "binds")) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
 (DTypeSig false "patVarsPM" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarsPM" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patVarsPM" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarsPM" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsListPM") (EVar "args")))
 (DFunDef false "patVarsPM" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "h")) (EApp (EVar "patVarsPM") (EVar "t"))))
 (DFunDef false "patVarsPM" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsListPM") (EVar "ps")))
 (DFunDef false "patVarsPM" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListPM") (EVar "ps")))
-(DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
+(DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
 (DFunDef false "patVarsPM" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldVarsPM")) (EVar "fields")))
 (DFunDef false "patVarsPM" (PWild) (EListLit))
 (DTypeSig false "patVarsListPM" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1141,7 +1141,7 @@ recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "h"))) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "t"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EVar "renamePat") (EVar "rm"))) (EVar "ps"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EVar "renamePat") (EVar "rm"))) (EVar "ps"))))
-(DFunDef false "renamePat" ((PVar "rm") (PCon "PAs" (PVar "x") (PVar "p"))) (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))))
+(DFunDef false "renamePat" ((PVar "rm") (PCon "PAs" (PVar "x") (PVar "l") (PVar "p"))) (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EVar "renameRecPatField") (EVar "rm"))) (EVar "fields"))) (EVar "open")))
 (DFunDef false "renamePat" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "renameRecPatField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
@@ -1411,12 +1411,12 @@ recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 (DTypeSig false "letBindNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "letBindNamesPM" ((PVar "binds")) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
 (DTypeSig false "patVarsPM" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patVarsPM" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patVarsPM" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarsPM" ((PCon "PCon" PWild (PVar "args"))) (EApp (EVar "patVarsListPM") (EVar "args")))
 (DFunDef false "patVarsPM" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "h")) (EApp (EVar "patVarsPM") (EVar "t"))))
 (DFunDef false "patVarsPM" ((PCon "PTuple" (PVar "ps"))) (EApp (EVar "patVarsListPM") (EVar "ps")))
 (DFunDef false "patVarsPM" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListPM") (EVar "ps")))
-(DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
+(DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
 (DFunDef false "patVarsPM" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldVarsPM")) (EVar "fields")))
 (DFunDef false "patVarsPM" (PWild) (EListLit))
 (DTypeSig false "patVarsListPM" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1426,7 +1426,7 @@ recPatFieldVarsPM (RecPatField _ (Some p)) = patVarsPM p
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCons") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "h"))) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "t"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "renamePat") (EVar "rm"))) (EVar "ps"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EVar "renamePat") (EVar "rm"))) (EVar "ps"))))
-(DFunDef false "renamePat" ((PVar "rm") (PCon "PAs" (PVar "x") (PVar "p"))) (EApp (EApp (EVar "PAs") (EVar "x")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))))
+(DFunDef false "renamePat" ((PVar "rm") (PCon "PAs" (PVar "x") (PVar "l") (PVar "p"))) (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))))
 (DFunDef false "renamePat" ((PVar "rm") (PCon "PRec" (PVar "n") (PVar "fields") (PVar "open"))) (EApp (EApp (EApp (EVar "PRec") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameRecPatField") (EVar "rm"))) (EVar "fields"))) (EVar "open")))
 (DFunDef false "renamePat" (PWild (PVar "p")) (EVar "p"))
 (DTypeSig false "renameRecPatField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))

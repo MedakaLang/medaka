@@ -700,7 +700,7 @@ ordGt _ = False
 
 -- ── pattern matching ──────────────────────────────────────────────────────
 export matchPat : Pat -> Value e -> Option (List (String, Value e))
-matchPat (PVar x) v = Some [(x, v)]
+matchPat (PVar x _) v = Some [(x, v)]
 matchPat PWild _ = Some []
 matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
@@ -721,7 +721,7 @@ matchPat (PTuple pats) (VTuple vals)
 matchPat (PList pats) (VList vals)
   | listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
-matchPat (PAs x p) v = matchAs x p v
+matchPat (PAs x _ p) v = matchAs x p v
 matchPat (PRec _ fields _) (VRecord _ recFields) =
   matchRecFields fields recFields
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
@@ -1127,7 +1127,7 @@ eval env (EDictAt name routesRef) =
   applyDicts env (lookupEnv env name) routesRef.value
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
-eval env (ELet _ True (PVar f) e1 e2) = evalRecLet env f e1 e2
+eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet _ _ pat e1 e2) = evalLet env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
@@ -1492,7 +1492,7 @@ evalBlock env [DoLet _ _ pat e] = blockLetLast env pat e
 evalBlock env ((DoExpr e)::rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env ((DoLet _ True (PVar f) e)::rest) = blockRecLet env f e rest
+evalBlock env ((DoLet _ True (PVar f _) e)::rest) = blockRecLet env f e rest
 evalBlock env ((DoLet _ _ pat e)::rest) = blockLet env pat e rest
 evalBlock env [DoAssign _ e] =
   let _ = eval env e
@@ -1789,7 +1789,8 @@ lookupPositions iface mname (((i, m), p)::rest)
 implMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> Expr -> Value e
 implMethodValue env positions [] body
   | isEmptyL positions = memoThunk env body
-  | otherwise = VClosure env [PVar "$eta"] (EApp body (EVar "$eta"))
+  | otherwise =
+    VClosure env [PVar "$eta" (Loc "" 0 0 0 0)] (EApp body (EVar "$eta"))
 implMethodValue env _ pats body = VClosure env pats body
 
 -- A VThunk whose body evaluates at most once: the first force writes the result

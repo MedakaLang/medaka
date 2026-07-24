@@ -150,12 +150,12 @@ bindName (CBind name _) = name
 
 -- the variables a pattern binds.
 export patVars : Pat -> List String
-patVars (PVar x) = [x]
+patVars (PVar x _) = [x]
 patVars (PCon _ args) = patVarsList args
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PTuple ps) = patVarsList ps
 patVars (PList ps) = patVarsList ps
-patVars (PAs x p) = x :: patVars p
+patVars (PAs x _ p) = x :: patVars p
 patVars _ = []
 
 export patVarsList : List Pat -> List String
@@ -713,7 +713,7 @@ export dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x)::_) _) = dispIsDictParamName x
+dispClauseHasLeadingDict (CClause ((PVar x _)::_) _) = dispIsDictParamName x
 dispClauseHasLeadingDict _ = False
 
 dispIsDictParamName : String -> Bool
@@ -741,7 +741,7 @@ dictCountUniformGo n (pats::rest) = leadingDictCount pats == n
 
 -- count of leading `$dict…` params in one clause's param list.
 export leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x)::rest) =
+leadingDictCount ((PVar x _)::rest) =
   if dispIsDictParamName x then
     1 + leadingDictCount rest
   else
@@ -1027,7 +1027,7 @@ dispLeavesOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> List
 dispLeavesOk cf isFn fa fnNames root acc (CIf _ t f) found = match dispLeavesOk cf isFn fa fnNames root acc t found
   None => None
   Some f2 => dispLeavesOk cf isFn fa fnNames root acc f f2
-dispLeavesOk cf isFn fa fnNames root acc (CLet False (PVar _) _ b) found =
+dispLeavesOk cf isFn fa fnNames root acc (CLet False (PVar _ _) _ b) found =
   dispLeavesOk cf isFn fa fnNames root acc b found
 dispLeavesOk cf isFn fa fnNames root acc (CLet False PWild _ b) found =
   dispLeavesOk cf isFn fa fnNames root acc b found
@@ -1102,7 +1102,7 @@ dispNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> 
 dispNonTailHeads cf isFn fa members (CIf c t f) = allCallHeads cf c
   ++ dispNonTailHeads cf isFn fa members t
   ++ dispNonTailHeads cf isFn fa members f
-dispNonTailHeads cf isFn fa members (CLet False (PVar _) rhs b) = allCallHeads cf rhs
+dispNonTailHeads cf isFn fa members (CLet False (PVar _ _) rhs b) = allCallHeads cf rhs
   ++ dispNonTailHeads cf isFn fa members b
 dispNonTailHeads cf isFn fa members (CLet False PWild rhs b) = allCallHeads cf rhs
   ++ dispNonTailHeads cf isFn fa members b

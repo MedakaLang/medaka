@@ -262,12 +262,12 @@ leftSectionGo : Expr -> Expr -> Expr
 leftSectionOrExpr : Expr -> Expr
 leftSectionRhs : Expr -> String -> Expr -> Expr -> Expr
 letExprKind : Token -> Parser Expr
-letFunTailFor : String -> List Pat -> Expr -> Token -> Parser DoStmt
+letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> Parser DoStmt
 letIdent : String -> Parser DoStmt
-letIdentBody : String -> List Pat -> Token -> Parser DoStmt
+letIdentBody : String -> Loc -> List Pat -> Token -> Parser DoStmt
 letIdentExpr : String -> Parser Expr
-letIdentExprRest : String -> List Pat -> Token -> Parser Expr
-letIdentRest : String -> List Pat -> Expr -> Parser DoStmt
+letIdentExprRest : String -> Loc -> List Pat -> Token -> Parser Expr
+letIdentRest : String -> Loc -> List Pat -> Expr -> Parser DoStmt
 letKind : Token -> Parser DoStmt
 letMutRemovedMsg : String
 letPat : Parser DoStmt

@@ -194,14 +194,14 @@ headIsUpper s = match arrayGet 0 (stringToChars s)
 
 -- names bound by a pattern (each becomes a DISTINCT local binder / key).
 patBinderNames : Pat -> List String
-patBinderNames (PVar x) = [x]
+patBinderNames (PVar x _) = [x]
 patBinderNames PWild = []
 patBinderNames (PLit _) = []
 patBinderNames (PCon _ ps) = flatMap patBinderNames ps
 patBinderNames (PCons a b) = patBinderNames a ++ patBinderNames b
 patBinderNames (PTuple ps) = flatMap patBinderNames ps
 patBinderNames (PList ps) = flatMap patBinderNames ps
-patBinderNames (PAs x p) = x :: patBinderNames p
+patBinderNames (PAs x _ p) = x :: patBinderNames p
 patBinderNames (PRng _ _ _) = []
 patBinderNames (PRec _ fields _) = flatMap recFieldBinderNames fields
 
@@ -1342,14 +1342,14 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "headIsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "headIsUpper" ((PVar "s")) (EMatch (EApp (EApp (EVar "arrayGet") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "isUpper") (EVar "c"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "patBinderNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBinderNames" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBinderNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBinderNames" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderNames")) (EVar "ps")))
 (DFunDef false "patBinderNames" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBinderNames") (EVar "a")) (EApp (EVar "patBinderNames") (EVar "b"))))
 (DFunDef false "patBinderNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderNames")) (EVar "ps")))
 (DFunDef false "patBinderNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBinderNames")) (EVar "ps")))
-(DFunDef false "patBinderNames" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBinderNames") (EVar "p"))))
+(DFunDef false "patBinderNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBinderNames") (EVar "p"))))
 (DFunDef false "patBinderNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBinderNames")) (EVar "fields")))
 (DTypeSig false "recFieldBinderNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1803,14 +1803,14 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "headIsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "headIsUpper" ((PVar "s")) (EMatch (EApp (EApp (EVar "arrayGet") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "isUpper") (EVar "c"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "patBinderNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBinderNames" ((PCon "PVar" (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "patBinderNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBinderNames" ((PCon "PWild")) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PLit" PWild)) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderNames")) (EVar "ps")))
 (DFunDef false "patBinderNames" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBinderNames") (EVar "a")) (EApp (EVar "patBinderNames") (EVar "b"))))
 (DFunDef false "patBinderNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderNames")) (EVar "ps")))
 (DFunDef false "patBinderNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBinderNames")) (EVar "ps")))
-(DFunDef false "patBinderNames" ((PCon "PAs" (PVar "x") (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBinderNames") (EVar "p"))))
+(DFunDef false "patBinderNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBinderNames") (EVar "p"))))
 (DFunDef false "patBinderNames" ((PCon "PRng" PWild PWild PWild)) (EListLit))
 (DFunDef false "patBinderNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBinderNames")) (EVar "fields")))
 (DTypeSig false "recFieldBinderNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))

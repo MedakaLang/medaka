@@ -931,7 +931,7 @@ matchParamHit loc name pats p
   | otherwise = []
 
 isBareParam : String -> Pat -> Bool
-isBareParam p (PVar q) = p == q
+isBareParam p (PVar q _) = p == q
 isBareParam _ _ = False
 
 -- ── §8 autofixer (Task A) ──────────────────────────────────────────────────────
@@ -1018,7 +1018,7 @@ paramIndexGo p (pat::rest) i
 armToClause : Bool -> String -> String -> List Pat -> Int -> Arm -> Decl
 armToClause vis name p pats k (Arm pat _ body) =
   let cpat = if patIsWild pat && wholeWordIn p (exprToString body) then
-    PVar p
+    PVar p (Loc "" 0 0 0 0)
   else
     pat
   DFunDef vis name (replaceAt k cpat pats) body
@@ -1122,14 +1122,14 @@ destructurablePat _ _ = False
 -- record iff its type is single-ctor AND every sub-pattern is; literals, `::`,
 -- list and range patterns are refutable.
 patIrrefutable : Oracle -> Pat -> Bool
-patIrrefutable _ (PVar _) = True
+patIrrefutable _ (PVar _ _) = True
 patIrrefutable _ PWild = True
 patIrrefutable orc (PTuple ps) = allList (patIrrefutable orc) ps
 patIrrefutable orc (PCon c ps) = ctorIsSingle orc c
   && allList (patIrrefutable orc) ps
 patIrrefutable orc (PRec c fs _) = ctorIsSingle orc c
   && allList (recPatFieldIrrefutable orc) fs
-patIrrefutable orc (PAs _ p) = patIrrefutable orc p
+patIrrefutable orc (PAs _ _ p) = patIrrefutable orc p
 patIrrefutable _ _ = False
 
 recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
@@ -1440,7 +1440,7 @@ selfShadowFinding (name, loc) = Finding {
 -- whose sub-patterns are all irrefutable.  Everything else (multi-ctor, cons,
 -- list, literal, range, as-pattern) is refutable for this rule's purposes.
 irrefutablePat : Oracle -> Pat -> Bool
-irrefutablePat _ (PVar _) = True
+irrefutablePat _ (PVar _ _) = True
 irrefutablePat _ PWild = True
 irrefutablePat orc (PTuple ps) = not (anyList (refutablePat orc) ps)
 irrefutablePat orc (PRec _ fields _) = not (anyList (refutableField orc) fields)
@@ -1469,7 +1469,7 @@ refutableField orc (RecPatField _ (Some p)) = refutablePat orc p
 -- the irrefutable single-arm shape.
 bindMatchTail : Oracle -> List DoStmt -> Option (List DoStmt, String, Pat, Expr, Expr)
 bindMatchTail orc stmts = match splitTail2 stmts
-  Some (prefix, DoBind (PVar v) boundE, DoExpr matchE) =>
+  Some (prefix, DoBind (PVar v _) boundE, DoExpr matchE) =>
     bindMatchArm orc prefix v boundE (unwrapLoc matchE)
   _ => None
 
@@ -1807,8 +1807,8 @@ mentionsVar x e = match unwrapLoc e
 
 -- the section a lambda collapses to, or None if it is not an eligible shape.
 lamSection : List Pat -> Expr -> Option Section
-lamSection [PVar x] body = lamSection1 x (unwrapLoc body)
-lamSection [PVar x, PVar y] body
+lamSection [PVar x _] body = lamSection1 x (unwrapLoc body)
+lamSection [PVar x _, PVar y _] body
   | x != y = lamSection2 x y (unwrapLoc body)
   | otherwise = None
 lamSection _ _ = None
@@ -2295,7 +2295,7 @@ andThenEtaFn x arg = match unwrapLoc arg
 buildAndThenMap : String -> Expr -> Expr -> Expr
 buildAndThenMap x arg m = match andThenEtaFn x arg
   Some f => EApp (EApp (EVar "map") f) m
-  None => EApp (EApp (EVar "map") (ELam [PVar x] arg)) m
+  None => EApp (EApp (EVar "map") (ELam [PVar x (Loc "" 0 0 0 0)] arg)) m
 
 -- `andThen m (x => pure ARG)` with x occurring ≤ 1× in ARG → Some (the rewritten
 -- `map …` expression); anything else → None.
@@ -2310,7 +2310,7 @@ andThenPureMapApp (EApp hd m) cont
 andThenPureMapApp _ _ = None
 
 andThenPureMapCont : Expr -> Expr -> Option Expr
-andThenPureMapCont m (ELam [PVar x] body) =
+andThenPureMapCont m (ELam [PVar x _] body) =
   andThenPureMapBody m x (unwrapLoc body)
 andThenPureMapCont _ _ = None
 
@@ -3230,7 +3230,7 @@ matchToMapTransform _ _ _ = None
 
 -- Result passthrough arm: `Err v => Err v` with the SAME identifier v (condition 3).
 matchToMapErrPassthru : Pat -> Expr -> Bool
-matchToMapErrPassthru (PCon "Err" [PVar v]) body = match unwrapLoc body
+matchToMapErrPassthru (PCon "Err" [PVar v _]) body = match unwrapLoc body
   EApp hd arg => isEVarNamed "Err" hd && isEVarNamed v arg
   _ => False
 matchToMapErrPassthru _ _ = False
@@ -3238,9 +3238,9 @@ matchToMapErrPassthru _ _ = False
 -- build the map function: eta-reduce `p => f p` to `f` (reusing `andThenEtaFn`),
 -- else a lambda over the (possibly non-simple) binder pattern.
 matchToMapFn : Pat -> Expr -> Expr
-matchToMapFn (PVar x) expr = match andThenEtaFn x expr
+matchToMapFn (PVar x l) expr = match andThenEtaFn x expr
   Some f => f
-  None => ELam [PVar x] expr
+  None => ELam [PVar x l] expr
 matchToMapFn binder expr = ELam [binder] expr
 
 matchToMapCall : Pat -> Expr -> Expr -> Expr

@@ -7,7 +7,14 @@
 -- sub-sexps or quoted atoms.  Bare (unparenthesized) atoms are: AGlobal,
 -- CTFail, HCons, HNil, HUnit, RNone, true, false, LUnit, PWild.
 
-import frontend.ast.{Lit(..), Pat(..), RecPatField(..), Addr(..), Route(..)}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  RecPatField(..),
+  Addr(..),
+  Route(..),
+  Loc(..),
+}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -205,14 +212,14 @@ toRecPatField other =
   panic ("core_ir_sexp_parse: bad RecPatField: " ++ sexprToStr other)
 
 toPat : SExp -> Pat
-toPat (SList ((SAtom "PVar")::[n])) = PVar (toStr n)
+toPat (SList ((SAtom "PVar")::[n])) = PVar (toStr n) (Loc "" 0 0 0 0)
 toPat (SAtom "PWild") = PWild
 toPat (SList ((SAtom "PLit")::[l])) = PLit (toLit l)
 toPat (SList ((SAtom "PCon")::name::args)) = PCon (toStr name) (map toPat args)
 toPat (SList ((SAtom "PCons")::[h, t])) = PCons (toPat h) (toPat t)
 toPat (SList ((SAtom "PTuple")::ps)) = PTuple (map toPat ps)
 toPat (SList ((SAtom "PList")::ps)) = PList (map toPat ps)
-toPat (SList ((SAtom "PAs")::[n, p])) = PAs (toStr n) (toPat p)
+toPat (SList ((SAtom "PAs")::[n, p])) = PAs (toStr n) (Loc "" 0 0 0 0) (toPat p)
 toPat (SList ((SAtom "PRng")::[lo, hi, incl])) =
   PRng (toLit lo) (toLit hi) (toBool incl)
 toPat (SList ((SAtom "PRec")::[name, SList fields, rest])) =

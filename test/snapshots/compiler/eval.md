@@ -1,5 +1,5 @@
 # META
-source_lines=3452
+source_lines=3453
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -704,7 +704,7 @@ ordGt _ = False
 
 -- ── pattern matching ──────────────────────────────────────────────────────
 export matchPat : Pat -> Value e -> Option (List (String, Value e))
-matchPat (PVar x) v = Some [(x, v)]
+matchPat (PVar x _) v = Some [(x, v)]
 matchPat PWild _ = Some []
 matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
@@ -725,7 +725,7 @@ matchPat (PTuple pats) (VTuple vals)
 matchPat (PList pats) (VList vals)
   | listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
-matchPat (PAs x p) v = matchAs x p v
+matchPat (PAs x _ p) v = matchAs x p v
 matchPat (PRec _ fields _) (VRecord _ recFields) =
   matchRecFields fields recFields
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
@@ -1131,7 +1131,7 @@ eval env (EDictAt name routesRef) =
   applyDicts env (lookupEnv env name) routesRef.value
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
-eval env (ELet _ True (PVar f) e1 e2) = evalRecLet env f e1 e2
+eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet _ _ pat e1 e2) = evalLet env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch env (eval env scrut) arms
@@ -1496,7 +1496,7 @@ evalBlock env [DoLet _ _ pat e] = blockLetLast env pat e
 evalBlock env ((DoExpr e)::rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env ((DoLet _ True (PVar f) e)::rest) = blockRecLet env f e rest
+evalBlock env ((DoLet _ True (PVar f _) e)::rest) = blockRecLet env f e rest
 evalBlock env ((DoLet _ _ pat e)::rest) = blockLet env pat e rest
 evalBlock env [DoAssign _ e] =
   let _ = eval env e
@@ -1793,7 +1793,8 @@ lookupPositions iface mname (((i, m), p)::rest)
 implMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> Expr -> Value e
 implMethodValue env positions [] body
   | isEmptyL positions = memoThunk env body
-  | otherwise = VClosure env [PVar "$eta"] (EApp body (EVar "$eta"))
+  | otherwise =
+    VClosure env [PVar "$eta" (Loc "" 0 0 0 0)] (EApp body (EVar "$eta"))
 implMethodValue env _ pats body = VClosure env pats body
 
 -- A VThunk whose body evaluates at most once: the first force writes the result
@@ -3762,7 +3763,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ordGt" ((PCon "Gt")) (EVar "True"))
 (DFunDef false "ordGt" (PWild) (EVar "False"))
 (DTypeSig true "matchPat" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "matchPat" ((PCon "PVar" (PVar "x")) (PVar "v")) (EApp (EVar "Some") (EListLit (ETuple (EVar "x") (EVar "v")))))
+(DFunDef false "matchPat" ((PCon "PVar" (PVar "x") PWild) (PVar "v")) (EApp (EVar "Some") (EListLit (ETuple (EVar "x") (EVar "v")))))
 (DFunDef false "matchPat" ((PCon "PWild") PWild) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LInt" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
@@ -3777,7 +3778,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PCons" PWild PWild) (PCon "VList" (PList))) (EVar "None"))
 (DFunDef false "matchPat" ((PCon "PTuple" (PVar "pats")) (PCon "VTuple" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "matchPat" ((PCon "PAs" (PVar "x") (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
+(DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
 (DFunDef false "matchPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PCon "VRecord" PWild (PVar "recFields"))) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EFieldAccess (EVar "ctorFieldOrdersRef") "value")) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -3944,7 +3945,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "routesRef") "value")))
 (DFunDef false "eval" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "apply") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")))
-(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "evalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "eval" ((PVar "env") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "evalMatch") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
@@ -4055,7 +4056,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "blockLetLast") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "evalBlock") (EVar "env")) (EVar "rest")))))
-(DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "f")) (EVar "e")) (EVar "rest")))
+(DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "f")) (EVar "e")) (EVar "rest")))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockLet") (EVar "env")) (EVar "pat")) (EVar "e")) (EVar "rest")))
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoAssign" PWild (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "evalBlock") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EVar "x") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))) (EVar "rest")))
@@ -4210,7 +4211,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupPositions" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
 (DFunDef false "lookupPositions" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupPositions") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EVar "PVar") (ELit (LString "$eta"))))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")))
 (DTypeSig false "memoThunk" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "memoThunk" ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EVar "memoThunkOf") (EApp (EVar "Ref") (EVar "None"))) (EVar "env")) (EVar "body")))
@@ -5163,7 +5164,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ordGt" ((PCon "Gt")) (EVar "True"))
 (DFunDef false "ordGt" (PWild) (EVar "False"))
 (DTypeSig true "matchPat" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "matchPat" ((PCon "PVar" (PVar "x")) (PVar "v")) (EApp (EVar "Some") (EListLit (ETuple (EVar "x") (EVar "v")))))
+(DFunDef false "matchPat" ((PCon "PVar" (PVar "x") PWild) (PVar "v")) (EApp (EVar "Some") (EListLit (ETuple (EVar "x") (EVar "v")))))
 (DFunDef false "matchPat" ((PCon "PWild") PWild) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LInt" (PVar "n"))) (PCon "VInt" (PVar "m"))) (EIf (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
 (DFunDef false "matchPat" ((PCon "PLit" (PCon "LFloat" (PVar "f"))) (PCon "VFloat" (PVar "g"))) (EIf (EBinOp "==" (EVar "f") (EVar "g")) (EApp (EVar "Some") (EListLit)) (EVar "None")))
@@ -5178,7 +5179,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PCons" PWild PWild) (PCon "VList" (PList))) (EVar "None"))
 (DFunDef false "matchPat" ((PCon "PTuple" (PVar "pats")) (PCon "VTuple" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "matchPat" ((PCon "PAs" (PVar "x") (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
+(DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
 (DFunDef false "matchPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PCon "VRecord" PWild (PVar "recFields"))) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EFieldAccess (EVar "ctorFieldOrdersRef") "value")) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -5345,7 +5346,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EFieldAccess (EVar "routesRef") "value")))
 (DFunDef false "eval" ((PVar "env") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "apply") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")))
-(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "evalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "eval" ((PVar "env") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "evalMatch") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
@@ -5456,7 +5457,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "blockLetLast") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "evalBlock") (EVar "env")) (EVar "rest")))))
-(DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "f")) (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "f")) (EVar "e")) (EVar "rest")))
+(DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "f")) (EVar "e")) (EVar "rest")))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "blockLet") (EVar "env")) (EVar "pat")) (EVar "e")) (EVar "rest")))
 (DFunDef false "evalBlock" ((PVar "env") (PList (PCon "DoAssign" PWild (PVar "e")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "evalBlock" ((PVar "env") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "evalBlock") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EListLit (ETuple (EVar "x") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))) (EVar "rest")))
@@ -5611,7 +5612,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupPositions" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
 (DFunDef false "lookupPositions" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupPositions") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EVar "PVar") (ELit (LString "$eta"))))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")))
 (DTypeSig false "memoThunk" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "memoThunk" ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EVar "memoThunkOf") (EApp (EVar "Ref") (EVar "None"))) (EVar "env")) (EVar "body")))
