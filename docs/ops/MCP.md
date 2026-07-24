@@ -1,9 +1,10 @@
 # MCP.md — `medaka mcp`, the LSP-for-agents
 
-**Status:** IMPLEMENTED — 58d050a7, 2026-07-16. All 7 tools shipped and merged
-(#246/#247/#249/#250/#251/#252/#255), protocol-version negotiation in place,
-verified READY against the real MCP SDK. This doc covers wiring it into the
-Medaka repo for coding agents (`.mcp.json` + `.claude/settings.json` +
+**Status:** IMPLEMENTED — 58d050a7, 2026-07-16 (7 tools); `medaka_references`
+added #870/#912. All 8 tools shipped and merged (#246/#247/#249/#250/#251/
+#252/#255/#870/#912), protocol-version negotiation in place, verified READY
+against the real MCP SDK. This doc covers wiring it into the Medaka repo for
+coding agents (`.mcp.json` + `.claude/settings.json` +
 `scripts/medaka-mcp-wrapper.sh`) and how to use it.
 
 ---
@@ -16,9 +17,17 @@ over stdio — one newline-delimited JSON object per message, exactly the shape
 checks/queries to coding agents: think of it as an LSP, but shaped for an
 agent's tool-call loop instead of an editor's request/notification loop. It
 negotiates the client's requested protocol version (falling back to the
-newest it knows) and advertises 7 tools via `tools/list`.
+newest it knows) and advertises 8 tools via `tools/list`.
 
-## 2. The 7 tools
+**Prefer these over grep/Bash for the jobs they cover.** Each tool's own
+`description` (visible over `tools/list`) is written DIRECTIVELY — it says
+*when* this tool is the first choice, not just what it computes — because the
+default failure mode is reaching for `Grep`/Bash even with a working
+semantic tool present (industry-wide; see
+[anthropics/claude-code#32599](https://github.com/anthropics/claude-code/issues/32599)
+and #847).
+
+## 2. The 8 tools
 
 Each appears to an agent as `mcp__medaka__<tool>` once the server is wired in.
 Full argument schemas are self-described over `tools/list`; this is the
@@ -29,7 +38,8 @@ one-line version (positions are 0-based, LSP-style).
 | `medaka_check` | `file` \| `source` | Type-check and return structured diagnostics — same JSON as `medaka check --json` |
 | `medaka_type_at` | `file`, `line`, `col` | Infer the type/scheme at a position (stateless hover) |
 | `medaka_symbols` | `file` | List top-level declarations with source ranges (document outline) |
-| `medaka_definition` | `file`, `line`, `col` | Find the declaration defining the identifier at a position |
+| `medaka_definition` | `file`, `line`, `col` | Find the declaration defining the identifier at a position (intra-file only) |
+| `medaka_references` | `file`, `line`, `col`, `includeDeclaration?` | Find every use of the identifier at a position, project-wide — resolves by binder identity, not spelling |
 | `medaka_fmt` | `file` \| `source`, `check?` | Format source with the canonical formatter; never writes to disk |
 | `medaka_lint` | `paths`, `deny?`, `only?`, `disable?` | Run the style linter over one or more files |
 | `medaka_test` | `file` | Run a file's doctests (and property tests, if any) |
@@ -93,6 +103,22 @@ Two traps this creates:
   tools are for non-compiler work and querying unchanged-semantics code. (The
   same trap hits the parent after it rebuilds mid-session — `/mcp` reconnect to
   refresh the server onto the new binary.)
+
+  **A per-worktree server (the real fix) is a harness feature outside this
+  repo's control** — not something a Medaka PR can deliver (#846). The
+  repo-controllable minimum shipped instead: every `tools/call` result carries
+  a compact `staleBinary` field **when, and only when,** the live compiler
+  source at this server's `MEDAKA_ROOT` has diverged from what the running
+  binary was actually built from — the same fingerprint check
+  `checkSourceStaleness` uses for the CLI's own startup warning
+  (`compiler/driver/medaka_cli.mdk`'s `sourceStalenessVerdict`), recomputed on
+  every call so a mid-session rebuild-without-reconnect (the trap right above)
+  is caught on the NEXT tool call, not just at server launch. A fresh binary
+  gets nothing extra — the field costs zero tokens in the common case. **This
+  does not by itself detect a daughter's OWN worktree drifting from the
+  orchestrator's** (the root being fingerprinted is still the orchestrator's
+  `MEDAKA_ROOT`, per the trap above) — `/mcp` reconnect after `make medaka`
+  remains the correct fix for that case.
 
 ## 5. Honesty caveats — read before trusting a result
 
