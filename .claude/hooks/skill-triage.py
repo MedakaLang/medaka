@@ -25,7 +25,26 @@ stdlib = re.search(r"STDLIB\.md", prompt, re.IGNORECASE) or (
                   prompt, re.IGNORECASE)
 )
 
-if not roadmap and not stdlib:
+# MCP-tool-shaped task (#847): the medaka MCP server (compiler/tools/mcp.mdk)
+# exposes check/type_at/symbols/definition/references/fmt/lint/test as
+# mcp__medaka__* tools, but nothing maps a task's SHAPE to the matching tool
+# at decision time -- the model defaults to grep/Bash even with a working
+# tool present. Narrow, verb-anchored triggers (not "any .mdk mention") so
+# this doesn't nudge on every prompt in the repo.
+mcp_check = re.search(r"\btype-?check|\bdoes\s+(it|this(?:\s+file)?|the\s+file)\s+(parse|compile|typecheck)\b",
+                       prompt, re.IGNORECASE)
+mcp_type_at = re.search(r"\bwhat(?:'s| is) the type of\b|\btype of\b|\bwhat type is\b", prompt, re.IGNORECASE)
+mcp_symbols = re.search(r"\b(list|show) (the )?(top-level )?(declarations|symbols|functions)\b|\bdocument outline\b",
+                         prompt, re.IGNORECASE)
+mcp_definition = re.search(r"\b(find|go to|where is)\b.*\bdefin", prompt, re.IGNORECASE)
+mcp_references = re.search(r"\bfind (all )?(uses|usages|references)\b|\bwho calls\b",
+                            prompt, re.IGNORECASE)
+mcp_fmt = re.search(r"\bformat (this|the) (file|source|code)\b", prompt, re.IGNORECASE)
+mcp_lint = re.search(r"\blint\b", prompt, re.IGNORECASE)
+mcp_test = re.search(r"\brun (the )?doctests?\b", prompt, re.IGNORECASE)
+mcp = mcp_check or mcp_type_at or mcp_symbols or mcp_definition or mcp_references or mcp_fmt or mcp_lint or mcp_test
+
+if not roadmap and not stdlib and not mcp:
     sys.exit(0)
 
 if roadmap:
@@ -55,6 +74,26 @@ if stdlib:
         "add-primitive.\n"
         "STDLIB.md is the checklist but is prone to drift; verify each item "
         "against the actual .mdk before trusting its status."
+    )
+
+if mcp:
+    print(
+        "Skill triage (MCP-tool-shaped task detected): before reaching for "
+        "grep/Bash, check whether a medaka_* MCP tool answers this directly "
+        "(mcp__medaka__*, deferred -- ToolSearch its schema before the first "
+        "call):\n"
+        "- Type-check / does it parse or compile -> medaka_check.\n"
+        "- What type is X -> medaka_type_at.\n"
+        "- List declarations / outline a file -> medaka_symbols.\n"
+        "- Where is X defined (same file) -> medaka_definition.\n"
+        "- Find every use of X (whole project) -> medaka_references.\n"
+        "- Format a file -> medaka_fmt.\n"
+        "- Lint a file -> medaka_lint.\n"
+        "- Run a file's doctests -> medaka_test.\n"
+        "Caveat: an inherited server answers with the ORCHESTRATOR's binary "
+        "-- a daughter editing compiler/*.mdk or stdlib/core.mdk must still "
+        "verify with its OWN freshly-built ./medaka (docs/ops/MCP.md §4); "
+        "watch for a staleBinary field on the tool result."
     )
 
 sys.exit(0)

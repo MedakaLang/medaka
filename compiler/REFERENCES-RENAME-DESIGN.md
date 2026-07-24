@@ -49,10 +49,13 @@ Hard constraint (Val): the analysis is **linear** — see §3d (big-O) and §7 (
   `rewriteDecls`, `loader.mdk:559`).
 
 - **Linear approach:** one whole-project walk builds `HashMap<BinderKey, List (uri,Loc)>`
-  (stdlib `hash_map`, `stdlib/hash_map.mdk:37`) + `HashMap<BinderKey, (uri,Loc)>` for the
-  def site. Build = **O(total tokens)** with O(1) amortized inserts. A `references` query =
-  resolve the click to a `BinderKey`, then **one O(1) lookup + O(#uses) emit**. A `rename` =
-  the same index + a linear map from each `Loc` to an edit — **O(#uses)**, **edits returned,
+  (stdlib `hash_map`, `stdlib/hash_map.mdk:37`) for the use sites **plus a second
+  `HashMap<BinderKey, List (uri,Loc)>` for the def sites — a LIST, not one entry** (#964;
+  see §3b: one binder has one def site per clause head, and the single-entry model this
+  bullet used to prescribe is precisely what shipped the bug). Build = **O(total tokens)**
+  with O(1) amortized inserts. A `references` query = resolve the click to a `BinderKey`,
+  then **one O(1) lookup + O(#def sites + #uses) emit**. A `rename` = the same index + a
+  linear map from each `Loc` to an edit — **O(#def sites + #uses)**, **edits returned,
   never written** (the #250 / `fmt --write` guardrail). **No `List`-as-set/map anywhere; no
   per-query re-walk.**
 
@@ -163,9 +166,29 @@ is about *source files*; this NUL lives only in in-memory keys, never written to
 Two mutable hash maps, built once per project load:
 
 ```
-defIndex : HashMap String (String, Loc)          -- BinderKey → (uri, defLoc)          [the def site]
+defIndex : HashMap String (Ref (List (String, Loc)))  -- BinderKey → mutable list of (uri, defLoc)
 refIndex : HashMap String (Ref (List (String, Loc)))  -- BinderKey → mutable list of (uri, useLoc)
 ```
+
+⚠️ **`defIndex` is a LIST, not one entry (#964).** One binder can have MANY def sites: a
+multi-clause top-level function is N separate `DFunDef` decls that all share one BinderKey,
+so `describe 0 = … / describe 1 = … / describe n = …` is three clause heads under one key.
+This spec said `HashMap String (String, Loc)` and the implementation duly `hmSet`-ed, i.e.
+LAST-WRITE-WINS — `references` then under-reported every earlier head, and a rename built on
+the same set left those heads under the OLD name, which still compiles and silently changes
+runtime behaviour. Accumulate, never overwrite.
+
+⚠️ **…but `defIndex[key]` is a SET of def sites, not a bag.** The same `(uri, span)` must
+never appear twice: `defsOfDecl` records a record FIELD once per VARIANT, all at the
+enclosing `data` decl's one name `Loc` and all under one field key, so
+`data T = A { x : Int } | B { x : Int }` offers `x` twice at byte-identical spans (the
+compiler's own `frontend/ast.mdk` `Decl` does it for `pub` and `methods`). Overwriting hid
+that; appending exposes it. Two edits over an **identical range** in one `WorkspaceEdit` is
+rejected by strict LSP clients and **double-applied** (`labellabel`) by lenient ones —
+source corruption of exactly the class this whole document exists to avoid. The push must
+refuse a `(uri, span)` it already holds, via an **O(1) hash membership set**, never a scan
+of the key's own list (that would be a `List`-as-a-set, and the N-vs-2N op-count ratio
+cannot see it: doubling a project doubles MODULES, not def sites per binder).
 
 (`refIndex` values are `Ref (List …)` so appends are O(1) push, never `xs ++ [x]` — the
 `xs ++ [x]`-in-a-fold shape is the canonical quadratic per `compiler/AGENTS.md` and the
@@ -189,8 +212,10 @@ ordered), run one recursive walk mirroring `stampExpr`'s frame-stack shape
    these in dependency order, `resolve.mdk:2480-2489`).
 
 At each site:
-- **A binder** (decl name via #331 `Loc`, or a local binder Loc) → `hmSet defIndex key
-  (uri, loc)` and push `(name, key)` onto the appropriate frame.
+- **A binder** (decl name via #331 `Loc`, or a local binder Loc) → **PUSH** `(uri, loc)` onto
+  `defIndex[key]` unless that exact `(uri, span)` is already recorded (an O(1) `Ref`-list
+  push guarded by an O(1) hash membership probe, *not* an `hmSet` — see both #964 notes in
+  §3b) and push `(name, key)` onto the appropriate frame.
 - **An occurrence** `ELoc loc (EVar n)` → resolve `n` to a `BinderKey` by the frame stack
   first (shadowing), else the module env (imports), else the module's own top-level, else a
   synthetic `"?unresolved?"` bucket (dropped from results). Push `(uri, loc)` onto
@@ -212,8 +237,9 @@ let a frame become a per-file accumulator.
   of project size except through #uses (which is inherent — you must return them all).
   **Total: O(clicked-file-size + #uses).**
 - **`rename`:** same lookup, then **O(#uses)** to map each `Loc` to a
-  `{ range, replacement }` edit. **Total: O(#uses).** No file is re-walked; the def site is
-  one more edit from `defIndex`.
+  `{ range, replacement }` edit. **Total: O(#uses + #def sites).** No file is re-walked; the
+  def sites are `#def sites` more edits from `defIndex` — **every** clause head, not one
+  (#964).
 
 **Exact data structures named:** stdlib `HashMap String v` (`stdlib/hash_map.mdk`), stdlib
 `HashSet String` (for the visited/unresolved sets), and `Ref (List …)` for O(1) append

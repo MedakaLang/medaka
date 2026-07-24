@@ -68,6 +68,7 @@ isDigitC : Char -> Bool
 isEmptyArgs : List Pat -> Bool
 isIrrefutablePat : Pat -> Bool
 letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
+litEq : Lit -> Lit -> Bool
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 missingCtorPat : Oracle -> List String -> List String -> Pat
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String

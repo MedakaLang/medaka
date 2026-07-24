@@ -229,23 +229,36 @@ liveSourceFingerprint root =
       if h == "" then None else Some h
     _ => None
 
-checkSourceStaleness : Unit -> <IO> Unit
-checkSourceStaleness _ =
+-- The staleness VERDICT, factored out of `checkSourceStaleness` (#846) so the
+-- MCP layer (compiler/tools/mcp.mdk) can surface the SAME fingerprint check
+-- per tool call, not just once as a CLI-startup stderr warning a tool-calling
+-- agent never sees. `mcp.mdk` cannot import this module directly (medaka_cli
+-- is the top of the dependency graph — it is the one that imports mcp.mdk),
+-- so this is threaded down as a closure instead (`runMcpServer`'s 4th
+-- argument): `Some compilerDir` on a mismatch, `None` when fresh, unknown
+-- (no baked stamp — a dev build or a shipped binary), or the `compiler/`
+-- directory itself is missing.
+sourceStalenessVerdict : Unit -> <IO> Option String
+sourceStalenessVerdict _ =
   let baked = buildFingerprint ()
-  if baked == "" then ()
+  if baked == "" then None
   else
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
     let compilerDir = joinPath root "compiler"
-    if not (fileExists compilerDir) then ()
+    if not (fileExists compilerDir) then None
     else match liveSourceFingerprint root
-      None => ()
-      Some live => if live == baked then ()
-      else
-        let msg = "warning: this ./medaka was built from compiler source that differs from " ++ compilerDir ++ " — it may be stale; rebuild with 'make medaka'."
-        if envOr "MEDAKA_STRICT" "" != "" then
-          let _ = ePutStrLn msg
-          exit 1
-        else ePutStrLn msg
+      None => None
+      Some live => if live == baked then None else Some compilerDir
+
+checkSourceStaleness : Unit -> <IO> Unit
+checkSourceStaleness _ = match sourceStalenessVerdict ()
+  None => ()
+  Some compilerDir =>
+    let msg = "warning: this ./medaka was built from compiler source that differs from " ++ compilerDir ++ " — it may be stale; rebuild with 'make medaka'."
+    if envOr "MEDAKA_STRICT" "" != "" then
+      let _ = ePutStrLn msg
+      exit 1
+    else ePutStrLn msg
 
 main : <IO> Unit
 main =
@@ -2350,4 +2363,4 @@ runMcpServerFromEnv _ =
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok csrc => runMcpServer rsrc csrc stdlibDir
+      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict
