@@ -1,0 +1,38 @@
+-- #822 graded interfaces (EFFECTS-SEMANTICS §6): an interface over a ROW-INDEXED
+-- constructor `f : Row -> Type -> Type`, in the graded-lite degenerate the spec
+-- admits today (all grades collapsed onto ONE shared variable).  The point of
+-- running it through all three engines is the second half of §6's "Erasure and
+-- dispatch are untouched": a grade is an effect ROW, so it ERASES — the graded
+-- interface elaborates to an ordinary dictionary, `impl GThenable Async` binds the
+-- whole indexed family, and no engine sees a runtime witness for the index.  If any
+-- backend treated the Row slot as a value-carrying type argument the three arms
+-- would disagree here.
+data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+
+interface GThenable f where
+  gandThen : f e a -> (a -> <e> f e b) -> f e b
+
+interface GMappable f where
+  gmap : (a -> <e> b) -> f e a -> f e b
+
+impl GThenable Async where
+  gandThen (Done a) k = k a
+  gandThen (Suspend th) k = Suspend (u => gandThen (th u) k)
+
+impl GMappable Async where
+  gmap g (Done a) = Done (g a)
+  gmap g (Suspend th) = Suspend (u => gmap g (th u))
+
+-- the per-type eliminator: it performs exactly the row the value carries
+grun : Async e a -> <e> a
+grun (Done a) = a
+grun (Suspend th) = grun (th ())
+
+-- a deferred, effect-free computation: the grade stays <> all the way to grun
+lazyOne : Async e Int
+lazyOne = Suspend (u => Done 1)
+
+main =
+  let chained = gandThen lazyOne (x => Done (x * 10))
+  let mapped = gmap (y => y + 2) chained
+  (grun mapped, grun (gandThen (Done 5) (z => Done (z - 5))))

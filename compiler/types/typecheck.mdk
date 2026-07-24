@@ -1208,6 +1208,83 @@ firstTyConLocList : List Ty -> Option Loc
 firstTyConLocList [] = None
 firstTyConLocList (t::ts) = orElseLoc (firstTyConLoc t) (firstTyConLocList ts)
 
+-- #822 (graded interfaces): an instance head must have the KIND the interface's
+-- corresponding type parameter has.  A graded interface binds the whole row-indexed
+-- FAMILY — `impl GThenable Async`, never a fixed row like `impl GThenable (Async e)`
+-- (EFFECTS-SEMANTICS §6, DICT-SEMANTICS §3) — so the head's REMAINING parameter
+-- kinds (its declared kinds minus the ones the head already applied) must equal the
+-- interface slot's kinds.
+--
+-- This is a soundness guard, not polish.  A kind-mismatched head elaborates the
+-- method type's KRow slot to a `TEff` row while the constructor's own scheme has a
+-- plain tyvar in that position, and `unify` binds a tyvar to a TEff without
+-- complaint: the impl would be ACCEPTED and its grade would mean nothing — every
+-- index a caller reads off the result would be a fabrication.
+--
+-- Only interfaces that actually HAVE a graded slot are inspected (ifaceParamKindsRef
+-- records nothing else), so an ordinary interface is untouched.  Runs on BOTH
+-- whole-program paths: its one call site is in checkBodyImpl, shared by Flat and
+-- Module, immediately after registerAllData has populated both kind tables.
+checkGradedImplHeads : List Decl -> Unit
+checkGradedImplHeads [] = ()
+checkGradedImplHeads (d::rest) =
+  let _ = checkGradedImplHeadDecl d
+  checkGradedImplHeads rest
+
+checkGradedImplHeadDecl : Decl -> Unit
+checkGradedImplHeadDecl (DAttrib _ d) = checkGradedImplHeadDecl d
+checkGradedImplHeadDecl (DImpl { iface, tys, ... }) =
+  checkGradedImplTys iface 0 tys
+checkGradedImplHeadDecl _ = ()
+
+checkGradedImplTys : String -> Int -> List Ty -> Unit
+checkGradedImplTys _ _ [] = ()
+checkGradedImplTys iface i (t::rest) =
+  let _ = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
+    Some want if anyKRow want => checkGradedImplHead iface t want
+    _ => ()
+  checkGradedImplTys iface (i + 1) rest
+
+-- [want] is the interface slot's kind list.  A head that is not a TyCon spine at all
+-- (a bare tyvar) is left to the checks that already reject it.
+checkGradedImplHead : String -> Ty -> List Kind -> Unit
+checkGradedImplHead iface t want = match tyAppSpine t
+  (TyCon n loc, applied) =>
+    checkGradedImplHeadCon iface n loc (listLen applied) want
+  _ => ()
+
+checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
+checkGradedImplHeadCon iface n loc nApplied want
+  -- A type ALIAS head lives in aliasTableRef, never in dataParamKindsRef, and its
+  -- saturation is already policed by T-ALIAS-ARITY — a kind complaint here would be a
+  -- second, worse-worded report of the same defect.
+  | isSome (lookupAssoc n perRun.value.aliasTableRef.value) = ()
+  | otherwise = checkGradedImplHeadKinds iface n loc want (headRemainingKinds n nApplied)
+
+-- The head constructor's declared parameter kinds MINUS the ones the head already
+-- applies (`impl I (Async e)` supplies one).  A head that is not a user data
+-- constructor at all (a builtin like `Int`) has no recorded kinds and can never be
+-- row-indexed, so it yields `[]` — a genuine mismatch against any graded slot.
+headRemainingKinds : String -> Int -> List Kind
+headRemainingKinds n nApplied = match lookupAssoc n perRun.value.dataParamKindsRef.value
+  Some ctorKinds => dropFirst nApplied ctorKinds
+  None => []
+
+checkGradedImplHeadKinds : String -> String -> Option Loc -> List Kind -> List Kind -> Unit
+checkGradedImplHeadKinds iface n loc want got
+  | kindsEq got want = ()
+  | otherwise = pushTypeErrorOnceAt "T-IMPL-KIND-MISMATCH" loc (implKindMismatchMsg iface n want got)
+
+renderKindArrow : List Kind -> String
+renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+
+kindName : Kind -> String
+kindName KType = "Type"
+kindName KRow = "Row"
+
+implKindMismatchMsg : String -> String -> List Kind -> List Kind -> String
+implKindMismatchMsg iface ctor want got = "Instance head `\{ctor}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but `\{ctor}` has kind `\{renderKindArrow got}`, so the grade the methods index by has nowhere to live and every index a caller reads off a result would be fabricated. A graded interface binds the whole row-indexed family (`impl \{iface} \{ctor}`, never a fixed row like `\{ctor} <>`). Give `\{ctor}` a parameter used in an effect position (e.g. a field `Unit -> <e> a`) at each `Row` slot, or implement a non-graded interface for it."
+
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTy (TyFun a b) =
   let _ = checkEffectParamsTy a
@@ -2269,6 +2346,7 @@ data CrossRun = CrossRun {
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (String, List Kind)),
+    universeIfaceParamKinds : Ref (List (String, List Kind)),  -- #822: the interface half of the kind universe (see registerIfaceParamKinds)
     universeAliasTable : Ref (List (String, (List String, Ty))),
     universeDataEnv : Ref TcEnv,
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
@@ -2284,7 +2362,7 @@ data CrossRun = CrossRun {
     coreSchemeObligationsRef : Ref (OrdMap (List (String, List Int))),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
   }
 
--- Construct all 22 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct all 23 field-Refs fresh (each reproduces its former top-level ref's initial).
 -- ⚠️ `env` is the initial TcEnv (always `initialEnv`) and is a PARAMETER rather than a
 -- direct `initialEnv` reference on purpose — do NOT "simplify" it back to a `Unit` arg.
 -- `crossRun` below is a nullary top-level binding, i.e. a wasm value GLOBAL eagerly
@@ -2330,6 +2408,7 @@ freshCrossRun env = CrossRun {
   universeRecordByName = Ref omEmpty,
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
+  universeIfaceParamKinds = Ref [],
   universeAliasTable = Ref [],
   universeDataEnv = Ref env,
   universeDataDecls = Ref [],
@@ -2349,8 +2428,8 @@ freshCrossRun env = CrossRun {
 crossRun : Ref CrossRun
 crossRun = Ref (freshCrossRun initialEnv)
 
--- ── the ONE lifecycle owner for the 22 cross-module accumulators (#143/#144, #154) ──
--- These 22 deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
+-- ── the ONE lifecycle owner for the 23 cross-module accumulators (#143/#144, #154) ──
+-- These 23 deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
 -- the universe/data/impl accumulators cross module boundaries within one graph — see the
 -- declaration comments above), but they must NOT survive a whole multi-module RUN: a
 -- long-lived process (LSP, playground, snapshot runner) drives the analyze/elaborate path
@@ -2897,9 +2976,10 @@ data PerRun = PerRun {
     typeErrors : Ref (List TcDiag),
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
-  }
+    ifaceParamKindsRef : Ref (List (String, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
+  }  -- sibling for an ABSTRACT head.  Two key shapes; see registerIfaceParamKinds.
 
--- Construct all 61 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct all 62 field-Refs fresh (each reproduces its former top-level ref's initial).
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
@@ -2963,6 +3043,7 @@ freshPerRun _ = PerRun {
   typeErrors = Ref [],
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
+  ifaceParamKindsRef = Ref [],
 }
 
 -- The single module-level cell holding the current run's per-module accumulator bundle.
@@ -3711,6 +3792,9 @@ fromAstTypeE etbl tvs (TyCon n _) = match lookupAssoc n perRun.value.aliasTableR
 fromAstTypeE etbl tvs (TyVar n) = fromOption (TCon n) (lookupAssoc n tvs)
 fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon n _, args) => fromAstTypeApp etbl tvs n args
+  -- #822: an ABSTRACT head with known kinds — an interface typaram of graded kind
+  -- (`f e a`, `f : Row -> Type -> Type`).  Anything else stays opaque.
+  (TyVar h, args) => fromAstTypeVarApp etbl tvs h args a b
   _ => TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
 fromAstTypeE etbl tvs (TyFun a b) =
   TFun
@@ -3766,6 +3850,22 @@ fromAstTypeApp etbl tvs n args = match lookupAssoc n perRun.value.aliasTableRef.
       foldAppKinds etbl tvs (TCon n) kinds args
     _ => appFallback etbl tvs n args
 
+-- #822: a spine headed by an interface typaram of GRADED kind.  Refold it
+-- kind-directed against the interface's recorded slot kinds so a KRow slot becomes a
+-- TEff row: `f e b` yields the SAME Mono shape a row-indexed data head does
+-- (`Async e b` = `TApp (TApp (TCon Async) (TEff row)) b`), which is exactly what
+-- lets the instance head unify with the method's abstract one.  The head itself
+-- still elaborates as an ordinary tyvar — the grade rides the index, never the
+-- dictionary (EFFECTS-SEMANTICS §6 "Erasure and dispatch are untouched").
+-- rowArgNames consults the SAME table, so the etbl the caller seeded from it always
+-- carries a cell for every KRow slot name reached here; a name that somehow missed
+-- the seeding falls to rowArgOf's closed pure row rather than to a bogus TCon.
+fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
+fromAstTypeVarApp etbl tvs h args a b = match lookupAssoc h perRun.value.ifaceParamKindsRef.value
+  Some kinds if listLen kinds == listLen args =>
+    foldAppKinds etbl tvs (fromAstTypeE etbl tvs (TyVar h)) kinds args
+  _ => TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
+
 -- refold a kinded type-app spine: a KType arg recurses, a KRow arg becomes a
 -- TEff row (resolved through the shared etbl, so it aliases the field/sig tail).
 foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
@@ -3794,6 +3894,12 @@ rowArgOf _ _ = pureRow
 rowArgNames : Ty -> List String
 rowArgNames (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon n _, args) => rowArgNamesApp n args (rowArgNames a ++ rowArgNames b)
+  -- #822: the abstract-head half — an interface typaram of graded kind.  MUST stay
+  -- in lockstep with fromAstTypeVarApp (same table, same arity guard): a name this
+  -- reports is dropped from the tyvar map and seeded into the etbl instead, so a
+  -- seam that reported a name the elaborator then did NOT turn into a row would
+  -- leave it as an opaque `TCon "e"`.
+  (TyVar h, args) => rowArgNamesVarApp h args (rowArgNames a ++ rowArgNames b)
   _ => rowArgNames a ++ rowArgNames b
 rowArgNames (TyFun a b) = rowArgNames a ++ rowArgNames b
 rowArgNames (TyTuple ts) = flatMap rowArgNames ts
@@ -3803,6 +3909,12 @@ rowArgNames _ = []
 
 rowArgNamesApp : String -> List Ty -> List String -> List String
 rowArgNamesApp n args fallback = match lookupAssoc n perRun.value.dataParamKindsRef.value
+  Some kinds if listLen kinds == listLen args => krowArgVarNames kinds args
+    ++ flatMap rowArgNames args
+  _ => fallback
+
+rowArgNamesVarApp : String -> List Ty -> List String -> List String
+rowArgNamesVarApp h args fallback = match lookupAssoc h perRun.value.ifaceParamKindsRef.value
   Some kinds if listLen kinds == listLen args => krowArgVarNames kinds args
     ++ flatMap rowArgNames args
   _ => fallback
@@ -7667,6 +7779,14 @@ registerData env (DTypeAlias _ name params rhs) =
   env
 registerData env (DNewtype _ name params con fty _) =
   registerVariants env name params [Variant con (ConPos [fty])]
+-- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
+-- unlike a data type's they are inferred from the METHOD SIGNATURES.  Registered here
+-- rather than at interface-method registration because every consumer (rowArgNames /
+-- fromAstTypeE / the impl-head kind check) must see the table BEFORE the first
+-- signature is elaborated, which is exactly registerAllData's slot.
+registerData env (DInterface { name, typarams, methods, ... }) =
+  let _ = registerIfaceParamKinds name typarams methods
+  env
 registerData env _ = env
 
 -- ── record metadata registration & instantiation ──────────────────────────
@@ -7759,6 +7879,129 @@ payloadAstTypes (ConNamed fields _) = map fieldTyOf fields
 
 fieldTyOf : Field -> Ty
 fieldTyOf (Field _ ty) = ty
+
+-- ── #822: interface type-parameter kinds (graded interfaces) ──────────────
+-- EFFECTS-SEMANTICS §6 "Graded interfaces": an interface may abstract over a
+-- ROW-INDEXED constructor (`f : Row -> Type -> Type`), so that its methods can
+-- carry the grade in the type index (`gandThen : f e a -> (a -> <e> f e b) ->
+-- f e b`, the graded-lite degenerate the spec admits today).  Data types already
+-- have per-parameter kinds (dataParamKindsRef, inferred from a variant field's
+-- effect tail by inferParamKinds); interfaces had NO kind source at all, so an
+-- abstract head `f e a` elaborated to an opaque `TApp` in which `e` was a plain
+-- TYPE variable — which is why the graded-lite signature was rejected outright
+-- (T-EFFECT-ARG-UNCOVERED: `f e b` contributed no return-position occurrence).
+--
+-- Inference mirrors inferParamKinds one level up: slot i of typaram `p` is KRow
+-- iff SOME application `p … a_i …` in a method signature puts a bare NAME at slot
+-- i that the SAME signature also uses in an effect-tail position (`<e>`).  The
+-- per-interface union matters: `gpure : a -> f e a` alone would infer slot 0 as
+-- KType, and disagreeing slot kinds across two methods of one interface would
+-- elaborate the same index to a row in one and a tyvar in the other.
+registerIfaceParamKinds : String -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKinds iface typarams methods =
+  registerIfaceParamKindsGo iface 0 typarams methods
+
+registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKindsGo _ _ [] _ = ()
+registerIfaceParamKindsGo iface i (p::ps) methods =
+  let kinds = ifaceParamKindsOf p methods
+  -- Only a GRADED slot is recorded.  A `Type`/`Type -> Type` head has no row slot
+  -- and gains nothing from the table, so leaving it out keeps the table (and hence
+  -- every lookup below) EMPTY for a program that declares no graded interface —
+  -- the pre-#822 behaviour, byte for byte.
+  let _ = if anyKRow kinds then insertIfaceParamKinds iface i p kinds else ()
+  registerIfaceParamKindsGo iface (i + 1) ps methods
+
+anyKRow : List Kind -> Bool
+anyKRow [] = False
+anyKRow (KRow::_) = True
+anyKRow (_::rest) = anyKRow rest
+
+kindsEq : List Kind -> List Kind -> Bool
+kindsEq [] [] = True
+kindsEq (KType::a) (KType::b) = kindsEq a b
+kindsEq (KRow::a) (KRow::b) = kindsEq a b
+kindsEq _ _ = False
+
+-- ONE table, TWO key shapes — one writer, one universe field, no mirror to keep:
+--   * `<iface>@<slot>` — the authoritative per-slot record.  Read by the impl-head
+--     kind check, which knows the interface and the argument position; never
+--     ambiguous, and it survives into an importer through the data universe.
+--   * the bare typaram NAME — the only key the ELABORATION seams can use, since a
+--     `TyVar h` spine head carries no interface context (rowArgNames is a pure
+--     `Ty -> List String`, and fromAstTypeE sees one type at a time).  Two graded
+--     interfaces spelling their head the same way with DIFFERENT kinds POISON that
+--     entry to `[]`, which the arity guard at every lookup (`listLen kinds ==
+--     listLen args`, and a TyApp spine always has ≥1 arg) can never match — the
+--     ambiguous name degrades to the pre-#822 opaque behaviour instead of silently
+--     adopting one interface's kinds.  `@` cannot occur in an identifier, so the
+--     two key spaces are disjoint.
+insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
+insertIfaceParamKinds iface i p kinds =
+  let tbl = perRun.value.ifaceParamKindsRef.value
+  -- lookupAssoc is first-match and this conses on the FRONT, so re-registering the
+  -- same interface (the data universe replays a module's public decls) compares
+  -- equal and keeps the entry rather than poisoning it.
+  let bare = match lookupAssoc p tbl
+    Some old if not (kindsEq old kinds) => []
+    _ => kinds
+  setRef
+    perRun.value.ifaceParamKindsRef
+    ((ifaceSlotKey iface i, kinds)::(p, bare)::tbl)
+
+ifaceSlotKey : String -> Int -> String
+ifaceSlotKey iface i = "\{iface}@\{intToString i}"
+
+-- Slot kinds of interface typaram [p].  Arity is the FIRST application's; an
+-- application at any other arity is ignored (every lookup site guards on the arity
+-- anyway, so a mixed-arity head simply stays opaque).
+ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
+ifaceParamKindsOf p methods = match flatMap (ifaceMethodVarApps p) methods
+  [] => []
+  apps@((args0, _)::_) => ifaceSlotKinds (listLen args0) 0 (filterList (a => listLen (fst a) == listLen args0) apps)
+
+-- every application of [p] in one method signature, paired with that signature's
+-- effect-tail names (the "same signature" side of the KRow rule).
+ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
+ifaceMethodVarApps p (IfaceMethod _ mty _) =
+  let tails = dedup (effTailNames mty)
+  map (args => (args, tails)) (varHeadApps p mty)
+
+ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
+ifaceSlotKinds arity i apps
+  | i >= arity = []
+  | otherwise = (if anySlotIsRow i apps then KRow else KType) :: ifaceSlotKinds arity (i + 1) apps
+
+anySlotIsRow : Int -> List (List Ty, List String) -> Bool
+anySlotIsRow _ [] = False
+anySlotIsRow i ((args, tails)::rest) = match nthTy i args
+  Some (TyVar n) => contains n tails || anySlotIsRow i rest
+  _ => anySlotIsRow i rest
+
+nthTy : Int -> List Ty -> Option Ty
+nthTy _ [] = None
+nthTy i (t::rest)
+  | i <= 0 = Some t
+  | otherwise = nthTy (i - 1) rest
+
+-- every application whose SPINE HEAD is the type VARIABLE [p], as its argument
+-- list.  The head of a spine is an atom (TyCon/TyVar), so recursing through the
+-- arguments alone covers the whole tree.
+varHeadApps : String -> Ty -> List (List Ty)
+varHeadApps p (TyApp a b) =
+  let sp = tyAppSpine (TyApp a b)
+  varHeadHere p (fst sp) (snd sp) ++ flatMap (varHeadApps p) (snd sp)
+varHeadApps p (TyFun a b) = varHeadApps p a ++ varHeadApps p b
+varHeadApps p (TyTuple ts) = flatMap (varHeadApps p) ts
+varHeadApps p (TyEffect _ _ t) = varHeadApps p t
+varHeadApps p (TyConstrained _ t) = varHeadApps p t
+varHeadApps _ _ = []
+
+varHeadHere : String -> Ty -> List Ty -> List (List Ty)
+varHeadHere p (TyVar h) args
+  | h == p = [args]
+  | otherwise = []
+varHeadHere _ _ _ = []
 
 -- one representation per param shared across all ctors: KType → fresh TVar,
 -- KRow → a TEff wrapping a fresh effvar (the row the param stands for).
@@ -12030,7 +12273,7 @@ checkBodyImpl seed mode prog0 =
       setRef perRun.value.registeredIfacesRef crossRun.value.universeRegisteredIfacesRef.value
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
-  -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the six
+  -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the seven
   -- persistent DATA-universe accumulators (prior modules' public data + ctor env, each minted
   -- exactly once) into the resetState-wiped working refs, then register ONLY this module's
   -- `prog0` as a transient FRONT overlay.  Ordering is byte-identical: the persistent list is
@@ -12054,6 +12297,11 @@ checkBodyImpl seed mode prog0 =
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
   let _ = checkUndeterminedRetEffVars prog
+  -- #822: instance-head kind check for graded interfaces.  Same placement rationale
+  -- as the line above — it reads BOTH kind tables (ifaceParamKindsRef for the
+  -- interface slot, dataParamKindsRef for the head constructor), which `dataEnv`
+  -- above has just populated.
+  let _ = checkGradedImplHeads prog
   let _ = rejectCyclicAliases ()
   let globalS = ifaceMethodSchemes prog ++ externSchemes prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
@@ -13475,7 +13723,21 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- which hides it) so the impl method's OWN method-level constraint vars
     -- (`Thenable m => …`) can be registered into activeDictVars below.
     let baseMap = zipL ifaceParams headMonos
-    let extraMap = freshTvMap (removeAllS ifaceParams (dedup (tyVarNames mty)))
+    -- #822: subtract rowArgNames too — the same split sigToSchemeTvs and
+    -- astTypeFreshTbl already make, and this was the one seam of the three that did
+    -- not.  A name sitting in a KRow type-app slot (`f e a` under a graded interface)
+    -- is an EFFECT variable: it belongs to [effMap] below, and minting a TYPE var for
+    -- it as well puts an entry in [extraMap] that [expected] never mentions.
+    -- ⚠️ HONEST SCOPE: this is a consistency fix, NOT a fix for an observed bug.  The
+    -- counterfactual was built and run (#822 branch): without this subtraction the
+    -- graded fixtures still check, run and build identically, because the stray entry
+    -- survives unification as an unbound, distinct var and so passes
+    -- checkMethodRigidityCore's pinned/dup/head-disjointness tests vacuously.  It is
+    -- kept because a survivor set that contains a variable the method type does not
+    -- mention is a false-positive waiting for the first rule that quantifies over ALL
+    -- survivors — and because one of three parallel seams disagreeing is this file's
+    -- documented recurring bug shape.
+    let extraMap = freshTvMap (removeAllS ifaceParams (removeAllS (rowArgNames mty) (dedup (tyVarNames mty))))
     -- #782/#784: build the method type's effect table the way sigToSchemeTvs does,
     -- so a free return-position effect var (`speak : a -> <e> String`) becomes a
     -- FRESH OPEN effvar that the impl body's actual effect instantiates (effect
@@ -15946,9 +16208,9 @@ appendUniverseAccums prog =
       setRef crossRun.value.obUnivIfaceTagsRef t
 
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
--- `registerData` / `registerVariants` hardcode the five working table refs, so grow by
+-- `registerData` / `registerVariants` hardcode the six working table refs, so grow by
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
--- ctor env, and snapshotting all six results back.  Called at the END of checkBodyImpl's
+-- ctor env, and snapshotting all seven results back.  Called at the END of checkBodyImpl's
 -- Module arm, where the working table refs are DEAD (this module's inference is done and the
 -- next module's resetState wipes them), so the clobber is invisible.  Registers each public
 -- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
@@ -15956,7 +16218,7 @@ appendUniverseAccums prog =
 -- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
 -- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
 -- open-coded as a 5-way lockstep mirror at THREE sites (the Module arm of the data-env
--- setup + appendDataUniverse's load and its store-back).  Adding a sixth universe table
+-- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
 -- meant remembering all three — the "silently absent from the other side" shape.  It now
 -- has one body per direction, and the two are exact inverses of each other.
 -- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
@@ -15968,15 +16230,17 @@ loadDataUniverse _ =
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
   let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
   let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
+  let _ = setRef perRun.value.ifaceParamKindsRef crossRun.value.universeIfaceParamKinds.value
   setRef perRun.value.aliasTableRef crossRun.value.universeAliasTable.value
 
--- the exact inverse of loadDataUniverse (same five tables, same order).
+-- the exact inverse of loadDataUniverse (same six tables, same order).
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
   let _ = setRef crossRun.value.universeRecords perRun.value.recordsRef.value
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
   let _ = setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
+  let _ = setRef crossRun.value.universeIfaceParamKinds perRun.value.ifaceParamKindsRef.value
   setRef crossRun.value.universeAliasTable perRun.value.aliasTableRef.value
 
 appendDataUniverse : List Decl -> Unit
