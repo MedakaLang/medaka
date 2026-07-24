@@ -198,11 +198,11 @@ MANYDEFS_N="${PERF_MANYDEFS_N:-4000}"
 # Both are OP-ONLY (deterministic, no min-of-K), so the band is chosen for the OP arm,
 # not a TIME floor: at 250/500/1000 `manyifaces` clears mark op r1>3 (3.07/3.54) with R=8
 # co-scaling, and `widerecords`'s resolve op is graded as a DETERMINISTIC RATIO in its
-# dedicated block below (its counted signal — the record-resolution `contains owner
-# owners`, op = 3N+1 = 751 at N=250 — sits UNDER OP_FLOOR after #78 P-1 drained the
-# incidental local-scope `contains n scope` it used to also count, and its typecheck
-# ceiling forbids raising N to lift it back over the floor; see that block). Knobs
-# reserved for DEEP/tuning; defaults match the ledgered bands.
+# dedicated block below. Since #984 (ownersOf indexed + `opBump`-counted) its counted
+# resolve signal is the record-resolution `contains owner owners` (3N) PLUS one op per
+# `ownersOf` probe (2N) = 5N+1 = 1251 at N=250 — now OVER OP_FLOOR (was 751/UNDER, when
+# ownersOf was a hand-rolled uncounted scan). Knobs reserved for DEEP/tuning; defaults
+# match the ledgered bands.
 MANYIFACES_N="${PERF_MANYIFACES_N:-$N}"
 WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 
@@ -659,33 +659,29 @@ gen_manyifaces() {
 # gen_widerecords — THE WIDE-RECORD SHAPE (issue #883, §5 hole 9). The ONLY shape that
 # declares a record: a data decl with N fields, plus N tiny accessor decls (`gI r =
 # r.fI`) and N tiny updater decls (`uI r = { r | fI = I }`), each ONE field mention.
-# In resolve every field mention routes through `ownersOf fname env.fieldOwners`
-# (resolve.mdk) — a linear scan of the (field,owner) multimap, which is N long — so the
-# 2N field mentions cost O(N^2). Tiny per-decl bodies (one field mention each) avoid the
+# In resolve every field mention routes through `ownersOf fname env.fieldOwnersIdx`
+# (resolve.mdk). Tiny per-decl bodies (one field mention each) avoid the
 # one-big-expression typecheck/emit blow-up a single N-wide `r.f0 + ... + r.fN` sum or
 # an N-deep nested `{ ... | fN = N }` update would trigger (measured: the wide-expr cut
 # spent 2 s in `emit` at N=500 alone).
 #
-# ⚠️ DISPROVEN OP PREMISE — THIS SHAPE READS LINEAR ON OP-COUNT, and that is a real
-# #883 finding, not a defect. `ownersOf` (and its sibling `ownsAnyField`) are
-# HAND-ROLLED recursive scans that call NEITHER util.contains NOR util.lookupAssoc, so
-# the deterministic OP counter (which only instruments those two) is STRUCTURALLY BLIND
-# to them — identical to `starimports`/`findExports`. resolve's counted op work here is
-# only the O(1) `contains owner owners` over the tiny per-field owners result, so op
-# reads a flat r~2.0 (LINEAR). So this is an `ok` LINEAR regression guard on the counted
-# record-resolution paths, NOT an ownersOf quadratic detector.
+# HISTORY (#883 -> #984). Until #984 `ownersOf` was a HAND-ROLLED linear scan of the
+# (field,owner) multimap (N long), so the 2N field mentions cost O(N^2) — visible ONLY on
+# resolve TIME (~180 ms at N=2000, UNDER the 200ms floor; barely allocates, so alloc was
+# blind, and the scan called neither util.contains nor util.lookupAssoc so the OP counter
+# was structurally blind too). #984 indexed `fieldOwners` by field name (O(log N) probe,
+# resolve TIME now LINEAR) AND routes each probe through `opBump`, so `ownersOf` is now
+# COUNTED: resolve op = 5N+1 (was 3N+1), a flat r~2.0 that now clears OP_FLOOR at N=250
+# (1251 > 1000). So this shape's resolve-op grade is a GENUINE ownersOf regression
+# detector: a reintroduced per-mention scan (counted per pair) lifts the resolve-op ratio
+# to ~4x and the dedicated block below goes red (proven: reverting #984's index turns
+# resolve op superlinear).
 #
-# The REAL ownersOf O(N^2) is visible only on resolve TIME, and only at N>=~4000 (it is
-# ~180 ms at N=2000, under the 200ms floor; the counted path is cheap so alloc is blind
-# too). A DEEP-only resolve-TIME arm would catch it, but at that N typecheck/elaborate
-# TIME are also superlinear (the #907/#882 decl-count classes, over the floor) and would
-# need their own ledger rows — filed as a #880 follow-up rather than paid for in QUICK.
-# GRADED OP-ONLY (cheap, deterministic). Because grade_op_stage SKIPs (never fails) a
-# below-OP_FLOOR reading, the SHAPES loop carries a DEDICATED widerecords resolve-op1 <
-# OP_FLOOR ⇒ fail guard (added per the #883 PR review — see the "widerecords silent-green
-# guard" block after the OP arm) so a band retune that blinds this guard fails loudly
-# instead of silent-passing "ok". (The generic loop does NOT self-guard this — only the
-# rshape and this explicit check do.)
+# GRADED OP-ONLY (cheap, deterministic). The SHAPES loop carries a DEDICATED widerecords
+# resolve-op block (see the "widerecords resolve-op grade" block after the OP arm) that
+# grades the resolve-op RATIO unconditionally and fails on a 0/missing reading (dead
+# profiler), so a band retune can never silent-green it. (The generic loop does NOT
+# self-guard this — only the rshape and this explicit check do.)
 gen_widerecords() {
   n=$1; f=$2; : > "$f"
   {
@@ -1775,7 +1771,9 @@ printf -- '---------------------------------------------------------------------
 # default N band. `manyifaces` co-scales N interfaces AND N reference sites to catch
 # mark's `contains x methods` List-as-set quadratic (ledgered manyifaces:mark, and the
 # independent manyifaces:resolve it surfaces); `widerecords` is the record shape — a
-# LINEAR op regression guard (its ownersOf target is uncounted; see gen_widerecords).
+# LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
+# indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
+# gen_widerecords).
 SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
@@ -1884,37 +1882,26 @@ for shape in $SHAPES; do
       "$n1" "$n2" "$n3"
   done
 
-  # ── widerecords resolve-op grade (#883 PR review; #78 P-1 rework) ─────────────
+  # ── widerecords resolve-op grade (#883 PR review; #78 P-1 rework; #984) ───────
   # widerecords is a `resolve` op regression-guard, and that reading is the ONLY thing
-  # it grades (its ownersOf target is uncounted — see gen_widerecords). Its counted
-  # signal is the record-resolution `contains owner owners` (fieldVerdict): op = 3N+1,
-  # LINEAR — 751 at N=250. That is UNDER OP_FLOOR, so grade_op_stage above SKIPs it
-  # (SKIP != fail): the shape would fall through to the ALLOC arm and print "ok" having
-  # graded NOTHING on resolve — silent-green.
+  # it grades. Its counted resolve signal since #984 is the record-resolution
+  # `contains owner owners` (fieldVerdict, 3N) PLUS one `opBump` per `ownersOf` index
+  # probe (2N) = 5N+1, LINEAR — 1251 at N=250, now OVER OP_FLOOR (grade_op_stage above
+  # ALSO grades it now; this dedicated block is the resolve-specific ratio guard + the
+  # dead-profiler check). Before #984 `ownersOf` was a hand-rolled uncounted scan and the
+  # signal was just 3N+1 = 751 (UNDER the floor, graded only here); it was even higher
+  # pre-#78 (~2783, of which ~2032 was the incidental local-scope `contains n scope` this
+  # same walk ran per reference, drained by #78 P-1 to O(log n) `omHasKey`).
   #
-  # It was NOT always under the floor: pre-#78 it read ~2783, but ~2032 of that was the
-  # incidental local-scope `contains n scope` this same walk ran per reference, which #78
-  # P-1 drained to O(log n) `omHasKey` (resolve.mdk `Scope`/`scopeMem`). Only the 751
-  # ownersOf-path residual (`contains owner owners`, one O(1) scan per field) survives —
-  # genuinely linear and genuinely under the 1000 floor.
+  # This is a GENUINE ownersOf quadratic detector: #984 both indexed the lookup (O(log N),
+  # resolve TIME now linear) and made the probe COUNTED, so a regression back to a
+  # per-mention scan of the (field,owner) multimap — counted per pair — lifts resolve op
+  # to O(N^2) and the ratio below trips (verified: reverting #984's index reads r~4.0).
+  # A regression where `ownersOf` returns a superlinear owners list also trips it.
   #
-  # Why not just raise N to lift op1 back over the floor? At the time of #78 that was
-  # BLOCKED by widerecords' own typecheck op crossing 3.0x at N>=~334 while op1=3N+1 needs
-  # N>=334 to reach 1000. #980/#981 (record-field index) has since FIXED that typecheck
-  # arm — it now reads LINEAR (op ~13.7k->17.7k->25.7k at 250/500/1000, r~1.3/1.4), so the
-  # ceiling is gone and raising N would no longer break typecheck. We keep the below-floor
-  # ratio-grade anyway, deliberately: it grades the exact 751->1502->3003 signal at the
-  # shape's existing CHEAP N=250 band rather than paying a larger band, and it correctly
-  # reflects that the counted resolve work here is legitimately small post-#78, not missing.
-  #
-  # So grade the resolve op as a DETERMINISTIC RATIO here, below the floor. The floor
-  # exists to refuse NOISY/negligible readings; a 751->1502->3003 op count is neither —
-  # it is exact and reproducible, and a regression in the `contains owner owners` path
-  # (e.g. ownersOf returning a superlinear owners list) makes it superlinear, which this
-  # ratio catches. This is STRICTLY MORE coverage than the old op1>=FLOOR floor-check,
-  # which graded no ratio at all. On the LINEAR (pass) path we fall through to the ALLOC
-  # arm exactly as before; we only `continue` (skip alloc) on a fail. Narrow: widerecords'
-  # resolve reading only.
+  # Grade the resolve op as a DETERMINISTIC RATIO here. On the LINEAR (pass) path we fall
+  # through to the ALLOC arm exactly as before; we only `continue` (skip alloc) on a fail.
+  # Narrow: widerecords' resolve reading only.
   if [ "$shape" = "widerecords" ]; then
     wr_ro1="$(awk '$1=="resolve"{print $2}' "$OF1")"
     wr_ro2="$(awk '$1=="resolve"{print $2}' "$OF2")"
@@ -1936,7 +1923,7 @@ for shape in $SHAPES; do
       continue
     fi
     ops_graded=$((ops_graded+1))
-    printf '%-10s %8s  resolve-ops %s -> %s -> %s  r1=%s r2=%s  (LINEAR — record-resolution `contains owner owners` held; graded below OP_FLOOR: #78 drained the co-scaling scope contains, band N=%s->%s->%s)\n' \
+    printf '%-10s %8s  resolve-ops %s -> %s -> %s  r1=%s r2=%s  (LINEAR — ownersOf indexed+counted (#984) + record-resolution `contains owner owners` held, band N=%s->%s->%s)\n' \
       "$shape" "$n1" "$wr_ro1" "$wr_ro2" "$wr_ro3" "$wr_r1" "$wr_r2" "$n1" "$n2" "$n3"
   fi
 

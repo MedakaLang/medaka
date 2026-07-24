@@ -118,9 +118,14 @@ That is genuinely strong. The holes are specific.
    No shape touches it: `modules` has exactly one interface with one method, so its `methods` list
    is length ~1. Needs a shape that **co-scales** N interfaces *and* N call sites (see §5).
 
-9. **Wide records.** No existing shape declares a record. In resolve, every field mention routes
-   through `ownersOf fname (fieldOwners : List (String, String))` — a linear scan per field;
-   record *update* pays it per updated field; `lookupRecordByName` is a prepend-list first-match.
+9. **Wide records.** ✅ CLOSED by `widerecords` (#883) + #984. In resolve, every field mention
+   routed through `ownersOf fname (fieldOwners : List (String, String))` — a linear scan per field
+   (record *update* paid it per updated field) — an O(fields × field-mentions) quadratic on resolve
+   TIME, uncounted (hand-rolled scan) so op-blind (#984). #984 indexed `fieldOwners` by field name
+   (`fieldOwnersIdx : OrdMap (List String)`, O(log n) probe) AND routes each probe through `opBump`,
+   so the `widerecords` resolve-op grade (5N+1, now over OP_FLOOR) is a genuine regression detector.
+   `lookupRecordByName` (typecheck.mdk) is already an `omLookup` (O(log n)), not the prepend-list
+   scan this line once claimed.
 
 10. **Nested / wide patterns.** `match` is N *flat* arms, bucketed to O(N log N). Nested patterns
     take the `usefulBranch`/`specializeCon` path (`compiler/frontend/exhaust.mdk`) that re-scans
@@ -186,7 +191,7 @@ that multiply**, or the N→2N method sees only a linear slice of an O(a×b) blo
 | new shape | grows | stresses |
 |---|---|---|
 | `manyifaces` | N interfaces **and** N call sites *together* | `mark`'s `contains x methods` |
-| `widerecords` | N fields, accessed/updated N times | resolve `ownersOf`, `lookupRecordByName` |
+| `widerecords` | N fields, accessed/updated N times | resolve `ownersOf` (indexed+counted, #984) |
 | `starimports` | 1 module importing N (and N→1) | `findExports` over `List ModuleExports` (needs P1) |
 | `reexports` | N-deep re-export fan-out | `reexportBindings`/`buildExports` (needs P1) |
 | `nestpat` | one N-deep / N-wide pattern | `usefulBranch`/`specializeCon` rescan |
