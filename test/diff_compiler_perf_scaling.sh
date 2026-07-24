@@ -197,8 +197,12 @@ MANYDEFS_N="${PERF_MANYDEFS_N:-4000}"
 # `manyifaces` / `widerecords` (issue #883) run at the DEFAULT N band (250/500/1000).
 # Both are OP-ONLY (deterministic, no min-of-K), so the band is chosen for the OP arm,
 # not a TIME floor: at 250/500/1000 `manyifaces` clears mark op r1>3 (3.07/3.54) with R=8
-# co-scaling, and `widerecords` keeps resolve op1 (~2783) over OP_FLOOR while its counted
-# stages all read `ok`. Knobs reserved for DEEP/tuning; defaults match the ledgered bands.
+# co-scaling, and `widerecords`'s resolve op is graded as a DETERMINISTIC RATIO in its
+# dedicated block below (its counted signal — the record-resolution `contains owner
+# owners`, op = 3N+1 = 751 at N=250 — sits UNDER OP_FLOOR after #78 P-1 drained the
+# incidental local-scope `contains n scope` it used to also count, and its typecheck
+# ceiling forbids raising N to lift it back over the floor; see that block). Knobs
+# reserved for DEEP/tuning; defaults match the ledgered bands.
 MANYIFACES_N="${PERF_MANYIFACES_N:-$N}"
 WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 
@@ -514,6 +518,39 @@ gen_xref() {
   # NB: f$((n-1)), not $prev — $prev leaves the loop at n-2, which would strand the
   # last function as the one dead decl.
   printf 'main = println (f%s 0)\n' "$((n - 1))" >> "$f"
+}
+
+# gen_scoperefs — THE #78 P-1 resolve SCOPE-scan detector. `xref` above no longer
+# catches #78: its quadratic was the env.values LIST scan, and env.values became an
+# OrdMap set (#954/#973), so `xref:resolve` is now linear. The *residual* #78 quadratic
+# is the LOCAL scope: resolve membership-tests `scope` on EVERY variable reference, and a
+# reference to a NON-local name scans the whole local scope to completion before falling
+# through to env.values. So a body with a LARGE local scope that makes MANY non-local
+# references is O(references × scope-size) — which no other shape builds.
+#
+# This shape is exactly that: one big function whose body is preceded by N `let`s (the
+# scope grows to N) and then references the top-level `base` N times. Each of the N
+# `base` refs scans the N-deep scope => O(N^2) `contains` steps, all COUNTED (util.contains
+# bumps the op counter). Pre-fix that read ~4*N^2 resolve ops (640002 at N=400); the fix
+# (scope backed by an OrdMap membership set — `omHasKey`, uncounted) DRAINS it to ~0
+# (2 at any N). So this is graded like `reexports`: an OP-REGRESSION ASSERTION, not a
+# ratio — resolve op MUST stay under OP_FLOOR; a reintroduced scope scan lifts it into
+# the hundreds of thousands. See the dedicated block after the starimports/reexports loop.
+#
+# NOTE this shape ALSO drives coupled (separate, still-open) typecheck/mangle quadratics
+# of the same List-as-set class — which is exactly why it is graded resolve-ONLY (its own
+# typecheck op serves only as the profiler-liveness witness), NOT through the per-stage
+# OP_STAGES loop that would fail on those unrelated rows.
+gen_scoperefs() {
+  n=$1; f=$2; : > "$f"
+  printf 'base : Int\nbase = 1\n' >> "$f"
+  printf 'big : Int\nbig =\n' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do printf '  let v%s = 0\n' "$i"; i=$((i+1)); done >> "$f"
+  # body: reference the non-local `base` N times (each ref scans the full N-deep scope)
+  printf '  base' >> "$f"
+  i=1; while [ "$i" -lt "$n" ]; do printf ' + base'; i=$((i+1)); done >> "$f"
+  printf '\n' >> "$f"
+  printf 'main = println big\n' >> "$f"
 }
 
 # gen_marksweep — THE MONEY-SHOT for the op arm (issue #884). It drives marker's
@@ -1847,25 +1884,60 @@ for shape in $SHAPES; do
       "$n1" "$n2" "$n3"
   done
 
-  # ── widerecords silent-green guard (#883 PR review) ──────────────────────────
+  # ── widerecords resolve-op grade (#883 PR review; #78 P-1 rework) ─────────────
   # widerecords is a `resolve` op regression-guard, and that reading is the ONLY thing
-  # it grades (its ownersOf target is uncounted — see gen_widerecords). But
-  # grade_op_stage treats a below-OP_FLOOR reading as a plain SKIP: it appends to
-  # op_lines and returns WITHOUT setting op_bad — so the overall verdict falls through
-  # to the ALLOC arm and prints "ok". The op arm can only PROMOTE an alloc-ok to a
-  # fail, never the reverse. So if a band retune (PERF_WIDERECORDS_N) drops resolve op1
-  # under OP_FLOOR (headroom is only ~2.8x: op1≈2783 vs 1000), the guard would silently
-  # stop checking while the shape still reported "ok" — the exact silent-green the
-  # rshape (starimports/reexports) loop already fails on. Mirror that TOOSMALL=fail here
-  # so widerecords can NEVER silent-pass. Narrow: widerecords' resolve reading only.
+  # it grades (its ownersOf target is uncounted — see gen_widerecords). Its counted
+  # signal is the record-resolution `contains owner owners` (fieldVerdict): op = 3N+1,
+  # LINEAR — 751 at N=250. That is UNDER OP_FLOOR, so grade_op_stage above SKIPs it
+  # (SKIP != fail): the shape would fall through to the ALLOC arm and print "ok" having
+  # graded NOTHING on resolve — silent-green.
+  #
+  # It was NOT always under the floor: pre-#78 it read ~2783, but ~2032 of that was the
+  # incidental local-scope `contains n scope` this same walk ran per reference, which #78
+  # P-1 drained to O(log n) `omHasKey` (resolve.mdk `Scope`/`scopeMem`). Only the 751
+  # ownersOf-path residual (`contains owner owners`, one O(1) scan per field) survives —
+  # genuinely linear and genuinely under the 1000 floor.
+  #
+  # Why not just raise N to lift op1 back over the floor? At the time of #78 that was
+  # BLOCKED by widerecords' own typecheck op crossing 3.0x at N>=~334 while op1=3N+1 needs
+  # N>=334 to reach 1000. #980/#981 (record-field index) has since FIXED that typecheck
+  # arm — it now reads LINEAR (op ~13.7k->17.7k->25.7k at 250/500/1000, r~1.3/1.4), so the
+  # ceiling is gone and raising N would no longer break typecheck. We keep the below-floor
+  # ratio-grade anyway, deliberately: it grades the exact 751->1502->3003 signal at the
+  # shape's existing CHEAP N=250 band rather than paying a larger band, and it correctly
+  # reflects that the counted resolve work here is legitimately small post-#78, not missing.
+  #
+  # So grade the resolve op as a DETERMINISTIC RATIO here, below the floor. The floor
+  # exists to refuse NOISY/negligible readings; a 751->1502->3003 op count is neither —
+  # it is exact and reproducible, and a regression in the `contains owner owners` path
+  # (e.g. ownersOf returning a superlinear owners list) makes it superlinear, which this
+  # ratio catches. This is STRICTLY MORE coverage than the old op1>=FLOOR floor-check,
+  # which graded no ratio at all. On the LINEAR (pass) path we fall through to the ALLOC
+  # arm exactly as before; we only `continue` (skip alloc) on a fail. Narrow: widerecords'
+  # resolve reading only.
   if [ "$shape" = "widerecords" ]; then
     wr_ro1="$(awk '$1=="resolve"{print $2}' "$OF1")"
-    if [ "$(awk -v v="${wr_ro1:-0}" -v f="$OP_FLOOR" 'BEGIN{print (v+0 < f+0)?1:0}')" = "1" ]; then
+    wr_ro2="$(awk '$1=="resolve"{print $2}' "$OF2")"
+    wr_ro3="$(awk '$1=="resolve"{print $2}' "$OF3")"
+    if [ -z "$wr_ro1" ] || [ -z "$wr_ro2" ] || [ -z "$wr_ro3" ] \
+       || [ "$(awk -v v="${wr_ro1:-0}" 'BEGIN{print (v+0 <= 0)?1:0}')" = "1" ]; then
+      # zero / missing = nothing measured (dead profiler), never "linear"
       fail=$((fail+1))
-      printf '%-10s %8s  ** N TOO SMALL — widerecords resolve-guard blind: resolve op1 %s < OP_FLOOR %s — raise PERF_WIDERECORDS_N **\n' \
-        "$shape" "$n1" "${wr_ro1:-0}" "$OP_FLOOR"
+      printf '%-10s %8s  ** NO RESOLVE-OP MEASUREMENT (0 or missing — harness/profiler bug) **\n' \
+        "$shape" "$n1"
       continue
     fi
+    wr_r1="$(awk -v a="$wr_ro1" -v b="$wr_ro2" 'BEGIN{printf "%.2f", b/a}')"
+    wr_r2="$(awk -v a="$wr_ro2" -v b="$wr_ro3" 'BEGIN{printf "%.2f", b/a}')"
+    if [ "$(awk -v r1="$wr_r1" -v r2="$wr_r2" -v th="$THRESH" 'BEGIN{print (r1>th && r2>th)?1:0}')" = "1" ]; then
+      fail=$((fail+1))
+      printf '%-10s %8s  ** SUPERLINEAR (OPS) record-resolution path ** resolve-op %s -> %s -> %s  r1=%s r2=%s (> %sx, band N=%s->%s->%s)\n' \
+        "$shape" "$n1" "$wr_ro1" "$wr_ro2" "$wr_ro3" "$wr_r1" "$wr_r2" "$THRESH" "$n1" "$n2" "$n3"
+      continue
+    fi
+    ops_graded=$((ops_graded+1))
+    printf '%-10s %8s  resolve-ops %s -> %s -> %s  r1=%s r2=%s  (LINEAR — record-resolution `contains owner owners` held; graded below OP_FLOOR: #78 drained the co-scaling scope contains, band N=%s->%s->%s)\n' \
+      "$shape" "$n1" "$wr_ro1" "$wr_ro2" "$wr_ro3" "$wr_r1" "$wr_r2" "$n1" "$n2" "$n3"
   fi
 
   # Subtract the fixed prelude cost — see the BASELINE note above. Without this the
@@ -2280,6 +2352,51 @@ for rshape in starimports reexports; do
       "$rshape" "$rn1" "$ra1" "$ra2" "$ra3" "$ar1" "$ar2" "$aceil" "$rn1" "$rn2" "$rn3" "$ro1"
   fi
 done
+
+# ── SHAPE: scoperefs — single-file RESOLVE scope-scan regression assertion (#78 P-1) ──
+#
+# Same "drained to ~0" contract as `reexports` above, for the residual #78 quadratic: the
+# LOCAL scope membership scan (`contains n scope`). The fix backs `scope` with an OrdMap
+# set (resolve.mdk's `Scope`/`scopeMem`), so the counted scan drops to a constant ~2
+# resolve ops at ANY N. A reintroduced List-as-set scope makes each of the N `base` refs
+# scan the N-deep scope: ~4*N^2 counted ops (640002 at N=400). So this is an ABSOLUTE
+# assertion — resolve op MUST stay under OP_FLOOR — NOT a ratio (the fixed value is a flat
+# constant, unratioable). Graded resolve-ONLY (gen_scoperefs drives coupled but SEPARATE
+# typecheck/mangle quadratics; running it through the OP_STAGES loop would fail on those).
+#
+# Profiler-liveness: a dead profiler emits op=0 for every stage, which would FALSE-PASS an
+# "op < FLOOR" assertion. So we witness on this shape's OWN typecheck op (huge here, and >
+# FLOOR even if its coupled quadratic is someday fixed — a ~17k prelude-marking constant
+# floors it): if THAT is under FLOOR the profiler produced nothing for this run and we fail
+# harness, never green. (The global ops_graded==0 guard is the whole-gate backstop.)
+SCOPEREFS_N="${PERF_SCOPEREFS_N:-300}"
+scn1="$SCOPEREFS_N"; scn2=$((SCOPEREFS_N * 2))
+scd1="$WORK/scoperefs_$scn1.mdk"; scd2="$WORK/scoperefs_$scn2.mdk"
+gen_scoperefs "$scn1" "$scd1"
+gen_scoperefs "$scn2" "$scd2"
+SCR1="$WORK/scoperefs_r1"; SCR2="$WORK/scoperefs_r2"
+MEDAKA_PERF=1 "$PROFILE" "$RUNTIME" "$CORE" "$scd1" > "$SCR1" 2>&1
+MEDAKA_PERF=1 "$PROFILE" "$RUNTIME" "$CORE" "$scd2" > "$SCR2" 2>&1
+scro1="$(awk -F'\t' '/^\[perf\] resolve/{print $5; exit}' "$SCR1")"
+scro2="$(awk -F'\t' '/^\[perf\] resolve/{print $5; exit}' "$SCR2")"
+sctc1="$(awk -F'\t' '/^\[perf\] typecheck/{print $5; exit}' "$SCR1")"
+if [ -z "$scro1" ] || [ -z "$scro2" ] || [ -z "$sctc1" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO OP MEASUREMENT from the profiler (harness bug — missing op column) **\n' scoperefs "$scn1"
+elif [ "$(awk -v v="$sctc1" -v f="$OP_FLOOR" 'BEGIN{print (v+0 < f+0)?1:0}')" = "1" ]; then
+  # liveness witness under floor => profiler produced nothing for this run
+  fail=$((fail+1))
+  printf '%-12s %8s  ** PROFILER LIVENESS FAILED: typecheck op %s < OP_FLOOR %s — op arm dead for this run **\n' \
+    scoperefs "$scn1" "$sctc1" "$OP_FLOOR"
+elif [ "$(awk -v a="$scro1" -v b="$scro2" -v f="$OP_FLOOR" 'BEGIN{print (a+0 >= f+0 || b+0 >= f+0)?1:0}')" = "1" ]; then
+  fail=$((fail+1))
+  printf '%-12s %8s  ** #78 SCOPE-SCAN QUADRATIC IS BACK ** resolve op %s -> %s (>= OP_FLOOR %s; the fixed state is a flat ~2). resolve.mdk scope reverted to a List `contains` **\n' \
+    scoperefs "$scn1" "$scro1" "$scro2" "$OP_FLOOR"
+else
+  pass=$((pass+1))
+  printf '%-12s %8s  resolve-ops %s -> %s  (drained; < OP_FLOOR %s — #78 scope set held; band N=%s->%s)\n' \
+    scoperefs "$scn1" "$scro1" "$scro2" "$OP_FLOOR" "$scn1" "$scn2"
+fi
 
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
