@@ -10,8 +10,9 @@
 --          OCC  <n>           -- occurrences a binderAt on <entry> would scan
 --
 --   medaka run … refindex_main.mdk --dump <runtime> <core> <entry> [root ...]
---     -> one line per binder key (tabs shown as `|`): the def site, use count,
---        and every use site — the correctness dump.
+--     -> one line per binder key (tabs shown as `|`): every def site (one per
+--        clause head for a multi-clause fn, #964), use count, and every use
+--        site — the correctness dump.
 --
 --   medaka run … refindex_main.mdk --project <runtime> <core> <projectRoot> <queryFile>
 --     -> the SAME three OPS/DEFS/OCC lines, but over `buildRefIndexProject`
@@ -23,7 +24,7 @@ import tools.refindex.{
   RefIndex,
   buildRefIndexDisk,
   buildRefIndexProjectDisk,
-  defOf,
+  defsOf,
   usesOf,
   riOps,
   allDefKeys,
@@ -90,11 +91,14 @@ dumpKeys idx (k::rest) =
   let _ = println (dumpLine idx k)
   dumpKeys idx rest
 
+-- `DEF` lists EVERY def site of the key, space-separated, in source order — a
+-- multi-clause top-level fn has one per clause head under the one BinderKey
+-- (#964), and a dump that showed only one is exactly how that bug hid.  A key
+-- with a single def site renders identically to before.
 dumpLine : RefIndex -> String -> String
 dumpLine idx k =
-  let dsite = match defOf idx k
-    Some (u, l) => showUL u l
-    None => "-"
+  let ds = defsOf idx k
+  let dsite = if listLen ds == 0 then "-" else joinWith " " (map showUL2 ds)
   let us = usesOf idx k
   "\{showKey k}  DEF \{dsite}  USES \{intToString (listLen us)}  \{joinWith " " (map showUL2 us)}"
 
