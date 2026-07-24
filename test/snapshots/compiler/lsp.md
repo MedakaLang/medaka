@@ -1,5 +1,5 @@
 # META
-source_lines=1909
+source_lines=1920
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -1673,7 +1673,7 @@ handleReferences runtimeSrc coreSrc idJson params docs =
 -- + `tools.refindex.buildRefIndexProject` fixes this: enumerate every `.mdk`
 -- under the project root and index all of them, so a click anywhere in the
 -- project finds uses anywhere else in the project). `binderAt`/`usesOf`/
--- `defOf` resolve through import origin + re-export chains + lexical scope
+-- `defsOf` resolve through import origin + re-export chains + lexical scope
 -- (never spelling), so shadowing, `import m as A`, selective/`as`-renamed
 -- imports, and same-name-in-two-modules are each resolved correctly by
 -- construction (compiler/REFERENCES-RENAME-DESIGN.md §5). `uri` is the
@@ -1702,16 +1702,27 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine pa
         Some key => jArray (referenceLocations idx key (includeDeclarationOf params))
   _ => jArray []
 
--- Every recorded use of `key`, plus its def site(s) when `includeDecl` (a def
--- site is NEVER also a use — `recordDef` never pushes into `refs`, so there
--- is no duplicate to dedupe). `defsOf` is `[]` for an external/prelude key
--- (F1: intra-project scope), which correctly drops the declaration line.
+-- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
+-- is `[]` for an external/prelude key (F1: intra-project scope), which correctly
+-- drops the declaration line.
 --
--- `defsOf`, not `defOf` (#964): a MULTI-CLAUSE top-level function is N separate
+-- `defsOf` is plural (#964): a MULTI-CLAUSE top-level function is N separate
 -- `DFunDef` decls sharing ONE BinderKey, so it has N clause-head def sites and
--- find-references must report EVERY one. Taking just one head silently omitted
+-- find-references must report EVERY one. Reporting just one head silently omitted
 -- the others — an incomplete result here, and a source-corrupting one for a
 -- rename built on the same set.
+--
+-- NO DEDUP IS DONE HERE, and that is a claim about the INDEX, not an oversight:
+--   * def-vs-use — a def site is never also a use (`recordDef` never pushes into
+--     `refs`), so the two lists cannot overlap;
+--   * def-vs-def — `refindex.mdk`'s `pushDef` refuses a (uri, span) it already
+--     holds, so `defsOf` cannot itself repeat one.
+-- The second half is load-bearing and was NOT free: `defsOfDecl` records a record
+-- field once PER VARIANT at the enclosing `data` decl's single name `Loc`, so
+-- without that check `data T = A { x : Int } | B { x : Int }` would put the same
+-- range in this list twice — and two edits over an identical range in one
+-- `WorkspaceEdit` is rejected by strict LSP clients and double-applied by lenient
+-- ones. If either invariant above is ever weakened, dedup MUST appear here.
 --
 -- DETERMINISM: sorted by (path, start line, start char) BEFORE rendering —
 -- neither `usesOf`'s underlying `Ref`-list nor the whole-project build order

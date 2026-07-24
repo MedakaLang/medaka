@@ -88,4 +88,12 @@ check_project "$ROOT/test/references_fixtures/binder_loc" \
 check_project "$ROOT/test/references_fixtures/multiclause" \
   "reference-index multi-clause defs (#964: every clause head is a DEF site)"
 
+# #964, the other half: the def list is a SET of sites, never a bag. A record field
+# shared by K variants is recorded K times at ONE decl Loc under ONE field key, so an
+# unguarded append repeats a byte-identical location — which a rename would turn into
+# K edits over the same range (rejected, or double-applied, by LSP clients). No DEF
+# column in this golden may repeat a site.
+check_project "$ROOT/test/references_fixtures/dup_field_def" \
+  "reference-index def dedup (#964: a shared record field is ONE DEF site, not K)"
+
 exit "$rc"
