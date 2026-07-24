@@ -1,0 +1,10 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 17, "symbol": "total"}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 12, "symbol": "total"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 12, "symbol": "missing"}}}
+{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 12, "symbol": ""}}}
+{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 12, "col": 0, "symbol": "total"}}}
+{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 17, "col": 16}}}
+{"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "medaka_definition", "arguments": {"file": "test/mcp_fixtures/symbol_addr.mdk", "line": 99, "symbol": "total"}}}
+{"jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": {}}
