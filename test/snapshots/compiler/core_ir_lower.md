@@ -1,5 +1,5 @@
 # META
-source_lines=1494
+source_lines=1547
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1146,7 +1146,60 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 lowerImpls : List Decl -> List CImplEntry
-lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
+lowerImpls prog =
+  let _ = installIfaceImplHeads (ifaceImplHeadTable prog)
+  lowerImplsWith (installDispatchTables prog) prog
+
+-- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
+-- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
+-- an impl that defines NONE of the interface's methods — every method inherited
+-- from an interface DEFAULT — reaches the Core IR as literally nothing.  The
+-- native emitter's `ifaceTags` derives "the tags an `iface` dict can carry" from
+-- those entries, so such an impl was INVISIBLE to it: a dict-routed call to the
+-- inherited method emitted an ARM-LESS dispatcher ending in `unreachable`
+-- (SIGSEGV), and a method with exactly one tagged impl elsewhere took the
+-- `soleImplDirect` shortcut straight into the WRONG impl (silent wrongness).
+-- Only the CROSS-MODULE case is affected: desugar's `fillImplDefaults` is
+-- same-module only, so a same-module impl gets a specialized (and therefore
+-- tagged, and therefore visible) clause for each inherited default.
+--
+-- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
+-- (`fromOption noneHeadTag (headTyconHead tys)`), and the decl set is matched
+-- arm-for-arm with `lowerDeclImpl` — including NOT unwrapping `DAttrib`, whose
+-- inner impl `lowerDeclImpl` also skips.  So this table is a strict SUPERSET of
+-- the tags the entries already yield: for every program that has no method-less
+-- impl the emitter's tag set (and its emitted IR) is unchanged.
+--
+-- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
+-- one chokepoint every emit path funnels through with the WHOLE program's decls
+-- (`lowerProgramEmit allDecls`), and it already installs `installDispatchTables`
+-- the same way.  A per-driver `install*` call — the shape the other side tables
+-- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
+-- is exactly the segfault this fixes.
+ifaceImplHeadsRef : Ref (List (String, String))
+ifaceImplHeadsRef = Ref []
+
+export installIfaceImplHeads : List (String, String) -> Unit
+installIfaceImplHeads t = setRef ifaceImplHeadsRef t
+
+export ifaceImplHeadTable : List Decl -> List (String, String)
+ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
+
+ifaceImplHeadEntries : Decl -> List (String, String)
+ifaceImplHeadEntries (DImpl { iface = ifaceName, tys = typeArgs, ... }) =
+  [(ifaceName, fromOption noneHeadTag (headTyconHead typeArgs))]
+ifaceImplHeadEntries _ = []
+
+-- the declared impl head tags for [iface], in declaration order (the caller
+-- dedups — `ifaceTags` already runs the union through `dedupS`).
+export ifaceImplHeadTags : String -> List String
+ifaceImplHeadTags iface = ifaceImplHeadTagsGo iface ifaceImplHeadsRef.value
+
+ifaceImplHeadTagsGo : String -> List (String, String) -> List String
+ifaceImplHeadTagsGo _ [] = []
+ifaceImplHeadTagsGo iface ((i, tag)::rest)
+  | i == iface = tag :: ifaceImplHeadTagsGo iface rest
+  | otherwise = ifaceImplHeadTagsGo iface rest
 
 -- lowerImpls against a PRE-BUILT dispatch table — the multi-module driver builds
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
@@ -1949,7 +2002,21 @@ nodeTag _ = "?"
 (DTypeSig false "lgToBind" (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "CClause"))) (TyCon "CBind")))
 (DFunDef false "lgToBind" ((PTuple (PTuple (PVar "n") PWild) (PVar "cs"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EVar "cs")))
 (DTypeSig false "lowerImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
-(DFunDef false "lowerImpls" ((PVar "prog")) (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))
+(DFunDef false "lowerImpls" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "installIfaceImplHeads") (EApp (EVar "ifaceImplHeadTable") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))))
+(DTypeSig false "ifaceImplHeadsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "installIfaceImplHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))
+(DFunDef false "installIfaceImplHeads" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "ifaceImplHeadsRef")) (EVar "t")))
+(DTypeSig true "ifaceImplHeadTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceImplHeadEntries")) (EVar "prog")))
+(DTypeSig false "ifaceImplHeadEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))))))
+(DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
+(DTypeSig true "ifaceImplHeadTags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceImplHeadTags" ((PVar "iface")) (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DTypeSig false "ifaceImplHeadTagsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadTagsGo" (PWild (PList)) (EListLit))
+(DFunDef false "ifaceImplHeadTagsGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "tag") (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "lowerDeclImpl") (EVar "disp"))) (EVar "prog")))
 (DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
@@ -2552,7 +2619,21 @@ nodeTag _ = "?"
 (DTypeSig false "lgToBind" (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "CClause"))) (TyCon "CBind")))
 (DFunDef false "lgToBind" ((PTuple (PTuple (PVar "n") PWild) (PVar "cs"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EVar "cs")))
 (DTypeSig false "lowerImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
-(DFunDef false "lowerImpls" ((PVar "prog")) (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))
+(DFunDef false "lowerImpls" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "installIfaceImplHeads") (EApp (EVar "ifaceImplHeadTable") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))))
+(DTypeSig false "ifaceImplHeadsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "installIfaceImplHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))
+(DFunDef false "installIfaceImplHeads" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "ifaceImplHeadsRef")) (EVar "t")))
+(DTypeSig true "ifaceImplHeadTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceImplHeadEntries")) (EVar "prog")))
+(DTypeSig false "ifaceImplHeadEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))))))
+(DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
+(DTypeSig true "ifaceImplHeadTags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceImplHeadTags" ((PVar "iface")) (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DTypeSig false "ifaceImplHeadTagsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceImplHeadTagsGo" (PWild (PList)) (EListLit))
+(DFunDef false "ifaceImplHeadTagsGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "tag") (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceImplHeadTagsGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "lowerDeclImpl") (EVar "disp"))) (EVar "prog")))
 (DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
