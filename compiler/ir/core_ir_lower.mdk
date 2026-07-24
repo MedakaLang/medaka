@@ -1229,6 +1229,16 @@ tyMentionsParams (TyFun a b) params = tyMentionsParams a params
 tyMentionsParams (TyTuple ts) params =
   anyList (t => tyMentionsParams t params) ts
 tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
+-- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
+-- no labels) IS a mention of that name, same as a bare `TyVar` above.
+-- Intentional cross-file duplicate of eval.mdk's tyMentions TyRow clause;
+-- not consolidating (tiny helper / divergent-by-design untyped-eval vs
+-- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
+-- ppEffAtomTy).
+-- lint-disable-next-line rule-duplicate-body
+tyMentionsParams (TyRow _ tail _) params = match tail
+  Some v => contains v params
+  None => False
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
@@ -1335,6 +1345,10 @@ tyMentionsNonParam (TyFun a b) params = tyMentionsNonParam a params
 tyMentionsNonParam (TyTuple ts) params =
   anyList (t => tyMentionsNonParam t params) ts
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
+-- Mirror of the `tyMentionsParams` arm above.
+tyMentionsNonParam (TyRow _ tail _) params = match tail
+  Some v => not (contains v params)
+  None => False
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────

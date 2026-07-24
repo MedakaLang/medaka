@@ -1,5 +1,5 @@
 # META
-source_lines=1309
+source_lines=1312
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -510,6 +510,9 @@ walkTy w curLoc (TyFun a b) =
 walkTy w curLoc (TyTuple ts) = walkTys w curLoc ts
 walkTy w curLoc (TyEffect _ _ t) = walkTy w curLoc t
 walkTy w curLoc (TyConstrained _ t) = walkTy w curLoc t
+-- A bare row atom (#997) has no wrapped type and its labels aren't `TyCon`
+-- references (no go-to-definition target), so there is nothing to walk.
+walkTy _ _ (TyRow _ _ _) = ()
 
 walkTys : W -> Loc -> List Ty -> Unit
 walkTys _ _ [] = ()
@@ -1486,6 +1489,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "curLoc")) (EVar "ts")))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t")))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t")))
+(DFunDef false "walkTy" (PWild PWild (PCon "TyRow" PWild PWild PWild)) (ELit LUnit))
 (DTypeSig false "walkTys" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
 (DFunDef false "walkTys" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkTys" ((PVar "w") (PVar "curLoc") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "curLoc")) (EVar "rest")))))
@@ -1949,6 +1953,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "curLoc")) (EVar "ts")))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t")))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t")))
+(DFunDef false "walkTy" (PWild PWild (PCon "TyRow" PWild PWild PWild)) (ELit LUnit))
 (DTypeSig false "walkTys" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
 (DFunDef false "walkTys" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkTys" ((PVar "w") (PVar "curLoc") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EVar "walkTys") (EVar "w")) (EVar "curLoc")) (EVar "rest")))))

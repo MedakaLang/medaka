@@ -3,11 +3,11 @@ import async.{Async}
 -- #997: a row/grade written directly in a type-ARGUMENT slot
 -- (`parseTyAtom`'s `TLt` arm) — not just the pre-existing prefix
 -- position (`tyFor`, `<Stdout> Unit -> Int`).
-bare : Async (<Stdout> Unit) Unit
-bareParam : Async (<Net "a.com/*"> Unit) Unit
-bareMulti : Async (<Stdout, Rand> Unit) Unit
-bareTailVar : Async (<Stdout | e> Unit) Unit
-bareEmpty : Async (<> Unit) Unit
-bareTailOnly : Async (<e> Unit) Unit
+bare : Async <Stdout> Unit
+bareParam : Async <Net "a.com/*"> Unit
+bareMulti : Async <Stdout, Rand> Unit
+bareTailVar : Async <Stdout | e> Unit
+bareEmpty : Async <> Unit
+bareTailOnly : Async <e> Unit
 degenerateStillWorks : Async (<Stdout> Unit) Unit
 prefixStillWorks : String -> <Stdout> Unit

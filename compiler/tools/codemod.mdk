@@ -33,6 +33,7 @@
 
 import frontend.ast.{
   Ty(..),
+  Loc,
   Constraint(..),
   Expr(..),
   Section(..),
@@ -202,6 +203,10 @@ mapTyKids f (TyTuple ts) =
 mapTyKids f (TyEffect es tail t) =
   let (t2, c) = mapTyFull f t
   (TyEffect es tail t2, c)
+-- A bare row atom (#997) has no wrapped Ty child to recurse into — a leaf,
+-- like `TyCon`/`TyVar` above.  `mapTyFull`'s outer `f ty1` call still
+-- visits the node itself.
+mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
 mapTyKids f (TyConstrained cs t) =
   let (cs2, cc) = mapConstraintsB f cs
   let (t2, ct) = mapTyFull f t
@@ -603,21 +608,18 @@ prependDrops (n::ns) acc =
   else
     prependDrops ns ((n, ADrop)::acc)
 
--- Apply the action table at one Ty node.  Only `TyEffect` nodes are affected;
--- everything else passes through unchanged.  (The child type was already
--- rewritten by mapTyFull's post-order recursion.)
+-- Apply the action table at one Ty node.  `TyEffect` and `TyRow` (#997, a
+-- bare row atom) are affected; everything else passes through unchanged.
+-- (The child type, if any, was already rewritten by mapTyFull's post-order
+-- recursion.)
 effTyNode : List (String, EffAction) -> Ty -> (Ty, Bool)
 effTyNode acts (TyEffect es tail t) = rewriteRow acts es tail t
+effTyNode acts (TyRow es tail l) = rewriteBareRow acts es tail l
 effTyNode _ ty = (ty, False)
 
 rewriteRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Ty -> (Ty, Bool)
 rewriteRow acts es tail t =
-  let stepped = map (applyAtom acts) es
-  let anyChanged = anyList sndB stepped
-  let kept = collectKept stepped
-  let deduped = dedupeAtoms kept
-  let dedupChanged = listLen deduped != listLen kept
-  let changed = anyChanged || dedupChanged
+  let (deduped, changed) = rewriteAtoms acts es
   match deduped
     [] => match tail
       -- fully-stripped, no tail → an unannotated (pure) arrow: drop the node.
@@ -625,6 +627,24 @@ rewriteRow acts es tail t =
       -- an open row with no atoms still prints (`<v>`) and round-trips.
       Some v => (TyEffect [] (Some v) t, changed)
     _ => (TyEffect deduped tail t, changed)
+
+-- Same action-table rewrite as `rewriteRow`, for a bare row atom (#997):
+-- there is no wrapped type to fall back to when the row strips to empty, so
+-- (unlike `rewriteRow`'s `None` case above) an empty closed bare row stays a
+-- `TyRow [] None` rather than being dropped — there is no other Ty to become.
+rewriteBareRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Option Loc -> (Ty, Bool)
+rewriteBareRow acts es tail l =
+  let (deduped, changed) = rewriteAtoms acts es
+  (TyRow deduped tail l, changed)
+
+rewriteAtoms : List (String, EffAction) -> List (String, Option String) -> (List (String, Option String), Bool)
+rewriteAtoms acts es =
+  let stepped = map (applyAtom acts) es
+  let anyChanged = anyList sndB stepped
+  let kept = collectKept stepped
+  let deduped = dedupeAtoms kept
+  let dedupChanged = listLen deduped != listLen kept
+  (deduped, anyChanged || dedupChanged)
 
 applyAtom : List (String, EffAction) -> (String, Option String) -> (Option (String, Option String), Bool)
 applyAtom acts (label, dom) = match lookupAssoc label acts

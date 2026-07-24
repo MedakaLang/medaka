@@ -1,5 +1,5 @@
 # META
-source_lines=3453
+source_lines=3477
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -408,6 +408,7 @@ countTyvars (TyFun a b) = countTyvars a + countTyvars b
 countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
 countTyvars (TyEffect _ _ t) = countTyvars t
 countTyvars (TyConstrained _ t) = countTyvars t
+countTyvars (TyRow _ _ _) = 0
 
 sumInts : List Int -> Int
 sumInts [] = 0
@@ -437,6 +438,18 @@ ppTyK (TyFun a b) = "\{ppTyFunArgK a} -> \{ppTyK b}"
 ppTyK (TyTuple ts) = "(" ++ joinComma (map ppTyK ts) ++ ")"
 ppTyK (TyEffect _ _ t) = ppTyK t
 ppTyK (TyConstrained _ t) = ppTyK t
+-- A bare row atom (#997) has no wrapped type to fall back to (unlike
+-- `TyEffect` above, which prints its wrapped type and drops the row).
+-- Render the row itself, so two impls keyed on different written rows
+-- (`Async <Stdout>` vs `Async <Rand>`) don't collide onto the SAME
+-- `implKeyOf` string — collapsing to a fixed placeholder here would be
+-- strictly worse than `TyEffect`'s existing (already lossy) behavior.
+ppTyK (TyRow es tail _) = "<\{ppRowBodyK es tail}>"
+
+ppRowBodyK : List (String, Option String) -> Option String -> String
+ppRowBodyK es None = joinComma (map fst es)
+ppRowBodyK [] (Some v) = v
+ppRowBodyK es (Some v) = "\{joinComma (map fst es)} | \{v}"
 
 ppTyFunArgK : Ty -> String
 ppTyFunArgK (TyFun a b) = "(" ++ ppTyK (TyFun a b) ++ ")"
@@ -489,6 +502,17 @@ tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
 tyMentions (TyEffect _ _ t) params = tyMentions t params
 tyMentions (TyConstrained _ t) params = tyMentions t params
+-- A bare row atom (#997) has no wrapped type, but a bare tail var (`<e>`,
+-- no labels) IS a mention of that name — the same relationship `TyVar`
+-- above already tracks for an ordinary type parameter used unwrapped.
+-- Intentional cross-file duplicate of core_ir_lower.mdk's tyMentionsParams
+-- TyRow clause; not consolidating (tiny helper / divergent-by-design
+-- untyped-eval vs typed-core-IR pair — same precedent as typecheck.mdk's
+-- and doc.mdk's ppEffAtomTy).
+-- lint-disable-next-line rule-duplicate-body
+tyMentions (TyRow _ tail _) params = match tail
+  Some v => contains v params
+  None => False
 
 -- ── environment ───────────────────────────────────────────────────────────
 export lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
@@ -3599,6 +3623,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "sumInts") (EApp (EApp (EVar "map") (EVar "countTyvars")) (EVar "ts"))))
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
 (DFunDef false "sumInts" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "+" (EVar "x") (EApp (EVar "sumInts") (EVar "xs"))))
@@ -3614,6 +3639,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppTyK" ((PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppTyK")) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTyK" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
 (DFunDef false "ppTyK" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
+(DFunDef false "ppTyK" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppRowBodyK") (EVar "es")) (EVar "tail")))) (ELit (LString ">"))))
+(DTypeSig false "ppRowBodyK" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es"))))
+(DFunDef false "ppRowBodyK" ((PList) (PCon "Some" (PVar "v"))) (EVar "v"))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))
 (DTypeSig false "ppTyFunArgK" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyFunArgK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppTyK") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "ppTyFunArgK" ((PVar "t")) (EApp (EVar "ppTyK") (EVar "t")))
@@ -3648,6 +3678,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
@@ -5000,6 +5031,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "countTyvars" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "sumInts") (EApp (EApp (EMethodRef "map") (EVar "countTyvars")) (EVar "ts"))))
 (DFunDef false "countTyvars" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
 (DFunDef false "countTyvars" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "countTyvars") (EVar "t")))
+(DFunDef false "countTyvars" ((PCon "TyRow" PWild PWild PWild)) (ELit (LInt 0)))
 (DTypeSig false "sumInts" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "sumInts" ((PList)) (ELit (LInt 0)))
 (DFunDef false "sumInts" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "+" (EVar "x") (EApp (EVar "sumInts") (EVar "xs"))))
@@ -5015,6 +5047,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppTyK" ((PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppTyK")) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTyK" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
 (DFunDef false "ppTyK" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
+(DFunDef false "ppTyK" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppRowBodyK") (EVar "es")) (EVar "tail")))) (ELit (LString ">"))))
+(DTypeSig false "ppRowBodyK" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es"))))
+(DFunDef false "ppRowBodyK" ((PList) (PCon "Some" (PVar "v"))) (EVar "v"))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))
 (DTypeSig false "ppTyFunArgK" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyFunArgK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppTyK") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "ppTyFunArgK" ((PVar "t")) (EApp (EVar "ppTyK") (EVar "t")))
@@ -5049,6 +5086,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))

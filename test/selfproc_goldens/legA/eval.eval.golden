@@ -350,6 +350,7 @@ payloadArity : ConPayload -> Int
 pickByTag : List (Value a) -> String -> Value a
 pickTagFallback : List (Value a) -> Value a
 ppField : (String, Value a) -> String
+ppRowBodyK : List (String, Option String) -> Option String -> String
 ppTyAtomK : Ty -> String
 ppTyFunArgK : Ty -> String
 ppTyK : Ty -> String

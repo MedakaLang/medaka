@@ -506,6 +506,9 @@ walkTy w curLoc (TyFun a b) =
 walkTy w curLoc (TyTuple ts) = walkTys w curLoc ts
 walkTy w curLoc (TyEffect _ _ t) = walkTy w curLoc t
 walkTy w curLoc (TyConstrained _ t) = walkTy w curLoc t
+-- A bare row atom (#997) has no wrapped type and its labels aren't `TyCon`
+-- references (no go-to-definition target), so there is nothing to walk.
+walkTy _ _ (TyRow _ _ _) = ()
 
 walkTys : W -> Loc -> List Ty -> Unit
 walkTys _ _ [] = ()

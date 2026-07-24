@@ -3505,6 +3505,10 @@ tyVarNames (TyFun a b) = tyVarNames a ++ tyVarNames b
 tyVarNames (TyTuple ts) = flatMap tyVarNames ts
 tyVarNames (TyEffect _ _ t) = tyVarNames t
 tyVarNames (TyConstrained _ t) = tyVarNames t
+-- A bare row atom (#997) wraps no inner type, so it carries no ordinary
+-- type-variable occurrence (its own tail var, if any, is a row-namespace
+-- name captured by `effTailNames`/`rowArgNames`, not this one).
+tyVarNames (TyRow _ _ _) = []
 
 -- WS-1c: the tyvar names appearing in a signature's `=>` CONSTRAINTS (not the value
 -- type).  `tyVarNames` deliberately skips TyConstrained's constraints, so a constraint
@@ -3540,6 +3544,7 @@ tyConNamesInTy (TyApp a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyFun a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyTuple ts) = flatMap tyConNamesInTy ts
 tyConNamesInTy (TyEffect _ _ t) = tyConNamesInTy t
+tyConNamesInTy (TyRow _ _ _) = []
 tyConNamesInTy (TyConstrained cs t) = flatMap tyConNamesInConstraint cs
   ++ tyConNamesInTy t
 
@@ -3662,6 +3667,12 @@ effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
 effTailNames (TyEffect _ tail t) = tailNameList tail ++ effTailNames t
 effTailNames (TyConstrained _ t) = effTailNames t
+-- A bare row atom (#997) carries its own tail var directly (no wrapped type
+-- to recurse into) — same tail-var-sharing contract as `TyEffect`'s arm
+-- above (see the `effect_param.mdk` regression guard for why this matters:
+-- a KRow arg's tail var must resolve to the SAME shared effvar cell
+-- wherever it recurs in a signature).
+effTailNames (TyRow _ tail _) = tailNameList tail
 
 tailNameList : Option String -> List String
 tailNameList None = []
@@ -3720,6 +3731,14 @@ fromAstTypeE etbl tvs (TyFun a b) =
 fromAstTypeE etbl tvs (TyTuple ts) = tupleMono (map (fromAstTypeE etbl tvs) ts)
 fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
+-- A bare row atom (#997) reached here means it landed in an ordinary
+-- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
+-- normally consumes a `TyRow`, routing it through `rowArgOf` instead.  This
+-- is the same permissive last-resort `fromAstTypeE` already takes for a
+-- misplaced `TyEffect` (transparently unwrap and keep inferring rather than
+-- crash); a `TyRow` has no wrapped type to unwrap to, so fall back to the
+-- same inert `Unit` filler the pre-#997 degenerate spelling used.
+fromAstTypeE etbl tvs (TyRow _ _ _) = TCon "Unit"
 
 -- A type alias applied to the wrong number of arguments — over-applied,
 -- under-applied, or (got=0) used unapplied.  v1 requires a parameterized alias
@@ -3786,6 +3805,15 @@ rowArgOf etbl (TyVar n) = match lookupAssoc n etbl
   Some cell => EffRow [] (Some cell)
   None => pureRow
 rowArgOf etbl (TyEffect labels tail _) =
+  EffRow (atomsOfWritten labels) (tailCell etbl tail)
+-- The primary shape #997 exists for: `Async <Stdout> Unit`'s `<Stdout>` IS a
+-- `TyRow`, not a `TyEffect` — this arm is what makes the bare row spelling
+-- carry the SAME effect information as the pre-existing degenerate spelling
+-- `Async (<Stdout> Unit) Unit` (a `TyEffect`, caught by the arm above).
+-- Without it, a written row here would silently fall through to the
+-- catch-all `pureRow` below and every bare-row-written effect would be
+-- DISCARDED for dict-passing purposes.
+rowArgOf etbl (TyRow labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
 rowArgOf _ _ = pureRow
 
@@ -9673,6 +9701,7 @@ tyFirstLoc (TyFun f x) = orElseLoc (tyFirstLoc f) (tyFirstLoc x)
 tyFirstLoc (TyTuple ts) = implHeadLoc ts
 tyFirstLoc (TyEffect _ _ t) = tyFirstLoc t
 tyFirstLoc (TyConstrained _ t) = tyFirstLoc t
+tyFirstLoc (TyRow _ _ l) = l
 
 -- the impl's head args → monos under ONE shared fresh-var map (so a var reused
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
@@ -10264,6 +10293,11 @@ tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
 tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
 tyIsConcrete (TyEffect _ _ t) = tyIsConcrete t
 tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
+-- Same "effect rows are transparent" treatment as `TyEffect` above (the
+-- comment on this function): a row's own tail var never counts against
+-- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
+-- wrapped type at all — is vacuously concrete too.
+tyIsConcrete (TyRow _ _ _) = True
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
 -- concrete is fully ground).  Mirror of lib/typecheck.ml's mono_matches.
@@ -10604,6 +10638,11 @@ tyStep (TyTuple ts1) (TyTuple ts2) =
 tyStep (TyTuple _) _ = MFail
 tyStep (TyEffect _ _ t1) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyConstrained _ t1) s = MKids [(t1, stripTyWrap s)]
+-- Same "rows are transparent" treatment used throughout this specificity
+-- engine (a `TyEffect`'s row never participates — only its wrapped type
+-- does). A bare row atom has no wrapped type to recurse into, so it
+-- vacuously matches anything in this position.
+tyStep (TyRow _ _ _) _ = MOk
 
 eqStr : String -> String -> Bool
 eqStr a b = a == b
@@ -13064,6 +13103,10 @@ substTyVars sub (TyFun a b) = TyFun (substTyVars sub a) (substTyVars sub b)
 substTyVars sub (TyTuple ts) = TyTuple (map (substTyVars sub) ts)
 substTyVars sub (TyEffect es eff t) = TyEffect es eff (substTyVars sub t)
 substTyVars sub (TyConstrained cs t) = TyConstrained cs (substTyVars sub t)
+-- No wrapped type to recurse into, and (like `TyEffect`'s `eff` above,
+-- untouched by this substitution) a row's tail var is never one of `sub`'s
+-- ordinary type-var names — a bare row atom substitutes to itself.
+substTyVars _ (TyRow es eff l) = TyRow es eff l
 
 -- A function-typed dispatch mono is fully GROUND — its head is `->`, structurally
 -- un-implementable for an ordinary interface (no `impl Display (a -> b)` exists).
@@ -13126,6 +13169,10 @@ reqTyToMono sub (TyTuple ts) =
   tupleSpineOf (TCon (tupleHeadTagTc (listLen ts))) (map (reqTyToMono sub) ts)
 reqTyToMono sub (TyEffect _ _ t) = reqTyToMono sub t
 reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
+-- Same last-resort fallback as `fromAstTypeE`'s `TyRow` arm: a `TyRow` here
+-- has no wrapped type to fall back to, so use the same inert `Unit` filler
+-- the pre-#997 degenerate spelling already used in a non-KRow slot.
+reqTyToMono _ (TyRow _ _ _) = TCon "Unit"
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
@@ -15087,15 +15134,23 @@ ppTy (TyVar n) = n
 ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
-ppTy (TyEffect effs tail t) =
+ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
+-- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
+-- wrapped type it has none of.
+ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
+ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
+
+-- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
+-- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
+-- rule-duplicate-body would flag an inlined copy).
+ppEffInsideTy : List (String, Option String) -> Option String -> String
+ppEffInsideTy effs tail =
   let labs = map ppEffAtomTy effs
-  let inside = match tail
+  match tail
     None => joinWith ", " labs
     Some v => match effs
       [] => v
       _ => "\{joinWith ", " labs} | \{v}"
-  "<\{inside}> \{ppTy t}"
-ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String

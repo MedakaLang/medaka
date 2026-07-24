@@ -1,5 +1,5 @@
 # META
-source_lines=685
+source_lines=705
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/codemod.mdk — the `medaka codemod` framework + registry.
@@ -37,6 +37,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   Ty(..),
+  Loc,
   Constraint(..),
   Expr(..),
   Section(..),
@@ -206,6 +207,10 @@ mapTyKids f (TyTuple ts) =
 mapTyKids f (TyEffect es tail t) =
   let (t2, c) = mapTyFull f t
   (TyEffect es tail t2, c)
+-- A bare row atom (#997) has no wrapped Ty child to recurse into — a leaf,
+-- like `TyCon`/`TyVar` above.  `mapTyFull`'s outer `f ty1` call still
+-- visits the node itself.
+mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
 mapTyKids f (TyConstrained cs t) =
   let (cs2, cc) = mapConstraintsB f cs
   let (t2, ct) = mapTyFull f t
@@ -607,21 +612,18 @@ prependDrops (n::ns) acc =
   else
     prependDrops ns ((n, ADrop)::acc)
 
--- Apply the action table at one Ty node.  Only `TyEffect` nodes are affected;
--- everything else passes through unchanged.  (The child type was already
--- rewritten by mapTyFull's post-order recursion.)
+-- Apply the action table at one Ty node.  `TyEffect` and `TyRow` (#997, a
+-- bare row atom) are affected; everything else passes through unchanged.
+-- (The child type, if any, was already rewritten by mapTyFull's post-order
+-- recursion.)
 effTyNode : List (String, EffAction) -> Ty -> (Ty, Bool)
 effTyNode acts (TyEffect es tail t) = rewriteRow acts es tail t
+effTyNode acts (TyRow es tail l) = rewriteBareRow acts es tail l
 effTyNode _ ty = (ty, False)
 
 rewriteRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Ty -> (Ty, Bool)
 rewriteRow acts es tail t =
-  let stepped = map (applyAtom acts) es
-  let anyChanged = anyList sndB stepped
-  let kept = collectKept stepped
-  let deduped = dedupeAtoms kept
-  let dedupChanged = listLen deduped != listLen kept
-  let changed = anyChanged || dedupChanged
+  let (deduped, changed) = rewriteAtoms acts es
   match deduped
     [] => match tail
       -- fully-stripped, no tail → an unannotated (pure) arrow: drop the node.
@@ -629,6 +631,24 @@ rewriteRow acts es tail t =
       -- an open row with no atoms still prints (`<v>`) and round-trips.
       Some v => (TyEffect [] (Some v) t, changed)
     _ => (TyEffect deduped tail t, changed)
+
+-- Same action-table rewrite as `rewriteRow`, for a bare row atom (#997):
+-- there is no wrapped type to fall back to when the row strips to empty, so
+-- (unlike `rewriteRow`'s `None` case above) an empty closed bare row stays a
+-- `TyRow [] None` rather than being dropped — there is no other Ty to become.
+rewriteBareRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Option Loc -> (Ty, Bool)
+rewriteBareRow acts es tail l =
+  let (deduped, changed) = rewriteAtoms acts es
+  (TyRow deduped tail l, changed)
+
+rewriteAtoms : List (String, EffAction) -> List (String, Option String) -> (List (String, Option String), Bool)
+rewriteAtoms acts es =
+  let stepped = map (applyAtom acts) es
+  let anyChanged = anyList sndB stepped
+  let kept = collectKept stepped
+  let deduped = dedupeAtoms kept
+  let dedupChanged = listLen deduped != listLen kept
+  (deduped, anyChanged || dedupChanged)
 
 applyAtom : List (String, EffAction) -> (String, Option String) -> (Option (String, Option String), Bool)
 applyAtom acts (label, dom) = match lookupAssoc label acts
@@ -688,7 +708,7 @@ declEffectWarn acts (DEffect _ name _) = match lookupAssoc name acts
 declEffectWarn acts (DAttrib _ d) = declEffectWarn acts d
 declEffectWarn _ _ = []
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "Expr" true) (mem "Section" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "PropParam" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Loc" false) (mem "Constraint" true) (mem "Expr" true) (mem "Section" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "PropParam" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
@@ -731,6 +751,7 @@ declEffectWarn _ _ = []
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyFun") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyTuple" (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "ts2") (PVar "c")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "ts"))) (DoExpr (ETuple (EApp (EVar "TyTuple") (EVar "ts2")) (EVar "c")))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "es")) (EVar "tail")) (EVar "t2")) (EVar "c")))))
+(DFunDef false "mapTyKids" (PWild (PCon "TyRow" (PVar "es") (PVar "tail") (PVar "l"))) (ETuple (EApp (EApp (EApp (EVar "TyRow") (EVar "es")) (EVar "tail")) (EVar "l")) (EVar "False")))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "cc")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "cs"))) (DoLet false false (PTuple (PVar "t2") (PVar "ct")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "TyConstrained") (EVar "cs2")) (EVar "t2")) (EBinOp "||" (EVar "cc") (EVar "ct"))))))
 (DTypeSig false "mapTyListB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "mapTyListB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
@@ -874,9 +895,14 @@ declEffectWarn _ _ = []
 (DFunDef false "prependDrops" ((PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EApp (EVar "prependDrops") (EVar "ns")) (EVar "acc")) (EApp (EApp (EVar "prependDrops") (EVar "ns")) (EBinOp "::" (ETuple (EVar "n") (EVar "ADrop")) (EVar "acc")))))
 (DTypeSig false "effTyNode" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "effTyNode" ((PVar "acts") (PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "rewriteRow") (EVar "acts")) (EVar "es")) (EVar "tail")) (EVar "t")))
+(DFunDef false "effTyNode" ((PVar "acts") (PCon "TyRow" (PVar "es") (PVar "tail") (PVar "l"))) (EApp (EApp (EApp (EApp (EVar "rewriteBareRow") (EVar "acts")) (EVar "es")) (EVar "tail")) (EVar "l")))
 (DFunDef false "effTyNode" (PWild (PVar "ty")) (ETuple (EVar "ty") (EVar "False")))
 (DTypeSig false "rewriteRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))))
-(DFunDef false "rewriteRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "t")) (EBlock (DoLet false false (PVar "stepped") (EApp (EApp (EVar "map") (EApp (EVar "applyAtom") (EVar "acts"))) (EVar "es"))) (DoLet false false (PVar "anyChanged") (EApp (EApp (EVar "anyList") (EVar "sndB")) (EVar "stepped"))) (DoLet false false (PVar "kept") (EApp (EVar "collectKept") (EVar "stepped"))) (DoLet false false (PVar "deduped") (EApp (EVar "dedupeAtoms") (EVar "kept"))) (DoLet false false (PVar "dedupChanged") (EBinOp "!=" (EApp (EVar "listLen") (EVar "deduped")) (EApp (EVar "listLen") (EVar "kept")))) (DoLet false false (PVar "changed") (EBinOp "||" (EVar "anyChanged") (EVar "dedupChanged"))) (DoExpr (EMatch (EVar "deduped") (arm (PList) () (EMatch (EVar "tail") (arm (PCon "None") () (EIf (EVar "changed") (ETuple (EVar "t") (EVar "True")) (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EVar "None")) (EVar "t")) (EVar "False")))) (arm (PCon "Some" (PVar "v")) () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (EVar "v"))) (EVar "t")) (EVar "changed"))))) (arm PWild () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "deduped")) (EVar "tail")) (EVar "t")) (EVar "changed")))))))
+(DFunDef false "rewriteRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "t")) (EBlock (DoLet false false (PTuple (PVar "deduped") (PVar "changed")) (EApp (EApp (EVar "rewriteAtoms") (EVar "acts")) (EVar "es"))) (DoExpr (EMatch (EVar "deduped") (arm (PList) () (EMatch (EVar "tail") (arm (PCon "None") () (EIf (EVar "changed") (ETuple (EVar "t") (EVar "True")) (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EVar "None")) (EVar "t")) (EVar "False")))) (arm (PCon "Some" (PVar "v")) () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (EVar "v"))) (EVar "t")) (EVar "changed"))))) (arm PWild () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "deduped")) (EVar "tail")) (EVar "t")) (EVar "changed")))))))
+(DTypeSig false "rewriteBareRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyTuple (TyCon "Ty") (TyCon "Bool")))))))
+(DFunDef false "rewriteBareRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "l")) (EBlock (DoLet false false (PTuple (PVar "deduped") (PVar "changed")) (EApp (EApp (EVar "rewriteAtoms") (EVar "acts")) (EVar "es"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyRow") (EVar "deduped")) (EVar "tail")) (EVar "l")) (EVar "changed")))))
+(DTypeSig false "rewriteAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool")))))
+(DFunDef false "rewriteAtoms" ((PVar "acts") (PVar "es")) (EBlock (DoLet false false (PVar "stepped") (EApp (EApp (EVar "map") (EApp (EVar "applyAtom") (EVar "acts"))) (EVar "es"))) (DoLet false false (PVar "anyChanged") (EApp (EApp (EVar "anyList") (EVar "sndB")) (EVar "stepped"))) (DoLet false false (PVar "kept") (EApp (EVar "collectKept") (EVar "stepped"))) (DoLet false false (PVar "deduped") (EApp (EVar "dedupeAtoms") (EVar "kept"))) (DoLet false false (PVar "dedupChanged") (EBinOp "!=" (EApp (EVar "listLen") (EVar "deduped")) (EApp (EVar "listLen") (EVar "kept")))) (DoExpr (ETuple (EVar "deduped") (EBinOp "||" (EVar "anyChanged") (EVar "dedupChanged"))))))
 (DTypeSig false "applyAtom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyTuple (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool")))))
 (DFunDef false "applyAtom" ((PVar "acts") (PTuple (PVar "label") (PVar "dom"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "label")) (EVar "acts")) (arm (PCon "None") () (ETuple (EApp (EVar "Some") (ETuple (EVar "label") (EVar "dom"))) (EVar "False"))) (arm (PCon "Some" (PCon "ADrop")) () (ETuple (EVar "None") (EVar "True"))) (arm (PCon "Some" (PCon "ARename" (PVar "nw"))) () (ETuple (EApp (EVar "Some") (ETuple (EVar "nw") (EVar "dom"))) (EVar "True")))))
 (DTypeSig false "sndB" (TyFun (TyTuple (TyVar "a") (TyCon "Bool")) (TyCon "Bool")))
@@ -909,7 +935,7 @@ declEffectWarn _ _ = []
 (DFunDef false "declEffectWarn" ((PVar "acts") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declEffectWarn") (EVar "acts")) (EVar "d")))
 (DFunDef false "declEffectWarn" (PWild PWild) (EListLit))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "Expr" true) (mem "Section" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "PropParam" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Loc" false) (mem "Constraint" true) (mem "Expr" true) (mem "Section" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "PropParam" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "ImplMethod" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "ParseError" false) (mem "parseWithPositions" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsChainLines" false) (mem "positionsLastContentLine" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatProgram" false))))
@@ -952,6 +978,7 @@ declEffectWarn _ _ = []
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyFun") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyTuple" (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "ts2") (PVar "c")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "ts"))) (DoExpr (ETuple (EApp (EVar "TyTuple") (EVar "ts2")) (EVar "c")))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "es")) (EVar "tail")) (EVar "t2")) (EVar "c")))))
+(DFunDef false "mapTyKids" (PWild (PCon "TyRow" (PVar "es") (PVar "tail") (PVar "l"))) (ETuple (EApp (EApp (EApp (EVar "TyRow") (EVar "es")) (EVar "tail")) (EVar "l")) (EVar "False")))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "cc")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "cs"))) (DoLet false false (PTuple (PVar "t2") (PVar "ct")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "TyConstrained") (EVar "cs2")) (EVar "t2")) (EBinOp "||" (EVar "cc") (EVar "ct"))))))
 (DTypeSig false "mapTyListB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "mapTyListB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
@@ -1095,9 +1122,14 @@ declEffectWarn _ _ = []
 (DFunDef false "prependDrops" ((PCons (PVar "n") (PVar "ns")) (PVar "acc")) (EIf (EBinOp "==" (EVar "n") (ELit (LString ""))) (EApp (EApp (EVar "prependDrops") (EVar "ns")) (EVar "acc")) (EApp (EApp (EVar "prependDrops") (EVar "ns")) (EBinOp "::" (ETuple (EVar "n") (EVar "ADrop")) (EVar "acc")))))
 (DTypeSig false "effTyNode" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "effTyNode" ((PVar "acts") (PCon "TyEffect" (PVar "es") (PVar "tail") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "rewriteRow") (EVar "acts")) (EVar "es")) (EVar "tail")) (EVar "t")))
+(DFunDef false "effTyNode" ((PVar "acts") (PCon "TyRow" (PVar "es") (PVar "tail") (PVar "l"))) (EApp (EApp (EApp (EApp (EVar "rewriteBareRow") (EVar "acts")) (EVar "es")) (EVar "tail")) (EVar "l")))
 (DFunDef false "effTyNode" (PWild (PVar "ty")) (ETuple (EVar "ty") (EVar "False")))
 (DTypeSig false "rewriteRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))))
-(DFunDef false "rewriteRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "t")) (EBlock (DoLet false false (PVar "stepped") (EApp (EApp (EMethodRef "map") (EApp (EVar "applyAtom") (EVar "acts"))) (EVar "es"))) (DoLet false false (PVar "anyChanged") (EApp (EApp (EVar "anyList") (EVar "sndB")) (EVar "stepped"))) (DoLet false false (PVar "kept") (EApp (EVar "collectKept") (EVar "stepped"))) (DoLet false false (PVar "deduped") (EApp (EVar "dedupeAtoms") (EVar "kept"))) (DoLet false false (PVar "dedupChanged") (EBinOp "!=" (EApp (EVar "listLen") (EVar "deduped")) (EApp (EVar "listLen") (EVar "kept")))) (DoLet false false (PVar "changed") (EBinOp "||" (EVar "anyChanged") (EVar "dedupChanged"))) (DoExpr (EMatch (EVar "deduped") (arm (PList) () (EMatch (EVar "tail") (arm (PCon "None") () (EIf (EVar "changed") (ETuple (EVar "t") (EVar "True")) (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EVar "None")) (EVar "t")) (EVar "False")))) (arm (PCon "Some" (PVar "v")) () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (EVar "v"))) (EVar "t")) (EVar "changed"))))) (arm PWild () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "deduped")) (EVar "tail")) (EVar "t")) (EVar "changed")))))))
+(DFunDef false "rewriteRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "t")) (EBlock (DoLet false false (PTuple (PVar "deduped") (PVar "changed")) (EApp (EApp (EVar "rewriteAtoms") (EVar "acts")) (EVar "es"))) (DoExpr (EMatch (EVar "deduped") (arm (PList) () (EMatch (EVar "tail") (arm (PCon "None") () (EIf (EVar "changed") (ETuple (EVar "t") (EVar "True")) (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EVar "None")) (EVar "t")) (EVar "False")))) (arm (PCon "Some" (PVar "v")) () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EListLit)) (EApp (EVar "Some") (EVar "v"))) (EVar "t")) (EVar "changed"))))) (arm PWild () (ETuple (EApp (EApp (EApp (EVar "TyEffect") (EVar "deduped")) (EVar "tail")) (EVar "t")) (EVar "changed")))))))
+(DTypeSig false "rewriteBareRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyTuple (TyCon "Ty") (TyCon "Bool")))))))
+(DFunDef false "rewriteBareRow" ((PVar "acts") (PVar "es") (PVar "tail") (PVar "l")) (EBlock (DoLet false false (PTuple (PVar "deduped") (PVar "changed")) (EApp (EApp (EVar "rewriteAtoms") (EVar "acts")) (EVar "es"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TyRow") (EVar "deduped")) (EVar "tail")) (EVar "l")) (EVar "changed")))))
+(DTypeSig false "rewriteAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool")))))
+(DFunDef false "rewriteAtoms" ((PVar "acts") (PVar "es")) (EBlock (DoLet false false (PVar "stepped") (EApp (EApp (EMethodRef "map") (EApp (EVar "applyAtom") (EVar "acts"))) (EVar "es"))) (DoLet false false (PVar "anyChanged") (EApp (EApp (EVar "anyList") (EVar "sndB")) (EVar "stepped"))) (DoLet false false (PVar "kept") (EApp (EVar "collectKept") (EVar "stepped"))) (DoLet false false (PVar "deduped") (EApp (EVar "dedupeAtoms") (EVar "kept"))) (DoLet false false (PVar "dedupChanged") (EBinOp "!=" (EApp (EVar "listLen") (EVar "deduped")) (EApp (EVar "listLen") (EVar "kept")))) (DoExpr (ETuple (EVar "deduped") (EBinOp "||" (EVar "anyChanged") (EVar "dedupChanged"))))))
 (DTypeSig false "applyAtom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffAction"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyTuple (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool")))))
 (DFunDef false "applyAtom" ((PVar "acts") (PTuple (PVar "label") (PVar "dom"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "label")) (EVar "acts")) (arm (PCon "None") () (ETuple (EApp (EVar "Some") (ETuple (EVar "label") (EVar "dom"))) (EVar "False"))) (arm (PCon "Some" (PCon "ADrop")) () (ETuple (EVar "None") (EVar "True"))) (arm (PCon "Some" (PCon "ARename" (PVar "nw"))) () (ETuple (EApp (EVar "Some") (ETuple (EVar "nw") (EVar "dom"))) (EVar "True")))))
 (DTypeSig false "sndB" (TyFun (TyTuple (TyVar "a") (TyCon "Bool")) (TyCon "Bool")))

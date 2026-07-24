@@ -976,6 +976,7 @@ ppEachShared : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArgFmt : String -> String -> String
 ppEffAtomTy : (String, Option String) -> String
+ppEffInsideTy : List (String, Option String) -> Option String -> String
 ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
 ppMono : Mono -> String

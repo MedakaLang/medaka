@@ -1,5 +1,5 @@
 # META
-source_lines=4779
+source_lines=4781
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -2045,13 +2045,12 @@ parseTyAtom = do
 -- `Async <Stdout> Unit` — unlike the prefix `tyFor TLt` form
 -- (`<Stdout> Unit -> Int`), there is no following type for the row to wrap:
 -- `Unit` here is `Async`'s *next* argument, parsed separately by the `many
--- parseTyAtom` loop in `parseTyApp`. Reuses `effectBody`/`mkEffect` — the
--- same row-parsing helpers `parseEffectTy` uses — so both spellings agree on
--- what a row means. Produces the identical `TyEffect` shape the existing
--- degenerate spelling `Async (<Stdout> Unit) Unit` already parses to
--- (`TyCon "Unit"` filler): `rowArgOf` (typecheck.mdk) reads only the
--- labels/tail off a `TyEffect` and ignores the wrapped type, so the filler
--- is inert by construction, not a new special case for the typechecker.
+-- parseTyAtom` loop in `parseTyApp`. Reuses `effectBody` — the same
+-- row-parsing helper `parseEffectTy` uses — so both spellings agree on what
+-- a row means. Produces `TyRow`, NOT a filler-wrapped `TyEffect`: a bare row
+-- atom wraps no inner type, and a filler (e.g. `TyCon "Unit"`) would be
+-- print-ambiguous with a genuine wrapped type of the same shape (see
+-- `TyRow`'s doc comment, ast.mdk).
 parseBareEffectAtom : Parser Ty
 parseBareEffectAtom = do
   s <- getPos
@@ -2059,7 +2058,10 @@ parseBareEffectAtom = do
   body <- effectBody
   expectTok TGt
   q <- getPos
-  pure (mkEffect body (TyCon "Unit" (Some (locOfSpan s q))))
+  pure (mkRow body (locOfSpan s q))
+
+mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow (labels, tail) loc = TyRow labels tail (Some loc)
 
 tyTupleOrSingle : List Ty -> Ty
 tyTupleOrSingle [t] = t
@@ -5494,7 +5496,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseTyAtom" (TyApp (TyCon "Parser") (TyCon "Ty")))
 (DFunDef false "parseTyAtom" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TUpper" (PVar "c")) () (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "pure") (EApp (EApp (EVar "TyCon") (EVar "c")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))) (arm (PCon "TIdent" (PVar "v")) () (EApp (EVar "emit") (EApp (EVar "TyVar") (EVar "v")))) (arm (PCon "TLParen") () (EVar "parseTyParen")) (arm (PCon "TLt") () (EVar "parseBareEffectAtom")) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected type atom"))))))))
 (DTypeSig false "parseBareEffectAtom" (TyApp (TyCon "Parser") (TyCon "Ty")))
-(DFunDef false "parseBareEffectAtom" () (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TLt"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "effectBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TGt"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "pure") (EApp (EApp (EVar "mkEffect") (EVar "body")) (EApp (EApp (EVar "TyCon") (ELit (LString "Unit"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))))))))
+(DFunDef false "parseBareEffectAtom" () (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TLt"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "effectBody")) (ELam ((PVar "body")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TGt"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "pure") (EApp (EApp (EVar "mkRow") (EVar "body")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))))))
+(DTypeSig false "mkRow" (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Loc") (TyCon "Ty"))))
+(DFunDef false "mkRow" ((PTuple (PVar "labels") (PVar "tail")) (PVar "loc")) (EApp (EApp (EApp (EVar "TyRow") (EVar "labels")) (EVar "tail")) (EApp (EVar "Some") (EVar "loc"))))
 (DTypeSig false "tyTupleOrSingle" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty")))
 (DFunDef false "tyTupleOrSingle" ((PList (PVar "t"))) (EVar "t"))
 (DFunDef false "tyTupleOrSingle" ((PVar "ts")) (EApp (EVar "TyTuple") (EVar "ts")))
@@ -6983,7 +6987,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseTyAtom" (TyApp (TyCon "Parser") (TyCon "Ty")))
 (DFunDef false "parseTyAtom" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TUpper" (PVar "c")) () (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "TyCon") (EVar "c")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))) (arm (PCon "TIdent" (PVar "v")) () (EApp (EVar "emit") (EApp (EVar "TyVar") (EVar "v")))) (arm (PCon "TLParen") () (EVar "parseTyParen")) (arm (PCon "TLt") () (EVar "parseBareEffectAtom")) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected type atom"))))))))
 (DTypeSig false "parseBareEffectAtom" (TyApp (TyCon "Parser") (TyCon "Ty")))
-(DFunDef false "parseBareEffectAtom" () (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TLt"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "effectBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TGt"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "mkEffect") (EVar "body")) (EApp (EApp (EVar "TyCon") (ELit (LString "Unit"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))))))))
+(DFunDef false "parseBareEffectAtom" () (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TLt"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "effectBody")) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TGt"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "mkRow") (EVar "body")) (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))))))))))))))
+(DTypeSig false "mkRow" (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Loc") (TyCon "Ty"))))
+(DFunDef false "mkRow" ((PTuple (PVar "labels") (PVar "tail")) (PVar "loc")) (EApp (EApp (EApp (EVar "TyRow") (EVar "labels")) (EVar "tail")) (EApp (EVar "Some") (EVar "loc"))))
 (DTypeSig false "tyTupleOrSingle" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty")))
 (DFunDef false "tyTupleOrSingle" ((PList (PVar "t"))) (EVar "t"))
 (DFunDef false "tyTupleOrSingle" ((PVar "ts")) (EApp (EVar "TyTuple") (EVar "ts")))
