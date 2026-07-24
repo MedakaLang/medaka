@@ -1,0 +1,15 @@
+-- #866, the shape that DISPROVES the "forward the enclosing scheme's dict" framing:
+-- `top` has a fully CONCRETE signature, so there is no enclosing dict to forward and
+-- the only correct route is `RKey "Int"`.  It segfaulted natively all the same,
+-- because the where-helper `h` was generalized over the constraint variable and the
+-- call site's mono was left an orphan (neither head-tycon nor activeDictVars ⇒ RNone
+-- ⇒ null dict).  Declining that generalization lets `h a b` unify it with `Int`.
+needsOrd : Ord a => a -> a -> Bool
+needsOrd x y = x < y
+
+top : Int -> Int -> Bool
+top a b = h a b
+  where
+    h x y = needsOrd x y
+
+main = println (top 3 4)

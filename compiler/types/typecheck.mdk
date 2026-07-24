@@ -4701,7 +4701,7 @@ blockRecLet env x e =
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x t1  -- LSP hover (block rec-let bypasses inferPat)
-  let sch = generalize t1
+  let sch = genRestricted (not (dictPinsGeneralization callN0 dictN0 t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
 
@@ -4717,7 +4717,7 @@ blockLet env (PVar x _) e =
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e) t
+  let sch = genRestricted (isNonexpansive e && not (dictPinsGeneralization callN0 dictN0 t)) t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
   seedAlphaLets (extendLocalVar env x sch) x e
@@ -7325,7 +7325,7 @@ inferRecLet env x e1 e2 =
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x t1  -- LSP hover (recursive PVar let bypasses inferPat)
-  let sch = generalize t1
+  let sch = genRestricted (not (dictPinsGeneralization callN0 dictN0 t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 
@@ -7377,7 +7377,7 @@ inferLetSimple env pat e1 e2 =
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetBody env (PVar x _) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e1) t1
+  let sch = genRestricted (isNonexpansive e1 && not (dictPinsGeneralization callN0 dictN0 t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
@@ -8098,7 +8098,10 @@ processLetGroup env binds =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
   let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
-  let genv = generalizeGroup env (zipL binds placeholders)
+  -- #866: hoisted out of generalizeGroup's per-binding recursion (both sources are
+  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.
+  let pinned = methodConstrainedIds () ++ dictForwardedIds callN0 dictN0
+  let genv = generalizeGroup env pinned (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
   -- registered NOTHING in schemeObligationsRef — only top-level SCCs did — so a
@@ -8161,6 +8164,55 @@ methodConstrainedIds _ = flatMap
 
 argStampMono : PendingEntry -> Mono
 argStampMono (PendingEntry _ _ am _ _) = am
+
+-- #866 — the SAME pin as methodConstrainedIds above, for the OTHER dict channel.
+-- methodConstrainedIds covers arg-position METHOD dispatch (pendingArgStamps); this
+-- covers a call to a constrained top-level FUNCTION (`needsOrd : Ord a => …`), whose
+-- per-slot dict routes live in the `dictApps` channel instead.  A local binding is
+-- NOT dict-abstracted — dict_pass prepends `$dict_…` params to top-level defs and
+-- impl methods only, never to a `where`/`let` member (which lowers to ONE lifted
+-- lambda with ONE shared route ref, so it structurally cannot serve two
+-- instantiations anyway).  So if the group generalizes over the very var such a call
+-- site constrains, the site's mono is left an ORPHAN: at resolveDictApps time it is
+-- neither pinned to a head tycon (→ RKey) nor registered in activeDictVars (→ RDict),
+-- so it falls through to RNone and the emitter hands the callee a NULL dict (`call
+-- @mdk_…needsOrd(i64 0, …)` → `inttoptr i64 0; load` → SIGSEGV), while `check` greens
+-- and eval survives on its arg-tag fallback.  Declining to generalize keeps the var
+-- the SAME cell the use site unifies (`h a b` → the enclosing `top`'s param var, or a
+-- concrete `Int`), so the existing resolveDictApps stamps RDict/RKey and the dict
+-- actually arrives.  Windowed to the binding's OWN inference (the marks every caller
+-- already takes), so this is O(sites in this body), never O(module).
+--
+-- ⚠️ BOTH channels are read, and that is LOAD-BEARING, not belt-and-braces.  The two
+-- typecheck entry points MARK DIFFERENT TREES: the run/emit path (elaborateModules)
+-- marks constrained-fn occurrences EDictAt (`prePassDictArg … dictNames0 …`) so its
+-- sites land in `dictApps`, while the CHECK path (markModules) passes `prePassDict
+-- rpNames []` — an EMPTY dict-name set, deliberately, since check needs no routes — so
+-- `dictApps` is empty there and only the CALL-OBLIGATION channel sees the constraint.
+-- Pinning on `dictApps` alone declines generalization on the emit path while `check`
+-- still generalizes, and the two then disagree: `check` greens a local helper used at
+-- two types and the emitter silently commits to whichever it saw first (MEASURED: `let
+-- sh v = shows v` at Bool then String printed `TrueTrue`).  That trades this issue's
+-- loud SIGSEGV for a SILENT wrong answer — strictly worse.  Reading both keeps the two
+-- entry points' generalization decisions identical, so an inconsistent use is an
+-- ordinary unification error at CHECK time, where it belongs.
+dictForwardedIds : Int -> Int -> List Int
+dictForwardedIds callN0 dictN0 = flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
+  ++ flatMap callOblMonoIds (callOblsWindow callN0)
+
+dictAppMonoIds : (Ref (List Route), List Mono, List String) -> List Int
+dictAppMonoIds (_, monos, _) = flatMap monoUnboundIds monos
+
+callOblMonoIds : (String, List Mono, Option Loc) -> List Int
+callOblMonoIds (_, monos, _) = flatMap monoUnboundIds monos
+
+-- True iff generalizing [t] here would orphan a dict-forwarding constraint var
+-- (dictForwardedIds).  Callers AND it into their existing value-restriction flag.
+dictPinsGeneralization : Int -> Int -> Mono -> Bool
+dictPinsGeneralization callN0 dictN0 t =
+  anyIn
+    (freeGenVars perRun.value.currentLevel.value t)
+    (dictForwardedIds callN0 dictN0)
 
 monoUnboundIds : Mono -> List Int
 monoUnboundIds t = match normalize t
@@ -8414,10 +8466,13 @@ dropFirst n xs
 dropFirst _ [] = []
 dropFirst n (_::xs) = dropFirst (n - 1) xs
 
-generalizeGroup : TcEnv -> List (LetBind, (String, Scheme)) -> TcEnv
-generalizeGroup env [] = env
-generalizeGroup env (((LetBind name clauses), (_, sch))::rest) =
-  let constrained = methodConstrainedIds ()
+-- [constrained] is the group's pin set, computed ONCE by processLetGroup:
+-- methodConstrainedIds (arg-position method dispatch) ++ dictForwardedIds
+-- (constrained-callee dict sites, #866).  Both name tyvars this group must not
+-- generalize over — see those two functions for why.
+generalizeGroup : TcEnv -> List Int -> List (LetBind, (String, Scheme)) -> TcEnv
+generalizeGroup env _ [] = env
+generalizeGroup env constrained (((LetBind name clauses), (_, sch))::rest) =
   let mono = schemeMono sch
   let isVal = clausesAreValue clauses && not (anyIn (freeGenVars perRun.value.currentLevel.value mono) constrained)
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
@@ -8427,7 +8482,7 @@ generalizeGroup env (((LetBind name clauses), (_, sch))::rest) =
   let env2 = match clauses
     [FunClause [] rhs] => seedAlphaLets env1 name rhs
     _ => env1
-  generalizeGroup env2 rest
+  generalizeGroup env2 constrained rest
 
 -- A where-clause binding is a value (generalizable) iff every clause has params
 -- (it's a function) or its zero-arg RHS is non-expansive.  Mirrors the oracle

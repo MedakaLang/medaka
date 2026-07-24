@@ -131,6 +131,7 @@ buildImplUniverse : List Decl -> ImplUniverse
 buildKeyTable : List Decl -> Map String (List KeyEntry)
 buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
+callOblMonoIds : (String, List Mono, Option Loc) -> List Int
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
@@ -358,7 +359,9 @@ depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derivableIface : String -> Bool
 detectSwappedArgs2 : TcEnv -> Expr -> Expr -> Option Mono
+dictAppMonoIds : (Ref (List Route), List Mono, List String) -> List Int
 dictArityOf : String -> Int
+dictForwardedIds : Int -> Int -> List Int
 dictParamName : String -> Int -> String
 dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
@@ -368,6 +371,7 @@ dictPassDecl : List String -> List String -> Decl -> Decl
 dictPassLetBind : List String -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : List String -> List ((String, String), List Int) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+dictPinsGeneralization : Int -> Int -> Mono -> Bool
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
 directImports : String -> List (String, List Decl) -> List String
 directSupers : String -> List String
@@ -544,7 +548,7 @@ funDomain : Mono -> Mono
 funParams2 : Mono -> Option (Mono, Mono)
 genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
-generalizeGroup : TcEnv -> List (LetBind, (String, Scheme)) -> TcEnv
+generalizeGroup : TcEnv -> List Int -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : List (String, List Decl) -> Option String
 goalHeadCon : List Mono -> Option String
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
