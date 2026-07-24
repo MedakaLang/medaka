@@ -2,7 +2,7 @@ main|local|d|2  DEF main.mdk:23:8  USES 1  main.mdk:23:15
 main|local|n|1  DEF main.mdk:15:9  USES 0  
 main|local|x|3  DEF main.mdk:24:11  USES 1  main.mdk:24:19
 main|local|x|4  DEF main.mdk:29:7  USES 1  main.mdk:29:11
-main|val|describe  DEF main.mdk:13:0 main.mdk:14:0 main.mdk:15:0  USES 1  main.mdk:18:15
-main|val|firstOr  DEF main.mdk:23:0 main.mdk:24:0  USES 0  
-main|val|single  DEF main.mdk:29:0  USES 0  
-main|val|usesDescribe  DEF main.mdk:18:0  USES 0  
+main|val|describe  DEF main.mdk:13:0 main.mdk:14:0 main.mdk:15:0  USES 2  main.mdk:12:7 main.mdk:18:15
+main|val|firstOr  DEF main.mdk:23:0 main.mdk:24:0  USES 1  main.mdk:22:7
+main|val|single  DEF main.mdk:29:0  USES 1  main.mdk:28:7
+main|val|usesDescribe  DEF main.mdk:18:0  USES 1  main.mdk:17:7

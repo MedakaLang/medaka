@@ -1,0 +1,26 @@
+-- module `ifdefs` — the F3(d) SPAN-VERIFICATION corpus for the rename gate
+-- (`ifacemethod.jsonl`). Renaming an INTERFACE METHOD is the one indexed shape
+-- whose def `Loc` is WRONG: `refindex.mdk`'s `defsOfDecl` records an interface's
+-- method declarations at the enclosing decl's name `Loc` — the INTERFACE name —
+-- not at each method's own name token. The emitted edit therefore lands on
+-- `Shp`, not on `zoneArea`, and applying it yielded `interface zoneSize a where`
+-- with the method declaration untouched: source that no longer parses.
+-- `renameEmitVerified` (lsp.mdk) re-reads every edit span and REFUSES when one
+-- does not spell the old name, so this transcript must produce a refusal — never
+-- a WorkspaceEdit. The real fix belongs in refindex.mdk (give `methodDef` the
+-- method's child name Loc, as `recordImplHeads` already does for impl heads).
+interface Shp a where
+  zoneArea : a -> Int
+
+data Sqr = Sqr Int
+
+impl Shp Sqr where
+  zoneArea (Sqr s) = s * s
+
+data Rct = Rct Int Int
+
+impl Shp Rct where
+  zoneArea (Rct w h) = w * h
+
+zoneTotal : Int
+zoneTotal = zoneArea (Sqr 3) + zoneArea (Rct 2 5)

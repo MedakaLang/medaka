@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"refused\":true,\"reason\":\"the reference index reports an occurrence of `zoneArea` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source\"}"}],"isError":true}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"changes\":{\"file://test/references_fixtures/rename/ifdefs.mdk\":[{\"range\":{\"start\":{\"line\":24,\"character\":0},\"end\":{\"line\":24,\"character\":9}},\"newText\":\"zoneSum\"},{\"range\":{\"start\":{\"line\":25,\"character\":0},\"end\":{\"line\":25,\"character\":9}},\"newText\":\"zoneSum\"}]}}"}],"isError":false}}
+{"jsonrpc":"2.0","id":4,"result":{}}

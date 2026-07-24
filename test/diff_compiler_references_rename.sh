@@ -57,6 +57,54 @@
 #     `also` → refusal. Over-refusal is acceptable (F3 conservative spirit); a
 #     silent capture is not.
 #
+# WHAT newname.jsonl PROVES (rename/nvdefs.mdk) — #966 newName VALIDATION
+# ---------------------------------------------------------------------------
+# `rename.jsonl` above vets the SYMBOL being renamed; these vet the NEW NAME,
+# the arm #966 found unchecked. Both used to return a WorkspaceEdit whose
+# APPLIED result was broken — the "never a wrong edit" contract's two open holes.
+#
+#   Q4 (id 2): rename `alpha` (nvdefs.mdk 20:10, the use in
+#     `bothSum = alpha + target`) to `Color`. Proves F3(c) CASE/NAMESPACE REFUSE
+#     (#966(a)): an uppercase-initial token IS a constructor/type in Medaka's
+#     lexis, so applying the old edit produced `Color = 1` and the parse error
+#     ``unexpected `Color` ``. Refusal names the namespace, not just "illegal".
+#
+#   Q5 (id 3): rename `target` (nvdefs.mdk 20:18) to `length`, a PRELUDE value.
+#     Proves F3(b) extended to the PRELUDE (#966(b)): `renameCollides` scanned
+#     `allDefKeys idx` = `hmKeys idx.defs`, and `refindex.mdk`'s `seedPrelude`
+#     seeds prelude names as import ORIGINS with NO def entries — so no prelude
+#     name was ever in that scan and the rename silently shadowed `length`.
+#
+#   Q6 (id 4): rename `alpha` to `renamedAlpha` — a lowercase, non-colliding,
+#     non-prelude name. The POSITIVE CONTROL: it must still emit the complete
+#     3-edit WorkspaceEdit (sig 13:7 + def 14:0 + the `bothSum` use 20:10),
+#     so Q4/Q5 prove a DISCRIMINATING check rather than a check that refuses
+#     everything. A gate whose new cases only ever assert refusals cannot tell
+#     "validated" from "broken".
+#
+# WHAT ifacemethod.jsonl PROVES (rename/ifdefs.mdk) — F3(d) SPAN VERIFICATION
+# ---------------------------------------------------------------------------
+# The other two transcripts vet the REQUEST (which symbol, which new name); this
+# one vets the INDEX the edits are derived from. `refindex.mdk`'s `defsOfDecl`
+# records an interface's METHOD DECLARATIONS at the enclosing decl's name `Loc`
+# — the INTERFACE name — instead of each method's own name token, so a rename of
+# an interface method emitted an edit over `interface Shp` and left the method
+# declaration untouched: source that no longer parses. (The impl clause heads and
+# the call sites are indexed correctly, #1002; only the interface's own method
+# decl Loc is wrong. The real fix belongs in refindex.mdk — give `methodDef` the
+# method's child name Loc, as `recordImplHeads` already does.)
+#
+#   Q7 (id 2): rename the interface method `zoneArea` at ifdefs.mdk 25:12 (the
+#     first use in `zoneTotal = zoneArea (Sqr 3) + …`) to `zoneSize`. Must be a
+#     REFUSAL: `renameEmitVerified` (lsp.mdk) re-reads every edit span and finds
+#     one that does not spell `zoneArea`. Never a WorkspaceEdit — an applied one
+#     corrupts the interface header.
+#
+#   Q8 (id 3): rename `zoneTotal` at 25:0 to `zoneSum` — a plain signed value in
+#     the SAME file. The POSITIVE CONTROL for Q7: it must still emit the 2-edit
+#     WorkspaceEdit (sig 24:0 + def 25:0), so Q7 proves span verification
+#     DISCRIMINATES rather than refusing everything indexed in this module.
+#
 # All (line, col) pairs were hand-derived from the fixture source by counting
 # characters (0-based, LSP-style) — re-derive the same way if the fixtures
 # change. To regenerate the golden:

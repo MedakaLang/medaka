@@ -14,5 +14,5 @@ main|local|t|2  DEF main.mdk:41:5  USES 1  main.mdk:41:9
 main|ty|T  DEF main.mdk:21:12  USES 2  main.mdk:37:20 main.mdk:40:14
 main|ty|U  DEF main.mdk:26:12  USES 0  
 main|ty|V  DEF main.mdk:33:12  USES 0  
-main|val|getX  DEF main.mdk:41:0  USES 0  
-main|val|mkA  DEF main.mdk:38:0  USES 0  
+main|val|getX  DEF main.mdk:41:0  USES 1  main.mdk:40:7
+main|val|mkA  DEF main.mdk:38:0  USES 1  main.mdk:37:7

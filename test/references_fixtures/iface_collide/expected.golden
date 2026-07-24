@@ -1,7 +1,7 @@
-alpha|method|tag  DEF alpha.mdk:3:2 main.mdk:37:2  USES 0  
-alpha|ty|Alpha  DEF alpha.mdk:2:17  USES 0  
-beta|method|tag  DEF beta.mdk:3:2 main.mdk:40:2  USES 0  
-beta|ty|Beta  DEF beta.mdk:2:17  USES 0  
+alpha|method|tag  DEF alpha.mdk:2:17 main.mdk:37:2  USES 1  main.mdk:27:21
+alpha|ty|Alpha  DEF alpha.mdk:2:17  USES 1  main.mdk:27:14
+beta|method|tag  DEF beta.mdk:2:17 main.mdk:40:2  USES 0  
+beta|ty|Beta  DEF beta.mdk:2:17  USES 1  main.mdk:28:13
 main|ctor|P  DEF main.mdk:30:5  USES 0  
 main|ctor|Q  DEF main.mdk:33:5  USES 0  
 main|ty|P  DEF main.mdk:30:5  USES 1  main.mdk:36:11

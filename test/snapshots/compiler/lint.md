@@ -1,5 +1,5 @@
 # META
-source_lines=3941
+source_lines=3938
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -68,7 +68,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, set, has, findWithDefault}
 import tools.printer.{declToString, exprToString}
-import support.char.{isAlnum, isLower, isUpper}
+import support.char.{isAlnum, isLower, isUpper, isIdentStart}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
@@ -3641,9 +3641,6 @@ identTokGo s cs n i
     stringSlice i j s :: identTokGo s cs n j
   | otherwise = identTokGo s cs n (i + 1)
 
-isIdentStart : Char -> Bool
-isIdentStart c = isLower c || isUpper c || c == '_'
-
 identEnd : Array Char -> Int -> Int -> Int
 identEnd cs n i
   | i >= n = i
@@ -3950,7 +3947,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "set" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorType" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
@@ -5243,8 +5240,6 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "identTokGo" ((PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "j")) (EVar "s")) (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "doctestIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -5327,7 +5322,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "set" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorType" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
@@ -6620,8 +6615,6 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "identTokGo" ((PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "j")) (EVar "s")) (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
-(DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "doctestIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))

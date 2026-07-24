@@ -49,3 +49,10 @@ isHexDigit c = isDigit c || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 -- lib/lsp_server.ml's is_ident_char.
 export isIdentChar : Char -> Bool
 isIdentChar c = isAlnum c
+
+-- Identifier-LEAD char (a-z A-Z _).  `isIdentChar` also admits digits and `'`,
+-- neither of which may START an identifier, so the two are NOT interchangeable:
+-- the lead class is what `lint`'s identifier tokenizer and `lsp`'s rename
+-- newName validation both need.
+export isIdentStart : Char -> Bool
+isIdentStart c = isLower c || isUpper c || c == '_'
