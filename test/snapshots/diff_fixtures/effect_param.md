@@ -1,5 +1,5 @@
 # META
-source_lines=44
+source_lines=54
 stages=TOKENS,DESUGAR,MARK
 # SOURCE
 -- Capability-effects v2 Stage 2a: PARAMETERIZED effect surface syntax.
@@ -46,6 +46,16 @@ seqIO (Suspend t) k = Suspend (u => seqIO (t u) k)
 
 main : <IO> Unit
 main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
+
+-- #997 follow-up regression guard: a WRITTEN literal row (`<IO | e>`, not a
+-- bare tyvar) in the SAME KRow argument slot must share `e` with the
+-- callback's own row exactly like the bare-tyvar `liftIO` above.  Proves
+-- `rowArgOf`/`effTailNames`'s `TyRow` arms are live: delete either locally
+-- and this gate reds (delete `effTailNames`'s arm and the compiler's own
+-- non-exhaustive match panics on this line; delete `rowArgOf`'s and the
+-- written `IO` label silently vanishes).
+liftIO2 : (Unit -> <IO | e> a) -> Async <IO | e> a
+liftIO2 act = Suspend (u => Done (act u))
 # TOKENS
 NEWLINE
 EFFECT
@@ -255,6 +265,41 @@ RPAREN
 RPAREN
 RPAREN
 NEWLINE
+IDENT "liftIO2"
+COLON
+LPAREN
+UPPER "Unit"
+ARROW
+LT
+UPPER "IO"
+PIPE
+IDENT "e"
+GT
+IDENT "a"
+RPAREN
+ARROW
+UPPER "Async"
+LT
+UPPER "IO"
+PIPE
+IDENT "e"
+GT
+IDENT "a"
+NEWLINE
+IDENT "liftIO2"
+IDENT "act"
+EQUAL
+UPPER "Suspend"
+LPAREN
+IDENT "u"
+FAT_ARROW
+UPPER "Done"
+LPAREN
+IDENT "act"
+IDENT "u"
+RPAREN
+RPAREN
+NEWLINE
 NEWLINE
 EOF
 # DESUGAR
@@ -275,6 +320,8 @@ EOF
 (DFunDef false "seqIO" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "seqIO") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "runAsync") (EApp (EApp (EVar "seqIO") (EVar "yld")) (ELam (PWild) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EVar "println") (ELit (LString "effect param ok")))))))))
+(DTypeSig false "liftIO2" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") (Some "e") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyRow ("IO") (Some "e"))) (TyVar "a"))))
+(DFunDef false "liftIO2" ((PVar "act")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "act") (EVar "u"))))))
 # MARK
 (DEffect false "Net" (Some "Prefix"))
 (DEffect false "Stdout" None)
@@ -293,3 +340,5 @@ EOF
 (DFunDef false "seqIO" ((PCon "Suspend" (PVar "t")) (PVar "k")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "seqIO") (EApp (EVar "t") (EVar "u"))) (EVar "k")))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "runAsync") (EApp (EApp (EVar "seqIO") (EVar "yld")) (ELam (PWild) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EDictApp "println") (ELit (LString "effect param ok")))))))))
+(DTypeSig false "liftIO2" (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") (Some "e") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyRow ("IO") (Some "e"))) (TyVar "a"))))
+(DFunDef false "liftIO2" ((PVar "act")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "act") (EVar "u"))))))

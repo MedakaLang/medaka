@@ -1,5 +1,5 @@
 # META
-source_lines=17653
+source_lines=17718
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -1125,6 +1125,18 @@ argPerformableOccs : Bool -> Ty -> List (String, List Atom)
 argPerformableOccs perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
   ++ argPerformableOccs perf t
 argPerformableOccs perf (TyEffect _ None t) = argPerformableOccs perf t
+-- A bare row atom (#997) carries its own tail var + labels directly (no
+-- wrapped type to recurse into) — same treatment as the `TyEffect` arms
+-- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
+-- (as opposed to a bare `Box e Int`) was invisible to this collector, which
+-- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
+-- `effVarOccAtoms` below, which shares this gap).
+argPerformableOccs perf (TyRow labels (Some n) _) =
+  if perf then
+    [(n, atomsOfWritten labels)]
+  else
+    []
+argPerformableOccs perf (TyRow _ None _) = []
 argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
   ++ argPerformableOccs perf b
 argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
@@ -1206,6 +1218,7 @@ firstTyConLoc (TyFun a b) = orElseLoc (firstTyConLoc a) (firstTyConLoc b)
 firstTyConLoc (TyTuple ts) = firstTyConLocList ts
 firstTyConLoc (TyEffect _ _ t) = firstTyConLoc t
 firstTyConLoc (TyConstrained _ t) = firstTyConLoc t
+firstTyConLoc (TyRow _ _ l) = l
 firstTyConLoc _ = None
 
 firstTyConLocList : List Ty -> Option Loc
@@ -1223,6 +1236,13 @@ checkEffectParamsTy (TyTuple ts) = checkEffectParamsTys ts
 checkEffectParamsTy (TyEffect labels _ t) =
   let _ = checkEffectAtoms labels
   checkEffectParamsTy t
+-- A bare row atom (#997) carries written effect params exactly like
+-- `TyEffect` above (`Async <Net "example.com"> Unit` must be domain-checked
+-- the same as the degenerate `Async (<Net "example.com"> Unit) Unit`) —
+-- without this arm the bare spelling silently skipped `T-EFFECT-PARAM`
+-- domain validation entirely (S1: a way to mint an invalid `Net` capability
+-- no other spelling admits).
+checkEffectParamsTy (TyRow labels _ _) = checkEffectAtoms labels
 checkEffectParamsTy (TyConstrained _ t) = checkEffectParamsTy t
 checkEffectParamsTy _ = ()
 
@@ -3676,6 +3696,16 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- above (see the `effect_param.mdk` regression guard for why this matters:
 -- a KRow arg's tail var must resolve to the SAME shared effvar cell
 -- wherever it recurs in a signature).
+-- ⚠️ Deliberately NAME-based, matching the pre-existing `TyEffect` arm above
+-- (NOT new to this arm — a `TyEffect` nested in a non-KRow argument slot,
+-- e.g. `List (<e> T)`, has always had the identical property): this walker
+-- has no kind context, so it cannot tell a row sitting in a genuinely
+-- KRow-kinded slot from one sitting in a Type-kinded slot that merely LOOKS
+-- like a row syntactically (`List <e>`, `List (<e> T)`). `undeterminedRetEffVars`
+-- (below) is documented as needing a KIND-AWARE argument-carrier test for
+-- exactly this reason and pairs this with the actually-kind-aware
+-- `rowArgNames`; this arm's over-counting is a residual channel of the same
+-- shape as that pre-existing gap, not a new one — see #784.
 effTailNames (TyRow _ tail _) = tailNameList tail
 
 tailNameList : Option String -> List String
@@ -3737,12 +3767,23 @@ fromAstTypeE etbl tvs (TyEffect _ _ t) = fromAstTypeE etbl tvs t
 fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- A bare row atom (#997) reached here means it landed in an ordinary
 -- (non-KRow) type slot — `kindArgMono`'s KRow branch (below) is what
--- normally consumes a `TyRow`, routing it through `rowArgOf` instead.  This
--- is the same permissive last-resort `fromAstTypeE` already takes for a
--- misplaced `TyEffect` (transparently unwrap and keep inferring rather than
--- crash); a `TyRow` has no wrapped type to unwrap to, so fall back to the
--- same inert `Unit` filler the pre-#997 degenerate spelling used.
-fromAstTypeE etbl tvs (TyRow _ _ _) = TCon "Unit"
+-- normally consumes a `TyRow`, routing it through `rowArgOf` instead. Unlike
+-- a misplaced `TyEffect` (which unwraps to a REAL user-written type and can
+-- keep inferring silently), a `TyRow` has no wrapped type at all — inventing
+-- one from nothing would turn what used to be a parse error (`List <Stdout>`,
+-- `data Holder = Holder <Stdout>`) into a silent mistype (`List Unit`).  Push
+-- a real diagnostic; `TCon "Unit"` is POST-ERROR RECOVERY ONLY, so inference
+-- can keep going, not a value anything should rely on.
+fromAstTypeE etbl tvs (TyRow labels tail loc) =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  TCon "Unit"
+
+-- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
+-- visible yet at this point in the file, so render the row body directly with
+-- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
+-- forward reference, fine: this module is resolved as a whole, not top-down).
+rowKindMismatchMsg : List (String, Option String) -> Option String -> String
+rowKindMismatchMsg labels tail = "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
 -- A type alias applied to the wrong number of arguments — over-applied,
 -- under-applied, or (got=0) used unapplied.  v1 requires a parameterized alias
@@ -3843,6 +3884,13 @@ krowArgVarNames : List Kind -> List Ty -> List String
 krowArgVarNames [] _ = []
 krowArgVarNames _ [] = []
 krowArgVarNames (KRow::ks) ((TyVar n)::as2) = n :: krowArgVarNames ks as2
+-- A KRow slot filled with a WRITTEN row carrying an open tail var (#997,
+-- `Box <Stdout | e> Int`) pins `e` exactly like a bare `Box e Int` does —
+-- same var-name contribution, just spelled with labels attached. A CLOSED
+-- written row (`Box <Stdout> Int`, no tail var) pins no name and falls
+-- through to the catch-all below, same as any other non-`TyVar` arg.
+krowArgVarNames (KRow::ks) ((TyRow _ (Some n) _)::as2) =
+  n :: krowArgVarNames ks as2
 krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── environment ───────────────────────────────────────────────────────────
@@ -10625,7 +10673,11 @@ tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
 -- AST-space step: rigid structural, NO normalize (raw AST patterns).  A TyEffect/
 -- TyConstrained wrapper on the general side is transparent — recurse into its body
 -- with the specific side's own wrappers stripped (stripTyWrap), preserving the old
--- tySubsumeGo behaviour.  Exhaustive over Ty's 7 constructors, so no catch-all.
+-- tySubsumeGo behaviour.  Exhaustive over every `Ty` constructor (ast.mdk), so
+-- no catch-all — a new constructor must add an arm here, not rely on a
+-- wildcard (a hand-maintained count here would rot; see `TyRow`'s own arm
+-- below for why: a bare row atom has no wrapped type to recurse into, so it
+-- vacuously matches anything in this position).
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStep (TyVar gn) _ = MVar gn
 tyStep (TyCon a _) (TyCon b _) = if a == b then MOk else MFail
@@ -13173,10 +13225,15 @@ reqTyToMono sub (TyTuple ts) =
   tupleSpineOf (TCon (tupleHeadTagTc (listLen ts))) (map (reqTyToMono sub) ts)
 reqTyToMono sub (TyEffect _ _ t) = reqTyToMono sub t
 reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
--- Same last-resort fallback as `fromAstTypeE`'s `TyRow` arm: a `TyRow` here
--- has no wrapped type to fall back to, so use the same inert `Unit` filler
--- the pre-#997 degenerate spelling already used in a non-KRow slot.
-reqTyToMono _ (TyRow _ _ _) = TCon "Unit"
+-- Same diagnostic + recovery as `fromAstTypeE`'s `TyRow` arm: `reqTyToMono`
+-- has no kind-directed KRow branch at all (its `TyApp` arm is unconditional),
+-- so a row written in a `requires` clause's type argument was ALREADY a
+-- silent `Unit` mistype before #997 for the degenerate spelling — push the
+-- same diagnostic rather than let #997's new syntax spelling reach it in
+-- silence too.
+reqTyToMono _ (TyRow labels tail loc) =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  TCon "Unit"
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
@@ -14063,6 +14120,14 @@ effVarOccAtoms : Ty -> List (String, List Atom)
 effVarOccAtoms (TyEffect labels (Some n) t) =
   (n, atomsOfWritten labels) :: effVarOccAtoms t
 effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
+-- A bare row atom (#997) is a named-tail row occurrence exactly like
+-- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
+-- ctor-arg written as `Box <Stdout | e> Int` was invisible to
+-- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
+-- check over-fired ("not sourced from any argument") on an argument that
+-- demonstrably DOES declare the atom.
+effVarOccAtoms (TyRow labels (Some n) _) = [(n, atomsOfWritten labels)]
+effVarOccAtoms (TyRow _ None _) = []
 effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
@@ -15159,7 +15224,7 @@ ppEffInsideTy effs tail =
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String
 ppEffAtomTy (l, None) = l
--- Intentional cross-file duplicate of the same helper in doc.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- Intentional cross-file duplicate of the same helper in doc.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
 -- lint-disable-next-line rule-duplicate-body
 ppEffAtomTy (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
@@ -17983,6 +18048,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argPerformableOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t"))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "TyCon" (PVar "n") PWild) (PVar "args")) () (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "perf")) (EVar "n")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))))
@@ -18017,6 +18084,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstTyConLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyConLocList") (EVar "ts")))
 (DFunDef false "firstTyConLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyConLoc") (EVar "t")))
 (DFunDef false "firstTyConLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyConLoc") (EVar "t")))
+(DFunDef false "firstTyConLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "firstTyConLoc" (PWild) (EVar "None"))
 (DTypeSig false "firstTyConLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyConLocList" ((PList)) (EVar "None"))
@@ -18026,6 +18094,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectParamsTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "checkEffectParamsTys") (EVar "ts")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectAtoms") (EVar "labels"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "t")))))
+(DFunDef false "checkEffectParamsTy" ((PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EVar "checkEffectAtoms") (EVar "labels")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsTy" (PWild) (ELit LUnit))
 (DTypeSig false "checkEffectParamsTys" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))
@@ -18465,7 +18534,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "tupleMono") (EApp (EApp (EVar "map") (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs"))) (EVar "ts"))))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
-(DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" PWild PWild PWild)) (EApp (EVar "TCon") (ELit (LString "Unit"))))
+(DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "TCon") (ELit (LString "Unit"))))))
+(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowKindMismatchMsg" ((PVar "labels") (PVar "tail")) (EBinOp "++" (EBinOp "++" (ELit (LString "A row <")) (EApp (EVar "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "labels")) (EVar "tail")))) (ELit (LString "> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."))))
 (DTypeSig false "aliasArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "aliasArityMsg" ((PVar "n") (PVar "expected") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type alias `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` expects "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "expected")))) (ELit (LString " argument(s), got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))
 (DTypeSig false "appFallback" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Mono"))))))
@@ -18501,6 +18572,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarNames" ((PList) PWild) (EListLit))
 (DFunDef false "krowArgVarNames" (PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
+(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
 (DFunDef false "krowArgVarNames" ((PCons PWild (PVar "ks")) (PCons PWild (PVar "as2"))) (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2")))
 (DData Public "TcEnv" () ((variant "TcEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))) ())
 (DTypeSig false "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
@@ -20649,7 +20721,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "tupleSpineOf") (EApp (EVar "TCon") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (EApp (EApp (EVar "map") (EApp (EVar "reqTyToMono") (EVar "sub"))) (EVar "ts"))))
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "reqTyToMono") (EVar "sub")) (EVar "t")))
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "reqTyToMono") (EVar "sub")) (EVar "t")))
-(DFunDef false "reqTyToMono" (PWild (PCon "TyRow" PWild PWild PWild)) (EApp (EVar "TCon") (ELit (LString "Unit"))))
+(DFunDef false "reqTyToMono" (PWild (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "TCon") (ELit (LString "Unit"))))))
 (DTypeSig false "checkReqObligations" (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "Unit")))))
 (DFunDef false "checkReqObligations" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkReqObligations" ((PVar "univ") (PVar "loc") (PCons (PTuple (PVar "ifaceR") (PVar "monoArgs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkReqOne") (EVar "univ")) (EVar "ifaceR")) (EVar "monoArgs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EVar "checkReqObligations") (EVar "univ")) (EVar "loc")) (EVar "rest")))))
@@ -20825,6 +20897,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarOccAtoms") (EVar "t")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "effVarOccAtoms" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "effVarOccAtoms")) (EVar "ts")))
@@ -21963,6 +22037,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argPerformableOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t"))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "ts")))
 (DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PCon "TyCon" (PVar "n") PWild) (PVar "args")) () (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "perf")) (EVar "n")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))))
@@ -21997,6 +22073,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstTyConLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyConLocList") (EVar "ts")))
 (DFunDef false "firstTyConLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyConLoc") (EVar "t")))
 (DFunDef false "firstTyConLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyConLoc") (EVar "t")))
+(DFunDef false "firstTyConLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "firstTyConLoc" (PWild) (EVar "None"))
 (DTypeSig false "firstTyConLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstTyConLocList" ((PList)) (EVar "None"))
@@ -22006,6 +22083,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectParamsTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "checkEffectParamsTys") (EVar "ts")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyEffect" (PVar "labels") PWild (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectAtoms") (EVar "labels"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "t")))))
+(DFunDef false "checkEffectParamsTy" ((PCon "TyRow" (PVar "labels") PWild PWild)) (EApp (EVar "checkEffectAtoms") (EVar "labels")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "checkEffectParamsTy") (EVar "t")))
 (DFunDef false "checkEffectParamsTy" (PWild) (ELit LUnit))
 (DTypeSig false "checkEffectParamsTys" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))
@@ -22445,7 +22523,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyTuple" (PVar "ts"))) (EApp (EVar "tupleMono") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs"))) (EVar "ts"))))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
 (DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "t")))
-(DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" PWild PWild PWild)) (EApp (EVar "TCon") (ELit (LString "Unit"))))
+(DFunDef false "fromAstTypeE" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "TCon") (ELit (LString "Unit"))))))
+(DTypeSig false "rowKindMismatchMsg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowKindMismatchMsg" ((PVar "labels") (PVar "tail")) (EBinOp "++" (EBinOp "++" (ELit (LString "A row <")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppEffInsideTy") (EVar "labels")) (EVar "tail")))) (ELit (LString "> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."))))
 (DTypeSig false "aliasArityMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "aliasArityMsg" ((PVar "n") (PVar "expected") (PVar "got")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type alias `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` expects "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "expected")))) (ELit (LString " argument(s), got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "got")))) (ELit (LString ""))))
 (DTypeSig false "appFallback" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Mono"))))))
@@ -22481,6 +22561,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "krowArgVarNames" ((PList) PWild) (EListLit))
 (DFunDef false "krowArgVarNames" (PWild (PList)) (EListLit))
 (DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyVar" (PVar "n")) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
+(DFunDef false "krowArgVarNames" ((PCons (PCon "KRow") (PVar "ks")) (PCons (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild) (PVar "as2"))) (EBinOp "::" (EVar "n") (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2"))))
 (DFunDef false "krowArgVarNames" ((PCons PWild (PVar "ks")) (PCons PWild (PVar "as2"))) (EApp (EApp (EVar "krowArgVarNames") (EVar "ks")) (EVar "as2")))
 (DData Public "TcEnv" () ((variant "TcEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))) ())
 (DTypeSig false "lookupVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scheme")))))
@@ -24629,7 +24710,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "tupleSpineOf") (EApp (EVar "TCon") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (EApp (EApp (EMethodRef "map") (EApp (EVar "reqTyToMono") (EMethodRef "sub"))) (EVar "ts"))))
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "reqTyToMono") (EMethodRef "sub")) (EVar "t")))
 (DFunDef false "reqTyToMono" ((PVar "sub") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "reqTyToMono") (EMethodRef "sub")) (EVar "t")))
-(DFunDef false "reqTyToMono" (PWild (PCon "TyRow" PWild PWild PWild)) (EApp (EVar "TCon") (ELit (LString "Unit"))))
+(DFunDef false "reqTyToMono" (PWild (PCon "TyRow" (PVar "labels") (PVar "tail") (PVar "loc"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EVar "loc")) (EApp (EApp (EVar "rowKindMismatchMsg") (EVar "labels")) (EVar "tail")))) (DoExpr (EApp (EVar "TCon") (ELit (LString "Unit"))))))
 (DTypeSig false "checkReqObligations" (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "Unit")))))
 (DFunDef false "checkReqObligations" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkReqObligations" ((PVar "univ") (PVar "loc") (PCons (PTuple (PVar "ifaceR") (PVar "monoArgs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkReqOne") (EVar "univ")) (EVar "ifaceR")) (EVar "monoArgs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EVar "checkReqObligations") (EVar "univ")) (EVar "loc")) (EVar "rest")))))
@@ -24805,6 +24886,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effVarOccAtoms" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EVar "effVarOccAtoms") (EVar "t"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EVar "effVarOccAtoms") (EVar "t")))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))))
+(DFunDef false "effVarOccAtoms" ((PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
 (DFunDef false "effVarOccAtoms" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "a")) (EApp (EVar "effVarOccAtoms") (EVar "b"))))
 (DFunDef false "effVarOccAtoms" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "effVarOccAtoms")) (EVar "ts")))

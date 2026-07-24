@@ -73,6 +73,7 @@ isOk : Result a b -> Bool
 isSome : Option a -> Bool
 length : a b -> Int
 liftIO : (Unit -> a) -> Async b a
+liftIO2 : (Unit -> <IO> a) -> Async <IO | b> a
 lt : a -> a -> Bool
 lte : a -> a -> Bool
 main : Unit

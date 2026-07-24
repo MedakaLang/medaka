@@ -54,6 +54,7 @@ import support.util.{
   mapOption,
   joinDot,
   dedup,
+  escStr,
 }
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
@@ -440,12 +441,28 @@ ppTyK (TyConstrained _ t) = ppTyK t
 -- (`Async <Stdout>` vs `Async <Rand>`) don't collide onto the SAME
 -- `implKeyOf` string — collapsing to a fixed placeholder here would be
 -- strictly worse than `TyEffect`'s existing (already lossy) behavior.
+-- Domain-faithful (mirrors typecheck.mdk's `ppEffAtomTy`, atom-for-atom —
+-- `implKeyTc`'s doc comment claims byte-identical output to this function,
+-- so `impl I (Box <Net "a/*"> Int)` must key the same on both sides): an
+-- atom's domain param IS part of what a written row means, so dropping it
+-- would collide two impls that differ only by domain onto one key.
 ppTyK (TyRow es tail _) = "<\{ppRowBodyK es tail}>"
 
 ppRowBodyK : List (String, Option String) -> Option String -> String
-ppRowBodyK es None = joinComma (map fst es)
+ppRowBodyK es None = joinComma (map ppEffAtomK es)
 ppRowBodyK [] (Some v) = v
-ppRowBodyK es (Some v) = "\{joinComma (map fst es)} | \{v}"
+ppRowBodyK es (Some v) = "\{joinComma (map ppEffAtomK es)} | \{v}"
+
+-- mirrors typecheck.mdk's ppEffAtomTy exactly (None => l, Some "_" => l ++
+-- " _", Some s => l ++ " " ++ %S) so the two implKey renderers stay in
+-- lockstep per the doc comment above.
+ppEffAtomK : (String, Option String) -> String
+ppEffAtomK (l, None) = l
+-- Intentional cross-file duplicate (a THIRD copy alongside typecheck.mdk's
+-- ppEffAtomTy and doc.mdk's ppEffAtomDoc); not consolidating (tiny helper /
+-- divergent-by-design backend trio).
+-- lint-disable-next-line rule-duplicate-body
+ppEffAtomK (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
 ppTyFunArgK : Ty -> String
 ppTyFunArgK (TyFun a b) = "(" ++ ppTyK (TyFun a b) ++ ")"

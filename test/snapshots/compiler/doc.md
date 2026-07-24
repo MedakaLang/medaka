@@ -98,7 +98,7 @@ ppEffInsideDoc effs tail =
 -- Mirror pp_atom in pp_ty_prec: None=>l, Some "_" => l ++ " _", Some s => l ++ " " ++ %S
 ppEffAtomDoc : (String, Option String) -> String
 ppEffAtomDoc (l, None) = l
--- Intentional cross-file duplicate of the same helper in typecheck.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
+-- Intentional cross-file duplicate of the same helper in typecheck.mdk AND eval.mdk's ppEffAtomK; not consolidating (tiny helper / divergent-by-design backend trio).
 -- lint-disable-next-line rule-duplicate-body
 ppEffAtomDoc (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 

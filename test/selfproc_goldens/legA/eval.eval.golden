@@ -349,6 +349,7 @@ pWriteFileBytes : Value a -> Value a -> <FileWrite> Value a
 payloadArity : ConPayload -> Int
 pickByTag : List (Value a) -> String -> Value a
 pickTagFallback : List (Value a) -> Value a
+ppEffAtomK : (String, Option String) -> String
 ppField : (String, Value a) -> String
 ppRowBodyK : List (String, Option String) -> Option String -> String
 ppTyAtomK : Ty -> String

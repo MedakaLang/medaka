@@ -159,6 +159,7 @@ kinds (enumerated from the message families):
 | missing constraint | `Could not deduce 'Eq a' … add 'Eq a =>'` (`:9628`) | `T-MISSING-CONSTRAINT` |
 | recursive alias | `Recursive type alias \`x\`` (`:2661`) | `T-RECURSIVE-ALIAS` |
 | alias arity | `Type alias \`x\` expects N argument(s), got M` (`:2793`) | `T-ALIAS-ARITY` |
+| row in non-row-kinded slot | `A row <…> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. …` — a bare row atom (`<Stdout>`, #997) or the pre-#997 degenerate `(<Stdout> T)` spelling used as a type argument whose declared parameter kind is `Type`, not `Row` (`List <Stdout>`, `data Holder = Holder <Stdout>`). Before #997 this was a parse error; `fromAstTypeE`/`reqTyToMono` still fall back to an inert `Unit` Mono after pushing the error so inference can continue | `T-ROW-KIND-MISMATCH` |
 | effect leak | effect-leak message (`:906`) | `T-EFFECT-LEAK` |
 | effect param | `Invalid effect parameter on <L>: …` / host-pattern (`:972`,`:993`) | `T-EFFECT-PARAM` |
 | under-determined effect var | `Under-determined effect variable <e> in method 'm' of interface 'I': …` — an interface method with a free effect tail var in RETURN position but no argument position (#784 Option A; dispatch could launder the effect) | `T-EFFECT-UNDETERMINED` |

@@ -1,5 +1,5 @@
 # META
-source_lines=3477
+source_lines=3494
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -58,6 +58,7 @@ import support.util.{
   mapOption,
   joinDot,
   dedup,
+  escStr,
 }
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
@@ -444,12 +445,28 @@ ppTyK (TyConstrained _ t) = ppTyK t
 -- (`Async <Stdout>` vs `Async <Rand>`) don't collide onto the SAME
 -- `implKeyOf` string — collapsing to a fixed placeholder here would be
 -- strictly worse than `TyEffect`'s existing (already lossy) behavior.
+-- Domain-faithful (mirrors typecheck.mdk's `ppEffAtomTy`, atom-for-atom —
+-- `implKeyTc`'s doc comment claims byte-identical output to this function,
+-- so `impl I (Box <Net "a/*"> Int)` must key the same on both sides): an
+-- atom's domain param IS part of what a written row means, so dropping it
+-- would collide two impls that differ only by domain onto one key.
 ppTyK (TyRow es tail _) = "<\{ppRowBodyK es tail}>"
 
 ppRowBodyK : List (String, Option String) -> Option String -> String
-ppRowBodyK es None = joinComma (map fst es)
+ppRowBodyK es None = joinComma (map ppEffAtomK es)
 ppRowBodyK [] (Some v) = v
-ppRowBodyK es (Some v) = "\{joinComma (map fst es)} | \{v}"
+ppRowBodyK es (Some v) = "\{joinComma (map ppEffAtomK es)} | \{v}"
+
+-- mirrors typecheck.mdk's ppEffAtomTy exactly (None => l, Some "_" => l ++
+-- " _", Some s => l ++ " " ++ %S) so the two implKey renderers stay in
+-- lockstep per the doc comment above.
+ppEffAtomK : (String, Option String) -> String
+ppEffAtomK (l, None) = l
+-- Intentional cross-file duplicate (a THIRD copy alongside typecheck.mdk's
+-- ppEffAtomTy and doc.mdk's ppEffAtomDoc); not consolidating (tiny helper /
+-- divergent-by-design backend trio).
+-- lint-disable-next-line rule-duplicate-body
+ppEffAtomK (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
 ppTyFunArgK : Ty -> String
 ppTyFunArgK (TyFun a b) = "(" ++ ppTyK (TyFun a b) ++ ")"
@@ -3481,7 +3498,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "escStr" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
@@ -3641,9 +3658,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppTyK" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
 (DFunDef false "ppTyK" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EApp (EVar "ppRowBodyK") (EVar "es")) (EVar "tail")))) (ELit (LString ">"))))
 (DTypeSig false "ppRowBodyK" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es"))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppEffAtomK")) (EVar "es"))))
 (DFunDef false "ppRowBodyK" ((PList) (PCon "Some" (PVar "v"))) (EVar "v"))
-(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "joinComma") (EApp (EApp (EVar "map") (EVar "ppEffAtomK")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))
+(DTypeSig false "ppEffAtomK" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "ppEffAtomK" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
+(DFunDef false "ppEffAtomK" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "ppTyFunArgK" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyFunArgK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppTyK") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "ppTyFunArgK" ((PVar "t")) (EApp (EVar "ppTyK") (EVar "t")))
@@ -4889,7 +4909,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "escStr" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
@@ -5049,9 +5069,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppTyK" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ppTyK") (EVar "t")))
 (DFunDef false "ppTyK" ((PCon "TyRow" (PVar "es") (PVar "tail") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppRowBodyK") (EVar "es")) (EVar "tail")))) (ELit (LString ">"))))
 (DTypeSig false "ppRowBodyK" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es"))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "None")) (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppEffAtomK")) (EVar "es"))))
 (DFunDef false "ppRowBodyK" ((PList) (PCon "Some" (PVar "v"))) (EVar "v"))
-(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))
+(DFunDef false "ppRowBodyK" ((PVar "es") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "joinComma") (EApp (EApp (EMethodRef "map") (EVar "ppEffAtomK")) (EVar "es"))))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))
+(DTypeSig false "ppEffAtomK" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "ppEffAtomK" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
+(DFunDef false "ppEffAtomK" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "ppTyFunArgK" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyFunArgK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "ppTyK") (EApp (EApp (EVar "TyFun") (EVar "a")) (EVar "b")))) (ELit (LString ")"))))
 (DFunDef false "ppTyFunArgK" ((PVar "t")) (EApp (EVar "ppTyK") (EVar "t")))
