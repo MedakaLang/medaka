@@ -896,6 +896,92 @@ gen_reexports() {
   printf 'import m%s.*\nmain = println (v0 + v%s)\n' "$top" "$top" > "$dir/entry.mdk"
 }
 
+# gen_typos — THE DIAGNOSTICS-PATH detector (issue #1016). Until this shape, EVERY
+# fixture in this file typechecked 0-DIAGNOSTIC by design, so the error path was
+# measured NOWHERE — which is exactly how resolve's did-you-mean search stayed
+# O(unbound names x in-scope names) unnoticed, on the path `medaka check` and the LSP
+# (lsp.mdk's analyzeLocated, recomputed on every document change) both run. A
+# half-typed buffer is the single most common input an editor ever sends, and a
+# half-typed buffer IS "many unbound names".
+#
+# CO-SCALED, the same "co-scale the two dimensions that multiply" rule the
+# marksweep/manyifaces pair follows: N defined bindings (the candidate POOL) AND N
+# bindings that each reference an undefined one-character typo of one (the DIAGNOSTIC
+# count). Pre-#1016 that was N x O(pool) ALLOCATING Levenshtein DPs. Measured by THIS
+# shape at its own band, N=250->500->1000 (2N+1 decls), before and after the fix:
+#
+#   before  total alloc  915.8 -> 2921.3 -> 10217.6 MB  r1=3.19 r2=3.50  ** SUPERLINEAR (ALLOC) **
+#   after   total alloc  124.5 ->  254.8 ->   530.3 MB  r1=2.05 r2=2.08   ok
+#
+# and the resolve stage alone, heap-pinned (deterministic bytes, not wall-clock):
+#   before  resolve alloc  799.3 -> 2686.3 -> 9741.8 MB   r1=3.36 r2=3.63
+#   after   resolve alloc    8.19 ->   19.90 ->   54.63 MB  r1=2.43 r2=2.74
+# i.e. 9741.8 MB -> 54.6 MB at N=1000, a 178x drop in the allocation this shape exists
+# to grade.
+#
+# Those "before" rows are a REAL RUN of this shape with the fix reverted and the gate
+# kept, not an estimate — the shape has been SEEN RED, and only this shape regressed in
+# that run.
+#
+# The ALLOC arm is what catches it: the per-unbound-name Levenshtein DP over the whole
+# pool is where all the allocation was. The OP arm (`scoreCand`'s opBump — one per
+# Levenshtein scoring) is a POST-fix regression guard rather than a pre-fix red: before
+# #1016 there was no counted op on this path at all, so a revert makes the op reading
+# DISAPPEAR rather than climb. MEASURED, in the very same seen-red run: pre-fix resolve
+# op reads 12250 -> 24500 -> 49000, i.e. dead LINEAR (r=2.00/2.00) while allocation is
+# screaming 3.19/3.50 — a textbook case of one arm being blind to what the other sees. That is what the "did the search actually run" assertion
+# below is for — it turns a vanished reading into a loud harness failure instead of a
+# silent skip.
+#
+# GRADED OP-ONLY (like marksweep/manyifaces): resolve sits under the 200ms TIME_FLOOR
+# here once fixed, so the TIME arm would grade it nowhere while costing ~K runs per
+# size. Its coverage is the deterministic OP arm (`scoreCand` bumps once per
+# Levenshtein scoring — the expensive, allocating step) plus the shared ALLOC arm.
+# ⚠️ What NEITHER arm sees: the surviving O(unbound x pool) PREFILTER scan, ~4 machine
+# ops per pair, allocating nothing. That is the accepted residual, not an oversight —
+# see resolve.mdk's `SugCand` note for why a sub-linear index was rejected. What the
+# arms DO catch is the whole regression surface that matters: re-materializing the pool
+# per call (alloc), and any weakening of the prefilters (op).
+#
+# NAME SHAPES ARE LOAD-BEARING — do not "simplify" the generator:
+#   * lengths vary (6..13), so the length prefilter (|len a - len b| <= ed a b) is
+#     exercised rather than vacuously true;
+#   * letters are spread by a deterministic LCG kept to a SMALL modulus so awk's
+#     doubles stay exact on every awk, Linux and macOS — a 32-bit multiplier here
+#     silently diverges between gawk and mawk and the fixture stops being a fixture.
+#   A degenerate corpus (one length, three letters) defeats both prefilters, looks
+#   like no real program, and would grade a worst case the fix does not claim.
+#
+# ⚠️ RESERVED WORDS. A generated name that happens to BE a keyword makes the file a
+# PARSE error, which short-circuits before resolve and silently measures NOTHING while
+# still reading as a clean run. `default`/`deriving`/`effect`/`export`/`extern` are all
+# reachable at these lengths, so the generator ASSERTS none is emitted — and the driver
+# separately asserts the fuzzy search actually RAN (see the typos block in the loop).
+gen_typos() {
+  n=$1; f=$2
+  awk -v n="$n" 'BEGIN {
+    L = "abcdefghijklmnopqrstuvwxyz";
+    split("default deriving effect export extern", kw, " ");
+    for (k in kw) RESV[kw[k]] = 1;
+    bad = "";
+    for (i = 0; i < n; i++) {
+      len = 5 + (i % 8); s = ""; v = i + 1;
+      for (p = 0; p < len; p++) {
+        v = (v * 75 + 74) % 65537;
+        s = s substr(L, (int(v / 251) % 26) + 1, 1);
+      }
+      if (("d" s) in RESV || ("e" s) in RESV) bad = s;
+      printf "d%s : Int\nd%s = %d\n", s, s, i;
+      printf "e%s : Int\ne%s = x%s\n", s, s, s;
+    }
+    printf "main = println 1\n";
+    if (bad != "") {
+      printf "gen_typos: generated suffix %s collides with a RESERVED WORD\n", bad > "/dev/stderr";
+      exit 1;
+    }
+  }' > "$f" || { echo "FAIL typos: generator assertion tripped (reserved-word collision)"; exit 1; }
+}
+
 # ── Measure ──────────────────────────────────────────────────────────────────
 # ⚠️ THE ALLOCATION RUNS DO NOT RUN wasm-emit (env -u MEDAKA_PERF_WASM), and that is
 # deliberate — it RESTORES this column to what it was calibrated on. #481 added the
@@ -1842,7 +1928,7 @@ printf -- '---------------------------------------------------------------------
 # LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
 # indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
 # gen_widerecords).
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords"
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
 else
@@ -1896,7 +1982,7 @@ for shape in $SHAPES; do
   # deterministic runs above, so each costs 3 runs, not 3 + 3*K. Every OTHER shape still
   # runs the full TIME arm.
   case "$shape" in
-    marksweep|manyifaces|widerecords)
+    marksweep|manyifaces|widerecords|typos)
     time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #883/#884 cost fix. its graded stage is under the ${TIME_FLOOR}s floor at this band, so TIME grades it nowhere; the op arm below is its coverage.)
 "
     ;;
@@ -1949,6 +2035,28 @@ for shape in $SHAPES; do
       "$(awk -v s="$st" '$1==s{print $2}' "$OF3")" \
       "$n1" "$n2" "$n3"
   done
+
+  # ── typos: assert the did-you-mean search actually RAN (#1016) ───────────────
+  # This is the only shape here whose signal comes from a DIAGNOSTIC, and a diagnostic
+  # is exactly what a fixture can silently stop producing: ONE generated name colliding
+  # with a reserved word makes the file a parse error, resolve never reaches the fuzzy
+  # search, and every ratio above reads a clean and meaningless "ok". `scoreCand` bumps
+  # the op counter once per Levenshtein scoring, and each of the N typos is one edit
+  # from BOTH its `d` and its `e` twin, so a run that really produced N diagnostics
+  # cannot come in under (the ~2N-decl walk baseline) + N. Under that is a HARNESS
+  # FAILURE, never a pass — the same "a gate that measured nothing must not read green"
+  # rule as the alloc-figure guard above.
+  if [ "$shape" = "typos" ]; then
+    ty_o1="$(awk '$1=="resolve"{print $2}' "$OF1")"
+    ty_min=$((3 * n1))
+    if [ "$(awk -v v="${ty_o1:-0}" -v m="$ty_min" 'BEGIN{print (v + 0 < m + 0) ? 1 : 0}')" = "1" ]; then
+      echo "FAIL typos: resolve op ${ty_o1:-<none>} at N=${n1} is under 3N (${ty_min}) — the"
+      echo "     did-you-mean search did not run, so the ratios above measured NOTHING."
+      echo "     Most likely the fixture is a parse error (reserved-word collision): see gen_typos."
+      fail=$((fail+1))
+      continue
+    fi
+  fi
 
   # ── widerecords resolve-op grade (#883 PR review; #78 P-1 rework; #984) ───────
   # widerecords is a `resolve` op regression-guard, and that reading is the ONLY thing
