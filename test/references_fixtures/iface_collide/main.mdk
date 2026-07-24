@@ -1,0 +1,40 @@
+-- #1002 regression fixture — TWO INTERFACES, ONE METHOD NAME.
+--
+-- Read test/references_fixtures/iface_collide/expected.golden as the assertion:
+-- `alpha|method|tag` must hold Alpha's declaration plus the head inside
+-- `impl Alpha P` and NOTHING ELSE; `beta|method|tag` likewise for `impl Beta Q`.
+-- No head may appear under the other interface's key. (The golden carries the
+-- exact line:col pairs — they are captured, not hand-counted here.)
+--
+-- This pins the F1 regression found reviewing the first cut of #1002. That cut
+-- keyed an impl head by looking the bare METHOD name up in `useEnv`, which holds
+-- exactly one slot per `method<TAB><name>` and carries NO interface identity — so
+-- both heads landed on `alpha|method|tag` and `beta|method|tag` kept only its
+-- declaration. That is strictly worse than the omission it replaced: `references`
+-- on `Alpha.tag` returned Beta's impl head, and a rename would have EDITED it,
+-- orphaning Beta's own method — the very failure mode #1002 exists to close, one
+-- dimension over. The key is now derived from the interface NAME the impl header
+-- spells (`ifaceModId`, compiler/tools/refindex.mdk).
+--
+-- No method is CALLED here, deliberately: two interfaces declaring `tag` are both
+-- in dispatch scope, so any `tag` call would be genuinely ambiguous ("No impl of
+-- Beta for P"). The collision belongs next to the impls, not next to a call.
+-- `tag` IS imported from alpha here, deliberately: that is what puts a value in
+-- `useEnv`'s single `method<TAB>tag` slot and makes the old method-name keying
+-- attribute Beta's head to ALPHA — the confidently-wrong attribution, rather than
+-- the merged-onto-`?ext` form. The complementary no-method-import spelling is
+-- pinned by references_fixtures/impl_method/noimport.mdk.
+import alpha.{Alpha, tag}
+import beta.{Beta}
+
+data P =
+  | P
+
+data Q =
+  | Q
+
+impl Alpha P where
+  tag P = 1
+
+impl Beta Q where
+  tag Q = 2

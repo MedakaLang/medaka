@@ -14,7 +14,14 @@
 -- method must edit all of them. This fixture pins that from three directions at
 -- once — same module as the interface (iface.mdk), a different module (here), and
 -- two impls of the same interface for DIFFERENT types (here).
+-- `noimport` is bare-imported so the entry-rooted dump reaches it: it carries the
+-- ORDINARY impl spelling, which does not import the method name. The
+-- two-interfaces-one-method-name case lives in its own fixture dir
+-- (references_fixtures/iface_collide/) because a second interface declaring
+-- `sizeOf` anywhere in this closure makes the calls below genuinely ambiguous
+-- ("No impl of Weighty for Box") — impls are in dispatch scope transitively.
 import iface.{Sized, sizeOf, Box, Small, Big}
+import noimport
 
 -- S0-2: an impl in a DIFFERENT module from its interface. Resolving through the
 -- import must yield `iface`'s key, NOT `main`'s — a regression that keyed on the

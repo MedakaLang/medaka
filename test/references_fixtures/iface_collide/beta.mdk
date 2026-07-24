@@ -1,0 +1,3 @@
+-- #1002 F1 fixture, module 2 of 3 — the OTHER interface declaring `tag`.
+export interface Beta a where
+  tag : a -> Int
