@@ -1,0 +1,27 @@
+-- #866 / PR #1021 — THE DUAL-CHANNEL INVARIANT PIN.  Do not "simplify" this to a
+-- single-type use; the two types are the entire point.
+--
+-- A local binding whose body calls a constrained function cannot be generalized over
+-- the constrained variable (a `let`/`where` member is not dict-abstracted — it lowers
+-- to ONE lifted lambda with ONE shared route ref).  typecheck declines that
+-- generalization at all five local-generalization sites, reading BOTH obligation
+-- channels: `dictApps` (populated on the run/emit path, which marks constrained-fn
+-- occurrences `EDictAt`) and the call-obligation window (the only one the CHECK path
+-- populates — `markModules` passes `prePassDict rpNames []`, an empty dict-name set).
+--
+-- WHY TWO TYPES: with a ONE-type use, both channels agree and deleting either half
+-- leaves the program green — which is exactly why the three `test/engine_fixtures/`
+-- pins for #866 cannot protect this invariant.  Used at TWO types, the halves
+-- diverge: drop the call-obligation half and `check` generalizes (ACCEPT) while emit
+-- does not, so the built binary silently commits to whichever type it saw first
+-- (measured: printed `TrueTrue`).  This fixture then fails two ways at once — `check`
+-- disagrees with `.expected` (ACCEPT vs REJECT), and check/run/build disagree with
+-- each other.  Restore the half and all three reject together, by diagnostic.
+--
+-- Verdict: REJECT, by T-LOCAL-CONSTRAINED-MONO pointing at the BINDING of `sh`.
+shows : Debug a => a -> String
+shows v = debug v
+
+main =
+  let sh = v => shows v
+  println (sh True ++ sh "a")

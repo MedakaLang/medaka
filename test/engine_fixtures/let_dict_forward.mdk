@@ -1,0 +1,10 @@
+-- #866 sibling of where_dict_forward.mdk: the defect is NOT where-specific.  A block
+-- `let` binding is generalized by a DIFFERENT typecheck entry point (blockLet /
+-- blockRecLet, not processLetGroup's generalizeGroup), and it orphaned the forwarded
+-- `Ord a` dict exactly the same way — check-green, eval-correct, native SIGSEGV.
+needsOrd : Ord a => a -> a -> Bool
+needsOrd x y = x < y
+
+main =
+  let h = x => needsOrd x x
+  println (h "a")
