@@ -1,0 +1,16 @@
+-- #822: a KROW DATA slot feeding an ABSTRACT head, with NO interface in the file at all.
+--
+-- This pins behaviour the implementation comment used to declare IMPOSSIBLE ("an
+-- unscoped seam withholds nothing, so the arm never fires there").  It does fire here:
+-- `e` is row-kinded from `dataParamKindsRef` — nothing to do with graded interfaces —
+-- so `rowArgNamesIn` reports it, the caller withholds it from the tyvar map, and the
+-- abstract-headed `f e Int` therefore meets the row-slot test with an empty graded scope.
+--
+-- The result is a FIX, not a leak.  Pre-#822 that withheld `e` fell through
+-- `fromAstTypeE (TyVar n)`'s `fromOption (TCon n)` and became a FABRICATED RIGID
+-- `TCon "e"`: `getInner` inferred as `D a b -> b e Int`, an opaque constant no caller
+-- could ever satisfy.  The golden below records `D a b -> b a Int` — a real variable.
+data D e f = MkD (Unit -> <e> Unit) (f e Int)
+
+getInner : D e f -> f e Int
+getInner (MkD _ x) = x

@@ -134,10 +134,20 @@ function, §3.)
 - `guardWarning = "Warning: guards may not be exhaustive"` (`:482`) — the only
   diagnostic produced standalone here (guard coverage on the raw AST).
 
-### Typecheck — `compiler/types/typecheck.mdk` (55 push sites / **~25 kinds** + 1 warning)
+### Typecheck — `compiler/types/typecheck.mdk` (push sites / kinds + 1 warning)
 
-The 55 sites all go through `pushTypeError` / `pushTypeErrorOnce` /
-`pushTypeErrorOnceAt`; the one warning is a direct `setRef matchWarnings`. Distinct
+⚠️ **The counts that stood here (`55 push sites / ~25 kinds`) were stale and are not
+replaced with new ones** — a hand-maintained census in prose rots at the next PR, exactly
+as the "Distinct-kind totals" note at the end of the code table already says. Derive them:
+
+```sh
+grep -cE 'pushTypeError(Once)?(At|HelpFixAt)? "' compiler/types/typecheck.mdk   # push sites
+grep -oE 'pushTypeError(Once)?(At|HelpFixAt)? "[A-Z-]+"' compiler/types/typecheck.mdk \
+  | grep -oE '"[A-Z-]+"' | sort -u | wc -l                                      # distinct codes
+```
+
+The sites all go through `pushTypeError` / `pushTypeErrorOnce` / `pushTypeErrorOnceAt` /
+`pushTypeErrorHelpFixAt`; the one warning is a direct `setRef matchWarnings`. Distinct
 kinds (enumerated from the message families):
 
 | Kind | Representative message | Code (§2) |
@@ -166,6 +176,7 @@ kinds (enumerated from the message families):
 | effect launder (impl body) | `Effect laundering in impl of 'm' for interface 'I': the body performs <X>, …` — an impl method body performing an INTRINSIC effect (not sourced from any argument) that is absorbed into a declared effect var and laundered to pure at the call site (#803; distinct from `T-EFFECT-UNDETERMINED`, which is signature-shape, and `T-EFFECT-LEAK`, which is a concrete/pure declared row) | `T-EFFECT-LAUNDER` |
 | effect arg-occurrence uncovered | `Argument-only effect variable <e> in method 'm' of interface 'I': …` / `Effect variable <e> … carries <X> at an argument position, but a method row carrying <e> does not include it …` — the dual of `T-EFFECT-UNDETERMINED`: an effect var's ARGUMENT occurrences are rows an impl can perform by using that argument, so a var appearing in no non-argument row (argument-only), or carrying argument-side atoms some non-argument occurrence lacks (uncovered), is rejected at the interface declaration (adversarial break 4 of #816; must be declaration-time — the same-tail row-unification arm loses the atom) | `T-EFFECT-ARG-UNCOVERED` |
 | impl pins method-scheme var | `Impl of 'm' for interface 'I' pins the method's quantified type variable(s) 'b' …` / `… identifies quantified type variables …` / `… identifies effect variables …` — an impl (or specialized default) method body constrains a caller-owned quantified variable of the method scheme: pins a type var to a constructed type, identifies two of them (or one with an impl-head var), or identifies two effect vars (W3 method-scheme fidelity, DICT-SEMANTICS §3; #814).  The effect-atom half of the same check (an atom poured into a method effect var at an occurrence whose declared row lacks it) reuses `T-EFFECT-LAUNDER` | `T-IMPL-TOO-SPECIFIC` |
+| graded instance head kind | ``Instance head has the wrong kind for interface 'GThenable': the interface's type parameter is graded — kind `Row -> Type -> Type` — but `Box` has kind `Type -> Type -> Type` …`` / ``… but this head already applies 1 argument(s) to `Async`, leaving kind `Type -> Type` …`` — an `impl` of a GRADED interface (one whose type parameter is row-indexed, `f : Row -> Type -> Type`; EFFECTS-SEMANTICS §6, #822) whose head does not carry a `Row` parameter at the interface's `Row` slot, or which fixes the row by applying the family (`impl I (Async e)`). Soundness, not polish: the method type's `Row` slot elaborates to a `TEff` row while the constructor's own scheme has a plain tyvar there, and `unify` binds the two silently — the impl would be accepted with a grade that means nothing. Deliberately ABSTAINS when the head's kind is not knowable (a type alias — already policed by `T-ALIAS-ARITY` — or a head absent from the kind table, which includes an abstractly-exported row-indexed type, #804) | `T-IMPL-KIND-MISMATCH` |
 | non-recursive value let | `'x' is not in scope on the RHS of its own binding …` (`:4923`) | `T-NONREC-VALUE-LET` |
 | local binding not constraint-polymorphic | `local binding 'h' is used at two different types (Bool and String), but it cannot be polymorphic: its body calls something that needs a 'Debug' instance, and only top-level definitions can carry that constraint` — a `let`/`where` member whose body forwards a constrained callee's dictionary is NOT dict-abstracted (it lowers to one lifted lambda with one shared route ref), so typecheck declines to generalize it over that variable (`pinLocalIfDictForwarded`); a second use at a different type then collides. Located at the **binding**, not the second use — the binding is what the user changes. Carries a `help` naming both fixes (lift to top level; or use at one type). Replaces the bare `T-TYPE-MISMATCH` this used to surface as, and only when exactly one pinned binding matches (`pinnedLocalExplain` — see its conservatism rules). #866 / #1021; the narrowing is deliberate and signed off, and is retired by dict-abstracting local bindings | `T-LOCAL-CONSTRAINED-MONO` |
 | do not a monad | `do requires a monad` | `T-DO-NOT-MONAD` |

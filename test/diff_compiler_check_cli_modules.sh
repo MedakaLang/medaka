@@ -800,5 +800,96 @@ case "$x749a_out" in
   *) fail=$((fail+1)); printf 'FAIL 749/aliased-usermodule-fn-obligation-check (aliased obligation dropped: [%s])\n' "$x749a_out" ;;
 esac
 
+# ── 822: graded interface scope is per-DECLARATION, not per-NAME ──────────────
+#
+# Two UNRELATED modules each declare an interface named `GT`, both graded (#822,
+# EFFECTS-SEMANTICS §6), with the Row in DIFFERENT slots.  A graded scope keyed by any
+# bare String name — the typaram name, `GT`, or `GT@<slot>` — gives these two the SAME
+# key, and such a table populated across module boundaries is last-write-wins with a
+# SILENT loss.  That is one recurring root cause with four confirmed instances (eval
+# frames' ctor collision; #1044 refindex; #1047 interface defaults; the first cut of
+# #822), and relocating the key to a rarer namespace is not a fix — #1044 was created
+# that way.  Both must therefore check clean, and in EITHER import order.
+#
+# ⚠️ THIS BELONGS HERE, not in test/check_module_fixtures/.  That harness diffs
+# `check_modules_main`'s STDOUT scheme dump, and the graded scope is NOT OBSERVABLE
+# there: an open row renders exactly like a type variable, a concrete index in a Row
+# slot stays opaque, and a written row carries its own row-ness — so four fixtures
+# written that way were green with the implementation arm deleted.  ACCEPTANCE is the
+# only observable, and only this gate sees it.
+cat > "$TMP/g822_ma.mdk" <<'EOF'
+export interface GT f where
+  gpinA : f e a -> (a -> <e> f e b) -> f e b
+EOF
+cat > "$TMP/g822_mb.mdk" <<'EOF'
+export interface GT g where
+  gpinB : g a e -> (a -> <e> g a e) -> g a e
+EOF
+cat > "$TMP/g822_ab.mdk" <<'EOF'
+import g822_ma.{GT, gpinA}
+import g822_mb.{gpinB}
+main = println "ok"
+EOF
+cat > "$TMP/g822_ba.mdk" <<'EOF'
+import g822_mb.{GT, gpinB}
+import g822_ma.{gpinA}
+main = println "ok"
+EOF
+for g822_order in ab ba; do
+  g822_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/g822_$g822_order.mdk" 2>&1)"
+  g822_code=$?
+  if [ "$g822_code" -eq 0 ]; then
+    pass=$((pass+1)); printf 'ok   822/same-named-graded-ifaces-%s (both keep their own slot kinds)\n' "$g822_order"
+  else
+    fail=$((fail+1)); printf 'FAIL 822/same-named-graded-ifaces-%s (exit %d: [%s])\n' "$g822_order" "$g822_code" "$g822_out"
+  fi
+done
+
+# ── 822: a NON-graded interface must not inherit a graded namesake's kinds ────
+#
+# The discriminating shape, and the one that was actually broken (S1, review round 2):
+# only ONE of the two interfaces need be graded.  `plainmod` is an ordinary, valid,
+# self-contained library — `GT h` is `Type -> Type` and `Box` implements it.  Because
+# `ifaceParamKindsRef` is copied into the data universe, which is NOT import-scoped, a
+# graded interface of the same name ANYWHERE in the graph made `plainmod`'s impl fail
+# T-IMPL-KIND-MISMATCH, and swapping the two unrelated import lines below flipped the
+# verdict.  The front-overlay/first-match ordering did not protect it, because a
+# non-graded interface used to register NO entry and so had no local entry to shadow
+# with — see registerIfaceParamKindsGo.
+#
+# ⚠️ This is the pin the same-named-GRADED pair above could NOT provide: that pair
+# passes on a tree with the old `<iface>@<slot>`-keyed lookup, so it only catches total
+# absence of #822.  This one fails there.  Both orders, because the bug was order-dependent.
+cat > "$TMP/g822_graded.mdk" <<'EOF'
+export interface GT f where
+  gm : f e a -> (a -> <e> f e b) -> f e b
+EOF
+cat > "$TMP/g822_plain.mdk" <<'EOF'
+export interface GT h where
+  plainm : h a -> h a
+public export data Box a = Mk a
+export impl GT Box where
+  plainm x = x
+EOF
+cat > "$TMP/g822_mix_ab.mdk" <<'EOF'
+import g822_graded.{gm}
+import g822_plain.{Box, plainm}
+main = println "ok"
+EOF
+cat > "$TMP/g822_mix_ba.mdk" <<'EOF'
+import g822_plain.{Box, plainm}
+import g822_graded.{gm}
+main = println "ok"
+EOF
+for g822_order in ab ba; do
+  g822m_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/g822_mix_$g822_order.mdk" 2>&1)"
+  g822m_code=$?
+  if [ "$g822m_code" -eq 0 ]; then
+    pass=$((pass+1)); printf 'ok   822/nongraded-namesake-%s (ordinary interface keeps its own kinds)\n' "$g822_order"
+  else
+    fail=$((fail+1)); printf 'FAIL 822/nongraded-namesake-%s (valid program rejected, exit %d: [%s])\n' "$g822_order" "$g822m_code" "$g822m_out"
+  fi
+done
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,12 @@
+-- #822 S0 REGRESSION PIN (adversarial review of PR #1011).  Declaring a graded
+-- interface must leave the PRELUDE typed exactly as it always was.
+--
+-- The golden below is the whole prelude scheme dump, and that IS the assertion: the
+-- first cut of #822 published `f ↦ [KRow]` under the bare name, which collides with
+-- every arity-1 `f a` in Mappable / Applicative / Thenable / Foldable, so this
+-- four-line file produced 45 `Type mismatch` and `No impl` errors — all of them
+-- mislocated at the user's own `interface` line, none of them mentioning the prelude.
+-- If a future change re-globalises the graded scope, this golden collapses to that
+-- wall of errors and the gate names the file.
+interface H f where
+  h : f e -> <e> Int

@@ -1,0 +1,18 @@
+-- #822 S0 REGRESSION PIN, CROSS-MODULE half (adversarial review of PR #1011).
+--
+-- The first cut of #822 stored graded kinds under the bare type-parameter NAME in
+-- `universeIfaceParamKinds`, which is a GLOBAL data-universe accumulator and is NOT
+-- import-scoped.  So merely compiling `gradedmod` in the same run re-kinded every
+-- arity-2 `f _ _` in EVERY other module of the graph — including `plainmod`, which
+-- imports nothing from it and is imported by nothing that mentions it.
+--
+-- `held` republishes plainmod's `keep` so its scheme lands in the golden the gate
+-- diffs.  With the leak it reads `held : a <> b -> a <> b` — `Int` swallowed by a Row
+-- slot that erases; correctly scoped it reads `held : a Int b -> a Int b`.
+-- Verified to differ across the fix by building the pre-fix compiler and running it,
+-- not by assuming.
+import gradedmod.{GThenable}
+import plainmod.{keep}
+
+export held : f Int a -> f Int a
+held = keep

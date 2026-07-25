@@ -1038,20 +1038,20 @@ checkUndeterminedRetEffVars (d::rest) =
   checkUndeterminedRetEffVars rest
 
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkUndeterminedRetEffVarsDecl (DInterface { name, methods, ... }) =
-  checkIfaceMethodEffs name methods
+checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, methods, ... }) =
+  checkIfaceMethodEffs name (declGradedScope typarams methods) methods
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
 checkUndeterminedRetEffVarsDecl _ = ()
 
-checkIfaceMethodEffs : String -> List IfaceMethod -> Unit
-checkIfaceMethodEffs _ [] = ()
-checkIfaceMethodEffs iface ((IfaceMethod mname mty _)::rest) =
-  let _ = match undeterminedRetEffVars mty
+checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
+checkIfaceMethodEffs _ _ [] = ()
+checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
+  let _ = match undeterminedRetEffVars scope mty
     [] => ()
     bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyConLoc mty) (effectUndeterminedMsg iface mname bad)
-  let _ = checkArgEffVarCoverage iface mname mty
-  checkIfaceMethodEffs iface rest
+  let _ = checkArgEffVarCoverage iface scope mname mty
+  checkIfaceMethodEffs iface scope rest
 
 -- The DUAL of the #784 rule, closing the adversarial review's break 4 (and the
 -- argument-only variant): an effect var's ARGUMENT-position occurrences are
@@ -1071,14 +1071,14 @@ checkIfaceMethodEffs iface ((IfaceMethod mname mty _)::rest) =
 -- Post-unify inspection CANNOT catch these: the same-tail row-unification arm
 -- (`<e>` ~ `<Stdout | e>`) succeeds without recording the atom anywhere, so
 -- the declaration is the only seam with the information intact.
-checkArgEffVarCoverage : String -> String -> Ty -> Unit
-checkArgEffVarCoverage iface mname mty =
+checkArgEffVarCoverage : String -> List (String, List Kind) -> String -> Ty -> Unit
+checkArgEffVarCoverage iface scope mname mty =
   checkArgEffVars
     iface
     mname
     mty
     (methodEffArgOccs mty)
-    (methodEffRetOccs mty)
+    (methodEffRetOccs scope mty)
     (dedup (map fst (methodEffArgOccs mty)))
 
 checkArgEffVars : String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
@@ -1154,13 +1154,14 @@ krowSlotOccs perf n args = match lookupAssoc n perRun.value.dataParamKindsRef.va
 -- effect-var occurrences in NON-argument positions: each spine arrow's own row,
 -- plus every occurrence inside the final return type (nested rows and bare
 -- row-kinded ctor-arg slots).
-methodEffRetOccs : Ty -> List (String, List Atom)
-methodEffRetOccs (TyConstrained _ t) = methodEffRetOccs t
-methodEffRetOccs (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: methodEffRetOccs t
-methodEffRetOccs (TyEffect _ None t) = methodEffRetOccs t
-methodEffRetOccs (TyFun _ b) = methodEffRetOccs b
-methodEffRetOccs t = effVarOccAtoms t ++ map (n => (n, [])) (rowArgNames t)
+methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
+methodEffRetOccs scope (TyConstrained _ t) = methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect _ None t) = methodEffRetOccs scope t
+methodEffRetOccs scope (TyFun _ b) = methodEffRetOccs scope b
+methodEffRetOccs scope t = effVarOccAtoms t
+  ++ map (n => (n, [])) (rowArgNamesIn scope t)
 
 argOnlyEffVarMsg : String -> String -> String -> String
 argOnlyEffVarMsg iface mname v = "Argument-only effect variable <\{v}> in method '\{mname}' of interface '\{iface}': <\{v}> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <\{v}> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <\{v}> through the method's row (e.g. `-> <\{v}> …`), or drop it from the argument."
@@ -1187,10 +1188,10 @@ argAtomsUncoveredMsg iface mname v esc = "Effect variable <\{v}> in method '\{mn
 -- An abstract row-ctor arg (`r e a`, `r` a type variable) is conservatively
 -- rejected — no real interface method has that shape, and matching it soundly
 -- would need per-argument kind inference we do not run here.
-undeterminedRetEffVars : Ty -> List String
-undeterminedRetEffVars sig =
+undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
+undeterminedRetEffVars scope sig =
   let args = methodArgs sig
-  let argCarried = dedup (flatMap effTailNames args ++ flatMap rowArgNames args)
+  let argCarried = dedup (flatMap effTailNames args ++ flatMap (rowArgNamesIn scope) args)
   let retTail = dedup (effTailNames (methodRet sig))
   removeAllS argCarried retTail
 
@@ -1222,6 +1223,151 @@ firstTyConLoc _ = None
 firstTyConLocList : List Ty -> Option Loc
 firstTyConLocList [] = None
 firstTyConLocList (t::ts) = orElseLoc (firstTyConLoc t) (firstTyConLocList ts)
+
+-- #822 (graded interfaces): an instance head must have the KIND the interface's
+-- corresponding type parameter has.  A graded interface binds the whole row-indexed
+-- FAMILY — `impl GThenable Async`, never a fixed row like `impl GThenable (Async e)`
+-- (EFFECTS-SEMANTICS §6, DICT-SEMANTICS §3) — so the head's REMAINING parameter
+-- kinds (its declared kinds minus the ones the head already applied) must equal the
+-- interface slot's kinds.
+--
+-- This is a soundness guard, not polish.  A kind-mismatched head elaborates the
+-- method type's KRow slot to a `TEff` row while the constructor's own scheme has a
+-- plain tyvar in that position, and `unify` binds a tyvar to a TEff without
+-- complaint: the impl would be ACCEPTED and its grade would mean nothing — every
+-- index a caller reads off the result would be a fabrication.
+--
+-- Only interfaces that actually HAVE a graded slot are inspected (ifaceParamKindsRef
+-- records nothing else), so an ordinary interface is untouched.  Runs on BOTH
+-- whole-program paths: its one call site is in checkBodyImpl, shared by Flat and
+-- Module, immediately after registerAllData has populated both kind tables.
+checkGradedImplHeads : List Decl -> Unit
+checkGradedImplHeads [] = ()
+checkGradedImplHeads (d::rest) =
+  let _ = checkGradedImplHeadDecl d
+  checkGradedImplHeads rest
+
+checkGradedImplHeadDecl : Decl -> Unit
+checkGradedImplHeadDecl (DAttrib _ d) = checkGradedImplHeadDecl d
+checkGradedImplHeadDecl (DImpl { iface, tys, ... }) =
+  checkGradedImplTys iface 0 tys
+checkGradedImplHeadDecl _ = ()
+
+-- ⚠️ THE ONLY reader of `ifaceParamKindsRef`'s bare-name `<iface>@<slot>` key, and it is
+-- a DIAGNOSTIC.  That is deliberate and load-bearing.  A flat table keyed by a bare
+-- `String` name and populated across module boundaries is last-write-wins with a SILENT
+-- loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and the
+-- first cut of #822 itself, where this table was ALSO keyed by the bare typaram name and
+-- re-kinded every arity-matching application in the program.  Choosing a namespace that
+-- is merely *less likely* to clash is not a fix: #1044 was CREATED by relocating exactly
+-- this defect to a rarer namespace.
+--
+-- So no ELABORATION seam reads this table.  Every seam that turns a method signature
+-- into a Mono takes its scope from the DECLARATION (`declGradedScope`) or from the very
+-- resolution result that produced the signature (`ifaceMethodTyResolved`, which carries
+-- the scope in the same tuple as `mty` so the two cannot be resolved differently).
+--
+-- Severity tracks REACH, not rarity.  Because the only reader is this diagnostic, the
+-- worst case of an `<iface>@<slot>` collision — two graded interfaces sharing a NAME
+-- across modules — is a kind error judged against the wrong slot kinds, or not reported
+-- at all: bounded to those two interfaces, never silent wrongness in a program's types.
+-- Keying it properly would need a resolved module identity, and typecheck.mdk carries
+-- none for an interface (`ifaceMethodTy` itself matches on `name == iface`). That is
+-- #1047's territory, upstream of #822 — which this must not pretend to have fixed.
+checkGradedImplTys : String -> Int -> List Ty -> Unit
+checkGradedImplTys _ _ [] = ()
+checkGradedImplTys iface i (t::rest) =
+  let _ = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
+    Some want if anyKRow want => checkGradedImplHead iface t want
+    _ => ()
+  checkGradedImplTys iface (i + 1) rest
+
+-- [want] is the interface slot's kind list.
+--
+-- Only a head whose kind is actually KNOWN is judged, and the two ways it can be
+-- unknown are BOTH deliberate abstentions, not oversights:
+--   * a type ALIAS head lives in aliasTableRef, never in dataParamKindsRef, and its
+--     saturation is already policed by T-ALIAS-ARITY — a kind complaint here would be
+--     a second, worse-worded report of the same defect;
+--   * a head absent from dataParamKindsRef entirely.  That is NOT only a builtin like
+--     `Int`: an ABSTRACTLY-exported data type (`export data Asy e a`, #804) is absent
+--     too, and it may well be row-indexed.  Reporting it rejected a correct program
+--     and told the author to add a `Row` parameter the type ALREADY HAD.  Abstaining
+--     costs nothing real — a genuinely wrong head still fails on its method bodies,
+--     where the mismatch is concrete and located.
+-- A head that is not a TyCon spine at all is judged where it can be: a saturated
+-- TUPLE is kind `Type`, which is never a graded slot's kind, so it is reported; a bare
+-- tyvar head carries no kind and is left to the checks that already reject it.
+checkGradedImplHead : String -> Ty -> List Kind -> Unit
+checkGradedImplHead iface t want = match tyAppSpine t
+  (TyCon n loc, applied) =>
+    checkGradedImplHeadCon iface n loc (listLen applied) want
+  -- A saturated tuple is kind `Type`, which is never a graded slot's kind.  It gets its
+  -- OWN remedy: the generic "give it a Row parameter" advice is nonsense for a tuple —
+  -- you cannot add one.  ⚠️ The span is best-effort: `TyTuple` carries no loc of its own
+  -- and `TyVar` carries none either, so `impl I (a, b)` genuinely has no span to point at
+  -- and reports unlocated.  Fabricating a nearby one would be worse than saying nothing.
+  (TyTuple ts, _) => pushTypeErrorOnceAt
+    "T-IMPL-KIND-MISMATCH"
+    (firstTyConLocList ts)
+    (implTupleHeadKindMsg iface (listLen ts) want)
+  _ => ()
+
+checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
+checkGradedImplHeadCon iface n loc nApplied want = match headRemainingKinds n nApplied
+  None => ()
+  Some got => checkGradedImplHeadKinds iface n loc nApplied want got
+
+-- The head constructor's declared parameter kinds MINUS the ones the head already
+-- applies (`impl I (Async e)` supplies one).  `None` = "this head's kind is not
+-- knowable here" (alias, builtin, or abstractly-exported type), which the caller
+-- treats as an abstention.
+headRemainingKinds : String -> Int -> Option (List Kind)
+headRemainingKinds n nApplied
+  | isSome (lookupAssoc n perRun.value.aliasTableRef.value) = None
+  | otherwise = map (dropFirst nApplied) (lookupAssoc n perRun.value.dataParamKindsRef.value)
+
+checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
+checkGradedImplHeadKinds iface n loc nApplied want got
+  | kindsEq got want = ()
+  | otherwise = pushTypeErrorOnceAt "T-IMPL-KIND-MISMATCH" loc (implKindMismatchMsg iface n nApplied want got)
+
+renderKindArrow : List Kind -> String
+renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
+
+kindName : Kind -> String
+kindName KType = "Type"
+kindName KRow = "Row"
+
+-- ⚠️ [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
+-- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
+-- prevent.
+implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String
+implKindMismatchMsg iface ctor nApplied want got = "Instance head has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but \{implHeadKindClause ctor nApplied got}, so the grade the methods index by has nowhere to live and every index a caller reads off a result would be fabricated. \{implKindMismatchFix iface ctor nApplied}"
+
+-- The "but …" clause: an UNAPPLIED head states its own kind; a partially applied one
+-- (`impl I (Async e)` — the fixed-row shape a graded interface forbids) must say so,
+-- because the leftover kind is NOT the constructor's kind and reporting it as such is
+-- simply false (`Async` is `Row -> Type -> Type`; `Async e` is `Type -> Type`).
+implHeadKindClause : String -> Int -> List Kind -> String
+implHeadKindClause ctor nApplied got
+  | nApplied <= 0 = "`\{ppConName ctor}` has kind `\{renderKindArrow got}`"
+  | otherwise = "this head already applies \{intToString nApplied} argument(s) to `\{ppConName ctor}`, leaving kind `\{renderKindArrow got}`"
+
+-- The remedy, conditioned on which mistake was actually made.  Telling an author who
+-- wrote `impl GThenable Box` to "write `impl GThenable Box`" is a tautology — that
+-- advice is only useful when the head was APPLIED, where dropping the argument is
+-- literally the fix.
+implKindMismatchFix : String -> String -> Int -> String
+implKindMismatchFix iface ctor nApplied
+  | nApplied > 0 = "A graded interface binds the whole row-indexed FAMILY, never a fixed-row application: drop the argument(s) and write `impl \{iface} \{ppConName ctor}`."
+  | otherwise = "Give `\{ppConName ctor}` a parameter used in an effect position at each `Row` slot — a constructor field of the shape `Unit -> <e> a` is what makes a parameter row-kinded — or implement a non-graded interface for it instead."
+
+-- A saturated TUPLE head, which needs its own message: a tuple is kind `Type` and cannot
+-- be given a row parameter, so the ordinary "add a `Unit -> <e> a` field" remedy would
+-- send the author after something that does not exist.
+implTupleHeadKindMsg : String -> Int -> List Kind -> String
+implTupleHeadKindMsg iface n want = "Instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."
 
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTy (TyFun a b) =
@@ -2284,13 +2430,14 @@ data CrossRun = CrossRun {
     universeFunNamesRef : Ref (OrdMap Unit),
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
     universeIfaceRequiredRef : Ref (OrdMap (List String)),
-    universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
+    universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     universeRegisteredIfacesRef : Ref (OrdMap Unit),
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecords : Ref (List (String, RecordInfo)),
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (String, List Kind)),
+    universeIfaceParamKinds : Ref (List (String, List Kind)),  -- #822: the interface half of the kind universe (see registerIfaceParamKinds)
     universeAliasTable : Ref (List (String, (List String, Ty))),
     universeDataEnv : Ref TcEnv,
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
@@ -2306,7 +2453,7 @@ data CrossRun = CrossRun {
     coreSchemeObligationsRef : Ref (OrdMap (List (String, List Int))),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
   }
 
--- Construct all 22 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct all 23 field-Refs fresh (each reproduces its former top-level ref's initial).
 -- ⚠️ `env` is the initial TcEnv (always `initialEnv`) and is a PARAMETER rather than a
 -- direct `initialEnv` reference on purpose — do NOT "simplify" it back to a `Unit` arg.
 -- `crossRun` below is a nullary top-level binding, i.e. a wasm value GLOBAL eagerly
@@ -2352,6 +2499,7 @@ freshCrossRun env = CrossRun {
   universeRecordByName = Ref omEmpty,
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
+  universeIfaceParamKinds = Ref [],
   universeAliasTable = Ref [],
   universeDataEnv = Ref env,
   universeDataDecls = Ref [],
@@ -2371,8 +2519,8 @@ freshCrossRun env = CrossRun {
 crossRun : Ref CrossRun
 crossRun = Ref (freshCrossRun initialEnv)
 
--- ── the ONE lifecycle owner for the 22 cross-module accumulators (#143/#144, #154) ──
--- These 22 deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
+-- ── the ONE lifecycle owner for the 23 cross-module accumulators (#143/#144, #154) ──
+-- These 23 deliberately SURVIVE the per-module `resetState` (so dict arities/ifaces and
 -- the universe/data/impl accumulators cross module boundaries within one graph — see the
 -- declaration comments above), but they must NOT survive a whole multi-module RUN: a
 -- long-lived process (LSP, playground, snapshot runner) drives the analyze/elaborate path
@@ -2876,7 +3024,7 @@ data PerRun = PerRun {
     pendingBinopSites : Ref (List PendingEntry),
     pendingUnopSites : Ref (List PendingEntry),
     pendingArithSites : Ref (List (Ref Route, Mono)),
-    methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
+    methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     registeredIfacesRef : Ref (OrdMap Unit),
     implObls : Windowed (String, List String, Ty, Mono, Option Loc),  -- #841: pendingImplObligations/N, ported onto Windowed
     numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
@@ -2919,8 +3067,11 @@ data PerRun = PerRun {
     typeErrors : Ref (List TcDiag),
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
-    pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- #866: one entry per LOCAL binding whose generalization dictForwardedIds
-  }  -- declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
+    ifaceParamKindsRef : Ref (List (String, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
+    pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- sibling for an ABSTRACT head.  See registerIfaceParamKinds; read by ONE seam
+  }  -- (checkGradedImplTys, a diagnostic) — the elaborators carry their scope instead.  -- declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
+-- #866: one entry per LOCAL binding whose generalization dictForwardedIds
+
 -- dict it forwards, the binding's own loc).  Read ONLY by pinnedLocalExplain,
 -- to turn the downstream `Type mismatch` such a pin causes into a diagnostic
 -- that points at the BINDING and says why.  The tyvar is stored as a Mono, not
@@ -2928,7 +3079,7 @@ data PerRun = PerRun {
 -- on the (hot, allocation-sensitive) unify path.  Per-module by construction:
 -- freshPerRun re-mints it, so a stale entry cannot label a later module.
 
--- Construct all 61 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct all 63 field-Refs fresh (each reproduces its former top-level ref's initial).
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
@@ -2992,6 +3143,7 @@ freshPerRun _ = PerRun {
   typeErrors = Ref [],
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
+  ifaceParamKindsRef = Ref [],
   pinnedLocals = Ref [],
 }
 
@@ -3716,9 +3868,16 @@ sigToScheme ty = fst (sigToSchemeTvs ty)
 -- SAME quantified ids the returned scheme carries, so a call-site instantiation's
 -- subst maps them.
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
-sigToSchemeTvs ty =
-  let tvs = freshTvMap (removeAllS (rowArgNames ty) (tyVarNamesWithConstraints ty))
-  let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
+sigToSchemeTvs ty = sigToSchemeTvsIn [] ty
+
+-- #822: the graded-scope-carrying form.  An INTERFACE METHOD signature is built with
+-- its interface's declGradedScope so an abstract head `f e a` gets its Row slot; every
+-- other signature passes `[]` and is elaborated exactly as before.
+sigToSchemeTvsIn : List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
+sigToSchemeTvsIn scope ty =
+  let rows = rowArgNamesIn scope ty
+  let tvs = freshTvMap (removeAllS rows (tyVarNamesWithConstraints ty))
+  let etbl = freshEffMap (dedup (effTailNames ty ++ rows))
   (
     Forall (map monoTyvarId (map snd tvs)) (map effvarIdOf etbl) (fromAstTypeE etbl tvs ty),
     tvs,
@@ -3801,6 +3960,9 @@ fromAstTypeE etbl tvs (TyCon n _) = match lookupAssoc n perRun.value.aliasTableR
 fromAstTypeE etbl tvs (TyVar n) = fromOption (TCon n) (lookupAssoc n tvs)
 fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon n _, args) => fromAstTypeApp etbl tvs n args
+  -- #822: an ABSTRACT head with known kinds — an interface typaram of graded kind
+  -- (`f e a`, `f : Row -> Type -> Type`).  Anything else stays opaque.
+  (TyVar h, args) => fromAstTypeVarApp etbl tvs h args a b
   _ => TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
 fromAstTypeE etbl tvs (TyFun a b) =
   TFun
@@ -3875,6 +4037,76 @@ fromAstTypeApp etbl tvs n args = match lookupAssoc n perRun.value.aliasTableRef.
       foldAppKinds etbl tvs (TCon n) kinds args
     _ => appFallback etbl tvs n args
 
+-- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
+-- the SAME Mono shape a row-indexed data head does (`Async e b` =
+-- `TApp (TApp (TCon Async) (TEff row)) b`), which is exactly what lets the instance
+-- head unify with the method's abstract one.  The head itself still elaborates as an
+-- ordinary tyvar: the grade rides the type INDEX, never the dictionary
+-- (EFFECTS-SEMANTICS §6 "Erasure and dispatch are untouched").
+--
+-- ⚠️ This reads the CALLER'S OWN CLASSIFICATION out of [etbl]/[tvs] rather than
+-- re-deriving it from a kind table, and that is the point.  Every seam builds the
+-- pair as `etbl = freshEffMap (effTailNames ty ++ rowArgNamesIn scope ty)` and
+-- `tvs = freshTvMap (tyVarNames ty MINUS rowArgNamesIn scope ty)`, so "seeded into
+-- etbl AND withheld from tvs" is precisely "this seam called it a row" — the two
+-- cannot disagree, and there is no name-keyed global to leak.
+--
+-- ⚠️ It fires at seams with NO graded scope, and that is CORRECT — an earlier version
+-- of this comment claimed the opposite ("an unscoped seam withholds nothing, so this
+-- arm never fires there"), which was simply false.  A KROW DATA slot withholds too:
+-- `rowArgNamesIn` reports the `e` of `D e f` from `dataParamKindsRef` with no interface
+-- in the file at all, and `registerVariants`' payload seam withholds by construction
+-- (`tvs = ktypeTvs` is KType-only, `etbl = krowEtbl` is KRow-only).  So in
+-- `data D e f = MkD (Unit -> <e> Unit) (f e Int)`, the `e` of the abstract-headed
+-- `f e Int` reaches this arm unscoped.
+-- The result is a FIX, not a leak: pre-#822 that `e` was withheld from tvs and then
+-- elaborated by `fromAstTypeE (TyVar n)`'s `fromOption (TCon n)` fallback into a
+-- FABRICATED RIGID `TCon "e"` — `getInner : D e f -> f e Int` inferred as
+-- `D a b -> b e Int`, an opaque constant no caller can ever satisfy.  It now infers
+-- `D a b -> b a Int`.  Pinned by typecheck_error_fixtures/graded_krow_data_slot_abstract_head.mdk.
+fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
+fromAstTypeVarApp etbl tvs h args a b
+  | anyRowSlotArg etbl tvs args =
+    foldRowSlotArgs etbl tvs (fromAstTypeE etbl tvs (TyVar h)) args
+  | otherwise = TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
+
+-- A bare NAME is a row slot arg iff the caller seeded it into [etbl] and deliberately
+-- kept it out of [tvs].
+isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
+isRowSlotArg etbl tvs (TyVar n) = isSome (lookupAssoc n etbl)
+  && isNone (lookupAssoc n tvs)
+-- A WRITTEN row (#997) is a row, full stop — no name test, and in particular no `Some n`
+-- test.  `<Stdout | e>` and `<>` are the same construct with and without a tail, and a
+-- `TyRow` is only ever legal in a row-kinded position anyway (that is what
+-- `fromAstTypeE`'s TyRow clause exists to say).
+--
+-- ⚠️ Requiring an open tail here was an S1: it made the SPEC'S OWN `gpure : a -> f <> a`
+-- (EFFECTS-SEMANTICS §6, one of the four canonical graded signatures) unspellable — the
+-- closed row fell to the opaque fallback and drew `T-ROW-KIND-MISMATCH`, a message
+-- asserting the slot "isn't row-kinded" when slot 0 of `f` had just been INFERRED KRow
+-- from a sibling method.  The same `<>` on a concrete head (`Async <> a`) was accepted,
+-- so the two halves of the feature disagreed on one spelling with the abstract half
+-- misdiagnosing why.  #823 cannot add the graded core interfaces without this.
+isRowSlotArg _ _ (TyRow _ _ _) = True
+isRowSlotArg _ _ _ = False
+
+-- monomorphic and short-circuiting on purpose (compiler/AGENTS.md): this runs on
+-- every var-headed type-application node the elaborator meets.
+anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
+anyRowSlotArg _ _ [] = False
+anyRowSlotArg etbl tvs (t::rest) = isRowSlotArg etbl tvs t
+  || anyRowSlotArg etbl tvs rest
+
+foldRowSlotArgs : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
+foldRowSlotArgs _ _ acc [] = acc
+foldRowSlotArgs etbl tvs acc (arg::rest) =
+  foldRowSlotArgs etbl tvs (TApp acc (rowSlotArgMono etbl tvs arg)) rest
+
+rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
+rowSlotArgMono etbl tvs arg
+  | isRowSlotArg etbl tvs arg = TEff (rowArgOf etbl arg)
+  | otherwise = fromAstTypeE etbl tvs arg
+
 -- refold a kinded type-app spine: a KType arg recurses, a KRow arg becomes a
 -- TEff row (resolved through the shared etbl, so it aliases the field/sig tail).
 foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
@@ -3909,20 +4141,37 @@ rowArgOf _ _ = pureRow
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
 -- into an etbl with shared effvars before elaborating).  Walks the whole type.
+-- The unscoped entry point: a type that is NOT an interface method signature has no
+-- graded head, so only the DATA half (dataParamKindsRef) can contribute.  Every
+-- general elaborator seam calls this one.
 rowArgNames : Ty -> List String
-rowArgNames (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon n _, args) => rowArgNamesApp n args (rowArgNames a ++ rowArgNames b)
-  _ => rowArgNames a ++ rowArgNames b
-rowArgNames (TyFun a b) = rowArgNames a ++ rowArgNames b
-rowArgNames (TyTuple ts) = flatMap rowArgNames ts
-rowArgNames (TyEffect _ _ t) = rowArgNames t
-rowArgNames (TyConstrained _ t) = rowArgNames t
-rowArgNames _ = []
+rowArgNames ty = rowArgNamesIn [] ty
 
-rowArgNamesApp : String -> List Ty -> List String -> List String
-rowArgNamesApp n args fallback = match lookupAssoc n perRun.value.dataParamKindsRef.value
+-- [scope] is the graded typaram map of the interface whose method signature this
+-- type IS (declGradedScope); `[]` everywhere else.  It is the ONLY channel by which an
+-- abstract head can be row-kinded, which is what confines #822 to method signatures.
+rowArgNamesIn : List (String, List Kind) -> Ty -> List String
+rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon n _, args) => rowArgNamesApp scope n args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
+  -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
+  (TyVar h, args) => rowArgNamesVarApp scope h args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
+  _ => rowArgNamesIn scope a ++ rowArgNamesIn scope b
+rowArgNamesIn scope (TyFun a b) = rowArgNamesIn scope a ++ rowArgNamesIn scope b
+rowArgNamesIn scope (TyTuple ts) = flatMap (rowArgNamesIn scope) ts
+rowArgNamesIn scope (TyEffect _ _ t) = rowArgNamesIn scope t
+rowArgNamesIn scope (TyConstrained _ t) = rowArgNamesIn scope t
+rowArgNamesIn _ _ = []
+
+rowArgNamesApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
+rowArgNamesApp scope n args fallback = match lookupAssoc n perRun.value.dataParamKindsRef.value
   Some kinds if listLen kinds == listLen args => krowArgVarNames kinds args
-    ++ flatMap rowArgNames args
+    ++ flatMap (rowArgNamesIn scope) args
+  _ => fallback
+
+rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
+rowArgNamesVarApp scope h args fallback = match lookupAssoc h scope
+  Some kinds if listLen kinds == listLen args => krowArgVarNames kinds args
+    ++ flatMap (rowArgNamesIn scope) args
   _ => fallback
 
 krowArgVarNames : List Kind -> List Ty -> List String
@@ -5798,7 +6047,7 @@ recordImplObligation x mono
     mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
-    Some (iface, typarams, mty) =>
+    Some (iface, typarams, mty, _) =>
       let _ = pushPendingObl (iface, typarams, mty, mono, currentLoc.value)
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
@@ -6143,7 +6392,7 @@ isShadowStandalone name = contains name driverState.value.standaloneValuesRef.va
 -- this predicate, and always did.
 singleTyparamIfaceMethod : String -> Bool
 singleTyparamIfaceMethod name = match omLookup name perRun.value.methodIfaceParamsRef.value
-  Some (_, typarams, _) => listLen typarams == 1
+  Some (_, typarams, _, _) => listLen typarams == 1
   None => False
 
 -- True iff [name] is a method of SOME visible interface, whatever its typaram arity --
@@ -6508,7 +6757,7 @@ definerReceiverDispatches name xt
 definerReceiverIsDictVar : String -> Mono -> Bool
 definerReceiverIsDictVar name xt = match normalize xt
   TVar cell => match omLookup name perRun.value.methodIfaceParamsRef.value
-    Some (mIface, _, _) => dictVarSatisfiesIface mIface (tyvarId cell) perRun.value.groupConstraintMonosRef.value
+    Some (mIface, _, _, _) => dictVarSatisfiesIface mIface (tyvarId cell) perRun.value.groupConstraintMonosRef.value
     None => False
   _ => False
 
@@ -6837,7 +7086,13 @@ inferDefinerShadowVarApp env name f x =
 -- not pin it) when the method type is unavailable.
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 shadowVarHeadMethodScheme env name f = match omLookup name perRun.value.methodIfaceParamsRef.value
-  Some (_, _, ty) => instantiate (sigToScheme ty)
+  -- #822: this elaborates an interface METHOD type, so it must use the stored graded
+  -- scope.  Unscoped (`sigToScheme ty`) a graded method's index came out as a plain
+  -- tyvar here while its real scheme has a row there, and `unify` binds the two without
+  -- complaint — a silent divergence between two elaborations of the SAME signature.
+  -- Co-locating the scope with `ty` is what makes this a one-token fix instead of a
+  -- second lookup that could disagree.
+  Some (_, _, ty, scope) => instantiate (fst (sigToSchemeTvsIn scope ty))
   None =>
     -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
     let saved = toggles.value.shadowHeadCtxRef.value
@@ -7813,6 +8068,14 @@ registerData env (DTypeAlias _ name params rhs) =
   env
 registerData env (DNewtype _ name params con fty _) =
   registerVariants env name params [Variant con (ConPos [fty])]
+-- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
+-- unlike a data type's they are inferred from the METHOD SIGNATURES.  Registered here
+-- rather than at interface-method registration because every consumer (rowArgNames /
+-- fromAstTypeE / the impl-head kind check) must see the table BEFORE the first
+-- signature is elaborated, which is exactly registerAllData's slot.
+registerData env (DInterface { name, typarams, methods, ... }) =
+  let _ = registerIfaceParamKinds name typarams methods
+  env
 registerData env _ = env
 
 -- ── record metadata registration & instantiation ──────────────────────────
@@ -7905,6 +8168,145 @@ payloadAstTypes (ConNamed fields _) = map fieldTyOf fields
 
 fieldTyOf : Field -> Ty
 fieldTyOf (Field _ ty) = ty
+
+-- ── #822: interface type-parameter kinds (graded interfaces) ──────────────
+-- EFFECTS-SEMANTICS §6 "Graded interfaces": an interface may abstract over a
+-- ROW-INDEXED constructor (`f : Row -> Type -> Type`), so that its methods can
+-- carry the grade in the type index (`gandThen : f e a -> (a -> <e> f e b) ->
+-- f e b`, the graded-lite degenerate the spec admits today).  Data types already
+-- have per-parameter kinds (dataParamKindsRef, inferred from a variant field's
+-- effect tail by inferParamKinds); interfaces had NO kind source at all, so an
+-- abstract head `f e a` elaborated to an opaque `TApp` in which `e` was a plain
+-- TYPE variable — which is why the graded-lite signature was rejected outright
+-- (T-EFFECT-ARG-UNCOVERED: `f e b` contributed no return-position occurrence).
+--
+-- Inference mirrors inferParamKinds one level up: slot i of typaram `p` is KRow
+-- iff SOME application `p … a_i …` in a method signature puts a bare NAME at slot
+-- i that the SAME signature also uses in an effect-tail position (`<e>`).  The
+-- per-interface union matters: `gpure : a -> f e a` alone would infer slot 0 as
+-- KType, and disagreeing slot kinds across two methods of one interface would
+-- elaborate the same index to a row in one and a tyvar in the other.
+registerIfaceParamKinds : String -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKinds iface typarams methods =
+  registerIfaceParamKindsGo iface 0 typarams methods
+
+registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKindsGo _ _ [] _ = ()
+registerIfaceParamKindsGo iface i (p::ps) methods =
+  -- ⚠️ EVERY slot is recorded, graded or not, and the non-graded ones are the whole
+  -- point (S1, review round 2).  Recording only graded slots looks like a tidy
+  -- minimisation and is a false-reject bug: `ifaceParamKindsRef` is copied into the
+  -- data universe, which is NOT import-scoped, so an ORDINARY interface that merely
+  -- shares a name with a graded one anywhere in the graph found the graded entry and
+  -- had its impl rejected with T-IMPL-KIND-MISMATCH — order-dependently, since
+  -- swapping two unrelated import lines changed which module registered first.
+  -- A module's own decls are registered as a FRONT overlay during its own pass and
+  -- `lookupAssoc` is first-match, so a local entry shadows the universe's — but only
+  -- if there IS one.  An all-KType entry is exactly that shadow; `checkGradedImplTys`
+  -- gates on `anyKRow`, so it costs nothing but the row.
+  let _ = insertIfaceParamKinds iface i p (ifaceParamKindsOf p methods)
+  registerIfaceParamKindsGo iface (i + 1) ps methods
+
+anyKRow : List Kind -> Bool
+anyKRow [] = False
+anyKRow (KRow::_) = True
+anyKRow (_::rest) = anyKRow rest
+
+kindsEq : List Kind -> List Kind -> Bool
+kindsEq [] [] = True
+kindsEq (KType::a) (KType::b) = kindsEq a b
+kindsEq (KRow::a) (KRow::b) = kindsEq a b
+kindsEq _ _ = False
+
+-- ONE key shape: `<iface>@<slot>`.
+-- ⚠️ An earlier cut of #822 ALSO stored the bare typaram NAME, so that the
+-- elaboration seams — which see a `TyVar h` spine head carrying no interface
+-- context — could look it up.  That was an S0: `rowArgNames`/`fromAstTypeE` are the
+-- GENERAL signature elaborators (sigToSchemeTvs, astTypeFreshTbl), not an
+-- interface-method-only seam, so a program-global `f ↦ [KRow, KType]` was adopted by
+-- every unrelated `f a b` in the program — a plain top-level signature
+-- (`bad : f Int a -> f String a` type-checked, both arguments erased to `<>` by
+-- rowArgOf's catch-all), every OTHER module through the data universe (which is not
+-- import-scoped), and the prelude itself (arity-1 `[KRow]` collides with `Mappable`/
+-- `Applicative`/`Thenable`/`Foldable`, turning one clean diagnostic into 45
+-- mislocated ones).  Poisoning could not save it: an interface-local type-parameter
+-- name is simply not a program-global key.  The scope now travels as an explicit
+-- argument instead — see declGradedScope and rowArgNamesIn.
+insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
+insertIfaceParamKinds iface i _ kinds =
+  setRef
+    perRun.value.ifaceParamKindsRef
+    ((ifaceSlotKey iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
+
+ifaceSlotKey : String -> Int -> String
+ifaceSlotKey iface i = "\{iface}@\{intToString i}"
+
+-- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
+-- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
+-- built.  No name, no table, no lookup — structurally unforgeable.
+declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
+declGradedScope [] _ = []
+declGradedScope (p::ps) methods =
+  declGradedScopeAdd
+    p
+    (ifaceParamKindsOf p methods)
+    (declGradedScope ps methods)
+
+declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
+declGradedScopeAdd p kinds rest
+  | anyKRow kinds = (p, kinds)::rest
+  | otherwise = rest
+
+-- Slot kinds of interface typaram [p].  Arity is the FIRST application's; an
+-- application at any other arity is ignored (every lookup site guards on the arity
+-- anyway, so a mixed-arity head simply stays opaque).
+ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
+ifaceParamKindsOf p methods = match flatMap (ifaceMethodVarApps p) methods
+  [] => []
+  apps@((args0, _)::_) => ifaceSlotKinds (listLen args0) 0 (filterList (a => listLen (fst a) == listLen args0) apps)
+
+-- every application of [p] in one method signature, paired with that signature's
+-- effect-tail names (the "same signature" side of the KRow rule).
+ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
+ifaceMethodVarApps p (IfaceMethod _ mty _) =
+  let tails = dedup (effTailNames mty)
+  map (args => (args, tails)) (varHeadApps p mty)
+
+ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
+ifaceSlotKinds arity i apps
+  | i >= arity = []
+  | otherwise = (if anySlotIsRow i apps then KRow else KType) :: ifaceSlotKinds arity (i + 1) apps
+
+anySlotIsRow : Int -> List (List Ty, List String) -> Bool
+anySlotIsRow _ [] = False
+anySlotIsRow i ((args, tails)::rest) = match nthTy i args
+  Some (TyVar n) => contains n tails || anySlotIsRow i rest
+  _ => anySlotIsRow i rest
+
+nthTy : Int -> List Ty -> Option Ty
+nthTy _ [] = None
+nthTy i (t::rest)
+  | i <= 0 = Some t
+  | otherwise = nthTy (i - 1) rest
+
+-- every application whose SPINE HEAD is the type VARIABLE [p], as its argument
+-- list.  The head of a spine is an atom (TyCon/TyVar), so recursing through the
+-- arguments alone covers the whole tree.
+varHeadApps : String -> Ty -> List (List Ty)
+varHeadApps p (TyApp a b) =
+  let sp = tyAppSpine (TyApp a b)
+  varHeadHere p (fst sp) (snd sp) ++ flatMap (varHeadApps p) (snd sp)
+varHeadApps p (TyFun a b) = varHeadApps p a ++ varHeadApps p b
+varHeadApps p (TyTuple ts) = flatMap (varHeadApps p) ts
+varHeadApps p (TyEffect _ _ t) = varHeadApps p t
+varHeadApps p (TyConstrained _ t) = varHeadApps p t
+varHeadApps _ _ = []
+
+varHeadHere : String -> Ty -> List Ty -> List (List Ty)
+varHeadHere p (TyVar h) args
+  | h == p = [args]
+  | otherwise = []
+varHeadHere _ _ _ = []
 
 -- one representation per param shared across all ctors: KType → fresh TVar,
 -- KRow → a TEff wrapping a fresh effvar (the row the param stands for).
@@ -9576,7 +9978,7 @@ resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono e
 ifaceParamMonos : String -> Mono -> Option (List Mono)
 ifaceParamMonos name fullMono = match omLookup name perRun.value.methodIfaceParamsRef.value
   None => None
-  Some (_, typarams, mty) =>
+  Some (_, typarams, mty, _) =>
     map (subst => map (paramMonoOf subst) typarams) (matchTyMono mty fullMono)
 
 paramMonoOf : List (String, Mono) -> String -> Mono
@@ -10417,16 +10819,21 @@ insertIfaceRequired (_::rest) m = insertIfaceRequired rest m
 -- typarams, mty)` into the params map + `omInsert iface ()` into the registered-iface
 -- set), updating the two passed maps in lockstep instead of the global refs, so the copy
 -- in checkBodyImpl's Module arm lands the identical maps the per-module rebuild produced.
-insertMethodIfaceParams : List Decl -> (OrdMap (String, List String, Ty), OrdMap Unit) -> (OrdMap (String, List String, Ty), OrdMap Unit)
+insertMethodIfaceParams : List Decl -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit)
 insertMethodIfaceParams [] acc = acc
 insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
   insertMethodIfaceParams rest (insertMethodIfaceParams [d] acc)
-insertMethodIfaceParams ((DInterface { name, typarams, methods, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc name typarams methods acc)
+-- #822: the graded scope is computed ONCE per declaration — the union over ALL of this
+-- interface's methods — and threaded in, never re-derived per method.
+insertMethodIfaceParams ((DInterface { name, typarams, methods, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc name typarams (declGradedScope typarams methods) methods acc)
 insertMethodIfaceParams (_::rest) acc = insertMethodIfaceParams rest acc
 
-insertIfaceMethodsAcc : String -> List String -> List IfaceMethod -> (OrdMap (String, List String, Ty), OrdMap Unit) -> (OrdMap (String, List String, Ty), OrdMap Unit)
-insertIfaceMethodsAcc _ _ [] acc = acc
-insertIfaceMethodsAcc iface typarams ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams rest (omInsert mname (iface, typarams, mty) mp, omInsert iface () ifs)
+insertIfaceMethodsAcc : String -> List String -> List (String, List Kind) -> List IfaceMethod -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit)
+insertIfaceMethodsAcc _ _ _ [] acc = acc
+-- #822: the graded scope is stored ALONGSIDE (typarams, mty) rather than in a table of
+-- its own, so the two are ONE resolution result and cannot be resolved differently —
+-- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
+insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp, omInsert iface () ifs)
 
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
@@ -12407,7 +12814,7 @@ checkBodyImpl seed mode prog0 =
       setRef perRun.value.registeredIfacesRef crossRun.value.universeRegisteredIfacesRef.value
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
-  -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the six
+  -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the seven
   -- persistent DATA-universe accumulators (prior modules' public data + ctor env, each minted
   -- exactly once) into the resetState-wiped working refs, then register ONLY this module's
   -- `prog0` as a transient FRONT overlay.  Ordering is byte-identical: the persistent list is
@@ -12431,6 +12838,11 @@ checkBodyImpl seed mode prog0 =
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
   let _ = checkUndeterminedRetEffVars prog
+  -- #822: instance-head kind check for graded interfaces.  Same placement rationale
+  -- as the line above — it reads BOTH kind tables (ifaceParamKindsRef for the
+  -- interface slot, dataParamKindsRef for the head constructor), which `dataEnv`
+  -- above has just populated.
+  let _ = checkGradedImplHeads prog
   let _ = rejectCyclicAliases ()
   let globalS = ifaceMethodSchemes prog ++ externSchemes prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
@@ -12836,15 +13248,19 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
 inferOneIfaceDefaults env (DInterface { name, typarams, methods, ... }) =
-  let ifaceSchemes = methodSchemesPure methods
-  inferDefaultMethods (extendVars env ifaceSchemes) name typarams methods
+  -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
+  -- threaded down so the default bodies see the same Row slots the schemes were built
+  -- with.  Computed ONCE per interface rather than per method.
+  let dscope = declGradedScope typarams methods
+  let ifaceSchemes = methodSchemesPure dscope methods
+  inferDefaultMethods (extendVars env ifaceSchemes) name dscope typarams methods
 inferOneIfaceDefaults _ _ = ()
 
-inferDefaultMethods : TcEnv -> String -> List String -> List IfaceMethod -> Unit
-inferDefaultMethods _ _ _ [] = ()
-inferDefaultMethods env iface typarams (m::rest) =
-  let _ = inferDefaultMethod env iface typarams m
-  inferDefaultMethods env iface typarams rest
+inferDefaultMethods : TcEnv -> String -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
+inferDefaultMethods _ _ _ _ [] = ()
+inferDefaultMethods env iface dscope typarams (m::rest) =
+  let _ = inferDefaultMethod env iface dscope typarams m
+  inferDefaultMethods env iface dscope typarams rest
 
 -- C8b: type-check ALL interface default bodies, unconditionally.
 --
@@ -12866,9 +13282,12 @@ inferDefaultMethods env iface typarams (m::rest) =
 --
 -- Double-error guard: snapshot typeErrors length before body inference; skip the
 -- outer unify if new errors were added (matches the oracle's single-error raise).
-inferDefaultMethod : TcEnv -> String -> List String -> IfaceMethod -> Unit
-inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
-  let st = sigToSchemeTvs mty
+inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
+inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
+  -- #822: [dscope] is the same declaration-derived graded scope the method's own
+  -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
+  -- body of a graded method must see its Row slots as rows, not as tyvars.
+  let st = sigToSchemeTvsIn dscope mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
   let _ = setRef perRun.value.currentFn ""
   let _ = setRef perRun.value.inRigidityBodyRef True
@@ -12893,13 +13312,13 @@ inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefaul
   -- after the body unifies clean, aliasing [expected2] onto the solved
   -- [actualTy] lets the same post-unify rigidity used on the impl path read the
   -- solution through [effMap2] (contortion #3; 2c retires this rebuild).
-  let effMap2 = freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))
-  let expected2 = fromAstTypeE effMap2 (freshTvMap (removeAllS (rowArgNames mty) (dedup (tyVarNames mty)))) mty
+  let effMap2 = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn dscope mty))
+  let expected2 = fromAstTypeE effMap2 (freshTvMap (removeAllS (rowArgNamesIn dscope mty) (dedup (tyVarNames mty)))) mty
   let errsB0 = listLen perRun.value.typeErrors.value
   let actualTy = inferDefaultMethodBody mname subject defLoc env (fst inst) pats body
   let _ = if listLen perRun.value.typeErrors.value == errsB0 then
     let _ = unify expected2 actualTy
-    checkImplEffVarRigidity subject mty effMap2 False defLoc
+    checkImplEffVarRigidity subject dscope mty effMap2 False defLoc
   else
     ()
   let addedObls = wWindow perRun.value.implObls oblN0
@@ -12941,7 +13360,7 @@ inferDefaultMethod env iface typarams (IfaceMethod mname mty (Some (MethodDefaul
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
   registerMethodDictSlots mname 0 ids (snd inst)
-inferDefaultMethod _ _ _ _ = ()
+inferDefaultMethod _ _ _ _ _ = ()
 
 -- Infer a default method body against [expectedTy], suppressing the outer
 -- unify if the body itself already pushed a type error (prevents duplicates
@@ -13841,7 +14260,7 @@ inferImplMethods env allProg iface implTvMap headMonos (m::rest) =
 inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
 inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg iface mname
   None => ()
-  Some (ifaceParams, mty) =>
+  Some (ifaceParams, mty, gscope) =>
     -- currentFn = the method name (NOT "") so arg-/return-position sites in THIS
     -- body record `encl = mname`.  registerImplRequires keys every method of an impl
     -- under the SAME impl tyvar id (`impl Ord (List a)` registers `a` once per
@@ -13854,6 +14273,12 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let _ = setRef perRun.value.currentFn mname
     let _ = setRef perRun.value.currentImplBody True
     let _ = setRef perRun.value.inRigidityBodyRef True
+    -- #822: [gscope] arrives FROM `ifaceMethodTyResolved`, in the same result as [mty] —
+    -- deliberately NOT a separate lookup.  The Row slots must elaborate here exactly as
+    -- they did when this method's own scheme was built, and the only way to guarantee
+    -- that is for the scope and the type to be one resolution.  (Getting it wrong is
+    -- loud, not silent: `e` would stay a plain tyvar that the body's real `TEff` then
+    -- binds, which the W3 survivor check below reports as T-IMPL-TOO-SPECIFIC.)
     -- #837: schemeObligationsRef snapshot/restore window RETIRED — (name, binding-id)
     -- keying makes a where-helper name collision structurally impossible.
     -- #518: window this body's newly-added obligations, exactly as processLetGroup /
@@ -13865,7 +14290,21 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- which hides it) so the impl method's OWN method-level constraint vars
     -- (`Thenable m => …`) can be registered into activeDictVars below.
     let baseMap = zipL ifaceParams headMonos
-    let extraMap = freshTvMap (removeAllS ifaceParams (dedup (tyVarNames mty)))
+    -- #822: subtract rowArgNames too — the same split sigToSchemeTvs and
+    -- astTypeFreshTbl already make, and this was the one seam of the three that did
+    -- not.  A name sitting in a KRow type-app slot (`f e a` under a graded interface)
+    -- is an EFFECT variable: it belongs to [effMap] below, and minting a TYPE var for
+    -- it as well puts an entry in [extraMap] that [expected] never mentions.
+    -- ⚠️ HONEST SCOPE: this is a consistency fix, NOT a fix for an observed bug.  The
+    -- counterfactual was built and run (#822 branch): without this subtraction the
+    -- graded fixtures still check, run and build identically, because the stray entry
+    -- survives unification as an unbound, distinct var and so passes
+    -- checkMethodRigidityCore's pinned/dup/head-disjointness tests vacuously.  It is
+    -- kept because a survivor set that contains a variable the method type does not
+    -- mention is a false-positive waiting for the first rule that quantifies over ALL
+    -- survivors — and because one of three parallel seams disagreeing is this file's
+    -- documented recurring bug shape.
+    let extraMap = freshTvMap (removeAllS ifaceParams (removeAllS (rowArgNamesIn gscope mty) (dedup (tyVarNames mty))))
     -- #782/#784: build the method type's effect table the way sigToSchemeTvs does,
     -- so a free return-position effect var (`speak : a -> <e> String`) becomes a
     -- FRESH OPEN effvar that the impl body's actual effect instantiates (effect
@@ -13875,7 +14314,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- (`<Stdout>`) or PURE (`<>`) declared row still yields a closed row, so a genuine
     -- impl-body effect leak past a non-var bound is still enforced (#782).  The free-var
     -- laundering at the CALL site remains #784's concern.
-    let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNames mty))
+    let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
     let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
     let actual = inferClauses env [(pats, body)]
     let launderLoc = orElseLoc (implBodyLoc body) (firstTyConLoc mty)
@@ -13942,7 +14381,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the survivor check never read, and `check` stayed green on a program whose
     -- built binary printed garbage.
     let addedCallObls = callOblsWindow callN0
-    let _ = checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged launderLoc
+    let _ = checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -14154,7 +14593,7 @@ effectLaunderMsg iface mname escaping = "Effect laundering in impl of '\{mname}'
 --                    preserving today's values exactly (impl: the real threaded flag;
 --                    default's own separate call: False) — 2a does NOT touch the
 --                    double-report.
-checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool) -> Option Loc -> Unit
+checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind)) -> Option Loc -> Unit
 checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedObls addedCallObls effInside loc =
   let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
   let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
@@ -14167,12 +14606,12 @@ checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedOb
   let _ = checkSurvivorObligations subject iface ownTyparams mty extraMap addedObls loc
   let _ = checkSurvivorCallObligations subject iface ownTyparams mty extraMap addedCallObls loc
   match effInside
-    Some (effMap, launderFlagged) =>
-      checkImplEffVarRigidity subject mty effMap launderFlagged loc
+    Some (effMap, launderFlagged, gscope) =>
+      checkImplEffVarRigidity subject gscope mty effMap launderFlagged loc
     None => ()
 
-checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Bool -> Option Loc -> Unit
-checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged)) loc
+checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
+checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope)) loc
 
 -- B1 (adversarial review): the GENERIC default-method path is the checking seam
 -- for a cross-module impl that inherits an interface default (fillImplDefaults
@@ -14349,9 +14788,9 @@ anyContainsI (x::xs) ys = containsI x ys || anyContainsI xs ys
 -- `Async e`.  Resolution is design-scoped (#817); until then this check
 -- preserves main's behavior for that channel exactly.  (The TYPE-var half has
 -- no such carve-out: a method type var may never alias an impl-head type var.)
-checkImplEffVarRigidity : String -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
-checkImplEffVarRigidity subject mty effMap launderFlagged loc =
-  let occs = effVarOccAtoms mty ++ map (n => (n, [])) (rowArgNames mty)
+checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
+checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
+  let occs = effVarOccAtoms mty ++ map (n => (n, [])) (rowArgNamesIn scope mty)
   let _ = if launderFlagged then
     ()
   else
@@ -14530,27 +14969,31 @@ removeAllS drop (x::xs)
 -- lookup whose stored iface != [iface] returns None; that only makes the check-path
 -- obligation pass SKIP that impl body (a missed reject, deferred to build — the pre-#760
 -- status quo), never a false reject, and never touches the emit path.
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty)
+-- #822: BOTH paths also return the interface's graded scope, so a caller cannot obtain
+-- the method type without the scope that elaborates it.  On the slow path it comes from
+-- the very declaration this scan selected (free — same traversal); on the fast path it
+-- comes out of the same table entry as `(typarams, mty)`.
+ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved allProg iface mname
   | useFastIfaceMethodTy.value = match omLookup mname perRun.value.methodIfaceParamsRef.value
-    Some (ifn, typarams, mty) =>
+    Some (ifn, typarams, mty, scope) =>
       if ifn == iface then
-        Some (typarams, mty)
+        Some (typarams, mty, scope)
       else
         None
     None => None
   | otherwise = ifaceMethodTy allProg iface mname
 
--- the (interface typarams, declared method type) of method [mname] in interface
--- [iface], searched across [allProg]'s interface decls
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty)
+-- the (interface typarams, declared method type, graded scope) of method [mname] in
+-- interface [iface], searched across [allProg]'s interface decls
+ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTy [] _ _ = None
 ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface mname
   Some r => Some r
   None => ifaceMethodTy rest iface mname
 ifaceMethodTy ((DInterface { name, typarams, methods, ... })::rest) iface mname
   | name == iface = match methodTyOf mname methods
-    Some ty => Some (typarams, ty)
+    Some ty => Some (typarams, ty, declGradedScope typarams methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
 ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
@@ -14682,7 +15125,7 @@ firstPredForEncl iface subject pfx ((eiface, esubject, ename)::rest)
 -- from methodIfaceParamsRef → None → no predicate route, tyvar-keyed behaviour unchanged.
 ifaceOfMethodName : String -> Option String
 ifaceOfMethodName name = map
-  ((iface, _, _) => iface)
+  ((iface, _, _, _) => iface)
   (omLookup name perRun.value.methodIfaceParamsRef.value)
 
 registerEachActive : List Int -> String -> Unit
@@ -14715,8 +15158,8 @@ ifaceMethodSchemes [] = []
 ifaceMethodSchemes (d::rest) = declIfaceMethods d ++ ifaceMethodSchemes rest
 
 declIfaceMethods : Decl -> List (String, Scheme)
-declIfaceMethods (DInterface { typarams, methods, ... }) =
-  methodSchemes typarams methods
+declIfaceMethods (DInterface { name, typarams, methods, ... }) =
+  methodSchemes (declGradedScope typarams methods) typarams methods
 declIfaceMethods _ = []
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
@@ -14732,34 +15175,52 @@ registerMethodIfaceParamsAll (d::rest) =
 registerMethodIfaceParamsDecl : Decl -> Unit
 registerMethodIfaceParamsDecl (DAttrib _ d) = registerMethodIfaceParamsDecl d
 registerMethodIfaceParamsDecl (DInterface { name, typarams, methods, ... }) =
-  registerMethodIfaceParamsMethods name typarams methods
+  registerMethodIfaceParamsMethods
+    name
+    typarams
+    (declGradedScope typarams methods)
+    methods
 registerMethodIfaceParamsDecl _ = ()
 
-registerMethodIfaceParamsMethods : String -> List String -> List IfaceMethod -> Unit
-registerMethodIfaceParamsMethods _ _ [] = ()
-registerMethodIfaceParamsMethods iface typarams ((IfaceMethod mname mty _)::rest) =
-  let _ = setRef perRun.value.methodIfaceParamsRef (omInsert mname (iface, typarams, mty) perRun.value.methodIfaceParamsRef.value)
+-- #822: [scope] — this interface's graded typarams, computed ONCE from THIS declaration
+-- (declGradedScope, union over all its methods) and stored in the same entry as
+-- (typarams, mty).
+--
+-- ⚠️ That co-location is the whole point, and it is why #822 does NOT add a table of its
+-- own.  The scope's ONLY job is to elaborate the `mty` it accompanies, so the invariant
+-- that matters is not "the scope has a collision-proof key" — it is "the scope is never
+-- resolved differently from the mty it elaborates".  Keying it independently (by
+-- interface name, or by method name in a parallel map) is exactly what could break that.
+-- Storing them as one value makes disagreement unrepresentable.
+-- This entry is method-NAME-keyed last-write-wins, an exposure it already had and which
+-- `ifaceMethodTyResolved` already guards by comparing the stored iface; a graded scope
+-- inherits that guard rather than adding a second, differently-wrong lookup.  The
+-- underlying bare-name interface identity is #1047's territory, upstream of #822.
+registerMethodIfaceParamsMethods : String -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
+registerMethodIfaceParamsMethods _ _ _ [] = ()
+registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)::rest) =
+  let _ = setRef perRun.value.methodIfaceParamsRef (omInsert mname (iface, typarams, mty, scope) perRun.value.methodIfaceParamsRef.value)
   let _ = setRef perRun.value.registeredIfacesRef (omInsert iface () perRun.value.registeredIfacesRef.value)
-  registerMethodIfaceParamsMethods iface typarams rest
+  registerMethodIfaceParamsMethods iface typarams scope rest
 
 -- build each method's scheme AND register its method-level constraints (foldMap's
 -- `Monoid m`) into methodConstraintsRef, keyed by the scheme's own quantified ids
 -- (from the same tvs map), so a call-site instantiation can route the dict.
-methodSchemes : List String -> List IfaceMethod -> List (String, Scheme)
-methodSchemes _ [] = []
-methodSchemes typarams ((IfaceMethod mname mty _)::rest) =
-  let st = sigToSchemeTvs mty
+methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
+methodSchemes _ _ [] = []
+methodSchemes scope typarams ((IfaceMethod mname mty _)::rest) =
+  let st = sigToSchemeTvsIn scope mty
   let _ = registerMethodConstraints typarams mname mty (snd st) (schemeIds (fst st))
-  (mname, fst st) :: methodSchemes typarams rest
+  (mname, fst st) :: methodSchemes scope typarams rest
 
 -- like methodSchemes but WITHOUT the registerMethodConstraints side effect — for
 -- callers (inferOneIfaceDefaults) that only need the schemes to look up a method's
 -- own type and must not double-register methodConstraintsRef entries (those are
 -- registered once during ifaceMethodSchemes at env setup).
-methodSchemesPure : List IfaceMethod -> List (String, Scheme)
-methodSchemesPure [] = []
-methodSchemesPure ((IfaceMethod mname mty _)::rest) =
-  (mname, sigToScheme mty) :: methodSchemesPure rest
+methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
+methodSchemesPure _ [] = []
+methodSchemesPure scope ((IfaceMethod mname mty _)::rest) =
+  (mname, fst (sigToSchemeTvsIn scope mty)) :: methodSchemesPure scope rest
 
 -- the method-level-constraint slot ids of [mname]: one id per `=>` constraint over
 -- a non-interface-param tyvar, looked up in the scheme's tvs map.  Registered only
@@ -16355,9 +16816,9 @@ appendUniverseAccums prog =
       setRef crossRun.value.obUnivIfaceTagsRef t
 
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
--- `registerData` / `registerVariants` hardcode the five working table refs, so grow by
+-- `registerData` / `registerVariants` hardcode the six working table refs, so grow by
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
--- ctor env, and snapshotting all six results back.  Called at the END of checkBodyImpl's
+-- ctor env, and snapshotting all seven results back.  Called at the END of checkBodyImpl's
 -- Module arm, where the working table refs are DEAD (this module's inference is done and the
 -- next module's resetState wipes them), so the clobber is invisible.  Registers each public
 -- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
@@ -16365,7 +16826,7 @@ appendUniverseAccums prog =
 -- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
 -- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
 -- open-coded as a 5-way lockstep mirror at THREE sites (the Module arm of the data-env
--- setup + appendDataUniverse's load and its store-back).  Adding a sixth universe table
+-- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
 -- meant remembering all three — the "silently absent from the other side" shape.  It now
 -- has one body per direction, and the two are exact inverses of each other.
 -- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
@@ -16377,15 +16838,17 @@ loadDataUniverse _ =
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
   let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
   let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
+  let _ = setRef perRun.value.ifaceParamKindsRef crossRun.value.universeIfaceParamKinds.value
   setRef perRun.value.aliasTableRef crossRun.value.universeAliasTable.value
 
--- the exact inverse of loadDataUniverse (same five tables, same order).
+-- the exact inverse of loadDataUniverse (same six tables, same order).
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
   let _ = setRef crossRun.value.universeRecords perRun.value.recordsRef.value
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
   let _ = setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
+  let _ = setRef crossRun.value.universeIfaceParamKinds perRun.value.ifaceParamKindsRef.value
   setRef crossRun.value.universeAliasTable perRun.value.aliasTableRef.value
 
 appendDataUniverse : List Decl -> Unit
