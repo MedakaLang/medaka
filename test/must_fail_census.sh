@@ -172,7 +172,13 @@ h3=0
 if [ -f "$LEDGER" ]; then
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue ;; esac
-    n="${line%% *}"
+    # ANY whitespace, matching diff_compiler_must_fail.sh's split — keep these two in
+    # step. When this was `${line%% *}`, a TAB-separated entry fell into the `continue`
+    # below and was SILENTLY EXCLUDED from this half, so its exemption could outlive a
+    # CLOSED issue with nothing reporting it. The gate is the loud half and rejects a
+    # malformed line on the PR that adds it, so `continue` here is a belt-and-braces
+    # skip rather than a hole — but only while both parsers split the same way.
+    n="${line%%[[:space:]]*}"
     case "$n" in ''|*[!0-9]*) continue ;; esac
     state="$(gh issue view "$n" --json state -q .state 2>/dev/null)" || state=""
     if [ "$state" = "CLOSED" ]; then

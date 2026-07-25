@@ -1,0 +1,53 @@
+issue: 1079
+what: A DECL ATTRIBUTE above an `interface` makes the interface UNRESOLVABLE. Resolve drops
+what: the declaration underneath the `DAttrib` wrapper instead of unwrapping it, so every
+what: later reference — the `impl` head AND the call site — fails against an interface that
+what: is plainly declared three lines up. main.mdk is the minimal case: ONE file, no
+what: `export`, no importer, and the ONLY difference from control.mdk is the `@deprecated`
+what: line. Expected: exit 0, prints `woof` (an attribute is metadata; it must not change
+what: what the declaration MEANS). Actual: exit 1, `Unknown interface: Speak`.
+what: This is the EARLIEST layer of the DAttrib family: #1063 needs an `export` plus an
+what: importer, #1037 (CLOSED, fixed by #1058) was the impl-side case whose five new unwrap
+what: arms are UNREACHABLE for an attributed interface precisely because resolve drops it
+what: before lowering ever runs. Fix direction: unwrap `DAttrib` at interface registration,
+what: or reject the attribute AT THE ATTRIBUTE, in the file containing it, naming it.
+cmd: check-json main.mdk
+exit: 1
+diag-code: R-UNKNOWN-INTERFACE None:None-None:None
+why-diag-code: `diag-code:`, NOT `diag:` — the WORDING IS NOT THE DEFECT, the DROPPED
+why-diag-code: DECLARATION is. The message ("Unknown interface: Speak") is genuinely poor —
+why-diag-code: it names a CONSEQUENCE rather than the cause, which is half of why this is
+why-diag-code: filed S2 — but a reword alone must NOT drain this row: the interface would
+why-diag-code: still be dropped and the program still wrongly rejected. Only exit 0 drains it.
+why-diag-code: ⚠️ THE RANGE IS PART OF THE PIN AND IT IS `None:None-None:None` — an UNLOCATED
+why-diag-code: diagnostic. That is not a rendering bug: #789 (CLOSED) removed the fabricated
+why-diag-code: {0,0} range, so `range: null` is now the CORRECT rendering of a diagnostic that
+why-diag-code: carries no location, and `render_diags` maps it to None:None-None:None on purpose.
+why-diag-code: ⚠️ ONE UNRELATED CHANGE CAN MOVE THIS RANGE, so read this before draining:
+why-diag-code: `UnknownInterface String (Option Loc)` (compiler/frontend/resolve.mdk:118) CAN
+why-diag-code: carry a Loc, and the sites that raise it for this shape pass `None` (:1219,
+why-diag-code: :1234, :1243). Anyone LOCATING that diagnostic — a one-line ws:diagnostics
+why-diag-code: improvement, and the second half of this very issue asks for it — flips this
+why-diag-code: row RED with the SAME code and a REAL range. THAT IS NOT A FIX OF #1079.
+why-diag-code: If the actual line is `R-UNKNOWN-INTERFACE <a real range>`: update the range
+why-diag-code: here and KEEP THE ROW OPEN. Only `exit 0` means the interface is seen.
+control: check-json control.mdk
+why-control: control.mdk is main.mdk with the `@deprecated` line DELETED and nothing else
+why-control: changed — checks clean (exit 0) and runs to `woof`, i.e. the interface, its
+why-control: default method, the `impl`, and the call site are all fine on their own. That
+why-control: isolates the defect to THE PRESENCE OF THE ATTRIBUTE and rules out "interfaces
+why-control: are broken", "default methods are broken", or "empty `impl … where` is broken".
+why-control: If the control breaks, the environment regressed and this row's drain is a lie.
+why-note: ⚠️ DO NOT drain this row by removing the empty `impl Speak Dog where` or the call
+why-note: site to "simplify" the repro. The interface is dropped from resolve's environment,
+why-note: so it is the CONSUMERS that report it; a file that declares an attributed interface
+why-note: and never mentions it again checks GREEN and shows nothing at all.
+why-note: ⚠️ SCOPE: this row pins ONLY the single-file unresolvable-interface facet, which is
+why-note: what I can prove. The `export`ed variant additionally produces 8 diagnostics under
+why-note: `--json`, two of them IN THE PROVIDER FILE (`T-IMPL-TOO-SPECIFIC`,
+why-note: `T-PHANTOM-METHOD`), which suggests the attribute also strips the interface's TYPE
+why-note: PARAMETER rather than merely hiding the declaration. That second facet is NOT
+why-note: isolated and NOT pinned here — do not read this row draining as clearing it.
+why-note: ⚠️ Loud (exit 1), not silent: nothing is miscompiled, the program is REJECTED. Hence
+why-note: S2, not S0 — and hence a fix must be checked for the inverse, that an attribute now
+why-note: unwrapped does not start being silently IGNORED where it should be rejected.
