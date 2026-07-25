@@ -187,6 +187,7 @@ import ir.core_ir_lower.{
   compileTree,
   canonPat,
   ifaceImplRouteKeys,
+  ifaceImplHeadTags,
   ifaceDeclHeadUnique,
 }
 import support.util.{
@@ -5474,24 +5475,96 @@ tagsMinus (t::rest) covered
 -- A bare CVar naming an impl method, applied to args.  The impl is chosen by the
 -- discriminating argument's runtime constructor TYPE (mirrors eval's
 -- filterByTag → runtimeTypeTag).  Two shapes:
---   • ONE impl group (the method has impls at a single type) — no runtime test is
---     needed: a well-typed call always reaches that impl, so emit a DIRECT call
---     (covers single-impl + the multi-clause-body fixture; the multi-clause
---     fall-through lives INSIDE the impl fn's decision tree, note (n)/(o)).
---   • SEVERAL impl groups (impls at distinct types) — load the discriminating
---     argument's cell tag and emit an if-chain: for each group, test whether the
---     loaded ctor tag is one the group's TYPE owns (OR over its constructors'
---     hashName, via ctorsOfType), and on a match call that group's impl fn.  An
---     exhausted chain is `unreachable` (the typechecker proved a real impl).
+--   • ONE impl group AND no inherited-default arm (`argTagDefaultTags` empty) — no
+--     runtime test is needed: a well-typed call always reaches that impl, so emit a
+--     DIRECT call (covers single-impl + the multi-clause-body fixture; the
+--     multi-clause fall-through lives INSIDE the impl fn's decision tree, note
+--     (n)/(o)).
+--   • SEVERAL impl groups (impls at distinct types), or any inherited-default arm —
+--     load the discriminating argument's cell tag and emit an if-chain: for each
+--     group, test whether the loaded ctor tag is one the group's TYPE owns (OR over
+--     its constructors' hashName, via ctorsOfType), and on a match call that group's
+--     impl fn; then one default-synthesis arm per declared impl head that has no
+--     entry for this method.  An exhausted chain traps loudly (emitArgDispatchMiss).
 --     The discriminating arg may be an IMMEDIATE nullary ctor, so the tag is read
 --     via `loadDiscriminant` (low-bit branch), not a bare `loadTag` (note (p)).
 emitMethodArgDispatch : Emit -> String -> List String -> (String, LTy)
 emitMethodArgDispatch e method argOps =
   let groups = implGroupsForMethod e method
+  let defTags = argTagDefaultTags e method groups
   match groups
     [] => emitDefaultArgTag e method argOps
-    [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOf method) LTInt
-    _ => emitArgTagDispatch e method groups argOps
+    [g] =>
+      if isEmptyL defTags then
+        emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOf method) LTInt
+      else
+        emitArgTagDispatch e method groups defTags argOps
+    _ => emitArgTagDispatch e method groups defTags argOps
+
+-- #1046: the DECLARED impl heads of [method]'s interface that this method has NO
+-- entry at — the receivers that reach the interface DEFAULT at run time, and exactly
+-- the arms `implGroupsForMethod` cannot see.
+--
+-- ⚠️ WHY THE ARM SET IS DECL-DERIVED AND NOT A GUARD ON THE SHORTCUT.  `lowerDeclImpl`
+-- projects a `DImpl` to one `CImplEntry` per method the impl DEFINES, so a
+-- cross-module impl that overrides NOTHING contributes zero entries and is invisible
+-- in `implGroupsForMethod`.  The old `[g] => direct call` arm was the emitter deciding
+-- "one surviving group ⇒ one possible callee" from that lossy set: with a method-less
+-- sibling it emitted an unconditional `call @mdk_impl_Cat_speak` with no tag test at
+-- all, so `Dog` — which inherits the default — got `Cat`'s body.  Wrong answer, exit
+-- 0, no diagnostic (#1046).
+--
+-- Merely GUARDING the shortcut would have RELOCATED that, not removed it: it routes
+-- into `emitArgDispatchChain`, which had no arm for the inheriting head either and
+-- ended in a bare `unreachable` — the ≥2-group form of the same program prints
+-- `yip|meow|yip` at -O1..-O3 (clang folds the last tag test against the UB) and
+-- SEGFAULTS at -O0.  So the fix is to take the arm set from the DECLS, which are a
+-- superset of every receiver the program can produce: there is no second derivation
+-- of "who are the callees" left for the emitter to get wrong.  Same move #948 made
+-- for `ifaceTags` on the dict path, and the same reason #1058's route-word SET beat
+-- re-deriving one word — this is the third consumer of that one lost fact.
+--
+-- HEADS, not route keys (`ifaceImplRouteKeys`): a runtime ctor tag is
+-- type-argument-blind, so this path genuinely cannot tell `Box Int` from
+-- `Box String`.  Those two heads collapse to one arm here and the FIRST declared one
+-- wins — a pre-existing property of arg-tag dispatch (the discriminant carries no
+-- type argument), not something this change introduces or can fix; the dict path is
+-- where that distinction is representable (#1036).
+--
+-- [] for every program with no method-less impl — the declared heads are then exactly
+-- the group tags — so every existing site keeps its shortcut and its byte-identical
+-- IR, and a method with no interface default is excluded outright.
+argTagDefaultTags : Emit -> String -> List ImplGroup -> List String
+argTagDefaultTags e method groups = match defaultFor e method
+  None => []
+  Some _ => tagsMinus (dedupS (ifaceImplHeadTags (methodIfaceOf method))) (groupTags groups)
+
+groupTags : List ImplGroup -> List String
+groupTags [] = []
+groupTags (g::rest) = groupTag g :: groupTags rest
+
+-- can this path HONESTLY synthesize [method]'s interface default at [tag]?
+--
+--   * the type must own CONSTRUCTORS.  The arm's test is `emitTagMatch` over them, and
+--     a primitive receiver (Int/String/Char/…) carries no runtime cell tag at all.
+--   * `@mdk_default_<method>_<tag>` must expect NO leading dict params.  Both kinds it
+--     can want — the method's own `=>` constraint dicts (`methodConstraintIfacesOf`,
+--     prepended to the default's pats by dict_pass) and the inner same-interface
+--     impl's per-instance `requires` (`innerDefaultReqCount`) — are loaded FROM A DICT
+--     CELL by the dict path's `emitDefaultDispatchChain`.  This path has no dict, so
+--     there is nothing to load them from and a call with the words missing would run
+--     the default on garbage.
+--
+-- A tag that fails this gets NO arm and therefore falls through to
+-- `emitArgDispatchMiss` — a loud, coded runtime abort.  That is deliberate: an honest
+-- gap for the receiver that cannot be served, rather than a silent wrong answer for
+-- every receiver (the pre-#1046 behaviour).  It is still counted in
+-- `argTagDefaultTags`, so its mere existence suppresses the direct-call shortcut.
+argDefaultEmittable : Emit -> String -> String -> Bool
+argDefaultEmittable e method tag = tag != noneHeadTag
+  && isNonEmptyL (ctorsOfType e tag)
+  && isEmptyL (methodConstraintIfacesOf method)
+  && innerDefaultReqCount e method tag == 0
 
 -- E19: an arg-tag site for a method with NO tagged impl groups — an interface
 -- DEFAULT reached on the RNone fallback (`max`/`min`, whose `maximum`/`minimum`
@@ -5511,27 +5584,34 @@ emitDefaultArgTag e method argOps =
   gapE
     ("arg-tag dispatch for method '" ++ method ++ "' has no impl groups (unresolved RNone fallback)")
 
-emitArgTagDispatch : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
-emitArgTagDispatch e method groups argOps
+-- [groups] are `groups` non-empty by construction (emitMethodArgDispatch's `[]` arm
+-- short-circuits to emitDefaultArgTag), so `headGroup` is total here.
+emitArgTagDispatch : Emit -> String -> List ImplGroup -> List String -> List String -> (String, LTy)
+emitArgTagDispatch e method groups defTags argOps
   | headPos (groupPositionsOf (headGroup groups)) >= lengthS argOps = gapE ("arg-tag dispatch for method '" ++ method ++ "': discriminating arg position not supplied (under-applied / unapplied method)")
-  | otherwise = emitArgTagDispatchGo e method groups argOps (headPos (groupPositionsOf (headGroup groups)))
+  | otherwise = emitArgTagDispatchGo e method groups defTags argOps (headPos (groupPositionsOf (headGroup groups)))
 
-emitArgTagDispatchGo : Emit -> String -> List ImplGroup -> List String -> Int -> (String, LTy)
-emitArgTagDispatchGo e method groups argOps discrimPos =
+emitArgTagDispatchGo : Emit -> String -> List ImplGroup -> List String -> List String -> Int -> (String, LTy)
+emitArgTagDispatchGo e method groups defTags argOps discrimPos =
   let discrimWord = nthStr argOps discrimPos
   let tagReg = loadDiscriminant e discrimWord
   let slot = freshReg e
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "argdispend" ++ intToString (freshLocal e)
-  let _ = emitArgDispatchChain e method tagReg groups argOps slot endL
+  let _ = emitArgDispatchChain e method tagReg groups defTags argOps slot endL
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
   (r, LTInt)
 
-emitArgDispatchChain : Emit -> String -> String -> List ImplGroup -> List String -> String -> String -> Unit
-emitArgDispatchChain e _ _ [] _ _ _ = emit e "  unreachable"
-emitArgDispatchChain e method tagReg (g::rest) argOps slot endL =
+-- the tagged-impl arms, then (#1046) the inherited-default arms, then the miss trap.
+-- Order matters and is the same as the dict path's `emitDispatchChainDefaulted`:
+-- explicit impls FIRST, so a program with no method-less impl (defTags == []) emits
+-- exactly the pre-#1046 arm sequence and its IR is byte-identical bar the terminal.
+emitArgDispatchChain : Emit -> String -> String -> List ImplGroup -> List String -> List String -> String -> String -> Unit
+emitArgDispatchChain e method tagReg [] defTags argOps slot endL =
+  emitArgDefaultChain e method tagReg defTags argOps slot endL
+emitArgDispatchChain e method tagReg (g::rest) defTags argOps slot endL =
   let tag = groupTag g
   let cond = emitTagMatch e tagReg (ctorsOfType e tag)
   let n = intToString (freshLocal e)
@@ -5543,7 +5623,56 @@ emitArgDispatchChain e method tagReg (g::rest) argOps slot endL =
   let _ = emit e "  store i64 \{rv}, ptr \{slot}"
   let _ = emit e ("  br label %" ++ endL)
   let _ = emit e (next ++ ":")
-  emitArgDispatchChain e method tagReg rest argOps slot endL
+  emitArgDispatchChain e method tagReg rest defTags argOps slot endL
+
+-- #1046: the default-synthesis TAIL of an arg-tag chain — one arm per declared impl
+-- head with no entry for this method.  Each arm tag-tests that type's constructors and
+-- calls the SAME lifted `@mdk_default_<method>_<tag>` the dict path's
+-- `emitDefaultDispatchChain` calls; `ensureDefaultEmitted` restamps the body's inner
+-- same-interface calls to the concrete `RKey tag`, so they stay direct calls and never
+-- re-enter this path.  No dict words are passed and none are needed —
+-- `argDefaultEmittable` skips every tag whose default expects any (see its note on why
+-- the alternative is a wrong answer, not a missing feature).
+emitArgDefaultChain : Emit -> String -> String -> List String -> List String -> String -> String -> Unit
+emitArgDefaultChain e method _ [] _ _ _ = emitArgDispatchMiss e method
+emitArgDefaultChain e method tagReg (tag::rest) argOps slot endL =
+  let _ = if argDefaultEmittable e method tag then
+    emitArgDefaultArm e method tagReg tag argOps slot endL
+  else
+    ()
+  emitArgDefaultChain e method tagReg rest argOps slot endL
+
+emitArgDefaultArm : Emit -> String -> String -> String -> List String -> String -> String -> Unit
+emitArgDefaultArm e method tagReg tag argOps slot endL = match defaultFor e method
+  None => ()
+  Some entry =>
+    let cond = emitTagMatch e tagReg (ctorsOfType e tag)
+    let n = intToString (freshLocal e)
+    let yes = "argdefyes" ++ n
+    let next = "argdefnext" ++ n
+    let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
+    let _ = emit e (yes ++ ":")
+    let fname = defaultFnName tag method
+    let _ = ensureDefaultEmitted e fname tag method entry
+    let (rv, _) = emitImplCall e fname argOps LTInt
+    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+    let _ = emit e ("  br label %" ++ endL)
+    emit e (next ++ ":")
+
+-- the exhausted arg-tag chain.  A bare `unreachable` here was UB with TEETH, not a
+-- harmless assertion: `clang` at -O1 and above propagates it backwards and folds the
+-- LAST tag test to always-true, so a receiver with no arm silently ran the last arm's
+-- impl (`yip|meow|yip` for #1046's three-type form), while at -O0 it reached the `ud2`
+-- and SEGFAULTED.  A side-effecting `@mdk_panic` call blocks that fold (the block is
+-- no longer removable) and turns any residual uncovered receiver into a loud, coded,
+-- nonzero-exit abort — the same remedy `emitTree`'s CTFail arm applies to
+-- non-exhaustive matches.  `unreachable` still follows, purely as the block's
+-- terminator: `@mdk_panic` exits(1) and never returns.
+emitArgDispatchMiss : Emit -> String -> Unit
+emitArgDispatchMiss e method =
+  let (msg, _) = emitLit e (LString "arg-tag dispatch for method '\{method}': the receiver's runtime type has no impl arm")
+  let _ = emit e "  call void @mdk_panic(i64 \{msg})"
+  emit e "  unreachable"
 
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).

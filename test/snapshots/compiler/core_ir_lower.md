@@ -1,5 +1,5 @@
 # META
-source_lines=1614
+source_lines=1635
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1235,6 +1235,27 @@ ifaceRouteKeysGo iface ((i, tag, key)::rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #1046: the HEAD TAGS of every DECLARED impl of [iface], in declaration order (the
+-- caller dedups).  This is the ARG-TAG path's counterpart to `ifaceImplRouteKeys`,
+-- and it must be the head — never a route key.  Arg-tag dispatch discriminates on
+-- the receiver's runtime CONSTRUCTOR tag, which is type-argument-blind: a canonical
+-- key like `Speak|(Box Int)|` names no type, owns no constructors, and so could
+-- never be matched by a `ctorsOfType` arm.  (The flip side of that blindness is
+-- stated where it bites: `argTagDefaultTags` in llvm_emit.mdk.)
+--
+-- Like the route keys, this is a strict SUPERSET of the heads the `CImplEntry`s
+-- yield, and that is the entire point — `lowerDeclImpl` emits one entry per method
+-- an impl DEFINES, so an impl that overrides nothing produces none, and an
+-- entry-derived arm set silently loses it.
+export ifaceImplHeadTags : String -> List String
+ifaceImplHeadTags iface = ifaceHeadTagsGo iface ifaceImplHeadsRef.value
+
+ifaceHeadTagsGo : String -> List (String, String, String) -> List String
+ifaceHeadTagsGo _ [] = []
+ifaceHeadTagsGo iface ((i, tag, _)::rest)
+  | i == iface = tag :: ifaceHeadTagsGo iface rest
+  | otherwise = ifaceHeadTagsGo iface rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
@@ -2087,6 +2108,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "ifaceImplHeadTags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceImplHeadTags" ((PVar "iface")) (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DTypeSig false "ifaceHeadTagsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceHeadTagsGo" (PWild (PList)) (EListLit))
+(DFunDef false "ifaceHeadTagsGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "tag") (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EFieldAccess (EVar "ifaceImplHeadsRef") "value")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -2717,6 +2743,11 @@ nodeTag _ = "?"
 (DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
+(DTypeSig true "ifaceImplHeadTags" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceImplHeadTags" ((PVar "iface")) (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DTypeSig false "ifaceHeadTagsGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceHeadTagsGo" (PWild (PList)) (EListLit))
+(DFunDef false "ifaceHeadTagsGo" ((PVar "iface") (PCons (PTuple (PVar "i") (PVar "tag") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EVar "tag") (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceHeadTagsGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EFieldAccess (EVar "ifaceImplHeadsRef") "value")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))

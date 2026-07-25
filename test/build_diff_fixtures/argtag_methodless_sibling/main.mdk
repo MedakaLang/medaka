@@ -1,0 +1,55 @@
+-- #1046: a METHOD-LESS impl (every method inherited from a cross-module interface
+-- DEFAULT) still has to contribute a dispatch arm on the ARG-TAG path — the RNone
+-- fallback a bare method name reached through a LOCAL LAMBDA takes, which carries no
+-- dict and discriminates on the receiver's runtime constructor tag.
+--
+-- `lowerDeclImpl` emits one `CImplEntry` per method an impl DEFINES, so `Dog`/`Ant`
+-- below produce none for `speak`/`score`.  `emitMethodArgDispatch` used to derive its
+-- arm set from those entries alone, which lost them, and then:
+--
+--   * with ONE surviving group it took a direct-call shortcut with NO TAG TEST at all,
+--     so EVERY receiver got the overriding impl's body (the Score half: `99|99`);
+--   * with TWO surviving groups it emitted a chain ending in bare `unreachable`, which
+--     clang -O1+ folds into "the last arm always matches" (the Speak half:
+--     `yip|meow|yip`) and -O0 runs off into a SEGFAULT.
+--
+-- Both were exit 0 with no diagnostic on a program `check` accepts and `medaka run`
+-- executes correctly, so ONLY a build-and-run comparison can see them.  Three shapes
+-- are pinned here at once because they are one defect at three arm counts: 1 group +
+-- 1 inherited (Score), 2 groups + 1 inherited (Speak), and an inherited default whose
+-- body is non-constant (see iface.mdk).
+import iface.{Speak(..), speak, Score(..), base, score}
+
+data Dog = Dog
+data Cat = Cat
+data Fox = Fox
+
+-- METHOD-LESS: inherits `speak`'s default. Contributes no CImplEntry.
+impl Speak Dog where
+
+impl Speak Cat where
+  speak _ = "meow"
+
+impl Speak Fox where
+  speak _ = "yip"
+
+data Ant = Ant
+data Bee = Bee
+
+-- METHOD-LESS FOR `score` (it defines only the sibling `base`), which is the same lost
+-- fact one method over: an impl need not be empty to be invisible for a given method.
+impl Score Ant where
+  base _ = 3
+
+impl Score Bee where
+  base _ = 5
+  score _ = 99
+
+main =
+  -- The local lambdas are load-bearing: they are what strips the dict route and forces
+  -- the arg-tag path.  Calling `speak Dog` directly resolves to a concrete RKey site
+  -- and was always correct.
+  let f = v => speak v
+  let g = v => score v
+  let _ = println (f Dog ++ "|" ++ f Cat ++ "|" ++ f Fox)
+  println "\{g Ant}|\{g Bee}"
