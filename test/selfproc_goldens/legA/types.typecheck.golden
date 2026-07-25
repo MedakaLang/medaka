@@ -654,6 +654,7 @@ implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implOblToU : (String, List String, Ty, Mono, Option Loc) -> UObligation
 implSubject : String -> String -> String
+implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, String)
 importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)

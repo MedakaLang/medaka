@@ -134,10 +134,20 @@ function, §3.)
 - `guardWarning = "Warning: guards may not be exhaustive"` (`:482`) — the only
   diagnostic produced standalone here (guard coverage on the raw AST).
 
-### Typecheck — `compiler/types/typecheck.mdk` (55 push sites / **~25 kinds** + 1 warning)
+### Typecheck — `compiler/types/typecheck.mdk` (push sites / kinds + 1 warning)
 
-The 55 sites all go through `pushTypeError` / `pushTypeErrorOnce` /
-`pushTypeErrorOnceAt`; the one warning is a direct `setRef matchWarnings`. Distinct
+⚠️ **The counts that stood here (`55 push sites / ~25 kinds`) were stale and are not
+replaced with new ones** — a hand-maintained census in prose rots at the next PR, exactly
+as the "Distinct-kind totals" note at the end of the code table already says. Derive them:
+
+```sh
+grep -cE 'pushTypeError(Once)?(At|HelpFixAt)? "' compiler/types/typecheck.mdk   # push sites
+grep -oE 'pushTypeError(Once)?(At|HelpFixAt)? "[A-Z-]+"' compiler/types/typecheck.mdk \
+  | grep -oE '"[A-Z-]+"' | sort -u | wc -l                                      # distinct codes
+```
+
+The sites all go through `pushTypeError` / `pushTypeErrorOnce` / `pushTypeErrorOnceAt` /
+`pushTypeErrorHelpFixAt`; the one warning is a direct `setRef matchWarnings`. Distinct
 kinds (enumerated from the message families):
 
 | Kind | Representative message | Code (§2) |

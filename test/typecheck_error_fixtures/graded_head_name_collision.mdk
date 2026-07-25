@@ -7,7 +7,7 @@
 -- that degradation deliberate.  It was not deliberate, it was a symptom — and the
 -- claim was false anyway: ACROSS MODULES the loser depended on the order of two
 -- import lines in a third file.  The scope now travels as an argument
--- (gradedScopeOf), so there is no shared key left to collide over.
+-- (declGradedScope), so there is no shared key left to collide over.
 interface GA f where
   ga : f e a -> (a -> <e> f e b) -> f e b
 

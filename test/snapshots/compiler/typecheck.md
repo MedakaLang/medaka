@@ -1,5 +1,5 @@
 # META
-source_lines=18438
+source_lines=18470
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -1306,7 +1306,15 @@ checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHead iface t want = match tyAppSpine t
   (TyCon n loc, applied) =>
     checkGradedImplHeadCon iface n loc (listLen applied) want
-  (TyTuple ts, _) => checkGradedImplHeadKinds iface (tupleHeadTagTc (listLen ts)) (firstTyConLocList ts) 0 want []
+  -- A saturated tuple is kind `Type`, which is never a graded slot's kind.  It gets its
+  -- OWN remedy: the generic "give it a Row parameter" advice is nonsense for a tuple —
+  -- you cannot add one.  ⚠️ The span is best-effort: `TyTuple` carries no loc of its own
+  -- and `TyVar` carries none either, so `impl I (a, b)` genuinely has no span to point at
+  -- and reports unlocated.  Fabricating a nearby one would be worse than saying nothing.
+  (TyTuple ts, _) => pushTypeErrorOnceAt
+    "T-IMPL-KIND-MISMATCH"
+    (firstTyConLocList ts)
+    (implTupleHeadKindMsg iface (listLen ts) want)
   _ => ()
 
 checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
@@ -1358,6 +1366,12 @@ implKindMismatchFix : String -> String -> Int -> String
 implKindMismatchFix iface ctor nApplied
   | nApplied > 0 = "A graded interface binds the whole row-indexed FAMILY, never a fixed-row application: drop the argument(s) and write `impl \{iface} \{ppConName ctor}`."
   | otherwise = "Give `\{ppConName ctor}` a parameter used in an effect position at each `Row` slot — a constructor field of the shape `Unit -> <e> a` is what makes a parameter row-kinded — or implement a non-graded interface for it instead."
+
+-- A saturated TUPLE head, which needs its own message: a tuple is kind `Type` and cannot
+-- be given a row parameter, so the ordinary "add a `Unit -> <e> a` field" remedy would
+-- send the author after something that does not exist.
+implTupleHeadKindMsg : String -> Int -> List Kind -> String
+implTupleHeadKindMsg iface n want = "Instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."
 
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTy (TyFun a b) =
@@ -3861,7 +3875,7 @@ sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvs ty = sigToSchemeTvsIn [] ty
 
 -- #822: the graded-scope-carrying form.  An INTERFACE METHOD signature is built with
--- its interface's gradedScopeOf so an abstract head `f e a` gets its Row slot; every
+-- its interface's declGradedScope so an abstract head `f e a` gets its Row slot; every
 -- other signature passes `[]` and is elaborated exactly as before.
 sigToSchemeTvsIn : List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn scope ty =
@@ -4038,34 +4052,46 @@ fromAstTypeApp etbl tvs n args = match lookupAssoc n perRun.value.aliasTableRef.
 -- re-deriving it from a kind table, and that is the point.  Every seam builds the
 -- pair as `etbl = freshEffMap (effTailNames ty ++ rowArgNamesIn scope ty)` and
 -- `tvs = freshTvMap (tyVarNames ty MINUS rowArgNamesIn scope ty)`, so "seeded into
--- etbl AND withheld from tvs" is precisely "rowArgNamesIn called this a row" — the
--- two seams cannot disagree, and there is no name-keyed global to leak.  An
--- unscoped seam withholds nothing, so this arm never fires there and the spine stays
--- opaque exactly as it did pre-#822.
+-- etbl AND withheld from tvs" is precisely "this seam called it a row" — the two
+-- cannot disagree, and there is no name-keyed global to leak.
+--
+-- ⚠️ It fires at seams with NO graded scope, and that is CORRECT — an earlier version
+-- of this comment claimed the opposite ("an unscoped seam withholds nothing, so this
+-- arm never fires there"), which was simply false.  A KROW DATA slot withholds too:
+-- `rowArgNamesIn` reports the `e` of `D e f` from `dataParamKindsRef` with no interface
+-- in the file at all, and `registerVariants`' payload seam withholds by construction
+-- (`tvs = ktypeTvs` is KType-only, `etbl = krowEtbl` is KRow-only).  So in
+-- `data D e f = MkD (Unit -> <e> Unit) (f e Int)`, the `e` of the abstract-headed
+-- `f e Int` reaches this arm unscoped.
+-- The result is a FIX, not a leak: pre-#822 that `e` was withheld from tvs and then
+-- elaborated by `fromAstTypeE (TyVar n)`'s `fromOption (TCon n)` fallback into a
+-- FABRICATED RIGID `TCon "e"` — `getInner : D e f -> f e Int` inferred as
+-- `D a b -> b e Int`, an opaque constant no caller can ever satisfy.  It now infers
+-- `D a b -> b a Int`.  Pinned by typecheck_error_fixtures/graded_krow_data_slot_abstract_head.mdk.
 fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 fromAstTypeVarApp etbl tvs h args a b
   | anyRowSlotArg etbl tvs args =
     foldRowSlotArgs etbl tvs (fromAstTypeE etbl tvs (TyVar h)) args
   | otherwise = TApp (fromAstTypeE etbl tvs a) (fromAstTypeE etbl tvs b)
 
--- A bare name the caller seeded into [etbl] and deliberately kept OUT of [tvs].
+-- A bare NAME is a row slot arg iff the caller seeded it into [etbl] and deliberately
+-- kept it out of [tvs].
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isRowSlotArg etbl tvs (TyVar n) = isSome (lookupAssoc n etbl)
   && isNone (lookupAssoc n tvs)
--- ⚠️ #997 × #822 — a defect of the MERGE, which NEITHER branch had alone.  #997 made a
--- row WRITABLE in a type-argument slot, so a graded slot can now hold
--- `f <Stdout | e> a`; `krowArgVarNames`' own `TyRow _ (Some n) _` arm pins that `e`
--- exactly as it pins a bare `f e a`, so `rowArgNamesIn` reports it and the caller
--- withholds it from [tvs].  Without this arm the two seams disagreed for the first
--- time: the spine fell to the opaque fallback and `fromAstTypeE`'s new `TyRow` clause
--- fired a spurious T-ROW-KIND-MISMATCH on a well-formed graded signature.
--- Keep this in lockstep with krowArgVarNames — same shape, same `Some n` condition.
-isRowSlotArg etbl tvs (TyRow _ (Some n) _) = isSome (lookupAssoc n etbl)
-  && isNone (lookupAssoc n tvs)
--- A CLOSED written row in a graded slot (`f <Stdout> a`) pins no name, so nothing
--- classifies it and it still reaches T-ROW-KIND-MISMATCH.  That is #821 surface
--- (explicit grades), it is LOUD rather than silent, and the graded-lite subset this
--- PR implements always spells the grade as a shared variable.
+-- A WRITTEN row (#997) is a row, full stop — no name test, and in particular no `Some n`
+-- test.  `<Stdout | e>` and `<>` are the same construct with and without a tail, and a
+-- `TyRow` is only ever legal in a row-kinded position anyway (that is what
+-- `fromAstTypeE`'s TyRow clause exists to say).
+--
+-- ⚠️ Requiring an open tail here was an S1: it made the SPEC'S OWN `gpure : a -> f <> a`
+-- (EFFECTS-SEMANTICS §6, one of the four canonical graded signatures) unspellable — the
+-- closed row fell to the opaque fallback and drew `T-ROW-KIND-MISMATCH`, a message
+-- asserting the slot "isn't row-kinded" when slot 0 of `f` had just been INFERRED KRow
+-- from a sibling method.  The same `<>` on a concrete head (`Async <> a`) was accepted,
+-- so the two halves of the feature disagreed on one spelling with the abstract half
+-- misdiagnosing why.  #823 cannot add the graded core interfaces without this.
+isRowSlotArg _ _ (TyRow _ _ _) = True
 isRowSlotArg _ _ _ = False
 
 -- monomorphic and short-circuiting on purpose (compiler/AGENTS.md): this runs on
@@ -4126,7 +4152,7 @@ rowArgNames : Ty -> List String
 rowArgNames ty = rowArgNamesIn [] ty
 
 -- [scope] is the graded typaram map of the interface whose method signature this
--- type IS (gradedScopeOf); `[]` everywhere else.  It is the ONLY channel by which an
+-- type IS (declGradedScope); `[]` everywhere else.  It is the ONLY channel by which an
 -- abstract head can be row-kinded, which is what confines #822 to method signatures.
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
@@ -8171,12 +8197,18 @@ registerIfaceParamKinds iface typarams methods =
 registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
 registerIfaceParamKindsGo _ _ [] _ = ()
 registerIfaceParamKindsGo iface i (p::ps) methods =
-  let kinds = ifaceParamKindsOf p methods
-  -- Only a GRADED slot is recorded.  A `Type`/`Type -> Type` head has no row slot
-  -- and gains nothing from the table, so leaving it out keeps the table (and hence
-  -- every lookup below) EMPTY for a program that declares no graded interface —
-  -- the pre-#822 behaviour, byte for byte.
-  let _ = if anyKRow kinds then insertIfaceParamKinds iface i p kinds else ()
+  -- ⚠️ EVERY slot is recorded, graded or not, and the non-graded ones are the whole
+  -- point (S1, review round 2).  Recording only graded slots looks like a tidy
+  -- minimisation and is a false-reject bug: `ifaceParamKindsRef` is copied into the
+  -- data universe, which is NOT import-scoped, so an ORDINARY interface that merely
+  -- shares a name with a graded one anywhere in the graph found the graded entry and
+  -- had its impl rejected with T-IMPL-KIND-MISMATCH — order-dependently, since
+  -- swapping two unrelated import lines changed which module registered first.
+  -- A module's own decls are registered as a FRONT overlay during its own pass and
+  -- `lookupAssoc` is first-match, so a local entry shadows the universe's — but only
+  -- if there IS one.  An all-KType entry is exactly that shadow; `checkGradedImplTys`
+  -- gates on `anyKRow`, so it costs nothing but the row.
+  let _ = insertIfaceParamKinds iface i p (ifaceParamKindsOf p methods)
   registerIfaceParamKindsGo iface (i + 1) ps methods
 
 anyKRow : List Kind -> Bool
@@ -8203,7 +8235,7 @@ kindsEq _ _ = False
 -- `Applicative`/`Thenable`/`Foldable`, turning one clean diagnostic into 45
 -- mislocated ones).  Poisoning could not save it: an interface-local type-parameter
 -- name is simply not a program-global key.  The scope now travels as an explicit
--- argument instead — see gradedScopeOf and rowArgNamesIn.
+-- argument instead — see declGradedScope and rowArgNamesIn.
 insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
 insertIfaceParamKinds iface i _ kinds =
   setRef
@@ -18820,7 +18852,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkGradedImplTys" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkGradedImplTys" ((PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "checkGradedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))
-(DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PCon "TyCon" (PVar "n") (PVar "loc")) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadKinds") (EVar "iface")) (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts")))) (EApp (EVar "firstTyConLocList") (EVar "ts"))) (ELit (LInt 0))) (EVar "want")) (EListLit))) (arm PWild () (ELit LUnit))))
+(DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PCon "TyCon" (PVar "n") (PVar "loc")) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-KIND-MISMATCH"))) (EApp (EVar "firstTyConLocList") (EVar "ts"))) (EApp (EApp (EApp (EVar "implTupleHeadKindMsg") (EVar "iface")) (EApp (EVar "listLen") (EVar "ts"))) (EVar "want")))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "checkGradedImplHeadCon" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))))
 (DFunDef false "checkGradedImplHeadCon" ((PVar "iface") (PVar "n") (PVar "loc") (PVar "nApplied") (PVar "want")) (EMatch (EApp (EApp (EVar "headRemainingKinds") (EVar "n")) (EVar "nApplied")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "got")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadKinds") (EVar "iface")) (EVar "n")) (EVar "loc")) (EVar "nApplied")) (EVar "want")) (EVar "got")))))
 (DTypeSig false "headRemainingKinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
@@ -18838,6 +18870,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadKindClause" ((PVar "ctor") (PVar "nApplied") (PVar "got")) (EIf (EBinOp "<=" (EVar "nApplied") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EVar "display") (EApp (EVar "renderKindArrow") (EVar "got")))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "this head already applies ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nApplied")))) (ELit (LString " argument(s) to `"))) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "`, leaving kind `"))) (EApp (EVar "display") (EApp (EVar "renderKindArrow") (EVar "got")))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implKindMismatchFix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "implKindMismatchFix" ((PVar "iface") (PVar "ctor") (PVar "nApplied")) (EIf (EBinOp ">" (EVar "nApplied") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "A graded interface binds the whole row-indexed FAMILY, never a fixed-row application: drop the argument(s) and write `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "`."))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "Give `")) (EApp (EVar "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` a parameter used in an effect position at each `Row` slot — a constructor field of the shape `Unit -> <e> a` is what makes a parameter row-kinded — or implement a non-graded interface for it instead."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implTupleHeadKindMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))
+(DFunDef false "implTupleHeadKindMsg" ((PVar "iface") (PVar "n") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance head `")) (EApp (EVar "display") (EApp (EVar "ppConName") (EApp (EVar "tupleHeadTagTc") (EVar "n"))))) (ELit (LString "` has the wrong kind for interface '"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "': the interface's type parameter is graded — kind `"))) (EApp (EVar "display") (EApp (EVar "renderKindArrow") (EVar "want")))) (ELit (LString "` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."))))
 (DTypeSig false "checkEffectParamsTy" (TyFun (TyCon "Ty") (TyCon "Unit")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
@@ -19310,7 +19344,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeVarApp" ((PVar "etbl") (PVar "tvs") (PVar "h") (PVar "args") (PVar "a") (PVar "b")) (EIf (EApp (EApp (EApp (EVar "anyRowSlotArg") (EVar "etbl")) (EVar "tvs")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "foldRowSlotArgs") (EVar "etbl")) (EVar "tvs")) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EApp (EVar "TyVar") (EVar "h")))) (EVar "args")) (EIf (EVar "otherwise") (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "a"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRowSlotArg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "isRowSlotArg" ((PVar "etbl") (PVar "tvs") (PCon "TyVar" (PVar "n"))) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl"))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs")))))
-(DFunDef false "isRowSlotArg" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild)) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl"))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs")))))
+(DFunDef false "isRowSlotArg" (PWild PWild (PCon "TyRow" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isRowSlotArg" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "anyRowSlotArg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "anyRowSlotArg" (PWild PWild (PList)) (EVar "False"))
@@ -20187,7 +20221,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerIfaceParamKinds" ((PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
 (DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
 (DFunDef false "registerIfaceParamKindsGo" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false (PVar "kinds") (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))) (DoLet false false PWild (EIf (EApp (EVar "anyKRow") (EVar "kinds")) (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EVar "kinds")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
+(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
 (DTypeSig false "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))
@@ -22939,7 +22973,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkGradedImplTys" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkGradedImplTys" ((PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "checkGradedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))
-(DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PCon "TyCon" (PVar "n") (PVar "loc")) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadKinds") (EVar "iface")) (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts")))) (EApp (EVar "firstTyConLocList") (EVar "ts"))) (ELit (LInt 0))) (EVar "want")) (EListLit))) (arm PWild () (ELit LUnit))))
+(DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PCon "TyCon" (PVar "n") (PVar "loc")) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-KIND-MISMATCH"))) (EApp (EVar "firstTyConLocList") (EVar "ts"))) (EApp (EApp (EApp (EVar "implTupleHeadKindMsg") (EVar "iface")) (EApp (EVar "listLen") (EVar "ts"))) (EVar "want")))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "checkGradedImplHeadCon" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))))
 (DFunDef false "checkGradedImplHeadCon" ((PVar "iface") (PVar "n") (PVar "loc") (PVar "nApplied") (PVar "want")) (EMatch (EApp (EApp (EVar "headRemainingKinds") (EVar "n")) (EVar "nApplied")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "got")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadKinds") (EVar "iface")) (EVar "n")) (EVar "loc")) (EVar "nApplied")) (EVar "want")) (EVar "got")))))
 (DTypeSig false "headRemainingKinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Kind"))))))
@@ -22957,6 +22991,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadKindClause" ((PVar "ctor") (PVar "nApplied") (PVar "got")) (EIf (EBinOp "<=" (EVar "nApplied") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` has kind `"))) (EApp (EMethodRef "display") (EApp (EVar "renderKindArrow") (EVar "got")))) (ELit (LString "`"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "this head already applies ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nApplied")))) (ELit (LString " argument(s) to `"))) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "`, leaving kind `"))) (EApp (EMethodRef "display") (EApp (EVar "renderKindArrow") (EVar "got")))) (ELit (LString "`"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implKindMismatchFix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "implKindMismatchFix" ((PVar "iface") (PVar "ctor") (PVar "nApplied")) (EIf (EBinOp ">" (EVar "nApplied") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "A graded interface binds the whole row-indexed FAMILY, never a fixed-row application: drop the argument(s) and write `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "`."))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (ELit (LString "Give `")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EVar "ctor")))) (ELit (LString "` a parameter used in an effect position at each `Row` slot — a constructor field of the shape `Unit -> <e> a` is what makes a parameter row-kinded — or implement a non-graded interface for it instead."))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implTupleHeadKindMsg" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "String")))))
+(DFunDef false "implTupleHeadKindMsg" ((PVar "iface") (PVar "n") (PVar "want")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance head `")) (EApp (EMethodRef "display") (EApp (EVar "ppConName") (EApp (EVar "tupleHeadTagTc") (EVar "n"))))) (ELit (LString "` has the wrong kind for interface '"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "': the interface's type parameter is graded — kind `"))) (EApp (EMethodRef "display") (EApp (EVar "renderKindArrow") (EVar "want")))) (ELit (LString "` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."))))
 (DTypeSig false "checkEffectParamsTy" (TyFun (TyCon "Ty") (TyCon "Unit")))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
 (DFunDef false "checkEffectParamsTy" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EVar "checkEffectParamsTy") (EVar "a"))) (DoExpr (EApp (EVar "checkEffectParamsTy") (EVar "b")))))
@@ -23429,7 +23465,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fromAstTypeVarApp" ((PVar "etbl") (PVar "tvs") (PVar "h") (PVar "args") (PVar "a") (PVar "b")) (EIf (EApp (EApp (EApp (EVar "anyRowSlotArg") (EVar "etbl")) (EVar "tvs")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "foldRowSlotArgs") (EVar "etbl")) (EVar "tvs")) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EApp (EVar "TyVar") (EVar "h")))) (EVar "args")) (EIf (EVar "otherwise") (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "a"))) (EApp (EApp (EApp (EVar "fromAstTypeE") (EVar "etbl")) (EVar "tvs")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRowSlotArg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "isRowSlotArg" ((PVar "etbl") (PVar "tvs") (PCon "TyVar" (PVar "n"))) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl"))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs")))))
-(DFunDef false "isRowSlotArg" ((PVar "etbl") (PVar "tvs") (PCon "TyRow" PWild (PCon "Some" (PVar "n")) PWild)) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl"))) (EApp (EVar "isNone") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "tvs")))))
+(DFunDef false "isRowSlotArg" (PWild PWild (PCon "TyRow" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isRowSlotArg" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "anyRowSlotArg" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))))
 (DFunDef false "anyRowSlotArg" (PWild PWild (PList)) (EVar "False"))
@@ -24306,7 +24342,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerIfaceParamKinds" ((PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
 (DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
 (DFunDef false "registerIfaceParamKindsGo" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false (PVar "kinds") (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))) (DoLet false false PWild (EIf (EApp (EVar "anyKRow") (EVar "kinds")) (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EVar "kinds")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
+(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
 (DTypeSig false "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))

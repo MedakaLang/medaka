@@ -845,5 +845,51 @@ for g822_order in ab ba; do
   fi
 done
 
+# ── 822: a NON-graded interface must not inherit a graded namesake's kinds ────
+#
+# The discriminating shape, and the one that was actually broken (S1, review round 2):
+# only ONE of the two interfaces need be graded.  `plainmod` is an ordinary, valid,
+# self-contained library — `GT h` is `Type -> Type` and `Box` implements it.  Because
+# `ifaceParamKindsRef` is copied into the data universe, which is NOT import-scoped, a
+# graded interface of the same name ANYWHERE in the graph made `plainmod`'s impl fail
+# T-IMPL-KIND-MISMATCH, and swapping the two unrelated import lines below flipped the
+# verdict.  The front-overlay/first-match ordering did not protect it, because a
+# non-graded interface used to register NO entry and so had no local entry to shadow
+# with — see registerIfaceParamKindsGo.
+#
+# ⚠️ This is the pin the same-named-GRADED pair above could NOT provide: that pair
+# passes on a tree with the old `<iface>@<slot>`-keyed lookup, so it only catches total
+# absence of #822.  This one fails there.  Both orders, because the bug was order-dependent.
+cat > "$TMP/g822_graded.mdk" <<'EOF'
+export interface GT f where
+  gm : f e a -> (a -> <e> f e b) -> f e b
+EOF
+cat > "$TMP/g822_plain.mdk" <<'EOF'
+export interface GT h where
+  plainm : h a -> h a
+public export data Box a = Mk a
+export impl GT Box where
+  plainm x = x
+EOF
+cat > "$TMP/g822_mix_ab.mdk" <<'EOF'
+import g822_graded.{gm}
+import g822_plain.{Box, plainm}
+main = println "ok"
+EOF
+cat > "$TMP/g822_mix_ba.mdk" <<'EOF'
+import g822_plain.{Box, plainm}
+import g822_graded.{gm}
+main = println "ok"
+EOF
+for g822_order in ab ba; do
+  g822m_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/g822_mix_$g822_order.mdk" 2>&1)"
+  g822m_code=$?
+  if [ "$g822m_code" -eq 0 ]; then
+    pass=$((pass+1)); printf 'ok   822/nongraded-namesake-%s (ordinary interface keeps its own kinds)\n' "$g822_order"
+  else
+    fail=$((fail+1)); printf 'FAIL 822/nongraded-namesake-%s (valid program rejected, exit %d: [%s])\n' "$g822_order" "$g822m_code" "$g822m_out"
+  fi
+done
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
