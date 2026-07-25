@@ -1,7 +1,7 @@
 core|method|eq  DEF main.mdk:52:2  USES 0  
 iface|ctor|Big  DEF iface.mdk:7:19  USES 1  main.mdk:23:41
 iface|ctor|Small  DEF iface.mdk:7:19  USES 4  noimport.mdk:15:26 noimport.mdk:24:7 main.mdk:23:34 main.mdk:61:15
-iface|method|sizeOf  DEF iface.mdk:4:17 iface.mdk:13:2 iface.mdk:14:2 noimport.mdk:21:2 main.mdk:33:2 main.mdk:43:2  USES 5  main.mdk:23:21 main.mdk:58:16 main.mdk:61:8 main.mdk:61:23 main.mdk:61:38
+iface|method|sizeOf  DEF iface.mdk:5:2 iface.mdk:13:2 iface.mdk:14:2 noimport.mdk:21:2 main.mdk:33:2 main.mdk:43:2  USES 5  main.mdk:23:21 main.mdk:58:16 main.mdk:61:8 main.mdk:61:23 main.mdk:61:38
 iface|ty|Box  DEF iface.mdk:7:19  USES 5  iface.mdk:12:18 noimport.mdk:15:21 noimport.mdk:23:14 main.mdk:23:29 main.mdk:57:21
 iface|ty|Sized  DEF iface.mdk:4:17  USES 2  noimport.mdk:15:14 main.mdk:23:14
 main|ctor|Crate  DEF main.mdk:29:5  USES 1  main.mdk:61:30

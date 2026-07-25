@@ -70,7 +70,7 @@ import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import support.char.{isIdentChar, isDigit, isLower, isUpper, isIdentStart}
 import support.util.{maxI, utf8Len, joinWith, splitOnChar}
 import io.{stripCR}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, mapProg}
 import types.typecheck.{
   checkProgramSchemes,
   checkProgramSchemesWithRuntime,
@@ -120,6 +120,29 @@ import frontend.ast.{
   UseGroup,
   UseWild,
   UseAlias,
+  -- #963 pun expansion (`punFieldsOfDecls` below) — the pattern side needs the
+  -- pattern constructors, the expression side the pattern-HOSTING expression
+  -- constructors.
+  Pat(..),
+  RecPatField(..),
+  Arm(..),
+  Guard(..),
+  GuardArm,
+  DoStmt(..),
+  FunClause(..),
+  MethodDefault(..),
+  Expr,
+  ELoc,
+  EDoOrigin,
+  EVar,
+  ELam,
+  ELet,
+  ELetGroup,
+  EMatch,
+  EBlock,
+  EDo,
+  EGuards,
+  ESetLit,
 }
 
 -- ── open-document store ─────────────────────────────────────────────────────
@@ -1886,16 +1909,16 @@ renameEditChecked idx runtimeSrc coreSrc key newName defs docs = match newNameIl
 -- else* and the caller applies it sight-unseen.
 --
 -- That is not hypothetical. Renaming an INTERFACE METHOD (`area` → `zarea` in
--- `interface Shape a where / area : a -> Int`) emits an edit over the span
--- `Shape` — `refindex.mdk`'s `defsOfDecl` records an interface's method decls at
--- the enclosing DECL's name `Loc` (the interface name), not each method's own,
--- so the applied edit produced `interface zarea a where` while leaving the
--- method declaration untouched: a program that no longer parses. The impl heads
--- and the call sites are indexed correctly (#1002); only the interface's own
--- method-declaration Loc is wrong. The real fix belongs in `refindex.mdk` (give
--- `methodDef` the method's child name `Loc`, exactly as `recordImplHeads`
--- already does for impl clause heads); until it lands, rename must REFUSE
--- rather than corrupt the source.
+-- `interface Shape a where / area : a -> Int`) used to emit an edit over the
+-- span `Shape` — `refindex.mdk`'s `defsOfDecl` recorded an interface's method
+-- decls at the enclosing DECL's name `Loc` (the interface name), not each
+-- method's own — so the applied edit produced `interface zarea a where` while
+-- leaving the method declaration untouched: a program that no longer parses.
+-- This arm caught it and refused. **#1013 has since fixed the Loc**, so that
+-- rename now emits a complete, correct edit set (interface decl + every impl
+-- head + every call site) and this arm no longer fires on it; the shapes that
+-- still reach it are the two puns whose element `Loc` the parser drops — see
+-- the F3(e) note below — which `pun.jsonl` pins.
 --
 -- Being a property of the EDIT SET rather than of one known bug, this also
 -- catches any future Loc regression in the same shape — the check is cheap
@@ -1905,7 +1928,7 @@ renameEmitVerified key newName all docs = match keyNsName key
   None => renameRefusal "cannot determine the kind of the symbol being renamed"
   Some (_ns, oldName) =>
     if allSpansSpell oldName all docs then
-      workspaceEditJson newName all
+      workspaceEditJson (punTablesFor all docs) newName all
     else
       renameRefusal (stringConcat [
         "the reference index reports an occurrence of `",
@@ -1942,6 +1965,237 @@ renameSrcOf p docs = match docsGet (uriOfPath p) docs
   None => match readFile p
     Ok s => Some s
     Err _ => None
+
+-- ── F3(e) PUN EXPANSION (#963) ───────────────────────────────────────────────
+-- A record PUN spells a FIELD name and a BINDER name with ONE token:
+--
+--   pattern     `area s = match s / Circle { radius } => radius * 3`
+--   expression  `mk radius = Circle { radius }`
+--
+-- Both `{ radius }` tokens are indexed — correctly — as an occurrence of the
+-- LOCAL `radius` (refindex's `recFieldBinders` gives the pattern pun the field
+-- token's own `Loc`; `walkExpr`'s `ESetLit` arm walks the bare element as an
+-- ordinary use). So the span really does spell `radius` and F3(d) waves it
+-- through; replacing it outright with `rad` yields `Circle { rad }`, which names
+-- a field that does not exist — a LOUD `Unknown field: rad` (#963). Wrong edit,
+-- and the one class span verification structurally cannot see: the span is right,
+-- the REPLACEMENT is what is wrong.
+--
+-- The fix is not a fourth refusal but the expansion the sugar already stands
+-- for: emit `radius = rad` over the whole pun token, which is what
+-- `Circle { radius = rad }` means in both pattern and expression position. The
+-- field name is preserved, the binder moves, and the applied program compiles.
+--
+-- WHY IT IS SAFE TO REWRITE MORE THAN THE NAME. A pun span reaches an edit set
+-- ONLY as a val/local occurrence: refindex never records a field USE for a
+-- record-literal label (`walkFields` drops the label) and files every field DEF
+-- at the enclosing `data` decl's own name `Loc` (`fieldDef`) — so no `field`-key
+-- edit can ever land on a pun token, and the expansion cannot collide with a
+-- field rename.
+--
+-- WHY THE DETECTION IS COMPLETE, not a best-effort scan:
+--   * PATTERN puns are intrinsic to the AST — `RecPatField name loc None` IS the
+--     pun, `Some pat` is the explicit form. No inference, no ambiguity.
+--   * EXPRESSION puns are `ESetLit`s that desugar rewrites into `ERecordCreate`,
+--     and `punRecordSetLit` reproduces `rewriteRecordPun`'s guard EXACTLY
+--     (desugar.mdk: head is a `ConNamed` ctor OF THIS FILE, non-empty, every
+--     item a bare var). Anything that guard rejects is a genuine `Set { … }` /
+--     `Map { … }` literal, whose elements are plain uses that must be replaced
+--     by the bare name — which is what falls through to. ⚠️ The per-FILE ctor
+--     scope is not a shortcut: a cross-module pun does not compile
+--     (`desugarRecordPuns` collects record names from one module's decls), so
+--     widening it would expand a genuine set element.
+--   * REACHABILITY is `mapProg`'s, i.e. desugar's own: a pun the traversal
+--     cannot reach is a pun `desugarRecordPuns` never expanded either, so it is
+--     not a record pun in any program that compiles.
+--
+-- Two pun forms are NOT expanded here and do not need to be: a MIXED brace
+-- (`Circle { radius, tag = 1 }`, which the parser folds to `ERecordCreate` via
+-- `kvElemToField` and whose element `Loc` is dropped) and a record-update pun
+-- (`{ c | radius }`, whose `EVar` the parser builds unlocated). Both leave the
+-- index pointing at the enclosing expression's span, so F3(d) already refuses
+-- them — safe, and the residual belongs to those two dropped `Loc`s, not here.
+
+-- The punned-field spans of ONE file, as ((1-based line, 0-based char), field).
+-- `[]` for a file that does not parse — the caller then emits the bare name,
+-- exactly as before; a file that does not parse also has no index entries for
+-- the rename to have found in the first place.
+punFieldsOfSrc : String -> List ((Int, Int), String)
+punFieldsOfSrc src = match parseWithPositionsOpt src
+  None => []
+  Some (decls, _) => punFieldsOfDecls decls
+
+punFieldsOfDecls : List Decl -> List ((Int, Int), String)
+punFieldsOfDecls decls =
+  let acc = Ref []
+  let recNames = recordCtorNames decls
+  -- `mapProg` for the expression side (desugar's own traversal — see the
+  -- reachability note above) and, from each node it visits, the patterns that
+  -- node HOSTS; `declParamPuns` adds the clause params `mapDecl` steps over.
+  let _ = mapProg (punVisit acc recNames) decls
+  declParamPuns decls ++ acc.value
+
+-- `mapProg`'s callback is a REWRITER; this one rewrites nothing and only
+-- harvests, so the rebuilt tree it returns is discarded.
+punVisit : Ref (List ((Int, Int), String)) -> List String -> Expr -> Expr
+punVisit acc recNames e =
+  let _ = collectExprPuns acc recNames e
+  e
+
+-- Every constructor that can head a record brace, from THIS file's decls —
+-- the same set `desugarRecordPuns` computes (a `ConNamed` variant's ctor name).
+recordCtorNames : List Decl -> List String
+recordCtorNames decls = flatMapL recordCtorNamesOf decls
+
+recordCtorNamesOf : Decl -> List String
+recordCtorNamesOf d = match innerDecl d
+  DData _ _ _ vs _ => namedVariantCtors vs
+  _ => []
+
+namedVariantCtors : List Variant -> List String
+namedVariantCtors [] = []
+namedVariantCtors ((Variant n (ConNamed _ _))::vs) = n :: namedVariantCtors vs
+namedVariantCtors (_::vs) = namedVariantCtors vs
+
+-- Push this node's puns. The `ESetLit` arm is the expression pun; every other
+-- arm hands over the patterns the node holds directly (their sub-patterns are
+-- walked by `patPuns`), which is where a pattern pun can appear.
+collectExprPuns : Ref (List ((Int, Int), String)) -> List String -> Expr -> Unit
+collectExprPuns acc recNames (ESetLit name items) =
+  if punRecordSetLit recNames name items then
+    pushPuns acc (flatMapL punItemSpan items)
+  else
+    ()
+collectExprPuns acc _ (ELam ps _) = pushPuns acc (flatMapL patPuns ps)
+collectExprPuns acc _ (ELet _ _ p _ _) = pushPuns acc (patPuns p)
+collectExprPuns acc _ (EMatch _ arms) = pushPuns acc (flatMapL armPuns arms)
+collectExprPuns acc _ (EGuards arms) = pushPuns acc (flatMapL guardArmPuns arms)
+collectExprPuns acc _ (EBlock stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (EDo stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (ELetGroup binds _) =
+  pushPuns acc (flatMapL letBindPuns binds)
+collectExprPuns _ _ _ = ()
+
+pushPuns : Ref (List ((Int, Int), String)) -> List ((Int, Int), String) -> Unit
+pushPuns acc [] = ()
+pushPuns acc found = acc := found ++ acc.value
+
+-- `rewriteRecordPun`'s guard, verbatim (desugar.mdk): a record-literal brace
+-- whose items are ALL bare vars. `Set { a, b }` fails the head test, `Map { … }`
+-- never reaches `ESetLit` at all, and `Circle { radius, tag = 1 }` is already an
+-- `ERecordCreate` — so this is true of pun braces and nothing else.
+punRecordSetLit : List String -> String -> List Expr -> Bool
+punRecordSetLit _ _ [] = False
+punRecordSetLit recNames name items = anyName recNames name && allBareVars items
+
+allBareVars : List Expr -> Bool
+allBareVars [] = True
+allBareVars (e::rest) = match punItemSpan e
+  [] => False
+  _ => allBareVars rest
+
+-- The (span, field) of one pun item — a located bare variable. `[]` for
+-- anything else, which is also how `allBareVars` rejects a non-pun brace.
+punItemSpan : Expr -> List ((Int, Int), String)
+punItemSpan (ELoc (Loc _ sl sc _ _) (EVar n)) = [((sl, sc), n)]
+punItemSpan (ELoc _ e) = punItemSpan e
+punItemSpan (EDoOrigin _ e) = punItemSpan e
+punItemSpan _ = []
+
+armPuns : Arm -> List ((Int, Int), String)
+armPuns (Arm p gs _) = patPuns p ++ flatMapL guardPuns gs
+
+guardArmPuns : GuardArm -> List ((Int, Int), String)
+guardArmPuns (GuardArm gs _) = flatMapL guardPuns gs
+
+guardPuns : Guard -> List ((Int, Int), String)
+guardPuns (GBind p _) = patPuns p
+guardPuns _ = []
+
+stmtPuns : DoStmt -> List ((Int, Int), String)
+stmtPuns (DoBind p _) = patPuns p
+stmtPuns (DoLet _ _ p _) = patPuns p
+stmtPuns _ = []
+
+letBindPuns : LetBind -> List ((Int, Int), String)
+letBindPuns (LetBind _ clauses) = flatMapL clausePuns clauses
+
+clausePuns : FunClause -> List ((Int, Int), String)
+clausePuns (FunClause ps _) = flatMapL patPuns ps
+
+-- Clause parameters: `mapDecl` maps only a decl's BODY, so a `PRec` parameter
+-- (`draw (Circle { radius }) = …`) is reachable from the decl alone.
+declParamPuns : List Decl -> List ((Int, Int), String)
+declParamPuns decls = flatMapL declParamPunsOf decls
+
+declParamPunsOf : Decl -> List ((Int, Int), String)
+declParamPunsOf d = match innerDecl d
+  DFunDef _ _ ps _ => flatMapL patPuns ps
+  DLetGroup _ binds => flatMapL letBindPuns binds
+  DImpl { methods = ms, ... } => flatMapL implMethodPuns ms
+  DInterface { methods = ms, ... } => flatMapL ifaceMethodPuns ms
+  _ => []
+
+implMethodPuns : ImplMethod -> List ((Int, Int), String)
+implMethodPuns (ImplMethod _ ps _) = flatMapL patPuns ps
+
+ifaceMethodPuns : IfaceMethod -> List ((Int, Int), String)
+ifaceMethodPuns (IfaceMethod _ _ (Some (MethodDefault ps _))) =
+  flatMapL patPuns ps
+ifaceMethodPuns _ = []
+
+-- A pattern's punned record fields: `RecPatField name loc None` IS the pun
+-- (`Some p` is the explicit `field = pat` form, whose sub-pattern is walked).
+patPuns : Pat -> List ((Int, Int), String)
+patPuns (PRec _ fields _) = flatMapL recFieldPuns fields
+patPuns (PCon _ ps) = flatMapL patPuns ps
+patPuns (PCons a b) = patPuns a ++ patPuns b
+patPuns (PTuple ps) = flatMapL patPuns ps
+patPuns (PList ps) = flatMapL patPuns ps
+patPuns (PAs _ _ p) = patPuns p
+patPuns _ = []
+
+recFieldPuns : RecPatField -> List ((Int, Int), String)
+recFieldPuns (RecPatField name (Loc _ sl sc _ _) None) = [((sl, sc), name)]
+recFieldPuns (RecPatField _ _ (Some p)) = patPuns p
+
+flatMapL : (a -> List b) -> List a -> List b
+flatMapL _ [] = []
+flatMapL f (x::xs) = f x ++ flatMapL f xs
+
+-- One pun table per DISTINCT file in the edit set. `all` is sorted by path
+-- (`compareUseLoc`), so same-path entries are contiguous and `spanSamePath`
+-- yields each file exactly once — one parse per affected file, never per edit.
+-- The enclosing request already built the whole-project index, so this is
+-- strictly cheaper than the work `renameResult` has already done.
+punTablesFor : List (String, Loc) -> Docs -> <IO> List (String, List ((Int, Int), String))
+punTablesFor [] _ = []
+punTablesFor ((p, _)::rest) docs =
+  let sameRest = spanSamePath p rest
+  let tbl = match renameSrcOf p docs
+    None => []
+    Some src => punFieldsOfSrc src
+  (p, tbl) :: punTablesFor (snd sameRest) docs
+
+punTableOf : String -> List (String, List ((Int, Int), String)) -> List ((Int, Int), String)
+punTableOf _ [] = []
+punTableOf p ((q, tbl)::rest) = if p == q then tbl else punTableOf p rest
+
+-- The replacement text for ONE edit: `field = newName` at a pun token, the bare
+-- `newName` everywhere else. Both lists are per-FILE and small (a file's puns ×
+-- that file's edits), and the request is already O(project) — see `punTablesFor`.
+punAwareText : List ((Int, Int), String) -> String -> Loc -> String
+punAwareText tbl newName (Loc _ sl sc _ _) = match punFieldAt tbl sl sc
+  Some field => stringConcat [field, " = ", newName]
+  None => newName
+
+punFieldAt : List ((Int, Int), String) -> Int -> Int -> Option String
+punFieldAt [] _ _ = None
+punFieldAt (((l, c), field)::rest) sl sc =
+  if l == sl && c == sc then
+    Some field
+  else
+    punFieldAt rest sl sc
 
 -- An external / prelude / out-of-project key: refindex mints these as
 -- `"?ext\t<ns>\t<name>"` (extKey, refindex.mdk). `defsOf` already returns `[]`
@@ -2095,16 +2349,20 @@ firstChar s =
 -- Group the sorted (path, Loc) edits by uri into a `WorkspaceEdit { changes }`.
 -- Sorted by path first (compareUseLoc), so same-path entries are contiguous —
 -- one group per file, no `List`-as-map accumulation.
-workspaceEditJson : String -> List (String, Loc) -> Json
-workspaceEditJson newName sorted =
-  jObject [("changes", jObject (groupEdits newName sorted))]
+--
+-- `puns` is the per-file punned-field table (#963): an edit that lands on a
+-- `{ radius }` token becomes `radius = <newName>`, never a bare replacement.
+workspaceEditJson : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> Json
+workspaceEditJson puns newName sorted =
+  jObject [("changes", jObject (groupEdits puns newName sorted))]
 
-groupEdits : String -> List (String, Loc) -> List (String, Json)
-groupEdits _ [] = []
-groupEdits newName ((p, loc)::rest) =
+groupEdits : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> List (String, Json)
+groupEdits _ _ [] = []
+groupEdits puns newName ((p, loc)::rest) =
   let sameRest = spanSamePath p rest
-  let edits = map (textEditJson newName) (loc :: map snd (fst sameRest))
-  (uriOfPath p, jArray edits) :: groupEdits newName (snd sameRest)
+  let tbl = punTableOf p puns
+  let edits = map (textEditJson tbl newName) (loc :: map snd (fst sameRest))
+  (uriOfPath p, jArray edits) :: groupEdits puns newName (snd sameRest)
 
 -- (edits whose path == p from the front, then the remainder) — contiguous run.
 spanSamePath : String -> List (String, Loc) -> (List (String, Loc), List (String, Loc))
@@ -2115,9 +2373,12 @@ spanSamePath p ((q, loc)::rest) =
     ((q, loc) :: fst sr, snd sr)
   else ([], (q, loc)::rest)
 
-textEditJson : String -> Loc -> Json
-textEditJson newName loc =
-  jObject [("range", jRangeOfLoc loc), ("newText", JString newName)]
+textEditJson : List ((Int, Int), String) -> String -> Loc -> Json
+textEditJson tbl newName loc = jObject
+  [
+    ("range", jRangeOfLoc loc),
+    ("newText", JString (punAwareText tbl newName loc)),
+  ]
 
 -- textDocument/rename → WorkspaceEdit | error (#254 Stage 2). Shares
 -- `renameResult` with the `medaka_rename` MCP tool. A refusal (F3) becomes a

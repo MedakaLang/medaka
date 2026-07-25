@@ -1,5 +1,5 @@
 # META
-source_lines=2307
+source_lines=2568
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -74,7 +74,7 @@ import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import support.char.{isIdentChar, isDigit, isLower, isUpper, isIdentStart}
 import support.util.{maxI, utf8Len, joinWith, splitOnChar}
 import io.{stripCR}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, mapProg}
 import types.typecheck.{
   checkProgramSchemes,
   checkProgramSchemesWithRuntime,
@@ -124,6 +124,29 @@ import frontend.ast.{
   UseGroup,
   UseWild,
   UseAlias,
+  -- #963 pun expansion (`punFieldsOfDecls` below) — the pattern side needs the
+  -- pattern constructors, the expression side the pattern-HOSTING expression
+  -- constructors.
+  Pat(..),
+  RecPatField(..),
+  Arm(..),
+  Guard(..),
+  GuardArm,
+  DoStmt(..),
+  FunClause(..),
+  MethodDefault(..),
+  Expr,
+  ELoc,
+  EDoOrigin,
+  EVar,
+  ELam,
+  ELet,
+  ELetGroup,
+  EMatch,
+  EBlock,
+  EDo,
+  EGuards,
+  ESetLit,
 }
 
 -- ── open-document store ─────────────────────────────────────────────────────
@@ -1890,16 +1913,16 @@ renameEditChecked idx runtimeSrc coreSrc key newName defs docs = match newNameIl
 -- else* and the caller applies it sight-unseen.
 --
 -- That is not hypothetical. Renaming an INTERFACE METHOD (`area` → `zarea` in
--- `interface Shape a where / area : a -> Int`) emits an edit over the span
--- `Shape` — `refindex.mdk`'s `defsOfDecl` records an interface's method decls at
--- the enclosing DECL's name `Loc` (the interface name), not each method's own,
--- so the applied edit produced `interface zarea a where` while leaving the
--- method declaration untouched: a program that no longer parses. The impl heads
--- and the call sites are indexed correctly (#1002); only the interface's own
--- method-declaration Loc is wrong. The real fix belongs in `refindex.mdk` (give
--- `methodDef` the method's child name `Loc`, exactly as `recordImplHeads`
--- already does for impl clause heads); until it lands, rename must REFUSE
--- rather than corrupt the source.
+-- `interface Shape a where / area : a -> Int`) used to emit an edit over the
+-- span `Shape` — `refindex.mdk`'s `defsOfDecl` recorded an interface's method
+-- decls at the enclosing DECL's name `Loc` (the interface name), not each
+-- method's own — so the applied edit produced `interface zarea a where` while
+-- leaving the method declaration untouched: a program that no longer parses.
+-- This arm caught it and refused. **#1013 has since fixed the Loc**, so that
+-- rename now emits a complete, correct edit set (interface decl + every impl
+-- head + every call site) and this arm no longer fires on it; the shapes that
+-- still reach it are the two puns whose element `Loc` the parser drops — see
+-- the F3(e) note below — which `pun.jsonl` pins.
 --
 -- Being a property of the EDIT SET rather than of one known bug, this also
 -- catches any future Loc regression in the same shape — the check is cheap
@@ -1909,7 +1932,7 @@ renameEmitVerified key newName all docs = match keyNsName key
   None => renameRefusal "cannot determine the kind of the symbol being renamed"
   Some (_ns, oldName) =>
     if allSpansSpell oldName all docs then
-      workspaceEditJson newName all
+      workspaceEditJson (punTablesFor all docs) newName all
     else
       renameRefusal (stringConcat [
         "the reference index reports an occurrence of `",
@@ -1946,6 +1969,237 @@ renameSrcOf p docs = match docsGet (uriOfPath p) docs
   None => match readFile p
     Ok s => Some s
     Err _ => None
+
+-- ── F3(e) PUN EXPANSION (#963) ───────────────────────────────────────────────
+-- A record PUN spells a FIELD name and a BINDER name with ONE token:
+--
+--   pattern     `area s = match s / Circle { radius } => radius * 3`
+--   expression  `mk radius = Circle { radius }`
+--
+-- Both `{ radius }` tokens are indexed — correctly — as an occurrence of the
+-- LOCAL `radius` (refindex's `recFieldBinders` gives the pattern pun the field
+-- token's own `Loc`; `walkExpr`'s `ESetLit` arm walks the bare element as an
+-- ordinary use). So the span really does spell `radius` and F3(d) waves it
+-- through; replacing it outright with `rad` yields `Circle { rad }`, which names
+-- a field that does not exist — a LOUD `Unknown field: rad` (#963). Wrong edit,
+-- and the one class span verification structurally cannot see: the span is right,
+-- the REPLACEMENT is what is wrong.
+--
+-- The fix is not a fourth refusal but the expansion the sugar already stands
+-- for: emit `radius = rad` over the whole pun token, which is what
+-- `Circle { radius = rad }` means in both pattern and expression position. The
+-- field name is preserved, the binder moves, and the applied program compiles.
+--
+-- WHY IT IS SAFE TO REWRITE MORE THAN THE NAME. A pun span reaches an edit set
+-- ONLY as a val/local occurrence: refindex never records a field USE for a
+-- record-literal label (`walkFields` drops the label) and files every field DEF
+-- at the enclosing `data` decl's own name `Loc` (`fieldDef`) — so no `field`-key
+-- edit can ever land on a pun token, and the expansion cannot collide with a
+-- field rename.
+--
+-- WHY THE DETECTION IS COMPLETE, not a best-effort scan:
+--   * PATTERN puns are intrinsic to the AST — `RecPatField name loc None` IS the
+--     pun, `Some pat` is the explicit form. No inference, no ambiguity.
+--   * EXPRESSION puns are `ESetLit`s that desugar rewrites into `ERecordCreate`,
+--     and `punRecordSetLit` reproduces `rewriteRecordPun`'s guard EXACTLY
+--     (desugar.mdk: head is a `ConNamed` ctor OF THIS FILE, non-empty, every
+--     item a bare var). Anything that guard rejects is a genuine `Set { … }` /
+--     `Map { … }` literal, whose elements are plain uses that must be replaced
+--     by the bare name — which is what falls through to. ⚠️ The per-FILE ctor
+--     scope is not a shortcut: a cross-module pun does not compile
+--     (`desugarRecordPuns` collects record names from one module's decls), so
+--     widening it would expand a genuine set element.
+--   * REACHABILITY is `mapProg`'s, i.e. desugar's own: a pun the traversal
+--     cannot reach is a pun `desugarRecordPuns` never expanded either, so it is
+--     not a record pun in any program that compiles.
+--
+-- Two pun forms are NOT expanded here and do not need to be: a MIXED brace
+-- (`Circle { radius, tag = 1 }`, which the parser folds to `ERecordCreate` via
+-- `kvElemToField` and whose element `Loc` is dropped) and a record-update pun
+-- (`{ c | radius }`, whose `EVar` the parser builds unlocated). Both leave the
+-- index pointing at the enclosing expression's span, so F3(d) already refuses
+-- them — safe, and the residual belongs to those two dropped `Loc`s, not here.
+
+-- The punned-field spans of ONE file, as ((1-based line, 0-based char), field).
+-- `[]` for a file that does not parse — the caller then emits the bare name,
+-- exactly as before; a file that does not parse also has no index entries for
+-- the rename to have found in the first place.
+punFieldsOfSrc : String -> List ((Int, Int), String)
+punFieldsOfSrc src = match parseWithPositionsOpt src
+  None => []
+  Some (decls, _) => punFieldsOfDecls decls
+
+punFieldsOfDecls : List Decl -> List ((Int, Int), String)
+punFieldsOfDecls decls =
+  let acc = Ref []
+  let recNames = recordCtorNames decls
+  -- `mapProg` for the expression side (desugar's own traversal — see the
+  -- reachability note above) and, from each node it visits, the patterns that
+  -- node HOSTS; `declParamPuns` adds the clause params `mapDecl` steps over.
+  let _ = mapProg (punVisit acc recNames) decls
+  declParamPuns decls ++ acc.value
+
+-- `mapProg`'s callback is a REWRITER; this one rewrites nothing and only
+-- harvests, so the rebuilt tree it returns is discarded.
+punVisit : Ref (List ((Int, Int), String)) -> List String -> Expr -> Expr
+punVisit acc recNames e =
+  let _ = collectExprPuns acc recNames e
+  e
+
+-- Every constructor that can head a record brace, from THIS file's decls —
+-- the same set `desugarRecordPuns` computes (a `ConNamed` variant's ctor name).
+recordCtorNames : List Decl -> List String
+recordCtorNames decls = flatMapL recordCtorNamesOf decls
+
+recordCtorNamesOf : Decl -> List String
+recordCtorNamesOf d = match innerDecl d
+  DData _ _ _ vs _ => namedVariantCtors vs
+  _ => []
+
+namedVariantCtors : List Variant -> List String
+namedVariantCtors [] = []
+namedVariantCtors ((Variant n (ConNamed _ _))::vs) = n :: namedVariantCtors vs
+namedVariantCtors (_::vs) = namedVariantCtors vs
+
+-- Push this node's puns. The `ESetLit` arm is the expression pun; every other
+-- arm hands over the patterns the node holds directly (their sub-patterns are
+-- walked by `patPuns`), which is where a pattern pun can appear.
+collectExprPuns : Ref (List ((Int, Int), String)) -> List String -> Expr -> Unit
+collectExprPuns acc recNames (ESetLit name items) =
+  if punRecordSetLit recNames name items then
+    pushPuns acc (flatMapL punItemSpan items)
+  else
+    ()
+collectExprPuns acc _ (ELam ps _) = pushPuns acc (flatMapL patPuns ps)
+collectExprPuns acc _ (ELet _ _ p _ _) = pushPuns acc (patPuns p)
+collectExprPuns acc _ (EMatch _ arms) = pushPuns acc (flatMapL armPuns arms)
+collectExprPuns acc _ (EGuards arms) = pushPuns acc (flatMapL guardArmPuns arms)
+collectExprPuns acc _ (EBlock stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (EDo stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (ELetGroup binds _) =
+  pushPuns acc (flatMapL letBindPuns binds)
+collectExprPuns _ _ _ = ()
+
+pushPuns : Ref (List ((Int, Int), String)) -> List ((Int, Int), String) -> Unit
+pushPuns acc [] = ()
+pushPuns acc found = acc := found ++ acc.value
+
+-- `rewriteRecordPun`'s guard, verbatim (desugar.mdk): a record-literal brace
+-- whose items are ALL bare vars. `Set { a, b }` fails the head test, `Map { … }`
+-- never reaches `ESetLit` at all, and `Circle { radius, tag = 1 }` is already an
+-- `ERecordCreate` — so this is true of pun braces and nothing else.
+punRecordSetLit : List String -> String -> List Expr -> Bool
+punRecordSetLit _ _ [] = False
+punRecordSetLit recNames name items = anyName recNames name && allBareVars items
+
+allBareVars : List Expr -> Bool
+allBareVars [] = True
+allBareVars (e::rest) = match punItemSpan e
+  [] => False
+  _ => allBareVars rest
+
+-- The (span, field) of one pun item — a located bare variable. `[]` for
+-- anything else, which is also how `allBareVars` rejects a non-pun brace.
+punItemSpan : Expr -> List ((Int, Int), String)
+punItemSpan (ELoc (Loc _ sl sc _ _) (EVar n)) = [((sl, sc), n)]
+punItemSpan (ELoc _ e) = punItemSpan e
+punItemSpan (EDoOrigin _ e) = punItemSpan e
+punItemSpan _ = []
+
+armPuns : Arm -> List ((Int, Int), String)
+armPuns (Arm p gs _) = patPuns p ++ flatMapL guardPuns gs
+
+guardArmPuns : GuardArm -> List ((Int, Int), String)
+guardArmPuns (GuardArm gs _) = flatMapL guardPuns gs
+
+guardPuns : Guard -> List ((Int, Int), String)
+guardPuns (GBind p _) = patPuns p
+guardPuns _ = []
+
+stmtPuns : DoStmt -> List ((Int, Int), String)
+stmtPuns (DoBind p _) = patPuns p
+stmtPuns (DoLet _ _ p _) = patPuns p
+stmtPuns _ = []
+
+letBindPuns : LetBind -> List ((Int, Int), String)
+letBindPuns (LetBind _ clauses) = flatMapL clausePuns clauses
+
+clausePuns : FunClause -> List ((Int, Int), String)
+clausePuns (FunClause ps _) = flatMapL patPuns ps
+
+-- Clause parameters: `mapDecl` maps only a decl's BODY, so a `PRec` parameter
+-- (`draw (Circle { radius }) = …`) is reachable from the decl alone.
+declParamPuns : List Decl -> List ((Int, Int), String)
+declParamPuns decls = flatMapL declParamPunsOf decls
+
+declParamPunsOf : Decl -> List ((Int, Int), String)
+declParamPunsOf d = match innerDecl d
+  DFunDef _ _ ps _ => flatMapL patPuns ps
+  DLetGroup _ binds => flatMapL letBindPuns binds
+  DImpl { methods = ms, ... } => flatMapL implMethodPuns ms
+  DInterface { methods = ms, ... } => flatMapL ifaceMethodPuns ms
+  _ => []
+
+implMethodPuns : ImplMethod -> List ((Int, Int), String)
+implMethodPuns (ImplMethod _ ps _) = flatMapL patPuns ps
+
+ifaceMethodPuns : IfaceMethod -> List ((Int, Int), String)
+ifaceMethodPuns (IfaceMethod _ _ (Some (MethodDefault ps _))) =
+  flatMapL patPuns ps
+ifaceMethodPuns _ = []
+
+-- A pattern's punned record fields: `RecPatField name loc None` IS the pun
+-- (`Some p` is the explicit `field = pat` form, whose sub-pattern is walked).
+patPuns : Pat -> List ((Int, Int), String)
+patPuns (PRec _ fields _) = flatMapL recFieldPuns fields
+patPuns (PCon _ ps) = flatMapL patPuns ps
+patPuns (PCons a b) = patPuns a ++ patPuns b
+patPuns (PTuple ps) = flatMapL patPuns ps
+patPuns (PList ps) = flatMapL patPuns ps
+patPuns (PAs _ _ p) = patPuns p
+patPuns _ = []
+
+recFieldPuns : RecPatField -> List ((Int, Int), String)
+recFieldPuns (RecPatField name (Loc _ sl sc _ _) None) = [((sl, sc), name)]
+recFieldPuns (RecPatField _ _ (Some p)) = patPuns p
+
+flatMapL : (a -> List b) -> List a -> List b
+flatMapL _ [] = []
+flatMapL f (x::xs) = f x ++ flatMapL f xs
+
+-- One pun table per DISTINCT file in the edit set. `all` is sorted by path
+-- (`compareUseLoc`), so same-path entries are contiguous and `spanSamePath`
+-- yields each file exactly once — one parse per affected file, never per edit.
+-- The enclosing request already built the whole-project index, so this is
+-- strictly cheaper than the work `renameResult` has already done.
+punTablesFor : List (String, Loc) -> Docs -> <IO> List (String, List ((Int, Int), String))
+punTablesFor [] _ = []
+punTablesFor ((p, _)::rest) docs =
+  let sameRest = spanSamePath p rest
+  let tbl = match renameSrcOf p docs
+    None => []
+    Some src => punFieldsOfSrc src
+  (p, tbl) :: punTablesFor (snd sameRest) docs
+
+punTableOf : String -> List (String, List ((Int, Int), String)) -> List ((Int, Int), String)
+punTableOf _ [] = []
+punTableOf p ((q, tbl)::rest) = if p == q then tbl else punTableOf p rest
+
+-- The replacement text for ONE edit: `field = newName` at a pun token, the bare
+-- `newName` everywhere else. Both lists are per-FILE and small (a file's puns ×
+-- that file's edits), and the request is already O(project) — see `punTablesFor`.
+punAwareText : List ((Int, Int), String) -> String -> Loc -> String
+punAwareText tbl newName (Loc _ sl sc _ _) = match punFieldAt tbl sl sc
+  Some field => stringConcat [field, " = ", newName]
+  None => newName
+
+punFieldAt : List ((Int, Int), String) -> Int -> Int -> Option String
+punFieldAt [] _ _ = None
+punFieldAt (((l, c), field)::rest) sl sc =
+  if l == sl && c == sc then
+    Some field
+  else
+    punFieldAt rest sl sc
 
 -- An external / prelude / out-of-project key: refindex mints these as
 -- `"?ext\t<ns>\t<name>"` (extKey, refindex.mdk). `defsOf` already returns `[]`
@@ -2099,16 +2353,20 @@ firstChar s =
 -- Group the sorted (path, Loc) edits by uri into a `WorkspaceEdit { changes }`.
 -- Sorted by path first (compareUseLoc), so same-path entries are contiguous —
 -- one group per file, no `List`-as-map accumulation.
-workspaceEditJson : String -> List (String, Loc) -> Json
-workspaceEditJson newName sorted =
-  jObject [("changes", jObject (groupEdits newName sorted))]
+--
+-- `puns` is the per-file punned-field table (#963): an edit that lands on a
+-- `{ radius }` token becomes `radius = <newName>`, never a bare replacement.
+workspaceEditJson : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> Json
+workspaceEditJson puns newName sorted =
+  jObject [("changes", jObject (groupEdits puns newName sorted))]
 
-groupEdits : String -> List (String, Loc) -> List (String, Json)
-groupEdits _ [] = []
-groupEdits newName ((p, loc)::rest) =
+groupEdits : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> List (String, Json)
+groupEdits _ _ [] = []
+groupEdits puns newName ((p, loc)::rest) =
   let sameRest = spanSamePath p rest
-  let edits = map (textEditJson newName) (loc :: map snd (fst sameRest))
-  (uriOfPath p, jArray edits) :: groupEdits newName (snd sameRest)
+  let tbl = punTableOf p puns
+  let edits = map (textEditJson tbl newName) (loc :: map snd (fst sameRest))
+  (uriOfPath p, jArray edits) :: groupEdits puns newName (snd sameRest)
 
 -- (edits whose path == p from the front, then the remainder) — contiguous run.
 spanSamePath : String -> List (String, Loc) -> (List (String, Loc), List (String, Loc))
@@ -2119,9 +2377,12 @@ spanSamePath p ((q, loc)::rest) =
     ((q, loc) :: fst sr, snd sr)
   else ([], (q, loc)::rest)
 
-textEditJson : String -> Loc -> Json
-textEditJson newName loc =
-  jObject [("range", jRangeOfLoc loc), ("newText", JString newName)]
+textEditJson : List ((Int, Int), String) -> String -> Loc -> Json
+textEditJson tbl newName loc = jObject
+  [
+    ("range", jRangeOfLoc loc),
+    ("newText", JString (punAwareText tbl newName loc)),
+  ]
 
 -- textDocument/rename → WorkspaceEdit | error (#254 Stage 2). Shares
 -- `renameResult` with the `medaka_rename` MCP tool. A refusal (F3) becomes a
@@ -2318,12 +2579,12 @@ unit = ()
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "mapProg" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkProgramSchemes" false) (mem "checkProgramSchemesWithRuntime" false) (mem "ppSchemeNamed" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false) (mem "allDefKeys" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" false) (mem "DoStmt" true) (mem "FunClause" true) (mem "MethodDefault" true) (mem "Expr" false) (mem "ELoc" false) (mem "EDoOrigin" false) (mem "EVar" false) (mem "ELam" false) (mem "ELet" false) (mem "ELetGroup" false) (mem "EMatch" false) (mem "EBlock" false) (mem "EDo" false) (mem "EGuards" false) (mem "ESetLit" false))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -2745,7 +3006,7 @@ unit = ()
 (DTypeSig false "renameEditChecked" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json"))))))))))
 (DFunDef false "renameEditChecked" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "key") (PVar "newName") (PVar "defs") (PVar "docs")) (EMatch (EApp (EApp (EVar "newNameIllegal") (EVar "key")) (EVar "newName")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EIf (EApp (EApp (EApp (EApp (EApp (EVar "renameCollides") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "key")) (EVar "newName")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "renaming to `")) (EVar "newName") (ELit (LString "` would collide with an existing binder"))))) (EBlock (DoLet false false (PVar "all") (EBinOp "++" (EVar "defs") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renameEmitVerified") (EVar "key")) (EVar "newName")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EVar "all"))) (EVar "docs"))))))))
 (DTypeSig false "renameEmitVerified" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "all")) (EVar "docs")) (EApp (EApp (EVar "workspaceEditJson") (EVar "newName")) (EVar "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
+(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "all")) (EVar "docs")) (EApp (EApp (EApp (EVar "workspaceEditJson") (EApp (EApp (EVar "punTablesFor") (EVar "all")) (EVar "docs"))) (EVar "newName")) (EVar "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
 (DTypeSig false "allSpansSpell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "allSpansSpell" (PWild (PList) PWild) (EVar "True"))
 (DFunDef false "allSpansSpell" ((PVar "oldName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "spanSpells") (EVar "oldName")) (EVar "p")) (EVar "loc")) (EVar "docs")) (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "rest")) (EVar "docs"))))
@@ -2753,6 +3014,93 @@ unit = ()
 (DFunDef false "spanSpells" ((PVar "oldName") (PVar "p") (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "docs")) (EIf (EBinOp "||" (EBinOp "!=" (EVar "sl") (EVar "el")) (EBinOp "!=" (EBinOp "-" (EVar "ec") (EVar "sc")) (EApp (EVar "stringLength") (EVar "oldName")))) (EVar "False") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (arm (PCon "Some" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "oldName"))) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "renameSrcOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "renameSrcOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "p"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "Err" PWild) () (EVar "None"))))))
+(DTypeSig false "punFieldsOfSrc" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfSrc" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "punFieldsOfDecls") (EVar "decls")))))
+(DTypeSig false "punFieldsOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfDecls" ((PVar "decls")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "recNames") (EApp (EVar "recordCtorNames") (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "punVisit") (EVar "acc")) (EVar "recNames"))) (EVar "decls"))) (DoExpr (EBinOp "++" (EApp (EVar "declParamPuns") (EVar "decls")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "punVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "punVisit" ((PVar "acc") (PVar "recNames") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExprPuns") (EVar "acc")) (EVar "recNames")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "recordCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNames" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "recordCtorNamesOf")) (EVar "decls")))
+(DTypeSig false "recordCtorNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNamesOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DData" PWild PWild PWild (PVar "vs") PWild) () (EApp (EVar "namedVariantCtors") (EVar "vs"))) (arm PWild () (EListLit))))
+(DTypeSig false "namedVariantCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "namedVariantCtors" ((PList)) (EListLit))
+(DFunDef false "namedVariantCtors" ((PCons (PCon "Variant" (PVar "n") (PCon "ConNamed" PWild PWild)) (PVar "vs"))) (EBinOp "::" (EVar "n") (EApp (EVar "namedVariantCtors") (EVar "vs"))))
+(DFunDef false "namedVariantCtors" ((PCons PWild (PVar "vs"))) (EApp (EVar "namedVariantCtors") (EVar "vs")))
+(DTypeSig false "collectExprPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "collectExprPuns" ((PVar "acc") (PVar "recNames") (PCon "ESetLit" (PVar "name") (PVar "items"))) (EIf (EApp (EApp (EApp (EVar "punRecordSetLit") (EVar "recNames")) (EVar "name")) (EVar "items")) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "punItemSpan")) (EVar "items"))) (ELit LUnit)))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELam" (PVar "ps") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELet" PWild PWild (PVar "p") PWild PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EVar "patPuns") (EVar "p"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "armPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "guardArmPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELetGroup" (PVar "binds") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))))
+(DFunDef false "collectExprPuns" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "pushPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "pushPuns" ((PVar "acc") (PList)) (ELit LUnit))
+(DFunDef false "pushPuns" ((PVar "acc") (PVar "found")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EVar "found") (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "punRecordSetLit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
+(DFunDef false "punRecordSetLit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "punRecordSetLit" ((PVar "recNames") (PVar "name") (PVar "items")) (EBinOp "&&" (EApp (EApp (EVar "anyName") (EVar "recNames")) (EVar "name")) (EApp (EVar "allBareVars") (EVar "items"))))
+(DTypeSig false "allBareVars" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "allBareVars" ((PList)) (EVar "True"))
+(DFunDef false "allBareVars" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "punItemSpan") (EVar "e")) (arm (PList) () (EVar "False")) (arm PWild () (EApp (EVar "allBareVars") (EVar "rest")))))
+(DTypeSig false "punItemSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "EVar" (PVar "n")))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "n"))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" (PWild) (EListLit))
+(DTypeSig false "armPuns" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "armPuns" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "++" (EApp (EVar "patPuns") (EVar "p")) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs"))))
+(DTypeSig false "guardArmPuns" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardArmPuns" ((PCon "GuardArm" (PVar "gs") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs")))
+(DTypeSig false "guardPuns" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardPuns" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "guardPuns" (PWild) (EListLit))
+(DTypeSig false "stmtPuns" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "stmtPuns" ((PCon "DoBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" ((PCon "DoLet" PWild PWild (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" (PWild) (EListLit))
+(DTypeSig false "letBindPuns" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "letBindPuns" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMapL") (EVar "clausePuns")) (EVar "clauses")))
+(DTypeSig false "clausePuns" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "clausePuns" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "declParamPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPuns" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "declParamPunsOf")) (EVar "decls")))
+(DTypeSig false "declParamPunsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPunsOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DFunDef" PWild PWild (PVar "ps") PWild) () (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "implMethodPuns")) (EVar "ms"))) (arm (PRec "DInterface" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "ifaceMethodPuns")) (EVar "ms"))) (arm PWild () (EListLit))))
+(DTypeSig false "implMethodPuns" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "implMethodPuns" ((PCon "ImplMethod" PWild (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "ifaceMethodPuns" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "ifaceMethodPuns" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") PWild)))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "ifaceMethodPuns" (PWild) (EListLit))
+(DTypeSig false "patPuns" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "patPuns" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "recFieldPuns")) (EVar "fields")))
+(DFunDef false "patPuns" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patPuns") (EVar "a")) (EApp (EVar "patPuns") (EVar "b"))))
+(DFunDef false "patPuns" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "patPuns" (PWild) (EListLit))
+(DTypeSig false "recFieldPuns" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" (PVar "name") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "None"))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "name"))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patPuns") (EVar "p")))
+(DTypeSig false "flatMapL" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
+(DFunDef false "flatMapL" (PWild (PList)) (EListLit))
+(DFunDef false "flatMapL" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "flatMapL") (EVar "f")) (EVar "xs"))))
+(DTypeSig false "punTablesFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))))))
+(DFunDef false "punTablesFor" ((PList) PWild) (EListLit))
+(DFunDef false "punTablesFor" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "docs")) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "punFieldsOfSrc") (EVar "src"))))) (DoExpr (EBinOp "::" (ETuple (EVar "p") (EVar "tbl")) (EApp (EApp (EVar "punTablesFor") (EApp (EVar "snd") (EVar "sameRest"))) (EVar "docs"))))))
+(DTypeSig false "punTableOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "punTableOf" (PWild (PList)) (EListLit))
+(DFunDef false "punTableOf" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "tbl")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "q")) (EVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "punAwareText" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "punAwareText" ((PVar "tbl") (PVar "newName") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "punFieldAt") (EVar "tbl")) (EVar "sl")) (EVar "sc")) (arm (PCon "Some" (PVar "field")) () (EApp (EVar "stringConcat") (EListLit (EVar "field") (ELit (LString " = ")) (EVar "newName")))) (arm (PCon "None") () (EVar "newName"))))
+(DTypeSig false "punFieldAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "punFieldAt" ((PList) PWild PWild) (EVar "None"))
+(DFunDef false "punFieldAt" ((PCons (PTuple (PTuple (PVar "l") (PVar "c")) (PVar "field")) (PVar "rest")) (PVar "sl") (PVar "sc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "sl")) (EBinOp "==" (EVar "c") (EVar "sc"))) (EApp (EVar "Some") (EVar "field")) (EApp (EApp (EApp (EVar "punFieldAt") (EVar "rest")) (EVar "sl")) (EVar "sc"))))
 (DTypeSig false "isExternalKey" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExternalKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "m") PWild) () (EBinOp "==" (EVar "m") (ELit (LString "?ext")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "keyTab" (TyCon "Char"))
@@ -2787,16 +3135,16 @@ unit = ()
 (DFunDef false "allIdentCharsGo" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "True") (EIf (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "allIdentCharsGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DFunDef false "firstChar" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "arr")))))))
-(DTypeSig false "workspaceEditJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json"))))
-(DFunDef false "workspaceEditJson" ((PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EVar "groupEdits") (EVar "newName")) (EVar "sorted")))))))
-(DTypeSig false "groupEdits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "groupEdits" (PWild (PList)) (EListLit))
-(DFunDef false "groupEdits" ((PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "edits") (EApp (EApp (EVar "map") (EApp (EVar "textEditJson") (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EVar "groupEdits") (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
+(DTypeSig false "workspaceEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json")))))
+(DFunDef false "workspaceEditJson" ((PVar "puns") (PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EVar "sorted")))))))
+(DTypeSig false "groupEdits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))))
+(DFunDef false "groupEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "groupEdits" ((PVar "puns") (PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "puns"))) (DoLet false false (PVar "edits") (EApp (EApp (EVar "map") (EApp (EApp (EVar "textEditJson") (EVar "tbl")) (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
 (DTypeSig false "spanSamePath" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))))
 (DFunDef false "spanSamePath" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "spanSamePath" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EApp (EVar "fst") (EVar "sr"))) (EApp (EVar "snd") (EVar "sr"))))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EVar "rest")))))
-(DTypeSig false "textEditJson" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "textEditJson" ((PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "newName"))))))
+(DTypeSig false "textEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json")))))
+(DFunDef false "textEditJson" ((PVar "tbl") (PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EApp (EApp (EApp (EVar "punAwareText") (EVar "tbl")) (EVar "newName")) (EVar "loc")))))))
 (DTypeSig false "handleRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleRename" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "msg") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a document uri")))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "document is not open")))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EIf (EApp (EVar "isRenameRefusal") (EVar "msg")) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseErr") (EVar "idJson")) (EApp (EVar "renameReasonOf") (EVar "msg")))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "msg")))))))
 (DTypeSig false "renameReasonOf" (TyFun (TyCon "Json") (TyCon "String")))
@@ -2838,12 +3186,12 @@ unit = ()
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "splitOnChar" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "mapProg" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkProgramSchemes" false) (mem "checkProgramSchemesWithRuntime" false) (mem "ppSchemeNamed" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false) (mem "allDefKeys" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" false) (mem "DoStmt" true) (mem "FunClause" true) (mem "MethodDefault" true) (mem "Expr" false) (mem "ELoc" false) (mem "EDoOrigin" false) (mem "EVar" false) (mem "ELam" false) (mem "ELet" false) (mem "ELetGroup" false) (mem "EMatch" false) (mem "EBlock" false) (mem "EDo" false) (mem "EGuards" false) (mem "ESetLit" false))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -3265,7 +3613,7 @@ unit = ()
 (DTypeSig false "renameEditChecked" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json"))))))))))
 (DFunDef false "renameEditChecked" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "key") (PVar "newName") (PVar "defs") (PVar "docs")) (EMatch (EApp (EApp (EVar "newNameIllegal") (EVar "key")) (EVar "newName")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EIf (EApp (EApp (EApp (EApp (EApp (EVar "renameCollides") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "key")) (EVar "newName")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "renaming to `")) (EVar "newName") (ELit (LString "` would collide with an existing binder"))))) (EBlock (DoLet false false (PVar "all") (EBinOp "++" (EVar "defs") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "renameEmitVerified") (EVar "key")) (EVar "newName")) (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EDictApp "all"))) (EVar "docs"))))))))
 (DTypeSig false "renameEmitVerified" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EDictApp "all")) (EVar "docs")) (EApp (EApp (EVar "workspaceEditJson") (EVar "newName")) (EDictApp "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
+(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EDictApp "all")) (EVar "docs")) (EApp (EApp (EApp (EVar "workspaceEditJson") (EApp (EApp (EVar "punTablesFor") (EDictApp "all")) (EVar "docs"))) (EVar "newName")) (EDictApp "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
 (DTypeSig false "allSpansSpell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "allSpansSpell" (PWild (PList) PWild) (EVar "True"))
 (DFunDef false "allSpansSpell" ((PVar "oldName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "spanSpells") (EVar "oldName")) (EVar "p")) (EVar "loc")) (EVar "docs")) (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "rest")) (EVar "docs"))))
@@ -3273,6 +3621,93 @@ unit = ()
 (DFunDef false "spanSpells" ((PVar "oldName") (PVar "p") (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "docs")) (EIf (EBinOp "||" (EBinOp "!=" (EVar "sl") (EVar "el")) (EBinOp "!=" (EBinOp "-" (EVar "ec") (EVar "sc")) (EApp (EVar "stringLength") (EVar "oldName")))) (EVar "False") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (arm (PCon "Some" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "oldName"))) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "renameSrcOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "renameSrcOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "p"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "Err" PWild) () (EVar "None"))))))
+(DTypeSig false "punFieldsOfSrc" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfSrc" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "punFieldsOfDecls") (EVar "decls")))))
+(DTypeSig false "punFieldsOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfDecls" ((PVar "decls")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "recNames") (EApp (EVar "recordCtorNames") (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "punVisit") (EVar "acc")) (EVar "recNames"))) (EVar "decls"))) (DoExpr (EBinOp "++" (EApp (EVar "declParamPuns") (EVar "decls")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "punVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "punVisit" ((PVar "acc") (PVar "recNames") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExprPuns") (EVar "acc")) (EVar "recNames")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "recordCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNames" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "recordCtorNamesOf")) (EVar "decls")))
+(DTypeSig false "recordCtorNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNamesOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DData" PWild PWild PWild (PVar "vs") PWild) () (EApp (EVar "namedVariantCtors") (EVar "vs"))) (arm PWild () (EListLit))))
+(DTypeSig false "namedVariantCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "namedVariantCtors" ((PList)) (EListLit))
+(DFunDef false "namedVariantCtors" ((PCons (PCon "Variant" (PVar "n") (PCon "ConNamed" PWild PWild)) (PVar "vs"))) (EBinOp "::" (EVar "n") (EApp (EVar "namedVariantCtors") (EVar "vs"))))
+(DFunDef false "namedVariantCtors" ((PCons PWild (PVar "vs"))) (EApp (EVar "namedVariantCtors") (EVar "vs")))
+(DTypeSig false "collectExprPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "collectExprPuns" ((PVar "acc") (PVar "recNames") (PCon "ESetLit" (PVar "name") (PVar "items"))) (EIf (EApp (EApp (EApp (EVar "punRecordSetLit") (EVar "recNames")) (EVar "name")) (EVar "items")) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "punItemSpan")) (EVar "items"))) (ELit LUnit)))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELam" (PVar "ps") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELet" PWild PWild (PVar "p") PWild PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EVar "patPuns") (EVar "p"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "armPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "guardArmPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELetGroup" (PVar "binds") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))))
+(DFunDef false "collectExprPuns" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "pushPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "pushPuns" ((PVar "acc") (PList)) (ELit LUnit))
+(DFunDef false "pushPuns" ((PVar "acc") (PVar "found")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EVar "found") (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "punRecordSetLit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
+(DFunDef false "punRecordSetLit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "punRecordSetLit" ((PVar "recNames") (PVar "name") (PVar "items")) (EBinOp "&&" (EApp (EApp (EVar "anyName") (EVar "recNames")) (EVar "name")) (EApp (EVar "allBareVars") (EVar "items"))))
+(DTypeSig false "allBareVars" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "allBareVars" ((PList)) (EVar "True"))
+(DFunDef false "allBareVars" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "punItemSpan") (EVar "e")) (arm (PList) () (EVar "False")) (arm PWild () (EApp (EVar "allBareVars") (EVar "rest")))))
+(DTypeSig false "punItemSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "EVar" (PVar "n")))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "n"))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" (PWild) (EListLit))
+(DTypeSig false "armPuns" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "armPuns" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "++" (EApp (EVar "patPuns") (EVar "p")) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs"))))
+(DTypeSig false "guardArmPuns" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardArmPuns" ((PCon "GuardArm" (PVar "gs") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs")))
+(DTypeSig false "guardPuns" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardPuns" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "guardPuns" (PWild) (EListLit))
+(DTypeSig false "stmtPuns" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "stmtPuns" ((PCon "DoBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" ((PCon "DoLet" PWild PWild (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" (PWild) (EListLit))
+(DTypeSig false "letBindPuns" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "letBindPuns" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMapL") (EVar "clausePuns")) (EVar "clauses")))
+(DTypeSig false "clausePuns" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "clausePuns" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "declParamPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPuns" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "declParamPunsOf")) (EVar "decls")))
+(DTypeSig false "declParamPunsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPunsOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DFunDef" PWild PWild (PVar "ps") PWild) () (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "implMethodPuns")) (EVar "ms"))) (arm (PRec "DInterface" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "ifaceMethodPuns")) (EVar "ms"))) (arm PWild () (EListLit))))
+(DTypeSig false "implMethodPuns" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "implMethodPuns" ((PCon "ImplMethod" PWild (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "ifaceMethodPuns" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "ifaceMethodPuns" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") PWild)))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "ifaceMethodPuns" (PWild) (EListLit))
+(DTypeSig false "patPuns" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "patPuns" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "recFieldPuns")) (EVar "fields")))
+(DFunDef false "patPuns" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patPuns") (EVar "a")) (EApp (EVar "patPuns") (EVar "b"))))
+(DFunDef false "patPuns" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "patPuns" (PWild) (EListLit))
+(DTypeSig false "recFieldPuns" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" (PVar "name") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "None"))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "name"))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patPuns") (EVar "p")))
+(DTypeSig false "flatMapL" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
+(DFunDef false "flatMapL" (PWild (PList)) (EListLit))
+(DFunDef false "flatMapL" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "flatMapL") (EVar "f")) (EVar "xs"))))
+(DTypeSig false "punTablesFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))))))
+(DFunDef false "punTablesFor" ((PList) PWild) (EListLit))
+(DFunDef false "punTablesFor" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "docs")) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "punFieldsOfSrc") (EVar "src"))))) (DoExpr (EBinOp "::" (ETuple (EVar "p") (EVar "tbl")) (EApp (EApp (EVar "punTablesFor") (EApp (EVar "snd") (EVar "sameRest"))) (EVar "docs"))))))
+(DTypeSig false "punTableOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "punTableOf" (PWild (PList)) (EListLit))
+(DFunDef false "punTableOf" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "tbl")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "q")) (EVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "punAwareText" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "punAwareText" ((PVar "tbl") (PVar "newName") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "punFieldAt") (EVar "tbl")) (EVar "sl")) (EVar "sc")) (arm (PCon "Some" (PVar "field")) () (EApp (EVar "stringConcat") (EListLit (EVar "field") (ELit (LString " = ")) (EVar "newName")))) (arm (PCon "None") () (EVar "newName"))))
+(DTypeSig false "punFieldAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "punFieldAt" ((PList) PWild PWild) (EVar "None"))
+(DFunDef false "punFieldAt" ((PCons (PTuple (PTuple (PVar "l") (PVar "c")) (PVar "field")) (PVar "rest")) (PVar "sl") (PVar "sc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "sl")) (EBinOp "==" (EVar "c") (EVar "sc"))) (EApp (EVar "Some") (EVar "field")) (EApp (EApp (EApp (EVar "punFieldAt") (EVar "rest")) (EVar "sl")) (EVar "sc"))))
 (DTypeSig false "isExternalKey" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExternalKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "m") PWild) () (EBinOp "==" (EVar "m") (ELit (LString "?ext")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "keyTab" (TyCon "Char"))
@@ -3307,16 +3742,16 @@ unit = ()
 (DFunDef false "allIdentCharsGo" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "True") (EIf (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "allIdentCharsGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DFunDef false "firstChar" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "arr")))))))
-(DTypeSig false "workspaceEditJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json"))))
-(DFunDef false "workspaceEditJson" ((PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EVar "groupEdits") (EVar "newName")) (EVar "sorted")))))))
-(DTypeSig false "groupEdits" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "groupEdits" (PWild (PList)) (EListLit))
-(DFunDef false "groupEdits" ((PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "edits") (EApp (EApp (EMethodRef "map") (EApp (EVar "textEditJson") (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EVar "groupEdits") (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
+(DTypeSig false "workspaceEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json")))))
+(DFunDef false "workspaceEditJson" ((PVar "puns") (PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EVar "sorted")))))))
+(DTypeSig false "groupEdits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))))
+(DFunDef false "groupEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "groupEdits" ((PVar "puns") (PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "puns"))) (DoLet false false (PVar "edits") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "textEditJson") (EVar "tbl")) (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
 (DTypeSig false "spanSamePath" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))))
 (DFunDef false "spanSamePath" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "spanSamePath" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EApp (EVar "fst") (EVar "sr"))) (EApp (EVar "snd") (EVar "sr"))))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EVar "rest")))))
-(DTypeSig false "textEditJson" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json"))))
-(DFunDef false "textEditJson" ((PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "newName"))))))
+(DTypeSig false "textEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json")))))
+(DFunDef false "textEditJson" ((PVar "tbl") (PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EApp (EApp (EApp (EVar "punAwareText") (EVar "tbl")) (EVar "newName")) (EVar "loc")))))))
 (DTypeSig false "handleRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleRename" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "msg") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a document uri")))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "document is not open")))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EIf (EApp (EVar "isRenameRefusal") (EVar "msg")) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseErr") (EVar "idJson")) (EApp (EVar "renameReasonOf") (EVar "msg")))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "msg")))))))
 (DTypeSig false "renameReasonOf" (TyFun (TyCon "Json") (TyCon "String")))

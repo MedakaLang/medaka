@@ -82,28 +82,65 @@
 #     everything. A gate whose new cases only ever assert refusals cannot tell
 #     "validated" from "broken".
 #
-# WHAT ifacemethod.jsonl PROVES (rename/ifdefs.mdk) — F3(d) SPAN VERIFICATION
+# WHAT ifacemethod.jsonl PROVES (rename/ifdefs.mdk) — INTERFACE-METHOD RENAME
 # ---------------------------------------------------------------------------
 # The other two transcripts vet the REQUEST (which symbol, which new name); this
 # one vets the INDEX the edits are derived from. `refindex.mdk`'s `defsOfDecl`
-# records an interface's METHOD DECLARATIONS at the enclosing decl's name `Loc`
-# — the INTERFACE name — instead of each method's own name token, so a rename of
-# an interface method emitted an edit over `interface Shp` and left the method
-# declaration untouched: source that no longer parses. (The impl clause heads and
-# the call sites are indexed correctly, #1002; only the interface's own method
-# decl Loc is wrong. The real fix belongs in refindex.mdk — give `methodDef` the
-# method's child name Loc, as `recordImplHeads` already does.)
+# USED TO record an interface's METHOD DECLARATIONS at the enclosing decl's name
+# `Loc` — the INTERFACE name — instead of each method's own name token, so a
+# rename of an interface method emitted an edit over `interface Shp` and left the
+# method declaration untouched: source that no longer parses. F3(d) span
+# verification refused it. **#1013 fixed that Loc**, so the transcript now
+# asserts the POSITIVE outcome; the corpus's F3(d) negative case moved to
+# `pun.jsonl` Q12 (below), which is where span verification is still proven to
+# discriminate.
 #
 #   Q7 (id 2): rename the interface method `zoneArea` at ifdefs.mdk 25:12 (the
-#     first use in `zoneTotal = zoneArea (Sqr 3) + …`) to `zoneSize`. Must be a
-#     REFUSAL: `renameEmitVerified` (lsp.mdk) re-reads every edit span and finds
-#     one that does not spell `zoneArea`. Never a WorkspaceEdit — an applied one
-#     corrupts the interface header.
+#     first use in `zoneTotal = zoneArea (Sqr 3) + …`) to `zoneSize`. Must be the
+#     COMPLETE 5-edit WorkspaceEdit — the interface's own method declaration
+#     (12:2), BOTH impl clause heads (17:2, 22:2, #1002), and both call sites
+#     (25:12, 25:31). Hand-verified: applying all five yields a module that still
+#     checks clean.
 #
 #   Q8 (id 3): rename `zoneTotal` at 25:0 to `zoneSum` — a plain signed value in
-#     the SAME file. The POSITIVE CONTROL for Q7: it must still emit the 2-edit
-#     WorkspaceEdit (sig 24:0 + def 25:0), so Q7 proves span verification
-#     DISCRIMINATES rather than refusing everything indexed in this module.
+#     the SAME file. The unrelated-symbol control: the 2-edit WorkspaceEdit
+#     (sig 24:0 + def 25:0) must be untouched by anything Q7 does.
+#
+# WHAT pun.jsonl PROVES (rename/pdefs.mdk) — #963 RECORD-PUN EXPANSION
+# ---------------------------------------------------------------------------
+# A record PUN spells the FIELD name and the BINDER name with ONE token, so an
+# edit that replaces that token outright renames the field too:
+# `Circle { radius }` → `Circle { rad }` is a LOUD `Unknown field: rad` (#963).
+# The span really does spell the old name, so F3(d) cannot see it — the span is
+# right, the REPLACEMENT is wrong. `renameEmitVerified` now emits the expansion
+# the sugar stands for, `girth = <newName>`, at a pun token only.
+#
+#   Q9 (id 2): rename the PATTERN pun binder `girth` at pdefs.mdk 21:9 (inside
+#     `Blob { girth, mark = m } => girth * m`) to `girthA`. Two edits: the pun
+#     token 21:9-14 becomes `girth = girthA` (NOT a bare `girthA`), the ordinary
+#     use 21:30-35 becomes `girthA`. Applying both yields
+#     `Blob { girth = girthA, mark = m } => girthA * m`.
+#
+#   Q10 (id 3): rename the PARAMETER `girth` at 27:7, whose only use is an
+#     EXPRESSION pun (`mkBlob girth mark = Blob { girth, mark }`), to `girthB`.
+#     The mirror of Q9: the binder 27:7-12 takes the bare name and the pun token
+#     27:27-32 takes `girth = girthB`. Proves the expansion is keyed on the SITE,
+#     not on which end of the rename the click was.
+#
+#   Q11 (id 4): rename `lo` at 32:9 — used inside a GENUINE `Set { lo, hi }`
+#     literal — to `loZ`. The NEGATIVE CONTROL: both edits must be BARE. A brace
+#     whose head is not a `ConNamed` ctor of this module is a container literal,
+#     not a record, and expanding its elements would corrupt a working program.
+#     Without this case a fix that expanded every bare brace element would pass.
+#
+#   Q12 (id 5): rename the parameter `girth` at 36:10, used in the RECORD-UPDATE
+#     pun `{ b | girth }`, to `girthD`. Must be an F3(d) REFUSAL: the parser
+#     builds a record-update pun's `EVar` UNLOCATED, so the index files the use
+#     at the enclosing expression's span and span verification catches it. This
+#     is the corpus's F3(d) negative case (it replaced Q7's, retired by #1013).
+#
+# All three edit sets above were applied by hand and the resulting module both
+# checks and evaluates to the SAME value as before the rename (50).
 #
 # All (line, col) pairs were hand-derived from the fixture source by counting
 # characters (0-based, LSP-style) — re-derive the same way if the fixtures
