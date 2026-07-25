@@ -1,0 +1,9 @@
+interface Speak a where
+  speak : a -> String
+  speak _ = "woof"
+
+data Dog = Dog
+
+impl Speak Dog where
+
+main = println (speak Dog)

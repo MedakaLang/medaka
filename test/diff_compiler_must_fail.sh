@@ -302,11 +302,21 @@ _ledger="$ROOT/test/MUST-FAIL-NOT-PINNABLE.txt"
 if [ -f "$_ledger" ]; then
   while IFS= read -r _line; do
     case "$_line" in ''|\#*) continue ;; esac
-    _n="${_line%% *}"
+    # ANY whitespace separates the number from the reason, not a space specifically.
+    # This was `${_line%% *}` and a TAB-separated entry produced a diagnostic that
+    # flatly contradicted the line in front of it — "does not start with an issue
+    # number" about `1017<TAB>PERF: …`, which plainly does. Worse, the census
+    # (test/must_fail_census.sh) splits the same way but `continue`s SILENTLY on a
+    # non-numeric prefix, so a tab entry dropped out of the stale-exemption half
+    # altogether: half a ratchet, which is the one thing that ledger's header says
+    # it must never become. Keep the two parsers' split rule identical.
+    _n="${_line%%[[:space:]]*}"
     case "$_n" in ''|*[!0-9]*)
       dup_fail=1
       echo "MALFORMED: MUST-FAIL-NOT-PINNABLE.txt line does not start with an issue number:"
       echo "       $_line"
+      echo "  Expected '<issue-number><whitespace><reason>'. The number must be the first"
+      echo "  token and bare digits — no '#', no 'issue', no leading whitespace."
       echo
       continue ;;
     esac
