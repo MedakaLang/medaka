@@ -1,0 +1,9 @@
+-- issue #1047: two UNRELATED modules (a.mdk, b.mdk) each declare an interface with
+-- the same BARE NAME `Speak`. They have no import relationship whatsoever. The
+-- interface tables are keyed by bare name, so whichever module is processed first
+-- wins and the loser's default method silently vanishes. `check` exits 0 and both
+-- engines print `A-default|A-default` where the correct answer is `A-default|B-default`.
+import ai.{DogA(..), sayA}
+import bi.{DogB(..), sayB}
+
+main = println (sayA DogA ++ "|" ++ sayB DogB)

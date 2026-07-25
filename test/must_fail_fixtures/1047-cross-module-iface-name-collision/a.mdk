@@ -1,0 +1,6 @@
+-- issue #1047, module A: declares `interface Speak` with default `"A-default"`.
+-- It has NO import relationship of any kind with b.mdk, which declares an
+-- interface of the SAME BARE NAME.
+export interface Speak x where
+  speak : x -> String
+  speak _ = "A-default"
