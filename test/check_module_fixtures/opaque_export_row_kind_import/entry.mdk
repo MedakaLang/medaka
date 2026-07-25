@@ -1,0 +1,39 @@
+import opaquemod.{Asy}
+
+-- ⚠️ WHAT THIS GATE CAN AND CANNOT SEE.  `diff_compiler_check_modules.sh` diffs the
+-- entry's inferred SCHEMES against `oracle.tcmod`; it discards stderr and never reads
+-- the exit code.  So this fixture guards the SILENT halves of #804/#1028 — a scheme
+-- that comes back with the effect row erased — and it CANNOT guard the rejection half.
+-- `speak` below is the #804 interface shape, and its printed scheme is BYTE-IDENTICAL
+-- before and after the fix: the spurious `T-EFFECT-UNDETERMINED` went to stderr, which
+-- this gate throws away.  The accept assertion for that shape lives in
+-- test/analyze_project_fixtures/804_opaque_row_iface_accept/ (zero diagnostics, via
+-- `check --json`), and `speak` is kept here because `runIt` at the bottom needs it.
+export interface Speak s where
+  speak : s -> Asy e a -> <e> a
+
+-- #1028: a WRITTEN row in the Row-kinded slot must elaborate AS A ROW.  Without the
+-- imported param kinds `fromAstTypeApp` fell through to `appFallback` instead of
+-- `foldAppKinds`/`kindArgMono`.  Through THIS probe that failed SILENTLY — the golden
+-- below read `Asy Unit Int` with nothing on stderr at all.  (On the `check`/`run`/`build`
+-- CLI paths the same line instead drew a false-positive T-ROW-KIND-MISMATCH claiming the
+-- slot "isn't row-kinded"; that is the loud face of this identical defect.)
+wrote : Asy <Stdout> Int
+wrote = wrote
+
+-- The same row in its pre-#997 parenthesized spelling.  This one failed
+-- SILENTLY: it typechecked with the row erased to the wrapped type, so the
+-- golden below would read `Asy Unit Int` — indistinguishable, to the reader of a
+-- scheme dump, from a genuinely dropped effect.
+seeded : Asy (<Stdout> Unit) Int
+seeded = seeded
+
+-- The same bug's FOURTH face, NOT a control — do not delete this as redundant.
+-- A bare tyvar in the row slot propagates cross-module for a `public export` type
+-- (that is `effect_var_row_ctor_import`'s ground), but for an OPAQUE one it did not:
+-- on a pre-fix binary this inferred `Speak a => a -> Asy b c -> c`, the row slot read
+-- as an ordinary type parameter — the LAUNDERING answer, and silent. Post-fix it is
+-- `Asy <> b -> b`, with the slot recognised as a row. So this line is a fourth
+-- discriminator on the same root cause, and the golden below records the difference.
+runIt : Speak s => s -> Asy b c -> c
+runIt s a = speak s a

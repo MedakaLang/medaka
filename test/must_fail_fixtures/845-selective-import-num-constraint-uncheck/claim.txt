@@ -26,8 +26,9 @@ what: the S2 the issue currently carries.
 cmd: check main.mdk
 exit: 0
 control: check control.mdk
-why-fixture: THIS IS A MULTI-MODULE PIN, modeled on
-why-fixture: test/must_fail_fixtures/804-abstract-export-row-kind-cross-module/.
+why-fixture: THIS IS A MULTI-MODULE PIN, modeled on the #804 pin (drained and
+why-fixture: removed once #804/#1028 were fixed; its positive successor is
+why-fixture: test/check_module_fixtures/opaque_export_row_kind_import/).
 why-fixture: main.mdk imports `f` from the sibling `helper.mdk` in the SAME
 why-fixture: fixture directory -- `medaka check main.mdk` resolves same-directory
 why-fixture: sibling imports with no medaka.toml, so a single `cmd:` line drives

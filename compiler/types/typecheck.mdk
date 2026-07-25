@@ -1289,12 +1289,15 @@ checkGradedImplTys iface i (t::rest) =
 --   * a type ALIAS head lives in aliasTableRef, never in dataParamKindsRef, and its
 --     saturation is already policed by T-ALIAS-ARITY — a kind complaint here would be
 --     a second, worse-worded report of the same defect;
---   * a head absent from dataParamKindsRef entirely.  That is NOT only a builtin like
---     `Int`: an ABSTRACTLY-exported data type (`export data Asy e a`, #804) is absent
---     too, and it may well be row-indexed.  Reporting it rejected a correct program
---     and told the author to add a `Row` parameter the type ALREADY HAD.  Abstaining
---     costs nothing real — a genuinely wrong head still fails on its method bodies,
---     where the mismatch is concrete and located.
+--   * a head absent from dataParamKindsRef entirely — a builtin like `Int`, whose kinds
+--     this compiler records nowhere.  Abstaining costs nothing real: a genuinely wrong
+--     head still fails on its method bodies, where the mismatch is concrete and located.
+--     ⚠️ An ABSTRACTLY-exported data type (`export data Asy e a`) USED to land here too,
+--     cross-module, and the abstention was load-bearing for it: judging it reported a
+--     correct program rejected and told the author to add a `Row` parameter the type
+--     ALREADY HAD.  #804/#1028 fixed that at the source — registerOpaqueParamKinds
+--     publishes an opaque type's kinds — so an abstract head is now judged on its REAL
+--     kinds like any other, and this arm no longer covers for it.
 -- A head that is not a TyCon spine at all is judged where it can be: a saturated
 -- TUPLE is kind `Type`, which is never a graded slot's kind, so it is reported; a bare
 -- tyvar head carries no kind and is left to the checks that already reject it.
@@ -1320,8 +1323,10 @@ checkGradedImplHeadCon iface n loc nApplied want = match headRemainingKinds n nA
 
 -- The head constructor's declared parameter kinds MINUS the ones the head already
 -- applies (`impl I (Async e)` supplies one).  `None` = "this head's kind is not
--- knowable here" (alias, builtin, or abstractly-exported type), which the caller
--- treats as an abstention.
+-- knowable here" (an alias or a builtin), which the caller treats as an abstention.
+-- ⚠️ An abstractly-exported type was in that bucket until #804/#1028 and is NOT any
+-- more — `registerOpaqueParamKinds` gives it a real `dataParamKindsRef` entry, so it
+-- returns `Some` and is judged exactly like a `public export` one.
 headRemainingKinds : String -> Int -> Option (List Kind)
 headRemainingKinds n nApplied
   | isSome (lookupAssoc n perRun.value.aliasTableRef.value) = None
@@ -1548,8 +1553,9 @@ public export data Kind = KType | KRow
 -- included) by the multi-module check drivers, BEFORE per-module checking, and
 -- deliberately NOT cleared by resetState — it is whole-program metadata, not a
 -- per-module accumulator.  An abstract export brings the type NAME into scope but
--- never registers its fields (publicDataDecls drops VisAbstract decls, so they
--- reach neither recordsRef nor dataParamKindsRef in an importer).  A dot-access on
+-- never registers its fields (publicDataDecls drops VisAbstract decls, so they never
+-- reach recordsRef in an importer — its PARAM KINDS do travel, since #804/#1028, via
+-- registerOpaqueParamKinds, but a kind is not a field).  A dot-access on
 -- such a type therefore lands at resolveFieldRecord's `head known but no record
 -- info` branch with the type name still recoverable as the receiver's head tycon;
 -- membership here distinguishes that case (clear abstract-export diagnostic) from a
@@ -1819,7 +1825,7 @@ routeLocalSym _ = ""
 -- (records / recordByName / fieldOwners / dataParamKinds / aliasTable) PLUS the ctor ENV; an
 -- env-only accumulator would silently drop the 5-table side effects and the compiler would
 -- fail to self-typecheck, so all SIX persist.  Seeded by the core pass (also Module mode),
--- grown ONE module at a time by `appendDataUniverse (publicDataDecls prog0)` AFTER the module
+-- grown ONE module at a time by `appendDataUniverse prog0` AFTER the module
 -- (so module k sees pub 1..k-1, never its own pub twice), copied into the resetState-wiped
 -- working refs and OVERLAID with prog0 at the `dataEnv` binding.  First-wins order preserved:
 -- persistent [pub_{k-1}..pub_1] + overlay conses prog0 → [prog0, pub_{k-1}..pub_1], the same
@@ -8141,7 +8147,7 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 registerVariants : TcEnv -> String -> List String -> List Variant -> TcEnv
 registerVariants env name params variants =
   let kinds = inferParamKinds params variants
-  let _ = setRef perRun.value.dataParamKindsRef ((name, kinds)::perRun.value.dataParamKindsRef.value)
+  let _ = recordParamKinds name kinds
   let paramReprs = mintParamReprs kinds
   let tvs = ktypeTvs params kinds paramReprs
   let etbl = krowEtbl params kinds paramReprs
@@ -8150,6 +8156,19 @@ registerVariants env name params variants =
   let result = applyParams (TCon name) paramReprs
   let _ = registerNamedFieldVariants name params variants
   addVariants env tvs etbl paramTyIds rowEffvarIds result variants
+
+-- The sole place that ADDS AN ENTRY to `dataParamKindsRef`.  (It is not the ref's only
+-- writer: `loadDataUniverse` replaces the whole list from the cross-run universe, and
+-- `freshPerRun`/`resetState` re-init it to `[]`.  Those set the TABLE; this is the only
+-- thing that registers a TYPE.)  Prepends, so a later registration shadows an earlier one
+-- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
+-- overlay over the data universe and therefore win, which is the ordering every reader
+-- assumes (see the `dataEnv` binding in checkBodyImpl).
+recordParamKinds : String -> List Kind -> Unit
+recordParamKinds name kinds =
+  setRef
+    perRun.value.dataParamKindsRef
+    ((name, kinds)::perRun.value.dataParamKindsRef.value)
 
 -- A data param is KRow iff its name appears in a field's effect-tail position
 -- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
@@ -12986,7 +13005,7 @@ checkBodyImpl seed mode prog0 =
   -- which are DEAD here (the next module's resetState wipes them).  Flat leaves it untouched.
   let _ = match mode
     Flat _ => ()
-    Module _ _ _ => appendDataUniverse (publicDataDecls prog0)
+    Module _ _ _ => appendDataUniverse prog0
   globalS ++ topSchemes
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
@@ -16823,7 +16842,9 @@ appendUniverseAccums prog =
 -- next module's resetState wipes them), so the clobber is invisible.  Registers each public
 -- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
 -- per-module O(|accData|) re-registration.  Only publicDataDecls are folded in (private data
--- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
+-- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading —
+-- plus, since #804/#1028, the PARAM KINDS (and nothing else) of the module's OPAQUE types,
+-- see registerOpaqueParamKinds.
 -- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
 -- open-coded as a 5-way lockstep mirror at THREE sites (the Module arm of the data-env
 -- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
@@ -16851,10 +16872,18 @@ storeDataUniverse _ =
   let _ = setRef crossRun.value.universeIfaceParamKinds perRun.value.ifaceParamKindsRef.value
   setRef crossRun.value.universeAliasTable perRun.value.aliasTableRef.value
 
+-- ⚠️ Takes THIS MODULE'S WHOLE decl list, not a pre-filtered one: it owns BOTH halves
+-- of what a module publishes to the data universe — `publicDataDecls` (ctors + records +
+-- kinds, for a `public export` type) and `registerOpaqueParamKinds` (kinds ONLY, for an
+-- opaque one).  Filtering at the call site is what let the opaque half go missing for as
+-- long as it did (#804/#1028); there is now nothing to remember.
 appendDataUniverse : List Decl -> Unit
-appendDataUniverse pubDecls =
+appendDataUniverse prog0 =
+  let pubDecls = publicDataDecls prog0
   let _ = loadDataUniverse ()
   let env2 = registerAllData crossRun.value.universeDataEnv.value pubDecls
+  -- #804/#1028: kinds travel even when the constructors do not.
+  let _ = registerOpaqueParamKinds prog0
   let _ = storeDataUniverse ()
   let _ = setRef crossRun.value.universeDataEnv env2
   -- #674: keep the DECLS too (universeDataEnv is a bare-name ctor env — last-write-wins,
@@ -16863,6 +16892,58 @@ appendDataUniverse pubDecls =
   -- THIS module imports with `(..)` from these decls; available on BOTH the check path
   -- AND the elaborate/emit path (where the Module `accData` field is dead `[]`, #154 PR-C).
   setRef crossRun.value.universeDataDecls (crossRun.value.universeDataDecls.value ++ pubDecls)
+
+-- #804/#1028: an OPAQUE type publishes its PARAMETER KINDS, and nothing else.
+--
+-- `export data Async e a = Done a | Suspend (Unit -> <e> Async e a)` — constructors
+-- PRIVATE, the standard opacity pattern (`docs/spec/language-design.md`: "export exposes
+-- only the type name; use public export to additionally expose constructors"), and
+-- exactly how `stdlib/async.mdk` declares `Async`.  `publicDataDecls` drops such a decl,
+-- so before this an importer had NO `dataParamKindsRef` entry for the type: every reader
+-- that asks "is slot i row-kinded?" missed, and each one failed differently —
+--   * `fromAstTypeApp` fell to `appFallback` instead of `foldAppKinds`/`kindArgMono`, so
+--     a written row in the KRow slot elaborated as an ordinary TYPE.  Silent:
+--     `seed : Async (<IO> Unit) Int` printed back as `Async Unit Int`, with the row gone
+--     from the scheme the user reads to confirm the effect survived inference;
+--   * post-#1004 the bare-row spelling instead drew T-ROW-KIND-MISMATCH — a false
+--     positive telling the author the slot "isn't row-kinded" when it is;
+--   * `rowArgNames` reported no row-kinded argument, so #784's `checkUndeterminedRetEffVars`
+--     could not see `Async e a` pinning `<e>` and rejected the method with
+--     T-EFFECT-UNDETERMINED;
+--   * downstream of those, `Type mismatch: a vs Unit` where the same program written in
+--     ONE module reports T-EFFECT-LEAK.
+-- A `public export` clone of the same type behaved correctly throughout — constructor
+-- visibility was the whole difference.
+--
+-- A KIND IS NOT A FIELD.  "Slot 0 of `Async` has kind Row" says nothing about `Done` or
+-- `Suspend`; the abstraction `export` buys is intact.  So this registers the kinds and
+-- deliberately NOT `registerVariants` — no ctor schemes, no `recordsRef`/`fieldOwnersRef`
+-- entries, no named-field registration.  Promoting the decl to `VisPublic` in
+-- `publicDataDecls` would have been a one-line "fix" that leaks the constructors.
+--
+-- `export newtype` is in the same bucket and has no workaround at all: `public` is a
+-- parse error on `newtype`, so its constructor is unconditionally module-private.
+--
+-- NOT `VisPrivate`: a private type's name is not in scope for an importer, and the
+-- universe kind table is not import-scoped, so publishing it could only collide a name
+-- nobody can spell against one they can.
+--
+-- ⚠️ `dataParamKindsRef` is keyed by BARE NAME across the whole import graph, so two
+-- same-named types in different modules already share a key (#1047's territory, upstream
+-- of this).  This does not widen that hazard so much as make it UNIFORM: an opaque type
+-- now competes for its own name on exactly the terms a `public export` one always has —
+-- prepend-per-module, `lookupAssoc` first-match, own-module overlay wins.  Every hot
+-- reader additionally guards on `listLen kinds == listLen args`, so a same-name/
+-- different-arity clash abstains rather than mis-kinds.
+registerOpaqueParamKinds : List Decl -> Unit
+registerOpaqueParamKinds [] = ()
+registerOpaqueParamKinds ((DData VisAbstract n ps vs _)::rest) =
+  let _ = recordParamKinds n (inferParamKinds ps vs)
+  registerOpaqueParamKinds rest
+registerOpaqueParamKinds ((DNewtype True n ps con fty _)::rest) =
+  let _ = recordParamKinds n (inferParamKinds ps [Variant con (ConPos [fty])])
+  registerOpaqueParamKinds rest
+registerOpaqueParamKinds (_::rest) = registerOpaqueParamKinds rest
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by the persistent interface-method membership SET.  `direct` still filters
