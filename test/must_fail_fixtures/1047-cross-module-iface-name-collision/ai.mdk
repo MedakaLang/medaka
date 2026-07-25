@@ -1,0 +1,10 @@
+-- issue #1047: A's implementor. `impl Speak DogA` is METHOD-LESS, so it inherits
+-- a.mdk's default body ("A-default").
+import a.{Speak(..), speak}
+
+public export data DogA = DogA
+
+impl Speak DogA where
+
+export sayA : DogA -> String
+sayA d = speak d
