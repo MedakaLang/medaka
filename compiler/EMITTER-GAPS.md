@@ -1131,7 +1131,7 @@ Head tags — not route keys — because a runtime ctor tag is type-argument-bli
 property of arg-tag dispatch, unchanged by this fix, and the dict path (#1036) is where the
 distinction is representable.
 
-**RESIDUAL (honest gap, not a wrong answer).** `argDefaultEmittable` declines an arm when the
+**RESIDUAL — #1075 (honest gap, not a wrong answer).** `argDefaultEmittable` declines an arm when the
 default cannot be synthesized without a dict — a **primitive** head (owns no ctor tag to test),
 a method with its own `=>` constraint dicts, or an inner same-interface impl with per-instance
 `requires`. Those receivers fall to the chain terminal, which is now an explicit
