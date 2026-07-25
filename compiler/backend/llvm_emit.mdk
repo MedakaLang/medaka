@@ -211,6 +211,7 @@ import support.ordmap.{
   omFromNames,
   omFromPairs,
   omMapValues,
+  omSize,
   omEmpty,
 }
 -- backend-agnostic TRMC eligibility analysis (lifted out per WASMGC-TRMC-DESIGN §5/§7-Stage-0;
@@ -567,14 +568,33 @@ methodConstraintIfacesOf method = match lookupAssoc method methodConstraintIface
 ctorFieldTypesRef : Ref (List (String, List String))
 ctorFieldTypesRef = Ref []
 
+-- #352: the table above has ONE ENTRY PER CONSTRUCTOR in the program, and
+-- `ctorFieldTypeNamesOf` is called from `bindPattern` for EVERY constructor pattern
+-- the emitter binds — so the `lookupAssoc` scan was O(patterns × ctors) = O(N²).
+-- Measured on an N-ctor / N-arm `match` shape (profile_main, emit stage, prelude
+-- constant subtracted): counted-op ratio r1=3.63 r2=3.80 per doubling at
+-- N=250/500/1000, and `perf --call-graph dwarf` names `bindPattern → lookupAssoc`
+-- as the caller. Indexed at the SINGLE install point so it can never go stale;
+-- `reverseL` makes the FIRST list entry win on a duplicate ctor name, matching the
+-- `lookupAssoc` first-match it replaces. Uninstalled (None) it falls back to the
+-- linear scan — identical answer either way, so the emitted IR is byte-identical.
+ctorFieldTypeMapRef : Ref (Option (OrdMap (List String)))
+ctorFieldTypeMapRef = Ref None
+
 export installCtorFieldTypes : List (String, List String) -> Unit
-installCtorFieldTypes t = setRef ctorFieldTypesRef t
+installCtorFieldTypes t =
+  let _ = setRef ctorFieldTypesRef t
+  setRef ctorFieldTypeMapRef (Some (omFromPairs (reverseL t) omEmpty))
 
 -- the declared field type-head names of a constructor, or [] if unknown.
 ctorFieldTypeNamesOf : String -> List String
-ctorFieldTypeNamesOf con = match lookupAssoc con ctorFieldTypesRef.value
-  Some names => names
-  None => []
+ctorFieldTypeNamesOf con = match ctorFieldTypeMapRef.value
+  Some m => match omLookup con m
+    Some names => names
+    None => []
+  None => match lookupAssoc con ctorFieldTypesRef.value
+    Some names => names
+    None => []
 
 -- map a declared field type-head NAME to a definite scalar LTy, or None when it
 -- is not a known scalar (polymorphic / pointer-typed / "" unknown) — None ⇒ the
@@ -1088,6 +1108,60 @@ isCtor e name = match ctorMapRef.value
 recFieldTable : Emit -> List (String, List String)
 recFieldTable e = e.recFields.value
 
+-- ── record field-order INDEX (#352) ──────────────────────────────
+-- The table above is CONSTANT for a program (`Ref (collectRecords groups)`, set once
+-- at Emit construction), has one entry per record TYPE, and is consulted on EVERY
+-- record field op — create/access/update/variant-update — two ways:
+--
+--   * BY NAME (`lookupAssoc recName (recFieldTable e)`, in `floatFieldRecord`,
+--     `fieldIdxByName`, `recordByName`, `emitVariantUpdate`) — O(records) per op;
+--   * BY LABEL (`findRecordByLabel`, the unstamped/collision fallback) — worse, a
+--     `contains label labels` over EVERY record's label list until one matches.
+--
+-- Both are O(records) per field op ⇒ O(field-ops × records) = O(N²) on a program of
+-- many record types. Measured (profile_main emit stage, prelude constant subtracted,
+-- N distinct 2-field records with a create+update+2 accesses each, N=125/250/500):
+-- counted-op ratio r1=3.39 r2=3.64 per doubling — quadratic.
+--
+-- Two maps, both built once at the single install point below:
+--   `recByNameRef`  recName → labels (first entry wins ⇒ `lookupAssoc` first-match)
+--   `recByLabelRef` label → (recName, labels) of the FIRST record in TABLE ORDER
+--                   owning that label — exactly `findRecordByLabel`'s answer. Built
+--                   by folding the table in REVERSE so an earlier record overwrites
+--                   a later one, which is what makes "first in table order" win.
+-- Uninstalled (None) both readers fall back to the original scans, so a probe that
+-- constructs an `Emit` without going through emitProgram is unaffected.
+recByNameRef : Ref (Option (OrdMap (List String)))
+recByNameRef = Ref None
+
+recByLabelRef : Ref (Option (OrdMap (String, List String)))
+recByLabelRef = Ref None
+
+installRecFieldIndex : List (String, List String) -> Unit
+installRecFieldIndex t =
+  let _ = setRef recByNameRef (Some (omFromPairs (reverseL t) omEmpty))
+  setRef recByLabelRef (Some (recLabelIndex (reverseL t) omEmpty))
+
+-- fold the (already reversed) table, mapping every label of a record to that record.
+-- Later inserts win, and "later" here is EARLIER in the original table.
+recLabelIndex : List (String, List String) -> OrdMap (String, List String) -> OrdMap (String, List String)
+recLabelIndex [] acc = acc
+recLabelIndex ((name, labels)::rest) acc =
+  recLabelIndex rest (insertLabels (name, labels) labels acc)
+
+-- (`owner`, not `rec` — `rec` is a RESERVED WORD and the parse error it produces
+-- reads as an unrelated layout complaint two lines away.)
+insertLabels : (String, List String) -> List String -> OrdMap (String, List String) -> OrdMap (String, List String)
+insertLabels _ [] acc = acc
+insertLabels owner (l::rest) acc =
+  insertLabels owner rest (omInsert l owner acc)
+
+-- the record type named `recName`, index-backed (fallback: the raw list scan).
+recFieldsOfName : Emit -> String -> Option (List String)
+recFieldsOfName e recName = match recByNameRef.value
+  Some m => omLookup recName m
+  None => lookupAssoc recName (recFieldTable e)
+
 -- ── impl table ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
 -- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
@@ -1398,9 +1472,71 @@ ctorTypeTable e = e.ctorTypes.value
 ctorTypeMapRef : Ref (Option (OrdMap String))
 ctorTypeMapRef = Ref None
 
+-- #352: the THREE derived views of the SAME constant ctor→type table that #990 left
+-- as whole-table scans, all built at this one install point (so none can go stale):
+--
+--   * `ctorsByTypeRef`   type → its constructors IN TABLE ORDER.  Replaces
+--     `ctorsOfTypeIn`, which filtered the WHOLE table on every call — and its
+--     callers run per ctor site (`ctorOrdinal` via `cellTag`), per refutable-let
+--     PCon (`ctorHasSiblings`) and per dispatch arm (`emitTagMatch`).
+--   * `ctorOrdinalMapRef` ctor → its 0-based index within its type's ctor list.
+--     Replaces `indexOfStr name (ctorsOfType e ty)`, which is O(that type's ctors)
+--     AND allocates an `Option` per step (`map (+ 1)` recursion) — so on an N-ctor
+--     type this was O(N²) in TIME **and** in ALLOCATION.
+--   * `typeIdMapRef`      type → its dense id (index among `distinctTypeNames`).
+--     Replaces `indexOfStr ty (distinctTypeNames e)`, O(types) per ctor site.
+--
+-- ORDER IS LOAD-BEARING and is preserved, not assumed: the buckets are built by a
+-- left fold that PREPENDS then `omMapValues reverseL`s (the `groupImplsByMethod`
+-- discipline), so each bucket is exactly `ctorsOfTypeIn`'s filtered order — which
+-- `emitTagMatch` renders as an OR-chain of `hashName`s, so any reorder would move
+-- emitted IR.  Ordinals/type-ids are read off those ordered lists and installed with
+-- `omFromPairs (reverseL …)` so the FIRST occurrence wins, exactly matching the
+-- `indexOfStr`/`ctorTypeOf` first-match they replace (a ctor name owned by two types
+-- keeps the first type's ordinal).  Uninstalled (None) every reader falls back to the
+-- original scan, so a probe that never calls emitProgram is unaffected.
+--
+-- Measured (profile_main emit stage, prelude constant subtracted, N=250/500/1000):
+-- the N-distinct-single-ctor-type shape read op r1=2.61 r2=2.93 before.
+ctorsByTypeRef : Ref (Option (OrdMap (List String)))
+ctorsByTypeRef = Ref None
+
+ctorOrdinalMapRef : Ref (Option (OrdMap Int))
+ctorOrdinalMapRef = Ref None
+
+typeIdMapRef : Ref (Option (OrdMap Int))
+typeIdMapRef = Ref None
+
 installCtorTypeMap : List (String, String) -> Unit
 installCtorTypeMap t =
+  let byType = groupCtorsByType t
+  let tys = nubStr (typeNamesOf t)
+  let _ = setRef ctorsByTypeRef (Some byType)
+  let _ = setRef ctorOrdinalMapRef (Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty))
+  let _ = setRef typeIdMapRef (Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty))
   setRef ctorTypeMapRef (Some (omFromPairs (reverseL t) omEmpty))
+
+-- one LEFT fold prepending each ctor to its type's bucket (O(1) per entry), then
+-- `omMapValues reverseL` restores TABLE order in each bucket — total O(entries).
+groupCtorsByType : List (String, String) -> OrdMap (List String)
+groupCtorsByType t = omMapValues reverseL (foldCtorsByType t omEmpty)
+
+foldCtorsByType : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
+foldCtorsByType [] acc = acc
+foldCtorsByType ((c, ty)::rest) acc =
+  foldCtorsByType rest (omInsert ty (c :: fromOption [] (omLookup ty acc)) acc)
+
+-- (ctor, ordinal) for every ctor of every type, types visited in first-appearance
+-- order and each bucket numbered from 0 — so `omFromPairs (reverseL …)` keeps the
+-- first occurrence, matching `indexOfStr name (ctorsOfType e ty)`.
+ctorOrdinalPairs : OrdMap (List String) -> List String -> List (String, Int)
+ctorOrdinalPairs _ [] = []
+ctorOrdinalPairs byType (ty::rest) = numberFrom 0 (fromOption [] (omLookup ty byType))
+  ++ ctorOrdinalPairs byType rest
+
+numberFrom : Int -> List String -> List (String, Int)
+numberFrom _ [] = []
+numberFrom i (x::rest) = (x, i) :: numberFrom (i + 1) rest
 
 -- the type name owning constructor [name], index-backed (fallback: the raw list scan).
 ctorTypeOf : Emit -> String -> Option String
@@ -1435,10 +1571,17 @@ dropAssoc k ((n, v)::rest) = if n == k then rest else (n, v) :: dropAssoc k rest
 -- caller whose route stays RNone — `total xs = fold (+) 0 xs`) would otherwise see
 -- an empty ctor list and hit the "owns no constructors" gap.  Fall back to the
 -- reserved ctors so the tag-match discriminates on the built-in cell tags.
+-- #352: index-backed (a bucket is non-empty by construction, so an ABSENT type is
+-- exactly the old empty-filter case → the reserved fallback). Falls back to the full
+-- table filter when uninstalled; identical list, identical order, either way.
 ctorsOfType : Emit -> String -> List String
-ctorsOfType e ty = match ctorsOfTypeIn ty (ctorTypeTable e)
-  [] => reservedCtorsOfType ty
-  cs => cs
+ctorsOfType e ty = match ctorsByTypeRef.value
+  Some m => match omLookup ty m
+    Some cs => cs
+    None => reservedCtorsOfType ty
+  None => match ctorsOfTypeIn ty (ctorTypeTable e)
+    [] => reservedCtorsOfType ty
+    cs => cs
 
 -- the reserved built-in constructors of a runtime ADT, mirroring `reservedTag`'s
 -- ordinal layout (List = Cons|Nil, Option = Some|None, Result = Ok|Err,
@@ -3144,14 +3287,14 @@ isFloatFieldLabel e recName label = match floatFieldRecord e recName label
 -- arithmetic by the receiver's actual record).
 floatFieldRecord : Emit -> String -> String -> Option (String, List String)
 floatFieldRecord e recName label =
-  if recName == "" then findRecordByLabel (recFieldTable e) label
-  else match lookupAssoc recName (recFieldTable e)
+  if recName == "" then findRecordByLabel e label
+  else match recFieldsOfName e recName
     Some labels =>
       if contains label labels then
         Some (recName, labels)
       else
-        findRecordByLabel (recFieldTable e) label
-    None => findRecordByLabel (recFieldTable e) label
+        findRecordByLabel e label
+    None => findRecordByLabel e label
 
 -- fused statically-Float arithmetic: both operands as unboxed doubles, one float
 -- op, box ONCE (replaces N intermediate boxes with 1).
@@ -6947,7 +7090,12 @@ cellTag e name =
 -- ctor→type table) → reserved ordinals 0/1 of the synthetic list type.
 ctorOrdinal : Emit -> String -> Int
 ctorOrdinal e name = match ctorTypeOf e name
-  Some ty => orZero (indexOfStr name (ctorsOfType e ty))
+  -- #352: `ctorTypeOf name = Some ty` means `name` IS in the ctor→type table, so it
+  -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
+  -- `indexOfStr` scan return the same Int. Fallback when uninstalled.
+  Some ty => match ctorOrdinalMapRef.value
+    Some m => orZero (omLookup name m)
+    None => orZero (indexOfStr name (ctorsOfType e ty))
   None => if name == "Nil" then 1 else 0
 
 -- the dense per-type id of the type that owns constructor `name`: its index among
@@ -6956,8 +7104,15 @@ ctorOrdinal e name = match ctorTypeOf e name
 -- so its composite tags can never collide with a user type's.
 ctorTypeId : Emit -> String -> Int
 ctorTypeId e name = match ctorTypeOf e name
-  Some ty => orZero (indexOfStr ty (distinctTypeNames e))
-  None => lengthS (distinctTypeNames e)
+  -- #352: `typeIdMapRef` is built from the SAME `nubStr (typeNamesOf …)` list that
+  -- `distinctTypeNames` memoizes, numbered from 0 — so the probe and the
+  -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
+  Some ty => match typeIdMapRef.value
+    Some m => orZero (omLookup ty m)
+    None => orZero (indexOfStr ty (distinctTypeNames e))
+  None => match typeIdMapRef.value
+    Some m => omSize m
+    None => lengthS (distinctTypeNames e)
 
 -- the distinct type names of the program, in declaration order (the ctor→type
 -- table lists each type's ctors consecutively, so dedup-preserving-order gives the
@@ -9731,7 +9886,7 @@ emitFieldAccess e env ex label recName =
     let f = loadField e w 0
     (f, LTInt)
   else
-    let idx = fieldIdxByName (recFieldTable e) recName label
+    let idx = fieldIdxByName e recName label
     let f = loadField e w idx
     (f, LTInt)
 
@@ -9740,20 +9895,22 @@ emitFieldAccess e env ex label recName =
 -- back to today's label-only search (safety for unstamped / synthesized
 -- accesses).  The by-name path is what makes two records sharing a field name at
 -- DIFFERENT indices resolve to the correct offset.
-fieldIdxByName : List (String, List String) -> String -> String -> Int
-fieldIdxByName table recName label =
-  if recName == "" then findFieldIdx table label
-  else match lookupAssoc recName table
+-- #352: takes the `Emit` (not the raw table) so the by-name probe can go through the
+-- installed index; same answers, same fallbacks.
+fieldIdxByName : Emit -> String -> String -> Int
+fieldIdxByName e recName label =
+  if recName == "" then findFieldIdx e label
+  else match recFieldsOfName e recName
     Some labels => match indexOfStr label labels
       Some i => i
-      None => findFieldIdx table label
-    None => findFieldIdx table label
+      None => findFieldIdx e label
+    None => findFieldIdx e label
 
 emitRecordUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> List CField -> (String, LTy)
 emitRecordUpdate e env recName base updates =
   let (bw, _) = emitExpr e env base
   let firstLabel = cFieldFirstLabel updates
-  match recordByName (recFieldTable e) recName firstLabel
+  match recordByName e recName firstLabel
     None => gapE ("CRecordUpdate: unknown record type for field '" ++ firstLabel ++ "'")
     Some (name, labels) =>
       let updatePairs = emitUpdatePairs e env updates
@@ -9767,19 +9924,19 @@ emitRecordUpdate e env recName base updates =
 -- is what makes two records that share a field name at DIFFERENT slot indices
 -- update the correct slot; the label-only guess silently wrote the other
 -- record's slot (bug #38).  Peer of fieldIdxByName on the access path.
-recordByName : List (String, List String) -> String -> String -> Option (String, List String)
-recordByName table recName label =
-  if recName == "" then findRecordByLabel table label
-  else match lookupAssoc recName table
+recordByName : Emit -> String -> String -> Option (String, List String)
+recordByName e recName label =
+  if recName == "" then findRecordByLabel e label
+  else match recFieldsOfName e recName
     Some labels => match indexOfStr label labels
       Some _ => Some (recName, labels)
-      None => findRecordByLabel table label
-    None => findRecordByLabel table label
+      None => findRecordByLabel e label
+    None => findRecordByLabel e label
 
 emitVariantUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> List CField -> (String, LTy)
 emitVariantUpdate e env con base updates =
   let (bw, _) = emitExpr e env base
-  match lookupAssoc con (recFieldTable e)
+  match recFieldsOfName e con
     None => gapE ("CVariantUpdate: unknown variant type for constructor '" ++ con ++ "'")
     Some labels =>
       let updatePairs = emitUpdatePairs e env updates
@@ -9836,20 +9993,28 @@ cFieldExprs : List CField -> List CExpr
 cFieldExprs [] = []
 cFieldExprs ((CField _ ex)::rest) = ex :: cFieldExprs rest
 
-findFieldIdx : List (String, List String) -> String -> Int
-findFieldIdx table label = match findRecordByLabel table label
+findFieldIdx : Emit -> String -> Int
+findFieldIdx e label = match findRecordByLabel e label
   Some (_, labels) => match indexOfStr label labels
     Some i => i
     None => panic ("llvm: field '" ++ label ++ "' not found in record (internal error)")
   None => panic ("llvm: CFieldAccess: unknown field '" ++ label ++ "'")
 
-findRecordByLabel : List (String, List String) -> String -> Option (String, List String)
-findRecordByLabel [] _ = None
-findRecordByLabel ((name, labels)::rest) label =
+-- #352: index-backed — `recByLabelRef` already holds, per label, the FIRST record in
+-- table order that owns it, which is exactly what the scan below returns. Fallback to
+-- the scan when uninstalled.
+findRecordByLabel : Emit -> String -> Option (String, List String)
+findRecordByLabel e label = match recByLabelRef.value
+  Some m => omLookup label m
+  None => findRecordByLabelIn (recFieldTable e) label
+
+findRecordByLabelIn : List (String, List String) -> String -> Option (String, List String)
+findRecordByLabelIn [] _ = None
+findRecordByLabelIn ((name, labels)::rest) label =
   if contains label labels then
     Some (name, labels)
   else
-    findRecordByLabel rest label
+    findRecordByLabelIn rest label
 
 indexOfStr : String -> List String -> Option Int
 indexOfStr _ [] = None
@@ -10481,6 +10646,9 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
   let _ = installCtorTypeMap ctorTypes
+  -- #352: index the CONSTANT record field-order table (by name and by label) so every
+  -- per-field-op probe is O(log records) not O(records) — same first-match answers.
+  let _ = installRecFieldIndex (recFieldTable e)
   let _ = installSigMap (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
@@ -10819,6 +10987,9 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
   let _ = installCtorTypeMap ctorTypes
+  -- #352: index the CONSTANT record field-order table (by name and by label) so every
+  -- per-field-op probe is O(log records) not O(records) — same first-match answers.
+  let _ = installRecFieldIndex (recFieldTable e)
   let _ = installSigMap (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
   -- #990: install the by-method impl index (see emitProgram) — resets any prior
