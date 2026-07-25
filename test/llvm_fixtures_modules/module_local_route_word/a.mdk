@@ -2,7 +2,7 @@
 -- Crucially `a` does NOT import `b`, so a's typecheck sees exactly ONE impl at head
 -- tycon `Box` and `keyForSiteByIface` therefore stamps the BARE HEAD `"Box"` into
 -- useA's dict cell — not the canonical key.
-import iface.{Speak(..), speak}
+import iface.{Speak(..), speak, Loud(..), loud}
 import boxty.{Box(..)}
 
 export impl Speak (Box Int) where
@@ -13,3 +13,14 @@ useA x = speak x
 
 export callA : Unit -> String
 callA _ = useA (Box 1)
+
+-- Variant 2: the sibling in `b` OVERRIDES rather than inheriting.  Same visibility
+-- shape — `a` cannot see it — so a's site stamps the bare head here too.
+export impl Loud (Box Int) where
+  loud _ = "loudint"
+
+export useLoudA : Loud a => a -> String
+useLoudA x = loud x
+
+export callLoudA : Unit -> String
+callLoudA _ = useLoudA (Box 1)

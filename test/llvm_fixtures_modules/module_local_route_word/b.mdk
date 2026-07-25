@@ -2,8 +2,14 @@
 -- Nothing in this module is ever dispatched on.  Its mere PRESENCE IN THE PROGRAM is
 -- what made the emitter's program-global collision verdict disagree with a's
 -- module-local one.
-import iface.{Speak(..), speak}
+import iface.{Speak(..), speak, Loud(..), loud}
 import boxty.{Box(..)}
 
 export impl Speak (Box String) where
+
+
+-- Variant 2's sibling: same head tycon `Box`, differing type argument, and it
+-- OVERRIDES.  Pre-fix, a's `Box Int` receiver was dispatched INTO this body.
+export impl Loud (Box String) where
+  loud _ = "loudstr"
 

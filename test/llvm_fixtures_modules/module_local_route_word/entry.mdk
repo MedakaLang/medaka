@@ -22,9 +22,24 @@
 -- The fix is for the arm to accept EVERY word any module could stamp for the impl
 -- (`implEntryRouteWords`) instead of betting on one.
 --
--- Must print `boxint`.  `DEFAULT` means leg 2 is back.
-import a.{callA}
+-- ── THE AXIS THIS PINS ─────────────────────────────────────────────────────────
+-- IMPORT VISIBILITY.  Every other multi-module fixture in this corpus is a TREE in
+-- which the module holding the dict-routed site imports everything that declares an
+-- impl, so none of them can express "the site's module cannot see the sibling" — the
+-- one axis leg 2 lives on.  Without this fixture a future RE-NARROWING of the route
+-- word set back to a single recomputed verdict would regress silently with every gate
+-- green, which is exactly how this class arrived.
+--
+-- Two variants, because their pre-fix symptoms differ:
+--   Speak — the sibling in `b` INHERITS the default.  Pre-fix: `DEFAULT` (or SIGSEGV).
+--   Loud  — the sibling in `b` OVERRIDES.             Pre-fix: `loudstr`, the WRONG
+--           IMPL, i.e. silent wrongness with no default involved at all (#1064).
+--
+-- Must print `boxint` then `loudint`.  Anything else means leg 2 is back.
+import a.{callA, callLoudA}
 import b
 
 main : <IO> Unit
-main = putStrLn (callA ())
+main =
+  let _ = putStrLn (callA ())
+  putStrLn (callLoudA ())
