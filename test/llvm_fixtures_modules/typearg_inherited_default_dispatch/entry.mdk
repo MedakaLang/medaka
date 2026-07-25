@@ -28,8 +28,24 @@
 -- Both   — the CONTROL: both siblings OVERRIDE, so C7 already keyed them correctly
 --          before this fix.  It must still print bi/bs.
 --
+-- Described — the NON-TRIVIAL DEFAULT.  `Cat` overrides `describe`; `Dog` INHERITS it,
+--          and the inherited body is not a constant: it calls two SIBLING methods on
+--          its own receiver and does arithmetic.  A right-arm/wrong-body synthesis, or
+--          sibling calls re-stamped to the other impl, changes the printed string —
+--          which a constant-string default cannot show.
+--
 -- Must print:  boxint / woof / woof / BOXINT / WOOF / bi / bs
-import tface.{Speak(..), speak, Loud(..), loud, Both(..), both}
+--              / OVERRIDDEN-cat / dog/71
+import tface.{
+  Speak(..),
+  speak,
+  Loud(..),
+  loud,
+  Both(..),
+  both,
+  Described(..),
+  describe,
+}
 
 data Box a = Box a
 
@@ -59,8 +75,28 @@ impl Both (Box Int) where
 impl Both (Box String) where
   both _ = "bs"
 
+-- Described: `Cat` OVERRIDES describe, `Dog` INHERITS the NON-CONSTANT default, whose
+-- body calls two siblings on its own receiver and does arithmetic.  Cat's and Dog's
+-- sibling values differ, so a default whose sibling calls were stamped to the wrong
+-- receiver prints `cat/31` instead of `dog/71`, and dropped arithmetic prints a
+-- different number.  DISTINCT head tycons on purpose — see tface.mdk.
+data Cat = Cat
+data Dog = Dog
+
+impl Described Cat where
+  tagOf _ = "cat"
+  sizeOf _ = 3
+  describe _ = "OVERRIDDEN-cat"
+
+impl Described Dog where
+  tagOf _ = "dog"
+  sizeOf _ = 7
+
 useSpeak : Speak a => a -> String
 useSpeak x = speak x
+
+useDescribed : Described a => a -> String
+useDescribed x = describe x
 
 useLoud : Loud a => a -> String
 useLoud x = loud x
@@ -76,4 +112,6 @@ main =
   let _ = putStrLn (useLoud (Box 2))
   let _ = putStrLn (useLoud (Box "t"))
   let _ = putStrLn (useBoth (Box 3))
-  putStrLn (useBoth (Box "u"))
+  let _ = putStrLn (useBoth (Box "u"))
+  let _ = putStrLn (useDescribed Cat)
+  putStrLn (useDescribed Dog)

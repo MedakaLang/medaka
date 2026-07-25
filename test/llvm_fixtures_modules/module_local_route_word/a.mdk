@@ -1,0 +1,15 @@
+-- `a` declares the OVERRIDING impl and the dict-routed forwarder that calls it.
+-- Crucially `a` does NOT import `b`, so a's typecheck sees exactly ONE impl at head
+-- tycon `Box` and `keyForSiteByIface` therefore stamps the BARE HEAD `"Box"` into
+-- useA's dict cell — not the canonical key.
+import iface.{Speak(..), speak}
+import boxty.{Box(..)}
+
+export impl Speak (Box Int) where
+  speak _ = "boxint"
+
+export useA : Speak a => a -> String
+useA x = speak x
+
+export callA : Unit -> String
+callA _ = useA (Box 1)

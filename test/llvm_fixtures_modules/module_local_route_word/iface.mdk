@@ -1,0 +1,4 @@
+-- #1036 leg 2: an interface with a DEFAULT, so an impl may override nothing.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"

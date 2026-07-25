@@ -1,7 +1,7 @@
--- #1036: three interfaces, each owning a DEFAULT body, imported by entry.mdk.  The
--- default is what lets an `impl` override NOTHING — and, cross-module, what makes it
--- reach the Core IR as zero `CImplEntry` (desugar's `fillImplDefaults` specializes
--- same-module only), which is the precondition for the bug.
+-- #1036: interfaces owning a DEFAULT body, imported by entry.mdk.  The default is
+-- what lets an `impl` override NOTHING — and, cross-module, what makes it reach the
+-- Core IR as zero `CImplEntry` (desugar's `fillImplDefaults` specializes same-module
+-- only), which is the precondition for the bug.
 export interface Speak a where
   speak : a -> String
   speak _ = "woof"
@@ -13,3 +13,30 @@ export interface Loud a where
 export interface Both a where
   both : a -> String
   both _ = "neither"
+
+-- ── the NON-TRIVIAL default ────────────────────────────────────────────────────
+-- Every default above returns a CONSTANT, which proves only that the right ARM was
+-- selected — it cannot tell a correct default BODY from one that merely returns
+-- something.  This PR changes how default bodies are REACHED, so that distinction is
+-- exactly what needs pinning: when a fix turns a "returns nothing" path into a
+-- "returns something" path, the new something is untested by construction.
+--
+-- `describe`'s default calls TWO sibling methods on its own receiver (`tagOf` and
+-- `sizeOf`, which each impl defines per type) and does arithmetic on the result, so
+-- the golden can tell apart:
+--   * right arm, mis-synthesized body            -> wrong string, or a crash
+--   * sibling calls re-stamped to the WRONG type -> the other impl's tag/size
+--   * the arithmetic dropped or mis-ordered      -> a different number
+--
+-- ⚠️ Its impls are at DISTINCT head tycons (`Cat`/`Dog`), NOT at a shared head with
+-- differing type arguments, and that is deliberate.  On a SHARED head the interpreter
+-- mis-dispatches these sibling calls — `Box String` inheriting this default evaluates
+-- `tagOf`/`sizeOf` at `Box Int` and yields `int/31` where `str/71` is correct.  That is
+-- a separate, PRE-EXISTING eval defect (native, after this PR, gets it right), and this
+-- corpus's golden is captured from eval, so pinning that shape here would enshrine the
+-- wrong value.  It is reported separately rather than encoded as a golden.
+export interface Described a where
+  tagOf : a -> String
+  sizeOf : a -> Int
+  describe : a -> String
+  describe x = tagOf x ++ "/" ++ intToString (sizeOf x * 10 + 1)

@@ -1,0 +1,9 @@
+-- `b` declares the INHERITING impl: same head tycon `Box`, different type argument.
+-- Nothing in this module is ever dispatched on.  Its mere PRESENCE IN THE PROGRAM is
+-- what made the emitter's program-global collision verdict disagree with a's
+-- module-local one.
+import iface.{Speak(..), speak}
+import boxty.{Box(..)}
+
+export impl Speak (Box String) where
+

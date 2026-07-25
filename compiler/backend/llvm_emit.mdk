@@ -1427,14 +1427,16 @@ implEntryTag (CImplEntry _ _ (CImplDefault _ _)) = ""
 -- the same impl, which is why no arm could have matched even once #948 made the
 -- inheriting impl visible as a tag.
 --
--- The two tests are ANDed rather than swapped so an uninstalled decl table
--- (`ifaceDeclHeadUnique` answers True when nothing was installed) degrades to
--- exactly the pre-#1036 entry-derived verdict instead of silently dropping C7.
--- The conjunction is also free of new upgrades in the common case: every entry's
--- impl contributes a decl row with the SAME (iface, tag, key), so ≥2 distinct
--- entry keys at a head implies ≥2 distinct decl keys there — `ifaceDeclHeadUnique
--- ⇒ headTagUnique`, and the only programs whose key changes are those with two
--- declared impls at one head where fewer than two of them define this method.
+-- ⚠️ There is NO single right answer here, which is why this returns a SET (see
+-- `implEntryRouteWords`) and why the scalar form below is kept only for the ONE
+-- caller that genuinely wants a scalar (`headTagForKey`-style symbol naming).
+--
+-- The emitter cannot recompute typecheck's verdict, because that verdict is not a
+-- property of the impl — it is a property of the SITE'S MODULE.  `KeyBuckets` is
+-- built per module from that module's import closure, so the same impl is stamped
+-- `"Box"` by a module that cannot see its sibling and `Speak|(Box Int)|` by one that
+-- can.  Deciding it here from ANY global table — entries or decls — is a second
+-- opinion that will disagree with one of them.
 implEntryRouteKey : List CImplEntry -> CImplEntry -> String
 implEntryRouteKey entries (CImplEntry n _ (CImplTagged t k iface _ _ _)) =
   if headTagUnique entries n t && ifaceDeclHeadUnique iface t then
@@ -1449,6 +1451,25 @@ implEntryRouteKey _ _ = ""
 implEntryRouteKeyE : Emit -> CImplEntry -> String
 implEntryRouteKeyE e ent =
   implEntryRouteKey (methodEntries e (implEntryMethodOf ent)) ent
+
+-- #1036 leg 2: EVERY dict word that any module's typecheck could stamp for this impl.
+-- `keyForSiteByIface` picks the bare head tag when the SITE'S MODULE sees no collision
+-- at that head and the canonical key when it does, so the impl legitimately answers to
+-- both; which one arrives depends on the caller's imports, which the shared dispatcher
+-- cannot know.  Emitting an arm per word makes the dispatcher accept the union instead
+-- of betting on one.
+--
+-- When the head is unambiguous program-wide — every program in this tree today — the
+-- route key IS the head tag, `dedupS` collapses the pair to ONE word, and the emitted
+-- `icmp` is byte-identical to the pre-#1036 single test.  Only a genuine collision
+-- yields two words and therefore two tests.
+implEntryRouteWords : Emit -> CImplEntry -> List String
+implEntryRouteWords e (CImplEntry m s (CImplTagged t k iface ps pats body)) = dedupS
+  [
+    implEntryRouteKeyE e (CImplEntry m s (CImplTagged t k iface ps pats body)),
+    t,
+  ]
+implEntryRouteWords _ _ = []
 
 -- ── ctor→type map ─────────────────────────────────────────────────
 -- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
@@ -5250,11 +5271,38 @@ loadReqDicts e dictPtr n i
 -- the cell (the old behavior) was an OUT-OF-BOUNDS load whenever the dispatch dict
 -- was a bare tag (no requires) → a garbage dict → SIGSEGV (e.g. `traverse` whose
 -- `Thenable m =>` is over a tyvar that is not the `Traversable` receiver).
+-- #1036 leg 2: the arm matches EVERY word the typechecker could have stamped for this
+-- impl, not one word the emitter recomputed.
+--
+-- The dispatcher is emitted ONCE per (method, arity) from the WHOLE-program impl
+-- table, but the dict word reaching it was chosen PER MODULE: typecheck's
+-- `keyForSiteByIface` upgrades a bare head tag to the canonical key only when the
+-- SITE'S MODULE can see two impls at that head (`KeyBuckets` is built from that
+-- module's import closure).  So for one impl, `a.mdk` may stamp the bare head `"Box"`
+-- while `entry.mdk` — which imports the inheriting sibling too — stamps
+-- `Speak|(Box Int)|`.  BOTH words legitimately name this impl.
+--
+-- Recomputing a single verdict here cannot be right for both, and the first cut of
+-- this fix proved it: it made the emitter's verdict program-global while typecheck's
+-- stayed module-local, so a module that could not see the sibling stamped `"Box"`,
+-- matched no arm, and fell to the interface default — turning a program that is
+-- CORRECT on main into a silent wrong answer.  That is the relocate-vs-eliminate
+-- trap: the disagreement moved from "entries vs decls" to "module-local vs global"
+-- instead of going away.
+--
+-- Consuming the WORD SET makes the arm a superset instead of a competing verdict, so
+-- no module's stamp can miss.  `implEntryRouteWords` returns one word when the head
+-- is unambiguous program-wide (every program in the tree today) — then this emits the
+-- identical single `icmp` and the IR is byte-for-byte unchanged.
+--
+-- RESIDUAL, stated rather than papered over: the bare head is still only ONE arm, so
+-- if two modules each see a DIFFERENT single impl at the same head they both stamp
+-- the bare head and only one impl can own it.  That is a PRE-EXISTING defect (it
+-- reproduces identically with and without this fix) and it is tracked separately; the
+-- point here is that this change cannot make it worse.
 emitDispatchArm : Emit -> String -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
 emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
-  let routeKey = implEntryRouteKeyE e ent
-  let cmp = freshReg e
-  let _ = emit e "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName routeKey)}"
+  let cmp = emitRouteWordMatch e headTag (implEntryRouteWords e ent)
   let n = intToString (freshLocal e)
   let yes = "dispyes" ++ n
   let next = "dispnext" ++ n
@@ -5262,6 +5310,40 @@ emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
   let _ = emit e (yes ++ ":")
   let _ = emitDispatchArmBody e dictPtr ent name methWords argOps slot endL
   emit e (next ++ ":")
+
+-- `headTag == w` for a ONE-word set (byte-identical to the pre-#1036 single `icmp`),
+-- else the OR of one `icmp` per word.  Emitted as a left-folded chain of `or`s so the
+-- register sequence is stable and no basic block is added — the arm keeps its exact
+-- two-label shape, which is what lets a one-word set stay byte-identical.
+--
+-- Deliberately NOT the `emitTagMatch` further down this file: that one belongs to the
+-- ARG-TAG path and compares a loaded CONSTRUCTOR tag against `cellTag`, whereas this
+-- compares a DICT WORD against `hashName`.  Same shape, different namespaces — merging
+-- them would silently cross dict-word and ctor-tag hashing.
+emitRouteWordMatch : Emit -> String -> List String -> String
+emitRouteWordMatch e _ [] = emitConstFalse e
+emitRouteWordMatch e headTag (w::rest) =
+  let first = freshReg e
+  let _ = emit e "  \{first} = icmp eq i64 \{headTag}, \{intToString (hashName w)}"
+  emitRouteWordMatchOr e headTag first rest
+
+emitRouteWordMatchOr : Emit -> String -> String -> List String -> String
+emitRouteWordMatchOr _ _ acc [] = acc
+emitRouteWordMatchOr e headTag acc (w::rest) =
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp eq i64 \{headTag}, \{intToString (hashName w)}"
+  let o = freshReg e
+  let _ = emit e "  \{o} = or i1 \{acc}, \{c}"
+  emitRouteWordMatchOr e headTag o rest
+
+-- an impl with no route word can match nothing; materialise `false` rather than
+-- emitting a bare `br` on a nonexistent register.  Unreachable in practice (every
+-- CImplTagged has a head tag), but a silently-malformed arm is the worse failure.
+emitConstFalse : Emit -> String
+emitConstFalse e =
+  let r = freshReg e
+  let _ = emit e "  \{r} = icmp eq i64 0, 1"
+  r
 
 -- the matched-arm body — shared by the guarded concrete arm (emitDispatchArm) and
 -- the general instance's UNCONDITIONAL catch-all arm (emitDispatchChain).  Load the
@@ -5359,15 +5441,23 @@ emitDispatchChainDefaulted e dictPtr headTag (ent::rest) uncovered name entry me
 -- the dispatch keys a method's tagged impls already cover, for diffing against the
 -- interface's full key set to find the derived-default tags.
 --
--- #1036: this is each entry's ROUTE key, not its bare head tag `t`.  Reading the
+-- #1036: this is each entry's ROUTE WORD SET, not its bare head tag `t`.  Reading the
 -- head made `impl Speak (Box Int)` claim to cover every `Box _`, so the inheriting
 -- `impl Speak (Box String)` looked covered, `tagsMinus` came back empty, and both
 -- the sole-impl shortcut and the mixed default+impls chain concluded there was
--- nothing left to route.  Byte-identical wherever no two declared impls of one
--- interface share a head — there the route key IS the head tag.
+-- nothing left to route.
+--
+-- It is the WORD SET (leg 2) rather than one route key because that is exactly what
+-- the arm now matches: a concrete arm claims both its canonical key and its bare
+-- head, so both must read as COVERED or `tagsMinus` would ask for a
+-- `@mdk_default_<m>_<head>` arm the concrete arm already shadows — dead code whose
+-- only effect is IR churn.
+--
+-- Byte-identical wherever no two declared impls of one interface share a head: there
+-- the route key IS the head tag and the set is one element.
 implEntryTags : Emit -> List CImplEntry -> List String
 implEntryTags _ [] = []
-implEntryTags e (ent::rest) = implEntryRouteKeyE e ent :: implEntryTags e rest
+implEntryTags e (ent::rest) = implEntryRouteWords e ent ++ implEntryTags e rest
 
 -- interface tags NOT covered by any tagged impl — the derived-default tags that need a
 -- `@mdk_default_<method>_<tag>` synthesis arm appended to the tagged-impl dispatch chain.
