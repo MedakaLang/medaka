@@ -216,6 +216,14 @@ MATCHLITS_N="${PERF_MATCHLITS_N:-1000}"
 MANYIFACES_N="${PERF_MANYIFACES_N:-$N}"
 WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 
+# `consfam` (issue #1029) samples at 200/400/800 rather than the default 250/500/1000.
+# Its cost is driven by the BACKEND, not the front end, and pre-fix it was near-cubic in
+# N — so the band is chosen from the ALLOC arm's side: 200/400/800 is where the defect was
+# reproduced (net alloc r1 3.30, r2 4.82 — clear of the 3.0 ceiling, and the emit TIME row
+# goes red there too) while keeping the largest sample at 800 functions, comparable to the
+# other shapes' 1000. See gen_consfam.
+CONSFAM_N="${PERF_CONSFAM_N:-200}"
+
 # `xref` samples the WASM arm at its OWN, SMALLER band — 2000/4000/8000 rather than
 # the shape's 4000/8000/16000. This is a COST fix and it is the reason this gate is
 # not the CI critical path. The band is deliberate — a ratio measured here does not
@@ -371,6 +379,12 @@ trap 'rm -rf "$WORK"' EXIT
 #              but those are HAND-ROLLED (uncounted), so op reads LINEAR: an `ok` guard,
 #              not an ownersOf detector (the real O(N^2) is TIME-only, N>=~4000). OP-ONLY.
 #              See gen_widerecords.
+#   consfam  — the BACKEND shape (issue #1029). N mutually cons-tail-recursive fns — the
+#              only thing in this corpus that reaches trmc_analysis's dispatch-TMC group
+#              GROWTH WALK, which runs unconditionally in both backends' emitProgram.
+#              `xref` chains N fns but with no cons tail, so the walk's consTargets
+#              pre-gate rejects every root and xref reads clean linear. Graded on the
+#              ALLOC arm; pre-fix it read NEAR-CUBIC. See gen_consfam.
 #   modules  — MULTI-MODULE (issue #153). The five shapes above are single-file,
 #              so they run only the single-file driver and are STRUCTURALLY BLIND
 #              to the O(modules^2) family in checkModuleFullImpl / elabModuleStamp.
@@ -796,6 +810,54 @@ gen_emittables() {
     i=$((i+1))
   done >> "$f"
   printf 'main = println (s0 1)\n' >> "$f"
+}
+
+# gen_consfam — THE DISPATCH-TMC GROUP-GROWTH SHAPE (issue #1029). N mutually
+# cons-tail-recursive functions: `c_i k = if k <= 0 then c_{i-1} 1 else i :: c_i (k - 1)`.
+# It is the ONLY shape that reaches backend/trmc_analysis.mdk's (b') dispatch-group
+# growth walk at all — and `detectDispatchGroups` runs UNCONDITIONALLY in BOTH backends'
+# emitProgram, i.e. on every `medaka build`.
+#
+# WHY NO OTHER SHAPE SEES IT, and why that is a property of the SHAPE and not the band:
+# the walk is pre-gated on `consTargets` — a candidate root must be the bottom callee of
+# some peeled tail-position spine cons. `xref` chains N functions but with PLAIN tail
+# calls, so consTargets is empty, every root is rejected before the walk starts, and xref
+# reads clean linear (alloc x2.10). The cons TAIL is the load-bearing detail; without one
+# this whole subsystem is unreachable from the corpus.
+#
+# Every c_i is a cons target here, so every c_i is a candidate root, and growing from c_k
+# walks the whole c_k..c_0 family. Pre-#1029 each step of that walk did `contains n acc`
+# (List-as-set), `acc ++ toAdd` and `rest ++ toAdd` (`++` is O(left), INSIDE the fold),
+# and a `dispFindBind` linear scan of every bind — O(P) work inside two nested loops.
+#
+# SEEN RED, at this band, on the pre-fix binary (87d4842f) — the rows this gate printed,
+# BOTH arms firing:
+#   consfam 200  290.8 MB  959.1 MB  4623.9 MB  r1=3.30 r2=4.82  ** SUPERLINEAR (ALLOC) **
+#   time emit: 0.310s -> 1.957s -> 13.365s     r1=6.31 r2=6.83   ** SUPERLINEAR (TIME) **
+# and GREEN with the fix, same tree, same band:
+#   consfam 200  218.6 MB  462.2 MB  1017.7 MB  r1=2.11 r2=2.20  ok
+# (per-stage `emit` allocation is the sharpest view: 84.0 -> 521.6 -> 3656.9 MB, x6.21 x7.01
+# before; 11.9 -> 24.6 -> 50.7 MB, x2.07 x2.06 after. Emit ops 352.4M -> 130k at N=800.)
+# GRADED BY THE ALLOC ARM, which rides the shared deterministic run — this shape adds NO
+# new profiler invocation beyond the three every shape makes.
+#
+# ⚠️ The fixture must actually FORM the group, or this measures a parse error. Re-derive:
+#   medaka build --keep-ir -o /tmp/cf /tmp/consfam.mdk && grep -c '^; tmc: .* group:' /tmp/cf.ll
+# must print a nonzero count (the accepted group's non-root members). A degenerate fixture
+# also trips the alloc arm's TOOSMALL branch, which is a FAIL, not a pass.
+gen_consfam() {
+  n=$1; f=$2; : > "$f"
+  {
+    printf 'c0 : Int -> List Int\nc0 k = if k <= 0 then [] else 0 :: c0 (k - 1)\n'
+    i=1; while [ "$i" -lt "$n" ]; do
+      printf 'c%s : Int -> List Int\nc%s k = if k <= 0 then c%s 1 else %s :: c%s (k - 1)\n' \
+        "$i" "$i" "$((i-1))" "$i" "$i"
+      i=$((i+1))
+    done
+    # `main` REFERENCES the last member, so DCE keeps the whole family and the backend
+    # actually runs the detection over it (a dead family is pruned before emit).
+    printf 'main = println (length (c%s 3))\n' "$((n-1))"
+  } >> "$f"
 }
 
 # gen_modules — the ONLY multi-module generator (issue #153). Writes N separate
@@ -1964,7 +2026,7 @@ printf -- '---------------------------------------------------------------------
 # LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
 # indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
 # gen_widerecords).
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos"
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
 else
@@ -1983,6 +2045,7 @@ for shape in $SHAPES; do
     manydefs)   base_n="$MANYDEFS_N" ;;
     manyifaces) base_n="$MANYIFACES_N" ;;
     widerecords) base_n="$WIDERECORDS_N" ;;
+    consfam)    base_n="$CONSFAM_N" ;;
     *)          base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
