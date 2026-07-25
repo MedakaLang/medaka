@@ -194,6 +194,26 @@ gh issue list --milestone "0.1.0 public preview"  # the release floor
 **Severity:** `S0: silent wrongness` (a wrong answer or destroyed source, **with no error**) →
 `S1: loud breakage` → `S2: misleading` → `S3: friction & debt`. **Soundness outranks release.**
 
+> ### ⚠️ A fix that makes a defect QUIETER is a severity INCREASE — even when the old behaviour was also broken.
+>
+> The ladder above orders states. Its corollary orders *changes*, and that is the half people miss:
+> **loud → silent is a regression**, and it will look like progress because the crash went away.
+> Three instances in one session (2026-07-24/25), each caught by a reviewer noticing rather than
+> by any gate:
+>
+> - **#1072** — a fix replaced an `unreachable` crash with a **wrong answer at exit 0**. Strictly
+>   worse: it removed the only loud signal that shape ever produced.
+> - **PR #1007** (fixing #1002) — an index fix turned *"returns nothing, so the rename driver
+>   refuses"* into *"returns a confidently wrong edit set the driver applies."*
+> - **PR #996** — the same transition, one PR earlier, in the same subsystem.
+>
+> **The reviewer's question:** *does this fix turn a path that returned NOTHING into one that
+> returns SOMETHING?* If so, **the new something is untested by construction** — every
+> pre-existing test covered the empty case, so no existing fixture can fail. The test that would
+> catch it cannot be derived from the diff or from coverage; it has to be built from the spec.
+>
+> Applying this to a green PR caught a language regression before it merged.
+
 ⚠️ **`verified` vs `needs-repro` is load-bearing. REPRODUCE BEFORE YOU FIX.** When the backlog was
 re-derived against the binary on 2026-07-14, **six entries were already fixed** — including two
 "silent build miscompiles", a duplicate-definition segfault, and a `newtype` bug billed as "the best

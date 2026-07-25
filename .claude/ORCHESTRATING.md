@@ -602,6 +602,34 @@ It has twice returned **do-not-merge** on a diff whose own gates were green, bot
 (`check` 0 diagnostics, `run` E-PANIC, `build` emitter failure), and the author's regression fixture
 **tested the bug it fixed, not the feature it shipped**.
 
+### The base rate, measured: 6 reviews, 6 real defects, all on 12/12-green PRs
+
+On 2026-07-24/25 **every** adversarial review run against a fully-green PR came back
+needs-work. Not a selected sample — all six that ran:
+
+| PR | what green CI could not see |
+|---|---|
+| #1004 | an S1 + two S2s (a wildcard arm skipped domain validation for new syntax) |
+| #1007 | a confirmed regression **worse than the bug it fixed** — impl heads attributed to the wrong interface |
+| #1010 | a **9–15× allocation regression** on two check-path sites; both perf arms structurally blind to it |
+| #1011 | an **S0** — a program-global key with no scope re-kinded every arity-matching application graph-wide |
+| #1021 | a **language regression** — four shapes that compiled and ran correctly on `main` were rejected |
+| #1058 | a **new S0 introduced by the fix**, which relocated the defect instead of eliminating it |
+
+**So: on this repo, for a compiler-semantics change, a green CI carries close to zero
+information about correctness.** That is not a slogan — it is the observed rate. It is also why
+the middle step above is *required* rather than advisable, and why "it's green, and it's late"
+is the worst possible moment to skip it.
+
+Two corollaries that cost real time in the same session:
+
+- **An author's own reviewer still counts as one pass, but only one.** Three of the six were
+  caught by a *sibling's* reviewer, not the author's.
+- **Merging on partial evidence is expensive precisely when the evidence is partial.** #1058
+  merged on roughly one and a half of three stated conditions; the skipped probe, re-run
+  afterwards, found **two S0s** — one of them live on `main`. Post-merge verification works, but
+  it converts a caught defect into a shipped one.
+
 ---
 
 ## ⚠️ A clean auto-merge is NOT agreement

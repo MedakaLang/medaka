@@ -33,6 +33,28 @@ built to fail loudly on *silence*, and every exception list must detect an **acc
 fix** — because a list that only suppresses failures rots, which is how `test/ported/`
 died.
 
+### 0.0.2 The next generation of that bug: a gate that RAN, PASSED, and COULD NOT HAVE FAILED
+
+§0.0 is about *"didn't run"* masquerading as *"passed."* Four gates on this repo have the
+harder version — they run, they grade, and they are **structurally incapable of failing on a
+defect in their own subject area**. All four were hit in a single session (2026-07-24/25);
+listing them together because the shape is only visible as a set.
+
+| gate | what it cannot see | why |
+|---|---|---|
+| `test/diff_compiler_engines.sh` | a bug **all three engines agree on** | it grades eval == native == wasm. Unanimity is its pass condition, so a shared wrong answer *is* a pass. Live examples: #1045, #1047. |
+| `test/llvm_fixtures_modules/` goldens | an **eval** defect | the goldens are captured **from eval**, so pinning an eval-wrong shape *enshrines* the wrong value as expected. #1071; PR #1058's author hit it and routed around it by hand. |
+| perf **allocation** arm | a **constant-factor** regression | it grades a growth *ratio* (linear ≈2.0×, quadratic ≈4.0×). A 15× constant factor at fixed *n* cannot move a ratio. |
+| perf **op-count** arm | a fix that **removes the counted steps** | it counts `contains`-steps via `opBump` — exactly what a List→map migration deletes — so the count goes **down** and it reports an improvement. |
+
+⚠️ **Byte-identical emitted IR proves SEMANTICS did not change. It says nothing about
+allocation, deduplication, or ordering** — which is precisely why it cannot speak to a
+List→index conversion that silently gains dedup or flips last-write-wins.
+
+**The rule this yields:** when a change lands in one of these areas, *name the gate that would
+have caught it.* If the honest answer is "none of them," that is the finding — file it, and
+prefer adding the missing arm over trusting the ones that are green.
+
 ### 0.0.1 Six quadratics, found by building the perf gate
 
 Agents kept introducing O(n²) algorithms and nothing was watching. Designing the
