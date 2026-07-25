@@ -1,5 +1,5 @@
 # META
-source_lines=9321
+source_lines=9345
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -194,6 +194,11 @@ import ir.core_ir.{
   CImplBody(..),
   CField(..),
 }
+-- #1072: the program-global DECLARED-impl head table, installed by `lowerImpls` (which
+-- every emit driver funnels through, this one included).  llvm_emit already reads it for
+-- the same decision; wasm read only the CImplEntries, which a method-less impl never
+-- produces — see implEntryRouteKeyW.
+import ir.core_ir_lower.{ifaceDeclHeadUnique}
 import list.{replicate}
 import support.ordmap.{
   OrdMap,
@@ -4009,9 +4014,23 @@ distinctKeysAtHeadW (_::rest) method tag acc =
 -- route key is hashed raw, and the dict WITNESS (routeWitness `dictTag routeTag`)
 -- hashes the SAME raw canonical key the typechecker stamps, so witness and dispatch
 -- agree.
-implEntryRouteKeyW : List CImplEntry -> String -> String -> String -> String
-implEntryRouteKeyW entries method tag key =
-  if headTagUniqueW entries method tag then
+--
+-- #1072: "unique head" must be decided over the DECLARED impls too, not the
+-- CImplEntries alone — the same correction #1036 made to llvm_emit's peer, which this
+-- one was left out of.  `lowerDeclImpl` projects a `DImpl` to one entry per method it
+-- DEFINES, so an impl that inherits the method from an interface default contributes
+-- ZERO entries: `headTagUniqueW` saw ONE key at head `Box` for
+-- `impl Speak (Box Int)` + `impl Speak (Box String)` and derived the bare head, while
+-- typecheck's `keyForSiteByIface` counts DECLARED impls of the INTERFACE and stamped
+-- `Speak|(Box Int)|` — so no arm could match and the chain trapped on its trailing
+-- `unreachable` (test/engine_divergence.txt's `llvmM/module_local_route_word` entry).
+-- ANDing in the decl verdict makes both sides decide from the same global facts.
+-- `ifaceDeclHeadUnique` is true for every head in every corpus that has no two
+-- declared impls of one interface at one head — i.e. all of them today — so every
+-- existing route word, and therefore every emitted WAT byte, is unchanged.
+implEntryRouteKeyW : List CImplEntry -> String -> String -> String -> String -> String
+implEntryRouteKeyW entries method tag key iface =
+  if headTagUniqueW entries method tag && ifaceDeclHeadUnique iface tag then
     tag
   else
     key
@@ -4430,9 +4449,14 @@ methodImpls prog method =
 -- tag) — and dedupPairs collapses the multiple entries of one impl to a single arm;
 -- two overlapping same-head impls yield two DISTINCT arms.
 methodImplKey : List CImplEntry -> String -> CImplEntry -> List (String, String)
-methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
+methodImplKey entries method (CImplEntry n _ (CImplTagged t k iface _ _ _)) =
   if n == method then
-    [(implFnSymTagW entries method t k, implEntryRouteKeyW entries method t k)]
+    [
+      (
+        implFnSymTagW entries method t k,
+        implEntryRouteKeyW entries method t k iface,
+      )
+    ]
   else
     []
 methodImplKey _ _ _ = []
@@ -9326,6 +9350,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceDeclHeadUnique" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
@@ -10218,8 +10243,8 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "distinctKeysAtHeadW" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "distinctKeysAtHeadW" ((PCons (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest")) (PVar "method") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "method")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "distinctKeysAtHeadW" ((PCons PWild (PVar "rest")) (PVar "method") (PVar "tag") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EVar "acc")))
-(DTypeSig false "implEntryRouteKeyW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implEntryRouteKeyW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EVar "key")))
+(DTypeSig false "implEntryRouteKeyW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
+(DFunDef false "implEntryRouteKeyW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key") (PVar "iface")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "tag"))) (EVar "tag") (EVar "key")))
 (DTypeSig false "headTagForKeyW" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "String")))))
 (DFunDef false "headTagForKeyW" (PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "headTagForKeyW" ((PVar "method") (PVar "key") (PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EVar "k") (EVar "key"))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "headTagForKeyW") (EVar "method")) (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -10340,7 +10365,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EApp (EVar "progImpls") (EVar "prog"))) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupPairs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "methodImplKey") (EVar "mEntries")) (EVar "method"))) (EVar "mEntries"))) (EListLit)))))
 (DTypeSig false "methodImplKey" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")))) (EListLit)))
+(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EVar "iface")))) (EListLit)))
 (DFunDef false "methodImplKey" (PWild PWild PWild) (EListLit))
 (DTypeSig false "implForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
 (DFunDef false "implForW" ((PVar "prog") (PVar "method") (PVar "tag")) (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EApp (EVar "progImpls") (EVar "prog"))) (EVar "method"))))
@@ -11562,6 +11587,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceDeclHeadUnique" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
@@ -12454,8 +12480,8 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "distinctKeysAtHeadW" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "distinctKeysAtHeadW" ((PCons (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest")) (PVar "method") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "method")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "distinctKeysAtHeadW" ((PCons PWild (PVar "rest")) (PVar "method") (PVar "tag") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHeadW") (EVar "rest")) (EVar "method")) (EVar "tag")) (EVar "acc")))
-(DTypeSig false "implEntryRouteKeyW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implEntryRouteKeyW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EVar "key")))
+(DTypeSig false "implEntryRouteKeyW" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
+(DFunDef false "implEntryRouteKeyW" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key") (PVar "iface")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "headTagUniqueW") (EVar "entries")) (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "tag"))) (EVar "tag") (EVar "key")))
 (DTypeSig false "headTagForKeyW" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "String")))))
 (DFunDef false "headTagForKeyW" (PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "headTagForKeyW" ((PVar "method") (PVar "key") (PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EVar "k") (EVar "key"))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "headTagForKeyW") (EVar "method")) (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -12576,7 +12602,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EApp (EVar "progImpls") (EVar "prog"))) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupPairs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "methodImplKey") (EVar "mEntries")) (EVar "method"))) (EVar "mEntries"))) (EListLit)))))
 (DTypeSig false "methodImplKey" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")))) (EListLit)))
+(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EVar "iface")))) (EListLit)))
 (DFunDef false "methodImplKey" (PWild PWild PWild) (EListLit))
 (DTypeSig false "implForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
 (DFunDef false "implForW" ((PVar "prog") (PVar "method") (PVar "tag")) (EApp (EApp (EApp (EVar "findByTagW") (EVar "method")) (EVar "tag")) (EApp (EApp (EVar "methodEntriesW") (EApp (EVar "progImpls") (EVar "prog"))) (EVar "method"))))

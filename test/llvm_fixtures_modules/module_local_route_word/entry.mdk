@@ -30,16 +30,25 @@
 -- word set back to a single recomputed verdict would regress silently with every gate
 -- green, which is exactly how this class arrived.
 --
--- Two variants, because their pre-fix symptoms differ:
+-- Three variants, because their pre-fix symptoms differ:
 --   Speak — the sibling in `b` INHERITS the default.  Pre-fix: `DEFAULT` (or SIGSEGV).
 --   Loud  — the sibling in `b` OVERRIDES.             Pre-fix: `loudstr`, the WRONG
 --           IMPL, i.e. silent wrongness with no default involved at all (#1064).
+--   Sized — #1072, and the DIRECTION the first two cannot express: `a` holds the
+--           strictly LESS specific impl, so the `min⊑` winner is the one `a` cannot
+--           see.  Both engines got this wrong (native AND eval, every opt level) until
+--           route resolution was scoped to the whole program rather than to `a`'s
+--           topological prefix.  Encoding the prefix's answer canonically does NOT fix
+--           it — measured: it keeps native wrong and makes eval wrong too, because the
+--           bare head was what let eval's runtime re-resolve with full visibility.
 --
--- Must print `boxint` then `loudint`.  Anything else means leg 2 is back.
-import a.{callA, callLoudA}
+-- Must print `boxint`, `loudint`, `boxspecific`.  Anything else means leg 2 or #1072
+-- is back.
+import a.{callA, callLoudA, callSizedA}
 import b
 
 main : <IO> Unit
 main =
   let _ = putStrLn (callA ())
-  putStrLn (callLoudA ())
+  let _ = putStrLn (callLoudA ())
+  putStrLn (callSizedA ())

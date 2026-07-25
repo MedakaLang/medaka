@@ -190,6 +190,11 @@ import ir.core_ir.{
   CImplBody(..),
   CField(..),
 }
+-- #1072: the program-global DECLARED-impl head table, installed by `lowerImpls` (which
+-- every emit driver funnels through, this one included).  llvm_emit already reads it for
+-- the same decision; wasm read only the CImplEntries, which a method-less impl never
+-- produces — see implEntryRouteKeyW.
+import ir.core_ir_lower.{ifaceDeclHeadUnique}
 import list.{replicate}
 import support.ordmap.{
   OrdMap,
@@ -4005,9 +4010,23 @@ distinctKeysAtHeadW (_::rest) method tag acc =
 -- route key is hashed raw, and the dict WITNESS (routeWitness `dictTag routeTag`)
 -- hashes the SAME raw canonical key the typechecker stamps, so witness and dispatch
 -- agree.
-implEntryRouteKeyW : List CImplEntry -> String -> String -> String -> String
-implEntryRouteKeyW entries method tag key =
-  if headTagUniqueW entries method tag then
+--
+-- #1072: "unique head" must be decided over the DECLARED impls too, not the
+-- CImplEntries alone — the same correction #1036 made to llvm_emit's peer, which this
+-- one was left out of.  `lowerDeclImpl` projects a `DImpl` to one entry per method it
+-- DEFINES, so an impl that inherits the method from an interface default contributes
+-- ZERO entries: `headTagUniqueW` saw ONE key at head `Box` for
+-- `impl Speak (Box Int)` + `impl Speak (Box String)` and derived the bare head, while
+-- typecheck's `keyForSiteByIface` counts DECLARED impls of the INTERFACE and stamped
+-- `Speak|(Box Int)|` — so no arm could match and the chain trapped on its trailing
+-- `unreachable` (test/engine_divergence.txt's `llvmM/module_local_route_word` entry).
+-- ANDing in the decl verdict makes both sides decide from the same global facts.
+-- `ifaceDeclHeadUnique` is true for every head in every corpus that has no two
+-- declared impls of one interface at one head — i.e. all of them today — so every
+-- existing route word, and therefore every emitted WAT byte, is unchanged.
+implEntryRouteKeyW : List CImplEntry -> String -> String -> String -> String -> String
+implEntryRouteKeyW entries method tag key iface =
+  if headTagUniqueW entries method tag && ifaceDeclHeadUnique iface tag then
     tag
   else
     key
@@ -4426,9 +4445,14 @@ methodImpls prog method =
 -- tag) — and dedupPairs collapses the multiple entries of one impl to a single arm;
 -- two overlapping same-head impls yield two DISTINCT arms.
 methodImplKey : List CImplEntry -> String -> CImplEntry -> List (String, String)
-methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
+methodImplKey entries method (CImplEntry n _ (CImplTagged t k iface _ _ _)) =
   if n == method then
-    [(implFnSymTagW entries method t k, implEntryRouteKeyW entries method t k)]
+    [
+      (
+        implFnSymTagW entries method t k,
+        implEntryRouteKeyW entries method t k iface,
+      )
+    ]
   else
     []
 methodImplKey _ _ _ = []
