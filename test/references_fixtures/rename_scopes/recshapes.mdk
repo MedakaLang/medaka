@@ -1,28 +1,48 @@
 -- module `recshapes` — two INDEX-INCOMPLETENESS shapes for the rename gate
 -- (`scopes.jsonl`).  ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK
--- COORDINATES — keep this header exactly 16 lines.
+-- COORDINATES — keep this header exactly 30 lines.
 --
--- Both are OPEN `refindex` defects, and neither has a mis-placed span, so F3(d)
--- span verification is structurally blind to them — the occurrence is simply not
--- under the clicked key:
---   #1003 a self-recursive LOCAL: `rgo (k - 1)` is recorded as a use of the
---         top-level `rgo`, so the rename leaves it behind and it REBINDS to that
---         outer definition — `medaka run` printed 10 before and 104 after, with
---         `check` clean. A silent wrong answer.
---   #951  a top-level `let rec`: `recshapes|local|rcount|N` and
+-- Neither shape has a MISPLACED span, so F3(d) span verification is
+-- structurally blind to both: the occurrence is simply not under the clicked
+-- key. `renameIndexIncomplete` decides them from the AST instead.
+--
+--   #1003 a self-recursive LOCAL. `rgo (k - 1)` is not filed under the local's
+--         key, so the rename leaves it behind and it REBINDS to whatever else is
+--         named `rgo` — `medaka run` printed 10 before and 104 after, `check`
+--         rc=0. Silent.
+--   #951  a top-level `let rec`. `recshapes|local|rcount|N` and
 --         `recshapes|val|rcount` BOTH hold a def at the same span, and the
 --         recursive call belongs to the first while the external call belongs to
---         the second. Renaming from either click edits half of them.
--- Both must now REFUSE (F3(f), `renameIndexAmbiguous`).
+--         the second, so either click edits half of them.
+--
+-- ⚠️ THE #1003 CASE IS DELIBERATELY `local`-SHADOWING-`local` (`rgo` inside
+-- `rNest`, under an enclosing `let rgo`), NOT the easier top-level-namesake
+-- form. A previous fix keyed on "a second binder spells this name" and had to
+-- carve out `local`↔`local` to let ordinary shadowing through — which is exactly
+-- where this variant lives, so the arm vanished while the bug did not. The
+-- fixture now sits IN that cell rather than beside it.
+--
+-- TWO NEGATIVE CONTROLS, each in the cell a sloppier detector would fail:
+--   * `rgo` at 33:6 is bound by a `let` that does NOT mention itself, so a
+--     detector matching on the NAME rather than on this def site's own `Loc`
+--     would refuse it. It must rename.
+--   * `rplain` is an ordinary top-level function that IS self-recursive, so a
+--     detector keyed on "recursive" rather than on `DLetGroup` would refuse it.
 rgo : Int -> Int
 rgo k = 100
 
 rOuter : Int -> Int
 rOuter n =
-  let rgo k = if k <= 0 then 0 else k + rgo (k - 1)
-  rgo n
+  let rgo k = 7
+  let rNest m =
+    let rgo k = if k <= 0 then 0 else k + rgo (k - 1)
+    rgo m
+  rNest n + rgo 1
 
 let rec rcount n = if n <= 0 then 0 else 1 + rcount (n - 1)
 
+rplain : Int -> Int
+rplain n = if n <= 0 then 0 else 1 + rplain (n - 1)
+
 recMain : Int
-recMain = rOuter 4 + rcount 3
+recMain = rOuter 4 + rcount 3 + rplain 2

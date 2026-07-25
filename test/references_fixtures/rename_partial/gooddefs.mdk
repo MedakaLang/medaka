@@ -1,11 +1,19 @@
 -- module `gooddefs` — the F2 PARTIAL-GRAPH corpus for the rename gate
--- (`partial.jsonl`).  `gval` is also referenced by `brokensib.mdk`, which does
--- NOT parse; `untouched` is referenced only from files that do.  That contrast
--- is the whole fixture: the first must refuse, the second must still succeed.
+-- (`partial.jsonl`).  Three names, three cells:
+--   `gval`      — also referenced by `brokensib.mdk`, which does not parse:
+--                 REFUSE, naming that file.
+--   `strval`    — also referenced by `strsib.mdk`, which does not parse AND
+--                 whose mention sits after an UNTERMINATED STRING, so the
+--                 lexer's view of it is corrupted too: REFUSE (this is the cell
+--                 a token-based mention scan silently misses).
+--   `untouched` — referenced only from files that parse: must still SUCCEED.
 -- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
--- header exactly 6 lines.
+-- header exactly 11 lines.
 export gval : Int
 gval = 7
+
+export strval : Int
+strval = 5
 
 export untouched : Int
 untouched = 3

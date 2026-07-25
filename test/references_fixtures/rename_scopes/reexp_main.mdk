@@ -1,0 +1,19 @@
+-- module `reexp_main` — F3(b) through a RE-EXPORT HOP (`scopes.jsonl`).
+-- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
+-- header exactly 12 lines.
+--
+-- A DIRECT `import list.*` was already refused, which is exactly what hid this:
+-- the arm looked like it worked. A re-exported name is a `DUse`, not a
+-- declaration, so the module-source check could not see it and
+-- `reexpVal` -> `sortBy` was accepted, breaking the program.
+--
+-- `intercalate` is the NEGATIVE CONTROL in the same cell: `list` declares it,
+-- so the chain COULD reach it, but `reexp_mid` re-exports only `sortBy` — a fix
+-- that pulled in everything downstream of the wildcard would refuse it wrongly.
+import reexp_mid.*
+
+reexpVal : List Int
+reexpVal = [3, 1]
+
+reexpSorted : List Int
+reexpSorted = sortBy compare reexpVal

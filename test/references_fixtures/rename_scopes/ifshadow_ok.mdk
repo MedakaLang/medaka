@@ -1,0 +1,18 @@
+-- module `ifshadow_ok` — the NEGATIVE CONTROL for the #1056 arm, in the same
+-- cell as the failure: it imports the SAME interface `Shdw` from the SAME module
+-- and carries an impl head for one of its methods.  The one thing it does NOT do
+-- is declare its own `Shdw`.
+--
+-- So a detector keyed on "this file imports the interface" or "this file has an
+-- impl head" would refuse this rename. It must succeed: the arm fires only when
+-- a module DECLARES and IMPORTS the same name, which is the ordering refindex
+-- gets backwards.
+import ifshadow_a.{Shdw, shdwOther}
+
+public export data Qt = Qt
+
+impl Shdw Qt where
+  shdwOther Qt = 2
+
+export okUse : Int
+okUse = shdwOther Qt

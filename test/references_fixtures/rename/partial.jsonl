@@ -1,5 +1,7 @@
 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
 {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
-{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/goodmain.mdk", "line": 5, "col": 10, "newName": "gvalZ"}}}
-{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/goodmain.mdk", "line": 5, "col": 17, "newName": "untouchedZ"}}}
-{"jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": {}}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/goodmain.mdk", "line": 7, "col": 10, "newName": "gvalZ"}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/goodmain.mdk", "line": 7, "col": 17, "newName": "strvalZ"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/goodmain.mdk", "line": 7, "col": 26, "newName": "untouchedZ"}}}
+{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_partial/brokensib.mdk", "line": 10, "col": 14, "newName": "gvalQ"}}}
+{"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": {}}
