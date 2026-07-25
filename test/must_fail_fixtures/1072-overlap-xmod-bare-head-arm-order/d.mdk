@@ -1,6 +1,0 @@
--- CONTROL half: byte-identical in shape to b.mdk, except THIS module holds the
--- GENERAL impl instead of the specific one.
-import c.{Speak(..), speak, Box(..)}
-
-impl Speak (Box a) where
-  speak _ = "general"
