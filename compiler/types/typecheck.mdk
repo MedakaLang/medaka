@@ -1980,6 +1980,11 @@ toggles = Ref (freshToggles ())
 -- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
 -- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
 -- no whole-record copy is allocated per set.
+-- #1072: `stampUniverseRef` holds the WHOLE program's decls, and is read for
+-- ROUTE-STAMP impl selection ONLY (elabModuleStamp — which is also where the reasoning
+-- lives).  `[]` means unset, in which case elabModuleStamp falls back to its own
+-- `implDecls`, the pre-#1072 topological prefix.  Deliberately NOT consulted by
+-- typechecking or name resolution, so import visibility is unchanged.
 data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
@@ -2000,6 +2005,7 @@ data DriverState =
       sigNameSetRef : Ref (OrdMap Unit),
       sigTyMapRef : Ref (OrdMap Ty),
       implInferEnabled : Ref Bool,
+      stampUniverseRef : Ref (List Decl),
     }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -2025,6 +2031,7 @@ freshDriverState _ = DriverState {
   sigNameSetRef = Ref omEmpty,
   sigTyMapRef = Ref omEmpty,
   implInferEnabled = Ref False,
+  stampUniverseRef = Ref [],
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -18017,6 +18024,11 @@ elaborateModules runtimeDecls coreDecls modulesIn =
   let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
   let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
   let _ = setRef driverState.value.promotionHarvestRef []
+  -- #1072: install THIS sweep's whole-program impl universe for the route stampers
+  -- (see elabModuleStamp).  Set per sweep because the prePassed trees differ between
+  -- them, and BEFORE core's own elabModuleStamp so the prelude's routes resolve
+  -- against the same global instance set every module does.
+  let _ = setRef driverState.value.stampUniverseRef (core2a ++ flatMap snd modules2a)
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
   -- impl-body universe (`accAll ++ prog`, order-observable through buildImplTable/
@@ -18064,6 +18076,8 @@ elaborateModules runtimeDecls coreDecls modulesIn =
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
       let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
       let modules2 = map (prePassModulePairArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
+      -- #1072: re-install for THIS sweep's prePassed trees (see the bare sweep above).
+      let _ = setRef driverState.value.stampUniverseRef (core2 ++ flatMap snd modules2)
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
       -- order-observable) but not accData (dead Module field).  wantAll=True keeps the
@@ -18455,12 +18469,45 @@ elabModuleStamp mid seedVars accData implDecls prog =
   let _ = setRef driverState.value.superDeclsRef implDecls  -- WS-1b: interfaces in scope for super expansion
   let schemes = checkModuleFullImpl mid seedVars accData implDecls prog
   let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals (per module, before dictPass)
-  let stampImplTable = buildImplTable implDecls
+  -- #1072: the impl universe the ROUTE STAMPERS select from is the WHOLE PROGRAM,
+  -- not `implDecls` (= core + every EARLIER module + this one, a TOPOLOGICAL PREFIX).
+  --
+  -- A dict word names the impl this site resolved to, and that resolution is
+  -- `inst = min⊑` over the matching impls (DICT-SEMANTICS §3) — a GLOBAL coherence
+  -- property.  Selecting it from a prefix made most-specific-wins depend on where the
+  -- site's module sits in the topo order: in #1072's repro `a` holds the call site and
+  -- `impl Sized (Box a)`, `b` holds the strictly more specific `impl Sized (Box Int)`,
+  -- and `a` precedes `b`, so `a`'s stamp named the GENERAL impl.  Swapping which
+  -- module holds which impl flipped the answer.  Native then called the general impl;
+  -- eval got it right only because a BARE-HEAD word (the no-collision encoding) let
+  -- its runtime `pickByTag` re-resolve among BOTH impls with full visibility — which
+  -- is also why stamping the prefix-selected impl CANONICALLY does not fix this: it
+  -- removes eval's second chance and makes eval wrong too (measured).
+  --
+  -- Scope of the widening: these two tables feed ONLY the resolve*/dictApp stampers
+  -- below (which impl a route points at, and that impl's own `requires` routes — kept
+  -- in lockstep so §6 C2's "same impl" obligation still holds by construction).
+  -- `implDecls` continues to drive typechecking, super-expansion, shadow resolution
+  -- and `returnPosMethodNames`, so IMPORT VISIBILITY for names and for constraint
+  -- SATISFIABILITY is unchanged — a program that did not typecheck still does not.
+  --
+  -- Byte-identity: adding entries can only change the answer when a LATER module
+  -- declares an impl of the same interface at the same head tycon.  First-match order
+  -- is unchanged (the new entries append), a strictly LESS specific newcomer never
+  -- displaces the min⊑ winner, and an INCOMPARABLE newcomer only breaks uniqueness and
+  -- falls back to that same first match.  There is no such same-head pair anywhere in
+  -- compiler/ + stdlib/ (`ifaceDeclHeadUnique` is true throughout — which is why every
+  -- route word in this tree is a bare head), so the self-compile IR is unmoved.
+  let stampUniverse = if isEmptyL driverState.value.stampUniverseRef.value then
+    implDecls
+  else
+    driverState.value.stampUniverseRef.value
+  let stampImplTable = buildImplTable stampUniverse
   -- #150 level-1: hoist the impl KEY table (was rebuilt from `implDecls` at each of
-  -- the five resolve* sites below).  buildKeyTable is a pure function of implDecls,
-  -- so one build feeds all five byte-identically — one O(cumulative decls) pass per
-  -- module instead of five.
-  let stampKeyTable = buildKeyTable implDecls
+  -- the five resolve* sites below).  buildKeyTable is a pure function of its decls,
+  -- so one build feeds all five byte-identically — one pass per module instead of
+  -- five.
+  let stampKeyTable = buildKeyTable stampUniverse
   let _ = resolveSites stampImplTable stampKeyTable (returnPosMethodNames implDecls) perRun.value.pendingSites.value
   let _ = resolveOpSites True stampImplTable stampKeyTable perRun.value.pendingBinopSites.value
   let _ = resolveOpSites False stampImplTable stampKeyTable perRun.value.pendingUnopSites.value

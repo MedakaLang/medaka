@@ -1,4 +1,0 @@
-import a.{Speak(..), speak, Box(..)}
-
-impl Speak (Box Int) where
-  speak _ = "specific"

@@ -769,17 +769,26 @@ memoKeys entries = memoKeysGo entries entries
 
 memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String)
 memoKeysGo _ [] = []
-memoKeysGo all ((CImplEntry m _ (CImplTagged tag key _ positions pats _))::rest)
+memoKeysGo all ((CImplEntry m _ (CImplTagged tag key iface positions pats _))::rest)
   | isEmptyL positions && isEmptyL pats =
-    (m, memoSelector all m tag key) :: memoKeysGo all rest
+    (m, memoSelector all m tag key iface) :: memoKeysGo all rest
 memoKeysGo all (_::rest) = memoKeysGo all rest
 
 -- the string an RKey occurrence of (method, head-tag) carries — bare head when the
 -- head is the sole impl of (method, head), else the canonical C7 key.  Mirrors the
--- emitter's implFnSymTag/keyForSite choice (C7), so the CAF and the occurrence agree.
-memoSelector : List CImplEntry -> String -> String -> String -> String
-memoSelector all method tag key =
-  if headTagUniqueL all method tag then
+-- emitter's implEntryRouteKey / typecheck's keyForSite choice (C7), so the CAF and the
+-- occurrence agree.
+--
+-- #1072: AND in the DECLARED-impl verdict, for the same reason llvm_emit's peer does
+-- (#1036) and wasm_emit's now does.  An impl that inherits the method contributes no
+-- CImplEntry, so the entry-only count called a colliding head unique and derived the
+-- bare head while typecheck stamped the canonical key — `isMemoKey` then missed, the
+-- occurrence was not hoisted onto its shared CAF, and its side effect ran per
+-- occurrence (#731's failure mode).  True for every head with no two declared impls of
+-- one interface, so every existing memo key is unchanged.
+memoSelector : List CImplEntry -> String -> String -> String -> String -> String
+memoSelector all method tag key iface =
+  if headTagUniqueL all method tag && ifaceDeclHeadUnique iface tag then
     tag
   else
     key

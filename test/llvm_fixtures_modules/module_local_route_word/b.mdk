@@ -2,7 +2,7 @@
 -- Nothing in this module is ever dispatched on.  Its mere PRESENCE IN THE PROGRAM is
 -- what made the emitter's program-global collision verdict disagree with a's
 -- module-local one.
-import iface.{Speak(..), speak, Loud(..), loud}
+import iface.{Speak(..), speak, Loud(..), loud, Sized(..), sizeOf}
 import boxty.{Box(..)}
 
 export impl Speak (Box String) where
@@ -12,4 +12,11 @@ export impl Speak (Box String) where
 -- OVERRIDES.  Pre-fix, a's `Box Int` receiver was dispatched INTO this body.
 export impl Loud (Box String) where
   loud _ = "loudstr"
+
+-- #1072 variant 3's sibling: unlike the two above, this one IS what a's site must
+-- reach.  It is strictly more specific than a's `Sized (Box a)` for a `Box Int`
+-- receiver, and a cannot see it — so it is only reachable if route resolution scopes
+-- to the WHOLE PROGRAM rather than to a's topological prefix.
+export impl Sized (Box Int) where
+  sizeOf _ = "boxspecific"
 

@@ -1,8 +1,8 @@
 -- `a` declares the OVERRIDING impl and the dict-routed forwarder that calls it.
--- Crucially `a` does NOT import `b`, so a's typecheck sees exactly ONE impl at head
--- tycon `Box` and `keyForSiteByIface` therefore stamps the BARE HEAD `"Box"` into
--- useA's dict cell — not the canonical key.
-import iface.{Speak(..), speak, Loud(..), loud}
+-- Crucially `a` does NOT import `b`, and `a` precedes `b` in topological order — so
+-- before #1072 a's route stamping saw exactly ONE impl at head tycon `Box`, detected
+-- no collision, and stamped the BARE HEAD `"Box"` into useA's dict cell.
+import iface.{Speak(..), speak, Loud(..), loud, Sized(..), sizeOf}
 import boxty.{Box(..)}
 
 export impl Speak (Box Int) where
@@ -24,3 +24,16 @@ useLoudA x = loud x
 
 export callLoudA : Unit -> String
 callLoudA _ = useLoudA (Box 1)
+
+-- #1072 variant 3: `a` holds the STRICTLY LESS SPECIFIC impl and the site.  The `min⊑`
+-- winner for this site's `Box Int` receiver lives in `b`, which `a` cannot see — so a
+-- prefix-scoped resolution names THIS impl and the program prints `boxgeneral`.
+-- Must print `boxspecific`.
+export impl Sized (Box a) where
+  sizeOf _ = "boxgeneral"
+
+export useSizedA : Sized a => a -> String
+useSizedA x = sizeOf x
+
+export callSizedA : Unit -> String
+callSizedA _ = useSizedA (Box 1)

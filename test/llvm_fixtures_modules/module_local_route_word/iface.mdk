@@ -1,4 +1,5 @@
--- #1036 leg 2 / #1064.  Two interfaces, one per variant of the IMPORT-VISIBILITY axis.
+-- #1036 leg 2 / #1064 / #1072.  Three interfaces, one per variant of the
+-- IMPORT-VISIBILITY axis.
 --
 -- `Speak` owns a DEFAULT, so the sibling impl in `b` can override NOTHING.
 export interface Speak a where
@@ -11,3 +12,14 @@ export interface Speak a where
 export interface Loud a where
   loud : a -> String
   loud _ = "LOUD-DEFAULT"
+
+-- #1072: the DIRECTION the two variants above cannot express.  There the site's own
+-- module holds the impl that is `min⊑` for its receiver, so a prefix-scoped resolution
+-- happens to pick the right one and only the ENCODING of the word was at stake.  Here
+-- the site's module holds the STRICTLY LESS SPECIFIC impl (`Sized (Box a)`) and the
+-- sibling it cannot see holds the more specific one (`Sized (Box Int)`), so a
+-- prefix-scoped resolution picks the WRONG IMPL outright — `boxgeneral` for a `Box Int`
+-- receiver, on every engine and every opt level, with `check` green.  No default is
+-- involved and no word is unmatched: it is a resolution bug, not an encoding bug.
+export interface Sized a where
+  sizeOf : a -> String

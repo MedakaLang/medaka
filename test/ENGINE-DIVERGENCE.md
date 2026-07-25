@@ -304,6 +304,21 @@ path in `emitDefaultRKeyRef`; what is missing is wiring it into the RDict chain.
 gap is wider than the method-less impl #948 turned on — the derived-Ord ADT inheriting
 `max`/`min` is exactly what `emitDispatchChainDefaulted` exists for on the LLVM side.
 
+> **`llvmM/module_local_route_word` FIXED 2026-07-25 (#1072).** Its row read
+> `wasm:codegen-bug` and blamed wasm for computing ONE route word where `llvm_emit` accepts
+> the whole set — which was true but was not the whole defect, and the row's stated promotion
+> condition ("PROMOTE when wasm accepts the route-word set") named the wrong remedy. The
+> shared cause was in **typecheck**: `elabModuleStamp` resolved each module's dict routes
+> against `accAll ++ prog`, the module graph's TOPOLOGICAL PREFIX, so which impl a route
+> named depended on where the site's module sat in that order (#1072 — the same defect made
+> native pick the wrong impl outright). Scoping route resolution to the whole program fixed
+> the resolution; wasm's word then still disagreed on ENCODING, for the reason #1036 had
+> already corrected in `llvm_emit`'s peer — `headTagUniqueW` counts CImplEntries, which a
+> method-less impl never produces — so `implEntryRouteKeyW` now ANDs in `ifaceDeclHeadUnique`
+> exactly as `implEntryRouteKey` does. eval == native == wasm on all three of the fixture's
+> variants; row promoted out of the ledger. The three `#1020` rows above are **not** affected
+> — those need the RDict default-synthesis arms wasm still lacks.
+
 ---
 
 ## 4. The engine-unavailability categories
