@@ -1,1 +1,0 @@
-export data Asy e a = Mk (Unit -> <e> a)

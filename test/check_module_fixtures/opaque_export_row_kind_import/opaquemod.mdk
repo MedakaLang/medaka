@@ -1,0 +1,13 @@
+-- #804/#1028 regression guard.  `Asy` is exported ABSTRACTLY — plain `export`,
+-- constructor PRIVATE — which is the standard opacity pattern and exactly how
+-- `stdlib/async.mdk` declares `Async e a`.  Its first parameter is Row-kinded
+-- (it appears in `Mk`'s field effect tail), and that KIND must reach an importer
+-- even though the constructor must not: see `registerOpaqueParamKinds` in
+-- compiler/types/typecheck.mdk.
+--
+-- This fixture and test/analyze_project_fixtures/804_opaque_row_iface_accept/ TOGETHER
+-- replace the drained must-fail pin 804-abstract-export-row-kind-cross-module: this one
+-- takes the SILENT halves (inferred schemes), that one takes the REJECTION half (the pin's
+-- located T-EFFECT-UNDETERMINED assertion, inverted to an accept).  Neither covers the
+-- other — see the note in entry.mdk.
+export data Asy e a = Mk (Unit -> <e> a)

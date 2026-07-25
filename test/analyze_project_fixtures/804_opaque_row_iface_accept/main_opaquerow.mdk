@@ -1,0 +1,25 @@
+-- #804 ACCEPT case.  This fixture must produce ZERO diagnostics in EVERY file.
+--
+-- `<e>` IS argument-carried — pinned by the Row-kinded slot of the imported
+-- `Asy e a` — so #784's `checkUndeterminedRetEffVars` must accept `speak`.  While an
+-- opaque type's parameter kinds did not cross the module boundary, `rowArgNames`
+-- reported no row-kinded argument here and this drew a spurious
+-- `T-EFFECT-UNDETERMINED` on the `Asy e a` argument.  A `public export` clone of
+-- `Asy` accepted the identical declaration — constructor visibility was the whole
+-- difference.
+--
+-- ⚠️ THIS IS THE ONLY GATE THAT ASSERTS THAT.  It replaces the drained must-fail pin
+-- 804-abstract-export-row-kind-cross-module, whose assertion was a LOCATED
+-- `T-EFFECT-UNDETERMINED` + exit 1; this is that assertion inverted.  Its sibling
+-- test/check_module_fixtures/opaque_export_row_kind_import pins the inferred SCHEMES
+-- (the silent halves, #1028) and CANNOT see this one: the `speak` scheme it prints is
+-- byte-identical before and after the fix, and diff_compiler_check_modules.sh discards
+-- stderr and never reads the exit code.  Delete this fixture and the REJECTION half of
+-- #804 is unguarded — a regression that re-broke `checkUndeterminedRetEffVars` or
+-- `rowArgNames` while leaving kind propagation intact would go green.
+import opaquerow.{Asy}
+
+interface Speak s where
+  speak : s -> Asy e a -> <e> a
+
+main = println "ok"

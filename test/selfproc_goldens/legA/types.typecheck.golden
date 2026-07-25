@@ -1096,6 +1096,7 @@ recordMethodLevelSlotObls : List (String, String) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordParamKinds : String -> List Kind -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
@@ -1136,6 +1137,7 @@ registerMethodIfaceParamsMethods : String -> List String -> List (String, List K
 registerNamedFieldVariants : String -> List String -> List Variant -> Unit
 registerOneAmbiguous : String -> List String -> Ty -> Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> Unit
+registerOpaqueParamKinds : List Decl -> Unit
 registerPredGiven : String -> List Mono -> String -> Unit
 registerRecordInfoKeyed : String -> String -> List String -> List Field -> Unit
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
