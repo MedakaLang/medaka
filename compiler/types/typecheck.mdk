@@ -1253,6 +1253,27 @@ checkGradedImplHeadDecl (DImpl { iface, tys, ... }) =
   checkGradedImplTys iface 0 tys
 checkGradedImplHeadDecl _ = ()
 
+-- ⚠️ THE ONLY reader of `ifaceParamKindsRef`'s bare-name `<iface>@<slot>` key, and it is
+-- a DIAGNOSTIC.  That is deliberate and load-bearing.  A flat table keyed by a bare
+-- `String` name and populated across module boundaries is last-write-wins with a SILENT
+-- loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and the
+-- first cut of #822 itself, where this table was ALSO keyed by the bare typaram name and
+-- re-kinded every arity-matching application in the program.  Choosing a namespace that
+-- is merely *less likely* to clash is not a fix: #1044 was CREATED by relocating exactly
+-- this defect to a rarer namespace.
+--
+-- So no ELABORATION seam reads this table.  Every seam that turns a method signature
+-- into a Mono takes its scope from the DECLARATION (`declGradedScope`) or from the very
+-- resolution result that produced the signature (`ifaceMethodTyResolved`, which carries
+-- the scope in the same tuple as `mty` so the two cannot be resolved differently).
+--
+-- Severity tracks REACH, not rarity.  Because the only reader is this diagnostic, the
+-- worst case of an `<iface>@<slot>` collision — two graded interfaces sharing a NAME
+-- across modules — is a kind error judged against the wrong slot kinds, or not reported
+-- at all: bounded to those two interfaces, never silent wrongness in a program's types.
+-- Keying it properly would need a resolved module identity, and typecheck.mdk carries
+-- none for an interface (`ifaceMethodTy` itself matches on `name == iface`). That is
+-- #1047's territory, upstream of #822 — which this must not pretend to have fixed.
 checkGradedImplTys : String -> Int -> List Ty -> Unit
 checkGradedImplTys _ _ [] = ()
 checkGradedImplTys iface i (t::rest) =
@@ -2395,7 +2416,7 @@ data CrossRun = CrossRun {
     universeFunNamesRef : Ref (OrdMap Unit),
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
     universeIfaceRequiredRef : Ref (OrdMap (List String)),
-    universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
+    universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     universeRegisteredIfacesRef : Ref (OrdMap Unit),
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecords : Ref (List (String, RecordInfo)),
@@ -2989,7 +3010,7 @@ data PerRun = PerRun {
     pendingBinopSites : Ref (List PendingEntry),
     pendingUnopSites : Ref (List PendingEntry),
     pendingArithSites : Ref (List (Ref Route, Mono)),
-    methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty)),
+    methodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     registeredIfacesRef : Ref (OrdMap Unit),
     implObls : Windowed (String, List String, Ty, Mono, Option Loc),  -- #841: pendingImplObligations/N, ported onto Windowed
     numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
@@ -3978,6 +3999,20 @@ fromAstTypeVarApp etbl tvs h args a b
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isRowSlotArg etbl tvs (TyVar n) = isSome (lookupAssoc n etbl)
   && isNone (lookupAssoc n tvs)
+-- ⚠️ #997 × #822 — a defect of the MERGE, which NEITHER branch had alone.  #997 made a
+-- row WRITABLE in a type-argument slot, so a graded slot can now hold
+-- `f <Stdout | e> a`; `krowArgVarNames`' own `TyRow _ (Some n) _` arm pins that `e`
+-- exactly as it pins a bare `f e a`, so `rowArgNamesIn` reports it and the caller
+-- withholds it from [tvs].  Without this arm the two seams disagreed for the first
+-- time: the spine fell to the opaque fallback and `fromAstTypeE`'s new `TyRow` clause
+-- fired a spurious T-ROW-KIND-MISMATCH on a well-formed graded signature.
+-- Keep this in lockstep with krowArgVarNames — same shape, same `Some n` condition.
+isRowSlotArg etbl tvs (TyRow _ (Some n) _) = isSome (lookupAssoc n etbl)
+  && isNone (lookupAssoc n tvs)
+-- A CLOSED written row in a graded slot (`f <Stdout> a`) pins no name, so nothing
+-- classifies it and it still reaches T-ROW-KIND-MISMATCH.  That is #821 surface
+-- (explicit grades), it is LOUD rather than silent, and the graded-lite subset this
+-- PR implements always spells the grade as a shared variable.
 isRowSlotArg _ _ _ = False
 
 -- monomorphic and short-circuiting on purpose (compiler/AGENTS.md): this runs on
@@ -5932,7 +5967,7 @@ recordImplObligation x mono
     mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
-    Some (iface, typarams, mty) =>
+    Some (iface, typarams, mty, _) =>
       let _ = pushPendingObl (iface, typarams, mty, mono, currentLoc.value)
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
@@ -6277,7 +6312,7 @@ isShadowStandalone name = contains name driverState.value.standaloneValuesRef.va
 -- this predicate, and always did.
 singleTyparamIfaceMethod : String -> Bool
 singleTyparamIfaceMethod name = match omLookup name perRun.value.methodIfaceParamsRef.value
-  Some (_, typarams, _) => listLen typarams == 1
+  Some (_, typarams, _, _) => listLen typarams == 1
   None => False
 
 -- True iff [name] is a method of SOME visible interface, whatever its typaram arity --
@@ -6642,7 +6677,7 @@ definerReceiverDispatches name xt
 definerReceiverIsDictVar : String -> Mono -> Bool
 definerReceiverIsDictVar name xt = match normalize xt
   TVar cell => match omLookup name perRun.value.methodIfaceParamsRef.value
-    Some (mIface, _, _) => dictVarSatisfiesIface mIface (tyvarId cell) perRun.value.groupConstraintMonosRef.value
+    Some (mIface, _, _, _) => dictVarSatisfiesIface mIface (tyvarId cell) perRun.value.groupConstraintMonosRef.value
     None => False
   _ => False
 
@@ -6971,7 +7006,13 @@ inferDefinerShadowVarApp env name f x =
 -- not pin it) when the method type is unavailable.
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 shadowVarHeadMethodScheme env name f = match omLookup name perRun.value.methodIfaceParamsRef.value
-  Some (_, _, ty) => instantiate (sigToScheme ty)
+  -- #822: this elaborates an interface METHOD type, so it must use the stored graded
+  -- scope.  Unscoped (`sigToScheme ty`) a graded method's index came out as a plain
+  -- tyvar here while its real scheme has a row there, and `unify` binds the two without
+  -- complaint — a silent divergence between two elaborations of the SAME signature.
+  -- Co-locating the scope with `ty` is what makes this a one-token fix instead of a
+  -- second lookup that could disagree.
+  Some (_, _, ty, scope) => instantiate (fst (sigToSchemeTvsIn scope ty))
   None =>
     -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
     let saved = toggles.value.shadowHeadCtxRef.value
@@ -8096,37 +8137,6 @@ insertIfaceParamKinds iface i _ kinds =
 
 ifaceSlotKey : String -> Int -> String
 ifaceSlotKey iface i = "\{iface}@\{intToString i}"
-
--- The GRADED SCOPE: an interface's graded typarams as a bare-name → slot-kinds map,
--- for the seams that are elaborating one of ITS method signatures.  This is the whole
--- scoping mechanism — a seam that does not know which interface it is looking at
--- passes nothing and gets exactly the pre-#822 behaviour, so a seam MISSED here
--- degrades the feature rather than leaking kinds into unrelated types.
--- Empty for every non-graded interface (only graded slots are ever recorded).
---
--- PREFER `declGradedScope`: it derives the scope from the DECLARATION in hand, so
--- there is no key and nothing to collide over.  `gradedScopeOf` is the fallback for
--- the ONE seam without the declaration — inferImplMethod, which reaches its method
--- type through `ifaceMethodTyResolved` and would need an `allProg` scan per impl
--- method to recover the interface's sibling methods.
---
--- A `<iface>@<slot>` key is not forgeable in a program that compiles.  Two graded
--- interfaces CAN share a name across modules, but: (i) each module registers its own
--- interfaces as a FRONT overlay during its own pass and `lookupAssoc` is first-match,
--- so a module always wins its own key — the same ordering invariant the data-kind
--- universe has relied on since #154 — and (ii) the one shape that could defeat that,
--- a module declaring its own `GT` while implementing an IMPORTED `GT`, resolves the
--- impl head to the LOCAL interface and is rejected before kinds are consulted
--- ("Method 'm1meth' is not part of interface 'GT'").  Both probed on this build; the
--- same-name-two-modules case elaborates each interface correctly.
-gradedScopeOf : String -> List String -> List (String, List Kind)
-gradedScopeOf iface typarams = gradedScopeGo iface 0 typarams
-
-gradedScopeGo : String -> Int -> List String -> List (String, List Kind)
-gradedScopeGo _ _ [] = []
-gradedScopeGo iface i (p::ps) = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
-  Some kinds => (p, kinds) :: gradedScopeGo iface (i + 1) ps
-  None => gradedScopeGo iface (i + 1) ps
 
 -- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
 -- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
@@ -9640,7 +9650,7 @@ resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono e
 ifaceParamMonos : String -> Mono -> Option (List Mono)
 ifaceParamMonos name fullMono = match omLookup name perRun.value.methodIfaceParamsRef.value
   None => None
-  Some (_, typarams, mty) =>
+  Some (_, typarams, mty, _) =>
     map (subst => map (paramMonoOf subst) typarams) (matchTyMono mty fullMono)
 
 paramMonoOf : List (String, Mono) -> String -> Mono
@@ -10481,16 +10491,21 @@ insertIfaceRequired (_::rest) m = insertIfaceRequired rest m
 -- typarams, mty)` into the params map + `omInsert iface ()` into the registered-iface
 -- set), updating the two passed maps in lockstep instead of the global refs, so the copy
 -- in checkBodyImpl's Module arm lands the identical maps the per-module rebuild produced.
-insertMethodIfaceParams : List Decl -> (OrdMap (String, List String, Ty), OrdMap Unit) -> (OrdMap (String, List String, Ty), OrdMap Unit)
+insertMethodIfaceParams : List Decl -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit)
 insertMethodIfaceParams [] acc = acc
 insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
   insertMethodIfaceParams rest (insertMethodIfaceParams [d] acc)
-insertMethodIfaceParams ((DInterface { name, typarams, methods, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc name typarams methods acc)
+-- #822: the graded scope is computed ONCE per declaration — the union over ALL of this
+-- interface's methods — and threaded in, never re-derived per method.
+insertMethodIfaceParams ((DInterface { name, typarams, methods, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc name typarams (declGradedScope typarams methods) methods acc)
 insertMethodIfaceParams (_::rest) acc = insertMethodIfaceParams rest acc
 
-insertIfaceMethodsAcc : String -> List String -> List IfaceMethod -> (OrdMap (String, List String, Ty), OrdMap Unit) -> (OrdMap (String, List String, Ty), OrdMap Unit)
-insertIfaceMethodsAcc _ _ [] acc = acc
-insertIfaceMethodsAcc iface typarams ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams rest (omInsert mname (iface, typarams, mty) mp, omInsert iface () ifs)
+insertIfaceMethodsAcc : String -> List String -> List (String, List Kind) -> List IfaceMethod -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (String, List String, Ty, List (String, List Kind)), OrdMap Unit)
+insertIfaceMethodsAcc _ _ _ [] acc = acc
+-- #822: the graded scope is stored ALONGSIDE (typarams, mty) rather than in a table of
+-- its own, so the two are ONE resolution result and cannot be resolved differently —
+-- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
+insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp, omInsert iface () ifs)
 
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
@@ -13917,7 +13932,7 @@ inferImplMethods env allProg iface implTvMap headMonos (m::rest) =
 inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
 inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg iface mname
   None => ()
-  Some (ifaceParams, mty) =>
+  Some (ifaceParams, mty, gscope) =>
     -- currentFn = the method name (NOT "") so arg-/return-position sites in THIS
     -- body record `encl = mname`.  registerImplRequires keys every method of an impl
     -- under the SAME impl tyvar id (`impl Ord (List a)` registers `a` once per
@@ -13930,12 +13945,12 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let _ = setRef perRun.value.currentFn mname
     let _ = setRef perRun.value.currentImplBody True
     let _ = setRef perRun.value.inRigidityBodyRef True
-    -- #822: the graded scope for THIS interface (empty for every non-graded one), so
-    -- the method type's Row slots elaborate here the same way they did when the
-    -- method's own scheme was built.  Missing it would leave `e` a plain tyvar that
-    -- the body's real `TEff` then binds — which the W3 survivor check below catches
-    -- as T-IMPL-TOO-SPECIFIC, i.e. loudly, not silently.
-    let gscope = gradedScopeOf iface ifaceParams
+    -- #822: [gscope] arrives FROM `ifaceMethodTyResolved`, in the same result as [mty] —
+    -- deliberately NOT a separate lookup.  The Row slots must elaborate here exactly as
+    -- they did when this method's own scheme was built, and the only way to guarantee
+    -- that is for the scope and the type to be one resolution.  (Getting it wrong is
+    -- loud, not silent: `e` would stay a plain tyvar that the body's real `TEff` then
+    -- binds, which the W3 survivor check below reports as T-IMPL-TOO-SPECIFIC.)
     -- #837: schemeObligationsRef snapshot/restore window RETIRED — (name, binding-id)
     -- keying makes a where-helper name collision structurally impossible.
     -- #518: window this body's newly-added obligations, exactly as processLetGroup /
@@ -14626,27 +14641,31 @@ removeAllS drop (x::xs)
 -- lookup whose stored iface != [iface] returns None; that only makes the check-path
 -- obligation pass SKIP that impl body (a missed reject, deferred to build — the pre-#760
 -- status quo), never a false reject, and never touches the emit path.
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty)
+-- #822: BOTH paths also return the interface's graded scope, so a caller cannot obtain
+-- the method type without the scope that elaborates it.  On the slow path it comes from
+-- the very declaration this scan selected (free — same traversal); on the fast path it
+-- comes out of the same table entry as `(typarams, mty)`.
+ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved allProg iface mname
   | useFastIfaceMethodTy.value = match omLookup mname perRun.value.methodIfaceParamsRef.value
-    Some (ifn, typarams, mty) =>
+    Some (ifn, typarams, mty, scope) =>
       if ifn == iface then
-        Some (typarams, mty)
+        Some (typarams, mty, scope)
       else
         None
     None => None
   | otherwise = ifaceMethodTy allProg iface mname
 
--- the (interface typarams, declared method type) of method [mname] in interface
--- [iface], searched across [allProg]'s interface decls
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty)
+-- the (interface typarams, declared method type, graded scope) of method [mname] in
+-- interface [iface], searched across [allProg]'s interface decls
+ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTy [] _ _ = None
 ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface mname
   Some r => Some r
   None => ifaceMethodTy rest iface mname
 ifaceMethodTy ((DInterface { name, typarams, methods, ... })::rest) iface mname
   | name == iface = match methodTyOf mname methods
-    Some ty => Some (typarams, ty)
+    Some ty => Some (typarams, ty, declGradedScope typarams methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
 ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
@@ -14778,7 +14797,7 @@ firstPredForEncl iface subject pfx ((eiface, esubject, ename)::rest)
 -- from methodIfaceParamsRef → None → no predicate route, tyvar-keyed behaviour unchanged.
 ifaceOfMethodName : String -> Option String
 ifaceOfMethodName name = map
-  ((iface, _, _) => iface)
+  ((iface, _, _, _) => iface)
   (omLookup name perRun.value.methodIfaceParamsRef.value)
 
 registerEachActive : List Int -> String -> Unit
@@ -14828,15 +14847,33 @@ registerMethodIfaceParamsAll (d::rest) =
 registerMethodIfaceParamsDecl : Decl -> Unit
 registerMethodIfaceParamsDecl (DAttrib _ d) = registerMethodIfaceParamsDecl d
 registerMethodIfaceParamsDecl (DInterface { name, typarams, methods, ... }) =
-  registerMethodIfaceParamsMethods name typarams methods
+  registerMethodIfaceParamsMethods
+    name
+    typarams
+    (declGradedScope typarams methods)
+    methods
 registerMethodIfaceParamsDecl _ = ()
 
-registerMethodIfaceParamsMethods : String -> List String -> List IfaceMethod -> Unit
-registerMethodIfaceParamsMethods _ _ [] = ()
-registerMethodIfaceParamsMethods iface typarams ((IfaceMethod mname mty _)::rest) =
-  let _ = setRef perRun.value.methodIfaceParamsRef (omInsert mname (iface, typarams, mty) perRun.value.methodIfaceParamsRef.value)
+-- #822: [scope] — this interface's graded typarams, computed ONCE from THIS declaration
+-- (declGradedScope, union over all its methods) and stored in the same entry as
+-- (typarams, mty).
+--
+-- ⚠️ That co-location is the whole point, and it is why #822 does NOT add a table of its
+-- own.  The scope's ONLY job is to elaborate the `mty` it accompanies, so the invariant
+-- that matters is not "the scope has a collision-proof key" — it is "the scope is never
+-- resolved differently from the mty it elaborates".  Keying it independently (by
+-- interface name, or by method name in a parallel map) is exactly what could break that.
+-- Storing them as one value makes disagreement unrepresentable.
+-- This entry is method-NAME-keyed last-write-wins, an exposure it already had and which
+-- `ifaceMethodTyResolved` already guards by comparing the stored iface; a graded scope
+-- inherits that guard rather than adding a second, differently-wrong lookup.  The
+-- underlying bare-name interface identity is #1047's territory, upstream of #822.
+registerMethodIfaceParamsMethods : String -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
+registerMethodIfaceParamsMethods _ _ _ [] = ()
+registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)::rest) =
+  let _ = setRef perRun.value.methodIfaceParamsRef (omInsert mname (iface, typarams, mty, scope) perRun.value.methodIfaceParamsRef.value)
   let _ = setRef perRun.value.registeredIfacesRef (omInsert iface () perRun.value.registeredIfacesRef.value)
-  registerMethodIfaceParamsMethods iface typarams rest
+  registerMethodIfaceParamsMethods iface typarams scope rest
 
 -- build each method's scheme AND register its method-level constraints (foldMap's
 -- `Monoid m`) into methodConstraintsRef, keyed by the scheme's own quantified ids

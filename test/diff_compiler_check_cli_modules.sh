@@ -800,5 +800,50 @@ case "$x749a_out" in
   *) fail=$((fail+1)); printf 'FAIL 749/aliased-usermodule-fn-obligation-check (aliased obligation dropped: [%s])\n' "$x749a_out" ;;
 esac
 
+# ── 822: graded interface scope is per-DECLARATION, not per-NAME ──────────────
+#
+# Two UNRELATED modules each declare an interface named `GT`, both graded (#822,
+# EFFECTS-SEMANTICS §6), with the Row in DIFFERENT slots.  A graded scope keyed by any
+# bare String name — the typaram name, `GT`, or `GT@<slot>` — gives these two the SAME
+# key, and such a table populated across module boundaries is last-write-wins with a
+# SILENT loss.  That is one recurring root cause with four confirmed instances (eval
+# frames' ctor collision; #1044 refindex; #1047 interface defaults; the first cut of
+# #822), and relocating the key to a rarer namespace is not a fix — #1044 was created
+# that way.  Both must therefore check clean, and in EITHER import order.
+#
+# ⚠️ THIS BELONGS HERE, not in test/check_module_fixtures/.  That harness diffs
+# `check_modules_main`'s STDOUT scheme dump, and the graded scope is NOT OBSERVABLE
+# there: an open row renders exactly like a type variable, a concrete index in a Row
+# slot stays opaque, and a written row carries its own row-ness — so four fixtures
+# written that way were green with the implementation arm deleted.  ACCEPTANCE is the
+# only observable, and only this gate sees it.
+cat > "$TMP/g822_ma.mdk" <<'EOF'
+export interface GT f where
+  gpinA : f e a -> (a -> <e> f e b) -> f e b
+EOF
+cat > "$TMP/g822_mb.mdk" <<'EOF'
+export interface GT g where
+  gpinB : g a e -> (a -> <e> g a e) -> g a e
+EOF
+cat > "$TMP/g822_ab.mdk" <<'EOF'
+import g822_ma.{GT, gpinA}
+import g822_mb.{gpinB}
+main = println "ok"
+EOF
+cat > "$TMP/g822_ba.mdk" <<'EOF'
+import g822_mb.{GT, gpinB}
+import g822_ma.{gpinA}
+main = println "ok"
+EOF
+for g822_order in ab ba; do
+  g822_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/g822_$g822_order.mdk" 2>&1)"
+  g822_code=$?
+  if [ "$g822_code" -eq 0 ]; then
+    pass=$((pass+1)); printf 'ok   822/same-named-graded-ifaces-%s (both keep their own slot kinds)\n' "$g822_order"
+  else
+    fail=$((fail+1)); printf 'FAIL 822/same-named-graded-ifaces-%s (exit %d: [%s])\n' "$g822_order" "$g822_code" "$g822_out"
+  fi
+done
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

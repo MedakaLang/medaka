@@ -1,0 +1,15 @@
+-- #997 x #822 MERGE-SEAM PIN.  A graded slot filled with a WRITTEN row carrying an open
+-- tail (`f <Stdout | e> a`), which #997 made spellable and #822 must accept.
+--
+-- Neither branch had this defect alone, which is exactly why it needs its own fixture:
+-- git auto-merged the two with no conflict marker (they edited different lines of
+-- `rowArgNames` / `krowArgVarNames` / `fromAstTypeE`), and the result disagreed with
+-- itself.  #997's `krowArgVarNames` arm pins the `e` of a written row exactly as it pins
+-- a bare `f e a`, so `rowArgNamesIn` reports it and the caller withholds it from the
+-- tyvar map — but #822's `isRowSlotArg` only recognised a bare `TyVar`, so the spine fell
+-- to the opaque fallback and #997's brand-new `TyRow` clause in `fromAstTypeE` fired a
+-- spurious T-ROW-KIND-MISMATCH on a well-formed signature.
+--
+-- Delete `isRowSlotArg`'s `TyRow _ (Some n) _` arm and this fixture reddens.
+interface GThenable f where
+  gandThen : f <Stdout | e> a -> (a -> <Stdout | e> f <Stdout | e> b) -> f <Stdout | e> b

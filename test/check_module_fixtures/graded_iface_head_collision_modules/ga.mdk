@@ -1,3 +1,0 @@
--- graded head `f`, Row in slot 0
-export interface GA f where
-  ga : f e a -> (a -> <e> f e b) -> f e b

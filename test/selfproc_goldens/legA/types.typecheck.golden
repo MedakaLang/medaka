@@ -556,8 +556,6 @@ generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : List (String, List Decl) -> Option String
 goalHeadCon : List Mono -> Option String
-gradedScopeGo : String -> Int -> List String -> List (String, List Kind)
-gradedScopeOf : String -> List String -> List (String, List Kind)
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 groundNumVars : List (String, List String, Ty, Mono, Option Loc) -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -602,8 +600,8 @@ ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String) -> St
 ifaceMethodName : String -> Bool
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodSchemes : List Decl -> List (String, Scheme)
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty)
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty)
+ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
 ifaceOfMethodName : String -> Option String
 ifaceParamKindsOf : String -> List IfaceMethod -> List Kind
@@ -760,10 +758,10 @@ inferredIfacePairs : String -> List Int -> List (String, Int)
 initialEnv : TcEnv
 innerDefaultMethod : String -> String
 insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
-insertIfaceMethodsAcc : String -> List String -> List IfaceMethod -> (Map String (String, List String, Ty), Map String Unit) -> (Map String (String, List String, Ty), Map String Unit)
+insertIfaceMethodsAcc : String -> List String -> List (String, List Kind) -> List IfaceMethod -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit)
 insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
 insertIfaceRequired : List Decl -> Map String (List String) -> Map String (List String)
-insertMethodIfaceParams : List Decl -> (Map String (String, List String, Ty), Map String Unit) -> (Map String (String, List String, Ty), Map String Unit)
+insertMethodIfaceParams : List Decl -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit)
 insertUnivImpl : ImplUniverse -> (String, List Ty, List Require) -> ImplUniverse
 instantiate : Scheme -> Mono
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
@@ -1115,7 +1113,7 @@ registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -
 registerMethodDictSlots : String -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
 registerMethodIfaceParamsDecl : Decl -> Unit
-registerMethodIfaceParamsMethods : String -> List String -> List IfaceMethod -> Unit
+registerMethodIfaceParamsMethods : String -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
 registerNamedFieldVariants : String -> List String -> List Variant -> Unit
 registerOneAmbiguous : String -> List String -> Ty -> Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> Unit
@@ -1204,11 +1202,8 @@ rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
 rowArgOf : List (String, Ref Effvar) -> Ty -> EffRow
 rowFreeEffvars : EffRow -> List Int
-<<<<<<< HEAD
-rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
-=======
 rowKindMismatchMsg : List (String, Option String) -> Option String -> String
->>>>>>> origin/main
+rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 runFinalChecks : List Decl -> List Decl -> Unit
 sameRootId : Int -> Mono -> Bool
 sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
