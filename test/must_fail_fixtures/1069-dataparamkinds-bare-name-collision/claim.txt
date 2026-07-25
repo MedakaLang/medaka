@@ -1,0 +1,55 @@
+issue: 1069
+what: two UNRELATED modules (apub.mdk, zopapub.mdk) each declare a DATA TYPE with the
+what: SAME BARE NAME `Box`, both at arity 2. `apub.mdk`'s `Box e a = MkBox (Unit ->
+what: <e> a)` has a graded (KRow, KType) param-kind signature; `zopapub.mdk`'s
+what: `Box p q = MkZ p q` has an unrelated (KType, KType) one. `main.mdk` imports
+what: ONLY `apub`'s `Box` and ONLY `zopapub`'s `zf` -- it never imports `zopapub`'s
+what: `Box` at all. `universeDataParamKinds` (compiler/types/typecheck.mdk) is keyed
+what: by bare type name across the WHOLE import graph, so whichever module registers
+what: last wins the lookup regardless of which module's `Box` is actually in scope at
+what: the use site. A written effect row on `apub`'s `Box` (`v : Box (<Stdout> Unit)
+what: Int`) is elaborated against `zopapub`'s wrong (all-KType) kind list, so the
+what: `<Stdout>` row silently ERASES to the wrapped type: `v` infers as
+what: `Box Unit Int`, dropping the effect entirely. `medaka check` exits 0 with no
+what: diagnostic anywhere.
+cmd: check main.mdk
+exit: 0
+stdout-line: v : Box Unit Int
+control: check control.mdk
+why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
+why-fixture: separate modules that share a data type name, one of which is imported
+why-fixture: for an unrelated binding only. `medaka check` resolves the
+why-fixture: same-directory sibling imports with no medaka.toml (same convention as
+why-fixture: 1046-methodless-impl-argtag-dispatch/ and 1047-cross-module-iface-name-
+why-fixture: collision/ in this corpus), and it loads only what main.mdk/control.mdk
+why-fixture: transitively import.
+why-control: control.mdk is BYTE-IDENTICAL to main.mdk except the `import zopapub.{zf}`
+why-control: line and the presence of zopapub.mdk in the import graph are both
+why-control: removed -- the ONE flipped feature, and exactly the issue's own stated
+why-control: control. With no other module declaring `Box`, `v`'s written effect row
+why-control: must survive intact and print `v : Box <Stdout> Int`.
+why-arity-note: TESTED, NOT ASSUMED: unlike #1070's alias table (which has an explicit
+why-arity-note: T-ALIAS-ARITY diagnostic on a mismatched arg count -- see
+why-arity-note: fromAstTypeApp's `Some (params, _) => pushTypeErrorOnce "T-ALIAS-ARITY"
+why-arity-note: ...` in typecheck.mdk), a DATA type head has NO equivalent arity check
+why-arity-note: at all: `fromAstTypeApp`'s dataParamKindsRef arm just falls through to
+why-arity-note: the opaque `appFallback` on a length mismatch, and `appFallback` also
+why-arity-note: elaborates a written `TyEffect` argument through `fromAstTypeE`'s
+why-arity-note: `TyEffect _ _ t => fromAstTypeE etbl tvs t` clause, which strips the
+why-arity-note: row unconditionally. Built and ran this fixture's `main.mdk` with the
+why-arity-note: shadower's `Box` at arity 0 (`data Box = MkZ`), arity 1 (`data Box p =
+why-arity-note: MkZ p`), and arity 3 (`data Box p q r = MkZ p q r`) in place of the
+why-arity-note: real arity-2 shadower: ALL THREE reproduce the identical silent
+why-arity-note: `v : Box Unit Int`, exit 0, no diagnostic -- same as the matching-arity
+why-arity-note: (arity 2) shadower pinned here. So for THIS symptom (a data type's
+why-arity-note: param-kind table), arity match is NOT what gates silence -- any
+why-arity-note: same-name collision is silent regardless of arity, because there is no
+why-arity-note: arity-checked path to fall back to. Keeping the pinned shadower at
+why-arity-note: arity 2 anyway because it is the issue's own verified repro, but a
+why-arity-note: future editor should not assume a different-arity variant of THIS
+why-arity-note: fixture would go loud -- it would not.
+why-note: fix shape per the issue/decision doc: carry module-qualified identity into
+why-note: `universeDataParamKinds` (and the sibling tables: universeAliasTable,
+why-note: universeRecordByName, universeDataEnv) rather than a bare type-name key.
+why-note: That flips main.mdk's inferred scheme to `v : Box <Stdout> Int`, draining
+why-note: this row. Close #1069 and delete this fixture when that happens.
