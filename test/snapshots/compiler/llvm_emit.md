@@ -1,5 +1,5 @@
 # META
-source_lines=11257
+source_lines=11263
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -5637,6 +5637,12 @@ emitArgDispatchChain e method tagReg (g::rest) defTags argOps slot endL =
 -- re-enter this path.  No dict words are passed and none are needed —
 -- `argDefaultEmittable` skips every tag whose default expects any (see its note on why
 -- the alternative is a wrong answer, not a missing feature).
+--
+-- ⚠️ The `if` below must NOT be "tidied" into `whenL`.  Medaka is STRICT, so `whenL
+-- False (emitArgDefaultArm …)` still evaluates its argument — and this argument's whole
+-- purpose is its `emit` side effects, so the skipped arm would be emitted anyway: a
+-- tag test against a type that owns no constructors, i.e. `emitTagMatch []`, which is a
+-- build-time `gapStr` panic.
 emitArgDefaultChain : Emit -> String -> String -> List String -> List String -> String -> String -> Unit
 emitArgDefaultChain e method _ [] _ _ _ = emitArgDispatchMiss e method
 emitArgDefaultChain e method tagReg (tag::rest) argOps slot endL =
