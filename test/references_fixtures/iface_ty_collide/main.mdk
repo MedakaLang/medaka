@@ -1,0 +1,38 @@
+-- #1044 regression fixture — AN IMPORTED TYPE MUST NOT STEAL AN INTERFACE'S SLOT.
+--
+-- Read test/references_fixtures/iface_ty_collide/expected.golden as the
+-- assertion: `a|method|mfoo` must hold BOTH a.mdk's declaration and the head
+-- inside `impl Foo P`, and NO `b|method|mfoo` key may exist at all — module `b`
+-- declares no method.
+--
+-- #1007 fixed a real S0 (impl-method heads keyed with no interface identity) by
+-- resolving the impl header's interface name through `nsTy` instead of
+-- `nsMethod`. But `nsTy` has the SAME one-slot-per-name property: it is shared by
+-- every `data`/`newtype`/`alias`/`interface`, and `importNs` is last-write-wins.
+-- So `import b.{Foo}` — an ordinary DATA TYPE — overwrote the slot `import
+-- a.{Foo}` had just filled, and the head was filed under a fabricated
+-- `b|method|mfoo` key while `a|method|mfoo` lost it. Moving a lookup to a rarer
+-- namespace is not the same as making it collision-proof; that is how #1007
+-- created #1044.
+--
+-- The fix keys the lookup in the namespace THE LANGUAGE ITSELF resolves an impl
+-- header in — resolve.mdk keeps `expInterfaces` apart from `expTypes` and rejects
+-- `impl Foo P` outright ("Unknown interface: Foo") when `Foo` is a data type — so
+-- a `data` can no longer enter the slot at all.
+--
+-- ⚠️ THE IMPORT ORDER BELOW IS LOAD-BEARING. The interface must be imported
+-- FIRST and the type SECOND: that is the order in which the type overwrites the
+-- interface. Swapping these two lines makes the OLD code produce the RIGHT answer
+-- — which is itself the sharpest evidence the old key was wrong, since the result
+-- depended on the textual order of two unrelated imports. Do not "tidy" them.
+import a.{Foo, mfoo}
+import b.{Foo}
+
+public export data P =
+  | P
+
+impl Foo P where
+  mfoo P = 1
+
+export useIt : Int
+useIt = mfoo P

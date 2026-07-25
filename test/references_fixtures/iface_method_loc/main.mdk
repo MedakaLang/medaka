@@ -1,0 +1,42 @@
+-- #1013 regression fixture — AN INTERFACE METHOD'S DECLARATION DEF SITE IS ITS
+-- OWN NAME TOKEN.
+--
+-- Read test/references_fixtures/iface_method_loc/expected.golden as the
+-- assertion. The load-bearing property: NO `main|method|…` DEF site may equal
+-- `main|ty|Weighed`'s DEF site. (The golden carries the exact line:col pairs —
+-- they are captured, not hand-counted here.)
+--
+-- Before the fix, `defsOfDecl`'s `DInterface` arm handed `methodDef` the DECL's
+-- own `loc`, so every method inherited the INTERFACE name-token span: `weigh`
+-- was recorded at `Weighed`. Against `references` that is a misleading highlight;
+-- driven through `rename` it is source CORRUPTION — renaming `weigh` would
+-- overwrite the interface's type name, turning `interface Weighed a` into
+-- `interface newName a`. That is the #964 / #1002 class, and it was the last
+-- corrupting entry left in a method's def set. The fix consumes the per-method
+-- child name `Loc`s the #331 Positions channel already supplies.
+--
+-- `describe` is DEFAULTED deliberately: the parser emits one `IfaceMethod` per
+-- CLAUSE LINE of a `where` body, so a defaulted method is TWO entries with the
+-- same name (its signature and its default head), and `declPosChildLocs` emits
+-- one index per the same lines — the two run 1:1. That 1:1 is what makes the
+-- positional zip correct rather than merely plausible, and this fixture is where
+-- it is pinned: `describe` must hold BOTH of its heads, at two DISTINCT spans,
+-- and `shout`'s def must NOT be dragged onto `describe`'s default-body line by an
+-- off-by-one. A regression that reverts to the decl loc collapses every method
+-- onto one span and MOVES this golden.
+
+export interface Weighed a where
+  weigh : a -> Int
+  describe : a -> Int
+  describe x = weigh x
+  shout : a -> Int
+
+public export data Box =
+  | Box
+
+impl Weighed Box where
+  weigh Box = 3
+  shout Box = 4
+
+export useIt : Int
+useIt = weigh Box + describe Box + shout Box

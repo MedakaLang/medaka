@@ -1,0 +1,3 @@
+-- #1044 fixture, module 1 of 3 — the INTERFACE named `Foo`.
+export interface Foo a where
+  mfoo : a -> Int
