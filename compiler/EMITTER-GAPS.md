@@ -1098,3 +1098,50 @@ Verified `test/engine_fixtures/adt_user_cons_nil.mdk` wasm build + `wasm-tools v
 TRMC) still wasm-build byte-for-byte as before. Promoted out of `test/engine_divergence.txt` (row
 deleted; `.pin` unchanged). Wasm-only (outside the LLVM self-compile graph) → fixpoint C3a/C3b
 byte-identical, no seed re-mint.
+
+## ARG-TAG method-less impl arm — CLOSED (#1046, S0, 2026-07-25, `llvm_emit.mdk`/`core_ir_lower.mdk`)
+
+The **third** consumer of the one fact #948 and #1024 also lost: *an impl that overrides
+nothing still contributes a dispatch arm.* This one is the **arg-tag (RNone) path** — the
+dict-free fallback a bare method name takes when it is reached through a local lambda, where
+the impl is chosen from the receiver's runtime CONSTRUCTOR tag.
+
+`emitMethodArgDispatch` derived its arm set from `implGroupsForMethod`, i.e. from
+`CImplEntry`s, and `lowerDeclImpl` emits one entry per method an impl **defines** — so a
+cross-module method-less impl (every method inherited from an interface DEFAULT;
+`fillImplDefaults` specializes same-module only) contributed none and vanished. Two symptoms,
+one cause, both on programs `check` accepts and `medaka run` executes correctly:
+
+| arms surviving | emitted | observed |
+|---|---|---|
+| 1 group + ≥1 inherited | unconditional direct call, **no tag test at all** | every receiver got the overriding impl (`meow\|meow`, `99\|99`), exit 0 |
+| ≥2 groups + ≥1 inherited | chain ending in bare `unreachable` | `-O1`..`-O3` fold the last test to always-true (`yip\|meow\|yip`); `-O0` runs off → **SEGFAULT** |
+
+**Fix.** The arm set is now taken from the impl **DECLS** (`ifaceImplHeadTags`, a
+head-tag sibling of #1036's `ifaceImplRouteKeys` over the same `ifaceImplHeadsRef` table),
+which are a superset of every receiver a program can produce — so there is no second
+derivation of "who are the callees" left for the emitter to get wrong. Tagged-impl arms come
+first, then one `@mdk_default_<method>_<tag>` synthesis arm per declared head with no entry
+for this method (the same lifted define the dict path's `emitDefaultDispatchChain` calls, its
+inner same-interface calls restamped to the concrete `RKey tag`). A GUARD on the shortcut was
+rejected: it only routes into the chain, whose terminal was the second half of the same bug.
+
+Head tags — not route keys — because a runtime ctor tag is type-argument-blind. `Box Int` and
+`Box String` therefore share one arm and the first declared impl wins; that is a **pre-existing**
+property of arg-tag dispatch, unchanged by this fix, and the dict path (#1036) is where the
+distinction is representable.
+
+**RESIDUAL — #1075 (honest gap, not a wrong answer).** `argDefaultEmittable` declines an arm when the
+default cannot be synthesized without a dict — a **primitive** head (owns no ctor tag to test),
+a method with its own `=>` constraint dicts, or an inner same-interface impl with per-instance
+`requires`. Those receivers fall to the chain terminal, which is now an explicit
+`@mdk_panic` + `unreachable` instead of a bare `unreachable`: a coded, nonzero-exit
+`[E-PANIC] arg-tag dispatch for method '<m>': the receiver's runtime type has no impl arm`.
+The bare `unreachable` was UB with teeth (see the table above) — a side-effecting call is what
+stops `clang` folding the predecessor branch. A method with **zero** tagged groups is still the
+pre-existing loud build gap `emitDefaultArgTag` (its comment explains why emitting a
+tag-less default there is unsound for the prelude's `Ord` defaults); that arm is unchanged.
+
+Pinned by `test/build_diff_fixtures/argtag_methodless_sibling/` (all three shapes plus a
+NON-CONSTANT default body — one that dispatches a sibling method and does arithmetic, so
+"returned the right value" is distinguishable from "returned something").

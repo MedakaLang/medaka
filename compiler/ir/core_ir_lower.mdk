@@ -1231,6 +1231,27 @@ ifaceRouteKeysGo iface ((i, tag, key)::rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #1046: the HEAD TAGS of every DECLARED impl of [iface], in declaration order (the
+-- caller dedups).  This is the ARG-TAG path's counterpart to `ifaceImplRouteKeys`,
+-- and it must be the head — never a route key.  Arg-tag dispatch discriminates on
+-- the receiver's runtime CONSTRUCTOR tag, which is type-argument-blind: a canonical
+-- key like `Speak|(Box Int)|` names no type, owns no constructors, and so could
+-- never be matched by a `ctorsOfType` arm.  (The flip side of that blindness is
+-- stated where it bites: `argTagDefaultTags` in llvm_emit.mdk.)
+--
+-- Like the route keys, this is a strict SUPERSET of the heads the `CImplEntry`s
+-- yield, and that is the entire point — `lowerDeclImpl` emits one entry per method
+-- an impl DEFINES, so an impl that overrides nothing produces none, and an
+-- entry-derived arm set silently loses it.
+export ifaceImplHeadTags : String -> List String
+ifaceImplHeadTags iface = ifaceHeadTagsGo iface ifaceImplHeadsRef.value
+
+ifaceHeadTagsGo : String -> List (String, String, String) -> List String
+ifaceHeadTagsGo _ [] = []
+ifaceHeadTagsGo iface ((i, tag, _)::rest)
+  | i == iface = tag :: ifaceHeadTagsGo iface rest
+  | otherwise = ifaceHeadTagsGo iface rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
