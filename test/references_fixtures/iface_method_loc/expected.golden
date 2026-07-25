@@ -1,0 +1,8 @@
+main|ctor|Box  DEF main.mdk:34:19  USES 3  main.mdk:42:14 main.mdk:42:29 main.mdk:42:41
+main|local|x|1  DEF main.mdk:31:11  USES 1  main.mdk:31:21
+main|method|describe  DEF main.mdk:30:2 main.mdk:31:2  USES 1  main.mdk:42:20
+main|method|shout  DEF main.mdk:32:2 main.mdk:39:2  USES 1  main.mdk:42:35
+main|method|weigh  DEF main.mdk:29:2 main.mdk:38:2  USES 2  main.mdk:31:15 main.mdk:42:8
+main|ty|Box  DEF main.mdk:34:19  USES 1  main.mdk:37:13
+main|ty|Weighed  DEF main.mdk:28:17  USES 0  
+main|val|useIt  DEF main.mdk:42:0  USES 0  

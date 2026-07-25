@@ -1,0 +1,7 @@
+a|method|mfoo  DEF a.mdk:3:2 main.mdk:35:2  USES 1  main.mdk:38:8
+a|ty|Foo  DEF a.mdk:2:17  USES 0  
+b|ctor|FooV  DEF b.mdk:3:19  USES 0  
+b|ty|Foo  DEF b.mdk:3:19  USES 0  
+main|ctor|P  DEF main.mdk:31:19  USES 1  main.mdk:38:13
+main|ty|P  DEF main.mdk:31:19  USES 1  main.mdk:34:9
+main|val|useIt  DEF main.mdk:38:0  USES 0  

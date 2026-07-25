@@ -1,0 +1,4 @@
+-- #1044 fixture, module 2 of 3 — an unrelated DATA TYPE that happens to be
+-- named `Foo` too. It shares nothing with a.Foo but the spelling.
+public export data Foo =
+  | FooV

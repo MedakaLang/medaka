@@ -114,4 +114,21 @@ check_project "$ROOT/test/references_fixtures/impl_method" \
 check_project "$ROOT/test/references_fixtures/iface_collide" \
   "reference-index method keying (#1002 F1: same method name, two interfaces stay distinct)"
 
+# #1013: an interface METHOD's declaration def site is its OWN name token, not the
+# interface's. It used to inherit the decl's loc, so `weigh` was recorded at
+# `Weighed` — a rename driven off that set would have overwritten the interface
+# TYPE NAME. Also pins the sig/default 1:1 zip (a defaulted method is two clause
+# lines, so it carries two DISTINCT def spans, and no method may be dragged onto
+# a neighbour's line).
+check_project "$ROOT/test/references_fixtures/iface_method_loc" \
+  "reference-index iface-method Loc (#1013: a method's decl def is at the METHOD token)"
+
+# #1044: an imported TYPE sharing an interface's name must not steal the slot the
+# impl-header lookup reads. Keying through `nsTy` (one slot per name, shared by
+# data/newtype/alias/interface, last-write-wins) filed the head under a phantom
+# `b|method|mfoo` and dropped it from `a|method|mfoo`. The import ORDER in that
+# fixture's main.mdk is load-bearing — see its header.
+check_project "$ROOT/test/references_fixtures/iface_ty_collide" \
+  "reference-index iface keying (#1044: an imported TYPE cannot steal the interface slot)"
+
 exit "$rc"
