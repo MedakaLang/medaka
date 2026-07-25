@@ -972,3 +972,43 @@ Build/seed mechanics live in `AGENTS.md`; what is orchestrator-specific:
   the issue's contested design premise, so "the ENVIRONMENT moved, not the bug" was wrong —
   the fix rejecting the control WAS the fix working. Verify which side moved before draining
   or reverting; never close/keep an issue on that message alone.
+
+## The dispatch arc, 2026-07-24/25 — three fixes, one class, and a merge I got wrong
+
+Seven independent defects lived on the dispatch surface where the tracker recorded one. Three
+lessons generalise past this subsystem.
+
+- 🚨 **I MERGED ON EVIDENCE I HAD MYSELF DECLARED INSUFFICIENT, AND IT SHIPPED AN S0.** I told a
+  reviewer I would merge PR #1058 only if three things came back clean — a 25-row matrix, four
+  named axes, and an order-permutation probe I called *"the one thing I most want tested."* I
+  merged having received the matrix. The probe, run afterwards, found exactly the failure mode I
+  had predicted in writing (#1072: most-specific-wins decided by module order). **A merge
+  condition you state and then don't enforce is worse than never stating it** — it buys the
+  reassurance without the check. If you name a gating probe, gate on it or withdraw it out loud.
+- ⚠️ **"The matrix is clean" is not "nothing regressed" — and the reviewer's own `AXES.txt`
+  said so.** That file exists to enumerate the axes a corpus does NOT vary. It was written,
+  read by both of us, cited by me to the reviewer, and then both of us treated a clean matrix as
+  sufficient. **A document that names its own blind spot only works if you re-read it at the
+  moment you are about to conclude.** The axis that mattered here was *import visibility* — not a
+  missing row, a missing dimension.
+- ⚠️ **When two derivations disagree, ask what truncated the INPUT — do not unify the OUTPUT.**
+  Three attempts at one S0 class: make the consumer tolerant (#1058 — closed 3 S0s, bought a
+  spurious-arm S0); make the producer canonical (my prescription — **disproved by building it**,
+  and it would have broken `eval`, which was right *because* a bare head defers the choice to a
+  full-visibility runtime re-resolution); finally, widen the **selection universe** (#1081 — the
+  stamp tables were built over a topological prefix, and route selection is a *global* minimum).
+  Unifying two derivations' output agrees on the wrong answer faster and looks like progress
+  because the encoding gets cleaner. **Diagnostic:** if your fix makes two consumers agree, check
+  whether a *third* consumer of the same facts also changes — #1081 found two more, which was the
+  evidence the input was the defect.
+- **A passing probe of yours does not refute a failing probe of theirs.** An agent reported an
+  eval-only S0; my reconstruction returned the *correct* answer and I nearly dropped the finding.
+  Their default body made two sibling calls, mine made one — only two reproduces. Their worktree
+  was still on disk. **Fetch the artifact; a prose repro under-specifies the load-bearing detail**,
+  because the reporter did not know which detail was load-bearing either.
+- **Scope a pre-push tripwire to where it can act.** My closing-keyword grep fires on keywords I
+  am *describing*, and in an issue/PR **comment** those are inert — GitHub only acts on PR bodies
+  and commit messages. High false-positive rate where risk is zero trained me to override it
+  twice in one session. Grep bodies and commit messages; skip comments. *A warning you learn to
+  ignore is worse than no warning.*
+
