@@ -87,17 +87,36 @@ git worktree list
 
 For each worktree that is NOT your own and NOT a live agent's:
 
+🚨 **"Nothing unmerged" is NOT "safe to remove" — that check alone will destroy live work.**
+This block used to read `log --oneline origin/main..HEAD` → *"empty ⇒ nothing unmerged ⇒
+safe"*. Measured 2026-07-25: a **sibling orchestrator's locked, actively-in-use worktree
+reported empty** — because an agent that has not committed yet is indistinguishable, by that
+query, from an abandoned tree. Following the old line literally would have deleted a live
+session's uncommitted work. **Three signals, all required, all derivable:**
+
 ```sh
-# SAFE to remove: its branch is fully merged (or the worktree is clean + unchanged).
-git -C <wt> log --oneline origin/main..HEAD    # empty => nothing unmerged => safe
-git worktree remove <wt>                        # (add --force only if clean & you're sure)
-git worktree prune                              # drops stale administrative entries
+git -C <wt> log --oneline origin/main..HEAD     # (1) empty  => nothing unmerged
+git -C <wt> status --porcelain                  # (2) empty  => nothing UNCOMMITTED
+git worktree list --porcelain | grep -A3 "^worktree <wt>$" | grep locked   # (3) NOT locked
+# (4) and no live process is sitting in it — the decisive liveness signal:
+for p in /proc/[0-9]*; do readlink "$p/cwd"; done 2>/dev/null | grep "^<wt>"
+git worktree remove <wt>                        # only when (1)-(4) all agree
+git worktree prune                              # metadata for already-deleted dirs only; always safe
 ```
 
-🚨 **Do NOT remove a worktree that has UNMERGED commits, or that a still-running agent
-owns** — you'd destroy unlanded work. If a branch has commits not in `origin/main`, either
-land them or leave the worktree and flag it. Never `git worktree remove` a sibling
-*session's* tree; scope to the worktrees *this* session spawned.
+`git worktree remove` drops the **directory, not the branch** — so with (1)–(4) satisfied
+there is genuinely nothing to lose. `prune` is unconditionally safe.
+
+🚨 **ATTRIBUTION IS USUALLY THE REAL BLOCKER, AND IT DOES NOT RESOLVE.** `git worktree list`
+shows `agent-<id>` names that say **nothing** about which session spawned them, and
+`TaskList` will not map them either. On a shared box with several orchestrators this means
+you frequently **cannot** tell your own agents' trees from a sibling's. When a check is
+structurally unable to attribute what it found: **REPORT AND HOLD, DO NOT ACT.** Never
+`git worktree remove` a sibling *session's* tree even when (1)–(4) say it is harmless — a
+sibling may still be reading an agent's tree for **evidence** (measured: an orchestrator was
+mid-investigation of an agent that had just disproved their own prescribed fix, and that
+proof existed only inside that worktree). Post the derived counts to the fleet and let each
+owner reap their own.
 
 ## Step 4 — reap orphan processes (never a box-wide kill)
 
