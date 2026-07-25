@@ -1,5 +1,5 @@
 # META
-source_lines=2942
+source_lines=3129
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -243,6 +243,8 @@ public export data Env = Env {
     ambiguous : List (String, List String),
     ctorAmbiguous : List (String, List String),
     internalGuard : OrdMap Unit,
+    sugValues : List SugCand,  -- the did-you-mean candidate POOLS, materialized ONCE per `Env`
+    sugTypes : List SugCand,  -- (see `SugCand`) instead of per unbound name — #1016.
   }  -- imported module (needs a selective import, not a typo fix; audit #5).
 -- (modId, expValues) pairs for every non-`core` module this file `import`s
 -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
@@ -757,10 +759,10 @@ suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestNameFuzzy env scope n
   | stringLength n < 3 = None
   | otherwise =
-    let lim = minI 2 (maxI 1 (stringLength n / 3))
-    match bestOf n lim (scopeNames scope)
+    let q = sugQueryOf n
+    match bestOfNames q (scopeNames scope)
       Some best => Some best
-      None => bestOf n lim (omKeys env.values ++ omKeys env.ctors ++ omKeys env.imported)
+      None => bestOfPool q env.sugValues
 
 -- "did you mean" for an unknown TYPE name: an exact curated Haskell-alias
 -- match takes priority; otherwise same policy as `suggestName` (nearest by
@@ -775,9 +777,7 @@ suggestType env n = match lookupAssoc n haskellTypeAliases
 suggestTypeFuzzy : Env -> String -> Option String
 suggestTypeFuzzy env n
   | stringLength n < 3 = None
-  | otherwise =
-    let lim = minI 2 (maxI 1 (stringLength n / 3))
-    bestOf n lim (omKeys env.types ++ omKeys env.imported)
+  | otherwise = bestOfPool (sugQueryOf n) env.sugTypes
 
 -- "did you mean" for an unknown CONSTRUCTOR (pattern position): today ONLY an
 -- exact curated Haskell-alias match (e.g. `Just`→`Some`) — there is no
@@ -785,8 +785,192 @@ suggestTypeFuzzy env n
 suggestCtor : String -> Option String
 suggestCtor n = lookupAssoc n haskellCtorAliases
 
-bestOf : String -> Int -> List String -> Option String
-bestOf n lim cands = map ((best, _) => best) (bestCandidate n lim cands None)
+-- ── the did-you-mean candidate pool (#1016) ───────────────────────────────
+-- `suggestNameFuzzy` used to rebuild `omKeys env.values ++ omKeys env.ctors ++
+-- omKeys env.imported` and run the O(len²) allocating Levenshtein DP against
+-- EVERY key of it, once per unbound name — O(unbound × in-scope) on the
+-- diagnostics path the LSP recomputes on every keystroke (#1016: 19.3 s to
+-- check a file with 1000 typos that takes 0.81 s once they are defined).
+--
+-- The pool is now materialized ONCE per `Env` (`sugValues` / `sugTypes` — the
+-- same once-per-Env discipline as `fieldOwnersIdx`), and every entry carries
+-- precomputed keys for O(1), ALLOCATION-FREE prefilters that reject a candidate
+-- WITHOUT running the DP at all:
+--
+--   * `len` — PROOF: `ed a b = d` means some sequence of `d` operations turns
+--     `a` into `b`, and each operation changes the length by at most one
+--     (insert +1, delete -1, substitute 0), so `|len a - len b| <= d`.  A
+--     candidate whose length is outside `[len n - lim, len n + lim]` therefore
+--     has `ed > lim` and would have been discarded anyway.
+--   * `mask` — bit `hashChar c & 31` set for each character `c` of the name.
+--     PROOF, in two steps.  (1) `ed a b <= k` implies the character SETS differ
+--     in at most `2k` members: along the optimal edit path `a = x0 -> … -> xd = b`
+--     (`d <= k`), one operation changes the set by at most one addition and one
+--     removal, so `|S(x i-1) Δ S(x i)| <= 2`, and symmetric difference obeys the
+--     triangle inequality, giving `|S a Δ S b| <= 2d <= 2k`.  (2) For ANY slot
+--     map `p`, `|M a Δ M b| <= |S a Δ S b|` where `M x = { p c | c in S x }`: if
+--     bit `j` is in `M a` but not `M b` then some `c in S a` has `p c = j` and
+--     nothing in `S b` maps to `j`, so `c` is in `S a \ S b`; distinct such bits
+--     have distinct `p`-values hence distinct witnesses, so the witness map is
+--     injective (symmetrically for `M b \ M a`).  Composing: more than `2k`
+--     differing mask bits implies `ed > k`.  `bitsAtMost` tests that in O(k)
+--     with k <= 4.  Step (2) holds for any `p`, so slot COLLISIONS cannot break
+--     the filter — they only shrink the left-hand side, making it strictly more
+--     conservative.  The filter therefore does not depend on `hashChar` agreeing
+--     across engines, only on it being deterministic within one.
+--     THREE independent 32-slot projections of the same character set are kept
+--     (hash bits [0,5), [5,10), [10,15)) and ALL THREE must pass.  The bound
+--     above holds for ANY projection of the set, so each is exactly as sound.
+--     Three, not one, because a 32-slot mask is coarser than it looks: `a`-`z`
+--     alone collides down to 15-18 DISTINCT slots (measured, per projection —
+--     plain birthday collisions), so one mask on a realistic 8-12 character
+--     identifier saturates and admits a large slice of the pool.  Mean
+--     Levenshtein scorings per unbound name on the perf gate's `typos` shape at
+--     N=1000 (pool 2373): one mask 207, two 71, three 58.  The 2→3 gain is
+--     small, which is the signal to stop adding projections: what survives is
+--     converging on the IRREDUCIBLE set — candidates whose character sets really
+--     do differ by ≤ 2k — and no projection of that set can reject those.  This
+--     residue is a LINEAR cost (it is dominated by the fixed prelude, not by the
+--     program's own names), so it does not restore the quadratic.
+--
+--   * `up` — does the name start uppercase.  Not a distance filter: it is the
+--     pre-existing `sameCaseClass` reject (see `startsUpper`), precomputed
+--     because deriving it needs `stringSlice`, which ALLOCATES.  Re-deriving it
+--     per candidate per unbound name is itself an O(unbound × in-scope)
+--     ALLOCATION, so leaving it out defeats the whole rewrite (measured: it alone
+--     kept resolve allocation quadratic after the pool was hoisted).
+--
+-- Both distance filters are ONE-SIDED: they can only reject candidates whose
+-- distance already exceeds `lim`, which `scoreCand` discards anyway.  The
+-- candidate set that reaches `keepBetter` is unchanged, and the ranking below is
+-- (distance, name)-lexicographic — i.e. order-independent — so the suggestion
+-- text is byte-identical to the old exhaustive scan (verified over 931
+-- suggestion-bearing diagnostics plus a whole-tree `medaka check` sweep).
+--
+-- ⚠️ WHAT THIS IS NOT: the pool is still SCANNED per unbound name, so the
+-- prefilter itself remains O(unbound × in-scope) — about four machine ops per
+-- pair, allocating nothing.  A true sub-linear index (deletion-neighbourhood /
+-- BK-tree) was rejected: it costs O(pool × len²) STRINGS to build, on every
+-- compile, to speed up a path that most compiles never take.  What the rewrite
+-- removes is the ALLOCATING O(len²) DP from the inner loop, which was ~99.9% of
+-- the cost.  The perf gate's `typos` shape grades that; nothing grades the
+-- residual scan, on purpose.
+data SugCand = SugCand String Int Int Int Int Bool
+
+sugPoolOf : List String -> List SugCand
+sugPoolOf ns = map sugCandOf ns
+
+sugCandOf : String -> SugCand
+sugCandOf n =
+  SugCand
+    n
+    (stringLength n)
+    (charMask 0 n)
+    (charMask 5 n)
+    (charMask 10 n)
+    (startsUpper n)
+
+-- An unbound name prepared for a pool scan: the name, the distance cut
+-- (≤ 2 absolutely AND ≤ max(1, len/3) relatively — unchanged), and its five
+-- prefilter keys.
+data SugQuery = SugQuery String Int Int Int Int Int Bool
+
+sugQueryOf : String -> SugQuery
+sugQueryOf n =
+  SugQuery
+    n
+    (minI 2 (maxI 1 (stringLength n / 3)))
+    (stringLength n)
+    (charMask 0 n)
+    (charMask 5 n)
+    (charMask 10 n)
+    (startsUpper n)
+
+-- Character-set bitmask over 32 slots, taken from bits [sh, sh+5) of each
+-- character's hash; see `SugCand`.  32 (not 64) because a Medaka Int is a 63-bit
+-- tagged immediate, so `shiftLeft 1 63` would not fit — hence three narrow
+-- projections rather than one wide mask.  Extra aliasing only ever merges two
+-- characters onto one slot, which makes the filter more conservative, never
+-- wrong; the exact hash therefore has no bearing on the suggestion chosen (it
+-- need not even agree across engines).
+charMask : Int -> String -> Int
+charMask sh n = charMaskGo sh (stringToChars n) 0 0
+
+charMaskGo : Int -> Array Char -> Int -> Int -> Int
+charMaskGo sh cs i acc
+  | i >= arrayLength cs = acc
+  | otherwise = charMaskGo sh cs (i + 1) (bitOr acc (shiftLeft 1 (bitAnd (shiftRight (hashChar (arrayGetUnsafe i cs)) sh) 31)))
+
+-- Does `x` have at most `k` bits set?  Clears the lowest set bit (`x & (x - 1)`)
+-- at most `k` times — O(k) with k = 2*lim <= 4, never a full popcount.
+bitsAtMost : Int -> Int -> Bool
+bitsAtMost k x
+  | x == 0 = True
+  | k <= 0 = False
+  | otherwise = bitsAtMost (k - 1) (bitAnd x (x - 1))
+
+-- The env-pool arm: every candidate carries its precomputed length, masks and
+-- case class, so the reject test below allocates nothing.
+bestOfPool : SugQuery -> List SugCand -> Option String
+bestOfPool q cands = map ((best, _) => best) (bestInPool q cands None)
+
+bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
+bestInPool _ [] acc = acc
+bestInPool q ((SugCand c clen cm1 cm2 cm3 cup)::cs) acc
+  | sugRejects q c clen cm1 cm2 cm3 cup = bestInPool q cs acc
+  | otherwise = bestInPool q cs (scoreCand q c acc)
+
+-- The local-scope arm: a plain name list, rebuilt constantly and small, so its
+-- candidates carry no precomputed keys.  The O(1) length filter still applies
+-- (same soundness argument); the mask does not, since deriving one costs about
+-- as much as the DP it would save at this list's size.
+bestOfNames : SugQuery -> List String -> Option String
+bestOfNames q ns = map ((best, _) => best) (bestInNames q ns None)
+
+bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
+bestInNames _ [] acc = acc
+bestInNames q (c::cs) acc
+  | sugRejectsName q c (stringLength c) (startsUpper c) = bestInNames q cs acc
+  | otherwise = bestInNames q cs (scoreCand q c acc)
+
+-- The pool arm's reject test.  Deliberately NOT written as `sugRejectsName q …
+-- || <mask test>`: `q` would have to be re-boxed at every candidate, which is
+-- the per-candidate allocation this rewrite exists to remove.  Cheapest tests
+-- first (`c == n` is a String compare and is true at most once); the disjuncts
+-- are pure, so their order cannot change the verdict.
+-- lint-disable-next-line rule-duplicate-body
+sugRejects : SugQuery -> String -> Int -> Int -> Int -> Int -> Bool -> Bool
+sugRejects (SugQuery n lim qlen qm1 qm2 qm3 qup) c clen cm1 cm2 cm3 cup = not (sameCase qup cup)
+  || clen < qlen - lim
+  || clen > qlen + lim
+  || not (bitsAtMost (2 * lim) (bitXor qm1 cm1))
+  || not (bitsAtMost (2 * lim) (bitXor qm2 cm2))
+  || not (bitsAtMost (2 * lim) (bitXor qm3 cm3))
+  || c == n
+
+sugRejectsName : SugQuery -> String -> Int -> Bool -> Bool
+sugRejectsName (SugQuery n lim qlen _ _ _ qup) c clen cup = not (sameCase qup cup)
+  || clen < qlen - lim
+  || clen > qlen + lim
+  || c == n
+
+-- Monomorphic Bool equality: `==` here would be a dict-dispatched `Eq` method
+-- call in the pool scan's inner loop (compiler/AGENTS.md, "the exception that is
+-- NOT an exception").
+sameCase : Bool -> Bool -> Bool
+sameCase True True = True
+sameCase False False = True
+sameCase _ _ = False
+
+-- The one expensive step: the O(len²) allocating DP, run only on candidates the
+-- prefilters admitted.  `opBump` makes exactly that step visible to the perf
+-- gate's OP arm (#884/#1016) — the count is the number of Levenshtein scorings,
+-- which is what went quadratic and what a filter regression would lift again.
+scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
+scoreCand (SugQuery n lim _ _ _ _ _) c acc =
+  let _ = opBump ()
+  let d = editDistance n c
+  if d > lim then acc else keepBetter c d acc
 
 -- Medaka's naming convention makes leading case a structural signal
 -- (constructors start uppercase, values/types-in-scope-of-a-value-query start
@@ -794,21 +978,12 @@ bestOf n lim cands = map ((best, _) => best) (bestCandidate n lim cands None)
 -- never the intended correction — surfacing one is worse than suggesting
 -- nothing (#514 sub-finding: `string`/`toString`, both lowercase queries,
 -- surfaced the unrelated prelude constructor `RString`).
+-- (`stringSlice` ALLOCATES, so this is precomputed into `SugCand`/`SugQuery`
+-- rather than re-derived per candidate — see `SugCand`.)
 startsUpper : String -> Bool
 startsUpper s = stringLength s > 0
   && stringSlice 0 1 s >= "A"
   && stringSlice 0 1 s <= "Z"
-
-sameCaseClass : String -> String -> Bool
-sameCaseClass a b = startsUpper a == startsUpper b
-
-bestCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
-bestCandidate _ _ [] acc = acc
-bestCandidate n lim (c::cs) acc
-  | c == n = bestCandidate n lim cs acc
-  | not (sameCaseClass n c) = bestCandidate n lim cs acc
-  | editDistance n c > lim = bestCandidate n lim cs acc
-  | otherwise = bestCandidate n lim cs (keepBetter c (editDistance n c) acc)
 
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBetter c d None = Some (c, d)
@@ -1242,21 +1417,27 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
   let pFieldOwners = whenL seed (fieldOwnersOf preludeDecls)
   let uIfaces = interfaceList prog
   let imported = importedNames prog
+  let valuesM = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported) omEmpty
+  let typesM = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ imported) omEmpty
+  let ctorsM = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog) omEmpty
+  let importedM = omFromNames imported omEmpty
   Env {
-    values = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported) omEmpty,
-    types = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ imported) omEmpty,
-    ctors = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog) omEmpty,
+    values = valuesM,
+    types = typesM,
+    ctors = ctorsM,
     fields = map fst pFieldOwners ++ map fst (fieldOwnersOf prog),
     fieldOwners = pFieldOwners ++ fieldOwnersOf prog,
     fieldOwnersIdx = buildFieldOwnerIndex (pFieldOwners ++ fieldOwnersOf prog),
     interfaces = map fst pIfaces ++ map fst uIfaces,
     ifaceMethods = pIfaces ++ uIfaces,
     effects = effectNames prog,
-    imported = omFromNames imported omEmpty,
+    imported = importedM,
     importedModuleValues = [],
     ambiguous = [],
     ctorAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
+    sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
+    sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),
   }
 
 whenL : Bool -> List a -> List a
@@ -2280,21 +2461,27 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
   let impIfaceMethods = importedIfaceMethods known prog baseIfaces
   let impEffects = importedEffects known prog
   let impModValues = importedModuleValueSets known prog
+  let valuesM = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ adds.iaValues) omEmpty
+  let typesM = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ adds.iaTypes) omEmpty
+  let ctorsM = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog ++ adds.iaCtors) omEmpty
+  let importedM = omFromNames adds.iaImported omEmpty
   let env = Env {
-    values = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ adds.iaValues) omEmpty,
-    types = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ adds.iaTypes) omEmpty,
-    ctors = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog ++ adds.iaCtors) omEmpty,
+    values = valuesM,
+    types = typesM,
+    ctors = ctorsM,
     fields = map fst pFieldOwners ++ map fst (fieldOwnersOf prog) ++ map fst adds.iaFieldOwners,
     fieldOwners = pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners,
     fieldOwnersIdx = buildFieldOwnerIndex (pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners),
     interfaces = baseIfaces,
     ifaceMethods = pIfaces ++ uIfaces ++ impIfaceMethods,
     effects = effectNames prog ++ impEffects,
-    imported = omFromNames adds.iaImported omEmpty,
+    imported = importedM,
     importedModuleValues = impModValues,
     ambiguous = ambiguousSet known prog,
     ctorAmbiguous = ctorAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,
+    sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
+    sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),
   }
   (env, adds.iaErrors)
 
@@ -2982,7 +3169,7 @@ stampBindingIds decls =
 (DFunDef false "resErrorLoc" ((PCon "AmbiguousConstructor" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "InternalExternAccess" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "ReassignImmutable" PWild (PVar "l"))) (EVar "l"))
-(DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "sugValues" (TyApp (TyCon "List") (TyCon "SugCand"))) (field "sugTypes" (TyApp (TyCon "List") (TyCon "SugCand")))))) ())
 (DTypeSig true "internalExterns" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64"))))
 (DTypeSig true "internalGuardFor" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
@@ -3149,22 +3336,49 @@ stampBindingIds decls =
 (DTypeSig false "suggestName" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "suggestName" ((PVar "env") (PVar "scope") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EBinOp "++" (EVar "haskellValueAliases") (EVar "haskellCtorAliases"))) (arm (PCon "Some" (PVar "sug")) () (EApp (EVar "Some") (EVar "sug"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "suggestNameFuzzy") (EVar "env")) (EVar "scope")) (EVar "n")))))
 (DTypeSig false "suggestNameFuzzy" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "suggestNameFuzzy" ((PVar "env") (PVar "scope") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "lim") (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EApp (EVar "scopeNames") (EVar "scope"))) (arm (PCon "Some" (PVar "best")) () (EApp (EVar "Some") (EVar "best"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "values")) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "ctors"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "imported")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "suggestNameFuzzy" ((PVar "env") (PVar "scope") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EVar "sugQueryOf") (EVar "n"))) (DoExpr (EMatch (EApp (EApp (EVar "bestOfNames") (EVar "q")) (EApp (EVar "scopeNames") (EVar "scope"))) (arm (PCon "Some" (PVar "best")) () (EApp (EVar "Some") (EVar "best"))) (arm (PCon "None") () (EApp (EApp (EVar "bestOfPool") (EVar "q")) (EFieldAccess (EVar "env") "sugValues")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "suggestType" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "suggestType" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "haskellTypeAliases")) (arm (PCon "Some" (PVar "sug")) () (EApp (EVar "Some") (EVar "sug"))) (arm (PCon "None") () (EApp (EApp (EVar "suggestTypeFuzzy") (EVar "env")) (EVar "n")))))
 (DTypeSig false "suggestTypeFuzzy" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "suggestTypeFuzzy" ((PVar "env") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "lim") (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (DoExpr (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EBinOp "++" (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "types")) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "imported")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "suggestTypeFuzzy" ((PVar "env") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "bestOfPool") (EApp (EVar "sugQueryOf") (EVar "n"))) (EFieldAccess (EVar "env") "sugTypes")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "suggestCtor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "suggestCtor" ((PVar "n")) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "haskellCtorAliases")))
-(DTypeSig false "bestOf" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "bestOf" ((PVar "n") (PVar "lim") (PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cands")) (EVar "None"))))
+(DData Private "SugCand" () ((variant "SugCand" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool")))) ())
+(DTypeSig false "sugPoolOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SugCand"))))
+(DFunDef false "sugPoolOf" ((PVar "ns")) (EApp (EApp (EVar "map") (EVar "sugCandOf")) (EVar "ns")))
+(DTypeSig false "sugCandOf" (TyFun (TyCon "String") (TyCon "SugCand")))
+(DFunDef false "sugCandOf" ((PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SugCand") (EVar "n")) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 0))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 5))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 10))) (EVar "n"))) (EApp (EVar "startsUpper") (EVar "n"))))
+(DData Private "SugQuery" () ((variant "SugQuery" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool")))) ())
+(DTypeSig false "sugQueryOf" (TyFun (TyCon "String") (TyCon "SugQuery")))
+(DFunDef false "sugQueryOf" ((PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SugQuery") (EVar "n")) (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 0))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 5))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 10))) (EVar "n"))) (EApp (EVar "startsUpper") (EVar "n"))))
+(DTypeSig false "charMask" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "charMask" ((PVar "sh") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (ELit (LInt 0))))
+(DTypeSig false "charMaskGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bitsAtMost" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "bitsAtMost" ((PVar "k") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "bitsAtMost") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "x")) (EBinOp "-" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "bestOfPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "bestOfPool" ((PVar "q") (PVar "cands")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cands")) (EVar "None"))))
+(DTypeSig false "bestInPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "bestInPool" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "bestInPool" ((PVar "q") (PCons (PCon "SugCand" (PVar "c") (PVar "clen") (PVar "cm1") (PVar "cm2") (PVar "cm3") (PVar "cup")) (PVar "cs")) (PVar "acc")) (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sugRejects") (EVar "q")) (EVar "c")) (EVar "clen")) (EVar "cm1")) (EVar "cm2")) (EVar "cm3")) (EVar "cup")) (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cs")) (EApp (EApp (EApp (EVar "scoreCand") (EVar "q")) (EVar "c")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bestOfNames" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "bestOfNames" ((PVar "q") (PVar "ns")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "ns")) (EVar "None"))))
+(DTypeSig false "bestInNames" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "bestInNames" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "bestInNames" ((PVar "q") (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EIf (EApp (EApp (EApp (EApp (EVar "sugRejectsName") (EVar "q")) (EVar "c")) (EApp (EVar "stringLength") (EVar "c"))) (EApp (EVar "startsUpper") (EVar "c"))) (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "cs")) (EApp (EApp (EApp (EVar "scoreCand") (EVar "q")) (EVar "c")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sugRejects" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool")))))))))
+(DFunDef false "sugRejects" ((PCon "SugQuery" (PVar "n") (PVar "lim") (PVar "qlen") (PVar "qm1") (PVar "qm2") (PVar "qm3") (PVar "qup")) (PVar "c") (PVar "clen") (PVar "cm1") (PVar "cm2") (PVar "cm3") (PVar "cup")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "sameCase") (EVar "qup")) (EVar "cup"))) (EBinOp "<" (EVar "clen") (EBinOp "-" (EVar "qlen") (EVar "lim")))) (EBinOp ">" (EVar "clen") (EBinOp "+" (EVar "qlen") (EVar "lim")))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm1")) (EVar "cm1"))))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm2")) (EVar "cm2"))))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm3")) (EVar "cm3"))))) (EBinOp "==" (EVar "c") (EVar "n"))))
+(DTypeSig false "sugRejectsName" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
+(DFunDef false "sugRejectsName" ((PCon "SugQuery" (PVar "n") (PVar "lim") (PVar "qlen") PWild PWild PWild (PVar "qup")) (PVar "c") (PVar "clen") (PVar "cup")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "sameCase") (EVar "qup")) (EVar "cup"))) (EBinOp "<" (EVar "clen") (EBinOp "-" (EVar "qlen") (EVar "lim")))) (EBinOp ">" (EVar "clen") (EBinOp "+" (EVar "qlen") (EVar "lim")))) (EBinOp "==" (EVar "c") (EVar "n"))))
+(DTypeSig false "sameCase" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
+(DFunDef false "sameCase" ((PCon "True") (PCon "True")) (EVar "True"))
+(DFunDef false "sameCase" ((PCon "False") (PCon "False")) (EVar "True"))
+(DFunDef false "sameCase" (PWild PWild) (EVar "False"))
+(DTypeSig false "scoreCand" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "scoreCand" ((PCon "SugQuery" (PVar "n") (PVar "lim") PWild PWild PWild PWild PWild) (PVar "c") (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoLet false false (PVar "d") (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c"))) (DoExpr (EIf (EBinOp ">" (EVar "d") (EVar "lim")) (EVar "acc") (EApp (EApp (EApp (EVar "keepBetter") (EVar "c")) (EVar "d")) (EVar "acc"))))))
 (DTypeSig false "startsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "startsUpper" ((PVar "s")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "A")))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "Z")))))
-(DTypeSig false "sameCaseClass" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "sameCaseClass" ((PVar "a") (PVar "b")) (EBinOp "==" (EApp (EVar "startsUpper") (EVar "a")) (EApp (EVar "startsUpper") (EVar "b"))))
-(DTypeSig false "bestCandidate" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "bestCandidate" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "bestCandidate" ((PVar "n") (PVar "lim") (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EIf (EBinOp "==" (EVar "c") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "sameCaseClass") (EVar "n")) (EVar "c"))) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EBinOp ">" (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c")) (EVar "lim")) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EApp (EApp (EApp (EVar "keepBetter") (EVar "c")) (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "keepBetter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "None")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "Some" (PTuple (PVar "bc") (PVar "bd")))) (EIf (EBinOp "<" (EVar "d") (EVar "bd")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "bd")) (EBinOp "<" (EVar "c") (EVar "bc"))) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EVar "otherwise") (EApp (EVar "Some") (ETuple (EVar "bc") (EVar "bd"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -3379,7 +3593,7 @@ stampBindingIds decls =
 (DFunDef false "hasFoldable" ((PCons (PRec "DInterface" ((rf "name" (PLit (LString "Foldable")))) true) PWild)) (EVar "True"))
 (DFunDef false "hasFoldable" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasFoldable") (EVar "rest")))
 (DTypeSig false "buildEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))
-(DFunDef false "buildEnv" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "imported") (EApp (EVar "importedNames") (EVar "prog"))) (DoExpr (ERecordCreate "Env" ((fa "values" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (fa "types" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (fa "ctors" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog")))) (EVar "omEmpty"))) (fa "fields" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "fieldOwners" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "interfaces" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "uIfaces")))) (fa "ifaceMethods" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces"))) (fa "effects" (EApp (EVar "effectNames") (EVar "prog"))) (fa "imported" (EApp (EApp (EVar "omFromNames") (EVar "imported")) (EVar "omEmpty"))) (fa "importedModuleValues" (EListLit)) (fa "ambiguous" (EListLit)) (fa "ctorAmbiguous" (EListLit)) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))))))))
+(DFunDef false "buildEnv" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "imported") (EApp (EVar "importedNames") (EVar "prog"))) (DoLet false false (PVar "valuesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (DoLet false false (PVar "typesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorsM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "importedM") (EApp (EApp (EVar "omFromNames") (EVar "imported")) (EVar "omEmpty"))) (DoExpr (ERecordCreate "Env" ((fa "values" (EVar "valuesM")) (fa "types" (EVar "typesM")) (fa "ctors" (EVar "ctorsM")) (fa "fields" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "fieldOwners" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "interfaces" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "uIfaces")))) (fa "ifaceMethods" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces"))) (fa "effects" (EApp (EVar "effectNames") (EVar "prog"))) (fa "imported" (EVar "importedM")) (fa "importedModuleValues" (EListLit)) (fa "ambiguous" (EListLit)) (fa "ctorAmbiguous" (EListLit)) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))) (fa "sugValues" (EApp (EVar "sugPoolOf") (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EVar "valuesM")) (EApp (EVar "omKeys") (EVar "ctorsM"))) (EApp (EVar "omKeys") (EVar "importedM"))))) (fa "sugTypes" (EApp (EVar "sugPoolOf") (EBinOp "++" (EApp (EVar "omKeys") (EVar "typesM")) (EApp (EVar "omKeys") (EVar "importedM"))))))))))
 (DTypeSig false "whenL" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "whenL" ((PCon "True") (PVar "xs")) (EVar "xs"))
 (DFunDef false "whenL" ((PCon "False") PWild) (EListLit))
@@ -3724,7 +3938,7 @@ stampBindingIds decls =
 (DTypeSig false "oneImportEffects" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "oneImportEffects" ((PVar "known") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "findExports") (EVar "mid")) (EVar "known")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exp")) () (EFieldAccess (EVar "exp") "expEffects")))))))
 (DTypeSig false "buildEnvMM" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "Env") (TyApp (TyCon "List") (TyCon "ResError")))))))))
-(DFunDef false "buildEnvMM" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "known") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "adds") (EApp (EApp (EVar "collectImports") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "baseIfaces") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "uIfaces"))) (EFieldAccess (EVar "adds") "iaIfaces"))) (DoLet false false (PVar "impIfaceMethods") (EApp (EApp (EApp (EVar "importedIfaceMethods") (EVar "known")) (EVar "prog")) (EVar "baseIfaces"))) (DoLet false false (PVar "impEffects") (EApp (EApp (EVar "importedEffects") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "impModValues") (EApp (EApp (EVar "importedModuleValueSets") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "env") (ERecordCreate "Env" ((fa "values" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaValues"))) (EVar "omEmpty"))) (fa "types" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaTypes"))) (EVar "omEmpty"))) (fa "ctors" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaCtors"))) (EVar "omEmpty"))) (fa "fields" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (EApp (EApp (EVar "map") (EVar "fst")) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "fieldOwners" (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners"))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "interfaces" (EVar "baseIfaces")) (fa "ifaceMethods" (EBinOp "++" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces")) (EVar "impIfaceMethods"))) (fa "effects" (EBinOp "++" (EApp (EVar "effectNames") (EVar "prog")) (EVar "impEffects"))) (fa "imported" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "adds") "iaImported")) (EVar "omEmpty"))) (fa "importedModuleValues" (EVar "impModValues")) (fa "ambiguous" (EApp (EApp (EVar "ambiguousSet") (EVar "known")) (EVar "prog"))) (fa "ctorAmbiguous" (EApp (EApp (EVar "ctorAmbiguousSet") (EVar "known")) (EVar "prog"))) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty")))))) (DoExpr (ETuple (EVar "env") (EFieldAccess (EVar "adds") "iaErrors")))))
+(DFunDef false "buildEnvMM" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "known") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "adds") (EApp (EApp (EVar "collectImports") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "baseIfaces") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "uIfaces"))) (EFieldAccess (EVar "adds") "iaIfaces"))) (DoLet false false (PVar "impIfaceMethods") (EApp (EApp (EApp (EVar "importedIfaceMethods") (EVar "known")) (EVar "prog")) (EVar "baseIfaces"))) (DoLet false false (PVar "impEffects") (EApp (EApp (EVar "importedEffects") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "impModValues") (EApp (EApp (EVar "importedModuleValueSets") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "valuesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaValues"))) (EVar "omEmpty"))) (DoLet false false (PVar "typesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorsM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaCtors"))) (EVar "omEmpty"))) (DoLet false false (PVar "importedM") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "adds") "iaImported")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (ERecordCreate "Env" ((fa "values" (EVar "valuesM")) (fa "types" (EVar "typesM")) (fa "ctors" (EVar "ctorsM")) (fa "fields" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (EApp (EApp (EVar "map") (EVar "fst")) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "fieldOwners" (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners"))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "interfaces" (EVar "baseIfaces")) (fa "ifaceMethods" (EBinOp "++" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces")) (EVar "impIfaceMethods"))) (fa "effects" (EBinOp "++" (EApp (EVar "effectNames") (EVar "prog")) (EVar "impEffects"))) (fa "imported" (EVar "importedM")) (fa "importedModuleValues" (EVar "impModValues")) (fa "ambiguous" (EApp (EApp (EVar "ambiguousSet") (EVar "known")) (EVar "prog"))) (fa "ctorAmbiguous" (EApp (EApp (EVar "ctorAmbiguousSet") (EVar "known")) (EVar "prog"))) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))) (fa "sugValues" (EApp (EVar "sugPoolOf") (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EVar "valuesM")) (EApp (EVar "omKeys") (EVar "ctorsM"))) (EApp (EVar "omKeys") (EVar "importedM"))))) (fa "sugTypes" (EApp (EVar "sugPoolOf") (EBinOp "++" (EApp (EVar "omKeys") (EVar "typesM")) (EApp (EVar "omKeys") (EVar "importedM")))))))) (DoExpr (ETuple (EVar "env") (EFieldAccess (EVar "adds") "iaErrors")))))
 (DTypeSig false "importedModuleValueSets" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "importedModuleValueSets" ((PVar "known") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "oneImportedModuleValues") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))
 (DTypeSig false "oneImportedModuleValues" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -4016,7 +4230,7 @@ stampBindingIds decls =
 (DFunDef false "resErrorLoc" ((PCon "AmbiguousConstructor" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "InternalExternAccess" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "ReassignImmutable" PWild (PVar "l"))) (EVar "l"))
-(DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "Env" () ((variant "Env" (ConNamed (field "values" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "types" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctors" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "fields" (TyApp (TyCon "List") (TyCon "String"))) (field "fieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "fieldOwnersIdx" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "interfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "ifaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "effects" (TyApp (TyCon "List") (TyCon "String"))) (field "imported" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "importedModuleValues" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ambiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorAmbiguous" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "internalGuard" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "sugValues" (TyApp (TyCon "List") (TyCon "SugCand"))) (field "sugTypes" (TyApp (TyCon "List") (TyCon "SugCand")))))) ())
 (DTypeSig true "internalExterns" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "internalExterns" () (EListLit (ELit (LString "arrayGetUnsafe")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64"))))
 (DTypeSig true "internalGuardFor" (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))
@@ -4183,22 +4397,49 @@ stampBindingIds decls =
 (DTypeSig false "suggestName" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "suggestName" ((PVar "env") (PVar "scope") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EBinOp "++" (EVar "haskellValueAliases") (EVar "haskellCtorAliases"))) (arm (PCon "Some" (PVar "sug")) () (EApp (EVar "Some") (EVar "sug"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "suggestNameFuzzy") (EVar "env")) (EVar "scope")) (EVar "n")))))
 (DTypeSig false "suggestNameFuzzy" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "suggestNameFuzzy" ((PVar "env") (PVar "scope") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "lim") (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EApp (EVar "scopeNames") (EVar "scope"))) (arm (PCon "Some" (PVar "best")) () (EApp (EVar "Some") (EVar "best"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "values")) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "ctors"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "imported")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "suggestNameFuzzy" ((PVar "env") (PVar "scope") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EVar "sugQueryOf") (EVar "n"))) (DoExpr (EMatch (EApp (EApp (EVar "bestOfNames") (EVar "q")) (EApp (EVar "scopeNames") (EVar "scope"))) (arm (PCon "Some" (PVar "best")) () (EApp (EVar "Some") (EVar "best"))) (arm (PCon "None") () (EApp (EApp (EVar "bestOfPool") (EVar "q")) (EFieldAccess (EVar "env") "sugValues")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "suggestType" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "suggestType" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "haskellTypeAliases")) (arm (PCon "Some" (PVar "sug")) () (EApp (EVar "Some") (EVar "sug"))) (arm (PCon "None") () (EApp (EApp (EVar "suggestTypeFuzzy") (EVar "env")) (EVar "n")))))
 (DTypeSig false "suggestTypeFuzzy" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "suggestTypeFuzzy" ((PVar "env") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "lim") (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (DoExpr (EApp (EApp (EApp (EVar "bestOf") (EVar "n")) (EVar "lim")) (EBinOp "++" (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "types")) (EApp (EVar "omKeys") (EFieldAccess (EVar "env") "imported")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "suggestTypeFuzzy" ((PVar "env") (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "bestOfPool") (EApp (EVar "sugQueryOf") (EVar "n"))) (EFieldAccess (EVar "env") "sugTypes")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "suggestCtor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "suggestCtor" ((PVar "n")) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "haskellCtorAliases")))
-(DTypeSig false "bestOf" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "bestOf" ((PVar "n") (PVar "lim") (PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cands")) (EVar "None"))))
+(DData Private "SugCand" () ((variant "SugCand" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool")))) ())
+(DTypeSig false "sugPoolOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SugCand"))))
+(DFunDef false "sugPoolOf" ((PVar "ns")) (EApp (EApp (EMethodRef "map") (EVar "sugCandOf")) (EVar "ns")))
+(DTypeSig false "sugCandOf" (TyFun (TyCon "String") (TyCon "SugCand")))
+(DFunDef false "sugCandOf" ((PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SugCand") (EVar "n")) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 0))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 5))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 10))) (EVar "n"))) (EApp (EVar "startsUpper") (EVar "n"))))
+(DData Private "SugQuery" () ((variant "SugQuery" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Bool")))) ())
+(DTypeSig false "sugQueryOf" (TyFun (TyCon "String") (TyCon "SugQuery")))
+(DFunDef false "sugQueryOf" ((PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "SugQuery") (EVar "n")) (EApp (EApp (EVar "minI") (ELit (LInt 2))) (EApp (EApp (EVar "maxI") (ELit (LInt 1))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3)))))) (EApp (EVar "stringLength") (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 0))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 5))) (EVar "n"))) (EApp (EApp (EVar "charMask") (ELit (LInt 10))) (EVar "n"))) (EApp (EVar "startsUpper") (EVar "n"))))
+(DTypeSig false "charMask" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "charMask" ((PVar "sh") (PVar "n")) (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 0))) (ELit (LInt 0))))
+(DTypeSig false "charMaskGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "charMaskGo" ((PVar "sh") (PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charMaskGo") (EVar "sh")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EApp (EVar "hashChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EVar "sh"))) (ELit (LInt 31)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bitsAtMost" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "bitsAtMost" ((PVar "k") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (ELit (LInt 0))) (EVar "True") (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "bitsAtMost") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EApp (EApp (EVar "bitAnd") (EVar "x")) (EBinOp "-" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "bestOfPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "bestOfPool" ((PVar "q") (PVar "cands")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cands")) (EVar "None"))))
+(DTypeSig false "bestInPool" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "SugCand")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "bestInPool" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "bestInPool" ((PVar "q") (PCons (PCon "SugCand" (PVar "c") (PVar "clen") (PVar "cm1") (PVar "cm2") (PVar "cm3") (PVar "cup")) (PVar "cs")) (PVar "acc")) (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sugRejects") (EVar "q")) (EVar "c")) (EVar "clen")) (EVar "cm1")) (EVar "cm2")) (EVar "cm3")) (EVar "cup")) (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bestInPool") (EVar "q")) (EVar "cs")) (EApp (EApp (EApp (EVar "scoreCand") (EVar "q")) (EVar "c")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "bestOfNames" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "bestOfNames" ((PVar "q") (PVar "ns")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "best") PWild)) (EVar "best"))) (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "ns")) (EVar "None"))))
+(DTypeSig false "bestInNames" (TyFun (TyCon "SugQuery") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "bestInNames" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "bestInNames" ((PVar "q") (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EIf (EApp (EApp (EApp (EApp (EVar "sugRejectsName") (EVar "q")) (EVar "c")) (EApp (EVar "stringLength") (EVar "c"))) (EApp (EVar "startsUpper") (EVar "c"))) (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bestInNames") (EVar "q")) (EVar "cs")) (EApp (EApp (EApp (EVar "scoreCand") (EVar "q")) (EVar "c")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sugRejects" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool")))))))))
+(DFunDef false "sugRejects" ((PCon "SugQuery" (PVar "n") (PVar "lim") (PVar "qlen") (PVar "qm1") (PVar "qm2") (PVar "qm3") (PVar "qup")) (PVar "c") (PVar "clen") (PVar "cm1") (PVar "cm2") (PVar "cm3") (PVar "cup")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "sameCase") (EVar "qup")) (EVar "cup"))) (EBinOp "<" (EVar "clen") (EBinOp "-" (EVar "qlen") (EVar "lim")))) (EBinOp ">" (EVar "clen") (EBinOp "+" (EVar "qlen") (EVar "lim")))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm1")) (EVar "cm1"))))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm2")) (EVar "cm2"))))) (EApp (EVar "not") (EApp (EApp (EVar "bitsAtMost") (EBinOp "*" (ELit (LInt 2)) (EVar "lim"))) (EApp (EApp (EVar "bitXor") (EVar "qm3")) (EVar "cm3"))))) (EBinOp "==" (EVar "c") (EVar "n"))))
+(DTypeSig false "sugRejectsName" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
+(DFunDef false "sugRejectsName" ((PCon "SugQuery" (PVar "n") (PVar "lim") (PVar "qlen") PWild PWild PWild (PVar "qup")) (PVar "c") (PVar "clen") (PVar "cup")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "sameCase") (EVar "qup")) (EVar "cup"))) (EBinOp "<" (EVar "clen") (EBinOp "-" (EVar "qlen") (EVar "lim")))) (EBinOp ">" (EVar "clen") (EBinOp "+" (EVar "qlen") (EVar "lim")))) (EBinOp "==" (EVar "c") (EVar "n"))))
+(DTypeSig false "sameCase" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
+(DFunDef false "sameCase" ((PCon "True") (PCon "True")) (EVar "True"))
+(DFunDef false "sameCase" ((PCon "False") (PCon "False")) (EVar "True"))
+(DFunDef false "sameCase" (PWild PWild) (EVar "False"))
+(DTypeSig false "scoreCand" (TyFun (TyCon "SugQuery") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "scoreCand" ((PCon "SugQuery" (PVar "n") (PVar "lim") PWild PWild PWild PWild PWild) (PVar "c") (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoLet false false (PVar "d") (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c"))) (DoExpr (EIf (EBinOp ">" (EVar "d") (EVar "lim")) (EVar "acc") (EApp (EApp (EApp (EVar "keepBetter") (EVar "c")) (EVar "d")) (EVar "acc"))))))
 (DTypeSig false "startsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "startsUpper" ((PVar "s")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EBinOp ">=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "A")))) (EBinOp "<=" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (ELit (LString "Z")))))
-(DTypeSig false "sameCaseClass" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "sameCaseClass" ((PVar "a") (PVar "b")) (EBinOp "==" (EApp (EVar "startsUpper") (EVar "a")) (EApp (EVar "startsUpper") (EVar "b"))))
-(DTypeSig false "bestCandidate" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "bestCandidate" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "bestCandidate" ((PVar "n") (PVar "lim") (PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EIf (EBinOp "==" (EVar "c") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "sameCaseClass") (EVar "n")) (EVar "c"))) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EBinOp ">" (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c")) (EVar "lim")) (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "bestCandidate") (EVar "n")) (EVar "lim")) (EVar "cs")) (EApp (EApp (EApp (EVar "keepBetter") (EVar "c")) (EApp (EApp (EVar "editDistance") (EVar "n")) (EVar "c"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "keepBetter" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "None")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))))
 (DFunDef false "keepBetter" ((PVar "c") (PVar "d") (PCon "Some" (PTuple (PVar "bc") (PVar "bd")))) (EIf (EBinOp "<" (EVar "d") (EVar "bd")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "d") (EVar "bd")) (EBinOp "<" (EVar "c") (EVar "bc"))) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "d"))) (EIf (EVar "otherwise") (EApp (EVar "Some") (ETuple (EVar "bc") (EVar "bd"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -4413,7 +4654,7 @@ stampBindingIds decls =
 (DFunDef false "hasFoldable" ((PCons (PRec "DInterface" ((rf "name" (PLit (LString "Foldable")))) true) PWild)) (EVar "True"))
 (DFunDef false "hasFoldable" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasFoldable") (EVar "rest")))
 (DTypeSig false "buildEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))
-(DFunDef false "buildEnv" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "imported") (EApp (EVar "importedNames") (EVar "prog"))) (DoExpr (ERecordCreate "Env" ((fa "values" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (fa "types" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (fa "ctors" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog")))) (EVar "omEmpty"))) (fa "fields" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "fieldOwners" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "interfaces" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "uIfaces")))) (fa "ifaceMethods" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces"))) (fa "effects" (EApp (EVar "effectNames") (EVar "prog"))) (fa "imported" (EApp (EApp (EVar "omFromNames") (EVar "imported")) (EVar "omEmpty"))) (fa "importedModuleValues" (EListLit)) (fa "ambiguous" (EListLit)) (fa "ctorAmbiguous" (EListLit)) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))))))))
+(DFunDef false "buildEnv" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "imported") (EApp (EVar "importedNames") (EVar "prog"))) (DoLet false false (PVar "valuesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (DoLet false false (PVar "typesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EVar "imported"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorsM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog")))) (EVar "omEmpty"))) (DoLet false false (PVar "importedM") (EApp (EApp (EVar "omFromNames") (EVar "imported")) (EVar "omEmpty"))) (DoExpr (ERecordCreate "Env" ((fa "values" (EVar "valuesM")) (fa "types" (EVar "typesM")) (fa "ctors" (EVar "ctorsM")) (fa "fields" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "fieldOwners" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))))) (fa "interfaces" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "uIfaces")))) (fa "ifaceMethods" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces"))) (fa "effects" (EApp (EVar "effectNames") (EVar "prog"))) (fa "imported" (EVar "importedM")) (fa "importedModuleValues" (EListLit)) (fa "ambiguous" (EListLit)) (fa "ctorAmbiguous" (EListLit)) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))) (fa "sugValues" (EApp (EVar "sugPoolOf") (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EVar "valuesM")) (EApp (EVar "omKeys") (EVar "ctorsM"))) (EApp (EVar "omKeys") (EVar "importedM"))))) (fa "sugTypes" (EApp (EVar "sugPoolOf") (EBinOp "++" (EApp (EVar "omKeys") (EVar "typesM")) (EApp (EVar "omKeys") (EVar "importedM"))))))))))
 (DTypeSig false "whenL" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "whenL" ((PCon "True") (PVar "xs")) (EVar "xs"))
 (DFunDef false "whenL" ((PCon "False") PWild) (EListLit))
@@ -4758,7 +4999,7 @@ stampBindingIds decls =
 (DTypeSig false "oneImportEffects" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "oneImportEffects" ((PVar "known") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModId") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "findExports") (EVar "mid")) (EVar "known")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exp")) () (EFieldAccess (EVar "exp") "expEffects")))))))
 (DTypeSig false "buildEnvMM" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "Env") (TyApp (TyCon "List") (TyCon "ResError")))))))))
-(DFunDef false "buildEnvMM" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "known") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "adds") (EApp (EApp (EVar "collectImports") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "baseIfaces") (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "uIfaces"))) (EFieldAccess (EVar "adds") "iaIfaces"))) (DoLet false false (PVar "impIfaceMethods") (EApp (EApp (EApp (EVar "importedIfaceMethods") (EVar "known")) (EVar "prog")) (EVar "baseIfaces"))) (DoLet false false (PVar "impEffects") (EApp (EApp (EVar "importedEffects") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "impModValues") (EApp (EApp (EVar "importedModuleValueSets") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "env") (ERecordCreate "Env" ((fa "values" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaValues"))) (EVar "omEmpty"))) (fa "types" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaTypes"))) (EVar "omEmpty"))) (fa "ctors" (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaCtors"))) (EVar "omEmpty"))) (fa "fields" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "fieldOwners" (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners"))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "interfaces" (EVar "baseIfaces")) (fa "ifaceMethods" (EBinOp "++" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces")) (EVar "impIfaceMethods"))) (fa "effects" (EBinOp "++" (EApp (EVar "effectNames") (EVar "prog")) (EVar "impEffects"))) (fa "imported" (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "adds") "iaImported")) (EVar "omEmpty"))) (fa "importedModuleValues" (EVar "impModValues")) (fa "ambiguous" (EApp (EApp (EVar "ambiguousSet") (EVar "known")) (EVar "prog"))) (fa "ctorAmbiguous" (EApp (EApp (EVar "ctorAmbiguousSet") (EVar "known")) (EVar "prog"))) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty")))))) (DoExpr (ETuple (EVar "env") (EFieldAccess (EVar "adds") "iaErrors")))))
+(DFunDef false "buildEnvMM" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "known") (PVar "prog") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "not") (EApp (EVar "programIsCore") (EVar "prog")))) (DoLet false false (PVar "pTypes") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "dataRecordNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pCtors") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "ctorNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pIfaces") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (DoLet false false (PVar "pValues") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "preludeValueNames") (EVar "preludeDecls")))) (DoLet false false (PVar "pFieldOwners") (EApp (EApp (EVar "whenL") (EVar "seed")) (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls")))) (DoLet false false (PVar "uIfaces") (EApp (EVar "interfaceList") (EVar "prog"))) (DoLet false false (PVar "adds") (EApp (EApp (EVar "collectImports") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "baseIfaces") (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pIfaces")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "uIfaces"))) (EFieldAccess (EVar "adds") "iaIfaces"))) (DoLet false false (PVar "impIfaceMethods") (EApp (EApp (EApp (EVar "importedIfaceMethods") (EVar "known")) (EVar "prog")) (EVar "baseIfaces"))) (DoLet false false (PVar "impEffects") (EApp (EApp (EVar "importedEffects") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "impModValues") (EApp (EApp (EVar "importedModuleValueSets") (EVar "known")) (EVar "prog"))) (DoLet false false (PVar "valuesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "externNames") (EVar "runtimeDecls")) (EVar "pValues")) (EApp (EVar "userValueNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaValues"))) (EVar "omEmpty"))) (DoLet false false (PVar "typesM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveTypes") (EVar "pTypes")) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaTypes"))) (EVar "omEmpty"))) (DoLet false false (PVar "ctorsM") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "primitiveConstructors") (EVar "pCtors")) (EApp (EVar "ctorNames") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaCtors"))) (EVar "omEmpty"))) (DoLet false false (PVar "importedM") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EVar "adds") "iaImported")) (EVar "omEmpty"))) (DoLet false false (PVar "env") (ERecordCreate "Env" ((fa "values" (EVar "valuesM")) (fa "types" (EVar "typesM")) (fa "ctors" (EVar "ctorsM")) (fa "fields" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pFieldOwners")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "fieldOwnersOf") (EVar "prog")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "fieldOwners" (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners"))) (fa "fieldOwnersIdx" (EApp (EVar "buildFieldOwnerIndex") (EBinOp "++" (EBinOp "++" (EVar "pFieldOwners") (EApp (EVar "fieldOwnersOf") (EVar "prog"))) (EFieldAccess (EVar "adds") "iaFieldOwners")))) (fa "interfaces" (EVar "baseIfaces")) (fa "ifaceMethods" (EBinOp "++" (EBinOp "++" (EVar "pIfaces") (EVar "uIfaces")) (EVar "impIfaceMethods"))) (fa "effects" (EBinOp "++" (EApp (EVar "effectNames") (EVar "prog")) (EVar "impEffects"))) (fa "imported" (EVar "importedM")) (fa "importedModuleValues" (EVar "impModValues")) (fa "ambiguous" (EApp (EApp (EVar "ambiguousSet") (EVar "known")) (EVar "prog"))) (fa "ctorAmbiguous" (EApp (EApp (EVar "ctorAmbiguousSet") (EVar "known")) (EVar "prog"))) (fa "internalGuard" (EApp (EApp (EVar "omFromNames") (EVar "internalGuard")) (EVar "omEmpty"))) (fa "sugValues" (EApp (EVar "sugPoolOf") (EBinOp "++" (EBinOp "++" (EApp (EVar "omKeys") (EVar "valuesM")) (EApp (EVar "omKeys") (EVar "ctorsM"))) (EApp (EVar "omKeys") (EVar "importedM"))))) (fa "sugTypes" (EApp (EVar "sugPoolOf") (EBinOp "++" (EApp (EVar "omKeys") (EVar "typesM")) (EApp (EVar "omKeys") (EVar "importedM")))))))) (DoExpr (ETuple (EVar "env") (EFieldAccess (EVar "adds") "iaErrors")))))
 (DTypeSig false "importedModuleValueSets" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "importedModuleValueSets" ((PVar "known") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "oneImportedModuleValues") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))
 (DTypeSig false "oneImportedModuleValues" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))

@@ -3,14 +3,19 @@ addProvenance : Map String (List String) -> String -> String -> Map String (List
 ambigModPhrase : List String -> String
 ambigMods : Env -> String -> List String
 ambiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
-bestCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
-bestOf : String -> Int -> List String -> Option String
+bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
+bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
+bestOfNames : SugQuery -> List String -> Option String
+bestOfPool : SugQuery -> List SugCand -> Option String
+bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
 buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
+charMask : Int -> String -> Int
+charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
 checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
@@ -237,11 +242,12 @@ resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
 resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List ResError
 resolveToLines : List Decl -> List Decl -> List Decl -> String
 rewriteNonRec : List String -> ResError -> ResError
-sameCaseClass : String -> String -> Bool
+sameCase : Bool -> Bool -> Bool
 scopeAdd : String -> Scope -> Scope
 scopeExtend : List String -> Scope -> Scope
 scopeMem : String -> Scope -> Bool
 scopeNames : Scope -> List String
+scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
 selfBinding : String -> (String, String)
 singleFileImportErrors : List Decl -> List ResError
 stampArm : List BScope -> Arm -> Arm
@@ -264,6 +270,11 @@ stampStmts : List BScope -> List DoStmt -> List DoStmt
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
+sugCandOf : String -> SugCand
+sugPoolOf : List String -> List SugCand
+sugQueryOf : String -> SugQuery
+sugRejects : SugQuery -> String -> Int -> Int -> Int -> Int -> Bool -> Bool
+sugRejectsName : SugQuery -> String -> Int -> Bool -> Bool
 suggestCtor : String -> Option String
 suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String
