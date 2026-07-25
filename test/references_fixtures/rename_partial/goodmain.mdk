@@ -1,0 +1,6 @@
+-- module `goodmain` — the file the transcript clicks in.  It parses; the
+-- sibling `brokensib.mdk` does not.
+import gooddefs.{gval, untouched}
+
+export goodSum : Int
+goodSum = gval + untouched

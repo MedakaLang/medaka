@@ -1,0 +1,14 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 33, "col": 0, "newName": "match"}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 33, "col": 0, "newName": "_"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 22, "col": 2, "newName": "capTop"}}}
+{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 22, "col": 13, "newName": "capLocal"}}}
+{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 33, "col": 0, "newName": "sortBy"}}}
+{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 30, "col": 2, "newName": "shTotal"}}}
+{"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/scopes.mdk", "line": 33, "col": 0, "newName": "plainValZ"}}}
+{"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/recshapes.mdk", "line": 22, "col": 2, "newName": "rgoZ"}}}
+{"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/recshapes.mdk", "line": 27, "col": 21, "newName": "rcountZ"}}}
+{"jsonrpc": "2.0", "id": 11, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/ifshadow.mdk", "line": 20, "col": 10, "newName": "shdwMineZ"}}}
+{"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename_scopes/alias_lib.mdk", "line": 3, "col": 7, "newName": "aliasZoo"}}}
+{"jsonrpc": "2.0", "id": 13, "method": "shutdown", "params": {}}

@@ -1,0 +1,11 @@
+-- module `gooddefs` — the F2 PARTIAL-GRAPH corpus for the rename gate
+-- (`partial.jsonl`).  `gval` is also referenced by `brokensib.mdk`, which does
+-- NOT parse; `untouched` is referenced only from files that do.  That contrast
+-- is the whole fixture: the first must refuse, the second must still succeed.
+-- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
+-- header exactly 6 lines.
+export gval : Int
+gval = 7
+
+export untouched : Int
+untouched = 3

@@ -68,7 +68,8 @@ import frontend.parser.{
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import support.char.{isIdentChar, isDigit, isLower, isUpper, isIdentStart}
-import support.util.{maxI, utf8Len, joinWith, splitOnChar}
+import support.util.{maxI, utf8Len, joinWith, splitOnChar, startsWith, endsWith}
+import support.path.{joinPath}
 import io.{stripCR}
 import frontend.desugar.{desugar, mapProg}
 import types.typecheck.{
@@ -120,6 +121,10 @@ import frontend.ast.{
   UseGroup,
   UseWild,
   UseAlias,
+  -- F3(b) import-scope capture (arm 3): the name a selective-import member
+  -- binds LOCALLY is its alias when it has one, so `import m.{f as g}` must be
+  -- read as binding `g`, not `f`.
+  useMemberLocal,
   -- #963 pun expansion (`punFieldsOfDecls` below) — the pattern side needs the
   -- pattern constructors, the expression side the pattern-HOSTING expression
   -- constructors.
@@ -1825,18 +1830,32 @@ includeDeclarationOf params = match lookup "context" params
 --       carries no project def site), so the symbol is defined outside the
 --       project (stdlib/prelude): REFUSE. `buildRefIndexProject` only indexes
 --       files under the project root, so every `defsOf` uri is in-project.
---   (b) capture/shadow — `newName` already names a same-namespace binder anywhere
---       in the project (a coarse conservative scan of `allDefKeys`) OR names a
---       PRELUDE binder (#966(b) — the prelude is seeded into the index WITHOUT
---       def entries, so `allDefKeys` alone never sees it and a rename onto
---       `length` silently shadowed it): REFUSE.
+--   (b) capture/shadow — `newName` is already taken IN AN AFFECTED SCOPE:
+--       a same-namespace binder anywhere in the project (a coarse conservative
+--       scan of `allDefKeys`), a PRELUDE binder (#966(b) — the prelude is seeded
+--       into the index WITHOUT def entries, so `allDefKeys` alone never sees it
+--       and a rename onto `length` silently shadowed it), ANY-namespace binder
+--       defined in a file this rename edits (the namespace-tag scan alone let a
+--       local capture a top-level name and change the program's answer), or a
+--       name an affected file IMPORTS (`import list.{sortBy}`): REFUSE.
 --       Over-refusal is acceptable (conservative spirit); silent capture is NOT.
 --   (c) illegal newName — `newName`'s LEXICAL CLASS must match the binder's
 --       namespace (#966(a)): a value/local/method/field binder needs a
 --       lowercase-initial identifier, a type/constructor needs an
 --       uppercase-initial one. Renaming a value to `Color` used to be accepted
 --       and the applied edit then failed to parse (`unexpected \`Color\``) —
---       a wrong edit, which this path exists to never emit.
+--       a wrong edit, which this path exists to never emit. `newName` must also
+--       LEX as an identifier: every reserved word is a lowercase identifier, so
+--       `foo` → `match` sailed through the case check (`newNameReserved`).
+--   (d) span verification — an emitted span that does not spell the old name
+--       (`renameEmitVerified`).
+--   (f) index ambiguity — a SECOND binder spelling the old name has an
+--       occurrence in an affected file, so the index's split of that name across
+--       keys is exactly what is in doubt (`renameIndexAmbiguous`; #951/#1003/
+--       #1056/#965a all take this shape).
+--   F2  partial graph — a project file that does not parse and mentions the old
+--       name has contributed NO occurrences, so the edit set is silently
+--       truncated (`renameBrokenProjectFile`).
 export renameResult : String -> String -> String -> String -> Json -> Docs -> <IO> Json
 renameResult runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params, renameNewName params)
   (Some line, Some col, Some newName) => match identifierAt src line col
@@ -1850,7 +1869,7 @@ renameResult runtimeSrc coreSrc uri src params docs = match (positionLine params
       -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
       match binderAt idx rootFile (line + 1) col
         None => renameRefusal "no renameable symbol at this position"
-        Some key => renameEditFor idx runtimeSrc coreSrc key newName docs
+        Some key => renameEditFor idx runtimeSrc coreSrc projectDir key newName docs
   _ => renameRefusal "rename requires a position and a newName"
 
 -- LSP `textDocument/rename` carries the target spelling in top-level
@@ -1878,28 +1897,57 @@ isRenameRefusal j = match lookup "refused" j
 -- clause head per impl (#1002): editing only one head left the others spelling the
 -- OLD name, which still COMPILES and silently changes runtime behaviour. That is
 -- the exact silent-wrongness this whole path exists to avoid.
-renameEditFor : RefIndex -> String -> String -> String -> String -> Docs -> <IO> Json
-renameEditFor idx runtimeSrc coreSrc key newName docs =
+renameEditFor : RefIndex -> String -> String -> String -> String -> String -> Docs -> <IO> Json
+renameEditFor idx runtimeSrc coreSrc projectDir key newName docs =
   if isExternalKey key then renameRefusal "cannot rename a symbol defined outside the project"
   else match defsOf idx key
     [] => renameRefusal "cannot rename a symbol defined outside the project"
-    defs => renameEditChecked idx runtimeSrc coreSrc key newName defs docs
+    defs => renameEditChecked idx runtimeSrc coreSrc projectDir key newName defs docs
 
 -- The symbol IS in-project and has def sites; now vet `newName` itself, then
--- emit. F3(c) (#966(a)) runs BEFORE the collision scan so an ill-formed or
--- wrong-case name is reported as such rather than as an incidental collision.
-renameEditChecked : RefIndex -> String -> String -> String -> String -> List (String, Loc) -> Docs -> <IO> Json
-renameEditChecked idx runtimeSrc coreSrc key newName defs docs = match newNameIllegal key newName
+-- the SCOPES the edit lands in, then the INDEX those scopes were derived from,
+-- and only then emit. F3(c) (#966(a)) runs BEFORE the collision scan so an
+-- ill-formed or wrong-case name is reported as such rather than as an incidental
+-- collision.
+--
+-- The edit set is built ONCE, up front, because three of the four checks below
+-- are questions about the FILES it touches ("any affected scope", F3(b)) rather
+-- than about the request:
+--   F3(b) capture — `newName` already visible in an affected file
+--   F3(f) index ambiguity — the index holds a SECOND binder spelling the OLD
+--         name in an affected file, so its occurrence split cannot be trusted
+--   F2    partial graph — some project file does not parse and mentions the old
+--         name, so its occurrences are missing from the index entirely
+renameEditChecked : RefIndex -> String -> String -> String -> String -> String -> List (String, Loc) -> Docs -> <IO> Json
+renameEditChecked idx runtimeSrc coreSrc projectDir key newName defs docs = match newNameIllegal key newName
   Some reason => renameRefusal reason
   None =>
-    if renameCollides idx runtimeSrc coreSrc key newName then
+    -- F6: EVERY def site is included, sorted IN with the uses (never a
+    -- duplicate — `recordDef` never pushes into `refs`, and `pushDef` refuses
+    -- a (uri, span) it already holds, refindex.mdk).
+    let all = sortBy compareUseLoc (defs ++ usesOf idx key)
+    let files = affectedPaths all
+    if renameCollides idx runtimeSrc coreSrc projectDir key newName files docs then
       renameRefusal (stringConcat ["renaming to `", newName, "` would collide with an existing binder"])
-    else
-      -- F6: EVERY def site is included, sorted IN with the uses (never a
-      -- duplicate — `recordDef` never pushes into `refs`, and `pushDef` refuses
-      -- a (uri, span) it already holds, refindex.mdk).
-      let all = defs ++ usesOf idx key
-      renameEmitVerified key newName (sortBy compareUseLoc all) docs
+    else match renameIndexAmbiguous idx key files
+      Some reason => renameRefusal reason
+      None => match renameBrokenProjectFile projectDir key docs
+        Some reason => renameRefusal reason
+        None => renameEmitVerified key newName all docs
+
+-- The DISTINCT files the edit set touches, in the sorted order `all` already
+-- carries — the "affected scope" of `REFERENCES-RENAME-DESIGN.md:368-370`,
+-- approximated at FILE granularity (the coarsest unit that is still sound:
+-- capture and shadowing are both intra-file phenomena once the importing file
+-- is itself in the set). `all` is sorted by path, so same-path entries are
+-- contiguous and `spanSamePath` yields each file exactly once.
+affectedPaths : List (String, Loc) -> List String
+affectedPaths [] = []
+affectedPaths ((p, _)::rest) = p :: affectedPaths (snd (spanSamePath p rest))
+
+pathIsIn : String -> List String -> Bool
+pathIsIn _ [] = False
+pathIsIn p (q::qs) = p == q || pathIsIn p qs
 
 -- F3(d) SPAN VERIFICATION — the last line of the "never a wrong edit" contract,
 -- and the only F3 arm that is not about the user's request at all: it audits the
@@ -2219,10 +2267,11 @@ keyNsName key = match splitOnChar keyTab key
   _::ns::name::_ => Some (ns, name)
   _ => None
 
--- F3(b) coarse conservative capture check: does `newName` already name a binder
--- in the SAME namespace anywhere in the project, or ANY binder the PRELUDE
--- declares? Over-refusal is acceptable (F3 spirit); a silent capture is not. An
--- unparseable key → refuse.
+-- F3(b) coarse conservative capture check: is `newName` already taken — by a
+-- same-namespace binder anywhere in the project, by ANY binder the PRELUDE
+-- declares, by ANY binder (any namespace) defined in a file this rename edits,
+-- or by a name an affected file IMPORTS? Over-refusal is acceptable (F3 spirit);
+-- a silent capture is not. An unparseable key → refuse.
 --
 -- ⚠️ THE PRELUDE ARM IS NOT REDUNDANT (#966(b)). `allDefKeys idx` is
 -- `hmKeys idx.defs`, and `refindex.mdk`'s `seedPrelude` deliberately seeds the
@@ -2240,12 +2289,41 @@ keyNsName key = match splitOnChar keyTab key
 -- an uppercase one only a prelude type/constructor. (The residual over-refusal —
 -- a value vs a record field of the same lowercase spelling — is the acceptable
 -- direction.)
-renameCollides : RefIndex -> String -> String -> String -> String -> Bool
-renameCollides idx runtimeSrc coreSrc key newName = match keyNsName key
+--
+-- ⚠️ THE SAME-NAMESPACE PROJECT SCAN IS NOT THE WHOLE CHECK EITHER (S0-1). It
+-- compares `ns2 == ns`, so a `local` key can never match a `val` key — the
+-- capture arm was blind in EXACTLY the direction capture happens. Renaming the
+-- local `x` of
+--
+--   top = 100
+--   f n = let x = n + 1
+--         x + top
+--
+-- to `top` was accepted, and the applied edit (`let top = n + 1` / `top + top`)
+-- still compiles and prints `4` instead of `102` — a silent wrong answer, the
+-- worst failure this path can produce. The design doc has always specified the
+-- right rule (`compiler/REFERENCES-RENAME-DESIGN.md:368-370`: refuse if
+-- `newName` would capture/shadow an existing binder **in any affected scope**);
+-- the `ns2 == ns` scan implemented a namespace tag instead of a scope.
+--
+-- The two arms below implement "visible in an affected scope", where the scope
+-- is approximated by the FILES the edit touches (`affectedPaths`):
+--   * `anyKeyNamedInFiles` — ANY namespace, any binder the index has a def site
+--     for in an affected file. Namespace-blind for the same reason the prelude
+--     arm can be: `newNameIllegal` has already pinned `newName`'s lexical class.
+--   * `anyImportBindsIn` — the names an affected file's IMPORTS bring into it.
+--     `allDefKeys` cannot see these for the same structural reason it could not
+--     see the prelude (an imported name has no def entry in the importing
+--     module), so `import list.{sortBy}` + rename-a-value-to-`sortBy` was
+--     accepted and shadowed the import: #966(b) unfixed one module over.
+renameCollides : RefIndex -> String -> String -> String -> String -> String -> List String -> Docs -> <IO> Bool
+renameCollides idx runtimeSrc coreSrc projectDir key newName files docs = match keyNsName key
   None => True
   Some (ns, _name) => anyDefKeyMatches (allDefKeys idx) ns newName
     || preludeDeclares coreSrc newName
     || preludeDeclares runtimeSrc newName
+    || anyKeyNamedInFiles idx (allDefKeys idx) newName files
+    || anyImportBindsIn newName projectDir files docs
 
 anyDefKeyMatches : List String -> String -> String -> Bool
 anyDefKeyMatches [] _ _ = False
@@ -2256,6 +2334,274 @@ anyDefKeyMatches (k::ks) ns newName = match keyNsName k
     else
       anyDefKeyMatches ks ns newName
   None => anyDefKeyMatches ks ns newName
+
+-- Any binder named `newName` — in ANY namespace — with a def site in one of the
+-- files this rename edits. O(total def sites), the same order as the index build
+-- the request already paid for.
+anyKeyNamedInFiles : RefIndex -> List String -> String -> List String -> Bool
+anyKeyNamedInFiles _ [] _ _ = False
+anyKeyNamedInFiles idx (k::ks) newName files = keyNameIs k newName && anyPathIn (defsOf idx k) files
+  || anyKeyNamedInFiles idx ks newName files
+
+keyNameIs : String -> String -> Bool
+keyNameIs k name = match keyNsName k
+  Some (_ns, n) => n == name
+  None => False
+
+anyPathIn : List (String, Loc) -> List String -> Bool
+anyPathIn [] _ = False
+anyPathIn ((p, _)::rest) files = pathIsIn p files || anyPathIn rest files
+
+-- Does any affected file's import list already bind `newName`? A selective
+-- member binds its ALIAS when it has one (`useMemberLocal`); a wildcard binds
+-- everything the imported module declares, which is answered by parsing that
+-- module exactly as the prelude arm parses `core`/`runtime`; a module ALIAS
+-- (`import m as D`) occupies the name `D`, so renaming onto it would shadow the
+-- qualifier. A BARE `import m` binds no names at all and is correctly ignored.
+anyImportBindsIn : String -> String -> List String -> Docs -> <IO> Bool
+anyImportBindsIn _ _ [] _ = False
+anyImportBindsIn newName projectDir (p::ps) docs = fileImportsBind newName projectDir p docs
+  || anyImportBindsIn newName projectDir ps docs
+
+fileImportsBind : String -> String -> String -> Docs -> <IO> Bool
+fileImportsBind newName projectDir p docs = match renameSrcOf p docs
+  None => False
+  Some src => match parseWithPositionsOpt src
+    None => False
+    Some (decls, _) => anyImportDeclBinds newName projectDir decls docs
+
+anyImportDeclBinds : String -> String -> List Decl -> Docs -> <IO> Bool
+anyImportDeclBinds _ _ [] _ = False
+anyImportDeclBinds newName projectDir (d::ds) docs = importDeclBinds newName projectDir (innerDecl d) docs
+  || anyImportDeclBinds newName projectDir ds docs
+
+importDeclBinds : String -> String -> Decl -> Docs -> <IO> Bool
+importDeclBinds newName projectDir (DUse _ path _) docs =
+  usePathBinds newName projectDir path docs
+importDeclBinds _ _ _ _ = False
+
+usePathBinds : String -> String -> UsePath -> Docs -> <IO> Bool
+usePathBinds newName _ (UseGroup _ members) _ =
+  anyName (map useMemberLocal members) newName
+usePathBinds newName projectDir (UseWild mods) docs = match importedModuleSrc projectDir mods docs
+  None => False
+  Some src => preludeDeclares src newName
+usePathBinds newName _ (UseAlias _ alias) _ = alias == newName
+usePathBinds _ _ (UseName _) _ = False
+
+-- The source of an imported module, looked up the two places a project's
+-- `import m.n` can resolve to: under the project root, then under `stdlib/`.
+-- Unreadable ⇒ `None`, which reads as "declares nothing" — best-effort in the
+-- F2 spirit, and the only direction available without duplicating the loader's
+-- `[dependencies]` multi-root resolution here.
+importedModuleSrc : String -> List String -> Docs -> <IO> Option String
+importedModuleSrc projectDir mods docs =
+  let rel = joinWith "/" mods ++ ".mdk"
+  match renameSrcOf (joinPath projectDir rel) docs
+    Some s => Some s
+    None => renameSrcOf (joinPath (lspMedakaRoot "." ++ "/stdlib") rel) docs
+
+-- ── F3(f) INDEX-AMBIGUITY REFUSE ────────────────────────────────────────────
+-- F3(d) (`renameEmitVerified`) audits the spans the index DID produce. This arm
+-- audits the ones it MIGHT HAVE DROPPED — the failure mode F3(d) is structurally
+-- blind to, because a missing occurrence has no span to verify.
+--
+-- ⚠️ THE CHEAP GATE PROPOSED IN REVIEW ("refuse whenever an edit span was
+-- recorded at the enclosing decl's `curLoc` rather than at a name token") DOES
+-- NOT WORK, and measuring the four open defects is what showed why:
+--   * it is not observable from outside `refindex.mdk`. A caller sees a `Loc`,
+--     not where it came from; the only observable proxy — "this span equals a
+--     top-level declaration's own name `Loc`" — is EXACTLY what a legitimate
+--     top-level definition looks like, so the gate cannot fire without refusing
+--     every `val` rename;
+--   * of the four defects it was proposed to cover, only #965(a) even has a
+--     mis-placed span. Dumped indexes for the other three (see below) show the
+--     occurrence is not misplaced but ABSENT from the clicked key, so no
+--     span-shaped check of any kind can see it.
+--
+-- What the same dumps DO show is one signature common to all four: a SECOND
+-- binder spelling the old name, with an occurrence in a file this rename edits.
+--   #951  `let rec countDown` — `main|local|countDown|1` and `main|val|countDown`
+--         BOTH have a def at 1:8; the recursive call is a use of the first, the
+--         external call a use of the second. Clicking either edits half.
+--   #1003 self-recursive local `go` under an outer `go` — the recursive call is
+--         recorded as a use of `main|val|go`, so it survives the rename and
+--         REBINDS to the outer definition: `10` becomes `104`, silently.
+--   #1056 imported interface shadowing a local one — the impl head lands on the
+--         phantom key `a|method|mlocal` while the click resolves to
+--         `main2|method|mlocal`; the head is dropped from the edit.
+--   #965a alias-qualified `D.bar` under a re-export wrapper also called `bar` —
+--         the use is filed at the wrapper's own decl name, which is
+--         `main|val|bar`'s DEF site.
+-- So: if any OTHER binder named `oldName` has a def or use in an affected file,
+-- the index's split of that name across keys is precisely what is in doubt, and
+-- the honest answer is to refuse.
+--
+-- TWO PAIRINGS ARE EXCLUDED, both measured against the corpus rather than
+-- assumed — they are the reason this is not "refuse on any namesake":
+--   * local ↔ local — nested shadowed locals. `refindex` keys each with a fresh
+--     id and gets them RIGHT (the review verified this end-to-end); refusing
+--     would break a working rename, which is the worse regression.
+--   * anything ↔ field — a record field and a binder share a spelling BY DESIGN;
+--     that is what a pun IS. `test/references_fixtures/rename/pdefs.mdk` has
+--     `pdefs|field|girth` sitting in the same file as the three `pdefs|local|
+--     girth|…` binders the #963 transcript renames, so without this exclusion
+--     F3(e) pun expansion could never be reached.
+renameIndexAmbiguous : RefIndex -> String -> List String -> Option String
+renameIndexAmbiguous idx key files = match keyNsName key
+  None => Some "cannot determine the kind of the symbol being renamed"
+  Some (ns, name) =>
+    let cands = allDefKeys idx ++ extNamesakeKeys name
+    map
+      (f => stringConcat [
+        "the reference index holds a second binder also named `",
+        name,
+        "` with an occurrence in `",
+        f,
+        "`, so the occurrences of this one cannot be told apart from that one's — refusing rather than emit an edit set that may be incomplete; disambiguate the two names first, or edit by hand",
+      ])
+      (firstAmbiguousFile idx key ns name cands files)
+
+-- Iteration is over the FILES (already sorted by `compareUseLoc`), not over
+-- `allDefKeys` — `hmKeys` order is a hash-table detail, and a refusal message
+-- that named a key-order-dependent file would differ across runners (#912).
+firstAmbiguousFile : RefIndex -> String -> String -> String -> List String -> List String -> Option String
+firstAmbiguousFile _ _ _ _ _ [] = None
+firstAmbiguousFile idx key ns name cands (f::fs)
+  | anyNamesakeInFile idx key ns name cands f = Some f
+  | otherwise = firstAmbiguousFile idx key ns name cands fs
+
+anyNamesakeInFile : RefIndex -> String -> String -> String -> List String -> String -> Bool
+anyNamesakeInFile _ _ _ _ [] _ = False
+anyNamesakeInFile idx key ns name (k::ks) f = namesakeHitsFile idx key ns name k f
+  || anyNamesakeInFile idx key ns name ks f
+
+namesakeHitsFile : RefIndex -> String -> String -> String -> String -> String -> Bool
+namesakeHitsFile idx key ns name k f
+  | k == key = False
+  | otherwise = match keyNsName k
+    None => False
+    Some (ns2, n2) => n2 == name
+      && !(benignNamesake ns ns2)
+      && anyPathIn (defsOf idx k ++ usesOf idx k) [f]
+
+-- The namesake pairings that are NOT evidence of an index defect — see the
+-- block comment above `renameIndexAmbiguous` for why each is safe.
+benignNamesake : String -> String -> Bool
+benignNamesake "field" _ = True
+benignNamesake _ "field" = True
+benignNamesake "local" "local" = True
+benignNamesake _ _ = False
+
+-- An occurrence `refindex` could not resolve to any project binder is recorded
+-- under `extKey ns name` = `"?ext\t<ns>\t<name>"` (refindex.mdk), a key with no
+-- def entry — so `allDefKeys` cannot see it, exactly as it could not see the
+-- prelude (#966(b)). It is the shape a self-recursive local takes with NO outer
+-- namesake (#1003's own reproducer): the recursive call resolves to nothing at
+-- all, and the rename drops it. Synthesizing the six keys costs six hash lookups.
+extNamesakeKeys : String -> List String
+extNamesakeKeys name = map
+  (ns => joinWith "\t" ["?ext", ns, name])
+  ["val", "local", "method", "ty", "ctor", "iface"]
+
+-- ── F2 PARTIAL-GRAPH REFUSE ─────────────────────────────────────────────────
+-- `REFERENCES-RENAME-DESIGN.md:362-367`: "a rename computed over a partial graph
+-- can miss a use → silent corruption." `refindex`'s `indexModule` no-ops a file
+-- that fails to parse — correct for `references` (best-effort listing) and
+-- CORRUPTING for rename, which hands the caller an edit set it will apply
+-- wholesale. Measured: a sibling with a trailing `zzz = (` returned a clean,
+-- `isError:false`, 4-edit success with that file's THREE occurrences (its
+-- `import gdefs.{gval}` clause and both uses) silently dropped.
+--
+-- REFUSE rather than mark `partial: true`. `textDocument/rename` returns a
+-- `WorkspaceEdit` and every editor applies it wholesale — the protocol has no
+-- slot for "this is only most of the rename", so a partial marker would be
+-- ignored by exactly the client most likely to act on it. And a partial rename
+-- is not a partial success: it is a program that no longer compiles (or, with a
+-- namesake in scope, one that compiles and does something else). Naming the
+-- broken file is the actionable answer, and it is one the user can act on.
+--
+-- SCOPED TO FILES THAT MENTION THE OLD NAME. A broken file with no token
+-- spelling `oldName` cannot be hiding an occurrence of it, so refusing on it
+-- would be pure over-refusal — one unrelated broken scratch file would block
+-- every rename in the project. The lexical pre-filter also bounds the cost: a
+-- lex per project file, a parse only for the few that mention the name.
+renameBrokenProjectFile : String -> String -> Docs -> <IO> Option String
+renameBrokenProjectFile projectDir key docs = match keyNsName key
+  None => None
+  Some (_ns, name) => map (p => stringConcat [
+    "`",
+    p,
+    "` is under the project root, mentions `",
+    name,
+    "`, and does not parse — its occurrences are missing from the reference index, so this rename would silently skip them; fix that file's parse error first",
+  ]) (firstBrokenMentioning name (projectMdkFiles projectDir) docs)
+
+firstBrokenMentioning : String -> List String -> Docs -> <IO> Option String
+firstBrokenMentioning _ [] _ = None
+firstBrokenMentioning name (p::ps) docs =
+  if brokenAndMentions name p docs then
+    Some p
+  else
+    firstBrokenMentioning name ps docs
+
+brokenAndMentions : String -> String -> Docs -> <IO> Bool
+brokenAndMentions name p docs = match renameSrcOf p docs
+  None => False
+  Some src => srcMentionsName name src && srcFailsToParse src
+
+srcFailsToParse : String -> Bool
+srcFailsToParse src = match parseWithPositionsOpt src
+  None => True
+  Some _ => False
+
+-- Token-level, not substring: `gvalue` must not read as a mention of `gval`.
+-- The lexer still runs on a file the PARSER rejects, which is exactly the file
+-- this question is asked about.
+srcMentionsName : String -> String -> Bool
+srcMentionsName name src = anyNameTok name (fst (tokenizeWithOffsetPairs src))
+
+anyNameTok : String -> List Token -> Bool
+anyNameTok _ [] = False
+anyNameTok name (t::ts) = tokSpells t name || anyNameTok name ts
+
+tokSpells : Token -> String -> Bool
+tokSpells (TIdent n) name = n == name
+tokSpells (TUpper n) name = n == name
+tokSpells _ _ = False
+
+-- Every `.mdk` under the project root, sorted. Sorted because the refusal above
+-- names the FIRST broken file and `listDir` order is a filesystem detail that
+-- differs across machines (#912). Dot-entries are skipped (`.git`); an
+-- unlistable directory contributes nothing rather than aborting the walk.
+projectMdkFiles : String -> <IO> List String
+projectMdkFiles root =
+  let acc = Ref []
+  let _ = collectMdkUnder acc root
+  sortBy compare acc.value
+
+collectMdkUnder : Ref (List String) -> String -> <IO> Unit
+collectMdkUnder acc dir = match listDir dir
+  Err _ => ()
+  Ok entries => collectMdkEntries acc dir entries
+
+collectMdkEntries : Ref (List String) -> String -> List String -> <IO> Unit
+collectMdkEntries _ _ [] = ()
+collectMdkEntries acc dir (n::rest) =
+  let _ = collectMdkEntry acc dir n
+  collectMdkEntries acc dir rest
+
+collectMdkEntry : Ref (List String) -> String -> String -> <IO> Unit
+collectMdkEntry acc dir n
+  | startsWith "." n = ()
+  | otherwise = collectMdkPath acc (joinPath dir n) n
+
+-- `listDir` on an entry doubles as the dir/file discriminator: `Ok` = directory
+-- (recurse), `Err` = a file (or unreadable — either way, no recursion).
+collectMdkPath : Ref (List String) -> String -> String -> <IO> Unit
+collectMdkPath acc full n = match listDir full
+  Ok _ => collectMdkUnder acc full
+  Err _ => if endsWith ".mdk" n then acc := full::acc.value else ()
 
 -- Does prelude source `src` declare `name` at top level (own name or child name:
 -- variant ctor, record field, interface/impl method, let-bind)? Reuses the same
@@ -2277,10 +2623,12 @@ anyDeclDeclares (d::ds) name = declOwnNameMatches d name
 -- F3(c) (#966(a)): is `newName` unusable for a binder in `key`'s namespace?
 -- `Some reason` ⇒ REFUSE with that reason; `None` ⇒ lexically fine.
 --
--- Two independent ways a newName breaks the applied edit, both previously
--- unchecked:
+-- Three independent ways a newName breaks the applied edit:
 --   * it is not an identifier at all (empty, leading digit, embedded space/
 --     punctuation) — the edited file no longer lexes;
+--   * the LEXER does not read it as an identifier even though every character
+--     is an identifier character — i.e. it is a RESERVED WORD, or `_`. See
+--     `newNameReserved`;
 --   * its CASE contradicts the namespace. Medaka's lexical convention is load-
 --     bearing, not cosmetic: an uppercase leading letter IS a constructor/type
 --     token, so `alpha` → `Color` produced a value binding `Color = …` and the
@@ -2295,6 +2643,14 @@ newNameIllegal key newName = match keyNsName key
     Some c =>
       if !(isIdentStart c) || !(allIdentChars newName) then
         Some (stringConcat ["`", newName, "` is not a legal Medaka identifier"])
+      else if newNameReserved newName then
+        Some (stringConcat [
+          "`",
+          newName,
+          "` is reserved by the language (a keyword, or `_`) and cannot name a ",
+          nsNoun ns,
+          " — choose a different name",
+        ])
       else if uppercaseNs ns then
         if isUpper c then None else Some (stringConcat [
           "`",
@@ -2345,6 +2701,45 @@ firstChar : String -> Option Char
 firstChar s =
   let arr = stringToChars s
   if arrayLength arr == 0 then None else Some (arrayGetUnsafe 0 arr)
+
+-- Is `newName` something the LEXER refuses to read as a plain identifier, even
+-- though every one of its characters is an identifier character? That is the
+-- reserved words (`match`, `where`, `let`, `data`, `True`, …) and `_`.
+--
+-- ⚠️ DERIVED FROM THE LEXER, NEVER A COPIED LIST. `#966(a)` fixed the INSTANCE
+-- "an uppercase name is illegal for a value"; the PROPERTY is "`newName` must be
+-- a legal identifier in that namespace", and every keyword in
+-- `frontend/lexer.mdk`'s `keywordOrIdent` table is a lowercase identifier that
+-- sailed straight through the `isIdentStart`/`allIdentChars`/case checks —
+-- `foo` → `match` was accepted and the applied edit produced ``unexpected
+-- `match` ``, character for character the failure #966(a) exists to prevent. A
+-- hand-copied keyword list would re-create the same instance-not-property error
+-- one dimension over AND rot the next time a keyword is added, so this asks the
+-- real tokenizer: a name is usable iff it lexes to exactly ONE identifier token
+-- spelling itself. `keywordOrIdent` is the lexer's own dispatcher and needs no
+-- export for this — running the tokenizer over the candidate consults it.
+newNameReserved : String -> Bool
+newNameReserved s = match significantToks s
+  [TIdent n] => n != s
+  [TUpper n] => n != s
+  _ => True
+
+-- The token stream minus the layout heralds the lexer wraps every source in.
+significantToks : String -> List Token
+significantToks s = dropLayoutToks (fst (tokenizeWithOffsetPairs s))
+
+dropLayoutToks : List Token -> List Token
+dropLayoutToks [] = []
+dropLayoutToks (t::ts)
+  | isLayoutTok t = dropLayoutToks ts
+  | otherwise = t :: dropLayoutToks ts
+
+isLayoutTok : Token -> Bool
+isLayoutTok TNewline = True
+isLayoutTok TIndent = True
+isLayoutTok TDedent = True
+isLayoutTok TEof = True
+isLayoutTok _ = False
 
 -- Group the sorted (path, Loc) edits by uri into a `WorkspaceEdit { changes }`.
 -- Sorted by path first (compareUseLoc), so same-path entries are contiguous —

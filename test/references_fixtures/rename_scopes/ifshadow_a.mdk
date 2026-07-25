@@ -1,0 +1,4 @@
+-- module `ifshadow_a` — the IMPORTED interface that shadows `ifshadow`'s own
+-- same-named one (#1056).  Its only job is to exist and be imported.
+export interface Shdw a where
+  shdwOther : a -> Int

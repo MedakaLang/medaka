@@ -142,6 +142,108 @@
 # All three edit sets above were applied by hand and the resulting module both
 # checks and evaluates to the SAME value as before the rename (50).
 #
+# WHAT scopes.jsonl PROVES — F3(b) AFFECTED SCOPE + F3(f) INDEX AMBIGUITY
+# ---------------------------------------------------------------------------
+# ⚠️ THIS TRANSCRIPT'S FIXTURES LIVE IN A SIBLING DIRECTORY,
+# test/references_fixtures/rename_scopes/, NOT beside this file. That is
+# deliberate and load-bearing: rename resolves its project root by walking up
+# from the CLICKED file, so every `.mdk` next to a fixture is inside that
+# fixture's project — dropping these modules into rename/ would have put their
+# binders (and, for partial.jsonl below, a file that does not parse) into the
+# project index of every transcript above. A sibling directory keeps each
+# corpus's index its own. The gate still loops over rename/*.jsonl; only the
+# `.mdk` corpora are split.
+#
+# Each request below emitted a WRONG EDIT before this change — reproduced by
+# driving `medaka mcp`, APPLYING the WorkspaceEdit, and re-running.
+#
+#   Q1/Q2 (id 2,3): rename `plainVal` (scopes.mdk 33:0) to `match`, then to `_`.
+#     F3(c) RESERVED-WORD REFUSE. Every keyword in `frontend/lexer.mdk`'s
+#     `keywordOrIdent` table is a lowercase identifier, so all 32 passed the
+#     `isIdentStart`/`allIdentChars`/case checks #966(a) added: the applied edit
+#     produced ``unexpected `match` ``. `newNameReserved` (lsp.mdk) asks the real
+#     tokenizer instead of a copied list, so a keyword added to the lexer is
+#     covered here the day it lands.
+#
+#   Q3 (id 4): rename the LOCAL `capLocal` (via its use, 22:2) to `capTop`, a
+#     TOP-LEVEL value in the same file. F3(b) CROSS-NAMESPACE CAPTURE REFUSE.
+#     `anyDefKeyMatches` compared namespace TAGS (`ns2 == ns`), so a `local` key
+#     could never match a `val` key — the capture arm was blind in exactly the
+#     direction capture happens. Applied, this module still `check`ed clean and
+#     printed a DIFFERENT ANSWER (102 -> 4 on the review's reproducer).
+#
+#   Q4 (id 5): the INVERSE — rename the TOP-LEVEL `capTop` (via its use, 22:13)
+#     to `capLocal`, a local in the same file. Must refuse too; a fix that only
+#     looked one way would pass Q3 and fail here.
+#
+#   Q5 (id 6): rename `plainVal` to `sortBy`, a name the file IMPORTS
+#     (`import list.{sortBy}`). F3(b) IMPORT-SCOPE REFUSE — the scan saw
+#     `allDefKeys` plus the prelude and never the names an import binds, so this
+#     was #966(b) unfixed one module over.
+#
+#   Q6 (id 7): rename the OUTER `shOuter` (31:2) of a shadowed pair to
+#     `shTotal`. POSITIVE CONTROL for Q3/Q4 and for Q8-Q11: nested shadowed
+#     locals are keyed correctly by refindex and must still emit exactly two
+#     edits, leaving the inner `shOuter` (lines 29-30) alone. Without this case a
+#     "fix" that refused every local rename would pass.
+#
+#   Q7 (id 8): rename `plainVal` to `plainValZ`. The plain POSITIVE CONTROL —
+#     a legal, non-colliding, non-imported name still emits the full edit set.
+#
+#   Q8 (id 9): rename the SELF-RECURSIVE LOCAL `rgo` (recshapes.mdk 22:2, via
+#     its outer use) to `rgoZ`. F3(f) REFUSE, #1003. The recursive call
+#     `rgo (k - 1)` is recorded as a use of the TOP-LEVEL `rgo`, so the rename
+#     left it behind and it REBOUND to that definition: `check` rc=0, output
+#     10 -> 104. Silent.
+#
+#   Q9 (id 10): rename the top-level `let rec` binding `rcount` (27:21, via its
+#     external call) to `rcountZ`. F3(f) REFUSE, #951 — `recshapes|local|rcount|N`
+#     and `recshapes|val|rcount` hold a def at the SAME span and split the call
+#     sites between them, so either click edits half. Applied: `Unbound variable`.
+#
+#   Q10 (id 11): rename the interface method `shdwMine` (ifshadow.mdk 20:10) to
+#     `shdwMineZ`. F3(f) REFUSE, #1056 — an IMPORTED same-named interface wins
+#     over the module's own in refindex's env, so the impl clause head lands on a
+#     phantom key and is dropped. Applied: `Method 'shdwMine' is not part of
+#     interface 'Shdw'`.
+#
+#   Q11 (id 12): rename `aliasBar` (alias_lib.mdk 3:7) to `aliasZoo` while
+#     `alias_main.mdk` calls it as `D.aliasBar` from a wrapper of the SAME name.
+#     F3(f) REFUSE, #965(a) — the alias-qualified reference is filed at the
+#     enclosing decl's `curLoc`, which here really does spell `aliasBar`, so
+#     F3(d) span verification waves it through and the edit rewrote an UNRELATED
+#     binder's definition head.
+#
+# ⚠️ Q8-Q11 are why the review's proposed one-line gate ("refuse whenever an edit
+# span was recorded at the enclosing decl's `curLoc` rather than at a name
+# token") is NOT what landed: it is not observable from outside refindex (a
+# caller sees a `Loc`, not its provenance, and the only observable proxy — "the
+# span equals a decl's own name Loc" — is what every legitimate top-level def
+# looks like), and dumping the index for all four showed only #965(a) has a
+# misplaced span at all. The other three have a MISSING occurrence, which no
+# span-shaped check can see. See `renameIndexAmbiguous` (lsp.mdk) for the
+# signature all four DO share and for the two namesake pairings excluded from it.
+#
+# WHAT partial.jsonl PROVES (rename_partial/) — F2 PARTIAL GRAPH
+# ---------------------------------------------------------------------------
+#   Q12 (id 2): rename `gval` (goodmain.mdk 5:10) to `gvalZ` while the sibling
+#     `brokensib.mdk` does not parse. Must REFUSE and NAME that file.
+#     `refindex`'s `indexModule` no-ops an unparseable file, so its THREE `gval`
+#     occurrences (the `import gooddefs.{gval}` clause and both uses) were absent
+#     from the index and rename returned a clean `isError:false` success that
+#     silently dropped them — `REFERENCES-RENAME-DESIGN.md:362-367` calls this
+#     out by name. Refusal beats a `partial: true` marker because
+#     `textDocument/rename` returns a `WorkspaceEdit` that editors apply
+#     wholesale; the protocol has no slot a partial flag could occupy.
+#
+#   Q13 (id 3): rename `untouched` (goodmain.mdk 5:17) to `untouchedZ`. THE
+#     NEGATIVE CONTROL, and the reason F2 here is scoped to files that MENTION
+#     the old name: `brokensib.mdk` is still broken, but it contains no
+#     `untouched` token, so it cannot be hiding an occurrence and the complete
+#     4-edit set (sig + def + import clause + use) must still be emitted. Without
+#     this case, "refuse whenever any project file is broken" would pass — and
+#     one unparseable scratch file would block every rename in the project.
+#
 # All (line, col) pairs were hand-derived from the fixture source by counting
 # characters (0-based, LSP-style) — re-derive the same way if the fixtures
 # change. To regenerate the golden:

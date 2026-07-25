@@ -1,0 +1,5 @@
+-- module `alias_lib` — the definer side of the #965(a) alias-qualified shape.
+-- `alias_main` imports it as `D` and calls `D.aliasBar` from a wrapper of the
+-- SAME name, which is what makes the mis-filed reference survive F3(d).
+export aliasBar : Int -> Int
+aliasBar x = x + 1

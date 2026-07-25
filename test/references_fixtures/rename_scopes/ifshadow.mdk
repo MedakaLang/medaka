@@ -1,0 +1,21 @@
+-- module `ifshadow` — #1056: an IMPORTED interface shadows this module's OWN
+-- same-named one in `refindex`'s env (it runs `addOwnToEnv` before
+-- `processImports`, the inverse of `resolve.mdk`), so the impl clause head below
+-- lands under the phantom key `ifshadow_a|method|shdwMine` while a click on the
+-- call site resolves to `ifshadow|method|shdwMine`.  The head is DROPPED from
+-- the edit set: applying the old 2-edit "success" gave
+-- `Method 'shdwMine' is not part of interface 'Shdw'`.
+-- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
+-- header exactly 9 lines.
+import ifshadow_a.{Shdw}
+
+export interface Shdw b where
+  shdwMine : b -> Int
+
+public export data Pt = Pt
+
+impl Shdw Pt where
+  shdwMine Pt = 1
+
+export shdwUse : Int
+shdwUse = shdwMine Pt

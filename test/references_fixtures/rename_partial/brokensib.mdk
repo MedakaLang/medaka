@@ -1,0 +1,13 @@
+-- module `brokensib` — DELIBERATELY UNPARSEABLE (the trailing `zzz = (`).
+-- `refindex`'s `indexModule` no-ops a file that fails to parse, so this file's
+-- THREE `gval` occurrences — the import clause and both uses below — are absent
+-- from the index.  Rename used to return a clean `isError:false` success that
+-- silently dropped all three; F2 now refuses and names this file.
+-- It mentions `gval` and NOT `untouched`, which is what makes the positive
+-- control in `partial.jsonl` discriminating.
+import gooddefs.{gval}
+
+export brokenOther : Int
+brokenOther = gval + gval
+
+zzz = (
