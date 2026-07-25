@@ -300,24 +300,28 @@ dispyes5:
   br label %dispend3
 dispnext5:
   %t7 = icmp eq i64 %t1, 1329440703857575389
-  br i1 %t7, label %dispyes8, label %dispnext8
-dispyes8:
-  %t9 = inttoptr i64 %dict to ptr
-  %t10 = getelementptr i8, ptr %t9, i64 8
-  %t11 = load i64, ptr %t10
-  %t12 = call i64 @mdk_impl_Default__Box_a___def(i64 %t11)
-  store i64 %t12, ptr %t2
+  %t8 = icmp eq i64 %t1, 193452654
+  %t9 = or i1 %t7, %t8
+  br i1 %t9, label %dispyes10, label %dispnext10
+dispyes10:
+  %t11 = inttoptr i64 %dict to ptr
+  %t12 = getelementptr i8, ptr %t11, i64 8
+  %t13 = load i64, ptr %t12
+  %t14 = call i64 @mdk_impl_Default__Box_a___def(i64 %t13)
+  store i64 %t14, ptr %t2
   br label %dispend3
-dispnext8:
-  %t13 = icmp eq i64 %t1, -308483285326192921
-  br i1 %t13, label %dispyes14, label %dispnext14
-dispyes14:
-  %t15 = call i64 @mdk_force_$memo_Default__Box_Int___def()
-  store i64 %t15, ptr %t2
+dispnext10:
+  %t15 = icmp eq i64 %t1, -308483285326192921
+  %t16 = icmp eq i64 %t1, 193452654
+  %t17 = or i1 %t15, %t16
+  br i1 %t17, label %dispyes18, label %dispnext18
+dispyes18:
+  %t19 = call i64 @mdk_force_$memo_Default__Box_Int___def()
+  store i64 %t19, ptr %t2
   br label %dispend3
-dispnext14:
+dispnext18:
   unreachable
 dispend3:
-  %t16 = load i64, ptr %t2
-  ret i64 %t16
+  %t20 = load i64, ptr %t2
+  ret i64 %t20
 }

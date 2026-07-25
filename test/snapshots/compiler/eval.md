@@ -1,5 +1,5 @@
 # META
-source_lines=3494
+source_lines=3506
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1796,6 +1796,8 @@ buildIfaceDispatch : List Decl -> List ((String, String), List Int)
 buildIfaceDispatch prog = flatMap ifaceDispatchEntries prog
 
 ifaceDispatchEntries : Decl -> List ((String, String), List Int)
+-- #1037: an attribute on an `interface` must not delete its dispatch positions.
+ifaceDispatchEntries (DAttrib _ d) = ifaceDispatchEntries d
 ifaceDispatchEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (ifaceMethodEntry ifaceName typeParams) methods
 ifaceDispatchEntries _ = []
 
@@ -1861,6 +1863,14 @@ seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
 declImplEntries : EvalEnv (Value e) -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value e))
+-- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+-- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
+-- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
+-- contributed no VTypedImpl at all, so `speak Cat` silently answered from the
+-- interface DEFAULT (wrong value, exit 0).  Fixed in LOCKSTEP with
+-- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
+-- decl set and a fix to one is silently absent from the other (AGENTS.md).
+declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
 declImplEntries env disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (implMethodEntry env disp ifaceName typeArgs) methods
 declImplEntries env _ (DInterface { typarams = typeParams, methods, ... }) =
   flatMap (defaultEntry env typeParams) methods
@@ -1917,6 +1927,8 @@ export implMethodNames : List Decl -> List String
 implMethodNames prog = dedup (flatMap implDeclNames prog)
 
 implDeclNames : Decl -> List String
+-- #1037
+implDeclNames (DAttrib _ d) = implDeclNames d
 implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 implDeclNames (DInterface { methods, ... }) = flatMap defaultName methods
 implDeclNames _ = []
@@ -4251,6 +4263,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "buildIfaceDispatch" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "buildIfaceDispatch" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceDispatchEntries")) (EVar "prog")))
 (DTypeSig false "ifaceDispatchEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "ifaceDispatchEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceDispatchEntries") (EVar "d")))
 (DFunDef false "ifaceDispatchEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ifaceMethodEntry") (EVar "ifaceName")) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "ifaceDispatchEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceMethodEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))
@@ -4275,6 +4288,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "seqV" (TyFun (TyCon "Unit") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "seqV" (PWild (PVar "v")) (EVar "v"))
 (DTypeSig false "declImplEntries" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
+(DFunDef false "declImplEntries" ((PVar "env") (PVar "disp") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "declImplEntries") (EVar "env")) (EVar "disp")) (EVar "d")))
 (DFunDef false "declImplEntries" ((PVar "env") (PVar "disp") (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "implMethodEntry") (EVar "env")) (EVar "disp")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
 (DFunDef false "declImplEntries" ((PVar "env") PWild (PRec "DInterface" ((rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "defaultEntry") (EVar "env")) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "declImplEntries" (PWild PWild PWild) (EListLit))
@@ -4306,6 +4320,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "implMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "implMethodNames" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EVar "implDeclNames")) (EVar "prog"))))
 (DTypeSig false "implDeclNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "implDeclNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implDeclNames") (EVar "d")))
 (DFunDef false "implDeclNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "implDeclNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "defaultName")) (EVar "methods")))
 (DFunDef false "implDeclNames" (PWild) (EListLit))
@@ -5662,6 +5677,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "buildIfaceDispatch" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "buildIfaceDispatch" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceDispatchEntries")) (EVar "prog")))
 (DTypeSig false "ifaceDispatchEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "ifaceDispatchEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceDispatchEntries") (EVar "d")))
 (DFunDef false "ifaceDispatchEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ifaceMethodEntry") (EVar "ifaceName")) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "ifaceDispatchEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceMethodEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))
@@ -5686,6 +5702,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "seqV" (TyFun (TyCon "Unit") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "seqV" (PWild (PVar "v")) (EVar "v"))
 (DTypeSig false "declImplEntries" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
+(DFunDef false "declImplEntries" ((PVar "env") (PVar "disp") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "declImplEntries") (EVar "env")) (EVar "disp")) (EVar "d")))
 (DFunDef false "declImplEntries" ((PVar "env") (PVar "disp") (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "implMethodEntry") (EVar "env")) (EVar "disp")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
 (DFunDef false "declImplEntries" ((PVar "env") PWild (PRec "DInterface" ((rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "defaultEntry") (EVar "env")) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "declImplEntries" (PWild PWild PWild) (EListLit))
@@ -5717,6 +5734,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "implMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "implMethodNames" ((PVar "prog")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EVar "implDeclNames")) (EVar "prog"))))
 (DTypeSig false "implDeclNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "implDeclNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implDeclNames") (EVar "d")))
 (DFunDef false "implDeclNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "implDeclNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "defaultName")) (EVar "methods")))
 (DFunDef false "implDeclNames" (PWild) (EListLit))

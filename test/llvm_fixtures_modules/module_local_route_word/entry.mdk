@@ -1,0 +1,45 @@
+-- #1036 LEG 2 — the module-visibility leg, and the regression the first cut of the
+-- #1036 fix introduced.  This fixture exists to make that regression impossible to
+-- reintroduce silently.
+--
+-- The dict word reaching a shared dispatcher is chosen PER MODULE: typecheck's
+-- `keyForSiteByIface` upgrades a bare head tag to the canonical impl key only when the
+-- SITE'S MODULE can see two impls at that head, because `KeyBuckets` is built from
+-- that module's import closure.  The dispatcher, by contrast, is emitted ONCE for the
+-- whole program.
+--
+-- Here `a` declares `impl Speak (Box Int)` and cannot see `b`, so a's site stamps the
+-- BARE HEAD `"Box"` (hashName 193452654).  `b` declares the inheriting
+-- `impl Speak (Box String)`; `entry` pulls it into the program but nobody ever
+-- dispatches on `Box String`.
+--
+-- The first cut of the fix recomputed the collision verdict from a program-global decl
+-- table, which COULD see b — so it emitted arms keyed only on the canonical keys
+-- (2069167587134005782 and 850218145493699906).  a's bare-head word matched neither
+-- and fell through to the interface default: `medaka check` green, eval `boxint`,
+-- native `DEFAULT`, exit 0.  Silent wrongness, on a program that is CORRECT on main.
+--
+-- The fix is for the arm to accept EVERY word any module could stamp for the impl
+-- (`implEntryRouteWords`) instead of betting on one.
+--
+-- ── THE AXIS THIS PINS ─────────────────────────────────────────────────────────
+-- IMPORT VISIBILITY.  Every other multi-module fixture in this corpus is a TREE in
+-- which the module holding the dict-routed site imports everything that declares an
+-- impl, so none of them can express "the site's module cannot see the sibling" — the
+-- one axis leg 2 lives on.  Without this fixture a future RE-NARROWING of the route
+-- word set back to a single recomputed verdict would regress silently with every gate
+-- green, which is exactly how this class arrived.
+--
+-- Two variants, because their pre-fix symptoms differ:
+--   Speak — the sibling in `b` INHERITS the default.  Pre-fix: `DEFAULT` (or SIGSEGV).
+--   Loud  — the sibling in `b` OVERRIDES.             Pre-fix: `loudstr`, the WRONG
+--           IMPL, i.e. silent wrongness with no default involved at all (#1064).
+--
+-- Must print `boxint` then `loudint`.  Anything else means leg 2 is back.
+import a.{callA, callLoudA}
+import b
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (callA ())
+  putStrLn (callLoudA ())

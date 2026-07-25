@@ -1,0 +1,13 @@
+-- #1036 leg 2 / #1064.  Two interfaces, one per variant of the IMPORT-VISIBILITY axis.
+--
+-- `Speak` owns a DEFAULT, so the sibling impl in `b` can override NOTHING.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"
+
+-- `Loud`'s sibling impls BOTH override, so no default is ever reached.  This variant
+-- has a different pre-fix symptom — the wrong IMPL rather than the default — which is
+-- why both are pinned: `boxstr` for a `Box Int` receiver at -O1+, SIGSEGV at -O0.
+export interface Loud a where
+  loud : a -> String
+  loud _ = "LOUD-DEFAULT"
