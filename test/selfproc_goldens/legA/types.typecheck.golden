@@ -76,6 +76,7 @@ argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
 argReqRoute : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argStampMono : PendingEntry -> Mono
+argStampPairs : PendingEntry -> List (Int, String)
 armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
@@ -116,7 +117,7 @@ binopPrimitiveHead : String -> Bool
 binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
-blockRecLet : TcEnv -> String -> Expr -> TcEnv
+blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 boundTvarId : List Int -> Mono -> List Int
@@ -134,6 +135,7 @@ buildImplUniverse : List Decl -> ImplUniverse
 buildKeyTable : List Decl -> Map String (List KeyEntry)
 buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
 buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc, String))
+callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
@@ -291,6 +293,7 @@ constraintIface : Constraint -> String
 constraintIsMethodLevel : List String -> Constraint -> Bool
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 constraintNonParamVars : List String -> Constraint -> List String
+constraintPhrase : String -> String
 constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
 constraintSlotVarIface : List String -> Constraint -> List (String, String)
 constraintTyVars : Constraint -> List (String, String)
@@ -346,6 +349,8 @@ decodeSetParam : String -> List String
 dedupI : List Int -> List Int
 dedupIGo : List Int -> List Int -> List Int
 dedupPairs : List (String, Int) -> List (String, Int)
+dedupPairsById : List (Int, String) -> List (Int, String)
+dedupPairsByIdGo : List (Int, String) -> List Int -> List (Int, String)
 dedupVecObls : List (String, List Int) -> List (String, List Int)
 defaultAmbiguousNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
 defaultBodyLocalNum : List (String, List String, Ty, Mono, Option Loc) -> Mono -> Unit
@@ -365,7 +370,9 @@ depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derivableIface : String -> Bool
 detectSwappedArgs2 : TcEnv -> Expr -> Expr -> Option Mono
+dictAppMonoIds : (Ref (List Route), List Mono, List String) -> List (Int, String)
 dictArityOf : String -> Int
+dictForwardedPairs : Int -> Int -> List (Int, String)
 dictParamName : String -> Int -> String
 dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
@@ -553,7 +560,7 @@ funDomain : Mono -> Mono
 funParams2 : Mono -> Option (Mono, Mono)
 genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
-generalizeGroup : TcEnv -> List (LetBind, (String, Scheme)) -> TcEnv
+generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : List (String, List Decl) -> Option String
 goalHeadCon : List Mono -> Option String
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
@@ -658,6 +665,7 @@ importedCtorTypeNames : List Decl -> List String
 importerShadowDomain : String -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 importerStandaloneValueScheme : String -> Option Mono
+indefiniteArticle : String -> String
 indexOfId : Int -> List Int -> Option Int
 indexOfIdGo : Int -> Int -> List Int -> Option Int
 indexOfInt : Int -> List Int -> Int
@@ -730,7 +738,7 @@ inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
 inferPlainImpl : TcEnv -> List Decl -> String -> List Ty -> List ImplMethod -> Unit
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
-inferRecLet : TcEnv -> String -> Expr -> Expr -> Mono
+inferRecLet : TcEnv -> String -> Option Loc -> Expr -> Expr -> Mono
 inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> Option Pat -> List (String, Scheme)
 inferRecPatFieldWith : TcEnv -> Mono -> String -> Option Pat -> List (String, Scheme)
 inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> List (String, Scheme)
@@ -823,6 +831,7 @@ liveNumVarGo : Int -> List (String, List String, Ty, Mono, Option Loc) -> Option
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Unit -> Unit
 locEq : Loc -> Loc -> Bool
+locSameFileAsError : Option Loc -> Bool
 lookupAssocI : Int -> List (Int, a) -> Option a
 lookupAssocS : String -> List (String, List String) -> Option (List String)
 lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
@@ -878,6 +887,7 @@ mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodArgs : Ty -> List Ty
 methodConstrainedIds : Unit -> List Int
+methodConstrainedPairs : Unit -> List (Int, String)
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
 methodConstraintNamesOfDecl : Decl -> List String
@@ -907,6 +917,7 @@ moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
 monoConcrete : Mono -> Bool
 monoHeadCon : Mono -> Option String
+monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
 monoIsFloat : Mono -> Bool
@@ -982,6 +993,11 @@ phantomMethodMsgs : Decl -> List String
 pickMostSpecificEntry : List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
+pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
+pinnedEntryName : (Mono, String, String, Option Loc) -> String
+pinnedLocalExplain : Mono -> Mono -> Option (Mono, String, String, Option Loc)
+pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
 pinsTyvarMsg : String -> Ty -> List String -> String
 pipeOp : Mono -> Mono -> Mono
 placeholderBinding : (String, Mono) -> (String, Scheme)
@@ -1079,6 +1095,8 @@ recordMethodLevelSlotObls : List (String, String) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
+recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
 recordSchemeCallObligations : Int -> List (String, List Int) -> List (Int, Mono) -> Unit
 recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> Option (List Mono)
@@ -1336,6 +1354,7 @@ tupleSpineOf : Mono -> List Mono -> Mono
 tupleTagArity : String -> Option Int
 tupleTagArityGo : String -> Int -> Option Int
 tupleUnifyClash : Mono -> Mono -> Bool
+tvarMonoOfIn : Mono -> Int -> Mono
 twoArgCallee : TcEnv -> Expr -> Option (String, Expr, Mono, Mono)
 tyAppSpine : Ty -> (Ty, List Ty)
 tyConNamesInConstraint : Constraint -> List String
@@ -1358,6 +1377,7 @@ typeErrorsSticky : Ref Bool
 typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit
 typeMismatchReport : Mono -> Mono -> Unit
+typeMismatchReportRest : Mono -> Mono -> Unit
 tyvarId : Ref Tyvar -> Int
 tyvarLevel : Ref Tyvar -> Int
 unboundSpineHead : Mono -> Bool

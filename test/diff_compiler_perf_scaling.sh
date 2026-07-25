@@ -762,6 +762,42 @@ gen_widerecords() {
   } >> "$f"
 }
 
+# gen_emittables — THE EMITTER-TABLE SHAPE (issue #352). The only shape that grows
+# the LLVM emitter's per-program lookup TABLES: N distinct record types, N distinct
+# single-ctor data types, and N exported top-level fns, with every one of them LIVE.
+#
+# Each `sI` does, in one tiny body: a record CREATE, a record UPDATE, two field
+# ACCESSes, a ctor ALLOC and a ctor PATTERN bind — i.e. one hit on every table #352
+# named — and tail-calls `s(I+1)`, so `main = println (s0 1)` roots the whole chain
+# and DCE keeps all N (the mistake gen_match's comment warns about). Bodies stay O(1)
+# so the shape cannot accidentally grade the one-big-expression typeOf/staticIsFloat
+# walk instead. `export` on every `sI` is what puts private_mangle's `pubFnNames` on
+# the map — no other shape exports anything, so the `mangle` op arm saw it nowhere.
+#
+# GRADED OP-ONLY, on the emit + mangle stages, in the dedicated block near the bottom
+# (not via the SHAPES loop): the emit-stage OP ratio is not in OP_STAGES, and the
+# TIME arm cannot see these at all — they are PURE SCANS that allocate almost nothing
+# per step, exactly the class THE SECOND RULE in compiler/AGENTS.md is about.
+gen_emittables() {
+  n=$1; f=$2; : > "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf 'data R%s = R%s { a%s : Int, b%s : Int }\n' "$i" "$i" "$i" "$i"
+    printf 'data T%s = K%s Int\n' "$i" "$i"
+    printf 'export s%s : Int -> Int\n' "$i"
+    printf 's%s x =\n' "$i"
+    printf '  let v = R%s { a%s = x, b%s = x }\n' "$i" "$i" "$i"
+    printf '  let w = { v | b%s = 1 }\n' "$i"
+    printf '  match K%s (w.a%s + w.b%s)\n' "$i" "$i" "$i"
+    if [ "$i" -eq $((n-1)) ]; then
+      printf '    K%s y => y\n' "$i"
+    else
+      printf '    K%s y => s%s y\n' "$i" "$((i+1))"
+    fi
+    i=$((i+1))
+  done >> "$f"
+  printf 'main = println (s0 1)\n' >> "$f"
+}
+
 # gen_modules — the ONLY multi-module generator (issue #153). Writes N separate
 # .mdk files into DIR, chained by import (m0 <- m1 <- ... <- m{N-1} <- entry), each
 # module defining K data types + K impls of a shared interface `Widget`,
@@ -2697,6 +2733,89 @@ else
   printf '%-12s %8s  resolve-ops %s -> %s  (drained; < OP_FLOOR %s — #78 scope set held; band N=%s->%s)\n' \
     scoperefs "$scn1" "$scro1" "$scro2" "$OP_FLOOR" "$scn1" "$scn2"
 fi
+
+# ── emittables — the EMITTER-TABLE op grade (issue #352) ─────────────────────
+#
+# Five per-program tables in the LLVM emitter (+ one in private_mangle) were `List`s
+# scanned once per SITE. Every one is a PURE scan, so the TIME arm is diluted by the
+# fixed prelude cost and the ALLOC arm is near-blind (compiler/AGENTS.md, THE SECOND
+# RULE) — but they all run through util.lookupAssoc/util.contains, so the DETERMINISTIC
+# op counter sees them exactly. This block grades the emit-stage and mangle-stage op
+# ratios on the one shape that grows those tables (gen_emittables).
+#
+# THE PRELUDE OP CONSTANT IS SUBTRACTED HERE, and that is this file's OWN established
+# rule applied to the op arm — see "⚠️ THE BASELINE MUST BE SUBTRACTED, OR THIS GATE IS
+# BLIND" above (the note beside BASE_ALLOC), which is why the alloc arm has subtracted a
+# baseline all along. Concretely for these two stages: `emit` pays ~20k counted ops
+# rendering core.mdk before the fixture is looked at, so at N=250 that constant pulls
+# THIS shape's genuine 3.5x down to 3.43 and its 3.9x down to 3.36 — raw, r1 would sit
+# UNDER the 3.0 threshold and the sustained-both-doublings rule would read the bug "ok".
+# (A statement about THIS shape's constant only; it says nothing about the calibration
+# of any other shape or row.)
+#
+# SEEN RED — measured on this box against the pre-#352 emitter, band N=250->500->1000,
+# net of the baseline (this is the state the block must fail in, and does):
+#     emit-ops    446101 -> 1579726 -> 5909476   r1=3.54 r2=3.74   ** QUADRATIC **
+#     mangle-ops   34621 ->  131746 ->  513496   r1=3.81 r2=3.90   ** QUADRATIC **
+# and after indexing the tables:
+#     emit-ops     85476 ->  170976 ->  341976   r1=2.00 r2=2.00   LINEAR
+#     mangle-ops    3246 ->    6496 ->   12996   r1=2.00 r2=2.00   LINEAR
+# The post-fix ratios are EXACTLY 2.00 (op counts are deterministic, not sampled), so
+# the 3.0 threshold has 50% headroom below and the pre-fix state 18-30% above.
+#
+# Not folded into OP_STAGES/SHAPES on purpose: `emit` is not an OP_STAGES entry (adding
+# it would grade every other shape's emit-op ratio too, which is a different change),
+# and this shape is the only one whose numbers mean anything for these tables.
+EMITTABLES_N="${PERF_EMITTABLES_N:-250}"
+emn1="$EMITTABLES_N"; emn2=$((EMITTABLES_N * 2)); emn3=$((EMITTABLES_N * 4))
+emf1="$WORK/emittables_$emn1.mdk"; emf2="$WORK/emittables_$emn2.mdk"; emf3="$WORK/emittables_$emn3.mdk"
+gen_emittables "$emn1" "$emf1"; gen_emittables "$emn2" "$emf2"; gen_emittables "$emn3" "$emf3"
+EMR1="$WORK/emittables_r1"; EMR2="$WORK/emittables_r2"; EMR3="$WORK/emittables_r3"
+EMRB="$WORK/emittables_rb"
+profile_run "$emf1" > "$EMR1"; profile_run "$emf2" > "$EMR2"; profile_run "$emf3" > "$EMR3"
+profile_run "$BASE_FIX" > "$EMRB"
+# One stage's net-op ratios, graded. Mutates the caller's fail/pass counters.
+grade_emittables_stage() {
+  _st="$1"
+  _b="$(awk -F'\t' -v s="[perf] $_st" '$1==s{print $5; exit}' "$EMRB")"
+  _o1="$(awk -F'\t' -v s="[perf] $_st" '$1==s{print $5; exit}' "$EMR1")"
+  _o2="$(awk -F'\t' -v s="[perf] $_st" '$1==s{print $5; exit}' "$EMR2")"
+  _o3="$(awk -F'\t' -v s="[perf] $_st" '$1==s{print $5; exit}' "$EMR3")"
+  # A missing column is a HARNESS failure, never a silent pass.
+  for _v in "$_b" "$_o1" "$_o2" "$_o3"; do
+    case "$_v" in
+      ''|*[!0-9]*)
+        fail=$((fail+1))
+        printf '%-12s %8s  ** NO %s-OP MEASUREMENT from the profiler (harness bug — base=%s N=%s 2N=%s 4N=%s) **\n' \
+          emittables "$emn1" "$_st" "$_b" "$_o1" "$_o2" "$_o3"
+        return ;;
+    esac
+  done
+  _verdict="$(awk -v b="$_b" -v o1="$_o1" -v o2="$_o2" -v o3="$_o3" -v th="$THRESH" -v fl="$OP_FLOOR" 'BEGIN{
+    d1=o1-b; d2=o2-b; d3=o3-b
+    if (d1 < fl) { printf "%d %d %d - - TOOSMALL", d1, d2, d3; exit }
+    r1=d2/d1; r2=d3/d2
+    printf "%d %d %d %.2f %.2f %s", d1, d2, d3, r1, r2, ((r1 > th && r2 > th) ? "QUADRATIC" : "ok") }')"
+  set -- $_verdict
+  if [ "$6" = "TOOSMALL" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_EMITTABLES_N (net %s-op %s < OP_FLOOR %s) **\n' \
+      emittables "$emn1" "$_st" "$1" "$OP_FLOOR"
+  elif [ "$6" = "QUADRATIC" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (%s-OPS) ** net %s -> %s -> %s  r1=%s r2=%s (>= %s, band N=%s->%s->%s)\n' \
+      emittables "$emn1" "$_st" "$1" "$2" "$3" "$4" "$5" "$THRESH" "$emn1" "$emn2" "$emn3"
+    printf '             an emitter lookup TABLE went back to a List scan — recFields / ctorType /\n'
+    printf '             ctorFieldTypes / ctorsOfType / pubFnNames (issue #352). See llvm_emit.mdk\n'
+    printf '             installCtorTypeMap + installRecFieldIndex, private_mangle.mdk pubFnNames.\n'
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  %s-ops net %s -> %s -> %s  r1=%s r2=%s  (LINEAR — #352 tables indexed; band N=%s->%s->%s)\n' \
+      emittables "$emn1" "$_st" "$1" "$2" "$3" "$4" "$5" "$emn1" "$emn2" "$emn3"
+  fi
+}
+grade_emittables_stage emit
+grade_emittables_stage mangle
 
 # ── matchlits — EXHAUSTIVENESS over a wide LITERAL match (issue #988) ─────────
 # The literal sibling of the main-loop `match` shape. It grades the TYPECHECK-STAGE
