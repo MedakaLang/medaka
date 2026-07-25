@@ -768,6 +768,39 @@ pipeline stage against goldens in `test/*_fixtures/` or `test/*_goldens/`.
    the committed goldens without writing anything.
 3. Verify: `bash test/diff_compiler_<name>.sh` passes.
 
+🚨 **A CAPTURED GOLDEN RECORDS WHAT THE ENGINE DID, NOT WHAT IS CORRECT. If the engine is
+wrong for your shape, capturing ENSHRINES THE BUG as the expected answer** — and the gate then
+defends it forever, going red on the eventual *fix*.
+
+This is not hypothetical and it is not rare. **178 `*.eval.golden` files** are generated from
+the interpreter (`test/eval_fixtures/`, `eval_dict_fixtures/`, `eval_list_fixtures/`,
+`eval_modules_fixtures/*`, …), and **eval is currently a known-wrong oracle in at least five
+open S0s** — #1034, #1037, #1040, #1047, #1062. Two separate PRs in one day nearly pinned a
+shape whose eval golden would have baked in a wrong value; both were caught only because a
+reviewer computed the correct answer **by hand** first.
+
+**So before you `CAPTURE=1` anything:**
+
+- **Work out the right answer independently** — from the language semantics, not from the tool.
+  Then compare. A golden that merely matches today's output has tested nothing.
+- **Cross-check the engines.** `eval` vs native vs wasm disagreeing means at most one of them
+  can be the oracle. **All three agreeing does NOT prove correctness** — several known S0s have
+  every engine equally wrong (e.g. #1047), which is exactly why `diff_compiler_engines` cannot
+  see them.
+- **If your shape is anywhere near a known-wrong area** (interface defaults, dict routing,
+  method-less impls, head-tycon collisions, local bindings that forward a dict), assume the
+  oracle is suspect and say in the fixture's own comment how you established the expected value.
+- **If the engine is wrong and you cannot get a trustworthy golden, do NOT capture one.** Pick a
+  neighbouring shape that *is* correct, or pin the bug in `test/must_fail_fixtures/` instead —
+  that harness asserts a bug **still reproduces**, which is the honest thing to record when the
+  engine is broken. See `test/MUST-FAIL-NOT-PINNABLE.txt` for how to declare a shape out of
+  scope with a reason.
+
+⚠️ The same caution applies to the **snapshot** and **selfproc LEG A** corpora, which render the
+compiler's own source and inferred schemes: blessing them records what the current compiler
+believes. A `--bless` that "fixes" a red gate without your having independently decided the new
+output is correct is a rubber stamp, and the gate exists to prevent exactly that.
+
 Add cases to the gate matching the stage you changed (parser change →
 `test/diff_compiler_parse*.sh` or `diff_compiler_check*.sh`).
 
