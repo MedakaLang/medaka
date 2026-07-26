@@ -46,8 +46,12 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    warnings guide you.
 4. **Resolve** — `compiler/frontend/resolve.mdk`. Bind every new name/reference.
    Add an arm for the new node so nothing falls through unresolved.
-5. **Typecheck** — `compiler/types/typecheck.mdk`. Infer/check types (HM +
-   interfaces + effects). If the construct introduces match arms, update
+5. **Typecheck** — `compiler/types/typecheck.mdk`. ⚠️ If this step touches a typechecker *bug*
+   (not just new-construct plumbing), the five-question standing gate in
+   `.claude/workstreams/TYPECHECK.md` still applies even though you're following this skill, not
+   `harden-typechecker` — it's keyed to the `ws:typecheck` label, not to a skill, precisely
+   because a fix routed here (cross-cutting) would otherwise miss a skill-scoped gate. Infer/check
+   types (HM + interfaces + effects). If the construct introduces match arms, update
    exhaustiveness — `checkMatchExhaustive` / `checkMatchRedundant`
    (`compiler/types/typecheck.mdk:5841` / `:5862`) call *into*
    `compiler/frontend/exhaust.mdk` (`buildOracle` / `useful` / `usefulWitness`);

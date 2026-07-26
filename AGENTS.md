@@ -850,7 +850,9 @@ itself make a task typechecker-internal. If the fix threads through resolve/eval
 (`deriving`, desugar-rooted), Phase 72 (field-name reuse: added a type_error, but the bulk was
 a multimap threaded through resolve *and* typecheck), Phase 73 (bidirectional checking), and
 Phases 83/84 (dict-threading through AST + typecheck + dict_pass + eval). **Check where the fix
-actually lands before loading it.**
+actually lands before loading it.** Either way, a typechecker bug fix first answers the five
+standing questions in `.claude/workstreams/TYPECHECK.md` — keyed to the `ws:typecheck` label, not
+to whichever skill you loaded, so the routing hazard above can't cause it to be missed.
 
 ## Doc index
 
