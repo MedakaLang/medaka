@@ -621,8 +621,14 @@ families must not share one (§6.9 Q1), so showing them under one name here woul
 misrepresent the design:
 
 ```
-gandThen : f e a → (a →^e f e b) → f e b
+gandThen : f e a → (a →^e f e b) → f e b        -- graded-LITE (one shared grade)
 ```
+
+This is the **graded-lite** degenerate — one variable doing duty as both the
+callback's row and the index — chosen here because it makes the *where does the
+effect live* contrast legible in one line. The normative family below uses
+independent grades joined in result position (`f (e ⊔ e₂) b`); the intuition is the
+same and the algebra is #821's.
 
 so effects are **registered now and produced later**. In the project owner's own
 words, which convey it better than the formal statement does:
@@ -702,7 +708,11 @@ obligation replaces it.
 ⚠️ **The METHOD names above are not decided, and are not even all attested.**
 `gandThen`/`gmap`/`grun` are spelled in `test/engine_fixtures/graded_iface_async.mdk`;
 `gpure` in `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`;
-**`gap` appears in no fixture at all** — it exists only in this document. The
+**`gap` is attested nowhere as a graded method name** — it exists only in this
+document. (Careful with that one: `compiler/backend/wasm_emit.mdk:9320` defines an
+unrelated `gap : String → a`, the W3 scope-wall panic helper. A symbol gate would
+therefore *resolve* `gap` and silently vouch for a name no graded fixture uses.)
+The
 *interface* names `Deferred*` are decided, the `g`-prefix on the methods is
 not, and `DeferredMappable.gmap` is at minimum an inconsistent pairing. Open
 question, §6.9 (Q1). What *is* settled is that the method names must stay
@@ -1173,21 +1183,32 @@ what reads well. With kinds written, factoring is a free choice — which is why
 `Deferred*` can mirror the plain hierarchy exactly, `requires` chain and all.
 
 Be precise about **which** methods that constraint actually bit, because a coarser
-version of this claim was wrong and is corrected here. Probed 2026-07-26:
+version of this claim was wrong and is corrected here. The first two cases are
+**probed** (2026-07-26); the third is **derived**, and says so — it cannot be
+probed, for a reason that is itself worth recording:
 
-- `gpure : a → f e a` alone — **not** `Effect`-kinded. Nothing puts `e` in an
-  effect tail, so a plain two-parameter instance head is accepted (§6.8's
-  non-locality pair turns on exactly this).
+- `gpure : a → f e a` alone — **not** `Effect`-kinded. *Observed:* nothing puts `e`
+  in an effect tail, so a plain two-parameter instance head is accepted, `check`
+  exit 0 (§6.8's non-locality pair turns on exactly this).
 - **graded-lite** `gmap : (a →^{e} b) → f e a → f e b` alone — **`Effect`-kinded
   after all.** The callback's row and the index are the *same* variable, so the
-  co-occurrence rule fires and a sole-method interface already treats `f` as
-  `Effect → Type → Type` (a plain head then draws `T-IMPL-KIND-MISMATCH`). An
+  co-occurrence rule fires. *Observed:* a sole-method interface already treats `f`
+  as `Effect → Type → Type`, and a plain head draws `T-IMPL-KIND-MISMATCH`. An
   earlier revision said `gmap` could not stand alone; that is **false** in this
   form.
 - the **join** form `gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b` — index and
-  callback row are *distinct* names, so the co-occurrence rule does not fire. This
-  is the form the earlier claim was true of, and the form §6's signature block
-  uses.
+  callback row are *distinct* names, so the co-occurrence rule does not fire.
+  **DERIVED, not observed: the join spelling does not parse today.** Both
+  `f (e | e2) b` and `f <e | e2> b` are hard parse errors (*"unexpected `(`;
+  expected a dedent"* / *"unexpected `<`; …"*), which is #821's content — a
+  type-level row join is unrepresentable while `EffRow` carries one optional tail.
+  The result is read off `anySlotIsRow` (`compiler/types/typecheck.mdk:8299-8302`),
+  which fires only when a **bare name** at slot *i* also appears in that same
+  signature's tail set. The nearest *expressible* analogue —
+  `gmap : (a →^{e₂} b) → f e a → f e b`, distinct names, no join — is **observed**
+  to fail with `T-EFFECT-ARG-UNCOVERED` rather than `T-IMPL-KIND-MISMATCH`, i.e.
+  the interface is never kinded graded at all. That is the form the earlier claim
+  was true of, and the form §6's signature block uses.
 
 So the constraint is real but narrower than stated: it bites the **join** family,
 and `gpure`-shaped methods in either family.
@@ -1292,10 +1313,22 @@ gmap : (a →^{e} b) → f e a → f e b            -- no row on the method's ow
 ```
 
 — which is exactly the signature option 1 also uses — **paired with an eager
-impl**. Option 1 makes that pairing impossible by changing the *impl*; option 2
-makes it impossible by changing the *signature*. Ship the signature above and then
-write an eager impl anyway, which is what #823 is on course to do if the fork is
-left unmade, and the result is **silently accepted** and unsound. Per #1095 the
+impl**.
+
+⚠️ **The two options are NOT symmetric, and that asymmetry is the whole content of
+the fork.** Option 1 avoids the pairing **by convention**: nothing enforces it, as
+the mechanism below shows — the B2 program printed in §6 is option 1's exact
+signature with an eager impl, `check` exit 0, and it prints. Option 2 forecloses
+the pairing **in the type system**: the row on the method's own arrow makes an
+eager impl a `T-EFFECT-LEAK` at any pure caller. So option 2 closes the hole for
+**every** impl, including ones written elsewhere by people who never read this
+document; option 1 closes it only for impls that choose to defer. (An earlier
+revision of this paragraph said option 1 "makes that pairing impossible by changing
+the impl" — false, and contradicted by the four lines immediately below it.)
+
+Ship the uncharged signature and then write an eager impl anyway, which is what
+#823 is on course to do if the fork is left unmade, and the result is **silently
+accepted** and unsound. Per #1095 the
 mechanism is `methodEffRetOccs` (`compiler/types/typecheck.mdk:1157-1164`), which
 counts a row-kinded **result-index** occurrence as discharging
 `checkArgEffVarCoverage` — but an index is a promise about *force* time, not a
@@ -1384,10 +1417,13 @@ Listed rather than smoothed over, because a guessed answer here has cost this
 document three public retractions already (PRs #999/#1001).
 
 - **Q1 — the `Deferred*` METHOD names.** The interface names are decided; the
-  methods are not, and they are not all attested: only `gandThen`/`gmap`/`grun`
-  (`test/engine_fixtures/graded_iface_async.mdk`) and `gpure`
-  (`test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`) are spelled
-  anywhere in the tree — **`gap` is this document's own invention.**
+  methods are not, and they are not all attested. Of the four this document names,
+  `gandThen`/`gmap` (with `grun`) are spelled in
+  `test/engine_fixtures/graded_iface_async.mdk` and `gpure` in
+  `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`, while **`gap`
+  is this document's own invention** as a graded method name. The tree is not even
+  self-consistent on the ones it has: the same fixture spells its bind `gth` at
+  `:21`, so "the fixtures' spelling" is not a single answer to defer to.
   `DeferredMappable.gmap` also pairs a descriptive interface name with a cryptic
   prefix. Constraint that any answer must respect: the names must stay distinct
   from the plain family's, since sharing them would make the unqualified `andThen`

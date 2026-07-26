@@ -386,7 +386,8 @@ slot is not checked at unification at all (#1094), and a result-index occurrence
 miscounted as discharging the argument-coverage rule, so a graded impl that applies
 its callback eagerly launders (#1095). Until those are addressed, migrating an impl
 off the #817 carve-out and onto a graded signature moves it from a *tracked*
-exemption to an *untracked* hole. See [`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md)
+exemption to an *unchecked* one — filed, but with nothing in the type system
+stopping it. See [`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md)
 §6.7 for both mechanisms and §6.9 for what the graded design still leaves open.
 
 W3 needs **no variance analysis**: rigidity decides scheme membership
