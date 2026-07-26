@@ -748,11 +748,12 @@ f e b) -> f e b` → `check` exit 0; probed 2026-07-26). What #822 shipped is a 
 that is **inferred**, which is the very rule §6.8 retires — declaration replaces
 it, and the surface above is written against the declared form.
 
-**The eager-arm fork is still open (#823) — but it is no longer speculative.** A
-prior revision recorded that no probe was possible; one is now, and it fires. On a
-binary built from `main` (2026-07-26) a graded-lite `DeferredThenable`-shaped
-interface whose impl **applies** its callback rather than storing it launders the
-callback's row, with `check` green:
+**The eager-arm fork is still open (#823) — but it is no longer speculative, and
+what is at stake is not what this document previously said (see #1095).** A prior
+revision recorded that no probe was possible; one is now, and it fires. On a binary
+built from `main` (2026-07-26) a graded-lite `DeferredThenable`-shaped interface
+whose impl **applies** its callback rather than storing it launders the callback's
+row, with `check` green:
 
 ```
 data Later e a = Now a | Wait (Unit -> <e> Later e a)
@@ -787,10 +788,19 @@ between them here:
   arrow instead of only its result index, which changes the signature
   discipline described above rather than the impl.
 
-#823 must settle this before migrating Async. Note that the probe above makes the
-choice *load-bearing for soundness*, not only for ergonomics: option 2 is not
-merely a different accounting, it is what makes an eager impl expressible without
-laundering.
+#823 must settle this before migrating Async.
+
+⚠️ **Read the fork correctly — and this document had it a notch wrong.** An earlier
+revision of this paragraph said the probe makes the choice load-bearing because
+"option 2 is what makes an eager impl expressible without laundering", implying
+option 1 is merely the safe one and option 2 the enabling one. Per #1095, **both
+options above are sound as stated**: deferring is silent at construction, and an
+explicit `→^{e}` on the method arrow *is* correctly enforced at the call site. What
+is false is that the choice is **free**. The unsound shape is neither of them — it
+is the *uncharged* signature this section's own examples give (`gmap : (a →^{e} b)
+→ f e a → f e b`, no row on the method's arrows), which is what the probe above
+exercises and what #823 is on course to ship if the fork is left unmade. §6.7,
+finding 2, gives the mechanism.
 
 The full family with independent grades remains the ideal; graded-lite is a
 narrower first surface realized *within* it once the kind exists, not a
@@ -1127,41 +1137,78 @@ so the obligation is a checkable property of each declared eliminator, not
 something an interface can impose.
 
 **Nothing enforces it today, and the index it would protect is itself unchecked.**
-Both halves were probed on a binary built from `main` (2026-07-26); this is a
-conformance finding against §9, not a claim about the spec:
+Probed on a binary built from `main` (2026-07-26), then independently reproduced
+and filed. These are conformance findings against §9, not claims about the spec.
 
-1. *The index is not checked at unification.* On the shipped `Async`:
+**Finding 1 — the `Effect`-kinded argument slot is not checked at unification (see
+#1094).** On the shipped `Async`:
 
-   ```
-   import async.{Async, liftIO, runAsync}
-   noisy : Async <IO> Int
-   noisy = liftIO (u => let _ = println "LAUNDERED" in 1)
-   pureNow : Async <> Int
-   pureNow = noisy                    -- accepted
-   sneaky : Int                       -- NO row at all
-   sneaky = runAsync pureNow
-   main = println sneaky
-   ```
+```
+import async.{Async, liftIO, runAsync}
+noisy : Async <IO> Int
+noisy = liftIO (u => let _ = println "LAUNDERED" in 1)
+pureNow : Async <> Int
+pureNow = noisy                    -- accepted
+sneaky : Int                       -- NO row at all
+sneaky = runAsync pureNow
+main = println sneaky
+```
 
-   `check` exit 0; `run` prints `LAUNDERED`. The control discriminates cleanly:
-   swapping the *value* slot instead (`Async <IO> String` where `Async <IO> Int` is
-   demanded) is rejected with `Type mismatch: String vs Int`, so the hole is
-   specific to the `Effect`-kinded slot. It reproduces identically on a
-   locally-declared effect-indexed type, so it is not the (closed) cross-module
-   parameter-kind loss of #804/#1028, and it involves no interface, so it is
-   neither #817 nor #825 (both dispatch-side). No open issue matching this shape
-   was found when this was written.
-2. *An eliminator that drops the row is not diagnosed.* `forceBad : Later e a → a`
-   defined by `forceBad (Wait t) = forceBad (t ())` is accepted, and — because of
-   (1) — can then be applied to a value carrying a real row.
+`check` exit 0; `run` prints `LAUNDERED`. The control discriminates cleanly:
+swapping the *value* slot instead (`Async <IO> String` where `Async <IO> Int` is
+demanded) is rejected with `Type mismatch: String vs Int`, so the hole is specific
+to the `Effect`-kinded slot. #1094's own repro is smaller still — eight lines with
+**no import, no interface and no impl** (`data Box e a = MkBox (Unit →^e a)`, a
+`Box <Stdout> Int` rebound as `Box ⟨ ⟩ Int`, then unboxed into a binding typed
+plain `Int` that prints) — and both engines are equally wrong, with no divergence
+to expose it. So it is not the (closed) cross-module parameter-kind loss of
+#804/#1028, and not #817 or #825, both of which are dispatch-side.
 
-Until (1) is closed the index is decorative: **the graded story's soundness is
-currently resting on a check that does not run.** Whether the obligation should be
-enforced as a *rule* (every eliminator of an `Effect`-indexed type must charge the
-index) or falls out for free once (1) is fixed — the ordinary §5 escape check would
-then reject `forceBad`, since `t ()` performs `e` under a declared `⟨ ⟩` — is §6.9
-(Q4). The spec states the obligation either way, because it is the property, and
-§9's soundness statements now name it.
+The mechanism, per #1094, is worth stating here because it says exactly *which*
+part of this section the implementation is missing. An `Effect`-kinded argument
+elaborates through `kindArgMono … KRow` to `TEff (rowArgOf …)`, and `rowArgOf`
+yields a **closed** `EffRow atoms None`; `unifyN (TEff r₁) (TEff r₂)` then routes to
+the arrow-row unifier, whose closed-versus-closed arm — `unifyRowN (EffRow _ None)
+(EffRow _ None) = ()`, `compiler/types/typecheck.mdk:981` — is a **documented
+silent no-op**. Its comment justifies the leniency for *arrows*, where direction is
+recovered later by `launderEscapeFromLog`, and signs off with *"a genuine mismatch
+elsewhere surfaces as a caller-level type mismatch"*. That justification does not
+transfer: **an index is invariant and has no later consumer.** Give either side an
+**open tail** and the guarded arms run `effectLeakCheck` and correctly reject the
+identical program — which is the sharpest available evidence that the rule this
+section states is *implementable*, and merely unreached, in this position. A
+corollary #1094 also records: because `rowArgOf`'s catch-all returns the pure row,
+an ordinary **type** written in the index slot (`Box Int Int`) is silently read as
+`Box ⟨ ⟩ Int`.
+
+Until #1094 is addressed the index is decorative: **the graded story's soundness is
+currently resting on a check that does not run.**
+
+**Finding 2 — the eager-arm fork is a soundness question, not a preference (see
+#1095).** The refinement matters and this document previously got it a notch wrong.
+Both options named in §6 above — *defer the arm*, or *keep it eager and charge the
+callback's row on the method's own arrow* — are in fact **sound as stated**:
+deferring is silent at construction, and an explicit `→^{e}` on the method arrow
+**is** correctly enforced at the call site. What is false is that the choice is
+**free**. The unsound thing is the *third* shape, and it is the one §6's signatures
+actually give and the one #823 is on course to ship:
+
+```
+gmap : (a →^{e} b) → f e a → f e b            -- no row on the method's own arrows
+```
+
+Under it an eager impl is **silently accepted** and unsound. Per #1095 the
+mechanism is `methodEffRetOccs` (`compiler/types/typecheck.mdk:1157-1164`), which
+counts a row-kinded **result-index** occurrence as discharging
+`checkArgEffVarCoverage` — but an index is a promise about *force* time, not a
+charge at *call* time, so the coverage rule of §6 ("argument-occurrence coverage")
+is satisfied by something that does not in fact charge anything. That is the
+precise seam at which the deferred family departs from the plain one, and it is why
+the eliminator obligation above cannot be left implicit.
+
+Note the division of labour between the two findings: #1094 is about the index not
+being *checked*, #1095 about an index being *miscounted as a charge*. Fixing either
+leaves the other standing.
 
 ### 6.8 What declaration retires
 
@@ -1253,10 +1300,39 @@ document three public retractions already (PRs #999/#1001).
   the declaration (legal) and explicitly does not settle this. The reason to doubt
   is stated there; it needs deciding alongside #823's eager-arm fork, which is the
   same question seen from the impl side.
-- **Q4 — is the §6.7 obligation a rule, or a consequence?** If the index is checked
-  at unification, the ordinary §5 escape check may already reject an eliminator that
-  drops the row, making a separate rule redundant. That cannot be determined while
-  the index is unchecked (§6.7, finding 1).
+- **Q4 — is the §6.7 obligation a rule, or a consequence? PARTIALLY RESOLVED: a
+  consequence for ordinary eliminators, still a rule for interface methods.** This
+  was recorded as undeterminable; it is now determinable in one half, because the
+  discriminator turns out not to depend on #1094 at all — it only needs the index
+  made *concrete*. Probed:
+
+  ```
+  data Later e a = Now a | Wait (Unit -> <e> Later e a)
+  forceIO : Later <IO> a -> a                    -- declared pure, index concrete
+  forceIO (Now a) = a
+  forceIO (Wait t) = forceIO (t ())
+  ```
+
+  → **rejected**, `T-EFFECT-LEAK`: *"Function 'forceIO' declared with <> but also
+  performs <IO>"*. So the ordinary §5 binding-boundary escape check **already
+  discharges the obligation** for a declared eliminator; no separate rule is needed
+  for that case. The earlier probe that appeared to show otherwise
+  (`forceBad : Later e a → a`, accepted) is explained rather than contradicted: with
+  a *variable* index the same escape check pins `e := ⟨ ⟩`, which is honest, and the
+  launder then arrives entirely through the call site — i.e. through #1094 and
+  nothing else. **So finding 2 of §6.7's earlier framing was #1094 wearing a
+  different hat**, and the "rule vs consequence" question for ordinary eliminators
+  resolves to *consequence*, parked on #1094 for confirmation once the index is
+  checked.
+
+  What is **not** resolved, and is the reason this entry stays open: the argument
+  above covers *declared* eliminators only. It does **not** extend to interface
+  method signatures, where #1095 shows a result-index occurrence being miscounted as
+  a charge (§6.7, finding 2) — there the escape check is not reached, so for methods
+  the obligation remains a genuine rule with nothing enforcing it. Falsifier for the
+  resolved half, should anyone find one: an eliminator that *runs* a registered
+  computation, carries a concrete non-empty index, and is nevertheless accepted. None
+  was found.
 - **Q5 — `type` aliases with an `Effect` parameter.** §6.2 admits the annotation on
   an alias head by symmetry with the other binding forms. Whether an alias may
   *abstract over* a row in a way its expansion does not (partial application,
@@ -1369,12 +1445,18 @@ the extern catalog is trusted, like any FFI boundary.
   permits, exactly as any other type argument. Without this the index carries no
   guarantee at all, and every statement below that mentions a registered effect is
   vacuous. ⚠️ **Probed and currently FALSE on the implementation** — see §6.7,
-  finding 1.
+  finding 1, and #1094: the closed-versus-closed arm of the row unifier is a
+  documented silent no-op whose justification is arrow-specific and does not
+  transfer to an invariant index.
 - **Deferred discharge.** Every elimination form of an effect-indexed type that
   *runs* a registered computation charges that computation's index on its own
   latent row (§6.7). Together with index fidelity this is what makes "registered
   now, produced later" a conservation law rather than a convention: an effect
-  corked into an index is uncorked into a row, never dropped.
+  corked into an index is uncorked into a row, never dropped. For an ordinary
+  declared eliminator the §5 escape check already delivers this (§6.9 Q4). For an
+  **interface method** it does not: a result-index occurrence is currently
+  miscounted as a charge — see #1095 — so the graded family's methods are the one
+  place this statement has no enforcement behind it.
 - **Principality.** Inference computes the `≤`-least row for every term (§3); the
   manifest is therefore the *tightest* sound description, not a conservative blanket.
 - **Coherence with erasure.** Under §8, the denotation is independent of the row;
@@ -1415,7 +1497,12 @@ a clause:
   argument slot must be checked at unification like any other, and an eliminator
   that runs a registered computation must charge its index. Suspect a value of
   `F <IO> τ` accepted where `F ⟨ ⟩ τ` is demanded — the *value* slot being checked
-  is not evidence that the index slot is.
+  is not evidence that the index slot is, and an ordinary type accepted in the
+  index slot (`F Int τ` read as `F ⟨ ⟩ τ`) is the same gap seen from the other
+  side. Both open against this clause today: #1094 (index unchecked) and #1095 (a
+  result-index occurrence miscounted as a charge in a method signature). Note
+  neither shows up as an engine divergence — both engines are equally wrong — so
+  `diff_compiler_engines` cannot see this class.
 - **Erasure / backend agreement** → §8: any divergence in result (not just
   acceptance) between evaluators traceable to effects violates the single-meaning law.
 - **`main` policy** → §7: a *language-internal* upper-bound gate on `main` would be a
