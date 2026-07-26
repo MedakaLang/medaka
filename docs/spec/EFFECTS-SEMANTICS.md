@@ -615,10 +615,13 @@ The effect variable sits on the **method's own arrow**, so the effects are
 **produced at the call site, immediately**. That is exactly right for a strict
 container (`List`, `Option`, `Result`): `map` really does run the callback now.
 
-The graded family instead records the effect in the **container's index**:
+The graded family instead records the effect in the **container's index**. Compare
+the same shape, deliberately spelled with a *different* method name — the two
+families must not share one (§6.9 Q1), so showing them under one name here would
+misrepresent the design:
 
 ```
-andThen : f e a → (a →^e f e b) → f e b
+gandThen : f e a → (a →^e f e b) → f e b
 ```
 
 so effects are **registered now and produced later**. In the project owner's own
@@ -696,9 +699,11 @@ grun     : f e a →^{e} a                    -- per-type eliminator (runAsync)
 — see §6.7 for why the eliminator cannot be a member of the family and what
 obligation replaces it.
 
-⚠️ **The METHOD names above are not decided.** `gmap`/`gpure`/`gap`/`gandThen` is
-what the in-tree fixtures spell today (`test/engine_fixtures/graded_iface_async.mdk`);
-the *interface* names `Deferred*` are decided, the `g`-prefix on the methods is
+⚠️ **The METHOD names above are not decided, and are not even all attested.**
+`gandThen`/`gmap`/`grun` are spelled in `test/engine_fixtures/graded_iface_async.mdk`;
+`gpure` in `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`;
+**`gap` appears in no fixture at all** — it exists only in this document. The
+*interface* names `Deferred*` are decided, the `g`-prefix on the methods is
 not, and `DeferredMappable.gmap` is at minimum an inconsistent pairing. Open
 question, §6.9 (Q1). What *is* settled is that the method names must stay
 **distinct from the plain family's**: sharing `map`/`andThen` was investigated and
@@ -757,18 +762,41 @@ row, with `check` green:
 
 ```
 data Later e a = Now a | Wait (Unit -> <e> Later e a)
+
 interface DThenable f where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
+
 impl DThenable Later where
   gandThen (Now a) k = k a                                -- EAGER: performs <e>
   gandThen (Wait t) k = Wait (u => gandThen (t u) k)
+
 step : Int -> <IO> Later <IO> Int
-step n = let _ = println "BOOM" in Now (n + 1)
+step n =
+  let _ = println "BOOM — this ran at BUILD time"
+  Now (n + 1)
+
 build : Unit -> Later <IO> Int                            -- NO row on the arrow
 build u = gandThen (Now 1) step
+
+main =
+  let _ = println "before"
+  let v = build ()
+  println "after"
 ```
 
-`check` exit 0; running it prints `BOOM`. The mechanism is structural, not a
+`check` exit 0; `run` prints `before` / `BOOM — this ran at BUILD time` / `after`,
+exit 0.
+
+⚠️ **`build` must actually be applied, and the result must be reached from `main`.**
+An earlier revision of this section printed this program with the last four lines
+missing — no `main`, and `build` never applied — while asserting the same output.
+That version does not run at all (`E-NO-MAIN`), and merely adding a bare `main`
+still prints nothing, because a top-level nullary binding is lazy and the
+application is never forced. The defect is precisely the one this document exists
+to warn about: **a probe that looks like it passed.** It is recorded rather than
+quietly corrected.
+
+The mechanism is structural, not a
 missing check: a graded signature deliberately carries **no row on the method's
 own arrows** — that is the whole point of moving the effect into the index — so an
 impl that performs rather than defers has nothing to charge it. The per-arrow
@@ -899,18 +927,28 @@ effect index.
 surgical rule, and it is the whole scope of the change:
 
 ```
-                                          κ ∈ {Type, arrow kinds}
-(kind-default)  ───────────────────────────────────────────────────────
-                an UNANNOTATED parameter may be inferred at κ, never at Effect
+                          κ contains NO occurrence of Effect, anywhere in it
+(kind-default)  ─────────────────────────────────────────────────────────────
+                an UNANNOTATED parameter may be inferred at κ
 ```
+
+The side condition has to be stated over the *whole* kind, not over its result:
+`{Type, arrow kinds}` would admit `Effect → Type`, which is precisely what the rule
+forbids, and "excluded from the codomain" is wrong for the same reason — in
+`Effect → Type → Type` the `Effect` sits in the **domain**.
 
 An unannotated parameter still gets its `Type`-versus-arrow structure from how it
 is used — `interface Mappable f` still infers `f : Type → Type` from `f a`, and
 `data Wrap f a = W (f a)` still infers `f : Type → Type` (§6.1). What an
-unannotated parameter can **never** be is `Effect`: that kind is reachable only by
-writing it. So the defaulting rule is not "unannotated means `Type`" — it is
-"unannotated means *whatever arity inference determines, with `Effect` excluded
-from the codomain*."
+unannotated parameter can **never** be is `Effect`, or any kind with an `Effect`
+inside it: that kind is reachable only by writing it. So the defaulting rule is not
+"unannotated means `Type`" — it is "unannotated means *whatever arity inference
+determines, drawn from the `Effect`-free kinds*."
+
+**A parameter's RESOLVED kind** is its declared kind where one is written, and its
+inferred kind otherwise. Every rule below is stated over the resolved kind, which
+is what makes partial annotation (a `data Async (e : Effect) a` whose `a` is bare)
+well-defined rather than leaving `a` with no κ to check against.
 
 **Corollary: the migration is compulsory, not opportunistic.** `data Async e a =
 Done a | Suspend (Unit →^e Async e a)` — today's spelling, no annotation — becomes
@@ -918,8 +956,12 @@ Done a | Suspend (Unit →^e Async e a)` — today's spelling, no annotation —
 unannotated parameter cannot be `Effect`. That is a deliberate consequence of
 *replace* rather than *augment* (nothing keeps a spooky fallback alive), and it is
 why the migration list below is a hard prerequisite rather than a cleanup. It also
-makes the change **loud**: every existing `Effect`-kinded declaration fails at its
-own head with a kind error, rather than silently re-kinding.
+makes the change **loud**: every existing `Effect`-kinded declaration fails with a
+kind error rather than silently re-kinding. (Loud, but not necessarily *at the
+head* — §6.4's rule detects the contradiction at the **field** whose effect tail
+demands `Effect`, which is where the evidence is. Whether the diagnostic should
+also point back at the unannotated head is a presentation choice for the
+implementation.)
 
 **The alternative, considered and rejected: annotate everything.** Full annotation
 — every parameter of every `data`/`newtype`/`type`/`interface` head carries its
@@ -930,13 +972,14 @@ against. It was rejected on migration cost. Derived, not estimated:
 ```sh
 # every parameterised declaration head in the shipped tree
 grep -rEc '^(public )?(export )?(data|newtype|type|interface) [A-Za-z_][A-Za-z0-9_]* [a-z]' \
-  stdlib/*.mdk compiler/*/*.mdk | awk -F: '{s+=$2} END {print s}'
+  stdlib/*.mdk compiler/*/*.mdk sqlite/lib/*.mdk | awk -F: '{s+=$2} END {print s}'
 ```
 
-**45** heads at the time of writing — every prelude interface in `stdlib/core.mdk`
+**47** heads at the time of writing — every prelude interface in `stdlib/core.mdk`
 (`Mappable f`, `Applicative f`, `Thenable m`, `Foldable t`, `Traversable t`, `Eq
 a`, `Ord a`, …) among them. Against that, the surgical rule's migration is the set
-of declarations that are `Effect`-kinded **today**:
+of declarations that are `Effect`-kinded **today** — same file scope, so the two
+numbers compare:
 
 ```sh
 awk '
@@ -949,17 +992,34 @@ END { flush() }' stdlib/*.mdk compiler/*/*.mdk sqlite/lib/*.mdk
 ```
 
 **Two**, at the time of writing: `stdlib/async.mdk:26` (`export data Async e a`)
-and `compiler/eval/eval.mdk:90` (`public export data Value e`). The same command
-over `test/*.mdk` finds **13** fixtures. No shipped **interface** is
-`Effect`-kinded yet — the graded family is specified here and not in `stdlib/`, so
-the interface half of the migration is greenfield.
+and `compiler/eval/eval.mdk:90` (`public export data Value e`). For the fixtures,
+the glob must be built with `find` — **there are no `.mdk` files directly under
+`test/`**, so a `test/*.mdk` argument makes `awk` exit fatal having matched
+nothing:
+
+```sh
+find test -name '*.mdk' -print0 | xargs -0 awk '<the same program>'
+```
+
+which yields **13**.
+
+⚠️ **That is a floor, not the fixture total.** The census program matches
+`data|newtype` only, so it is structurally blind to `interface` and `type` heads —
+and the graded fixtures (`test/typecheck_error_fixtures/graded_*.mdk`,
+`test/engine_fixtures/graded_iface_async.mdk`, and the `check_module_fixtures`
+graded/row families) declare `Effect`-kinded *interfaces*. No single grep decides
+that for you, because today's interface rule is the slot-and-tail **co-occurrence**
+rule of §6.8, not a textual pattern — enumerate those families by hand. No shipped
+**interface** is `Effect`-kinded yet, so the `stdlib/` interface half of the
+migration is greenfield; the *fixture* half is not.
 
 ⚠️ The decision record for this feature said **one** (`stdlib/async.mdk` alone,
 "the migration is ONE LINE"). That count was wrong: `Value e` is `Effect`-kinded
 too, via `VPrim (Value e →^e Value e)` and `VThunk (Unit →^e Value e)`. Two is
-still small enough that the rationale stands — but this is the second time a count
-in this arc has been asserted and been wrong, so **run the command, do not trust
-the number**, including the ones on this page.
+still small enough that the rationale stands — but this is now the *third* count in
+this arc asserted and found wrong (the third being a `test/*.mdk` recipe on this
+very page that matched nothing while printing a correct number), so **run the
+command, do not trust the number**, including every one on this page.
 
 Both writings are recorded here so the project owner can overrule the choice with
 the costs in front of them.
@@ -974,7 +1034,8 @@ two directions and they behave differently.
 where a monotype is demanded, the declaration is ill-kinded:
 
 ```
-                Δ = the head's declared kinds
+                Δ = the head's RESOLVED kinds (§6.3: declared where written,
+                    inferred otherwise)
                 Δ ⊢ τ : κ   for every field/method type τ of the declaration
 (kind-decl)  ────────────────────────────────────────────────────────────────
                 the declaration is well-kinded
@@ -1049,9 +1110,10 @@ A superinterface constraint applies the subinterface's parameters to the
 superinterface, so it is an ordinary kind application and must check as one:
 
 ```
-                interface I (p : κ) … requires J p
-                J's corresponding parameter is declared at κ'
-(kind-req)  ───────────────────────────────────────────────
+                interface I p … requires J p
+                κ  = p's RESOLVED kind in I   (§6.3)
+                κ' = the RESOLVED kind of J's corresponding parameter
+(kind-req)  ──────────────────────────────────────────────────────────
                 well-kinded iff κ = κ'
 ```
 
@@ -1104,11 +1166,31 @@ accident: the families really do differ in when the effect is produced, and the
 type system says so.
 
 ⚠️ **Declared kinds also dissolved a constraint that shaped the earlier design.**
-Under the retired inference rule an interface could only be `Effect`-kinded if some
-method mentioned the index in effect-tail position, so `gpure`/`gmap` could not
-stand alone and the family's factoring was forced by what inference could see.
-With kinds written, factoring is a free choice — which is why `Deferred*` can
-mirror the plain hierarchy exactly, `requires` chain and all.
+Under the retired inference rule an interface is `Effect`-kinded only if some
+method uses the *same variable* both at the index slot and in an effect tail, so
+the family's factoring was partly forced by what inference could see rather than by
+what reads well. With kinds written, factoring is a free choice — which is why
+`Deferred*` can mirror the plain hierarchy exactly, `requires` chain and all.
+
+Be precise about **which** methods that constraint actually bit, because a coarser
+version of this claim was wrong and is corrected here. Probed 2026-07-26:
+
+- `gpure : a → f e a` alone — **not** `Effect`-kinded. Nothing puts `e` in an
+  effect tail, so a plain two-parameter instance head is accepted (§6.8's
+  non-locality pair turns on exactly this).
+- **graded-lite** `gmap : (a →^{e} b) → f e a → f e b` alone — **`Effect`-kinded
+  after all.** The callback's row and the index are the *same* variable, so the
+  co-occurrence rule fires and a sole-method interface already treats `f` as
+  `Effect → Type → Type` (a plain head then draws `T-IMPL-KIND-MISMATCH`). An
+  earlier revision said `gmap` could not stand alone; that is **false** in this
+  form.
+- the **join** form `gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b` — index and
+  callback row are *distinct* names, so the co-occurrence rule does not fire. This
+  is the form the earlier claim was true of, and the form §6's signature block
+  uses.
+
+So the constraint is real but narrower than stated: it bites the **join** family,
+and `gpure`-shaped methods in either family.
 
 ### 6.7 The elimination-form obligation
 
@@ -1157,28 +1239,40 @@ main = println sneaky
 `check` exit 0; `run` prints `LAUNDERED`. The control discriminates cleanly:
 swapping the *value* slot instead (`Async <IO> String` where `Async <IO> Int` is
 demanded) is rejected with `Type mismatch: String vs Int`, so the hole is specific
-to the `Effect`-kinded slot. #1094's own repro is smaller still — eight lines with
-**no import, no interface and no impl** (`data Box e a = MkBox (Unit →^e a)`, a
-`Box <Stdout> Int` rebound as `Box ⟨ ⟩ Int`, then unboxed into a binding typed
-plain `Int` that prints) — and both engines are equally wrong, with no divergence
-to expose it. So it is not the (closed) cross-module parameter-kind loss of
-#804/#1028, and not #817 or #825, both of which are dispatch-side.
+to the `Effect`-kinded slot. #1094's own repro is smaller still — **no import, no
+interface and no impl** (`data Box e a = MkBox (Unit →^e a)`, a `Box <Stdout> Int`
+rebound as `Box ⟨ ⟩ Int`, then unboxed into a binding typed plain `Int` that
+prints) — and both engines are equally wrong, with no divergence to expose it. So
+it is neither #1028's cross-module kind loss nor #804's cross-module spurious
+*rejection* (both closed, both cross-module), and not #817 or #825, both of which
+are dispatch-side.
 
 The mechanism, per #1094, is worth stating here because it says exactly *which*
 part of this section the implementation is missing. An `Effect`-kinded argument
-elaborates through `kindArgMono … KRow` to `TEff (rowArgOf …)`, and `rowArgOf`
-yields a **closed** `EffRow atoms None`; `unifyN (TEff r₁) (TEff r₂)` then routes to
+elaborates through `kindArgMono … KRow` to `TEff (rowArgOf …)`. For the shape at
+issue — a **written closed row** (`<Stdout>`, `⟨ ⟩`) in the index slot — `rowArgOf`
+yields a closed `EffRow atoms None`; `unifyN (TEff r₁) (TEff r₂)` then routes to
 the arrow-row unifier, whose closed-versus-closed arm — `unifyRowN (EffRow _ None)
 (EffRow _ None) = ()`, `compiler/types/typecheck.mdk:981` — is a **documented
 silent no-op**. Its comment justifies the leniency for *arrows*, where direction is
 recovered later by `launderEscapeFromLog`, and signs off with *"a genuine mismatch
 elsewhere surfaces as a caller-level type mismatch"*. That justification does not
-transfer: **an index is invariant and has no later consumer.** Give either side an
-**open tail** and the guarded arms run `effectLeakCheck` and correctly reject the
-identical program — which is the sharpest available evidence that the rule this
-section states is *implementable*, and merely unreached, in this position. A
-corollary #1094 also records: because `rowArgOf`'s catch-all returns the pure row,
-an ordinary **type** written in the index slot (`Box Int Int`) is silently read as
+transfer: **an index is invariant and has no later consumer.**
+
+(`rowArgOf` is not closed-only in general — `compiler/types/typecheck.mdk:4131-4146`:
+its `TyVar` arm yields an **open** `EffRow [] (Some cell)` when the name resolves
+through the shared `etbl`, and its catch-all yields `pureRow`. The closed reading
+above is scoped to the written-closed-row case the probe exercises.)
+
+Per #1094, giving either side an **open tail** reaches the guarded arms, which run
+`effectLeakCheck` and reject the identical program — the sharpest available
+evidence that the rule this section states is *implementable*, and merely unreached,
+in this position. Note the open-tail arms are not one uniform path: a bare `<e>`
+target can silently absorb, with the rejection landing downstream rather than at the
+index, so "open tail rejects" should be read as *the machinery exists and fires*,
+not as a drop-in specification of where the diagnostic belongs. A corollary #1094
+also records: because `rowArgOf`'s catch-all returns the pure row, an ordinary
+**type** written in the index slot (`Box Int Int`) is silently read as
 `Box ⟨ ⟩ Int`.
 
 Until #1094 is addressed the index is decorative: **the graded story's soundness is
@@ -1190,14 +1284,18 @@ Both options named in §6 above — *defer the arm*, or *keep it eager and charg
 callback's row on the method's own arrow* — are in fact **sound as stated**:
 deferring is silent at construction, and an explicit `→^{e}` on the method arrow
 **is** correctly enforced at the call site. What is false is that the choice is
-**free**. The unsound thing is the *third* shape, and it is the one §6's signatures
-actually give and the one #823 is on course to ship:
+**free**. The unsound thing is not a third *signature* — it is the **combination**
+that results from leaving the fork unmade: §6's uncharged signature,
 
 ```
 gmap : (a →^{e} b) → f e a → f e b            -- no row on the method's own arrows
 ```
 
-Under it an eager impl is **silently accepted** and unsound. Per #1095 the
+— which is exactly the signature option 1 also uses — **paired with an eager
+impl**. Option 1 makes that pairing impossible by changing the *impl*; option 2
+makes it impossible by changing the *signature*. Ship the signature above and then
+write an eager impl anyway, which is what #823 is on course to do if the fork is
+left unmade, and the result is **silently accepted** and unsound. Per #1095 the
 mechanism is `methodEffRetOccs` (`compiler/types/typecheck.mdk:1157-1164`), which
 counts a row-kinded **result-index** occurrence as discharging
 `checkArgEffVarCoverage` — but an index is a promise about *force* time, not a
@@ -1225,9 +1323,11 @@ the fact that there were two, disagreeing, is most of the reason to retire them.
 Two properties motivate retiring them, both probe-established rather than argued:
 
 **1. The interface rule makes a kind a NON-LOCAL property of the method set.**
-Adding or removing an unrelated method silently re-kinds the interface, and the
-resulting error names neither kinds nor the method that moved. Verified with a
-two-file pair differing by exactly one line (2026-07-26):
+Adding or removing an unrelated method silently re-kinds the interface. The
+resulting error names **the kinds** — prominently and well — but not **the method
+that moved**, which is the fact the writer needs and the only one the diagnostic
+cannot recover. Verified with a two-file pair differing by exactly one line
+(2026-07-26):
 
 ```
 data Pair x y = MkPair y
@@ -1284,8 +1384,11 @@ Listed rather than smoothed over, because a guessed answer here has cost this
 document three public retractions already (PRs #999/#1001).
 
 - **Q1 — the `Deferred*` METHOD names.** The interface names are decided; the
-  methods are not. `gmap`/`gpure`/`gap`/`gandThen` is what in-tree fixtures spell,
-  and `DeferredMappable.gmap` pairs a descriptive interface name with a cryptic
+  methods are not, and they are not all attested: only `gandThen`/`gmap`/`grun`
+  (`test/engine_fixtures/graded_iface_async.mdk`) and `gpure`
+  (`test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`) are spelled
+  anywhere in the tree — **`gap` is this document's own invention.**
+  `DeferredMappable.gmap` also pairs a descriptive interface name with a cryptic
   prefix. Constraint that any answer must respect: the names must stay distinct
   from the plain family's, since sharing them would make the unqualified `andThen`
   that `do` desugars to pick one interface and break the prelude's containers
@@ -1337,7 +1440,20 @@ document three public retractions already (PRs #999/#1001).
   an alias head by symmetry with the other binding forms. Whether an alias may
   *abstract over* a row in a way its expansion does not (partial application,
   an alias whose right-hand side drops the parameter) was not investigated and no
-  behaviour is asserted.
+  behaviour is asserted. One cheap fact that bounds the question: **today an alias
+  parameter can never be `Effect`-kinded at all.** Probed —
+
+  ```
+  data Later e a = Now a | Wait (Unit -> <e> Later e a)
+  type LaterInt e = Later e Int
+  useIt : LaterInt <IO> -> Int          -- T-ROW-KIND-MISMATCH at the row
+  ```
+
+  — because the retired inference rule reads kindedness off a *variant field's*
+  effect tail and an alias has no variants (the same non-transitivity as §6.8's
+  point 2). So there is no existing behaviour to preserve or contradict here: the
+  alias case is entirely greenfield, which makes Q5 cheap to settle and means
+  nothing depends on settling it now.
 - **Q6 — the `do`-routing keyword's spelling** (#824). A separate keyword mirroring
   `do` is decided; the word is not. `defer` reads as "run at scope exit" to anyone
   arriving from Go or Zig.

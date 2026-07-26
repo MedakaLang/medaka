@@ -380,6 +380,15 @@ interface elaborates to an ordinary dictionary, one instance per constructor
 with the rows they are, and — the point — the graded impl inhabits its scheme at
 full generality, so W3 holds for it with **no exemption**.
 
+⚠️ **"No exemption" is a property of the design, not a description of the current
+implementation.** Two verified S0s stand between the two: the `Effect`-kinded index
+slot is not checked at unification at all (#1094), and a result-index occurrence is
+miscounted as discharging the argument-coverage rule, so a graded impl that applies
+its callback eagerly launders (#1095). Until those are addressed, migrating an impl
+off the #817 carve-out and onto a graded signature moves it from a *tracked*
+exemption to an *untracked* hole. See [`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md)
+§6.7 for both mechanisms and §6.9 for what the graded design still leaves open.
+
 W3 needs **no variance analysis**: rigidity decides scheme membership
 uniformly. In particular a body like `mk d = k ⇒ k ()` (fixing `b` to a
 callback-taking arrow — a shape a variance-aware effect check would be tempted
