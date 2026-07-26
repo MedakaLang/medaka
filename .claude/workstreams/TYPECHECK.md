@@ -16,6 +16,66 @@ coherence prelude-exclusion rule). This file carries only what the consolidation
 
 ---
 
+## 🚦 Standing gate: five questions before fixing ANY typechecker bug
+
+This is keyed to the **`ws:typecheck` label, not to a skill**, and it fires first because it
+gates everything else in this file. `harden-typechecker` is narrower than it looks — a fix that
+threads through resolve/eval/desugar routes to `add-language-feature` instead (`AGENTS.md`), and
+a gate parked in a skill would silently miss that fix. Keying it to the label instead of a skill
+closes that gap.
+
+**Before fixing ANY typechecker bug, answer these five questions IN WRITING on the issue or PR:**
+
+1. Does this bug represent an **architectural issue** or simply an **implementation gap**?
+2. Is there a **formal semantics** outlining the way this should behave? If yes, why aren't we
+   following it? If no, why not?
+3. Can this bug be fixed by making a **larger, more principled fix** to the surrounding
+   typechecker machinery?
+4. Are there **adjacent bugs** that we can find or have already filed near this one? If yes, is
+   there a **single fix that resolves the entire class**?
+5. What is the **most ideal principled way** to resolve this bug so that the typechecker becomes
+   more robust and properly architected?
+
+**Why this exists.** `compiler/types/typecheck.mdk` is the most fragile, highest-consequence file
+in the tree, and its bug history is dominated by fixes that *relocated* a defect rather than
+removing it:
+
+- **#1044 was created by #1007.** #1007 fixed a real def-site omission by re-keying impl-method
+  heads through `nsTy` instead of `nsMethod` — the right handle, but `nsTy` has the same
+  one-slot-per-name property `nsMethod` had, so an imported *type* sharing the interface's name
+  now steals the slot (#1044). #1070's audit calls this out by name: *"relocating the lookup is
+  not a fix."*
+- **#674's fix covered only ONE import spelling.** `import amod.{A1(..)}` resolves correctly;
+  `import amod.{A1, Dup}` still gets the wrong type, because the patch matched
+  `ctorMemberTypeName` against the `(..)` import flag rather than fixing the underlying bare-name
+  keying (#1070).
+- **The P0-9 cross-module constructor fix patched `compiler/eval/eval.mdk` and left its parallel
+  driver `compiler/ir/core_ir_eval.mdk` broken for months** — documented in `AGENTS.md`'s
+  `evalModules`/`cevalModules` trap.
+
+**Application notes:**
+
+- **Write the answers into the issue/PR body.** Unwritten answers become a ritual that gets
+  nodded through; written ones are reviewable at adversarial review, which is already mandatory
+  for S0 fixes.
+- **The implementing agent must not self-grade.** It will rationalise toward the small fix it
+  already wants to make. The adversarial reviewer checks the answers, not the author.
+- **Concrete discriminator for questions 1 and 3:** does the fix change the KEY or the
+  REPRESENTATION, or does it merely add a guard at ONE READ SITE? The second masquerading as the
+  first is this file's signature failure mode.
+- **Question 2 has a real answer path.** Medaka has formal specs for several subsystems —
+  `docs/spec/DICT-SEMANTICS.md`, `docs/spec/EFFECTS-SEMANTICS.md`, `docs/spec/SHADOW-SEMANTICS.md`,
+  `docs/spec/LAYOUT-SEMANTICS.md`. "No formal semantics exists" is therefore a **finding**, not an
+  excuse: the fix should come with one. PR #1093 (open) is the worked example — it specified
+  declared type-parameter kinds before any implementation began.
+- **Question 4 is the highest-yield.** Worked example: #1069, #1092, and five more rows of
+  #1070's audit are ONE class — bare-`String`-keyed cross-module registries — filed as separate
+  bugs. #1070's own remedy section says explicitly that the fix is **"NOT N patches."**
+- **Accepted cost:** this slows S0 fixes, and there are roughly a dozen open. The owner judged it
+  net-positive against a track record of fixes spawning adjacent bugs.
+
+---
+
 ## Why this workstream exists
 
 The HM core (levels + path-compressed union-find + value restriction) is excellent — do not
