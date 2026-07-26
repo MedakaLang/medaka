@@ -369,15 +369,26 @@ functor/monad impls must store the method's callback in the container — the so
 result index is `e ⊔ e'`, inexpressible with the head fixed at `Async e`, so the
 body can only typecheck by identifying a caller-owned effect variable with the
 instance-head row parameter (the tracked #817 exemption). The resolution is
-**graded interfaces** — interfaces over row-indexed constructors
-`f : Row → Type → Type` whose signatures compose indices by the row join in result
-position (`gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b`); see
-[`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 "Graded interfaces" for the
-semantics and #820 for the plan. Dictionary-wise nothing changes: a graded
+**graded interfaces** — the `Deferred*` family, interfaces over effect-indexed
+constructors `f : Effect → Type → Type` whose signatures compose indices by the row
+join in result position (`gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b`); see
+[`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 "Graded (`Deferred*`)
+interfaces" for the semantics, §6.1–§6.5 for the declared kind, and #820 for the
+plan. Dictionary-wise nothing changes: a graded
 interface elaborates to an ordinary dictionary, one instance per constructor
-*family* (`impl GMappable Async` — no overlap-on-grade dimension), grades erase
+*family* (`impl DeferredMappable Async` — no overlap-on-grade dimension), grades erase
 with the rows they are, and — the point — the graded impl inhabits its scheme at
 full generality, so W3 holds for it with **no exemption**.
+
+⚠️ **"No exemption" is a property of the design, not a description of the current
+implementation.** Two verified S0s stand between the two: the `Effect`-kinded index
+slot is not checked at unification at all (#1094), and a result-index occurrence is
+miscounted as discharging the argument-coverage rule, so a graded impl that applies
+its callback eagerly launders (#1095). Until those are addressed, migrating an impl
+off the #817 carve-out and onto a graded signature moves it from a *tracked*
+exemption to an *unchecked* one — filed, but with nothing in the type system
+stopping it. See [`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md)
+§6.7 for both mechanisms and §6.9 for what the graded design still leaves open.
 
 W3 needs **no variance analysis**: rigidity decides scheme membership
 uniformly. In particular a body like `mk d = k ⇒ k ()` (fixing `b` to a
