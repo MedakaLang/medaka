@@ -68,9 +68,12 @@ removing it:
   `docs/spec/LAYOUT-SEMANTICS.md`. "No formal semantics exists" is therefore a **finding**, not an
   excuse: the fix should come with one. PR #1093 (open) is the worked example — it specified
   declared type-parameter kinds before any implementation began.
-- **Question 4 is the highest-yield.** Worked example: #1069, #1092, and five more rows of
-  #1070's audit are ONE class — bare-`String`-keyed cross-module registries — filed as separate
-  bugs. #1070's own remedy section says explicitly that the fix is **"NOT N patches."**
+- **Question 4 is the highest-yield.** Worked example: bare-`String`-keyed cross-module
+  registries are ONE class — two filed separately (#1069, #1092), the rest recorded as audit rows
+  in #1070 (still owed, per its own "Owed" section) — so the fix is not N patches. (An earlier
+  draft of this bullet claimed all seven were filed separately — an encoded count nobody had
+  derived against the tracker. Corrected in review; a fitting place for it, since an unverified
+  count is exactly what this gate exists to catch.)
 - **Accepted cost:** this slows S0 fixes, and there are roughly a dozen open. The owner judged it
   net-positive against a track record of fixes spawning adjacent bugs.
 
