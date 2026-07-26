@@ -369,13 +369,14 @@ functor/monad impls must store the method's callback in the container — the so
 result index is `e ⊔ e'`, inexpressible with the head fixed at `Async e`, so the
 body can only typecheck by identifying a caller-owned effect variable with the
 instance-head row parameter (the tracked #817 exemption). The resolution is
-**graded interfaces** — interfaces over row-indexed constructors
-`f : Row → Type → Type` whose signatures compose indices by the row join in result
-position (`gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b`); see
-[`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 "Graded interfaces" for the
-semantics and #820 for the plan. Dictionary-wise nothing changes: a graded
+**graded interfaces** — the `Deferred*` family, interfaces over effect-indexed
+constructors `f : Effect → Type → Type` whose signatures compose indices by the row
+join in result position (`gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b`); see
+[`EFFECTS-SEMANTICS.md`](EFFECTS-SEMANTICS.md) §6 "Graded (`Deferred*`)
+interfaces" for the semantics, §6.1–§6.5 for the declared kind, and #820 for the
+plan. Dictionary-wise nothing changes: a graded
 interface elaborates to an ordinary dictionary, one instance per constructor
-*family* (`impl GMappable Async` — no overlap-on-grade dimension), grades erase
+*family* (`impl DeferredMappable Async` — no overlap-on-grade dimension), grades erase
 with the rows they are, and — the point — the graded impl inhabits its scheme at
 full generality, so W3 holds for it with **no exemption**.
 
