@@ -1,0 +1,16 @@
+-- issue #1092: `mth` is imported UNAMBIGUOUSLY from IB (`import ifaceb.{IB, mth}`) --
+-- IA's mth is never brought into scope.  Blob implements ONLY IA, so this call
+-- should be rejected: "No impl of IB for Blob".  Because ifaceb's import line
+-- registers first and ifacea's registers last, methodIfaceParamsRef's single
+-- bare-name entry for `mth` ends up owned by IA -- the checker tests against IA
+-- (which Blob DOES implement) instead of IB (the interface this call actually
+-- names).  check/run/build all clean; the built binary prints `1`, IA's impl
+-- body, for a call spelled as IB.mth on a type with no IB impl at all.
+import ifaceb.{IB, mth}
+import ifacea.{IA}
+
+public export data Blob = Blob
+export impl IA Blob where
+  mth b = 1
+
+main = println (mth Blob)
