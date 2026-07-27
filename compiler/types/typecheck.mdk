@@ -978,7 +978,98 @@ unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- closed-actual branch), which is exactly what the retired pre-unify walk did.  Absent that
 -- consumer this arm stays lenient (a genuine mismatch elsewhere surfaces as a caller-level
 -- type mismatch, as before).
+-- ⚠️ EVERY WORD ABOVE IS SCOPED TO AN ARROW'S LATENT ROW.  It does NOT transfer to a row
+-- sitting in an `Effect`-kinded type-ARGUMENT slot (`Async <Stdout> Int`): an index is
+-- INVARIANT, has no expected/actual asymmetry to worry about, and has no downstream
+-- launder consumer to recover the direction — so "a genuine mismatch surfaces elsewhere"
+-- is simply false there and the atoms are discarded for good (#1094, an S0).  Index rows
+-- therefore route to `unifyIndexRow` below, NOT here.  Do not re-point `unifyN`'s
+-- `TEff`/`TEff` arm at `unifyRow`.
 unifyRowN (EffRow _ None) (EffRow _ None) = ()
+
+-- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
+-- `Mono` carries two different kinds of row and they obey different rules:
+--   * `TFun _ EffRow _` — an arrow's LATENT row.  Sub-effecting via row-polymorphic
+--     re-open (§5) is load-bearing; `unifyRow` above is written for it.
+--   * `TEff EffRow`     — a row in an `Effect`-kinded type-argument (INDEX) slot.
+--     EFFECTS-SEMANTICS §9 "Index fidelity": `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable
+--     only when `φ₁ = φ₂`.  INVARIANT — no direction of `≤` is licensed here.  A
+--     parameter's polarity is not knowable without a variance analysis, which this
+--     compiler does not have, and a CONTRAVARIANT index is writable today
+--     (`data Sink e = MkSink ((Unit -> <e> Unit) -> Int)`), so widening in EITHER
+--     direction launders an effect.  Only equality is sound.
+-- `substMonoP` already encodes this distinction (it wraps an arrow row in `reopenRow`
+-- and passes a `TEff` row through UNCHANGED); routing both through one unifier threw
+-- that decision away.  This restores the agreement.
+--
+-- ⚠️ INVARIANCE IS NOT "BOTH SIDES CLOSED AND EQUAL" CHECKED AT THE TOP.  Solving an
+-- index METAVARIABLE against a written row is instantiation, not interchange, and must
+-- keep working — `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:17`
+-- (`mkPure : a -> Async <> a`, body `Done x`) unifies a FRESH OPEN effvar against the
+-- written closed `<>`.  So the OPEN-tailed cases are not blanket-rejected.
+--
+-- ⚠️ BUT "every open-tailed arm of `unifyRowN` is already invariance-correct" is FALSE,
+-- and an earlier revision of this comment said it.  Exactly TWO of the three open-tailed
+-- shapes are:
+--   * open~closed / closed~open — binds the tail to the exact difference and
+--     `effectLeakCheck`s the residue.  Correct: there is a metavariable to solve.
+--   * BOTH-OPEN with DISTINCT tails — ordinary Rémy/Wand unification into a shared fresh
+--     tail.  Correct: two metavariable-tailed rows CAN be made equal, and the join is the
+--     most general row equal to both.
+--   * SAME-TAIL with DIFFERING PREFIXES (`<Stdout | e>` ~ `<e>`, the same physical
+--     effvar) — NOT correct.  `unifyRowN`'s own arm DISCARDS the symmetric difference
+--     ("the atom evaporates … ACCIDENTAL leniency, NOT load-bearing", ~60 lines above).
+--     There is nothing left to solve — the tails are already the same cell — so the
+--     differing prefixes are two genuinely different rows, and dropping the difference is
+--     precisely the widening invariance forbids.  `launderBox : Box <Stdout | e> a ->
+--     Box e a` was accepted, and a value typed `Int` printed.  Hence the same-tail arm
+--     below, BEFORE the delegation.
+--     The benign self-unify `e ~ e` (equal prefixes, including two empty ones) has an
+--     EMPTY diff in both directions, so `relay : Box e a -> Box e a` stays green.
+--     Nothing is lost by intercepting here: the arm this pre-empts would have called
+--     `recordAbsorptions` on exactly this symmetric difference, and a non-empty
+--     difference is now an error instead of a silently-absorbed atom, while an empty one
+--     recorded nothing to begin with.
+--     🚨 DO NOT COPY THIS ARM ONTO `unifyRowN`'s ARROW same-tail arm.  The same discard
+--     launders there too (`launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+--     Unit)` is accepted), but that arm's leniency is NOT the same call: the covering
+--     rule for it was deliberately pushed to DECLARATION time (T-EFFECT-ARG-UNCOVERED /
+--     `checkArgEffVars`, whose own comment cites that arm), and the recordAbsorptions →
+--     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
+--     decision with its own blast radius, tracked separately — not a copy-paste of this.
+unifyIndexRow : EffRow -> EffRow -> Unit
+unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+
+unifyIndexRowN : EffRow -> EffRow -> Unit
+unifyIndexRowN (EffRow l1 None) (EffRow l2 None) =
+  indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+unifyIndexRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+  | effvarId v1 == effvarId v2 =
+    indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+unifyIndexRowN r1 r2 = unifyRowN r1 r2
+
+-- Two index rows with nothing left to solve — both closed, or both already ending in the
+-- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
+-- `atomsDiff` (not `atomsEscape`) on purpose: `expandIoInBound` widens a bound's
+-- `IO` into the security-label alias, which is a SUBSUMPTION step — exactly the ≤ that
+-- invariance forbids here, so `<IO>` and `<Stdout>` are different index rows.
+indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
+indexRowEqCheck [] [] _ _ = ()
+indexRowEqCheck _ _ l1 l2 =
+  pushTypeError "T-EFFECT-INDEX-MISMATCH" (indexRowMismatchMsg l1 l2)
+
+-- ERROR-QUALITY.md: deliberately NOT `effectLeakMsg`'s wording.  "Effectful value used
+-- where <> is allowed, but it performs <Stdout>" is the ARROW message and reads as a lie
+-- here — nothing is being performed at the point of mismatch; two types simply differ.
+-- Symmetric phrasing because `unify` has no expected/actual role.
+indexRowMismatchMsg : List Atom -> List Atom -> String
+indexRowMismatchMsg l1 l2 = "Effect index mismatch: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. \{openRowHint l1}) if it really should accept more."
+
+-- The "make it row-polymorphic" spelling for a row that may be EMPTY: `<>` has no
+-- labels, so the naive `<\{renderAtoms l1} | e>` renders the un-writable `< | e>`.
+openRowHint : List Atom -> String
+openRowHint [] = "`e`"
+openRowHint atoms = "`<\{renderAtoms atoms} | e>`"
 
 -- SOUNDNESS (Phase 146): an open row (an inference-synthesized arrow, i.e. a
 -- concrete value's latent effect) meeting a closed bound — its own labels must
@@ -3299,7 +3390,10 @@ unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
   let _ = unify a1 a2
   let _ = unifyRow r1 r2
   unify b1 b2
-unifyN (TEff r1) (TEff r2) = unifyRow r1 r2
+-- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
+-- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
+-- latent row and is a silent laundering hole for an index.  See `unifyIndexRow`.
+unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2
 unifyN a b = typeMismatch a b
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
@@ -4143,7 +4237,30 @@ rowArgOf etbl (TyEffect labels tail _) =
 -- DISCARDED for dict-passing purposes.
 rowArgOf etbl (TyRow labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
-rowArgOf _ _ = pureRow
+-- #1094: anything else here is an ordinary TYPE written into a row-kinded slot
+-- (`Box Int Int`).  This used to return `pureRow` silently, so the written `Int` was
+-- read back as `Box <> Int` with no diagnostic at all — the same "a row written in a
+-- position the elaborator does not recognise is silently coerced instead of diagnosed"
+-- root as the S0 above, one function apart, which is why it lands in the same change.
+-- It is the MIRROR of the shipped use-site check (`fromAstTypeE`'s `TyRow` arm: a row
+-- written where a type is expected), so it takes the same shipped code rather than
+-- half-applying the decided `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
+-- (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at one site out of three.  `pureRow` stays as the
+-- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
+-- with `TCon "Unit"`.
+rowArgOf _ ty =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyConLoc ty) (typeInRowSlotMsg ty)
+  pureRow
+
+-- Names the offending type, so a signature elaborated twice folds into one diagnostic.
+-- ⚠️ `pushTypeErrorOnceAt` keys on the MESSAGE TEXT ALONE — the loc is NOT part of the
+-- key (see its body).  So two different bad slots holding the SAME offending type
+-- (`weird : Box Int Int` and `alsoWeird : Box Int Unit`) collapse to ONE diagnostic and
+-- the second is silently unreported.  That is the behaviour of both shipped
+-- `T-ROW-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
+-- but do not read the type name in the message as making the key per-slot.
+typeInRowSlotMsg : Ty -> String
+typeInRowSlotMsg ty = "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
 -- into an etbl with shared effvars before elaborating).  Walks the whole type.

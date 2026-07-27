@@ -1,0 +1,78 @@
+-- #1094 ACCEPT half, and the "feature + UNRELATED code still behaves" fixture
+-- (AGENTS.md: the assertion is deliberately about code that does NOT use the new
+-- machinery).  Everything below must check clean.
+--
+-- Three things it pins, in order of how easy each is to break with a naive
+-- "both index rows must be closed and equal" check written at the top of unify:
+--
+-- 1. INSTANTIATION IS NOT INTERCHANGE.  `pureBox`'s written closed `<>` meets the
+--    FRESH OPEN effvar that instantiating `MkBox`'s scheme mints.  That is the
+--    open~closed arm — solving a metavariable, not comparing two written rows — and
+--    it must keep working.  (Same shape as `mkPure : a -> Async <> a` in
+--    graded_closed_row_grade_ok.mdk, the fixture most likely to catch a botched fix.)
+-- 2. EQUAL closed index rows still unify.  Invariance rejects DIFFERENT rows, not
+--    every written one: `alsoLoud = loud` at `Box <Stdout> Unit` is fine.
+-- 3. A row-POLYMORPHIC index still generalises and instantiates freely (`unbox`,
+--    `mkBox`, `relay`), including against an open-tailed written row (`widen`).
+-- 4. SAME-TAIL WITH EQUAL PREFIXES. `relay` (two empty prefixes) and `widen` (two
+--    `<Stdout>` prefixes) both unify two index rows ending in the SAME effvar cell.
+--    Their symmetric difference is empty, so they are the same row and must be
+--    accepted. This is the control for effect_index_same_tail_prefix.mdk, where the
+--    prefixes DIFFER and the row is rejected — rejecting these two instead would be
+--    the obvious over-correction, and it is what this half of the fixture forbids.
+--
+-- The unrelated half — `Pair`, `Swapper`, `firstOf`, `idString` — mentions no effect
+-- row, no index, and no `Box`.  Its inferred schemes are in this fixture's golden, so
+-- a change that perturbs ordinary elaboration shows up here even though none of that
+-- code goes near the index unifier.
+--
+-- ⚠️ READING THE GOLDEN: `mkBox` is pinned as `mkBox : (Unit -> a) -> Box b a` for the
+-- source `(Unit -> <e> a) -> Box e a`.  Do NOT read that as "the callback's row and the
+-- index are unrelated variables" — they are the SAME variable and are correctly linked
+-- (probed).  The printer simply ERASES an arrow's effect row when rendering a scheme and
+-- letters the surviving index independently, so one source `e` renders as an absent row
+-- on the arrow and as `b` on the index.  Same reason `unbox : Box a b -> b` shows no
+-- `<a>` on its result.
+data Box e a = MkBox (Unit -> <e> a)
+
+unbox : Box e a -> <e> a
+unbox (MkBox t) = t ()
+
+mkBox : (Unit -> <e> a) -> Box e a
+mkBox t = MkBox t
+
+relay : Box e a -> Box e a
+relay b = b
+
+-- (1) written closed `<>` against the fresh index var from MkBox's scheme
+pureBox : Unit -> Box <> Unit
+pureBox u = MkBox (v => ())
+
+shout : Unit -> <Stdout> Unit
+shout u = shout u
+
+loud : Box <Stdout> Unit
+loud = MkBox shout
+
+-- (2) equal closed index rows
+alsoLoud : Box <Stdout> Unit
+alsoLoud = loud
+
+-- (3) an OPEN-tailed written index absorbs a narrower one
+widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit
+widen b = b
+
+-- ── unrelated: nothing here mentions Box, an effect row, or an index ──────────
+data Pair a b = MkPair a b
+
+interface Swapper t where
+  swap : t a b -> t b a
+
+impl Swapper Pair where
+  swap (MkPair a b) = MkPair b a
+
+firstOf : Pair a b -> a
+firstOf (MkPair a _) = a
+
+idString : String -> String
+idString s = s

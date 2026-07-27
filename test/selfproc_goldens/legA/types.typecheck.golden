@@ -671,6 +671,8 @@ indexOfId : Int -> List Int -> Option Int
 indexOfIdGo : Int -> Int -> List Int -> Option Int
 indexOfInt : Int -> List Int -> Int
 indexOfIntGo : Int -> List Int -> Int -> Int
+indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
+indexRowMismatchMsg : List Atom -> List Atom -> String
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferApp : List (String, Expr) -> Expr -> Mono -> Mono -> Mono
@@ -973,6 +975,7 @@ occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
 opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
 openRow : Unit -> EffRow
+openRowHint : List Atom -> String
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 ordCompareOp : Mono -> Mono -> Mono
 overAppliedMsg : String -> Int -> Int -> String
@@ -1377,6 +1380,7 @@ tyVarNames : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
 typeErrorLines : List String -> List String
 typeErrorsSticky : Ref Bool
+typeInRowSlotMsg : Ty -> String
 typeMismatch : Mono -> Mono -> Unit
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit
 typeMismatchReport : Mono -> Mono -> Unit
@@ -1395,6 +1399,8 @@ unifyAllNumlit : Mono -> List Mono -> Unit
 unifyClauses : TcEnv -> Mono -> List (List Pat, Expr) -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> List (Int, Mono) -> List FieldAssign -> Unit
+unifyIndexRow : EffRow -> EffRow -> Unit
+unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyN : Mono -> Mono -> Unit
 unifyParamsExpected : List Mono -> List Mono -> Unit
 unifyRow : EffRow -> EffRow -> Unit

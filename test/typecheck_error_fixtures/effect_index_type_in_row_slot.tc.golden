@@ -1,0 +1,1 @@
+TYPE ERROR: The type `String` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature.

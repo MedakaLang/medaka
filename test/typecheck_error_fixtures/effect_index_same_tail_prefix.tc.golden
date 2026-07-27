@@ -1,0 +1,1 @@
+TYPE ERROR: Effect index mismatch: <> vs <Stdout>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. `e`) if it really should accept more.
