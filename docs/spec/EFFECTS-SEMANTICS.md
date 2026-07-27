@@ -1593,13 +1593,55 @@ the extern catalog is trusted, like any FFI boundary.
   honors `M`, the module cannot act outside its declared capabilities.
 - **Index fidelity (effect-indexed data).** For a constructor of kind
   `Effect → Type → Type`, the index is part of the type and is checked as such:
-  `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable only where the row order `≤` (§2.4)
-  permits, exactly as any other type argument. Without this the index carries no
-  guarantee at all, and every statement below that mentions a registered effect is
-  vacuous. ⚠️ **Probed and currently FALSE on the implementation** — see §6.7,
-  finding 1, and #1094: the closed-versus-closed arm of the row unifier is a
-  documented silent no-op whose justification is arrow-specific and does not
-  transfer to an invariant index.
+  `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable only when `φ₁ = φ₂`. **The index is
+  invariant**, not sub-effected — no direction of `≤` (§2.4) is licensed at this
+  slot. Without this the index carries no guarantee at all, and every statement
+  below that mentions a registered effect is vacuous.
+
+  **Correction — the rule as PR #1093 first stated it was unsound, and
+  self-contradicting.** That revision said the two were interchangeable "only
+  where the row order `≤` permits, exactly as any other type argument": covariant
+  widening, gated by `≤`. Four lines later its own ⚠️ said the arrow-unifier's
+  leniency "does not transfer to an invariant index" — the operative sentence and
+  the caveat sentence could not both be true, and this is the document's second
+  correction in this area (§6.7 finding 2 already corrected the eager-arm
+  asymmetry; see also PRs #999/#1001). It is recorded rather than quietly
+  rewritten, per that same convention.
+
+  The `≤` rule is not just internally inconsistent — it is disproven. A
+  **contravariant** `Effect`-indexed type is expressible and its kind is inferred
+  correctly:
+  ```
+  data Sink e = MkSink ((Unit -> <e> Unit) -> Int)
+  ```
+  Widening `pureSink : Sink <>` to `Sink <Stdout>` is exactly the `<> ≤ <Stdout>`
+  step the old rule licensed, and it makes a binding typed `Int` — carrying no
+  effect row at all — print at runtime, on both engines. **Why not covariance:** a
+  parameter's polarity in `F` (co-, contra-, or non-variant) is not knowable
+  without a variance analysis, which Medaka does not have; the widening direction
+  that is safe for a covariant occurrence is exactly the direction that is unsafe
+  for a contravariant one, so no direction of weakening is sound in general — only
+  equality is. **Why invariance costs almost nothing:** with *inferred* indices,
+  open-row unification already computes the join before invariance is ever asked
+  to compare two closed rows — an `if` across two branches with different tails
+  yields one joined row (`Async <Stdin, Stdout | a>`), not two concrete rows for
+  invariance to reject. Invariance only bites when a program writes two different
+  **concrete** rows into the same slot, which is exactly the case that should be
+  flagged rather than silently widened. (Established by probe.)
+
+  The removed clause — "exactly as any other type argument" — was also
+  independently wrong, and is not replaced with a repaired version of the same
+  appeal: ordinary type arguments are precisely where this covariant-widening bug
+  lives today (see #1098 — `Ref (Unit -> <> Unit)` widens to `Ref (Unit ->
+  <Stdout> Unit)`, and a write through the alias makes a no-row read print). Index
+  invariance does not rest on how sibling type-argument positions behave; it
+  stands on the variance argument above alone.
+
+  ⚠️ **Probed and currently FALSE on the implementation** — see §6.7, finding 1,
+  and #1094: the closed-versus-closed arm of the row unifier is a documented
+  silent no-op whose justification is arrow-specific and does not transfer to an
+  invariant index. (Unaffected by the correction above: the implementation was
+  never enforcing `≤` at this slot either — it enforces nothing.)
 - **Deferred discharge.** Every elimination form of an effect-indexed type that
   *runs* a registered computation charges that computation's index on its own
   latent row (§6.7). Together with index fidelity this is what makes "registered
