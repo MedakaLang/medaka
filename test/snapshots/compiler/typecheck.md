@@ -1,5 +1,5 @@
 # META
-source_lines=18551
+source_lines=18634
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -982,7 +982,68 @@ unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- closed-actual branch), which is exactly what the retired pre-unify walk did.  Absent that
 -- consumer this arm stays lenient (a genuine mismatch elsewhere surfaces as a caller-level
 -- type mismatch, as before).
+-- ⚠️ EVERY WORD ABOVE IS SCOPED TO AN ARROW'S LATENT ROW.  It does NOT transfer to a row
+-- sitting in an `Effect`-kinded type-ARGUMENT slot (`Async <Stdout> Int`): an index is
+-- INVARIANT, has no expected/actual asymmetry to worry about, and has no downstream
+-- launder consumer to recover the direction — so "a genuine mismatch surfaces elsewhere"
+-- is simply false there and the atoms are discarded for good (#1094, an S0).  Index rows
+-- therefore route to `unifyIndexRow` below, NOT here.  Do not re-point `unifyN`'s
+-- `TEff`/`TEff` arm at `unifyRow`.
 unifyRowN (EffRow _ None) (EffRow _ None) = ()
+
+-- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
+-- `Mono` carries two different kinds of row and they obey different rules:
+--   * `TFun _ EffRow _` — an arrow's LATENT row.  Sub-effecting via row-polymorphic
+--     re-open (§5) is load-bearing; `unifyRow` above is written for it.
+--   * `TEff EffRow`     — a row in an `Effect`-kinded type-argument (INDEX) slot.
+--     EFFECTS-SEMANTICS §9 "Index fidelity": `F φ₁ τ̄` and `F φ₂ τ̄` are interchangeable
+--     only when `φ₁ = φ₂`.  INVARIANT — no direction of `≤` is licensed here.  A
+--     parameter's polarity is not knowable without a variance analysis, which this
+--     compiler does not have, and a CONTRAVARIANT index is writable today
+--     (`data Sink e = MkSink ((Unit -> <e> Unit) -> Int)`), so widening in EITHER
+--     direction launders an effect.  Only equality is sound.
+-- `substMonoP` already encodes this distinction (it wraps an arrow row in `reopenRow`
+-- and passes a `TEff` row through UNCHANGED); routing both through one unifier threw
+-- that decision away.  This restores the agreement.
+--
+-- ⚠️ INVARIANCE IS NOT "BOTH SIDES CLOSED AND EQUAL" CHECKED AT THE TOP.  Solving an
+-- index METAVARIABLE against a written row is instantiation, not interchange, and must
+-- keep working — `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:17`
+-- (`mkPure : a -> Async <> a`, body `Done x`) unifies a FRESH OPEN effvar against the
+-- written closed `<>`.  So every open-tailed case delegates to `unifyRowN` verbatim:
+-- those arms are already invariance-correct (open~open is ordinary Rémy/Wand row
+-- unification; open~closed binds the tail to the exact difference and `effectLeakCheck`s
+-- the residue).  ONLY the closed~closed arm — the one with nothing left to solve —
+-- changes, from a silent no-op to set equality.
+unifyIndexRow : EffRow -> EffRow -> Unit
+unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
+
+unifyIndexRowN : EffRow -> EffRow -> Unit
+unifyIndexRowN (EffRow l1 None) (EffRow l2 None) =
+  indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+unifyIndexRowN r1 r2 = unifyRowN r1 r2
+
+-- Two CLOSED index rows are the same type iff neither side carries an atom the other
+-- lacks.  `atomsDiff` (not `atomsEscape`) on purpose: `expandIoInBound` widens a bound's
+-- `IO` into the security-label alias, which is a SUBSUMPTION step — exactly the ≤ that
+-- invariance forbids here, so `<IO>` and `<Stdout>` are different index rows.
+indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
+indexRowEqCheck [] [] _ _ = ()
+indexRowEqCheck _ _ l1 l2 =
+  pushTypeError "T-EFFECT-INDEX-MISMATCH" (indexRowMismatchMsg l1 l2)
+
+-- ERROR-QUALITY.md: deliberately NOT `effectLeakMsg`'s wording.  "Effectful value used
+-- where <> is allowed, but it performs <Stdout>" is the ARROW message and reads as a lie
+-- here — nothing is being performed at the point of mismatch; two types simply differ.
+-- Symmetric phrasing because `unify` has no expected/actual role.
+indexRowMismatchMsg : List Atom -> List Atom -> String
+indexRowMismatchMsg l1 l2 = "Effect index mismatch: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. \{openRowHint l1}) if it really should accept more."
+
+-- The "make it row-polymorphic" spelling for a row that may be EMPTY: `<>` has no
+-- labels, so the naive `<\{renderAtoms l1} | e>` renders the un-writable `< | e>`.
+openRowHint : List Atom -> String
+openRowHint [] = "`e`"
+openRowHint atoms = "`<\{renderAtoms atoms} | e>`"
 
 -- SOUNDNESS (Phase 146): an open row (an inference-synthesized arrow, i.e. a
 -- concrete value's latent effect) meeting a closed bound — its own labels must
@@ -3303,7 +3364,10 @@ unifyN (TFun a1 r1 b1) (TFun a2 r2 b2) =
   let _ = unify a1 a2
   let _ = unifyRow r1 r2
   unify b1 b2
-unifyN (TEff r1) (TEff r2) = unifyRow r1 r2
+-- #1094: an `Effect`-kinded type-ARGUMENT row is INVARIANT and gets its own unifier.
+-- `unifyRow` is the ARROW-row unifier; its closed~closed leniency is justified for a
+-- latent row and is a silent laundering hole for an index.  See `unifyIndexRow`.
+unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2
 unifyN a b = typeMismatch a b
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
@@ -4147,7 +4211,26 @@ rowArgOf etbl (TyEffect labels tail _) =
 -- DISCARDED for dict-passing purposes.
 rowArgOf etbl (TyRow labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
-rowArgOf _ _ = pureRow
+-- #1094: anything else here is an ordinary TYPE written into a row-kinded slot
+-- (`Box Int Int`).  This used to return `pureRow` silently, so the written `Int` was
+-- read back as `Box <> Int` with no diagnostic at all — the same "a row written in a
+-- position the elaborator does not recognise is silently coerced instead of diagnosed"
+-- root as the S0 above, one function apart, which is why it lands in the same change.
+-- It is the MIRROR of the shipped use-site check (`fromAstTypeE`'s `TyRow` arm: a row
+-- written where a type is expected), so it takes the same shipped code rather than
+-- half-applying the decided `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
+-- (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at one site out of three.  `pureRow` stays as the
+-- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
+-- with `TCon "Unit"`.
+rowArgOf _ ty =
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyConLoc ty) (typeInRowSlotMsg ty)
+  pureRow
+
+-- Names the offending type, which also makes the dedup key vary: `pushTypeErrorOnceAt`
+-- (matching the two shipped `T-ROW-KIND-MISMATCH` sites) then folds a signature
+-- elaborated twice into one diagnostic while still reporting two DIFFERENT bad slots.
+typeInRowSlotMsg : Ty -> String
+typeInRowSlotMsg ty = "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
 -- into an etbl with shared effvars before elaborating).  Walks the whole type.
@@ -18838,6 +18921,19 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyRowN" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "v1")) (EApp (EVar "ELink") (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None")))))))
 (DFunDef false "unifyRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "v2")) (EApp (EVar "ELink") (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None")))))))
 (DFunDef false "unifyRowN" ((PCon "EffRow" PWild (PCon "None")) (PCon "EffRow" PWild (PCon "None"))) (ELit LUnit))
+(DTypeSig false "unifyIndexRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
+(DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
+(DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EVar "r1")) (EVar "r2")))
+(DTypeSig false "indexRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
+(DFunDef false "indexRowEqCheck" ((PList) (PList) PWild PWild) (ELit LUnit))
+(DFunDef false "indexRowEqCheck" (PWild PWild (PVar "l1") (PVar "l2")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-INDEX-MISMATCH"))) (EApp (EApp (EVar "indexRowMismatchMsg") (EVar "l1")) (EVar "l2"))))
+(DTypeSig false "indexRowMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
+(DFunDef false "indexRowMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Effect index mismatch: <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> vs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString ">. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. "))) (EApp (EVar "display") (EApp (EVar "openRowHint") (EVar "l1")))) (ELit (LString ") if it really should accept more."))))
+(DTypeSig false "openRowHint" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "openRowHint" ((PList)) (ELit (LString "`e`")))
+(DFunDef false "openRowHint" ((PVar "atoms")) (EBinOp "++" (EBinOp "++" (ELit (LString "`<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "atoms")))) (ELit (LString " | e>`"))))
 (DTypeSig false "effectLeakCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "effectLeakCheck" ((PList) (PVar "bound")) (ELit LUnit))
 (DFunDef false "effectLeakCheck" ((PVar "escaping") (PVar "bound")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "effectLeakMsg") (EVar "bound")) (EVar "escaping"))))
@@ -19186,7 +19282,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyN" ((PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "typeMismatch") (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "unifyN" ((PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EVar "unify") (EVar "b1")) (EVar "b2")))))
 (DFunDef false "unifyN" ((PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EVar "unify") (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2")))
+(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyIndexRow") (EVar "r1")) (EVar "r2")))
 (DFunDef false "unifyN" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "typeMismatch") (EVar "a")) (EVar "b")))
 (DTypeSig false "unifyVars" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit"))))
 (DFunDef false "unifyVars" ((PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EVar "bindVar") (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
@@ -19446,7 +19542,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "None") () (EVar "pureRow"))))
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
-(DFunDef false "rowArgOf" (PWild PWild) (EVar "pureRow"))
+(DFunDef false "rowArgOf" (PWild (PVar "ty")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EApp (EVar "firstTyConLoc") (EVar "ty"))) (EApp (EVar "typeInRowSlotMsg") (EVar "ty")))) (DoExpr (EVar "pureRow"))))
+(DTypeSig false "typeInRowSlotMsg" (TyFun (TyCon "Ty") (TyCon "String")))
+(DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "The type `")) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."))))
 (DTypeSig false "rowArgNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "rowArgNames" ((PVar "ty")) (EApp (EApp (EVar "rowArgNamesIn") (EListLit)) (EVar "ty")))
 (DTypeSig false "rowArgNamesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
@@ -22966,6 +23064,19 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyRowN" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l1")) (EVar "l2"))) (EVar "l2"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "v1")) (EApp (EVar "ELink") (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "None")))))))
 (DFunDef false "unifyRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "effectLeakCheck") (EApp (EApp (EVar "atomsEscape") (EVar "l2")) (EVar "l1"))) (EVar "l1"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "v2")) (EApp (EVar "ELink") (EApp (EApp (EVar "EffRow") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EVar "None")))))))
 (DFunDef false "unifyRowN" ((PCon "EffRow" PWild (PCon "None")) (PCon "EffRow" PWild (PCon "None"))) (ELit LUnit))
+(DTypeSig false "unifyIndexRow" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
+(DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
+(DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
+(DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EVar "r1")) (EVar "r2")))
+(DTypeSig false "indexRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
+(DFunDef false "indexRowEqCheck" ((PList) (PList) PWild PWild) (ELit LUnit))
+(DFunDef false "indexRowEqCheck" (PWild PWild (PVar "l1") (PVar "l2")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-INDEX-MISMATCH"))) (EApp (EApp (EVar "indexRowMismatchMsg") (EVar "l1")) (EVar "l2"))))
+(DTypeSig false "indexRowMismatchMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
+(DFunDef false "indexRowMismatchMsg" ((PVar "l1") (PVar "l2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Effect index mismatch: <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l1")))) (ELit (LString "> vs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "l2")))) (ELit (LString ">. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. "))) (EApp (EMethodRef "display") (EApp (EVar "openRowHint") (EVar "l1")))) (ELit (LString ") if it really should accept more."))))
+(DTypeSig false "openRowHint" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "openRowHint" ((PList)) (ELit (LString "`e`")))
+(DFunDef false "openRowHint" ((PVar "atoms")) (EBinOp "++" (EBinOp "++" (ELit (LString "`<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "atoms")))) (ELit (LString " | e>`"))))
 (DTypeSig false "effectLeakCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))
 (DFunDef false "effectLeakCheck" ((PList) (PVar "bound")) (ELit LUnit))
 (DFunDef false "effectLeakCheck" ((PVar "escaping") (PVar "bound")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EVar "effectLeakMsg") (EVar "bound")) (EVar "escaping"))))
@@ -23314,7 +23425,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyN" ((PVar "t1") (PVar "t2")) (EIf (EApp (EApp (EVar "tupleUnifyClash") (EVar "t1")) (EVar "t2")) (EApp (EApp (EVar "typeMismatch") (EVar "t1")) (EVar "t2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "unifyN" ((PCon "TApp" (PVar "a1") (PVar "b1")) (PCon "TApp" (PVar "a2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "a1")) (EVar "a2"))) (DoExpr (EApp (EApp (EVar "unify") (EVar "b1")) (EVar "b2")))))
 (DFunDef false "unifyN" ((PCon "TFun" (PVar "a1") (PVar "r1") (PVar "b1")) (PCon "TFun" (PVar "a2") (PVar "r2") (PVar "b2"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "a1")) (EVar "a2"))) (DoLet false false PWild (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2"))) (DoExpr (EApp (EApp (EVar "unify") (EVar "b1")) (EVar "b2")))))
-(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyRow") (EVar "r1")) (EVar "r2")))
+(DFunDef false "unifyN" ((PCon "TEff" (PVar "r1")) (PCon "TEff" (PVar "r2"))) (EApp (EApp (EVar "unifyIndexRow") (EVar "r1")) (EVar "r2")))
 (DFunDef false "unifyN" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "typeMismatch") (EVar "a")) (EVar "b")))
 (DTypeSig false "unifyVars" (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyFun (TyApp (TyCon "Ref") (TyCon "Tyvar")) (TyCon "Unit"))))
 (DFunDef false "unifyVars" ((PVar "c1") (PVar "c2")) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (ELit LUnit) (EApp (EApp (EVar "bindVar") (EVar "c1")) (EApp (EVar "TVar") (EVar "c2")))))
@@ -23574,7 +23685,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyVar" (PVar "n"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "etbl")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EListLit)) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "None") () (EVar "pureRow"))))
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
 (DFunDef false "rowArgOf" ((PVar "etbl") (PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "EffRow") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "tailCell") (EVar "etbl")) (EVar "tail"))))
-(DFunDef false "rowArgOf" (PWild PWild) (EVar "pureRow"))
+(DFunDef false "rowArgOf" (PWild (PVar "ty")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-ROW-KIND-MISMATCH"))) (EApp (EVar "firstTyConLoc") (EVar "ty"))) (EApp (EVar "typeInRowSlotMsg") (EVar "ty")))) (DoExpr (EVar "pureRow"))))
+(DTypeSig false "typeInRowSlotMsg" (TyFun (TyCon "Ty") (TyCon "String")))
+(DFunDef false "typeInRowSlotMsg" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (ELit (LString "The type `")) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString "` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."))))
 (DTypeSig false "rowArgNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "rowArgNames" ((PVar "ty")) (EApp (EApp (EVar "rowArgNamesIn") (EListLit)) (EVar "ty")))
 (DTypeSig false "rowArgNamesIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))

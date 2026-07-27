@@ -1,0 +1,25 @@
+-- #1094 S0 REGRESSION PIN.  An `Effect`-kinded type-ARGUMENT slot is INVARIANT
+-- (EFFECTS-SEMANTICS §9, "Index fidelity"): `F <Stdout> a` and `F <> a` are different
+-- types, and no direction of the row order `≤` is licensed between them.
+--
+-- Before the fix `unifyN (TEff _) (TEff _)` routed into the ARROW-row unifier, whose
+-- closed~closed arm is a documented silent no-op — so both written rows landed there,
+-- the atom sets were never compared, and this file CHECKED CLEAN.  Add
+--     unbox : Box e a -> <e> a
+--     pureVal : Unit
+--     pureVal = unbox quiet
+-- and a binding whose scheme carries NO effect row at all performed <Stdout>, on both
+-- the interpreter and the compiled binary, with zero diagnostics.
+--
+-- The mismatch is on the ROW slot only; the value slot was already checked, which is
+-- what localised the hole to the `Effect`-kinded index.
+data Box e a = MkBox (Unit -> <e> a)
+
+shout : Unit -> <Stdout> Unit
+shout u = shout u
+
+loud : Box <Stdout> Unit
+loud = MkBox shout
+
+quiet : Box <> Unit
+quiet = loud

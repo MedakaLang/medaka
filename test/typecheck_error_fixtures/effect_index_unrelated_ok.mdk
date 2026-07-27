@@ -1,0 +1,64 @@
+-- #1094 ACCEPT half, and the "feature + UNRELATED code still behaves" fixture
+-- (AGENTS.md: the assertion is deliberately about code that does NOT use the new
+-- machinery).  Everything below must check clean.
+--
+-- Three things it pins, in order of how easy each is to break with a naive
+-- "both index rows must be closed and equal" check written at the top of unify:
+--
+-- 1. INSTANTIATION IS NOT INTERCHANGE.  `pureBox`'s written closed `<>` meets the
+--    FRESH OPEN effvar that instantiating `MkBox`'s scheme mints.  That is the
+--    open~closed arm — solving a metavariable, not comparing two written rows — and
+--    it must keep working.  (Same shape as `mkPure : a -> Async <> a` in
+--    graded_closed_row_grade_ok.mdk, the fixture most likely to catch a botched fix.)
+-- 2. EQUAL closed index rows still unify.  Invariance rejects DIFFERENT rows, not
+--    every written one: `alsoLoud = loud` at `Box <Stdout> Unit` is fine.
+-- 3. A row-POLYMORPHIC index still generalises and instantiates freely (`unbox`,
+--    `mkBox`, `relay`), including against an open-tailed written row (`widen`).
+--
+-- The unrelated half — `Pair`, `Swapper`, `firstOf`, `idString` — mentions no effect
+-- row, no index, and no `Box`.  Its inferred schemes are in this fixture's golden, so
+-- a change that perturbs ordinary elaboration shows up here even though none of that
+-- code goes near the index unifier.
+data Box e a = MkBox (Unit -> <e> a)
+
+unbox : Box e a -> <e> a
+unbox (MkBox t) = t ()
+
+mkBox : (Unit -> <e> a) -> Box e a
+mkBox t = MkBox t
+
+relay : Box e a -> Box e a
+relay b = b
+
+-- (1) written closed `<>` against the fresh index var from MkBox's scheme
+pureBox : Unit -> Box <> Unit
+pureBox u = MkBox (v => ())
+
+shout : Unit -> <Stdout> Unit
+shout u = shout u
+
+loud : Box <Stdout> Unit
+loud = MkBox shout
+
+-- (2) equal closed index rows
+alsoLoud : Box <Stdout> Unit
+alsoLoud = loud
+
+-- (3) an OPEN-tailed written index absorbs a narrower one
+widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit
+widen b = b
+
+-- ── unrelated: nothing here mentions Box, an effect row, or an index ──────────
+data Pair a b = MkPair a b
+
+interface Swapper t where
+  swap : t a b -> t b a
+
+impl Swapper Pair where
+  swap (MkPair a b) = MkPair b a
+
+firstOf : Pair a b -> a
+firstOf (MkPair a _) = a
+
+idString : String -> String
+idString s = s

@@ -1,0 +1,19 @@
+-- #1094, second half: an ordinary TYPE written into a row-kinded slot.
+--
+-- `Box`'s first parameter has kind `Effect`, so `Box String Unit` is ill-kinded.
+-- `rowArgOf`'s catch-all returned `pureRow` for anything it did not recognise, so the
+-- written `String` was silently coerced to the empty row and `medaka check` printed
+-- the declaration back as `weird : Box <> Unit` — a different type from the one in the
+-- source, with no diagnostic.  Same function and same root cause as the invariance
+-- hole above ("a row position the elaborator does not recognise is silently coerced
+-- instead of diagnosed"), which is why it is fixed in the same change.
+--
+-- It reuses the shipped use-site code `T-ROW-KIND-MISMATCH` — this is the MIRROR of
+-- that check (a type in a row slot rather than a row in a type slot), not a new rule.
+data Box e a = MkBox (Unit -> <e> a)
+
+mk : Unit -> Unit
+mk u = ()
+
+weird : Box String Unit
+weird = MkBox mk
