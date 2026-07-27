@@ -1,0 +1,5 @@
+-- issue #1092: two unrelated interfaces sharing the bare method name `mth`.
+-- methodIfaceParamsRef is keyed by bare name, last-write-wins across the whole
+-- loaded program -- see main.mdk / control.mdk for the collision this produces.
+export interface IA a where
+  mth : a -> Int

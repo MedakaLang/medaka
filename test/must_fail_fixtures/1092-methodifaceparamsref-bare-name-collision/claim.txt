@@ -1,0 +1,38 @@
+issue: 1092
+what: methodIfaceParamsRef (compiler/types/typecheck.mdk, registerMethodIfaceParamsMethods
+what: :15221 / insertMethodIfaceParams :10841-10855) is bare-method-name-keyed and
+what: last-write-wins across the whole loaded program.  Two unrelated interfaces IA and
+what: IB each declare `mth : a -> Int`.  main.mdk imports mth ONLY from IB (`import
+what: ifaceb.{IB, mth}`) and Blob implements ONLY IA -- this call should be rejected,
+what: "No impl of IB for Blob".  Because ifaceb's import line registers first here and
+what: ifacea's registers last, the SAME bare-name table entry gets overwritten by IA,
+what: so the impl-obligation check tests against IA (which Blob DOES implement) instead
+what: of IB (the interface the call actually names).  check/run/build all clean; the
+what: built binary prints `1` -- IA's impl body -- for a call spelled as IB.mth on a
+what: type with no IB impl at all.
+cmd: run main.mdk
+exit: 0
+stdout: 1
+control: run control.mdk
+why-fixture: MULTI-MODULE PIN, and the collision is IMPORT-ORDER DEPENDENT -- the
+why-fixture: checked-against interface is determined solely by which interface's
+why-fixture: registration comes LAST (here: ifaceb's line first, ifacea's second, so
+why-fixture: IA wins the bare-name race).  This is the "S0: all three of check/run/build
+why-fixture: clean, wrong answer executed" cell of the issue's 24-cell matrix, not the
+why-fixture: order-dependent-REJECT cell (which cannot be pinned as a control here since
+why-fixture: a control must exit 0 -- see why-control).
+why-control: control.mdk uses the OTHER import order (ifacea's line first, ifaceb's
+why-control: second) with Blob implementing IB, the interface mth actually resolves to
+why-control: in both files.  A bare order-swap ALONE (holding the impl/namedFrom fixed)
+why-control: lands on the matrix's "correct-reject" cell (exit 1), which this harness
+why-control: cannot express as a green control (control: always requires exit 0) -- so
+why-control: the control instead pairs the flipped order with a matching impl, where
+why-control: checked-against (IB, since ifaceb registers last under this order) and
+why-control: actually-used (IB) agree for the RIGHT reason.  It must stay green and
+why-control: print `2`.  If it breaks, module loading/interface resolution broke, not
+why-control: #1092.
+why-note: fix shape per the issue: key methodIfaceParamsRef by (module, name) rather
+why-note: than bare name, so obligation-checking is tied to the interface an occurrence
+why-note: actually resolved to, not to registration order.  A fix makes main.mdk reject
+why-note: with "No impl of IB for Blob", flipping the exit and draining this row.  Close
+why-note: #1092 and delete this fixture when that happens.
