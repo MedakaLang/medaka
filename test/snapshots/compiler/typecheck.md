@@ -1,5 +1,5 @@
 # META
-source_lines=18634
+source_lines=18668
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -1010,21 +1010,51 @@ unifyRowN (EffRow _ None) (EffRow _ None) = ()
 -- index METAVARIABLE against a written row is instantiation, not interchange, and must
 -- keep working — `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:17`
 -- (`mkPure : a -> Async <> a`, body `Done x`) unifies a FRESH OPEN effvar against the
--- written closed `<>`.  So every open-tailed case delegates to `unifyRowN` verbatim:
--- those arms are already invariance-correct (open~open is ordinary Rémy/Wand row
--- unification; open~closed binds the tail to the exact difference and `effectLeakCheck`s
--- the residue).  ONLY the closed~closed arm — the one with nothing left to solve —
--- changes, from a silent no-op to set equality.
+-- written closed `<>`.  So the OPEN-tailed cases are not blanket-rejected.
+--
+-- ⚠️ BUT "every open-tailed arm of `unifyRowN` is already invariance-correct" is FALSE,
+-- and an earlier revision of this comment said it.  Exactly TWO of the three open-tailed
+-- shapes are:
+--   * open~closed / closed~open — binds the tail to the exact difference and
+--     `effectLeakCheck`s the residue.  Correct: there is a metavariable to solve.
+--   * BOTH-OPEN with DISTINCT tails — ordinary Rémy/Wand unification into a shared fresh
+--     tail.  Correct: two metavariable-tailed rows CAN be made equal, and the join is the
+--     most general row equal to both.
+--   * SAME-TAIL with DIFFERING PREFIXES (`<Stdout | e>` ~ `<e>`, the same physical
+--     effvar) — NOT correct.  `unifyRowN`'s own arm DISCARDS the symmetric difference
+--     ("the atom evaporates … ACCIDENTAL leniency, NOT load-bearing", ~60 lines above).
+--     There is nothing left to solve — the tails are already the same cell — so the
+--     differing prefixes are two genuinely different rows, and dropping the difference is
+--     precisely the widening invariance forbids.  `launderBox : Box <Stdout | e> a ->
+--     Box e a` was accepted, and a value typed `Int` printed.  Hence the same-tail arm
+--     below, BEFORE the delegation.
+--     The benign self-unify `e ~ e` (equal prefixes, including two empty ones) has an
+--     EMPTY diff in both directions, so `relay : Box e a -> Box e a` stays green.
+--     Nothing is lost by intercepting here: the arm this pre-empts would have called
+--     `recordAbsorptions` on exactly this symmetric difference, and a non-empty
+--     difference is now an error instead of a silently-absorbed atom, while an empty one
+--     recorded nothing to begin with.
+--     🚨 DO NOT COPY THIS ARM ONTO `unifyRowN`'s ARROW same-tail arm.  The same discard
+--     launders there too (`launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+--     Unit)` is accepted), but that arm's leniency is NOT the same call: the covering
+--     rule for it was deliberately pushed to DECLARATION time (T-EFFECT-ARG-UNCOVERED /
+--     `checkArgEffVars`, whose own comment cites that arm), and the recordAbsorptions →
+--     `launderEscapeFromLog` trail depends on it.  Tightening the arrow side is a design
+--     decision with its own blast radius, tracked separately — not a copy-paste of this.
 unifyIndexRow : EffRow -> EffRow -> Unit
 unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 
 unifyIndexRowN : EffRow -> EffRow -> Unit
 unifyIndexRowN (EffRow l1 None) (EffRow l2 None) =
   indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
+unifyIndexRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+  | effvarId v1 == effvarId v2 =
+    indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
 unifyIndexRowN r1 r2 = unifyRowN r1 r2
 
--- Two CLOSED index rows are the same type iff neither side carries an atom the other
--- lacks.  `atomsDiff` (not `atomsEscape`) on purpose: `expandIoInBound` widens a bound's
+-- Two index rows with nothing left to solve — both closed, or both already ending in the
+-- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
+-- `atomsDiff` (not `atomsEscape`) on purpose: `expandIoInBound` widens a bound's
 -- `IO` into the security-label alias, which is a SUBSUMPTION step — exactly the ≤ that
 -- invariance forbids here, so `<IO>` and `<Stdout>` are different index rows.
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
@@ -4226,9 +4256,13 @@ rowArgOf _ ty =
   let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyConLoc ty) (typeInRowSlotMsg ty)
   pureRow
 
--- Names the offending type, which also makes the dedup key vary: `pushTypeErrorOnceAt`
--- (matching the two shipped `T-ROW-KIND-MISMATCH` sites) then folds a signature
--- elaborated twice into one diagnostic while still reporting two DIFFERENT bad slots.
+-- Names the offending type, so a signature elaborated twice folds into one diagnostic.
+-- ⚠️ `pushTypeErrorOnceAt` keys on the MESSAGE TEXT ALONE — the loc is NOT part of the
+-- key (see its body).  So two different bad slots holding the SAME offending type
+-- (`weird : Box Int Int` and `alsoWeird : Box Int Unit`) collapse to ONE diagnostic and
+-- the second is silently unreported.  That is the behaviour of both shipped
+-- `T-ROW-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
+-- but do not read the type name in the message as making the key per-slot.
 typeInRowSlotMsg : Ty -> String
 typeInRowSlotMsg ty = "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
 
@@ -18925,6 +18959,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
 (DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EVar "r1")) (EVar "r2")))
 (DTypeSig false "indexRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
 (DFunDef false "indexRowEqCheck" ((PList) (PList) PWild PWild) (ELit LUnit))
@@ -23068,6 +23103,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyIndexRow" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyIndexRowN") (EApp (EVar "effrowNorm") (EVar "r1"))) (EApp (EVar "effrowNorm") (EVar "r2"))))
 (DTypeSig false "unifyIndexRowN" (TyFun (TyCon "EffRow") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "None")) (PCon "EffRow" (PVar "l2") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")))
+(DFunDef false "unifyIndexRowN" ((PCon "EffRow" (PVar "l1") (PCon "Some" (PVar "v1"))) (PCon "EffRow" (PVar "l2") (PCon "Some" (PVar "v2")))) (EIf (EBinOp "==" (EApp (EVar "effvarId") (EVar "v1")) (EApp (EVar "effvarId") (EVar "v2"))) (EApp (EApp (EApp (EApp (EVar "indexRowEqCheck") (EApp (EApp (EVar "atomsDiff") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "atomsDiff") (EVar "l2")) (EVar "l1"))) (EVar "l1")) (EVar "l2")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "unifyIndexRowN" ((PVar "r1") (PVar "r2")) (EApp (EApp (EVar "unifyRowN") (EVar "r1")) (EVar "r2")))
 (DTypeSig false "indexRowEqCheck" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit"))))))
 (DFunDef false "indexRowEqCheck" ((PList) (PList) PWild PWild) (ELit LUnit))

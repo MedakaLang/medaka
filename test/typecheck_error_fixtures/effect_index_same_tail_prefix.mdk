@@ -1,0 +1,23 @@
+-- #1094, the SAME-TAIL half — caught by adversarial review of the first cut of the fix,
+-- which closed only the closed~closed case and then CLAIMED to have closed the issue.
+--
+-- Both index rows end in the SAME physical effvar `e` but carry different prefixes.
+-- `unifyRowN`'s same-tail arm DISCARDS the symmetric difference — its own comment says
+-- so ("the atom evaporates … ACCIDENTAL leniency, NOT load-bearing"), which is fine for
+-- an ARROW row and is exactly the widening invariance forbids for an INDEX. There is no
+-- metavariable left to solve here (the tails are already the same cell), so
+-- `<Stdout | e>` and `<e>` are two genuinely different rows.
+--
+-- Before the same-tail arm this file checked clean, and the shipped-`Async` version of
+-- it (`launderAsync : Async <Stdout | e> a -> Async e a`) laundered <Stdout> all the way
+-- into a `pureVal : Int` that printed, on both engines — i.e. #1094's flagship symptom
+-- survived a fix that had already gone green on every gate.
+--
+-- The discriminating control is in effect_index_unrelated_ok.mdk: `relay`,
+-- `pureBox` and especially `widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit` are
+-- the same-tail case with EQUAL prefixes, whose symmetric difference is empty, and they
+-- must stay accepted. Rejecting those instead would be the obvious over-correction.
+data Box e a = MkBox (Unit -> <e> a)
+
+launderBox : Box <Stdout | e> a -> Box e a
+launderBox x = x
