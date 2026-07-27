@@ -630,6 +630,58 @@ Two corollaries that cost real time in the same session:
   afterwards, found **two S0s** — one of them live on `main`. Post-merge verification works, but
   it converts a caught defect into a shipped one.
 
+### 🎯 Reviewing a spec's CLAIMS is not reviewing its RULES
+
+A spec PR (#1093, merged) got a two-pass adversarial conformance review: ~40 `file:line` code
+references verified, three blockers found and fixed, both doc gates re-run, and the load-bearing
+implementability claim confirmed by direct probe. It still shipped a **new normative rule that
+licensed an S0** (#1094). §9's "Index fidelity" bullet said effect-index types are interchangeable
+*"only where the row order `≤` permits, exactly as any other type argument"* — that is covariant
+widening, and a contravariant indexed type (`data Sink e = MkSink ((Unit -> <e> Unit) -> Int)`)
+makes it unsound. The bullet even contradicted itself within four lines. Corrected in #1099 (the
+doc) and #1102 (the type-checker fix, see #1094).
+
+The review was scoped around *"are this document's claims about the implementation true?"* —
+a good question, and it caught real defects. It never asked *"is the rule this document
+introduces sound?"*
+
+A spec makes two kinds of statement needing two kinds of review: **descriptive** claims about
+what the implementation does (check by probe), and **normative** rules the implementation must
+satisfy (check by *trying to break the rule* — find a program the rule permits that is
+unsound). Add the second question to any spec/design-doc review; "does the prose match the
+code" alone will pass a rule that is internally wrong.
+
+**The tell:** a rule stated in terms of an existing relation inherits that relation's bugs.
+`≤` is correct for *arrows* and unsound for an *index*; the borrowed rule silently borrowed the
+mismatch. A self-contradiction inside one bullet is a smell for exactly this — it usually means
+the author knew the right answer in one clause and imported a wrong analogy in another.
+
+### ⚠️ A verification probe must be ABLE to fail
+
+An S0 fix once routed through a guard that desugars to `__fallthrough__` — a construct
+`AGENTS.md`'s Traps section documents as a former run≠build miscompile source. The PR cited as
+verification: *"the benign fixture gives `run` == `build` == 0."*
+
+That comparison is structurally incapable of detecting a broken fallthrough: **`medaka run` and
+`medaka build` typecheck with the SAME binary** (see `AGENTS.md`'s debugging section) — only the
+execution engine differs, so the guard had already run identically in both arms before either
+engine started. Both probes also only ever exercised the guard's *true* branch — never the
+branch whose breakage was being ruled out.
+
+The reviewer accepted the conclusion, rejected the reasoning, and supplied a real discriminator:
+a case where a dead fallthrough would **flip the verdict** (two distinct open tails must fall
+through to the delegation; if it were dead the tails would never link and the unsound program
+would be accepted — it is rejected, so the fallthrough is live).
+
+This is distinct from *"an audit is not evidence"* above (that is about trusting a claim
+un-reproduced) and from *"a regression probe must succeed pre-fix"* (that is about a probe never
+exercised against the broken state) — here both probes ran, and ran clean, and still proved
+nothing, because **the two arms were never able to disagree in the first place.** A can't-fail
+probe reads in a PR body exactly like a real one — same shape, same confident sentence, same
+green result. General rule: **for every "I verified Z," name the observation that would have
+shown ¬Z; if none exists, say "not established" instead.** Generalizable trap: **two
+"independent" checks that share a pipeline stage give you ONE observation, not two.**
+
 ---
 
 ## ⚠️ A clean auto-merge is NOT agreement

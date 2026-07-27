@@ -574,6 +574,13 @@ stdout**, which handed a redirecting harness an empty artifact + apparent succes
 **nonexistent input file** or a **real typecheck error**, not just a wrong arity. `medaka build
 --keep-ir` remains the supported route.
 
+**`medaka run` and `medaka build` share the whole front end** — both typecheck with the
+**same binary**; they differ only in the execution engine (interpreter vs emitted native +
+runtime). So comparing `run` against `build` is a genuine test of **codegen and runtime**
+behavior (it is how several miscompiles were caught), but it is **NOT** two independent
+observations of anything at or before typecheck — a claim about resolve/typecheck-stage
+behavior gets exactly **one** observation from that pair, not two.
+
 **Playground e2e:** `playground/e2e/` is a Playwright harness driving a real browser against
 the built CM6 playground (`cd playground/e2e && ./run.sh`). Needs **node v24+** and a
 pre-built `playground/dist/playground.wasm`; uses the **system** Chrome. See
