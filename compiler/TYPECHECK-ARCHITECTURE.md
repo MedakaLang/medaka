@@ -1,9 +1,10 @@
 # Typechecker Architecture — the derived map
 
 **Status:** CURRENT — derived first-hand from `compiler/types/typecheck.mdk` at `main`
-`1691922a` (2026-07-29), then revised against three adversarial reviews. Every count was
-computed from the source, not copied from a prior doc. **Numbers rot: re-derive before
-trusting them** (§0 gives the commands).
+`1691922a` (2026-07-29), then corrected against three adversarial reviews, which found the
+state-cell universe over-counted by 25% and two figures silently inherited from prior docs.
+Every count now standing was re-derived from the source. **Numbers rot, and this document is
+itself evidence of how easily: re-derive before trusting them** (§0 gives the commands).
 
 **What this is.** A responsibility map: the subsystems inside the typechecker, what each
 owns, which state it touches, and which spec clause governs it. It exists because every
@@ -32,12 +33,21 @@ Three mechanical passes over the source, then verification by reading:
 Cheap spot-checks that reproduce the headline numbers without any tooling:
 
 ```sh
-wc -l compiler/types/typecheck.mdk                                  # size
-grep -cE '^-- [─═━]' compiler/types/typecheck.mdk                   # banner sections
-grep -n '\bcheckBodyImpl\b' compiler/types/typecheck.mdk | grep -v ' *--'   # the spine's 2 call sites
-awk '/^data PerRun/,/^\}/' compiler/types/typecheck.mdk | grep -cE '^ +[a-z].*:'    # PerRun fields
+wc -l compiler/types/typecheck.mdk                                  # 18668
+grep -cE '^-- [─═━]' compiler/types/typecheck.mdk                   # 75  banner sections
+grep -nE '^ +checkBodyImpl ' compiler/types/typecheck.mdk           # 2   the spine's call sites
+awk '/^data PerRun/,/^  \}/' compiler/types/typecheck.mdk \
+  | grep -cE '^ +[a-z][A-Za-z0-9_]* *:'                             # 63  PerRun fields
+grep -cE '^[A-Za-z_][A-Za-z0-9_]* = (Ref|newRef)' compiler/types/typecheck.mdk   # 9  loose cells
 sed -n '14,82p' compiler/types/typecheck.mdk | grep '^import'       # the 12 inbound seams
 ```
+
+⚠️ **Each of those five is shaped the way it is to dodge a specific false answer.**
+`/^  \}/` stops at `PerRun`'s *indented* closing brace — `/^\}/` runs past it into
+`freshPerRun`'s record literal and returns 64. `^ +checkBodyImpl ` requires the
+indented-application shape — a plain `\bcheckBodyImpl\b` with a comment filter returns 5
+(two declaration lines plus a trailing comment inside the `PerRun` record). And the loose-cell
+count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature (§0 trap 4).
 
 > ⚠️ **Three traps this derivation hit.** Each produced confident, wrong output first.
 > - A regex matching `data|type|impl|…` without a trailing `\s+` silently reclassifies
@@ -51,6 +61,16 @@ sed -n '14,82p' compiler/types/typecheck.mdk | grep '^import'       # the 12 inb
 >   `djoin`, `djoinN`, `drenderN` — there is **no `dmeet`** (see
 >   `docs/design/EFFECTS-CONFORMANCE-ROADMAP.md`: *"No `dmeet`/⊥"*). The first draft of
 >   this document copied the banner verbatim and asserted a function that does not exist.
+> - **`name : Ref T` is usually a FUNCTION, not a cell.** Counting module-level state with
+>   `^name : Ref ` returns 38; only **9** are cells. The other 29 are functions whose first
+>   *parameter* is a `Ref` — `tyvarId : Ref Tyvar -> Int`, `ppGo : Ref (…) -> … -> String`,
+>   the whole `coh*` matcher family. The first draft counted all 38, inflating the state
+>   universe from 118 to 147 and every per-subsystem cell figure with it.
+>
+> Traps 1 and 4 are **the same bug**: a pattern matching a prefix without validating the
+> rest of the shape. It was committed twice in one derivation, the second time *after*
+> writing trap 1 down. Match the whole form, or count the thing you actually mean
+> (`= Ref` for a cell, never `: Ref`).
 
 ⚠️ **`make agent-doc-symbols` did not catch that.** It passed a backticked `dmeet` that
 resolves nowhere in the source. Treat the symbol gate as a floor, not proof: grep each
@@ -66,19 +86,18 @@ symbol against `compiler/` yourself.
 | Logical declarations | 1,478 — **1,443 functions**, 33 `data`, 2 type aliases |
 | Exported | 70 (50 functions reachable as entry points) |
 | Banner sections | 75 (**not** a valid partition — §2) |
-| State cells | **147** — `PerRun` 63, `CrossRun` 25, `DriverState` 18, `Toggles` 3, loose module-level 38 |
-| Functions touching any state | **316 of 1,443** — the other 1,127 are pure |
-| Cells written from ≥6 functions | **6 of 147** |
+| State cells | **118** — `PerRun` 63, `CrossRun` 25, `DriverState` 18, `Toggles` 3, loose module-level **9** |
+| Functions touching any state | **244 of 1,443** — the other 1,199 are pure |
+| Cells written from ≥6 functions | **7 of 118** |
 | Inbound imports | 12 modules (§7.7) |
 | Modules importing this one | 31 |
-| Functions unreachable from an entry point | 0 |
-| Functions with no caller | 1 (`wReset`) |
+| Functions with no caller, hence unreachable | 1 (`wReset`) |
 
-**Growth**, from `git`: 10,483 lines (2026-06-29) → 13,717 (07-15) → 17,008 (07-22) →
+**Growth**, from `git`: 10,483 lines (2026-06-29) → 13,717 (07-14) → 17,008 (07-21) →
 18,668 (07-29). Roughly +8,200 lines in a month, +1,660 in the last week.
 
-Two of these contradict the received wisdom and are load-bearing for §7: **1,127 of 1,443
-functions are pure**, and **only 6 of 147 cells have diffuse ownership**. The state problem
+Two of these contradict the received wisdom and are load-bearing for §7: **1,199 of 1,443
+functions are pure**, and **only 7 of 118 cells have diffuse ownership**. The state problem
 this file is famous for has been substantially *fixed*.
 
 ---
@@ -107,7 +126,7 @@ Use them to find *when* something arrived, never *what a region does*.
 
 ## 3. The state model
 
-State is four bundle records plus 38 loose module-level `Ref`s. Each bundle is a **record
+State is four bundle records plus **9** loose module-level `Ref`s. Each bundle is a **record
 of `Ref`s** held in one cell, so a reset re-mints the record rather than clearing fields —
 this is the #158/#176 design, and it landed.
 
@@ -117,11 +136,15 @@ this is the #158/#176 design, and it landed.
 | `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*` | survives `resetState` by design |
 | `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | `Toggles` | 3 | dynamic-scope suppression flags (`suppressRLocalRecord`, `suppressArgStamp`, `shadowHeadCtxRef`) — save/restore around routing decisions | re-minted with `PerRun` |
-| *(loose)* | 38 | incl. the four bundle cells themselves, `tyvarId`, `currentLoc`, `typeErrorsSticky` | varies |
+| *(loose)* | **9** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, `toggles`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc`, `currentDoOrigin`, `currentMethodMismatch` | varies |
 
-**The six cells with no single owning function** (≥6 distinct writers) are the residual
+**The seven cells with no single owning function** (≥6 distinct writers) are the residual
 state-discipline debt: `perRun` (56 writers), `driverState` (14), `currentLoc` (8),
-`typeErrorsSticky` (8), `crossRun` (7), `funConstraintsRef` (6).
+`typeErrorsSticky` (8), `crossRun` (7), `toggles` (6), `funConstraintsRef` (6).
+
+⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field*, so
+its writers are already inside `perRun`'s 56. Read it as "these are the cells a change is
+most likely to desynchronize," not as a partition.
 
 Two structures deserve naming because subsystems below are defined in terms of them:
 
@@ -150,7 +173,7 @@ nothing — their sizes come from the declaration inventory, not from banner spa
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| Union-find + unification | `unify` → `unifyN` | 31 / 403 / 15 | — |
+| Union-find + unification | `unify` → `unifyN` | 31 / 403 / 9 | — |
 | Generalization, instantiation | `generalize`, `instantiate` | small | DICT §4 `gen` |
 | Value restriction | `eagerRefs`, `allEVars` walkers | ~125 lines | EFFECTS §6 |
 | AST type → `Mono` | `fromAstTypeE` | 15 / 224 / 3 | — |
@@ -181,11 +204,11 @@ imply.
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| Expression inference (25-arm walk) | `infer` | **298 / 4,302 / 63** | — |
-| Application inference | `inferAppExpr` | 58 / 991 / 21 | — |
+| Expression inference (25-arm walk) | `infer` | **298 / 4,302 / 57** | — |
+| Application inference | `inferAppExpr` | 58 / 991 / 19 | — |
 | Method occurrence typing | `inferMethodAt` | 18 / 300 / **18** | DICT §5 |
 | Match inference | `inferMatch` | 17 / 182 / 4 | — |
-| Binop/unop inference | `inferBinopE` | 13 / 195 / 8 | — |
+| Binop/unop inference | `inferBinopE` | 13 / 195 / 7 | — |
 | Let-group inference | `inferLetGroup`, `processLetGroup` | 30 / 337 / 6 | — |
 | Pattern inference | `inferPat` | ~140 lines | — |
 | **Numeric-literal defaulting** | `setNumlitFloats`; `recordNumlitLoc`, `markNumlitOpTaint`, `noteNumlitCtx`, `tagNumlitCtxIf`, `unifyAllNumlit` | ~220 lines / **5 cells** | **none** |
@@ -201,8 +224,8 @@ O(n²) history.
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| Dependency-ordered SCC processing | `processTopGroups` → `processSCCs` → `processSCC` | 86 / 918 / 27 | DICT §4 `gen-rec` (group sharing only) |
-| Data registration | `registerAllData` | 18 / 175 / 8 | — |
+| Dependency-ordered SCC processing | `processTopGroups` → `processSCCs` → `processSCC` | 86 / 918 / 26 | DICT §4 `gen-rec` (group sharing only) |
+| Data registration | `registerAllData` | 18 / 175 / 6 | — |
 
 ⚠️ **Tarjan's algorithm is NOT in this file** — `tarjanSCCs` is imported from
 `compiler/support/scc.mdk` (90 lines). The banner claiming otherwise is the §2 trap.
@@ -215,12 +238,12 @@ what a later group may observe of an earlier one's generalization, is unspecifie
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| **Entailment engine** | `entail` → `entailInst` | 49 / 620 / **6** | DICT §3 |
-| Obligation checking | `checkCallObligationsU` → `checkOneCallObligation` | 43 / 524 / 10 | DICT §3, §4 |
+| **Entailment engine** | `entail` → `entailInst` | 49 / 620 / **5** | DICT §3 |
+| Obligation checking | `checkCallObligationsU` → `checkOneCallObligation` | 43 / 524 / 8 | DICT §3, §4 |
 | **Obligation channels** | `Windowed` ops over `obls`/`implObls`/`dictApps`/`absorptions` | 5 ops, 4 channels | DICT §4 |
-| Impl method bodies | `inferImplBodies` → `inferOneImpl` → `inferImplMethods` → `inferImplMethod` | 22 / 495 / 12 | DICT §3 **W3**, §4 |
-| Default method bodies | `inferDefaultBodiesIfEnabled` → … → `inferDefaultMethod` | 12 / 260 / 10 | DICT §3 **W3**, §4 |
-| Dictionary insertion | `dictPass` → `dictPassDecl`, `implDictPassMethods` | 37 / 368 / 4 | DICT §4 |
+| Impl method bodies | `inferImplBodies` → `inferOneImpl` → `inferImplMethods` → `inferImplMethod` | 22 / 495 / 11 | DICT §3 **W3**, §4 |
+| Default method bodies | `inferDefaultBodiesIfEnabled` → … → `inferDefaultMethod` | 12 / 260 / 9 | DICT §3 **W3**, §4 |
+| Dictionary insertion | `dictPass` → `dictPassDecl`, `implDictPassMethods` | 37 / 368 / 2 | DICT §4 |
 | **Superclass-evidence expansion (WS-1b)** | `expandSupersTable` | ~100 lines owned | DICT §3 `super` |
 | Arg-position AST prepass | `prePassDictArg`, `prePassDeclScoped`, `rewriteArgScoped` | 23 / 269 / **0** | SHADOW §1 (S1, S9), §3; DICT §5 |
 | **D3a arg-position dispatch stamping** | `argDispatchIndices` | ~190 lines / 4 cells | DICT §5 |
@@ -267,9 +290,9 @@ the impl, and writes a `Route` back into the AST's `Ref Route` cells.
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| Coherence | `cohFirstConflict` → `cohConflictWith` | 18 / 167 / 8 | DICT §6 C1–C4 |
+| Coherence | `cohFirstConflict` → `cohConflictWith` | 18 / 167 / **0** | DICT §6 C1–C4 |
 | Final-check driver | `runFinalChecks` | 22 / 231 / **0** | — |
-| Signature-constraint soundness | `checkSigConstraintCoverage` → `checkSigConstraintOne` | 25 / 218 / 4 | — |
+| Signature-constraint soundness | `checkSigConstraintCoverage` → `checkSigConstraintOne` | 25 / 218 / 3 | — |
 | Signature-too-general | `checkSigTooGeneral` | ~98 lines | — |
 | Cyclic superinterface detection | dedicated walk | ~190 lines | DICT §3 **W1** |
 | Superinterface existence | dedicated walk | ~35 lines | DICT §3 |
@@ -306,7 +329,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
 | Typed elaboration | `elaborateModules` → `elabHarvestWorker` → `elabWorker` → `elabModuleStamp`; `elaborateDict` | 53 / 892 / 30 | DICT §4, §8 |
-| Cross-module universe marshalling | `loadDataUniverse`, `storeDataUniverse`, `appendUniverseAccums` | 14 cells each | DICT §6 C4, §8 I2 |
+| Cross-module universe marshalling | `loadDataUniverse` (14 cells), `storeDataUniverse` (14), `appendUniverseAccums` (11) | 3 fns | DICT §6 C4, §8 I2 |
 | Import seeding / aliasing / ctor overlay | `importFormSchemes`, `aliasSchemes`, `aliasConstraintEntries` | ~370 lines | DICT §8 I2 |
 
 ### Layer 8 — Diagnostics and error-path analysis
@@ -347,15 +370,16 @@ promotion set before the recursion into `rest` resets it (source comment at 1865
 ### 5.2 `checkBodyImpl` itself
 
 One function, 347 lines, **two call sites** (`Flat` at 12805, `Module` at 16768). It
-dominates **835 functions / 10,917 lines — 58% of the file — and 122 of 147 state cells
-(83%)**. It directly touches 46 cells.
+dominates **835 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells
+(93%)**. It directly touches 46 cells.
 
 It opens with `resetState ()` and is parameterised by
 `data CheckMode = Flat (List Decl) | Module String (List Decl) (List Decl)`. The author's
-own numbering (`#1`–`#6`, two `BREAK` points) marks the phases:
+own numbering (`#1`–`#6`, **three** `BREAK` points) marks the phases:
 
 ```
 resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
+  → effect domains          ← [BREAK #3] Flat populates inline; Module relies on the driver
   → checkEffectParams / checkLetRecDecls → shadows (#4) → mode-specific ref setup
   → dataEnv → checkUndeterminedRetEffVars → checkGradedImplHeads → rejectCyclicAliases
   → globalS = ifaceMethodSchemes ++ externSchemes → env1
@@ -428,8 +452,8 @@ missed two open S0s sitting in subsystems mapped here. Follow the code, not the 
 ## 7. What the map actually shows
 
 **1. The state problem is largely solved; the *control-flow* problem is not.**
-1,127 of 1,443 functions are pure and only 6 of 147 cells have diffuse ownership — #158/#176
-worked. But one function dominates 58% of the file and 83% of the state, is re-entered to a
+1,199 of 1,443 functions are pure and only 7 of 118 cells have diffuse ownership — #158/#176
+worked. But one function dominates 58% of the file and **93%** of the state, is re-entered to a
 fixpoint, and is followed by a 9-step ordered stamper pass that differs between the two
 paths. `ARCH-REVIEW.md` diagnosed "a god module with concentrated mutable state" and the fix
 addressed the state half. **No open issue names what is left.**
@@ -458,8 +482,11 @@ best-*cited* layer in §4; the deficit is structural form, not absence.)
   plumbing; filed correctly it is **a spec paragraph plus one whole-graph check that
   self-drains five S0/S1s** — which is what #1070 itself recommends.
 
-**4. The safest extractions are the error-path clusters, not the ones first proposed.**
-`prePassDictArg`, `runFinalChecks` and `foldModules` touch **zero** state cells, but this
+**4. Four subsystems are already pure, and the safest extractions are the error-path clusters.**
+`prePassDictArg`, `runFinalChecks`, `foldModules` **and coherence** (`cohFirstConflict`, 18
+functions / 167 lines) touch **zero** state cells. Coherence only looks stateful if you
+miscount its `coh*` helper signatures as cells (§0 trap 4) — it is a clean, free
+decomposition that the first draft hid from itself. But this
 file imports `mangledName` from `compiler/backend/private_mangle.mdk`, so a "pure ⇒
 extractable" argument must clear the seam list (§7.7) as well as the state graph. The
 ~1,200 lines of error-path machinery (Layer 8) are a stronger candidate: they fire only on
@@ -524,8 +551,11 @@ Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
 - **The `pending*` deferred-mutation cells are essential, not accidental.** A method site's
   route depends on which tyvar survives unification, knowable only post-inference. Bundle
   them; never try to eliminate them.
-- **~37 cells deliberately survive `resetState`.** Clearing one "for hygiene" reproduces the
-  Phase-134 dropped-dict bug.
+- **52 cells deliberately survive `resetState`.** It re-mints only `perRun` and `toggles`
+  (118 − 63 − 3), so every `CrossRun`, `DriverState` and remaining loose cell persists.
+  Clearing one "for hygiene" reproduces the Phase-134 dropped-dict bug. *(Prior docs say
+  "~37" — that is `97 − 60` from issue #158's title, an artifact of the old inflated Ref
+  count, not a measurement.)*
 - **Hot helpers stay monomorphic and short-circuiting** — delegating to prelude `Foldable`
   methods measured +56% self-compile.
 
@@ -535,21 +565,34 @@ Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
 
 | Document | Claim | Status |
 |---|---|---|
-| `compiler/ARCH-REVIEW.md` | "6,916 lines; 48 top-level `Ref`s" | Historical (2026-06-14). Now 18,668 lines / 147 cells across 4 bundles. |
+| `compiler/ARCH-REVIEW.md` | "6,916 lines; 48 top-level `Ref`s" | Historical (2026-06-14). Now 18,668 lines / 118 cells across 4 bundles + 9 loose. |
 | `compiler/ARCH-REVIEW.md` | status banner: "still one ~13k-line file" | Stale — 18,668. |
 | `compiler/ARCH-REVIEW.md` | "a 7k-line god-module with concentrated mutable state" | **Half fixed.** State is bundled; the concentration is now control-flow (§7.1). |
-| `.claude/workstreams/TYPECHECK.md` | "13,717 lines / 97 `Ref`s at `db33eeab`" | Correct as of 2026-07-15; superseded. |
+| `.claude/workstreams/TYPECHECK.md` | "13,717 lines / 97 `Ref`s at `db33eeab`" | Line count correct; `db33eeab` is dated **2026-07-14**, not 07-15, and the genuine cell count there is **95**, not 97 — the same `: Ref ` over-count (§0 trap 4). |
 | This document, §2 | the 75 banners describe their regions | False — they are insertion markers, and §4 inherited two of their errors before review. |
 
 **Corrections this document made to itself** (first draft → reviewed), recorded because the
 same three failure modes are available to the next reader:
 
-1. **DICT §8 I1 was cited for defects it does not govern.** Pattern-matched on the phrase
+1. **The state-cell universe was 147; it is 118.** 29 "cells" were function signatures
+   taking a `Ref` parameter (§0 trap 4). This propagated into every per-subsystem cell
+   figure — 14 of 25 were wrong — and into two §7 conclusions. Both erred in the
+   document's own favour: the spine holds **93%** of the state, not 83%, and coherence is
+   **pure**, making it a fourth free extraction the draft had hidden from itself.
+2. **DICT §8 I1 was cited for defects it does not govern.** Pattern-matched on the phrase
    *"never by its bare name"* instead of reading the clause's subject (dictionary
    parameters). Corrected in §7.3 — and the corrected finding is the more actionable one.
-2. **Tarjan and `dmeet` were taken from banners.** Both wrong; both caught by re-derivation,
+3. **Tarjan and `dmeet` were taken from banners.** Both wrong; both caught by re-derivation,
    not by the doc gates (§0).
-3. **The issue table was scoped by label, not by subsystem.** Missed #1047 and #1072.
+4. **"~37 cells survive `resetState`" was copied, not measured** — it is `97 − 60` from
+   issue #158's title. The real figure is 52. A status banner claiming everything was
+   derived does not make it so.
+5. **The issue table was scoped by label, not by subsystem.** Missed #1047 and #1072.
+6. **Two of the §0 re-derivation commands returned the wrong numbers** (64 for 63, 5 for 2).
+   A recipe that does not reproduce its own results is worse than none.
+
+The pattern across 1, 3 and 6: **every one was a shape-matching shortcut that produced a
+plausible number, and none was caught by a gate.** Only re-derivation caught them.
 
 ---
 
