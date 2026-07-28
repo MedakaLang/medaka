@@ -136,6 +136,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`TYPECHECK-AUDIT.md`](../compiler/TYPECHECK-AUDIT.md) | Selfhost Typechecker Audit — 2026-06-09 | IMPLEMENTED |
 | [`TYPECHECK-ERROR-FRAMING-DESIGN.md`](../compiler/TYPECHECK-ERROR-FRAMING-DESIGN.md) | TYPECHECK ERROR FRAMING — Design (Tier-3 "typecheck mis-framing" reservoir) | IMPLEMENTED |
 | [`TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md`](../compiler/TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md) | Signature Constraint Soundness — Design + Blast-Radius Census | IMPLEMENTED |
+| [`TYPECHECK-TARGET-ARCHITECTURE.md`](../compiler/TYPECHECK-TARGET-ARCHITECTURE.md) | Typechecker Target Architecture — the ground-up design | PROPOSAL |
 | [`VALUE-RESTRICTION-DESIGN.md`](../compiler/VALUE-RESTRICTION-DESIGN.md) | Generalizing constructor / record applications of values (value-restriction relaxation) | IMPLEMENTED |
 | [`WASM-FLOAT-TYPING-DESIGN.md`](../compiler/WASM-FLOAT-TYPING-DESIGN.md) | WASM-FLOAT-TYPING-DESIGN — the principled fix for W-SQLITE-4 | IMPLEMENTED |
 | [`WASM-POLY-NUM-DESIGN.md`](../compiler/WASM-POLY-NUM-DESIGN.md) | WASM-POLY-NUM-DESIGN — closing the wasm polymorphic-`Num` arithmetic gap | IMPLEMENTED |
