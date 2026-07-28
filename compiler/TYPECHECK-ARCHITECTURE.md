@@ -55,7 +55,7 @@ count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature
 >   "25 dead functions" finding.
 > - The section banners use **box-drawing** characters (`── `), not ASCII. An ASCII-only
 >   grep reports *"this file has no section structure"*, which is false.
-> - **A banner's API list can be aspirational.** The banner at L245 advertises
+> - **A banner's API list can be aspirational.** The `RefinementDomain interface` banner advertises
 >   *"dtop/dsub/djoin/dmeet/drender"*. Four of the five are real (`dsub` and `drender` are
 >   exported wrappers over `dsubN`/`drenderN`; `dtop` ships as `dtopFor`) — but there is
 >   **no `dmeet`** at all (see `docs/design/EFFECTS-CONFORMANCE-ROADMAP.md`: *"No
@@ -74,6 +74,14 @@ count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature
 
 ⚠️ **The doc gates will not catch these for you.** `make agent-doc-symbols` passed a
 backticked `dmeet` that resolves nowhere in the source. Treat it as a floor, not proof.
+
+**No line numbers, by policy.** This map describes code that is about to be changed — every
+line number in it would be stale after the first refactor, and a stale line number is worse
+than none because it looks authoritative. Every source reference here is a **grep anchor**:
+a symbol name, or a distinctive comment phrase verified unique at the time of writing. If an
+anchor stops matching, the code moved *and* something about it changed — which is exactly
+the signal you want. This follows the convention #991–#995 already state: *"grep the symbol
+names, not the numbers."*
 
 ---
 
@@ -213,9 +221,9 @@ imply.
 **Numeric-literal defaulting is semantic, not cosmetic.** `setNumlitFloats` writes each
 `ENumLit`'s `Ref (Option Float)` after HM completes — it decides the runtime representation
 of every integer literal. It runs at three sites, and **its ordering relative to
-`checkCallObligations` differs between the Flat and Module paths** (source comment at
-13080-13084). The taint machinery (`numlitUntainted`, `numlitOpLocs`) has a documented
-O(n²) history.
+`checkCallObligations` differs between the Flat and Module paths** (grep
+`setNumlitFloats-vs-checkCallObligations`). The taint machinery (`numlitUntainted`,
+`numlitOpLocs`) has a documented O(n²) history.
 
 ### Layer 3 — Letrec scheduling
 
@@ -301,8 +309,8 @@ the impl, and writes a `Route` back into the AST's `Ref Route` cells.
 determinism, one instance environment). **It does not require an impl to define every
 method, nor reject a method absent from the interface** — those checks have no spec.
 
-⚠️ `recordByNameRef`'s `omInsert` is **last-write-wins on a bare type name** (source comment
-at 1622) — the same cross-module hazard as §7.3.
+⚠️ `recordByNameRef`'s `omInsert` is **last-write-wins on a bare type name** (grep
+`recordByNameRef : registry KEY`) — the same cross-module hazard as §7.3.
 
 ### Layer 6 — Shadowing (standalone fn ⇄ interface method)
 
@@ -381,11 +389,12 @@ Three things this shape makes true that a linear reading does not:
   sites unmarked under `bareDict` are unsound to keep once a callee is promoted.
 
 `foldModules` calls the worker **head-first**, so `elabHarvestWorker` reads a module's
-promotion set before the recursion into `rest` resets it (source comment at 18654-18659).
+promotion set before the recursion into `rest` resets it (grep `Timing: elabModuleStamp`).
 
 ### 5.2 `checkBodyImpl` itself
 
-One function, 347 lines, **two call sites** (`Flat` at 12805, `Module` at 16768). It
+One function, 347 lines, **two call sites** — one `Flat`, one `Module` (§0's third
+command locates both). It
 dominates **835 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells
 (93%)**. It directly touches 46 cells.
 
@@ -411,7 +420,8 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
 ⚠️ **This sequence is ONE ITERATION, not the control flow.** On the eligible-name path the
 promotion fixpoint re-enters it until the dict-passed set stabilizes: *"a mark+typecheck
 pass discovers each eligible unsignatured fn's inferred constraints; we grow the
-dict-passed set and re-run until it stabilizes"* (9406-9412). Any perf or ordering argument
+dict-passed set and re-run until it stabilizes"* (grep `re-run until it stabilizes`). Any
+perf or ordering argument
 built on "linear phase sequence" is wrong by a factor of the fixpoint depth.
 
 **`Flat` vs `Module` bimodality is threaded through 20 `match mode` branches inside this
@@ -436,7 +446,8 @@ The two elaboration paths run **different stampers in different orders**:
 **8 stampers vs 9.** `resolveRLocalSites` runs only on the Module path. `resolveArgStamps`
 is last on Flat but fifth on Module. The source states the ordering is semantic — C5
 requires `resolveRLocalSites` to run *after* `resolveSites` and `resolveArgStamps` so the
-receiver-grounded route overrides what those stamped on the **same ref** (18612-18615).
+receiver-grounded route overrides what those stamped on the **same ref** (grep
+`C5: LAST among the route-stampers` — whose own wording is stale: it is 6th of 9).
 
 This is the sharpest instance of "order is semantics" in the file, and it is where
 #1040/#1052/#1082 live.
