@@ -132,6 +132,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`TYPE-ALIAS-EXPANSION-DESIGN.md`](../compiler/TYPE-ALIAS-EXPANSION-DESIGN.md) | Type-Alias Expansion — Design | IMPLEMENTED |
 | [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | OPEN |
 | [`TYPE-ERROR-SPAN-DESIGN.md`](../compiler/TYPE-ERROR-SPAN-DESIGN.md) | Type-error span precision — design | IMPLEMENTED |
+| [`TYPECHECK-ARCHITECTURE.md`](../compiler/TYPECHECK-ARCHITECTURE.md) | Typechecker Architecture — the derived map | CURRENT |
 | [`TYPECHECK-AUDIT.md`](../compiler/TYPECHECK-AUDIT.md) | Selfhost Typechecker Audit — 2026-06-09 | IMPLEMENTED |
 | [`TYPECHECK-ERROR-FRAMING-DESIGN.md`](../compiler/TYPECHECK-ERROR-FRAMING-DESIGN.md) | TYPECHECK ERROR FRAMING — Design (Tier-3 "typecheck mis-framing" reservoir) | IMPLEMENTED |
 | [`TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md`](../compiler/TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md) | Signature Constraint Soundness — Design + Blast-Radius Census | IMPLEMENTED |
