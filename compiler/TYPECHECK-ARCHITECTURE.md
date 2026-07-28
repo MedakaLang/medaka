@@ -1,10 +1,9 @@
 # Typechecker Architecture — the derived map
 
 **Status:** CURRENT — derived first-hand from `compiler/types/typecheck.mdk` at `main`
-`1691922a` (2026-07-29), then corrected against three adversarial reviews, which found the
-state-cell universe over-counted by 25% and two figures silently inherited from prior docs.
-Every count now standing was re-derived from the source. **Numbers rot, and this document is
-itself evidence of how easily: re-derive before trusting them** (§0 gives the commands).
+`1691922a` (2026-07-29), then corrected against four adversarial reviews. **Numbers rot —
+re-derive before trusting them**; §0 gives the commands and §9 records what this document
+itself got wrong.
 
 **What this is.** A responsibility map: the subsystems inside the typechecker, what each
 owns, which state it touches, and which spec clause governs it. It exists because every
@@ -39,7 +38,7 @@ grep -nE '^ +checkBodyImpl ' compiler/types/typecheck.mdk           # 2   the sp
 awk '/^data PerRun/,/^  \}/' compiler/types/typecheck.mdk \
   | grep -cE '^ +[a-z][A-Za-z0-9_]* *:'                             # 63  PerRun fields
 grep -cE '^[A-Za-z_][A-Za-z0-9_]* = (Ref|newRef)' compiler/types/typecheck.mdk   # 9  loose cells
-sed -n '14,82p' compiler/types/typecheck.mdk | grep '^import'       # the 12 inbound seams
+grep -cE '^import ' compiler/types/typecheck.mdk                    # 11  inbound seams
 ```
 
 ⚠️ **Each of those five is shaped the way it is to dodge a specific false answer.**
@@ -49,7 +48,7 @@ indented-application shape — a plain `\bcheckBodyImpl\b` with a comment filter
 (two declaration lines plus a trailing comment inside the `PerRun` record). And the loose-cell
 count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature (§0 trap 4).
 
-> ⚠️ **Three traps this derivation hit.** Each produced confident, wrong output first.
+> ⚠️ **Four traps this derivation hit.** Each produced confident, wrong output first.
 > - A regex matching `data|type|impl|…` without a trailing `\s+` silently reclassifies
 >   every function *named* `implMatchesReceiverU`, `dataEnvOf`, `typeOfX` as a declaration
 >   of that kind. It hid **55 functions** and turned "1 dead function" into a fabricated
@@ -57,10 +56,11 @@ count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature
 > - The section banners use **box-drawing** characters (`── `), not ASCII. An ASCII-only
 >   grep reports *"this file has no section structure"*, which is false.
 > - **A banner's API list can be aspirational.** The banner at L245 advertises
->   *"dtop/dsub/djoin/dmeet/drender"*. The functions that exist are `dtopFor`, `dsubN`,
->   `djoin`, `djoinN`, `drenderN` — there is **no `dmeet`** (see
->   `docs/design/EFFECTS-CONFORMANCE-ROADMAP.md`: *"No `dmeet`/⊥"*). The first draft of
->   this document copied the banner verbatim and asserted a function that does not exist.
+>   *"dtop/dsub/djoin/dmeet/drender"*. Four of the five are real (`dsub` and `drender` are
+>   exported wrappers over `dsubN`/`drenderN`; `dtop` ships as `dtopFor`) — but there is
+>   **no `dmeet`** at all (see `docs/design/EFFECTS-CONFORMANCE-ROADMAP.md`: *"No
+>   `dmeet`/⊥"*). The first draft copied the banner verbatim and asserted a function that
+>   does not exist.
 > - **`name : Ref T` is usually a FUNCTION, not a cell.** Counting module-level state with
 >   `^name : Ref ` returns 38; only **9** are cells. The other 29 are functions whose first
 >   *parameter* is a `Ref` — `tyvarId : Ref Tyvar -> Int`, `ppGo : Ref (…) -> … -> String`,
@@ -72,9 +72,8 @@ count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature
 > writing trap 1 down. Match the whole form, or count the thing you actually mean
 > (`= Ref` for a cell, never `: Ref`).
 
-⚠️ **`make agent-doc-symbols` did not catch that.** It passed a backticked `dmeet` that
-resolves nowhere in the source. Treat the symbol gate as a floor, not proof: grep each
-symbol against `compiler/` yourself.
+⚠️ **The doc gates will not catch these for you.** `make agent-doc-symbols` passed a
+backticked `dmeet` that resolves nowhere in the source. Treat it as a floor, not proof.
 
 ---
 
@@ -89,7 +88,7 @@ symbol against `compiler/` yourself.
 | State cells | **118** — `PerRun` 63, `CrossRun` 25, `DriverState` 18, `Toggles` 3, loose module-level **9** |
 | Functions touching any state | **244 of 1,443** — the other 1,199 are pure |
 | Cells written from ≥6 functions | **7 of 118** |
-| Inbound imports | 12 modules (§7.7) |
+| Inbound imports | 11 modules (§7.7) |
 | Modules importing this one | 31 |
 | Functions with no caller, hence unreachable | 1 (`wReset`) |
 
@@ -116,11 +115,9 @@ that label until the next banner. They are commit archaeology.
 
 Use them to find *when* something arrived, never *what a region does*.
 
-> ⚠️ **This document's own first draft fell for this twice**, in §4, two sections after
-> writing the warning above: it recorded Tarjan's algorithm as living here (it does not),
-> and it copied the L245 banner's aspirational API list including a `dmeet` that does not
-> exist. **Any line count or symbol list in §4 that came from a banner rather than from the
-> declaration inventory is suspect.** The rows below were re-derived after that finding.
+⚠️ **Any line count or symbol list in §4 that came from a banner rather than from the
+declaration inventory is suspect** — this document's first draft inherited two such errors
+(§9). Two Layer 1 rows still carry banner-span sizes, marked where they appear.
 
 ---
 
@@ -133,7 +130,7 @@ this is the #158/#176 design, and it landed.
 | Bundle | Cells | What is in it | Reset by |
 |---|---|---|---|
 | `PerRun` | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` |
-| `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*` | survives `resetState` by design |
+| `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives `resetState` by design |
 | `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | `Toggles` | 3 | dynamic-scope suppression flags (`suppressRLocalRecord`, `suppressArgStamp`, `shadowHeadCtxRef`) — save/restore around routing decisions | re-minted with `PerRun` |
 | *(loose)* | **9** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, `toggles`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc`, `currentDoOrigin`, `currentMethodMismatch` | varies |
@@ -148,7 +145,7 @@ most likely to desynchronize," not as a partition.
 
 Two structures deserve naming because subsystems below are defined in terms of them:
 
-- **`Windowed`** (`wNew`/`wPush`/`wMark`/`wWindow`/`wReset`) — a push-only channel with
+- **`Windowed`** (`wNew`/`wPush`/`wMark`/`wWindow`/`wReset`/`wSnapshot`/`wRestore`) — a push-only channel with
   mark/window bracketing, replacing the old snapshot-and-subtract idiom. Four channels use
   it: `obls`, `implObls`, `dictApps`, `absorptions`. This is *how obligations are scoped to
   a body at all*.
@@ -188,8 +185,8 @@ nothing — their sizes come from the declaration inventory, not from banner spa
 | Effect-label domain registry | `effectDomains` (`DriverState`) | ~49 lines | EFFECTS §2.2 |
 | **Axis-product lattice** | `productNorm`, `sortAxes`, `insertAxis`, `isSubTop`, `lookupAxis` | ~100 lines | EFFECTS §2 |
 | **Capability written-syntax decoder** | `atomOfWritten`, `decodeSetParam`, `decodeProductParam`, `decodeAxis` + hand-rolled splitters | ~150 lines | EFFECTS §2.3 |
-| **`IO` widening union alias (Stage 3)** | `decodeSetParam` region | 149 lines / 15 decls | EFFECTS §3.2 |
-| **Known-literal-prefix analysis α (Stage 2b)** | `commonPrefixLen` join | 102 lines / 10 decls | EFFECTS §2.4 |
+| **`IO` widening union alias (Stage 3)** | `decodeSetParam` region | 149 lines / 15 decls ⚠️banner-span | EFFECTS §3.2 |
+| **Known-literal-prefix analysis α (Stage 2b)** | `alpha`, `kpLcp` | 102 lines / 10 decls ⚠️banner-span | EFFECTS §2.4 |
 | Effect rows, atoms, propagation | `unifyRowN` | 124-line core | EFFECTS §2.4, §3, §5 |
 | Undetermined return-position eff vars | `checkUndeterminedRetEffVars` | 15 / 179 / 2 | EFFECTS §6 |
 | Interface-method effect checks | `checkIfaceMethodEffs` | 13 / 166 / 2 | EFFECTS §6 |
@@ -240,7 +237,7 @@ what a later group may observe of an earlier one's generalization, is unspecifie
 |---|---|---|---|
 | **Entailment engine** | `entail` → `entailInst` | 49 / 620 / **5** | DICT §3 |
 | Obligation checking | `checkCallObligationsU` → `checkOneCallObligation` | 43 / 524 / 8 | DICT §3, §4 |
-| **Obligation channels** | `Windowed` ops over `obls`/`implObls`/`dictApps`/`absorptions` | 5 ops, 4 channels | DICT §4 |
+| **Obligation channels** | `Windowed` ops over `obls`/`implObls`/`dictApps`/`absorptions` | 7 ops, 4 channels | DICT §4 |
 | Impl method bodies | `inferImplBodies` → `inferOneImpl` → `inferImplMethods` → `inferImplMethod` | 22 / 495 / 11 | DICT §3 **W3**, §4 |
 | Default method bodies | `inferDefaultBodiesIfEnabled` → … → `inferDefaultMethod` | 12 / 260 / 9 | DICT §3 **W3**, §4 |
 | Dictionary insertion | `dictPass` → `dictPassDecl`, `implDictPassMethods` | 37 / 368 / 2 | DICT §4 |
@@ -251,7 +248,7 @@ what a later group may observe of an earlier one's generalization, is unspecifie
 | Cross-run impl-key registry | `univConcreteBucket`, `univHeadless` | ~144 lines | DICT §6 C4, §8 I2 |
 | Specificity selection | `selectImplEntryByIface`, `pickMostSpecificEntry`, `tySubsumesV`, `matchStep` | ~660 lines | DICT §3 `inst` |
 
-`entail` at 620 lines touching only **6** cells is the best-encapsulated non-trivial
+`entail` at 620 lines touching only **5** cells is the best-encapsulated non-trivial
 subsystem in the file — the #156 work succeeded. The impl/default fork is the **#992** shape:
 two gateway chains, one judgment.
 
@@ -305,8 +302,7 @@ determinism, one instance environment). **It does not require an impl to define 
 method, nor reject a method absent from the interface** — those checks have no spec.
 
 ⚠️ `recordByNameRef`'s `omInsert` is **last-write-wins on a bare type name** (source comment
-at 1622) — the same cross-module hazard as §7.3, in a subsystem that had one line in the
-first draft of this map.
+at 1622) — the same cross-module hazard as §7.3.
 
 ### Layer 6 — Shadowing (standalone fn ⇄ interface method)
 
@@ -323,7 +319,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| **The spine** | `checkBodyImpl` | **835 / 10,917 / 122** | — |
+| **The spine** | `checkBodyImpl` | **835 / 10,917 / 110** | — |
 | **Promotion fixpoint** | `discoverAll` → `discoverPromoted` → `discoverNext`; `discoverPromotedModules` for the whole graph | ~175 lines + 2 banner regions | — |
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
@@ -356,13 +352,33 @@ safest extraction candidate in the file (§7.4).
 
 ### 5.1 The driver stack above `checkBodyImpl`
 
+**It is a bare sweep with a conditional fallback, not a fixpoint wrapped around a sweep.**
+
 ```
 elaborateModules
-  → discoverPromotedModules        ← FIXPOINT: re-runs mark+typecheck until stable
-    → elabHarvestWorker → elabWorker → elabModuleStamp
-      → checkModuleFullImpl
-        → checkBodyImpl            ← calls resetState at module START
+  │
+  ├─ BARE SWEEP (always)
+  │    foldModules elabHarvestWorker → elabWorker → elabModuleStamp
+  │      → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
+  │
+  └─ match promotionHarvestRef
+       [] → the bare sweep IS final — one whole-program typecheck (the #194 win)
+       _  → DISCARD it; resetCrossModuleState, then the 2-pass path:
+              discoverPromotedModules              ← FIXPOINT, over a FLATTENED joint program
+                → discoverPromotedJoint → checkProgramSeeded
+                  → checkProgramSeededSplit → checkBodyImpl (Flat …)
+              then a second real marking sweep with the promotion-augmented dict set
 ```
+
+Three things this shape makes true that a linear reading does not:
+
+- **The fixpoint is conditional.** It runs only when at least one function was *directly*
+  promoted. On the common path it never runs at all.
+- **It re-enters `checkBodyImpl` in `Flat` mode**, over a flattened joint program — not in
+  the `Module` mode the sweep above it uses. The two modes are both live within one
+  `elaborateModules` call.
+- **The bare sweep's results are thrown away** when the harvest is non-empty, because call
+  sites unmarked under `bareDict` are unsound to keep once a callee is promoted.
 
 `foldModules` calls the worker **head-first**, so `elabHarvestWorker` reads a module's
 promotion set before the recursion into `rest` resets it (source comment at 18654-18659).
@@ -463,8 +479,8 @@ Effects (Layer 1) carries 6 of the 11 open `ws:typecheck` S0s. EFFECTS-SEMANTICS
 this machinery — §6.7 names `unifyRowN`'s closed/closed arm at its line, §6 names
 `checkArgEffVarCoverage` and `methodEffRetOccs`, §10 maps gaps to clauses. What it lacks is
 SHADOW §3's **clause → site → keying-assumption table**. Every one of these S0s is a
-keying/site question, which is exactly what such a table catches. (Layer 1 is in fact the
-best-*cited* layer in §4; the deficit is structural form, not absence.)
+keying/site question, which is exactly what such a table catches. Layer 1 is in fact the
+best-*cited* layer in §4 — the deficit is structural form, not absence.
 
 **3. The cross-module S0s are two different problems, and only one has a clause.**
 
@@ -473,10 +489,16 @@ best-*cited* layer in §4; the deficit is structural form, not absence.)
   method name, so projection does not use the resolved class.
 - **#1069 and most of #1070 are UNDER-specified.** DICT §8's own preamble scopes it to
   *bindings* and *dictionary discipline*; I1 is about the count/order/predicates of
-  dictionary parameters. Kind registries and type/alias/interface name tables are neither.
-  **No clause in any spec grants type, alias, record, or interface names module-qualified
-  identity** — and `compiler/backend/private_mangle.mdk` never qualifies them either. That
-  is a missing rule, not an unenforced one.
+  dictionary parameters. Kind registries and type/alias/record name tables are neither.
+  **No clause in any spec grants type, alias or record names module-qualified identity** —
+  and `compiler/backend/private_mangle.mdk` never qualifies them either. That is a missing
+  rule, not an unenforced one.
+
+  **Interface names are the partial exception.** I2 requires *"qualified instance
+  identity"*, and an instance is identified by (class, head) — so a clause the engine must
+  already satisfy is unattainable if class names collapse across modules. **#1047** (two
+  unrelated `interface Speak`s merging) is therefore reachable from I2, unlike #1069.
+  Interfaces sit between the two cases: specified indirectly, never specified directly.
 
   This matters for how the work is sized. Filed as "specified but unenforced" it looks like
   plumbing; filed correctly it is **a spec paragraph plus one whole-graph check that
@@ -484,15 +506,16 @@ best-*cited* layer in §4; the deficit is structural form, not absence.)
 
 **4. Four subsystems are already pure, and the safest extractions are the error-path clusters.**
 `prePassDictArg`, `runFinalChecks`, `foldModules` **and coherence** (`cohFirstConflict`, 18
-functions / 167 lines) touch **zero** state cells. Coherence only looks stateful if you
-miscount its `coh*` helper signatures as cells (§0 trap 4) — it is a clean, free
-decomposition that the first draft hid from itself. But this
-file imports `mangledName` from `compiler/backend/private_mangle.mdk`, so a "pure ⇒
-extractable" argument must clear the seam list (§7.7) as well as the state graph. The
+functions / 167 lines) touch **zero** state cells — coherence only looks stateful if you
+miscount its `coh*` helper signatures as cells (§0 trap 4).
+
+But purity is necessary, not sufficient: this file imports `mangledName` from
+`compiler/backend/private_mangle.mdk`, so a "pure ⇒ extractable" argument must clear the
+seam list (§7.7) as well as the state graph. The
 ~1,200 lines of error-path machinery (Layer 8) are a stronger candidate: they fire only on
 failure, must not perturb inference, and have no inbound dependency from the inference core.
 
-**5. `entail` is the proof the target shape works.** 620 lines, 49 functions, 6 state
+**5. `entail` is the proof the target shape works.** 620 lines, 49 functions, 5 state
 cells, one gateway. The #156 consolidation produced the file's best-encapsulated subsystem.
 Measure whatever is done next against it.
 
@@ -511,10 +534,7 @@ exists" is a finding:
   are automatically satisfied. §5 measures 20 `match mode` branches, two `BREAK` points, and
   two divergent stamper orders. **A stated invariant with a measured counterexample.**
 
-*(The arg-position prepass was listed here in the first draft. That was wrong — SHADOW §3
-has a dedicated row for it naming `prePassDictArg`, and §1 S9 constrains its guard order.)*
-
-**7. The seams, inbound and outbound.** 12 modules are imported; 31 import this one. Four
+**7. The seams, inbound and outbound.** 11 modules are imported; 31 import this one. Four
 edges constrain refactors and none was named before:
 
 | Edge | Why it matters |
@@ -542,8 +562,7 @@ Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
   ⚠️ **This is a change-control rule, NOT an endorsement.** Two order dependencies are
   **defects, not settled behaviour**: impl selection by declaration/module order contradicts
   DICT §3 (*"never of search order, declaration order, or resolution position"*) and C3, and
-  is open as **#1072 (S0)**; cross-module dictionary **arity** decided by scan order is the
-  I1 break. Do not cite this bullet to defend either.
+  is open as **#1072 (S0)**. Do not cite this bullet to defend it.
 - **Effect rows are transparent in matching on purpose** (EFFECTS §8, the single-meaning
   law). Coherence, subsumption and dispatch matching strip `TEff` by design.
 - **`typeErrorsSticky` stays outside every state bundle, permanently.** It is sound because
@@ -588,11 +607,20 @@ same three failure modes are available to the next reader:
    issue #158's title. The real figure is 52. A status banner claiming everything was
    derived does not make it so.
 5. **The issue table was scoped by label, not by subsystem.** Missed #1047 and #1072.
-6. **Two of the §0 re-derivation commands returned the wrong numbers** (64 for 63, 5 for 2).
-   A recipe that does not reproduce its own results is worse than none.
+6. **Three of the §0 re-derivation commands returned the wrong numbers** — 64 for 63, 5 for
+   2, and `grep -c '^import'` returning **44** because it matched functions named
+   `importedBindings` and `importerShadowDomain`. A recipe that does not reproduce its own
+   results is worse than none.
+7. **The §5.1 driver stack was drawn as a fixpoint wrapped around the module sweep.** It is
+   a bare sweep with a *conditional* fallback, the fallback re-enters `checkBodyImpl` in
+   **`Flat`** mode, and on the common path it never runs. Corrected in §5.1.
+8. **`§7.3` over-corrected once the I1 citation was withdrawn**, sweeping interface names in
+   with types and aliases. I2's "qualified instance identity" does reach them (#1047).
 
-The pattern across 1, 3 and 6: **every one was a shape-matching shortcut that produced a
-plausible number, and none was caught by a gate.** Only re-derivation caught them.
+The pattern across 1, 3, 6 and the import miscount: **every one was a shape-matching
+shortcut that produced a plausible number, and not one was caught by a gate.** The prefix
+bug alone appeared three times — `data|type|impl`, `: Ref`, `^import` — twice *after* being
+written down as a trap. Only re-derivation caught any of them.
 
 ---
 
