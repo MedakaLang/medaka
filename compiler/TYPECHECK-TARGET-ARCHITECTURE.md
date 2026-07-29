@@ -635,9 +635,13 @@ once) is the architecture, the file boundary is not.
 
 ## 6. The migration DAG
 
-Six stages. Every task is a mergeable PR series with `main` green throughout.
-⊕ marks tasks *already filed* and adopted (re-scoped where noted) rather than
-duplicated. Verification bars per task follow §7's doctrine; compiler-source
+**Tracking: epic #1122** (stage table with all issue links). Six stages. Every
+task is a mergeable PR series with `main` green throughout. ⊕ marks tasks
+*already filed* and adopted (re-scoped where noted) rather than duplicated;
+tasks filed by this arc carry their numbers inline (S-2 #1107 · S-3 #1108 ·
+A-1a #1109 · A-1 #1110 · A-2 #1111 · A-3 #1112 · B-2 #1113 · B-3-ext #1114 ·
+E-1 #1115 · E-2 #1116 · E-4 #1117 · D-1 #1118 · D-2 #1119 · F-2 #1120; the
+review-found contravariant-row S0 is #1121). Verification bars per task follow §7's doctrine; compiler-source
 tasks all carry the standing bar (snapshot + selfproc-legA blessing, fixpoint
 C3a/C3b, `typecheck_compiler_source`).
 
@@ -768,8 +772,8 @@ orders merges, and the plan does not pretend otherwise.
   contravariant-or-mixed ⇒ invariant row treatment. Write channels (#1098) are
   the special case; the **contravariant immutable-datatype channel**
   (`data Taker a = MkTaker (a -> Int)` — found by this design's adversarial
-  review, to be filed + pinned) is the general case the write-channel proxy
-  misses. `List` control stays accepted.
+  review, reproduced on both engines, filed as **#1121**, pin owed) is the
+  general case the write-channel proxy misses. `List` control stays accepted.
 - **D-3. Coverage/charge separation** (#1095 ◇graded-arc): result-index
   occurrences never discharge argument coverage; abstract-head row-kinded
   arguments are *collected* at all (#1100); the eliminator obligation for
@@ -907,5 +911,6 @@ whole arc.
 - `compiler/ARCH-REVIEW.md` (PASS 2), `compiler/DRIVER-COLLAPSE-PLAN.md` — prior
   structural verdicts this design keeps or completes
 - `.claude/workstreams/TYPECHECK.md` — the standing five-question gate
-- Issues: #991–#995 (adopted), #1070/#1084 (family audits), #1082 (locals),
-  #616 (conformance gate, adopted into S-1), #820–#824 (graded arc, peer)
+- Issues: **#1122 (the epic / stage tracker)**; #991–#995 (adopted),
+  #1070/#1084 (family audits), #1082 (locals), #616 (conformance gate, adopted
+  into S-1), #820–#824 (graded arc, peer); filed by this arc: #1107–#1121
