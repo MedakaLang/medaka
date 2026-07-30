@@ -766,10 +766,18 @@ orders merges, and the plan does not pretend otherwise.
     winner. A-3's could-not-pass-before fixture covers (1) only; (2) and (3) need
     their own accounting in that PR.
   - **§5.1 M3 decides (d) in the direction that NARROWS THE CHECKER**, so #1134 is a
-    fix and the determined-use fixture flips to ACCEPT (re-pin by hand). §5.1 **M2**
-    additionally states a rule with no implementing site anywhere — an impl may not
-    define a method the interface does not declare — whose silent case, a misspelled
-    override of a *defaulted* method, has no diagnostic on any engine.
+    fix: `test/dict_fixtures/s5-phantom-determined-use-rejected.mdk` goes red on the
+    fix and re-pins to ACCEPT `7`, and the "relabel by hand" contingency in both
+    phantom fixtures' headers does not apply.
+  - **One K-relevant relocation**: §5.1 **M2** (an impl may not define a method the
+    interface does not declare) is enforced **at resolve**, not typecheck —
+    `checkMethodMember` → `MethodNotInInterface` / `R-METHOD-NOT-IN-INTERFACE`, with
+    `inferImplMethod`'s own arm inert. §2 K lists impl completeness among the checks
+    that move to declaration-time analysis; this half of it already lives upstream of
+    typecheck, and A-3 should relocate it deliberately rather than discover it. (This
+    row was first recorded here as "no implementing site" — wrong, and corrected: the
+    search was scoped to `typecheck.mdk` and the check lives one stage earlier. §11's
+    preamble now carries that lesson.)
 
   **F-1's S-2(f) gate is lifted**, with one constraint added: §4.1 **G4** forbids the
   interim pin's shape by name — an implementation that cannot dict-abstract a local
