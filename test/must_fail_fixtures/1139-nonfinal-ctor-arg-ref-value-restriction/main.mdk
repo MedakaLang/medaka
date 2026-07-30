@@ -1,0 +1,12 @@
+data BR a = BR (Ref (List a)) Bool
+
+putI : BR Int -> Unit
+putI (BR r _) = r := [1, 2, 3]
+
+getF : BR (Int -> Int) -> List (Int -> Int)
+getF (BR r _) = r.value
+
+main =
+  let b = BR (Ref []) True
+  let _ = putI b
+  println (map (f => f 10) (getF b))
