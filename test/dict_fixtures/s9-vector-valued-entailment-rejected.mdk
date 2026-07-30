@@ -1,0 +1,28 @@
+-- DICT-SEMANTICS §9 "Signature authority", final sentence: "The entailment side
+-- condition is VECTOR-VALUED on multi-parameter predicates: `Q_sig = {Ix a b, Ix
+-- c d}` does NOT entail an inferred joint `Ix a d` (each ARGUMENT appears in
+-- `Q_sig`, but the PREDICATE does not), so that binding is REJECTED rather than
+-- widened -- the per-argument reading would be unsound."
+--
+-- SPEC ANSWER (hand-derived): the body writes `ix p s`, whose goal is
+-- `Ix a d` -- pairing the first variable of one declared predicate with the
+-- second variable of the other. `Q_sig ⊩ P'ᵢ` fails, so REJECT.
+--
+-- OBSERVED: check/run/build all REJECT with `T-MISSING-CONSTRAINT`
+-- ("Could not deduce 'Ix a d' from the signature of 'joint'"). CONFORMANT.
+--
+-- This is the row that separates a genuinely n-ary obligation representation
+-- from #607's "two separate single-param facts" one. Under the per-argument
+-- reading `a` is covered by `Ix a b` and `d` is covered by `Ix c d`, so the
+-- broken representation ACCEPTS -- and then `ix p s` dispatches on a predicate
+-- no caller ever discharged.
+interface Ix a i where
+  ix : a -> i -> Int
+
+impl Ix Int Int where
+  ix a i = a + i
+
+joint : (Ix a b, Ix c d) => a -> b -> c -> d -> Int
+joint p q r s = ix p s
+
+main = println (joint (1 : Int) (2 : Int) (3 : Int) (4 : Int))

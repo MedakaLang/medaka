@@ -1,0 +1,44 @@
+-- DICT-SEMANTICS §2 "uniformity of nested resolution" + §3 `inst` + §3 `assum`
+-- precedence. This is the #203 shape, spelled out in §3's own worked example.
+--
+-- SPEC ANSWER (hand-derived, line by line):
+--
+--   line 1, goal `Tag (List Int)`:
+--     match(IE, ·) = { `Tag (List a) requires Tag a`, `Tag (List Int)` }.
+--     `Tag (List Int) ⊏ Tag (List a)` via σ = [Int/a], so min⊑ is the SPECIFIC
+--     instance. Its body is `tag _ = 99`.                       => 99
+--
+--   line 2, goal `Tag (List (List Int))`:
+--     `Tag (List Int)`'s head does NOT match, so match(IE, ·) = { `Tag (List a)` }
+--     alone and `inst` selects the general instance at φ = [List Int / a].
+--     §3 then discharges ITS context `Tag (List Int)` "through this same
+--     judgment" -- i.e. most-specifically -- so the captured evidence is the
+--     SPECIFIC instance's, giving `10 + 99`.                    => 109
+--
+-- The two wrong answers this row separates:
+--   * 21  -- the nested `Tag a` obligation handed to the GENERAL instance
+--            (10 + (10 + 1)): §2's "sub-evidence is never pre-baked at the
+--            instance declaration" violated.
+--   * 109/99 swapped, or line 1 = 11 -- arg-tag dispatch. §5 says a head tag
+--            "cannot distinguish the `List Int` instance from the `List a`
+--            instance", so an evaluator selecting on the runtime `List` tag is
+--            UNSOUND here, not merely incomplete. Line 1 is that cell.
+--
+-- OBSERVED: run/build both print 99 then 109. CONFORMANT.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag _ = 1
+
+impl Tag (List a) requires Tag a where
+  tag xs = match xs
+    (y :: _) => 10 + tag y
+    [] => 10
+
+impl Tag (List Int) where
+  tag _ = 99
+
+main =
+  println (tag ([1, 2] : List Int))
+  println (tag ([[1, 2]] : List (List Int)))

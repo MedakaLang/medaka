@@ -1,0 +1,510 @@
+#!/bin/sh
+# DICT-SEMANTICS conformance gate (docs/spec/DICT-SEMANTICS.md).
+#
+# Until this existed, `docs/spec/DICT-SEMANTICS.md` had NO EXECUTING GATE (#616).
+# The conformance reviewer was the sole enforcement mechanism, and reviewers are
+# per-PR, human-scale, and only look at the diff in front of them. That document
+# accumulated FOUR independent divergences in a single day (#607/#609/#610/#614),
+# three of them found by reading the spec against the source rather than by any
+# test, while every gate stayed green -- because THE COMPILER'S OWN SOURCE
+# CONTAINS ZERO MULTI-ARG CONSTRAINTS, so the self-hosting corpus is
+# constitutionally blind to the entire class. `typecheck_compiler_source.sh` and
+# the self-compile fixpoint cannot see any of it.
+#
+# Modelled directly on test/diff_compiler_shadow_semantics.sh, whose design
+# decisions transfer wholesale (#616 item 2): the check/run/build agreement
+# harness, the pin-current-behaviour discipline, the coverage self-audit, and the
+# KNOWN-BAD-row-as-ledger idea are all its.
+#
+# ###################################################################
+# # WHAT THIS GATE PINS, AND WHY THAT IS NOT THE SAME AS "CORRECT"  #
+# ###################################################################
+# ⚠️ THIS GATE PINS WHAT THE BINARY ACTUALLY DOES ON CURRENT MAIN, NOT WHAT THE
+# SPEC SAYS SHOULD HAPPEN. A gate that asserted the spec would just be red, and a
+# red gate teaches people to ignore it. Divergences are pinned WITH AN ANNOTATION
+# NAMING THE ISSUE, so the gate doubles as the conformance ledger and
+# SELF-DRAINS: the day a fix lands the row goes RED and whoever fixed it must
+# come here and re-pin the cell.
+#
+# ⚠️ AND THE CONVERSE, WHICH IS THE MORE DANGEROUS HALF: A CAPTURED GOLDEN
+# RECORDS WHAT THE ENGINE DID, NOT WHAT IS CORRECT. Every value in the TABLE
+# below was HAND-DERIVED FROM THE SPEC FIRST, in the fixture's own header
+# comment, and only then compared against the binary. Where they agree the row is
+# CONFORMANT; where they disagree the row says so in its label and names the
+# issue. THREE ENGINES AGREEING DOES NOT PROVE CORRECTNESS -- several known S0s
+# have every engine equally wrong, which is exactly why `diff_compiler_engines`
+# cannot see them, and one of the rows below (s3-min-fully-general-sibling) is
+# such a cell: both engines print the same WRONG number at exit 0.
+#
+# ###################################################################
+# # THREE ASSERTION SECTIONS, BECAUSE VERDICTS ARE NOT ENOUGH       #
+# ###################################################################
+#   1. VERDICT + VALUE. `check`/`run`/`build` each ACCEPT or REJECT as the row
+#      specifies; where run and build both accept, their stdouts must be
+#      byte-identical to each other AND to the pinned value. §7's single-evaluator
+#      law is a claim about VALUES ("two evaluators ... must agree, value-for-
+#      value, on every elaborated core program"), and an exit-code-only gate is
+#      blind to "build exits 0 printing a WRONG number" -- which is precisely
+#      #607's build-path symptom. REJECT rows additionally pin the DIAGNOSTIC
+#      CODE from `check --json`, so a row cannot pass by being rejected for an
+#      unrelated reason (a typo in a fixture would otherwise grade green).
+#   2. SCHEME. The exact `medaka check` scheme line for the binding under test.
+#      #607's and #610's discriminating probe was the scheme, not the value:
+#      both printed the RIGHT number while having SILENTLY DROPPED the
+#      constraint from the type. A verdict+value row cannot see that.
+#   3. EMITTED IR. `medaka build --keep-ir` and a pinned pattern over the `.ll`.
+#      This is the only section that can see a DEAD DICT SLOT (#607) or an
+#      arity skew (§8 I1) -- both invisible from behaviour alone -- and it is
+#      what turned "I think the wrong impl is selected" into
+#      `call @mdk_impl_Box_tag` on the screen for the S0 below.
+#
+# ⚠️ #616 item 4 asks for the TYPED, DICT-PASSED CORE IR
+# (`compiler/entries/core_ir_typed_modules_dump_main.mdk`). Section 3 uses
+# `build --keep-ir` INSTEAD, deliberately: it observes the same facts (dict-param
+# arity, which impl a site resolved to, which dicts were passed) on the path that
+# actually SHIPS, and it needs no oracle -- so this gate has no `test/bin/*`
+# staleness coupling and no `build_oracles.sh` registration. The Core-IR dump
+# route is listed under NOT YET COVERED below; it would add route-kind
+# (`RKey`/`RLocal`) visibility that LLVM IR flattens.
+#
+# ###################################################################
+# # THE LEDGER -- rows pinned to a KNOWN divergence, newest first    #
+# ###################################################################
+# * s6-1-4-supers-per-construction-goal -- ⚠️ UNFILED, S0 SILENT WRONGNESS ON
+#   THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
+#   constructed at a GROUND goal reaches the GENERAL `D`-dict, not the
+#   most-specific one: `check` exits 0, `run` prints the correct 77/77, and the
+#   SHIPPED NATIVE BINARY prints 20/77. §6 C2 names this exact break ("a
+#   super-projection that reaches a general `D`-dict while an independent
+#   top-level goal `D τ̄` resolves to a specific one"), and §6.1.4 names the
+#   mechanism ("pre-resolving a polymorphic instance's supers once, against its
+#   general head, at declaration"). Both arms are in ONE program, so they
+#   disagree inside one binary. Control: s6-1-4-direct-constraint-control
+#   declares `D a` DIRECTLY (so `assum` reaches the dict instead of `super`) and
+#   native is correct -- localising the defect to the superclass arm. DISTINCT
+#   from #412 (CLOSED, S0), which was the impl-`requires` arm of the same §6.1.4
+#   family; #412's own repro was re-run on this binary and is correct.
+#   ⚠️ This is the row the whole gate justifies: `run` and `build` share the
+#   entire front end, so their DISAGREEMENT is a real observation about codegen,
+#   and no existing gate drives this shape.
+# * s3-min-fully-general-sibling  -- ⚠️ UNFILED, S0 SILENT WRONGNESS. A fully
+#   general `impl Tag a` beside `impl Tag (Box Int)` makes EVERY `Box`-headed
+#   goal call the `Box Int` impl: `tag (Box "s")` prints 99 where 10 is correct,
+#   on check (exit 0, no diagnostic), on run, and on the shipped binary. Selection
+#   is keyed on the HEAD TYCON with the type ARGUMENTS DROPPED -- §10's named
+#   defect ("keys instances by class-plus-head-constructor alone, which cannot
+#   separate `List Int` from `List a`"). The control is one token away:
+#   s5-argtag-unsound-under-overlap is the same program with `impl Tag (List a)`
+#   in place of `impl Tag a`, and it is CORRECT. Reported to the orchestrator
+#   2026-07-30 with this repro; adjacent to but not obviously the same as #1072,
+#   which is a runtime arm-matching bug and states that "single-module
+#   permutations are CLEAN" -- this program is single-module and is not.
+# * s3-nested-obligation-two-levels -- #323 (OPEN, S3). At nesting depth >= 2
+#   under overlap the RUN path E-PANICs `unknown op '+'` while `check` and the
+#   NATIVE binary are both correct (119). A §7 single-evaluator-law violation.
+#   Its no-overlap control (s3-nested-no-overlap-control) proves eval handles
+#   depth-3 recursive context discharge fine, so the trigger is the overlap.
+#   ⚠️ #323's filed BUILD-side symptom ("silent garbage") does NOT reproduce.
+# * s6-1c-per-goal-unique-min-rejected -- #614 (S2) / #311 (S3), both OPEN. The
+#   declaration-time coherence sweep enforces §6.1 condition (a) (global pairwise
+#   comparability) where the spec commits to (c) (per-goal unique minimum), so
+#   the §6.1 separating case is rejected. SOUND (an over-rejection), and #311
+#   records the 2026-07-16 owner decision to keep (a) for now.
+#   s6-1c-incomparable-no-minimum-control is the discriminating control.
+# * s5-phantom-position-rejected -- ⚠️ UNFILED, S3. §5 lists phantom position
+#   ("`ā_C` absent from `τ_m`") as a supported dispatch case; the checker rejects
+#   it at the impl with a dedicated `T-PHANTOM-METHOD` code. Defensible (Medaka
+#   has no visible type application, so a use site cannot fix `a`), but
+#   unreconciled -- §5 still licenses it and nothing records the decision.
+#
+# ###################################################################
+# # NOT YET COVERED -- an honest punch-list, not a silent gap        #
+# ###################################################################
+# The corpus covers §1, §3 (selection/`assum`/`super`/W1/W3-type-axis), §4
+# (`gen`/`gen-rec`/`gen-sig`), §5 (result + phantom + arg-tag), §6/§6.1
+# (C1/C2/choice-points 2,3,4), §8 (I1/I2/I3) and §9 (signature authority,
+# vector-valued entailment). It does NOT yet cover:
+#   * §2 -- the dictionary RECORD SHAPE itself (a `supers` field vs a flat
+#     impl-key). Only its observable consequences are pinned; asserting the
+#     representation needs the Core-IR dump probe.
+#   * §3 W2 -- instance-resolution termination (the Paterson/coverage-style
+#     condition). No fixture drives a diverging instance context.
+#   * §3 W3 EFFECT axis, and the whole graded-interface (`Deferred*`) paragraph
+#     including its two verified S0s (#1094, #1095). That is
+#     EFFECTS-SEMANTICS' §6 to gate; only the TYPE axis is pinned here.
+#   * §6.1 choice-point 1 -- specificity compares heads only, not contexts. No
+#     fixture declares two α-equal heads with different contexts.
+#   * §6.1 condition (b) -- per-goal TOTAL order, the middle of the three. Only
+#     (a)-vs-(c) is separated.
+#   * §7 -- the WASM engine. Every row drives check/run/build; wasm is a third
+#     refinement the single-evaluator law also binds.
+#   * §4 `gen` for a LOCAL (`let`/`where`) constrained binding, as opposed to a
+#     top-level one. See #1052 (the local-dict pin is itself unsound).
+#   * The typed dict-passed Core-IR route kinds (`RKey`/`RLocal`, `CDict`), per
+#     the note above.
+# Adding any of these is mechanical: drop a fixture in test/dict_fixtures/ and
+# wire a row. The coverage self-audit below FAILS until you do, by design.
+#
+# Usage:  sh test/diff_compiler_dict_semantics.sh
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MEDAKA="$ROOT/medaka"
+FIXDIR="$ROOT/test/dict_fixtures"
+[ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
+[ -d "$FIXDIR" ] || { echo "missing fixture dir: $FIXDIR"; exit 2; }
+
+# Every invocation is bounded: DICT-SEMANTICS W1/W2 are DECIDABILITY conditions,
+# so a regression to a looping `super`-search or a diverging instance context
+# must surface as a row FAILURE, not as a hung CI job.
+bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+: >"$TMP/v0"; : >"$TMP/v1"; : >"$TMP/v2"; : >"$TMP/v3"
+
+# ── Section 1 table ───────────────────────────────────────────────────────────
+# entry (relative to FIXDIR) | label | exp_check | exp_run | exp_build | mode | value | code
+#   exp_* in {ACCEPT, REJECT} -- ACCEPT means exit 0, REJECT means nonzero exit.
+#   mode in:
+#     NONE        -- no stdout assertion (nothing ran to completion)
+#     ALL_EXACT   -- run and build both ACCEPT: their stdouts AND the pinned
+#                    `value` must all be byte-identical (§7 value agreement +
+#                    ground-truth pin)
+#     BUILD_EXACT -- only build's stdout is asserted against `value` (used where
+#                    run is expected to REJECT but build to ACCEPT with a
+#                    specific value -- a check/build-agree-run-diverges split)
+#     SPLIT_EXACT -- KNOWN-BAD ledger for a §7 single-evaluator-law violation
+#                    where BOTH engines accept and DISAGREE. `value` holds two
+#                    expectations separated by `%%`: run's stdout, then build's.
+#                    Both are asserted exactly, AND they are required to DIFFER
+#                    -- so the row goes RED the day the engines converge (which
+#                    is the drain) instead of silently absorbing the fix. This
+#                    mode exists because the shadow gate has no cell for it: its
+#                    ALL_EXACT assumes agreement, and a NONE row here would
+#                    report `ACCEPT ACCEPT ACCEPT` over a shipped wrong value.
+#   value uses literal backslash-n for embedded newlines (expanded via printf %b).
+#   code = the diagnostic `code` that `check --json` must report, or empty for
+#     no code assertion. A REJECT row WITHOUT a code cannot tell "rejected for
+#     the specified reason" from "rejected because the fixture has a typo".
+TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
+s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
+s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
+s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (119). build`s value is pinned because it is RIGHT; the row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|119|
+s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
+s3-min-fully-general-sibling.mdk|§3/§10 LEDGER ⚠️ UNFILED S0 SILENT WRONGNESS: a fully general `impl Tag a` beside `impl Tag (Box Int)` sends EVERY Box-headed goal to the Box Int impl -- selection keyed on the head tycon with type ARGS DROPPED. Spec answer 99/10/10; both engines print 99/99/99 at exit 0. PINS THE WRONG ANSWER ON PURPOSE|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n99\n99|
+s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
+s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
+s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
+s4-gen-sig-declared-context-kept.mdk|§4 `gen-sig` (#619): a declared predicate the body NEVER DISPATCHES ON is still abstracted and still displayed (#610 regression pin -- the value 9 is identical either way, so only the section-2 scheme assertion can see this)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|9|
+s4-gen-sig-violating-caller-rejected.mdk|§4 `var`: the declared context RESTRICTS CALLERS even when the body contains no method occurrence (#610 regression pin -- was exit 0)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+s4-gen-sig-body-needs-more-rejected.mdk|§4 `gen-sig` side condition `Q_sig ⊩ P`ᵢ` with `Q_sig` EMPTY: a signature is a contract the body must satisfy, not a floor it can raise -- rejected, never silently widened|REJECT|REJECT|REJECT|NONE||T-MISSING-CONSTRAINT
+s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|23|
+s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
+s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
+s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
+s5-phantom-position-rejected.mdk|§5 PHANTOM position -- LEDGER ⚠️ UNFILED S3: §5 lists it as supported ("same -- only the static dictionary determines it"); the checker rejects it at the impl. An over-rejection with a dedicated code, so deliberate but unreconciled with the spec|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
+s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
+s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-1c-per-goal-unique-min-rejected.mdk|§6.1 choice-point 2 -- LEDGER #614/#311 (both OPEN): the §6.1 SEPARATING CASE. Spec commits to (c) per-goal unique minimum and would ACCEPT, printing 3; the declaration-time sweep enforces (a) global comparability and rejects. Sound over-rejection; #311 records the owner decision to keep (a) for now|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-1c-incomparable-no-minimum-control.mdk|CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject -- and the message is byte-identical to its sibling`s, which is the evidence the checker is condition (a) BY CONSTRUCTION|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-1-3-commit-at-elaboration-site.mdk|§6.1 choice-point 3: selection COMMITS AT THE ELABORATION SITE. A rigid-variable goal inside a signed binding takes the general instance (11) and is NOT retroactively re-resolved when the caller instantiates at Int, while the same ground predicate resolved directly gives 99. ⚠️ DO NOT "FIX" 11 TO 99|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|11\n99|
+s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER ⚠️ UNFILED S0 SILENT WRONGNESS ON THE BUILD PATH: a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
+s6-1-4-direct-constraint-control.mdk|CONTROL for the row above: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
+s8-i1-samename-independent-dict-arity/main.mdk|§8 I1: dict arity is keyed by BINDING IDENTITY, not bare name -- two modules` same-named `widget` abstract 1 and 0 dicts respectively (arity asserted structurally in section 3)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|101\n201|
+s8-i2-global-instance-env/main.mdk|§8 I2 / §6 C4: `IE` is assembled across the WHOLE import graph -- the sole `impl Sz Coin` is reached only transitively, and `main` never imports its module at all|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
+s8-i3-evidence-travels/main.mdk|§8 I3: a constrained binding does not re-resolve its own predicates -- the only impl is declared DOWNSTREAM of `twice`, so the dict provably came from the call site|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
+s9-vector-valued-entailment-rejected.mdk|§9 signature authority: the `Q_sig ⊩ P`ᵢ` side condition is VECTOR-VALUED -- `{Ix a b, Ix c d}` does not entail a joint `Ix a d` even though every ARGUMENT appears. The row that separates a real n-ary obligation from #607`s two single-param facts|REJECT|REJECT|REJECT|NONE||T-MISSING-CONSTRAINT'
+
+# ── Section 2 table: exact `medaka check` scheme lines ────────────────────────
+# entry | label | expected scheme line (must appear VERBATIM in check's stdout)
+#   Bare `medaka check` prints only the user's OWN top-level bindings, which is
+#   why this is legible at all; `--types` would bury it under ~120 prelude lines.
+SCHEMES='s1-nary-predicate-scheme-kept.mdk|§1 the 2-ary constraint SURVIVES into the scheme (#607: printed `a -> b -> Int`, constraint gone, at exit 0)|twoParam : Ix a b => a -> b -> Int
+s4-gen-sig-declared-context-kept.mdk|§4 `gen-sig` the declared context is DISPLAYED even though the body never dispatches (#610: printed `sz2 : a -> Int`)|sz2 : Sz a => a -> Int
+s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` the superclass-entailed `B a` is DROPPED, not merged (pre-#619 displayed `(B a, C a) =>` and propagated it to every caller)|viaC : C a => a -> Int
+s4-gen-sig-superclass-redundant-dropped.mdk|§4 control: the binding that genuinely needs `B a` still shows it, so the row above is not "constraints are never displayed"|useB : B a => a -> Int
+s4-gen-rec-inferred-context.mdk|§4 `gen-rec` P` is the GROUP`s, so BOTH bindings generalize over `Sz a` -- not only the one whose body mentions `sz` first|evenSz : Sz a => a -> Int -> Bool
+s4-gen-rec-inferred-context.mdk|§4 `gen-rec` the other half of the group|oddSz : Sz a => a -> Int -> Bool'
+
+# ── Section 3 table: emitted-LLVM structural assertions ──────────────────────
+# entry | label | HAS|LACKS | extended-regex over the kept .ll
+#   The IR is produced BEFORE clang runs, so no optimization level can change it
+#   (AGENTS.md, "Parallelism"): these patterns are stable against -O0/-O2.
+IRS='s4-gen-sig-declared-context-kept.mdk|§4 `gen` a declared-but-never-dispatched constraint STILL ABSTRACTS ITS DICT PARAM -- arity 2 (dict + value) for a 1-argument source function. Invisible from behaviour: the value is 9 with or without the slot|HAS|^define i64 @mdk_s4_gen_sig_declared_context_kept__sz2\(i64 %arg0, i64 %arg1\)
+s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the CONSTRAINED same-named binding abstracts ONE dict: arity 2|HAS|^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)
+s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the UNCONSTRAINED same-named binding abstracts NONE: arity 1. A bare-name arity table would force a phantom dict param here and the call site would over-apply|HAS|^define i64 @mdk_righty__widget\(i64 %arg0\)
+s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl -- a direct call, no runtime arm-matching|HAS|call i64 @mdk_impl_Int_dflt\(
+s3-min-fully-general-sibling.mdk|⚠️ UNFILED S0 MECHANISM PIN: all THREE call sites lower to the SAME direct call to the `Box Int` impl, whose mangled symbol carries the head tycon with the type ARGUMENTS DROPPED. The general impl is emitted and never called. This is the evidence the defect is in SELECTION (elaboration), not in runtime arm-matching -- which is what distinguishes it from #1072|HAS|define i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|⚠️ UNFILED S0 MECHANISM PIN (second half): no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\('
+
+# ── Coverage self-audit ──────────────────────────────────────────────────────
+# Every top-level fixture unit (a .mdk file, or a directory) in FIXDIR must
+# appear in TABLE, or this gate silently re-creates the orphan-corpus problem it
+# exists to close (the shadow gate's audit finding, 2026-07-13).
+listed="$(printf '%s\n' "$TABLE" | awk -F'|' 'NF>1{print $1}' | sed 's#/main\.mdk$##' | sort -u)"
+actual="$(cd "$FIXDIR" && for e in *; do
+            if [ -d "$e" ] || { [ -f "$e" ] && [ "${e%.mdk}" != "$e" ]; }; then
+              echo "$e"
+            fi
+          done | sort -u)"
+
+uncovered=0
+for a in $actual; do
+  hit=0
+  for l in $listed; do
+    [ "$a" = "$l" ] && hit=1 && break
+  done
+  if [ "$hit" -eq 0 ]; then
+    uncovered=$((uncovered+1))
+    echo "FAIL" >>"$TMP/v0"
+    printf 'FAIL coverage: %s exists in %s but is NOT wired into this gate'"'"'s TABLE\n' "$a" "$FIXDIR"
+  fi
+done
+if [ "$uncovered" -eq 0 ]; then
+  echo "PASS" >>"$TMP/v0"
+  printf 'ok   coverage: every fixture in %s is wired into this gate (%d units)\n' "$FIXDIR" "$(printf '%s\n' "$actual" | grep -c .)"
+fi
+echo
+
+# ── Section 1: verdict + value + diagnostic code ─────────────────────────────
+echo '=== 1. verdict (check/run/build) + pinned value + diagnostic code ==='
+printf '%-52s %-6s %-6s %-6s %-11s %-22s %s\n' 'fixture' 'check' 'run' 'build' 'value' 'code' 'result'
+printf '%-52s %-6s %-6s %-6s %-11s %-22s %s\n' '----------------------------------------------------' '------' '------' '------' '-----------' '----------------------' '------'
+
+printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp_build mode value code; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
+
+  if [ ! -f "$entrypath" ]; then
+    printf '%-52s %s\n' "$entry" 'FAIL MISSING FIXTURE FILE'
+    echo "FAIL" >>"$TMP/v1"
+    continue
+  fi
+
+  bound "$MEDAKA" check "$entrypath" >/dev/null 2>"$TMP/$base.chk.err"
+  check_code=$?
+  bound "$MEDAKA" run "$entrypath" >"$TMP/$base.run.out" 2>"$TMP/$base.run.err"
+  run_code=$?
+  bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.bin" >"$TMP/$base.build.err" 2>&1
+  build_code=$?
+
+  if [ "$check_code" -eq 0 ]; then check_v='ACCEPT'; else check_v='REJECT'; fi
+  if [ "$run_code" -eq 0 ]; then run_v='ACCEPT'; else run_v='REJECT'; fi
+  if [ "$build_code" -eq 0 ] && [ -x "$TMP/$base.bin" ]; then
+    build_v='ACCEPT'
+    bound "$TMP/$base.bin" >"$TMP/$base.build.out" 2>"$TMP/$base.build.runerr"
+  else
+    build_v='REJECT'
+    : >"$TMP/$base.build.out"
+  fi
+
+  row_ok=1
+  [ "$check_v" = "$exp_check" ] || row_ok=0
+  [ "$run_v" = "$exp_run" ] || row_ok=0
+  [ "$build_v" = "$exp_build" ] || row_ok=0
+
+  value_v='-'
+  case "$mode" in
+    NONE) ;;
+    ALL_EXACT)
+      if [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'ACCEPT' ]; then
+        printf '%b\n' "$value" >"$TMP/$base.expected"
+        if cmp -s "$TMP/$base.run.out" "$TMP/$base.build.out" && cmp -s "$TMP/$base.run.out" "$TMP/$base.expected"; then
+          value_v='ok'
+        else
+          value_v='DIFF'
+          row_ok=0
+        fi
+      else
+        value_v='n/a'
+      fi
+      ;;
+    BUILD_EXACT)
+      if [ "$build_v" = 'ACCEPT' ]; then
+        printf '%b\n' "$value" >"$TMP/$base.expected"
+        if cmp -s "$TMP/$base.build.out" "$TMP/$base.expected"; then
+          value_v='ok'
+        else
+          value_v='WRONG'
+          row_ok=0
+        fi
+      else
+        value_v='n/a'
+      fi
+      ;;
+    SPLIT_EXACT)
+      if [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'ACCEPT' ]; then
+        rwant="${value%%\%\%*}"
+        bwant="${value#*\%\%}"
+        printf '%b\n' "$rwant" >"$TMP/$base.expected.run"
+        printf '%b\n' "$bwant" >"$TMP/$base.expected.build"
+        if cmp -s "$TMP/$base.run.out" "$TMP/$base.build.out"; then
+          # The drain fired: the two engines now AGREE. Re-pin this row.
+          value_v='CONVERGED-FIXED'
+          row_ok=0
+        elif ! cmp -s "$TMP/$base.run.out" "$TMP/$base.expected.run"; then
+          value_v='RUN-DIFF'
+          row_ok=0
+        elif ! cmp -s "$TMP/$base.build.out" "$TMP/$base.expected.build"; then
+          value_v='BUILD-DIFF'
+          row_ok=0
+        else
+          value_v='ok(split)'
+        fi
+      else
+        value_v='n/a'
+      fi
+      ;;
+    *)
+      value_v="BADMODE:$mode"
+      row_ok=0
+      ;;
+  esac
+
+  # Diagnostic-code assertion. A REJECT row that does not pin its code cannot
+  # distinguish "rejected for the reason the clause is about" from "rejected
+  # because someone mistyped the fixture" -- and the second grades green.
+  code_v='-'
+  if [ -n "$code" ]; then
+    bound "$MEDAKA" check --json "$entrypath" >"$TMP/$base.chk.json" 2>&1
+    if grep -q "\"code\":\"$code\"" "$TMP/$base.chk.json"; then
+      code_v="ok:$code"
+    else
+      code_v="MISSING:$code"
+      row_ok=0
+    fi
+  fi
+
+  if [ "$row_ok" -eq 1 ]; then
+    result='PASS'
+    echo "PASS" >>"$TMP/v1"
+  else
+    result='FAIL'
+    echo "FAIL" >>"$TMP/v1"
+    printf '     %s\n' "$label" >>"$TMP/failnotes"
+  fi
+  printf '%-52s %-6s %-6s %-6s %-11s %-22s %s\n' "$entry" "$check_v" "$run_v" "$build_v" "$value_v" "$code_v" "$result"
+done
+
+# ── Section 2: exact scheme lines ────────────────────────────────────────────
+echo
+echo '=== 2. `medaka check` scheme lines (#607/#610 printed the RIGHT value with the constraint SILENTLY DROPPED) ==='
+printf '%s\n' "$SCHEMES" | while IFS='|' read -r entry label want; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
+  if [ ! -f "$entrypath" ]; then
+    printf 'FAIL scheme %-44s MISSING FIXTURE FILE\n' "$entry"
+    echo "FAIL" >>"$TMP/v2"
+    continue
+  fi
+  bound "$MEDAKA" check "$entrypath" >"$TMP/$base.sch.out" 2>/dev/null
+  if grep -qxF "$want" "$TMP/$base.sch.out"; then
+    printf 'ok   scheme %-44s %s\n' "$entry" "$want"
+    echo "PASS" >>"$TMP/v2"
+  else
+    printf 'FAIL scheme %-44s want exactly: %s\n' "$entry" "$want"
+    printf '                 got:\n'
+    sed 's/^/                   /' "$TMP/$base.sch.out"
+    echo "FAIL" >>"$TMP/v2"
+  fi
+done
+
+# ── Section 3: emitted-LLVM structural assertions ────────────────────────────
+echo
+echo '=== 3. emitted LLVM IR (dict-param arity + which impl a site actually resolved to) ==='
+printf '%s\n' "$IRS" | while IFS='|' read -r entry label kind pat; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
+  if [ ! -f "$entrypath" ]; then
+    printf 'FAIL ir     %-44s MISSING FIXTURE FILE\n' "$entry"
+    echo "FAIL" >>"$TMP/v3"
+    continue
+  fi
+  if [ ! -f "$TMP/$base.ir.ll" ]; then
+    bound "$MEDAKA" build --keep-ir "$entrypath" -o "$TMP/$base.ir" >"$TMP/$base.ir.log" 2>&1
+    if [ ! -f "$TMP/$base.ir.ll" ]; then
+      printf 'FAIL ir     %-44s no IR emitted (build failed?); log tail:\n' "$entry"
+      tail -4 "$TMP/$base.ir.log" | sed 's/^/                   /'
+      echo "FAIL" >>"$TMP/v3"
+      continue
+    fi
+  fi
+  hits="$(grep -cE "$pat" "$TMP/$base.ir.ll" 2>/dev/null || true)"
+  [ -n "$hits" ] || hits=0
+  case "$kind" in
+    HAS)
+      if [ "$hits" -gt 0 ]; then
+        printf 'ok   ir     %-44s HAS  %s (%d)\n' "$entry" "$pat" "$hits"
+        echo "PASS" >>"$TMP/v3"
+      else
+        printf 'FAIL ir     %-44s HAS  %s -- NOT FOUND\n' "$entry" "$pat"
+        printf '                 %s\n' "$label"
+        echo "FAIL" >>"$TMP/v3"
+      fi
+      ;;
+    LACKS)
+      if [ "$hits" -eq 0 ]; then
+        printf 'ok   ir     %-44s LACKS %s\n' "$entry" "$pat"
+        echo "PASS" >>"$TMP/v3"
+      else
+        printf 'FAIL ir     %-44s LACKS %s -- FOUND %d\n' "$entry" "$pat" "$hits"
+        printf '                 %s\n' "$label"
+        echo "FAIL" >>"$TMP/v3"
+      fi
+      ;;
+    *)
+      printf 'FAIL ir     %-44s unknown kind %s\n' "$entry" "$kind"
+      echo "FAIL" >>"$TMP/v3"
+      ;;
+  esac
+done
+
+# ── Tally ────────────────────────────────────────────────────────────────────
+# The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
+# permits it and dash does fork the last pipeline stage), so shell variables
+# mutated inside them do not survive. Every verdict is therefore appended to a
+# FILE, which does, and the totals are derived from that -- never from a
+# variable, and never from an exit code.
+#
+# The verdicts are kept in FOUR files, one per section, because "did this gate
+# run?" is a PER-SECTION question. A single global count cannot tell a gutted
+# section-3 table from a gate that never had one, and would report `checked 36,
+# 0 failed` over an IR section that made zero observations. Counting per section
+# makes the emptiness REACHABLE and therefore testable.
+cnt() { c="$(grep -c "^$2\$" "$TMP/$1" 2>/dev/null || true)"; [ -n "$c" ] || c=0; echo "$c"; }
+p0="$(cnt v0 PASS)"; f0="$(cnt v0 FAIL)"
+p1="$(cnt v1 PASS)"; f1="$(cnt v1 FAIL)"
+p2="$(cnt v2 PASS)"; f2="$(cnt v2 FAIL)"
+p3="$(cnt v3 PASS)"; f3="$(cnt v3 FAIL)"
+n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3))
+pass=$((p0+p1+p2+p3))
+fail=$((f0+f1+f2+f3))
+asserts=$((n0+n1+n2+n3))
+
+if [ -s "$TMP/failnotes" ]; then
+  echo
+  echo 'failing rows -- the clause each was pinning:'
+  cat "$TMP/failnotes"
+fi
+
+echo
+printf '%s: checked %d assertions -- %d passed, %d failed\n' "$(basename "$0")" "$asserts" "$pass" "$fail"
+printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d\n' "$n0" "$n1" "$n2" "$n3"
+
+# ⚠️ AN EMPTY SECTION IS A FAILURE, NOT A PASS. Three gates in this tree once
+# shelled out to a tool that was not installed, printed `skipping`, and exited 0
+# -- so a required tandem gate had never once executed on that machine. "Green"
+# is not "ran", and a gate that can silently no-op will. Deleting or commenting
+# out a table here must RED the gate, not shrink it quietly.
+empty=0
+[ "$n0" -eq 0 ] && { echo "FAIL: the coverage self-audit made ZERO assertions." >&2; empty=1; }
+[ "$n1" -eq 0 ] && { echo "FAIL: section 1 (verdict+value+code) made ZERO assertions -- it did not run." >&2; empty=1; }
+[ "$n2" -eq 0 ] && { echo "FAIL: section 2 (schemes) made ZERO assertions -- it did not run." >&2; empty=1; }
+[ "$n3" -eq 0 ] && { echo "FAIL: section 3 (emitted IR) made ZERO assertions -- it did not run." >&2; empty=1; }
+[ "$empty" -eq 0 ] || exit 1
+
+[ "$fail" -eq 0 ]

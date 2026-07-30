@@ -1,0 +1,38 @@
+-- DICT-SEMANTICS §1 (`π ::= C τ̄`, predicates are n-ary) + §4 `var`.
+--
+-- SPEC ANSWER, derived by hand from the document before running anything:
+--   §1 says a predicate is a class applied to a VECTOR of type args, so `Ix a i`
+--   is ONE predicate over two variables, not two facts. §4 `var` says every use
+--   site discharges each residual predicate of the instantiated scheme through
+--   §3 entailment. `twoParamViolation "hi" True` instantiates the scheme at
+--   `a := String, i := Bool`; `match(IE, Ix String Bool)` is EMPTY (the only
+--   instance is `Ix Int Int`), so `inst` is inapplicable and there is no
+--   assumption in scope -> the goal is unentailed -> the program is REJECTED.
+--   The 1-param control `oneParamViolation` is here so the row cannot pass by
+--   rejecting for a reason that has nothing to do with arity.
+--
+-- OBSERVED: rejected, `T-NO-IMPL` "No impl of Ix for String Bool". CONFORMANT.
+--
+-- LEDGER: this is the #607 regression pin (S0, CLOSED). On `3a25dafe` this
+-- program was accepted at exit 0 and `run` then died with `unknown op '+'`,
+-- because the obligation representation was structurally 1-ary and dropped
+-- every multi-param obligation. If this row ever flips to ACCEPT, #607 is back.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+interface Ix a i where
+  ix : a -> i -> Int
+
+impl Ix Int Int where
+  ix a i = a + i
+
+oneParamViolation : Sz a => a -> Int
+oneParamViolation x = sz x
+
+twoParamViolation : Ix a i => a -> i -> Int
+twoParamViolation a i = ix a i
+
+main = println (twoParamViolation "hi" True)

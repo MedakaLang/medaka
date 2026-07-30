@@ -1,0 +1,23 @@
+-- DICT-SEMANTICS §8 I2 (= §6 C4): "GLOBAL INSTANCE ENVIRONMENT AFTER IMPORT
+-- RESOLUTION. `IE` and `CE` are assembled ACROSS THE WHOLE IMPORT GRAPH before
+-- entailment runs. ... IMPORT SCOPING AFFECTS VISIBILITY OF NAMES, NOT THE
+-- IDENTITY OF THE EVIDENCE a predicate resolves to."
+--
+-- SPEC ANSWER (hand-derived): the sole `impl Sz Coin` lives in `instances.mdk`,
+-- which this module does not import -- it reaches it only TRANSITIVELY, through
+-- `relay`. Under I2 the instance is nonetheless in `IE`, so the goal `Sz Coin`
+-- at line 4 resolves and prints `sz (Coin 42)` = 42. Under a per-module instance
+-- set it would be an unentailed goal and the program would be rejected -- which
+-- is C4's own failure mode ("otherwise C1/C2 hold only locally and coherence
+-- fails across module boundaries").
+--
+-- OBSERVED: check/run/build all ACCEPT and print 42. CONFORMANT.
+--
+-- Note the two things that are DELIBERATELY not imported here: the impl (impls
+-- have no importable name) and `instances` itself (not even the bare form). The
+-- named imports are the interface, its method, the type's constructor, and one
+-- unrelated function two modules away.
+import iface.{Sz, sz, Coin(..)}
+import relay.{bump2}
+
+main = println (sz (bump2 (Coin 40)))

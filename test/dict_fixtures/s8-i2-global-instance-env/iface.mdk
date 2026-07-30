@@ -1,0 +1,4 @@
+public export data Coin = Coin Int
+
+export interface Sz a where
+  sz : a -> Int

@@ -820,6 +820,29 @@ module-qualified identity.
 
 ## 10. How to read the recurring defects against this spec
 
+> ### ⚙️ This spec now EXECUTES: `test/diff_compiler_dict_semantics.sh` (#616)
+>
+> Until 2026-07-30 nothing mechanically checked the implementation against this
+> document — the conformance reviewer was the sole enforcement mechanism, which is
+> how it accumulated four independent divergences in a single day
+> (#607/#609/#610/#614) with every gate green. The corpus is
+> `test/dict_fixtures/`, **one fixture per clause**, each carrying its
+> **hand-derived spec answer in its own header comment** before any observed
+> value. The gate drives `check`/`run`/`build` per fixture and asserts the
+> **verdict**, the **printed value** (§7 is a claim about values, so exit codes
+> alone cannot see it), the **diagnostic code** for rejections, the **displayed
+> scheme** (#607/#610 both printed the right value with the constraint silently
+> dropped), and pinned patterns over the **emitted LLVM IR** (dict-param arity and
+> which impl a site actually resolved to — a dead dict slot is invisible from
+> behaviour).
+>
+> ⚠️ **It pins CURRENT BEHAVIOUR, not this spec.** Divergences are pinned with the
+> issue number annotated, so the gate doubles as the conformance ledger and goes
+> **red the day a fix lands** — which is the signal to re-pin the row. Its header
+> carries the live ledger and an explicit **NOT YET COVERED** punch-list; read
+> both before concluding a clause is enforced. Whichever clause you are editing
+> here, check whether it has a row there, and add one if it does not.
+
 **Audit completed 2026-06-21 — see [`archive/DICT-CONFORMANCE-AUDIT.md`](../../archive/DICT-CONFORMANCE-AUDIT.md) (archived); all D1–D10 divergences closed.** (That audit predates the
 overlap extension of §3/§6; D1–D10 concerned the non-overlapping regime. The
 overlap regime's conformance target is the 2026-07-16 revision, driver #203.)

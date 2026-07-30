@@ -1,0 +1,27 @@
+-- DICT-SEMANTICS §4 `var` + `gen-sig` (#619): the ENFORCEMENT half of
+-- s4-gen-sig-declared-context-kept. Identical program, violating call site.
+--
+-- SPEC ANSWER (hand-derived): `var` discharges each residual predicate of the
+-- instantiated scheme. `sz2 "hi"` instantiates `a := String`; `match(IE, Sz
+-- String)` is empty and no assumption is in scope, so the goal is unentailed and
+-- the program is REJECTED. Discharge is keyed off the binding's DECLARED
+-- context, not off whether the body happened to contain a method occurrence --
+-- and this body contains none, which is the whole point.
+--
+-- OBSERVED: check/run/build all REJECT with `T-NO-IMPL` ("No impl of Sz for
+-- String"). CONFORMANT.
+--
+-- LEDGER: #610 (S2, CLOSED) -- this program passed `check` at exit 0.
+-- Its control lives in s4-gen-sig-declared-context-kept: the same binding with a
+-- SATISFIED call. Neither row alone distinguishes "the declared context is
+-- enforced" from "nothing is ever enforced"/"everything is rejected".
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+sz2 : Sz a => a -> Int
+sz2 x = 9
+
+main = println (sz2 "hi")

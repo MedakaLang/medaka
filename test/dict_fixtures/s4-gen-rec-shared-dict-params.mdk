@@ -1,0 +1,33 @@
+-- DICT-SEMANTICS §4 `gen-rec` (the #44 vein): "the recursive occurrences of `x`
+-- inside its own body must be applied to the SAME dict params `x` abstracts --
+-- `var` resolves them to the in-scope `d₁…dₘ`, NOT a fresh entailment", and "a
+-- mutually-recursive group shares ONE `λ d̄.` prefix over the whole group".
+--
+-- SPEC ANSWER (hand-derived): `isEvenSz`/`isOddSz` are one mutually-recursive
+-- group over `Sz a`. Each cross-call passes the group's own dict param through.
+-- With `w = (1 : Int)`, `sz w = 1`, so the pair counts down by 1:
+--   isEvenSz 6 -> isOddSz 5 -> ... -> isEvenSz 0 = True    => True
+--   isOddSz  7 -> isEvenSz 6 -> ... -> isEvenSz 0 = True   => True
+--
+-- The failure §4 names is re-entering entailment at each recursive call, which
+-- "rebuilds a divergent or duplicated dictionary at each recursive step
+-- (non-termination, or evidence that disagrees with the caller's)". Both halves
+-- are observable here: non-termination would blow the 60s bound the gate puts on
+-- every invocation, and divergent evidence would change the printed booleans.
+--
+-- OBSERVED: check/run/build all ACCEPT and print True then True. CONFORMANT.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+isEvenSz : Sz a => a -> Int -> Bool
+isEvenSz w n = if n == 0 then True else isOddSz w (n - sz w)
+
+isOddSz : Sz a => a -> Int -> Bool
+isOddSz w n = if n == 0 then False else isEvenSz w (n - sz w)
+
+main =
+  println (isEvenSz (1 : Int) 6)
+  println (isOddSz (1 : Int) 7)

@@ -1,0 +1,61 @@
+-- DICT-SEMANTICS §3 `inst` / §6 C1 / §6 "uniform resolution" / §10's last-but-one
+-- bullet ("Suspect any resolution code path that ... KEYS INSTANCES BY
+-- CLASS-PLUS-HEAD-CONSTRUCTOR ALONE, WHICH CANNOT SEPARATE `List Int` FROM
+-- `List a`").
+--
+-- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED. Reported to the orchestrator on 2026-07-30
+-- with this repro and the control below; no open issue matched when this landed.
+-- Severity as observed: **S0, silent wrongness** -- `check` exits 0 with no
+-- diagnostic and BOTH engines print a value produced by an impl whose head the
+-- goal DOES NOT MATCH.
+--
+-- SPEC ANSWER (hand-derived, before running anything):
+--   `match(IE, π)` = { I | ∃φ. φ(head(I)) = π } (§3). `head(impl Tag (Box Int))`
+--   is `Box Int`; no substitution makes it `Box String` or `Box Bool`. So:
+--     goal `Tag (Box Int)`    -> match {Tag a, Tag (Box Int)}, min⊑ = Box Int => 99
+--     goal `Tag (Box String)` -> match {Tag a} ALONE                          => 10
+--     goal `Tag (Box Bool)`   -> match {Tag a} ALONE                          => 10
+--   Expected output: 99, 10, 10.
+--
+-- OBSERVED on this binary: **99, 99, 99** -- on `check` (exit 0, no diagnostic),
+-- on `run`, and on the shipped native binary alike. Two of the three lines call
+-- an impl their goal does not match.
+--
+-- MECHANISM (read off `medaka build --keep-ir`, not inferred): all three call
+-- sites lower to a DIRECT call to `@mdk_impl_Box_tag` -- the mangled symbol for
+-- `impl Tag (Box Int)` carries the HEAD TYCON ONLY, with the type ARGUMENTS
+-- dropped. Selection is therefore keyed on `Box`, which cannot separate
+-- `Box Int` from `Box String`. Because the call is direct, the decision is taken
+-- during elaboration, not at run time -- so it is not the runtime arm-matching
+-- site of #1072, and #1072 states explicitly that "single-module permutations are
+-- CLEAN", which this program contradicts. Treat them as adjacent, not identical,
+-- until someone traces both.
+--
+-- 🔬 THE CONTROL IS IN THE CORPUS, ONE TOKEN AWAY. `s5-argtag-unsound-under-
+-- overlap.mdk` is this program with the general sibling written `impl Tag (List a)`
+-- instead of `impl Tag a`, and it answers CORRECTLY (99, 10). So the trigger is
+-- specifically a FULLY GENERAL instance (a bare type-variable head, which mangles
+-- to `__none__` and enters no head bucket) sitting beside a tycon-headed one --
+-- not overlap as such, and not declaration order. `test/dict_fixtures/
+-- s3-nested-obligation-most-specific.mdk` is a second control at parametric width.
+--
+-- ⚠️ THIS ROW PINS A WRONG ANSWER ON PURPOSE, AND THE VALUE IT PINS IS NOT
+-- CORRECT. Do not "confirm" it against the engines -- they are the thing that is
+-- wrong. It goes RED the day selection starts keying on the full head, which is
+-- the signal to re-pin it to the spec answer `99\n10\n10` and close the issue
+-- this becomes.
+data Box a = Box a
+
+interface Tag a where
+  tag : a -> Int
+
+impl Tag a where
+  tag _ = 10
+
+impl Tag (Box Int) where
+  tag _ = 99
+
+main =
+  println (tag (Box (1 : Int)))
+  println (tag (Box "s"))
+  println (tag (Box True))

@@ -568,7 +568,19 @@ jobs:
             # the #492 blast-radius carve-out into the ~84-gate run. In a REQUIRED shard
             # on purpose — the thing every agent runs before pushing should not be the
             # one thing no gate watches.
-            pattern: "'diff_compiler_lex*' 'diff_compiler_parse*' 'diff_compiler_snapshot*' 'diff_compiler_resolve*' 'diff_compiler_fmt' 'diff_compiler_fmt_roundtrip' 'diff_compiler_wasm_shim_parity' 'diff_compiler_preflight_base' 'native_fixtures/run' 'build_construct_coverage'"
+            #
+            # 'diff_compiler_dict_semantics' (#616): the DICT-SEMANTICS.md conformance
+            # gate — dispatch, entailment, ⊑/min⊑ selection, dict-slot elaboration and
+            # cross-module dict arity. Parked here for COST, not theme: its subject is
+            # compiler/types/typecheck.mdk, so its natural home is `types` alongside its
+            # sibling diff_compiler_shadow_semantics — but `types` was the POLE in both
+            # merge_group runs measured on 2026-07-29 (429s on 30410046346, 376s on
+            # 30407173265) while `frontend` was the cheapest (182s / 228s). This gate
+            # costs ~43s wall (measured), drives check+run+build+`build --keep-ir` per
+            # fixture, and reads NO test/bin oracle — so it adds no oracle-build cost
+            # and lands frontend at roughly eval's level rather than deepening the pole.
+            # ⚠️ Re-derive those numbers before moving it; they rot.
+            pattern: "'diff_compiler_lex*' 'diff_compiler_parse*' 'diff_compiler_snapshot*' 'diff_compiler_resolve*' 'diff_compiler_fmt' 'diff_compiler_fmt_roundtrip' 'diff_compiler_wasm_shim_parity' 'diff_compiler_preflight_base' 'diff_compiler_dict_semantics' 'native_fixtures/run' 'build_construct_coverage'"
           - name: types
             # 'diff_compiler_shadow_semantics': the SHADOW-SEMANTICS.md decision matrix
             # (standalone fn ⇄ interface-method shadowing). It lives here rather than in

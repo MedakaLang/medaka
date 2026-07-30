@@ -1,0 +1,27 @@
+-- DICT-SEMANTICS §3 W3 (method-scheme fidelity), PINNED-TYPE axis -- the sibling
+-- of s3-w3-method-scheme-rigidity-constraint with the constraint route removed.
+--
+-- SPEC ANSWER (hand-derived): the body returns `K`, a nullary constructor of a
+-- user data type with NO class constraint anywhere. So the "needs a constraint
+-- the scheme lacks" test cannot fire; what W3 forbids here is the bare act of
+-- pinning: "`b̄ μ̄` belong to the CALLER -- `var` re-instantiates them freshly at
+-- every use site -- so a body that pins one inhabits a strictly more specific
+-- type than the scheme every call site is entitled to". REJECT.
+--
+-- OBSERVED: check/run/build all REJECT with `T-IMPL-TOO-SPECIFIC`
+-- ("... this body fixes them to specific types"). CONFORMANT.
+--
+-- Why BOTH W3 rows: an implementation that only checked "did the body acquire a
+-- constraint the scheme lacks" would pass the constraint row and silently accept
+-- this one, which is the unsound half (§3 W3 "type axis": `mk : a -> b` with a
+-- body returning 42 fixes `b := Int`; a caller instantiating `b := String`
+-- crashes). Checking the SET, not one member.
+data K = K
+
+interface Mk a where
+  mkv : a -> b
+
+impl Mk Int where
+  mkv _ = K
+
+main = println (debug (mkv (1 : Int) : K))

@@ -1,0 +1,6 @@
+-- The middle of the chain: it imports `instances`, `main` imports only this.
+import iface.{Coin(..)}
+import instances.{bump}
+
+export bump2 : Coin -> Coin
+bump2 c = bump (bump c)

@@ -1,0 +1,26 @@
+-- DICT-SEMANTICS §8 I1: "Evidence abstraction is KEYED BY BINDING IDENTITY. The
+-- dictionary parameters a generalized binding abstracts (§4 `gen`) -- their
+-- count, order, and predicates -- are part of THAT binding's elaborated type,
+-- identified by its module-qualified name, never by its bare name. Two distinct
+-- bindings that share a surface name (different modules) have INDEPENDENT
+-- dictionary arities. Conflating them (KEYING ARITY BY BARE NAME) forces phantom
+-- dictionary parameters onto an unconstrained binding, whose use sites then
+-- under- or over-apply -- A COHERENCE AND A TYPE-PRESERVATION BREAK AT ONCE."
+--
+-- SPEC ANSWER (hand-derived): `lefty.widget` abstracts one dict, `righty.widget`
+-- abstracts none. `L.widget (1 : Int)` = sz 1 + 100 = 101; `R.widget 1` = 201.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 101 then 201. CONFORMANT.
+--
+-- The failure mode I1 names is not a wrong number, it is an ARITY skew, so this
+-- row is also asserted STRUCTURALLY in the gate's IR section: the emitted
+-- `define` for lefty's widget must take TWO parameters (dict + value) and
+-- righty's exactly ONE. A bare-name arity table would give them the same count,
+-- and the value assertion alone might still pass if the extra slot happened to
+-- be ignored -- which is precisely how a "dead dict slot" hides.
+import lefty as L
+import righty as R
+
+main =
+  println (L.widget (1 : Int))
+  println (R.widget 1)

@@ -1,0 +1,39 @@
+-- DICT-SEMANTICS §5, PHANTOM-POSITION case.
+--
+-- SPEC ANSWER (hand-derived): §5 lists three cases for where the class parameter
+-- `ā_C` may occur in a method type -- argument, result, and "PHANTOM POSITION
+-- (`ā_C` absent from `τ_m`): SAME -- only the static dictionary determines it."
+-- Read literally, the spec licenses a phantom method: `phantom : Int` on
+-- `interface Mk a` is a legal class method whose dispatch comes from the
+-- statically-determined dictionary, as `(method)` in §5 states with no
+-- occurrence side condition. Under that reading this program is ACCEPTED and
+-- prints 7.
+--
+-- OBSERVED -- A DIVERGENCE, ⚠️ UNFILED (no open issue found; reported to the
+-- orchestrator with this repro on 2026-07-30 for triage):
+--   check/run/build all REJECT at the IMPL site with a dedicated diagnostic code
+--   `T-PHANTOM-METHOD`: "Method 'phantom' in interface 'Mk' does not mention
+--   interface parameter(s) 'a'; cannot dispatch".
+--
+-- The dedicated code (`compiler/types/typecheck.mdk`'s `checkPhantomMethods`)
+-- says this is a deliberate design decision, not an accident -- and it is
+-- defensible: Medaka has no visible type application, so a use site of `phantom`
+-- has no way to FIX `a`, and §5 never says how it would. What is missing is the
+-- reconciliation: §5 still lists phantom position as supported, and nothing in
+-- the tree records the decision. Either §5 should carve phantom position out
+-- (naming the no-type-application reason) or the checker should allow it.
+--
+-- SEVERITY as observed: S3 (friction & debt). It is a LOUD, LOCATED reject with
+-- a helpful message, and it is an OVER-rejection -- nothing unsound is accepted.
+-- This row pins the reject, so it self-drains if the checker is ever relaxed.
+interface Mk a where
+  mk : Int -> a
+  phantom : Int
+
+data Red = Red Int
+
+impl Mk Red where
+  mk n = Red n
+  phantom = 7
+
+main = println (phantom : Int)

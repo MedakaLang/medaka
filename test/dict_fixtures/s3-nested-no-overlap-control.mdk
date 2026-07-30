@@ -1,0 +1,26 @@
+-- CONTROL for s3-nested-obligation-two-levels (#323). Same interface, same depth
+-- (`List (List (List Int))`), the overlapping `impl Tag (List Int)` REMOVED.
+--
+-- SPEC ANSWER (hand-derived): only `Tag (List a)` matches at each of the three
+-- levels, bottoming out at `Tag Int`: 10 + 10 + 10 + 1 => 31.
+--
+-- OBSERVED: check/run/build all ACCEPT and all print 31. CONFORMANT.
+--
+-- Why this row is load-bearing: without it, s3-nested-obligation-two-levels'
+-- eval panic could be read as "eval cannot do depth-3 nesting at all", which is
+-- FALSE and would send a fixer at the wrong subsystem. This control proves the
+-- run path handles depth-3 recursive context discharge fine, and that #323's
+-- trigger is specifically the presence of a strictly-more-specific overlapping
+-- instance below the recursion.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag _ = 1
+
+impl Tag (List a) requires Tag a where
+  tag xs = match xs
+    (y :: _) => 10 + tag y
+    [] => 10
+
+main = println (tag ([[[1]]] : List (List (List Int))))

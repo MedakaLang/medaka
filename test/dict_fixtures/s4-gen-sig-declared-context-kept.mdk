@@ -1,0 +1,28 @@
+-- DICT-SEMANTICS §4 `gen-sig` (#619), first consequence: "a declared predicate
+-- the body never dispatches on is STILL ABSTRACTED -- it is part of the contract
+-- (`sz2 : Sz a => a -> Int` whose body ignores `Sz` still has `Sz a` in its
+-- scheme and every caller discharges it)". The spec names this exact program.
+--
+-- SPEC ANSWER (hand-derived): `Q_sig = {Sz a}` is the principal context, taken
+-- FROM THE SIGNATURE and not re-derived from the body. So:
+--   * the displayed scheme is `sz2 : Sz a => a -> Int`;
+--   * `sz2 (7 : Int)` discharges `Sz Int` (the one instance) and returns 9.
+--
+-- OBSERVED: check ACCEPT, scheme `sz2 : Sz a => a -> Int`, run/build print 9.
+-- CONFORMANT.
+--
+-- LEDGER: the #610 regression pin (S2, CLOSED). On `eedd1482` the enforced and
+-- displayed context was re-derived from BODY METHOD OCCURRENCES, so a body that
+-- never calls an `Sz` method lost the constraint entirely and `check --types`
+-- printed `sz2 : a -> Int`. The gate asserts the SCHEME LINE, because the value
+-- 9 is identical either way -- an exit-code-and-value row would not have seen it.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+sz2 : Sz a => a -> Int
+sz2 x = 9
+
+main = println (sz2 (7 : Int))

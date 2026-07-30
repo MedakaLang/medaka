@@ -1,0 +1,25 @@
+-- DICT-SEMANTICS §1 + §4 `gen-sig`: the POSITIVE half of s1-nary-predicate-enforced.
+--
+-- SPEC ANSWER (hand-derived): §4 `gen-sig` makes the ascribed `Ix a i` the
+-- binding's principal context, so `twoParam` abstracts ONE dictionary parameter
+-- for the joint 2-ary predicate and its displayed scheme keeps `Ix a b =>`. At
+-- the call `twoParam 1 2` the goal is `Ix Int Int`, matched uniquely by the one
+-- instance, so `inst` fires and `ix a i = a + i` gives 1 + 2 = 3.
+--
+-- OBSERVED: check ACCEPT, scheme `twoParam : Ix a b => a -> b -> Int`,
+-- run/build both print 3. CONFORMANT.
+--
+-- The SCHEME half matters independently of the value: #607's discriminating
+-- probe was `check --types` showing whether the constraint survives at all
+-- (it printed `a -> b -> Int`, constraint GONE, while still exiting 0). The
+-- gate asserts the scheme line, not just the verdict, for exactly that reason.
+interface Ix a i where
+  ix : a -> i -> Int
+
+impl Ix Int Int where
+  ix a i = a + i
+
+twoParam : Ix a i => a -> i -> Int
+twoParam a i = ix a i
+
+main = println (twoParam (1 : Int) (2 : Int))

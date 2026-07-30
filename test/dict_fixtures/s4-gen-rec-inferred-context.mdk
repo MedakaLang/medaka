@@ -1,0 +1,29 @@
+-- DICT-SEMANTICS §4 `gen-rec` with the context INFERRED rather than ascribed --
+-- the `gen` sourcing (`P'` read off the body) instead of the `gen-sig` sourcing.
+-- s4-gen-rec-shared-dict-params is the ascribed twin; this is the rule's other
+-- antecedent, and the two are DIFFERENT code paths per #610's mechanism note
+-- (declared context vs body-occurrence-derived context).
+--
+-- SPEC ANSWER (hand-derived): `P'` = predicates deferred to the RECURSIVE GROUP
+-- as a whole, so both bindings generalize over the same `{Sz a}` and share one
+-- `λ d̄.` prefix. Displayed schemes:
+--     evenSz : Sz a => a -> Int -> Bool
+--     oddSz  : Sz a => a -> Int -> Bool
+-- -- note both, not just the one whose body mentions `sz` first; `P'` is the
+-- group's, not the binding's. Values as in the ascribed twin: True, True.
+--
+-- OBSERVED: check ACCEPT with exactly those two schemes; run/build print
+-- True then True. CONFORMANT.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+evenSz w n = if n == 0 then True else oddSz w (n - sz w)
+
+oddSz w n = if n == 0 then False else evenSz w (n - sz w)
+
+main =
+  println (evenSz (1 : Int) 6)
+  println (oddSz (1 : Int) 7)
