@@ -1,0 +1,31 @@
+-- Issue 1139 (S0, memory-safety) — the value restriction's `Ref` exclusion must
+-- apply in EVERY constructor-argument position, not just the last one.
+--
+-- `isNonexpansive`'s constructor-application arm used to read
+--   isNonexpansive (EApp f x) = isCtorAppHead (EApp f x) && isNonexpansive x
+-- i.e. only `x`, the spine's FINAL argument, was tested for non-expansiveness;
+-- `f` reached only the head walk, which discarded every argument on its way to
+-- the head.  So the `Ref` name test only ever saw a `Ref` in final position.
+-- Here the `Ref` sits in NON-final position, so `let b = BR (Ref []) True` was
+-- generalized: `putI b` writes `List Int` into the shared cell and `getF b`
+-- reads it back as `List (Int -> Int)`.  `check` exited 0 with no diagnostic,
+-- `run` died with E-NOT-A-FUNCTION, and the BUILT binary SEGFAULTED (exit 139)
+-- jumping through the ints as function pointers.
+--
+-- The discriminator is argument POSITION alone: move the `Ref` to the final
+-- argument and nothing else, and this was already correctly rejected.
+--
+-- Verdict: REJECT, by a type-mismatch DIAGNOSTIC from check/run/build alike —
+-- never by a runtime panic and never by a segfault.
+data BR a = BR (Ref (List a)) Bool
+
+putI : BR Int -> Unit
+putI (BR r _) = r := [1, 2, 3]
+
+getF : BR (Int -> Int) -> List (Int -> Int)
+getF (BR r _) = r.value
+
+main =
+  let b = BR (Ref []) True
+  let _ = putI b
+  println (map (f => f 10) (getF b))

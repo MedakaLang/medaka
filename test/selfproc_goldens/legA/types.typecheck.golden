@@ -785,7 +785,7 @@ ioAliasLabels : List String
 isArithBinop : String -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
-isCtorAppHead : Expr -> Bool
+isCtorAppSpine : Expr -> Bool
 isDefinerShadow : String -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
