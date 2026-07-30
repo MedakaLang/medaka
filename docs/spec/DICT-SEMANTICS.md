@@ -52,11 +52,15 @@ neutrality, predicate deferral), **§5.1** (impl completeness, extraneous method
 where a phantom-method rejection belongs), **§6.2** (group scheduling and when `inst`
 may commit), **§6.3** (numeric-literal defaulting), **§7.1** (driver unimodality), and
 **§8 I4/I5** (module-qualified identity in every namespace; graph-global instance
-candidacy). Each carries a §11 row, and every one of those rows is UNIMPLEMENTED,
-PARTIAL or DIVERGENT — these clauses describe the target, not the tree. Two of them
-license behaviour changes that are stated in the clause itself rather than left to a
-migration to discover: **I5** (three distinct consequences, only one of which is an
-acceptance widening) and **§6.2 T4**.
+candidacy). Each carries a §11 row, and not one of those rows reads ENFORCED-as-stated
+— they are UNIMPLEMENTED, PARTIAL, DIVERGENT or HOLED. **These clauses describe the
+target, not the tree.** Two of them license behaviour changes stated in the clause
+itself rather than left to a migration to discover — **I5** (whose consequences are
+*derived*, not enumerated, and only one of which is an acceptance widening) and
+**§6.2 T4** (which carries a normative "not before I5" constraint). And one, **§4.1
+G3**, is explicitly a valid argument about a value set the implementation does **not**
+have (#1139), so it may not be cited as discharged: it is F-1's (#1082) gate, and the
+gate is not open.
 
 **Revision (2026-07-16): overlapping instances are specified.** Overlap with
 specialization — `impl Foo Int` alongside `impl Foo a`, the more specific
@@ -536,32 +540,71 @@ tracked as #1082, gated on this clause).
   arities; a table keyed by the bare name `g` conflates them, with exactly the
   under-/over-application I1 describes.
 
-- **G2 — The value-restriction gate.** A local binding **may abstract dictionaries
-  only where it generalizes at all**, and it generalizes only where the value
-  restriction licenses it: the bound expression must be a syntactic value. A
-  non-value local is monomorphic, has no quantified variable for a predicate to range
-  over, and therefore abstracts nothing. Dictionary abstraction is not a *second*
-  gate stacked on generalization — it is a consequence of it. No local that fails the
-  value restriction may acquire a `λd̄.` prefix.
+- **G2 — The value-restriction gate, with the value set defined HERE.** A local
+  binding **may abstract dictionaries only where it generalizes at all**, and it
+  generalizes only where the value restriction licenses it: the bound expression must
+  be a **syntactic value**. A non-value local is monomorphic, has no quantified
+  variable for a predicate to range over, and therefore abstracts nothing. Dictionary
+  abstraction is not a *second* gate stacked on generalization — it is a consequence
+  of it. No local that fails the value restriction may acquire a `λd̄.` prefix.
 
-- **G3 — Evaluation-timing neutrality (a theorem under G2, not an assumption).**
+  **Definition (syntactic value).** `v` is a syntactic value iff it is a literal, a
+  variable, a lambda, or a **construction whose every component is a syntactic
+  value** — a tuple, a list literal, a record construction, or an application of a
+  data constructor, in each case with **all** parts syntactic values — modulo
+  location/origin wrappers and type ascriptions, which are transparent. A constructor
+  that allocates a **mutable cell** is not admitted at any position. Everything else
+  is *expansive*.
+
+  🚨 **This definition is given in full, rather than by naming the implementation's
+  predicate, and that is deliberate.** An earlier revision of this clause defined the
+  set as *"whatever `isNonexpansive` accepts"*. That is the #1093 shape — a rule
+  stated in terms of an existing relation silently inherits that relation's bugs —
+  and it inherited one: `isNonexpansive`'s constructor-application arm tests only the
+  **final** argument of the spine (`isNonexpansive (EApp f x) = isCtorAppHead (EApp f
+  x) && isNonexpansive x`, `compiler/types/typecheck.mdk:3550`, where `f` reaches only
+  `isCtorAppHead`, which walks to the head discarding every argument at `:3565`), so a
+  mutable cell in any non-final position is admitted. The three sibling arms
+  (`ETuple`, `EListLit`, `ERecordCreate`) each fold with `allList isNonexpansive`;
+  the constructor arm is the one that does not, and the source comment above it
+  asserts that it does (*"every spine argument is itself non-expansive"*, `:3547`).
+  **"All parts" above is the words that arm is missing.** Tracked as #1139.
+
+- **G3 — Evaluation-timing neutrality, and exactly what it is contingent on.**
   Wrapping a bound expression `e` as `λd̄. e` moves `e`'s evaluation from binding time
-  to each use. Under G2 that is unobservable, and the argument is worth writing down
-  because it is what makes G2 the *right* gate rather than a convenient one: G2
-  admits only syntactic values; a syntactic value's evaluation performs no effect,
-  cannot diverge or panic, and allocates nothing whose identity a program can observe
-  (mutable-cell constructors are excluded from the non-expansive set precisely so
-  that generalizing them stays unsound). Re-evaluating one per use can therefore
-  change *allocation cost* and nothing else. Anything that could raise, diverge, or
-  perform on evaluation is expansive, is not generalized, and is never wrapped.
+  to each use. **For the value set G2 defines, that is unobservable**, and the
+  argument is what makes G2 the *right* gate rather than a convenient one: every such
+  value's evaluation performs no effect, cannot diverge or panic, and allocates
+  nothing whose identity a program can observe — mutable-cell constructors are
+  excluded from the value set at every position **precisely so that generalizing them
+  stays sound**, which is the same exclusion this argument needs. Re-evaluating such
+  a value per use can therefore change *allocation cost* and nothing else. Anything
+  that could raise, diverge, or perform on evaluation is expansive, is not
+  generalized, and is never wrapped.
 
-  ⚠️ **This is the part of the top-level case that does not carry over, and it is why
-  G2 cannot be relaxed for ergonomics.** At a top-level binding the same wrapping is
-  licensed by the same value restriction, but a top-level binding is evaluated at
-  most once per program either way, so its neutrality argument never has to be made.
-  At a local binder it does. A proposal to "generalize locals a little more eagerly
-  than the value restriction allows" is not an ergonomic loosening of G2 — it is a
-  proposal to move evaluation, and it owes this argument again.
+  🚨 **This is a valid argument about G2's set, NOT a discharged theorem about the
+  tree, and the difference is load-bearing because this clause is F-1's (#1082)
+  gate.** The implementation's value predicate is **not** G2's set: by the ⚠️ above it
+  admits a mutable cell in a non-final constructor argument, and such a binding is
+  generalized today (#1139 — `check` clean, `run` `E-NOT-A-FUNCTION`, native
+  SEGFAULT). Wrapping *that* binding in `λd̄.` would additionally re-allocate the cell
+  per use, so neutrality does not hold for it either. **An implementation may not cite
+  G3 while its value predicate is holed:** either the predicate is repaired to G2's
+  set first, or the dict-abstraction of locals is restricted to a set that is
+  independently shown to satisfy G2. Landing F-1 on the current predicate would take
+  a live unsoundness and give it a second, calling-convention-shaped channel.
+
+  ⚠️ **Why the argument has to be made at a local binder at all** — the top-level case
+  looks like it never needed it, and the reason is *not* established. A top-level
+  binding is gated by the same value predicate (`memberClauseIsValue`,
+  `compiler/types/typecheck.mdk:16023`, calling the same `isNonexpansive`), and once
+  it is dict-abstracted its body is likewise re-entered per use, so "evaluated at most
+  once per program" is a claim about **CAF memoization of a nullary top-level
+  binding** — which this document has **not verified** and does not assert. Treat the
+  top-level/local asymmetry as unestablished. What does not depend on it: a proposal
+  to "generalize locals a little more eagerly than the value restriction allows" is
+  not an ergonomic loosening of G2, it is a proposal to move evaluation, and it owes
+  this argument again from scratch.
 
 - **G4 — Predicate deferral across nested binders.** Let a local binding `b` sit
   inside an enclosing binder `E`. Partition the predicates `b`'s body infers by the
@@ -689,6 +732,20 @@ the clause whose meaning it protects.
     call `f (Red 1)`, §4 `var` instantiates `a := Red` against the matching impl.
   - `println (phantom : Int)`, with no `Mk` in scope, is **rejected**. The annotation
     fixes `τ_m`, which §5 says is irrelevant here, and nothing fixes `ā_C`.
+
+  ⚠️ **The rejection has TWO mechanisms, and citing only the first is incomplete.**
+  Where every visible instance of `C` has a rigid head (the shape above — `impl Mk
+  Red` and nothing more general), `match(IE, C ?ā)` is **empty**: matching is one-sided
+  from head to goal (§3), and no substitution on a ground head produces a
+  metavariable, so `inst` is inapplicable and the rejection is `var` failing to
+  discharge, as stated. Where a **fully-general** `impl C a` is also visible, that is
+  no longer true: `match(IE, C ?ā)` is non-empty with a unique `⊑`-minimum, so `inst`
+  would fire and pick it — and the program would be *accepted* with `?ā` still
+  undetermined, which is meaningless rather than wrong-but-defined. In that case the
+  rejection comes from **§6.2 T4**: a goal still not closed at quiescence is
+  ambiguous, and is rejected there. The verdict is the same either way; the mechanism
+  is not, and an implementation that only implements the first will accept the second
+  shape.
 
   An implementation **MAY** warn at the declaration that a phantom method is usable
   only under an ambient assumption. **Acceptance is per use site.**
@@ -961,6 +1018,18 @@ an implementation matter.
   `IE` could still grow, deferring would be a second, independent order-dependence
   rather than a cure for the first; it is I5 that makes T4 a purely beneficial delay.
 
+  🚨 **Normative migration constraint: T4 MUST NOT be implemented before I5.** This is
+  not advice about ordering work, it is a condition on T4's soundness. While candidacy
+  is still assembled incrementally — the topological-prefix behaviour §11's I5 row
+  records — deferring some goals to quiescence puts **two different candidate sets in
+  one program**: a closed goal commits at its group's end against the prefix visible
+  *then*, while a deferred goal resolves against the whole accumulation. Two goals in
+  the same program would then be answered from different instance environments, which
+  is a C4 violation outright and a C3 violation in effect — and, unlike the
+  order-dependence T4 exists to cure, this one would be **created by the deferral
+  itself**. An implementation that lands T4 first has made the problem worse in the
+  name of fixing it.
+
 - **T5 — The alternative is REJECTED, explicitly.** The alternative schedule is
   *freeze at the module boundary*: when a module closes, reject any of its goals
   still carrying a free metavariable as ambiguous, so that commitment is only ever
@@ -1053,7 +1122,20 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   (§3 `inst`) — each of which lets a caller or a construction goal choose the
   variable.
 
-  Two consequences fall out. The first is a **flagged design choice**:
+  🚨 **Clause 2's dictionary channel is evaluated as the channels stand BEFORE
+  generalization, and that is a resolution of a circularity, not a refinement.** At a
+  binding whose type is *inferred*, whether it abstracts a `d̄` at all is an **output**
+  of `gen` — which D1 orders *after* the test that would consult it. Read naively,
+  clause 2 asks a question whose answer does not exist yet. The rule is therefore:
+  **only a `d̄` that exists independently of this boundary's generalization decision is
+  a channel** — a `gen-sig` binding's declared `d̄_sig`, an `impl`-method body's method
+  dictionary, the matcher `φ` of the instance head it is checked at. A dictionary
+  parameter that generalization *would* mint for this very binding is **not** a
+  channel, because the whole point of defaulting is to decide, first, whether there is
+  anything left to generalize over.
+
+  Two consequences fall out. The first is the direct application of that resolution,
+  and it is a **flagged design choice only in which direction the circularity is cut**:
   * **At a binding whose type is inferred and about to be generalized, result position
     is NOT a determination channel.** `let n = 1` grounds; it does not generalize to
     `∀a. Num a ⇒ a`. This is a deliberate monomorphism-for-`Num` restriction — the
@@ -1062,6 +1144,15 @@ where it sits, which variables it may touch, and what it is not allowed to do.
     makes the representation of the literal `1`, and hence which `Num` impl runs, a
     property of the *use site* rather than of the literal — the very
     position-dependence this rule exists to remove.
+    ⚠️ **Cross-reference §4.1 G4, which reads as a contradiction of this bullet and is
+    not one.** G4 says a local binding's own predicates are abstracted on it and
+    discharged per use site — which for `let n = 1` would mean a `Num` dictionary
+    parameter and a per-use choice, exactly what this bullet forbids. They reconcile
+    **only through D1's ordering**: defaulting runs *before* generalization, so by the
+    time G4's partition is computed there is no `Num` predicate left on that variable
+    to abstract. Without D1's ordering the two clauses genuinely conflict, and the
+    conflict becomes reachable the moment locals are dict-abstracted at all (§11 G1 —
+    #1082). **Anyone landing #1082 must land it under D1's ordering**, not alongside it.
   * **At an `impl`-method body, result position IS a determination channel**, because
     both the method's declared scheme and the instance head are instantiated by
     somebody else. `empty : a` at `impl Monoid (Acc b)` has its `b` chosen by the goal
@@ -1169,6 +1260,23 @@ per-module path for a graph. It is not.
   that flattens the prelude into the user's program has erased the boundary both of
   them are stated against.
 
+**The place someone will push back, and what U2 actually says about it.** The doctest
+runner splits on whether the file under test has imports (`runChosen`,
+`compiler/tools/test_cmd.mdk:213-216`, on `hasUseDecls`), and the split is deliberate
+and documented. It is **not** a second elaboration mode — `runSingle`'s own comment
+says so (*"route the degenerate no-import file through the SAME multi-module path …
+the 1-module wrappers"*, `:225-227`), and both arms reach `elaborateModules`. So U2 is
+not violated by the split *as a driver choice*. What the split carries is a residual
+**flatten**: the prelude is concatenated into the user's declaration list rather than
+being a node of the graph, which is why the no-import arm must first compute
+`livePrelude` = *"the shadow-dropped core"* (`dropShadowedExp`, `:237-240`) and why it
+needs a `programIsCore` guard (`:255`) to avoid double-declaring everything when the
+file under test *is* the prelude. Under **U1** the prelude is a node like any other,
+so a genuine 2-node graph needs neither the pre-drop nor the guard — SHADOW S1's
+per-module scoping already answers the question they exist to work around. **Those two
+are defects of the flatten, not legitimate 1-module behaviour**, and U2 is what makes
+that judgement rather than leaving it to taste.
+
 ⚠️ **U1/U2 are clauses, not a description of the current state, and that difference
 has already misled.** `compiler/DRIVER-COLLAPSE-PLAN.md` records U1 as its own
 governing invariant (*"the degenerate 1-module case automatically satisfies the flat
@@ -1262,23 +1370,43 @@ module-qualified identity.
   Import scoping decides which **names** a module may write. It never decides which
   instances exist.
 
-  ⚠️ **This is a semantics change with three distinct consequences, and only the first
-  is an acceptance widening. Naming all three is the point of this paragraph.**
+  ⚠️ **This is a semantics change, and only the first of its consequences is an
+  acceptance widening.** The classes below are *derived*, not enumerated: a new
+  candidate can change the outcome at three points — whether a `⊑`-minimum exists
+  (C1), which instance it is (`inst`'s selection), and whether the selected instance's
+  own context `Q` is dischargeable (`inst`'s recursive premise) — and each point
+  yields one class, plus the trivial case of a goal that previously matched nothing.
+  **Do not treat this list as closed; derive against those four points instead.**
   1. **New acceptances.** An impl declared in a module that no path reaches before the
      goal's module — a topologically later one, or a sibling — becomes usable. A
      program that did not compile now compiles. This is the orphan-instance-style
      widening, and it is carried by a fixture that could not pass before.
-  2. **New rejections.** Enlarging `match(IE, π)` can destroy a `⊑`-minimum that a
-     smaller candidate set had. Two `⊑`-incomparable instances, one of which was
-     previously invisible at the goal, make the goal **ambiguous overlap** under C1 —
-     so a program that compiles today can stop compiling. A candidate-set widening is
-     *not* an acceptance widening.
+  2. **New rejections via C1.** Enlarging `match(IE, π)` can destroy a `⊑`-minimum
+     that a smaller candidate set had. Two `⊑`-incomparable instances, one of which
+     was previously invisible at the goal, make the goal **ambiguous overlap** under
+     C1 — so a program that compiles today can stop compiling. A candidate-set
+     widening is *not* an acceptance widening.
   3. **Silent answer changes.** A newly-visible instance that is strictly more
      specific than the previous winner *wins*, by §3. The program still compiles, and
      prints something different. There is no diagnostic, because nothing is wrong: the
      new answer is the specified one and the old answer was the artifact. Any
      migration onto I5 must treat this as its primary hazard rather than as golden
      churn.
+  4. **New rejections via an UNSATISFIABLE CONTEXT — with C1 fully satisfied.** The
+     newly-visible instance is strictly more specific, so it wins uncontested; but its
+     own `Q` cannot be discharged at the goal, and `inst` has no backtracking to the
+     runner-up. Given `impl Show2 (List a)` and `impl Show2 (List (Option a)) requires
+     Sized a`, the goal `Show2 (List (Option Blob))` with no `Sized Blob` in scope
+     compiles and prints `generic` while only the general instance is visible, and is
+     **rejected** — `No impl of Sized for Blob` — once both are. This is class (2)'s
+     outcome by class (3)'s mechanism, and it is neither: the two instances here are
+     perfectly `⊑`-comparable and C1 holds throughout, so the mechanism stated in (2)
+     does not apply. It falls out of §6.1 choice-point 1 (`⊑` compares heads only;
+     contexts play no role in selection) combined with `inst`'s commitment to the
+     `⊑`-minimum. ⚠️ **This class has the worst migration diagnostic of the four**: an
+     error naming an interface the author never wrote, arising from a module they
+     never imported, at a call site they did not change. A migration that plans only
+     for goldens and ambiguity will meet this one unprepared.
 
   The price I5 pays for coherence is that a program's meaning is a function of the
   **whole loaded graph**: adding an unrelated module to a build can change an existing
@@ -1466,9 +1594,9 @@ function rather than over the pass that was expected to call it.
 | §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
-| §4.1 **G1** (uniform dict abstraction at a local binder) | **UNIMPLEMENTED — confirmed absent TREE-WIDE, not just in `typecheck.mdk`.** `dictPassDecl:12377` has exactly four declaration arms — `DFunDef` (`:12378`), top-level `DLetGroup` (`:12388`), `DImpl` methods (`:12397`), `DInterface` default bodies (`:12403`) — then a catch-all `dictPassDecl _ _ d = d` (`:12407`); no arm descends into an expression. The stronger check is on the **name-minting** function: `dictParamName:12685` is the sole producer of a `$dict_<fn>_<slot>` binder, and tree-wide (`grep -rn dictParamName compiler/ --include='*.mdk'`) its only *pattern*-producing callers are `dictParamsGo:12671` and `dictParamsFrom:12680`, reachable only from those four arms — every other caller builds an `RDict` route or an `activeDictVars` entry, i.e. a **reference** to a param a declaration already bound. `llvm_emit.mdk`'s `dictParamNameE:6130` re-derives the same string for a method and creates nothing. And there is **no lambda-lifting pass** that could route a local through the `DFunDef` arm (`grep -rn 'lambdaLift\|hoistLocal\|liftLocal\|closureConv' compiler/` → 0 hits; `desugar.mdk` maps `ELetGroup` structurally at `:73`/`:120-121` and never hoists it) | — | so no `let`/`where` binding receives a `λd̄.` prefix at **any** stage — resolve, desugar, marker, typecheck, IR lowering, or either backend. Separately, even the implemented half has no per-binder key for G1 to extend: the arity a top-level binding gets is read by `dictArityOf:12662`, which is **bare-name** (see the I1 row). G1 additionally needs *local* binder identity — `(name, binding-id)` keying already exists for local scheme *obligations* (`registerLocalScheme:7866`, #837) and is the shape the arity table would need |
-| §4.1 **G2** (value-restriction gate) | `genRestricted:3606` gated on `isNonexpansive:3534` (with `isCtorAppHead:3562` excluding `Ref`), at all five local generalization sites: `blockRecLet:5205`, `blockLet:5221`, `inferRecLet:7835`, `inferLetBody:7904`, `generalizeGroup:9331` (via `clausesAreValue:9344`) | a local generalizes only at a syntactic value | ENFORCED, and G3's neutrality argument rests on exactly this predicate: `isNonexpansive`'s only allocating arms are constructor/tuple/list/record forms over non-expansive parts, and the sole mutable-cell constructor is excluded by name (`:3566` `name != "Ref"`). ⚠️ that exclusion is a hard-coded single name — the comment at `:3528-3530` says any future uppercase mutable-cell extern must be added by hand, so the predicate G3 depends on is maintained by convention |
-| §4.1 **G4** (predicate deferral; monomorphising is NOT an approximation) | 🔴 **DIVERGENT.** The five sites above conjoin the value test with `not (pinLocalIfDictForwarded:8947 …)` — the #866/#1021 all-or-nothing pin, which handles a dict-forwarding local by **declining to generalize** it, exactly the move G4 forbids | — | 🔴 **#1052 (OPEN, S0)** is that clause's counterexample and is already filed as one: monomorphising a `where` helper merges two *distinct rigid signature* variables and drops a dictionary slot, printing `2` where G4 says `3`, on both engines, exit 0. #1082 is the migration vehicle; the pin is documented as an interim at `registerLocalScheme`'s `#866 NARROWED THE PREMISE` comment (`:7850-7865`), which states the trade in the same terms |
+| §4.1 **G1** (uniform dict abstraction at a local binder) | **UNIMPLEMENTED — confirmed absent TREE-WIDE, not just in `typecheck.mdk`.** `dictPassDecl:12377` has exactly four declaration arms — `DFunDef` (`:12378`), top-level `DLetGroup` (`:12388`), `DImpl` methods (`:12397`), `DInterface` default bodies (`:12403`) — then a catch-all `dictPassDecl _ _ d = d` (`:12407`); no arm descends into an expression. The stronger check is on the **name-minting** function: `dictParamName:12685` is the sole producer of a `$dict_<fn>_<slot>` binder, and tree-wide (`grep -rn dictParamName compiler/ --include='*.mdk'`) its only *pattern*-producing callers are `dictParamsGo:12671` and `dictParamsFrom:12680`, reachable only from those four arms — every other caller builds an `RDict` route or an `activeDictVars` entry, i.e. a **reference** to a param a declaration already bound. `llvm_emit.mdk`'s `dictParamNameE:6130` re-derives the same string for a method and creates nothing. And there is **no lambda-lifting pass** that could route a local through the `DFunDef` arm (`grep -rn 'lambdaLift\|hoistLocal\|liftLocal\|closureConv' compiler/` → 0 hits; `desugar.mdk` maps `ELetGroup` structurally at `:73`/`:120-121` and never hoists it) | — | so no `let`/`where` binding receives a `λd̄.` prefix at **any** stage — resolve, desugar, marker, typecheck, IR lowering, or either backend. Separately, even the implemented half has no per-binder key for G1 to extend: the arity a top-level binding gets is read by `dictArityOf:12662`, which is **bare-name** (see the I1 row). G1 additionally needs *local* binder identity — `(name, binding-id)` keying already exists for local scheme *obligations* (`registerLocalScheme:7866`, #837) and is the shape the arity table would need. ⚠️ **G1's absence is uniform across BOTH local spellings** — the `dictParamName` derivation above covers `let` and `where` alike — so an observed `let`-vs-`where` behavioural difference (e.g. #1052's two spellings printing `3` and `2`) is **not** explained by this row. It is explained by the G4 row below: the five sites do not share one pin predicate |
+| §4.1 **G2** (value-restriction gate) | 🔴 **HOLED — the gate exists and its predicate is not G2's set.** `genRestricted:3606` is gated on `isNonexpansive:3534` at all five local generalization sites (`blockRecLet:5205`, `blockLet:5221`, `inferRecLet:7835`, `inferLetBody:7904`, `generalizeGroup:9331` via `clausesAreValue:9344`) **and at the top-level site** (`sccSchemes:16017` via `memberClauseIsValue:16023`) | a binding generalizes only at a syntactic value | 🔴 **#1139 (OPEN, S0, verified): the constructor-application arm folds over ONE argument, not all of them.** `isNonexpansive (EApp f x) = isCtorAppHead (EApp f x) && isNonexpansive x` (`:3550`): only `x`, the spine's **final** argument, is tested for non-expansiveness; `f` reaches only `isCtorAppHead`, whose recursive arm `isCtorAppHead (EApp f _) = isCtorAppHead f` (`:3565`) **discards every argument** on its walk to the head. So `Ref` is excluded in final position and admitted in any other — `data BR a = BR (Ref (List a)) Bool` with `let b = BR (Ref []) True` generalizes: `check` exit 0, `run` `E-NOT-A-FUNCTION`, native **SEGFAULT** (exit 139); the control with the `Ref` moved to final position is correctly rejected. The three sibling arms each use `allList isNonexpansive` (`:3543`, `:3544`, `:3552-3555`); this is the only arm that does not, **and the comment directly above it says it does** (`:3546-3547`, *"every spine argument is itself non-expansive"*) — so the source's own documentation is the specification and the code is the divergence. ⚠️ **The hazard is NOT the future extern the comment at `:3528-3530` warns about.** That warning ("any future uppercase mutable-cell extern MUST be added to the exclusion") describes a maintenance risk; plain `Ref`, already excluded by name at `:3566`, escapes **today** by position. G3 may not be cited as discharged while this stands |
+| §4.1 **G4** (predicate deferral; monomorphising is NOT an approximation) | 🔴 **DIVERGENT.** The five sites above conjoin the value test with `not (pinLocalIfDictForwarded:8947 …)` — the #866/#1021 all-or-nothing pin, which handles a dict-forwarding local by **declining to generalize** it, exactly the move G4 forbids | — | 🚨 **The five sites do NOT share one pin predicate, and this is where a `let`-vs-`where` divergence comes from.** The four `let`-shaped sites call `pinLocalIfDictForwarded:8947`, whose pin set is `dictForwardedPairs callN0 dictN0` (`:8928`) — the dict-app and call-obligation windows, and nothing else. The `where`/let-group site is different: `processLetGroup:8770` computes `pinned = methodConstrainedIds () ++ map fst dictPairs` (`:8791`) and hands it to `generalizeGroup:9310`, which pins on `anyIn free constrained` (`:9318`). So the `where` path pins on a **strictly larger** set — it consults the METHOD-constrained channel that the `let` path never reads. One judgment, two predicates, is an L1 fork, and it is the structural difference that would make #1052's `let` spelling generalize (unpinned ⇒ correct `3`) where its `where` spelling pins (⇒ the collapse to `2`). Stated as the mechanism the source supports; not probed here (no binary). 🔴 **#1052 (OPEN, S0)** is the clause's counterexample and is already filed as one: monomorphising a `where` helper merges two *distinct rigid signature* variables and drops a dictionary slot, printing `2` where G4 says `3`, on both engines, exit 0. #1082 is the migration vehicle; the pin is documented as an interim at `registerLocalScheme`'s `#866 NARROWED THE PREMISE` comment (`:7850-7865`), which states the trade in the same terms |
 | §5 method dispatch (arg/result/phantom position) | `inferMethodAt:4619`; `resolveSites:10057` (return-position); `argDispatchIndices:2746`/`prePassDictArg:9742` (arg-position) | dispatch type is fixed by `var`'s instantiation regardless of `ā_C`'s position in `τ_m` | — |
 | §5 arg-tag dispatch = optimization, not semantics | (i) `narrowMethod`/`methodAtNarrow:1048-1069` narrows by a STATICALLY-computed `Route` key, not a runtime inspection. (ii) The genuine runtime-argument-inspection fallback is `applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg:870` → `filterByTag:888-891` → `runtimeTypeTag:384-397` → `matchesTag:1088-1090` (all `compiler/eval/eval.mdk`) — reached whenever a VMulti (unnarrowed method candidates) is applied to a runtime argument | (i) is sound by construction (the key was already the `min⊑` winner at typecheck time — this is NOT arg-tag dispatch in §5's sense at all, despite the name). (ii) IS §5's arg-tag dispatch, and its side condition is **not verified**: `runtimeTypeTag` discriminates at **bare head-tycon granularity only** (`VList _ => Some "List"`, `:391`) — it cannot distinguish `List Int` from `List a`, nor (per the sharper counterexample below) `T Int` from `T Bool` | 🔴 **Already tracked, more precisely than this row first put it: #1113** (OPEN, part of this same target-architecture arc). #1113's own text corrects the "no overlap below the head" framing this row started from: *"`impl C (T Int)` / `impl C (T Bool)` don't overlap and the tag `T` determines nothing; multi-param interfaces likewise"* — so even NON-overlapping instances differing past the head are mis-discriminated by `runtimeTypeTag`'s granularity. #1113's own stated target fix ("computed once post-K from the global IE, frozen into the elaboration output... never re-derived") confirms today's `filterByTag` is exactly the ad-hoc mechanism it plans to retire |
 | §5.1 **M1** (impl completeness) | `checkImplCompleteness:10862` (whole-program scan) **and** `checkImplCompletenessMap:10922` (the multi-module keyed twin), pushing `T-INCOMPLETE-IMPL` via `pushIncompleteImpl:10868`; required set from `requiredMethodNames:10908` (methods whose merged `IfaceMethod` carries no default) | every non-defaulted interface method has a body in the impl, so `methods(e).m` is total | ⚠️ two implementations of one judgment (the scan and the map), kept in step by hand — the map's comment (`:10920-10921`) states its keying assumption outright: *"Interface names are globally unique, so the map's last-write-wins carries the same required-method list the scan's first-match returned."* **§8 I4 makes that premise false**, and the failure is silent in the last-write-wins direction: two same-named interfaces in one graph, one required-method list. Error location is `firstImplMethodLoc:10892` — the first present method body, `None` for a wholly-empty impl |
@@ -1488,11 +1616,11 @@ function rather than over the pass that was expected to call it.
 | §6.3 **D3** (the taint rule) | candidate set from `numConstrainedIds:9103`/`numObligIds:9106` (`iface == "Num"` only); the surviving-channel filter is **two different predicates**: `monoArgUnboundIds:9096` (outermost arrow **domains** only) at `defaultAmbiguousNum:9111` and `defaultGroupNum:9129`, versus `monoUnboundIds` over the **whole** member type at `defaultBodyLocalNum:9164` | which `Num`-constrained variables may ground | 🔴 **PARTIAL / tracked.** Neither predicate is D3's channel rule: `monoArgUnboundIds` under-approximates it (a return-position variable, and *every* variable of a nullary method type, get zero protection — the function returns `[]` on any non-`TFun`), and `defaultBodyLocalNum`'s whole-type test approximates it from the other side. The **instance-head** channel D3's open bullet asks about is in neither. Tracked as **#563** (return/nullary blind spot, `verified`) and **#564** (the missing ambiguity pairing); both close against §6.3 |
 | §6.3 **D4** (level discipline) | `registerAmbiguousConstraints:9199` computes `groupLevel = perRun.value.currentLevel.value + 1` (`:9205`) and `registerDispatchMonos:9250` filters on `snd p <= groupLevel` against `monoUnboundVarLevels:9263` | "belongs to this boundary" vs. an inner binder's leaked obligation | ⚠️ the level is derived from the **ambient** `currentLevel`, valid only because every precedent site runs `enterLevel`/`exitLevel` around its bodies and calls this post-`exitLevel`. The impl-method-body boundary has **no `enterLevel`/`exitLevel` at all**, which is why it hosts `defaultBodyLocalNum` and *not* `registerAmbiguousConstraints` — #564's recorded prerequisite, stated here as the keying assumption it is |
 | §7 single-evaluator law | `evalMethodAt:1223`/`dictOfRoute:1025`/`applyDicts:1013` (`compiler/eval/eval.mdk`); `emitMethod:4226` (`compiler/backend/llvm_emit.mdk`); `emitMethodRef:3548` (`compiler/backend/wasm_emit.mdk`); cross-engine agreement enforced by the GATE `test/diff_compiler_engines.sh`, not a shared source site | three independent emit/eval implementations of the same `Route` dispatch stay in agreement | agreement is kept by convention + the differential gate, not by one shared function body |
-| §7.1 **U1/U2** (driver unimodality) | 🔴 **DIVERGENT — a second mode is live.** `data CheckMode = Flat (List Decl) \| Module String (List Decl) (List Decl)` (`compiler/types/typecheck.mdk:12822`); `checkBodyImpl:12824` branches on it at **20 `Flat` arms** (derive: `grep -c '^    Flat ' compiler/types/typecheck.mdk`, against 21 `match mode` sites), and the two paths run different route-stamper sequences (`elaborateDict:9424` vs `elabModuleStamp:18570`) | — | the sole `Flat` constructor site is `checkProgramSeededSplit:12804`, whose live consumers are **not** remnants: `compiler/tools/repl.mdk` (`checkProgramSchemes`), `compiler/tools/check_policy.mdk:523,652,698`, `compiler/tools/doc.mdk:394`, `compiler/entries/playground_main.mdk`, `compiler/entries/core_ir_dict_pp_main.mdk:35` (`elaborateDict`), plus the flat re-entries inside `typecheck.mdk` itself — the promotion fallback (`:9434`, `:9463`, `:9556`) and the exhaustiveness-warning entry `checkMatchToLines:16722` (`:16725`). ⚠️ `compiler/DRIVER-COLLAPSE-PLAN.md`'s **status line says IMPLEMENTED**; this row is the measured counterexample §7.1 retires it with |
+| §7.1 **U1/U2** (driver unimodality) | 🔴 **DIVERGENT — a second mode is live.** `data CheckMode = Flat (List Decl) \| Module String (List Decl) (List Decl)` (`compiler/types/typecheck.mdk:12822`); `checkBodyImpl:12824` branches on it at **20 `Flat` arms** (derive: `grep -c '^    Flat ' compiler/types/typecheck.mdk`, against 21 `match mode` sites), and the two paths run different route-stamper sequences (`elaborateDict:9424` vs `elabModuleStamp:18570`) | — | the sole `Flat` constructor site is `checkProgramSeededSplit:12804`. **Do not read a consumer count out of this row — derive it:** `grep -rln 'elaborateDict\|checkProgramSchemes' compiler/entries/ compiler/tools/`, then `grep -n` each hit to separate real call sites from comments (at `128da26c` the file grep yields **12**, of which **10** call and 2 mention it only in prose). An earlier revision of this row listed five files and said "six external consumers" — wrong, and wrong in the way this table's own preamble warns about; the missing ones are load-bearing: **`tools/lsp.mdk:694`**, **`tools/snapshot.mdk:624`** (so a *gate* runs on the flat path), and **both typed emit entries**, `entries/llvm_emit_typed_main.mdk:66` and `entries/wasm_emit_typed_main.mdk:61` — which is where U2 bites hardest, because those paths produce **IR**. Add `entries/profile_main.mdk:247` and the flat re-entries inside `typecheck.mdk` itself: the promotion fallback (`:9434`, `:9463`, `:9556`) and `checkMatchToLines:16722` (`:16725`). ⚠️ `compiler/DRIVER-COLLAPSE-PLAN.md`'s **status line says IMPLEMENTED**; this row is the measured counterexample §7.1 retires it with |
 | §8 **I1** (evidence abstraction keyed by binding identity) | `dictArityOf:12662` (BARE-NAME, define-side only) vs. the cross-module qualified path `crossModuleFunConstraintsQualRef:2545`/`inferDictAtFound:4918` | dict-param count/order is part of the binding's identity, not its bare name | ⚠️ self-documented live hazard at lines 2415-2444: `dictArityOf`'s bare-name first-match "returns the WRONG module's arity" for two same-named fns of different `=>`-arity. The qualified table fixes the CALL-SITE (importer) leg; `dictArityOf` itself stays bare-name, safe only for the DEFINE-side prepend within the owning module — a residual sharp edge, not asserted as a currently-reproducing bug here |
 | §8 **I2** (global instance environment after import resolution) | `importFormSchemes:17309`/`aliasSchemes:17290`/`aliasConstraintEntries:17324` (`compiler/types/typecheck.mdk`) | import scoping affects visibility, never evidence identity | — |
 | §8 **I3** (evidence travels, not re-derived) | No INDEPENDENT site — but not because none was located; re-audited with I1's vocabulary (`inferDictAtFound`, `crossModuleFunConstraintsQualRef`) rather than I3's, and the same site applies: `inferDictAtFound:4918` (row I1 above) is exactly the mechanism that lets a cross-module CALLER supply the callee's dict args rather than the callee re-deriving anything | a cross-module call passes evidence as ordinary leading dict arguments (`var`, row above), sized by the callee's identity-keyed arity (I1) — there is nothing *for* the callee to re-resolve; it receives dicts as parameters like any other argument | this is a structural consequence of dict-PASSING itself (the callee is a function of its dict params, not a re-resolver), not a separately-checkable rule — same shape as C2's finding: the right conclusion is "enforced by the calling convention," not "unimplemented" |
-| §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ENFORCED for **values**: `checkVar:588` → `isAmbiguous:639`/`ambigMods:644` → `AmbiguousOccurrence`, code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1967`), set built by `ambiguousSet:2264`/`keepAmbiguous:2270`. ENFORCED for **data constructors** (#674): `checkPat:392` and `checkVar:602` → `isCtorAmbiguous:651` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5392` → `resolveFieldAmbiguous:5403`, which pushes `T-AMBIGUOUS-FIELD` (`:5406`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:338`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported`) with no ambiguity arm, and `checkConstraint:386` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4047` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3126` but *called* at `compiler/types/typecheck.mdk:12839`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. `keepAmbiguous:2273` additionally exempts `core` and any same-module top-level, which is I4's qualification 1 (scoping resolves before ambiguity applies) already realized for values |
+| §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ENFORCED for **values**: `checkVar:588` → `isAmbiguous:639`/`ambigMods:644` → `AmbiguousOccurrence`, code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1967`), set built by `ambiguousSet:2264`/`keepAmbiguous:2270`. ENFORCED for **data constructors** (#674): `checkPat:392` and `checkVar:602` → `isCtorAmbiguous:651` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5392` → `resolveFieldAmbiguous:5403`, which pushes `T-AMBIGUOUS-FIELD` (`:5406`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:338`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported`) with no ambiguity arm, and `checkConstraint:386` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4047` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3126` but *called* at `compiler/types/typecheck.mdk:12839`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. 🔴 **The type half is stronger than "a missing diagnostic", and this row understated it at first.** `fromAstTypeE:4047`'s `TyCon` arm bottoms out at `_ => TCon n` (`:4059`) — a **bare-name** `Mono`. Two modules that each `public export data Thing` therefore do not merely go undiagnosed at the use site: their types are *the same `Mono`* and are silently **identified**, so a function declared over one module's `Thing` accepts the other's constructor, typechecks green, and dies at run time on a pattern match that cannot see the foreign constructor. That is a type-identity collapse — the `Mono`-level half of #1070 that its own audit records as *"impossible to re-key per table, because the collapse already happened upstream"*, and #1047's family. I4 is what makes it unwritable; a use-site ambiguity diagnostic alone would not. `keepAmbiguous:2273` additionally exempts `core` and any same-module top-level, which is I4's qualification 1 (scoping resolves before ambiguity applies) already realized for values |
 | §8 **I5** (instance candidacy is graph-global) | 🔴 **PARTIAL — cumulative, not global.** `foldModules:17745` threads `accAll ++ prog` and `appendUniverseAccums:16925` grows the persistent impl universe (`growImplUniverse` over `implDeclsWithReqs:14030`) one module at a time, in the loader's dependency-first topological order (`compiler/driver/loader.mdk:570`) | the candidate set a goal is resolved against | so a module's candidate set is *every impl of every module earlier in the topological order*, plus its own — which is **strictly more** than its transitive imports (an unrelated sibling subtree fully visited earlier is included) and **strictly less** than the graph (nothing later is). The first half is order-dependence of exactly #1072's kind; the second is what I5 removes. ✅ the visibility half of I5 already holds: `implDeclWithReqs:14033` matches `DImpl { iface, tys, reqs, … }` and **never reads its `pub` field** (`compiler/frontend/ast.mdk:437-443`), so an impl's declared visibility governs no candidacy today — and `SHADOW-SEMANTICS.md` S2 already asserts the universe is *"GLOBAL — local ∪ imported ∪ prelude"* for its own routing rule |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
@@ -1539,10 +1667,25 @@ whose resolution is decided in M3's favour: the checker narrows, so the pinned
 and re-pins to ACCEPT `7`; the "relabel by hand" contingency in both phantom
 fixtures' headers does **not** apply and can be struck);
 **§4.1 G4** (the local-dict pin monomorphises where the clause requires a reject —
-#1052); **§6.2 T3/T4** (the route-stamper drain is keyed on the **module** boundary,
-while the tyvar cells it depends on survive it); **§7.1 U1/U2** (`CheckMode` is live,
-with 20 `Flat` arms and six external consumers, against
-`compiler/DRIVER-COLLAPSE-PLAN.md`'s status line of IMPLEMENTED).
+#1052 — and, separately, the five local sites do not share one pin predicate, which is
+where a `let`-vs-`where` divergence comes from); **§6.2 T3/T4** (the route-stamper
+drain is keyed on the **module** boundary, while the tyvar cells it depends on survive
+it); **§7.1 U1/U2** (`CheckMode` is live, with 20 `Flat` arms and a consumer set to be
+derived by the command in that row, against `compiler/DRIVER-COLLAPSE-PLAN.md`'s
+status line of IMPLEMENTED).
+
+🔴 **One row is HOLED rather than divergent, and it is the most serious finding in this
+table: §4.1 G2** (`isNonexpansive`'s constructor arm folds over the spine's **final
+argument only**, so a mutable cell in any other position is generalized — **#1139**,
+OPEN, S0, memory-safety: `check` exit 0, native SEGFAULT). It matters beyond its own
+severity because it is the premise **§4.1 G3** rests on, and G3 is **F-1's (#1082)
+gate**: landing dict-abstracted locals on the current value predicate would give a
+live unsoundness a second, calling-convention-shaped channel. ⚠️ **This row asserted
+the opposite** in its first revision — *"`isNonexpansive`'s only allocating arms are
+… over non-expansive parts"* — a claim contradicted by the very lines it cited, and
+the fourth first-pass error in this table. The three others were "no site" verdicts
+under-searched; this one was a **positive** claim read off a line whose sibling arms
+made it look obvious. Neither kind is caught by a doc gate.
 
 ---
 

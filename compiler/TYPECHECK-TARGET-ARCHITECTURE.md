@@ -758,13 +758,25 @@ orders merges, and the plan does not pretend otherwise.
     it, and §2 S's parenthetical *"matching today's whole-module-then-stamp
     behavior"* must be read as *extends*, not *describes*. **E-4's S-2(b) gate is
     lifted.**
-  - **§8 I5 names THREE consequences of global candidacy, not one.** §5 R2 calls it
-    an acceptance widening; the candidate-set widening also (2) creates **new C1
-    ambiguity rejections**, where a newly-visible `⊑`-incomparable instance destroys
-    a minimum a smaller candidate set had, and (3) **silently changes answers**,
-    where a newly-visible instance is strictly more specific than the previous
-    winner. A-3's could-not-pass-before fixture covers (1) only; (2) and (3) need
-    their own accounting in that PR.
+  - **§8 I5's consequences of global candidacy are NOT one, and the list is derived
+    rather than enumerated** — a new candidate can change the outcome at whether a
+    `⊑`-minimum exists, at which instance it is, and at whether that instance's own
+    context is dischargeable. §5 R2 sees only the acceptance widening (1). The others
+    are (2) **new C1 ambiguity rejections**, where a newly-visible `⊑`-incomparable
+    instance destroys a minimum a smaller candidate set had; (3) **silent answer
+    changes**, where a newly-visible instance is strictly more specific than the
+    previous winner; and (4) **new rejections with C1 fully satisfied**, where the
+    newly-visible instance wins uncontested but its own `requires` context is
+    unsatisfiable and `inst` does not backtrack — an error naming an interface the
+    author never wrote, from a module they never imported. A-3's
+    could-not-pass-before fixture covers (1) only; (2), (3) and (4) each need their
+    own accounting in that PR, and (4) is the one with the worst diagnostic.
+  - **⚠️ Sequencing: E-4 (T4) must not land before A-3 (I5)** — §6.2 T4 now says so
+    normatively. Deferring commitment while candidacy is still the topological prefix
+    puts two candidate sets in one program (closed goals see the prefix at their
+    group's end, deferred goals see the whole accumulation), which is a C3/C4
+    violation the deferral itself creates. The DAG already orders A before E; this is
+    the semantic reason, not just a dependency.
   - **§5.1 M3 decides (d) in the direction that NARROWS THE CHECKER**, so #1134 is a
     fix: `test/dict_fixtures/s5-phantom-determined-use-rejected.mdk` goes red on the
     fix and re-pins to ACCEPT `7`, and the "relabel by hand" contingency in both
