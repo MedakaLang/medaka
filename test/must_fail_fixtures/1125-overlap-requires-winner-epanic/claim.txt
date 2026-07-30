@@ -1,0 +1,66 @@
+issue: 1125
+what: an interface (`Speak`) with two overlapping impls -- `impl Speak (Box a)`
+what: (general) and `impl Speak (Box (List a)) requires Tag a` (more specific,
+what: since `Box (List a)` is strictly more specific than `Box a`) -- makes the
+what: tree-walking INTERPRETER lose the recursively-discharged `Tag Int`
+what: dictionary and panic when it dispatches to the most-specific winner. `medaka check` exits 0, clean
+what: (`use : Speak a => a -> String`). `medaka run` prints "START" then panics:
+what: `runtime error [E-PANIC]: putStrLn: not a String` (exit 1) -- `speak`
+what: returned something that is not a String, i.e. the dict-passing machinery
+what: handed the method body a broken value instead of discharging `tagOf`.
+what: `medaka build` + run is CORRECT: prints "START" then "specific:INT", exit 0.
+what: Both conditions -- overlap AND the winner carrying a `requires` -- are
+what: necessary; the issue's own 3-row matrix shows dropping either one alone
+what: makes eval agree with native. Possibly the same root cause as #323 (a
+what: nested obligation discharged by a parametric impl gets an RKey with no
+what: recursive reqs) manifesting at shallower nesting/simpler overlap -- but
+what: that is a hypothesis, not confirmed; this issue stands on its own
+what: single-level, 2-way-overlap repro, which needs no cross-issue assumption.
+cmd: run main.mdk
+exit: 1
+stdout: START
+control: run control.mdk
+why-fixture: `run` (the interpreter) is the verb that observes the defect --
+why-fixture: `check` is clean on both main.mdk and control.mdk (not a
+why-fixture: check-vs-build disagreement, a run-vs-build one), and `build`+run
+why-fixture: is CORRECT on main.mdk (that is the point: native disagrees with
+why-fixture: eval, and native is right). `build-run` on main.mdk would assert
+why-fixture: exit 0 / "specific:INT" -- the CORRECT behavior -- which is not
+why-fixture: what this issue pins; the interpreter's wrongness is the defect.
+why-stdout: this harness's `run` verb grades ONLY stdout + exit code -- it
+why-stdout: captures the interpreter's stderr into a side file that no
+why-stdout: assertion verb here reads, so the literal E-PANIC message text is
+why-stdout: NOT mechanically checkable through this suite (confirmed by
+why-stdout: reading test/diff_compiler_must_fail.sh's run_verb: stderr goes to
+why-stdout: "$_out.err", which no comparison below ever opens). `stdout: START`
+why-stdout: is therefore the narrowest available signature: it proves the
+why-stdout: interpreter actually STARTED running main (not a parse/typecheck
+why-stdout: rejection in disguise, and not an immediate crash before any
+why-stdout: output), then produced NOTHING further and exited nonzero -- which
+why-stdout: is exactly the "crashed partway through, mid-dispatch" shape #1125
+why-stdout: describes. Independently confirmed by hand outside this fixture (not
+why-stdout: graded here): `medaka run main.mdk` prints `runtime error
+why-stdout: [E-PANIC]: putStrLn: not a String` on stderr, and `medaka build
+why-stdout: main.mdk` followed by running the binary prints `START` then
+why-stdout: `specific:INT` on stdout, exit 0.
+why-control: control.mdk is byte-identical to main.mdk except the more-specific
+why-control: impl's `requires Tag a` context is DROPPED (and its body no longer
+why-control: calls `tagOf`, printing "specific:norequires" instead of routing
+why-control: through the Tag dict). That is the ONE flipped dimension -- the
+why-control: overlapping general sibling `impl Speak (Box a)` is UNCHANGED and
+why-control: still present -- isolating the observation to "the winner carries a
+why-control: requires", per the issue's own matrix (row 2: drop the `requires`,
+why-control: overlap stays, eval agrees with native). It must stay green
+why-control: (exit 0, prints "START" then "specific:norequires"): a failure here
+why-control: means dispatch on overlapping impls broke in general, not that
+why-control: #1125 was fixed.
+why-note: fix shape per the issue: whatever threads the recursively-discharged
+why-note: `requires` dictionary through the interpreter's dispatch path for the
+why-note: most-specific winner (the eval-side analog of whatever native already
+why-note: gets right) should make `medaka run main.mdk` print "START" then
+why-note: "specific:INT" at exit 0, with control.mdk unmoved. That flips this
+why-note: row's exit from 1 to 0 and its stdout from just "START" to
+why-note: "START\nspecific:INT", draining it. Close #1125 and delete this
+why-note: fixture when that happens. If a maintainer confirms this is the same
+why-note: root cause as #323, the right move is to fold the two and re-severity
+why-note: #323 rather than carry both -- but do not do that speculatively.
