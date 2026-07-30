@@ -1,0 +1,32 @@
+-- Control for #1125: byte-identical to main.mdk except the more-specific impl's
+-- `requires Tag a` context is DROPPED (and its body no longer calls `tagOf`, since
+-- there is no `Tag` obligation to discharge). This is the ONE flipped dimension --
+-- overlap is UNCHANGED (both `impl Speak (Box a)` and `impl Speak (Box (List a))`
+-- are still present, still overlapping) -- and per the issue's own 3-row matrix,
+-- dropping the `requires` alone is enough to make eval agree with native.
+interface Tag a where
+  tagOf : a -> String
+
+impl Tag Int where
+  tagOf _ = "INT"
+
+interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"
+
+data Box a = Box a
+
+impl Speak (Box a) where
+  speak _ = "general"
+
+impl Speak (Box (List a)) where
+  speak (Box xs) = match xs
+    [] => "specific:empty"
+    (y::_) => "specific:norequires"
+
+use : Speak a => a -> String
+use x = speak x
+
+main =
+  println "START"
+  println (use (Box [1, 2]))
