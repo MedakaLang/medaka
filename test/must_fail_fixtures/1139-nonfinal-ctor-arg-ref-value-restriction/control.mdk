@@ -1,0 +1,12 @@
+data BR3 a = BR3 (Ref (List a)) Bool
+
+useI : BR3 Int -> Unit
+useI (BR3 r _) = r := [4, 5, 6]
+
+readI : BR3 Int -> List Int
+readI (BR3 r _) = r.value
+
+main =
+  let b = BR3 (Ref []) True
+  let _ = useI b
+  println (readI b)
