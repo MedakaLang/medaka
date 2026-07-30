@@ -4,16 +4,29 @@
 -- antecedent, and the two are DIFFERENT code paths per #610's mechanism note
 -- (declared context vs body-occurrence-derived context).
 --
--- SPEC ANSWER (hand-derived): `P'` = predicates deferred to the RECURSIVE GROUP
--- as a whole, so both bindings generalize over the same `{Sz a}` and share one
--- `λ d̄.` prefix. Displayed schemes:
---     evenSz : Sz a => a -> Int -> Bool
---     oddSz  : Sz a => a -> Int -> Bool
--- -- note both, not just the one whose body mentions `sz` first; `P'` is the
--- group's, not the binding's. Values as in the ascribed twin: True, True.
+-- SPEC ANSWER (hand-derived):
+--   SCHEMES: evenSz : Sz a => a -> Int -> Bool
+--            oddSz  : Sz a => a -> Int -> Bool
+--   VALUES:  `sz w` is 1 at `w = (1 : Int)`, so both arms decrement by one:
+--            evenSz 6 -> oddSz 5 -> ... -> evenSz 0 = True      => True
+--            oddSz  7 -> evenSz 6 -> ... -> evenSz 0 = True     => True
 --
 -- OBSERVED: check ACCEPT with exactly those two schemes; run/build print
 -- True then True. CONFORMANT.
+--
+-- ⚠️ THIS ROW DOES **NOT** DISCRIMINATE GROUP SOURCING FROM PER-BINDING SOURCING,
+-- and an earlier revision wrongly claimed it did ("both bindings, not just the one
+-- whose body mentions `sz` first"). BOTH bodies here dispatch on `Sz`, so
+-- per-binding inference and §4's group-wide `P'` produce the identical answer --
+-- the fixture cannot tell them apart, and the claim was inert. The claim has been
+-- deleted rather than weakened.
+--
+-- 🔬 The DISCRIMINATING form -- a group where only ONE body dispatches, so the
+-- other can acquire `Sz a =>` only from the group -- lives in its own fixture,
+-- `s4-gen-rec-inferred-asymmetric.mdk`, because it does not currently execute:
+-- `check` accepts and reports both schemes, and BOTH engines then refuse to run
+-- it. What remains pinned here is the ordinary symmetric case as a regression
+-- guard on the schemes and the values.
 interface Sz a where
   sz : a -> Int
 

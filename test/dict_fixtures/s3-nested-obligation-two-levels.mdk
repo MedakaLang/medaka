@@ -34,6 +34,20 @@
 -- pins `build`'s value as CORRECT (119) and `run`'s verdict as the bug. It goes
 -- RED the day `run` stops panicking, which is the signal to re-pin it to
 -- ALL_EXACT 119 and close #323.
+--
+-- ⚠️ THE `println 7` SENTINEL BELOW IS LOAD-BEARING; DO NOT DELETE IT. This gate
+-- pins the diagnostic CODE for every REJECT row, precisely so a row cannot pass by
+-- being rejected for an unrelated reason -- but that assertion reads
+-- `check --json`, and here `check` ACCEPTS: the rejection is `run`'s, at run time,
+-- on stderr. **The harness cannot grade `run`'s stderr (#1130)**, so the panic
+-- SIGNATURE (`E-PANIC: unknown op '+'`) is genuinely unpinnable today.
+-- The sentinel recovers what can be recovered: it makes `run` emit `7` on stdout
+-- BEFORE the failing line, so the row can pin HOW FAR EXECUTION GOT. Without it
+-- stdout is empty and the row asserts only "nonzero exit", which a startup
+-- failure, a load error or a panic on any other line would satisfy equally.
+-- ⚠️ Be honest about the residual: the sentinel pins the REACH POINT, not the
+-- REASON. A stack overflow on the same line would also print `7` and then die,
+-- and this row would stay green. Closing that needs #1130.
 interface Tag a where
   tag : a -> Int
 
@@ -48,4 +62,6 @@ impl Tag (List a) requires Tag a where
 impl Tag (List Int) where
   tag _ = 99
 
-main = println (tag ([[[1]]] : List (List (List Int))))
+main =
+  println 7
+  println (tag ([[[1]]] : List (List (List Int))))

@@ -1,0 +1,30 @@
+-- DICT-SEMANTICS §3 W3, the DEFAULT-BODY half. W3 says the rule applies to the
+-- impl's body "or by the class's DEFAULT, which is checked by this same rule (it
+-- is the class-provided impl, at the head `C ā_C` itself with `ā_C` also held
+-- rigid)".
+--
+-- SPEC ANSWER (hand-derived): `mk : a -> b` quantifies `b` at the method level.
+-- A default body of `42` needs `Num b`, which the declared scheme does not
+-- license, and `b` belongs to every caller. W3 rejects -- and it must reject the
+-- DEFAULT specifically, with `ā_C` rigid too, since a default is checked once at
+-- the interface rather than per impl.
+--
+-- OBSERVED: check/run/build all REJECT with `T-IMPL-TOO-SPECIFIC`, and the
+-- message is default-specific: "DEFAULT BODY of 'mk' in interface 'Mk' requires
+-- 'Num' on the method's quantified type variable 'b' …". CONFORMANT.
+--
+-- Why this row exists separately from the two impl-body W3 rows: they check
+-- `checkImplMethodRigidity`, this checks `checkDefaultMethodRigidity` -- distinct
+-- sites, and the corpus previously had NO fixture declaring a default body inside
+-- an `interface` at all, so the impl rows alone would have let a default-only
+-- regression through while reading as "W3 is covered". Added after an adversarial
+-- review (F2) found the gap was neither covered nor declared.
+--
+-- NOTE there is deliberately no `impl` here: the default body is rejected on the
+-- INTERFACE declaration alone, which is the point -- W3 on a default is not
+-- contingent on any instance existing.
+interface Mk a where
+  mk : a -> b
+  mk _ = 42
+
+main = println 0

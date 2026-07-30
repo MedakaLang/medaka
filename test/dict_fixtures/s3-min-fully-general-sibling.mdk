@@ -23,17 +23,40 @@
 -- on `run`, and on the shipped native binary alike. Two of the three lines call
 -- an impl their goal does not match.
 --
--- MECHANISM (read off `medaka build --keep-ir`, not inferred): all three call
--- sites lower to a DIRECT call to `@mdk_impl_Box_tag` -- the mangled symbol for
--- `impl Tag (Box Int)` carries the HEAD TYCON ONLY, with the type ARGUMENTS
--- dropped. Selection is therefore keyed on `Box`, which cannot separate
--- `Box Int` from `Box String`. Because the call is direct, the decision is taken
--- during elaboration, not at run time -- so it is not the runtime arm-matching
--- site of #1072, and #1072 states explicitly that "single-module permutations are
--- CLEAN", which this program contradicts. Treat them as adjacent, not identical,
--- until someone traces both. #667 (CLOSED) is also NOT this: it was the FLAT
--- shape (`impl Sz Int` + `impl Sz a`), was interpreter-only, and its exact repro
--- prints the intended 999/999 on both engines here -- genuinely fixed.
+-- ⚠️ THE TRIGGER IS THE GENERAL IMPL'S HEAD BEING A BARE TYPE VARIABLE. IT IS
+-- INDEPENDENT OF THE TYPE CONSTRUCTOR -- `Box` here is incidental. Probed
+-- directly, same interface, same two goals, ONE token different:
+--     impl Tag a       + impl Tag (List Int)  ->  99 / 99   WRONG
+--     impl Tag (List a) + impl Tag (List Int) ->  99 / 10   CORRECT
+-- Both impls sit at the SAME tycon in the second, and it answers correctly.
+--
+-- ⚠️ AN EARLIER REVISION OF THIS COMMENT SAID THE MANGLED SYMBOL "DROPS THE TYPE
+-- ARGUMENTS" AND THAT SELECTION IS "KEYED ON `Box`". THAT IS FALSIFIED BY THIS
+-- CORPUS -- if arguments were dropped, the `List a` vs `List Int` row could not
+-- answer 99/10. The symbols show what actually happens:
+--     general head `a`      -> `@mdk_impl___none___tag` + `@mdk_impl_List_tag`
+--     general head `List a` -> `@mdk_impl_Tag__List_a___tag`
+--                            + `@mdk_impl_Tag__List_Int___tag`
+-- When two impls share a head tycon the mangler disambiguates with the FULL head
+-- and selection is correct. The short name in the buggy case is a SYMPTOM of the
+-- head bucket having exactly one member, not the cause.
+--
+-- MECHANISM, as far as the evidence actually goes (read off `medaka build
+-- --keep-ir`; the last step is a LEAD, NOT TRACED): all three call sites lower to
+-- one DIRECT call to the `Box Int` impl, and the general impl is emitted and
+-- never called. Because the call is direct, the decision is taken during
+-- ELABORATION, not at run time. The impl universe is split into a bucket keyed by
+-- head tycon and a HEADLESS bucket (`univConcreteBucket` / `univHeadless`,
+-- `compiler/types/typecheck.mdk`), and a bare-tyvar head has no head tycon to be
+-- filed under -- which is consistent with everything above, but the selection
+-- site itself has NOT been traced here. Do not repeat the earlier mistake of
+-- promoting a plausible mechanism to a stated one.
+--
+-- NOT #1072: that is runtime arm-matching, and it states "single-module
+-- permutations are CLEAN", which this single-module program contradicts. NOT
+-- #667 either: that was the FLAT shape (`impl Sz Int` + `impl Sz a`), was
+-- interpreter-only, and its exact repro prints the intended 999/999 on both
+-- engines here -- genuinely fixed.
 --
 -- 🔗 The target-architecture task most likely to SUBSUME this is **#1113**
 -- (ARCH B-2, "identity-stamped evidence ... min-specificity only at `inst`,
@@ -44,13 +67,17 @@
 -- decided at elaboration, so they are different sites of one keying assumption.
 -- Recorded as a pointer, not a dedup claim: #1128 is the tracked entry.
 --
--- 🔬 THE CONTROL IS IN THE CORPUS, ONE TOKEN AWAY. `s5-argtag-unsound-under-
--- overlap.mdk` is this program with the general sibling written `impl Tag (List a)`
--- instead of `impl Tag a`, and it answers CORRECTLY (99, 10). So the trigger is
--- specifically a FULLY GENERAL instance (a bare type-variable head, which mangles
--- to `__none__` and enters no head bucket) sitting beside a tycon-headed one --
--- not overlap as such, and not declaration order. `test/dict_fixtures/
--- s3-nested-obligation-most-specific.mdk` is a second control at parametric width.
+-- 🔬 THE CONTROL. `s3-min-fully-general-control.mdk` is THE ONE-TOKEN control:
+-- byte-identical to this file except the general impl's head reads `(Box a)`
+-- instead of `a`. It answers 99 / 10 / 10 -- correctly.
+-- ⚠️ `s5-argtag-unsound-under-overlap.mdk` is NOT the one-token control, though an
+-- earlier revision of this comment claimed it was. It differs in the type
+-- constructor (`List` vs `Box`), the general head, AND the number of call sites,
+-- so it cannot isolate a single variable. It remains a useful SECOND data point
+-- (the bug reproduces at `List` too), just not a control.
+-- `s3-nested-obligation-most-specific.mdk` is a third data point at parametric
+-- width. So the trigger is a bare-type-variable general head beside a
+-- tycon-headed impl -- not overlap as such, and not declaration order.
 --
 -- ⚠️ THIS ROW PINS A WRONG ANSWER ON PURPOSE, AND THE VALUE IT PINS IS NOT
 -- CORRECT. Do not "confirm" it against the engines -- they are the thing that is

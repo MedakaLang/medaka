@@ -116,33 +116,59 @@
 #   the §6.1 separating case is rejected. SOUND (an over-rejection), and #311
 #   records the 2026-07-16 owner decision to keep (a) for now.
 #   s6-1c-incomparable-no-minimum-control is the discriminating control.
-# * s5-phantom-position-rejected -- #1107 paragraph (d) (OPEN, S3). §5 lists
-#   phantom position ("`ā_C` absent from `τ_m`") as a supported dispatch case; the
-#   checker rejects it at the impl with a dedicated `T-PHANTOM-METHOD` code.
-#   Defensible (Medaka has no visible type application, so a use site cannot fix
-#   `a`), but unreconciled -- §5 still licenses it and nothing records the
-#   decision. ⚠️ This is NOT an unfiled bug and must NOT be filed as one: #1107 is
-#   "ARCH S-2: write the owed spec paragraphs", and its paragraph (d) is this
-#   finding verbatim -- "Impl completeness / phantom-method rejection -- enforced
-#   today with no governing clause (map §4 Layer 5)". It is SPEC work with no
-#   behaviour change; the paragraph decides the direction and the checker follows.
-#   The row pins TODAY'S rejection either way, so it goes red on either outcome.
+# * s4-gen-rec-inferred-asymmetric -- ⚠️ UNFILED, S1 LOUD BREAKAGE. An INFERRED
+#   mutually-recursive group in which only ONE body dispatches on the class:
+#   `check` accepts AND reports both schemes correctly as `Sz a =>`, then NEITHER
+#   engine will execute it -- `run` E-PANICs `unbound identifier:
+#   $dict_evenSz_0`, `build` dies `unbound dict witness '$dict_…__evenSz_0' in
+#   emit env (dict not threaded to this site)`. So the type level agrees with §4
+#   `gen-rec` (the group shares one dict prefix) and the elaboration does not
+#   thread it -- §4's own named failure mode, caught one step before it could be a
+#   wrong value. Two controls in the corpus isolate the trigger to INFERRED +
+#   MUTUAL + ASYMMETRIC: the ascribed twin runs, and the symmetric inferred row
+#   runs. Mirror-checked (swapping which body dispatches fails symmetrically).
+#   FOUND BY FIXING AN INERT ASSERTION -- the symmetric row used to claim it
+#   discriminated group from per-binding sourcing, which it could not; making the
+#   discriminator real is what exposed this.
+# * s5-phantom-determined-use-rejected -- ⚠️ UNFILED, S3 OVER-REJECTION. Inside
+#   `useBoth : Mk a => a -> Int` the `Mk a` dict is in scope over a RIGID `a`, so
+#   §3 `assum` discharges the goal and §5 `(method)` projects: the spec ACCEPTS
+#   and prints 7. The checker rejects at the interface/impl DECLARATION and never
+#   looks at the use site. Paired with s5-phantom-ambiguous-use-rejected (which
+#   BOTH spec and impl reject) this shows the implementation rejects a strict
+#   SUPERSET of what the spec does.
+#   ⚠️ NOT PINNED TO #1107 (d), deliberately, and this correction is worth keeping:
+#   #1107 is "ARCH S-2: write the owed spec paragraphs", its paragraph (d) is this
+#   finding verbatim -- but it is SPEC-ONLY WITH NO BEHAVIOUR CHANGE. A REJECT row
+#   pinned to it would stay green through its entire lifetime and then go stale
+#   silently: a self-draining pin that cannot drain is worse than no pin. What
+#   this row drains on is a BEHAVIOUR change (the checker narrowing to reject only
+#   ambiguous USES). If #1107 (d) instead decides §5 should forbid phantom methods
+#   outright, nothing here goes red and whoever closes it must re-label by hand --
+#   stated in the fixture rather than papered over.
 #
 # ###################################################################
 # # NOT YET COVERED -- an honest punch-list, not a silent gap        #
 # ###################################################################
-# The corpus covers §1, §3 (selection/`assum`/`super`/W1/W3-type-axis), §4
-# (`gen`/`gen-rec`/`gen-sig`), §5 (result + phantom + arg-tag), §6/§6.1
-# (C1/C2/choice-points 2,3,4), §8 (I1/I2/I3) and §9 (signature authority,
-# vector-valued entailment). It does NOT yet cover:
+# The corpus covers §1, §2 (method-level `Q_m`), §3 (selection/`assum`/`super`/W1/
+# W3-type-axis incl. the DEFAULT-body half), §4 (`gen`/`gen-rec`/`gen-sig`), §5
+# (result + phantom + arg-tag), §6/§6.1 (C1/C2/choice-points 2,3,4), §8 (I1 incl.
+# dict-param ORDER, I2, I3) and §9 (signature authority, vector-valued
+# entailment). It does NOT yet cover:
 #   * §2 -- the dictionary RECORD SHAPE itself (a `supers` field vs a flat
 #     impl-key). Only its observable consequences are pinned; asserting the
-#     representation needs the Core-IR dump probe.
+#     representation needs the Core-IR dump probe. ⚠️ This exclusion is about the
+#     `{methods, supers}` LAYOUT only -- §2's method-level-constraint exception is
+#     behaviourally observable and IS covered, by
+#     s2-method-level-constraint-abstract.
 #   * §3 W2 -- instance-resolution termination (the Paterson/coverage-style
-#     condition). No fixture drives a diverging instance context.
+#     condition). No fixture drives a diverging instance context. ⚠️ Per §11's own
+#     W2 row there is no static check to gate anyway -- what exists is a dynamic
+#     depth-32 cutoff -- so a fixture here would pin the cutoff, not the clause.
 #   * §3 W3 EFFECT axis, and the whole graded-interface (`Deferred*`) paragraph
 #     including its two verified S0s (#1094, #1095). That is
-#     EFFECTS-SEMANTICS' §6 to gate; only the TYPE axis is pinned here.
+#     EFFECTS-SEMANTICS' §6 to gate; only the TYPE axis is pinned here -- but note
+#     BOTH of its sites now are (impl body AND interface default body).
 #   * §6.1 choice-point 1 -- specificity compares heads only, not contexts. No
 #     fixture declares two α-equal heads with different contexts.
 #   * §6.1 condition (b) -- per-goal TOTAL order, the middle of the three. Only
@@ -153,6 +179,12 @@
 #     top-level one. See #1052 (the local-dict pin is itself unsound).
 #   * The typed dict-passed Core-IR route kinds (`RKey`/`RLocal`, `CDict`), per
 #     the note above.
+#   * `run`'s STDERR on any row. The harness grades `check`'s diagnostic code (from
+#     `check --json`) and every engine's stdout and exit code, but has no way to
+#     assert a RUNTIME panic's signature -- so a row whose pinned failure is a
+#     `run`-time E-PANIC pins the exit code and the stdout reached, never the
+#     reason. Filed as #1130; s3-nested-obligation-two-levels is the row that
+#     currently pays for it and says so in its own header.
 # Adding any of these is mechanical: drop a fixture in test/dict_fixtures/ and
 # wire a row. The coverage self-audit below FAILS until you do, by design.
 #
@@ -181,9 +213,13 @@ trap 'rm -rf "$TMP"' EXIT
 #     ALL_EXACT   -- run and build both ACCEPT: their stdouts AND the pinned
 #                    `value` must all be byte-identical (§7 value agreement +
 #                    ground-truth pin)
-#     BUILD_EXACT -- only build's stdout is asserted against `value` (used where
-#                    run is expected to REJECT but build to ACCEPT with a
-#                    specific value -- a check/build-agree-run-diverges split)
+#     BUILD_EXACT -- build's stdout is asserted against `value` (used where run is
+#                    expected to REJECT but build to ACCEPT with a specific value
+#                    -- a check/build-agree-run-diverges split). `value` MAY be
+#                    written `<run-stdout>%%<build-stdout>`, in which case the
+#                    stdout `run` emitted before dying is ALSO asserted, pinning
+#                    how far execution got. ⚠️ Reach point, not reason: `run`'s
+#                    stderr cannot be graded (#1130).
 #     SPLIT_EXACT -- KNOWN-BAD ledger for a §7 single-evaluator-law violation
 #                    where BOTH engines accept and DISAGREE. `value` holds two
 #                    expectations separated by `%%`: run's stdout, then build's.
@@ -201,20 +237,26 @@ TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint ob
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
 s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
 s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
-s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (119). build`s value is pinned because it is RIGHT; the row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|119|
+s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
 s3-min-fully-general-sibling.mdk|§3/§10 LEDGER #1128 (OPEN, S0 SILENT WRONGNESS, both engines): a fully general `impl Tag a` beside `impl Tag (Box Int)` sends EVERY Box-headed goal to the Box Int impl -- selection keyed on the head tycon with type ARGS DROPPED. Spec answer 99/10/10; both engines print 99/99/99 at exit 0. PINS THE WRONG ANSWER ON PURPOSE|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n99\n99|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
 s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
+s3-w3-default-method-rigidity.mdk|§3 W3 DEFAULT-BODY half: W3 also governs "the class`s default, which is checked by this same rule". A different site (`checkDefaultMethodRigidity`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
+s2-method-level-constraint-abstract.mdk|§2 EXCEPTION: a method whose OWN signature adds a constraint over a fresh variable not fixed by the instance keeps that dict ABSTRACT -- projection yields a value still awaiting it. The two lines apply the SAME slot at TWO different `b`, which a construction-time-baked dict could not do|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1/2\n1/True|
+s3-min-fully-general-control.mdk|THE ONE-TOKEN CONTROL for #1128: byte-identical to it except the general impl`s head reads `(Box a)` not `a`. Answers 99/10/10 CORRECTLY, which is what makes #1128`s trigger claim (a BARE TYPE-VARIABLE head, not the tycon) an observation rather than an inference|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10\n10|
+s8-i1-dict-param-order.mdk|§8 I1 / §4 `gen` ORDER half: a TWO-predicate signature, with the two impls at the same type but different bodies so only POSITION distinguishes the dicts. Every other ACCEPTED fixture abstracts at most one dict, so order was previously never elaborated at all|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|503|
 s4-gen-sig-declared-context-kept.mdk|§4 `gen-sig` (#619): a declared predicate the body NEVER DISPATCHES ON is still abstracted and still displayed (#610 regression pin -- the value 9 is identical either way, so only the section-2 scheme assertion can see this)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|9|
 s4-gen-sig-violating-caller-rejected.mdk|§4 `var`: the declared context RESTRICTS CALLERS even when the body contains no method occurrence (#610 regression pin -- was exit 0)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s4-gen-sig-body-needs-more-rejected.mdk|§4 `gen-sig` side condition `Q_sig ⊩ P`ᵢ` with `Q_sig` EMPTY: a signature is a contract the body must satisfy, not a floor it can raise -- rejected, never silently widened|REJECT|REJECT|REJECT|NONE||T-MISSING-CONSTRAINT
 s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|23|
 s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
-s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
+s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note. ⚠️ BOTH bodies dispatch, so this row does NOT discriminate group sourcing from per-binding sourcing (an earlier revision wrongly claimed it did); it is a regression guard on the schemes and values. The discriminating form is the asymmetric row below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
+s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- LEDGER ⚠️ UNFILED S1 LOUD BREAKAGE: an INFERRED mutually-recursive group in which only ONE body dispatches. check ACCEPTS and reports BOTH schemes as `Sz a =>` (the group-wide `P` attribution is right), then NEITHER engine will execute it -- run E-PANICs `unbound identifier: $dict_evenSz_0`, build dies `unbound dict witness ... in emit env (dict not threaded to this site)`. §4`s named failure mode, caught before it can become a wrong value. Controls: the ascribed twin and the symmetric row both run fine; mirroring which body dispatches fails symmetrically|ACCEPT|REJECT|REJECT|NONE||
 s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
-s5-phantom-position-rejected.mdk|§5 PHANTOM position -- LEDGER #1107 paragraph (d) (OPEN, S3): §5 lists it as supported ("same -- only the static dictionary determines it"); the checker rejects it at the impl. An over-rejection with a dedicated code, so deliberate but unreconciled -- and the reconciliation is OWED SPEC WORK, not a bug: #1107 (d) is "impl completeness / phantom-method rejection -- enforced today with no governing clause". Do NOT file separately|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
+s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
+s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER ⚠️ UNFILED S3 OVER-REJECTION: inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ NOT drained by #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
 s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
 s6-1c-per-goal-unique-min-rejected.mdk|§6.1 choice-point 2 -- LEDGER #614/#311 (both OPEN): the §6.1 SEPARATING CASE. Spec commits to (c) per-goal unique minimum and would ACCEPT, printing 3; the declaration-time sweep enforces (a) global comparability and rejects. Sound over-rejection; #311 records the owner decision to keep (a) for now|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
@@ -246,8 +288,10 @@ IRS='s4-gen-sig-declared-context-kept.mdk|§4 `gen` a declared-but-never-dispatc
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the CONSTRAINED same-named binding abstracts ONE dict: arity 2|HAS|^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the UNCONSTRAINED same-named binding abstracts NONE: arity 1. A bare-name arity table would force a phantom dict param here and the call site would over-apply|HAS|^define i64 @mdk_righty__widget\(i64 %arg0\)
 s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl -- a direct call, no runtime arm-matching|HAS|call i64 @mdk_impl_Int_dflt\(
-s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN: all THREE call sites lower to the SAME direct call to the `Box Int` impl, whose mangled symbol carries the head tycon with the type ARGUMENTS DROPPED. The general impl is emitted and never called. This is the evidence the defect is in SELECTION (elaboration), not in runtime arm-matching -- which is what distinguishes it from #1072|HAS|define i64 @mdk_impl___none___tag\(
-s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN (second half): no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\('
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 1/3: the general impl IS emitted -- so it was not DCE`d away, and its absence from the call sites below is a selection decision rather than a missing definition|HAS|define i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 2/3: no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 3/3: the calls that DO exist go to the `Box Int` impl. Without this the row`s own label ("all three sites lower to the same direct call") was UNASSERTED -- a change routing all three through some THIRD symbol while leaving the general impl uncalled would have kept the row green under a false label (adversarial review F1)|HAS|call i64 @mdk_impl_Box_tag\(
+s8-i1-dict-param-order.mdk|§8 I1 ORDER, structural half: a TWO-predicate binding must abstract FOUR parameters (2 dicts + 2 values). The value 503 alone cannot see a count change that unification happens to absorb|HAS|^define i64 @mdk_s8_i1_dict_param_order__pair2\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\)'
 
 # ── Coverage self-audit ──────────────────────────────────────────────────────
 # Every top-level fixture unit (a .mdk file, or a directory) in FIXDIR must
@@ -334,13 +378,39 @@ printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp
       ;;
     BUILD_EXACT)
       if [ "$build_v" = 'ACCEPT' ]; then
-        printf '%b\n' "$value" >"$TMP/$base.expected"
-        if cmp -s "$TMP/$base.build.out" "$TMP/$base.expected"; then
-          value_v='ok'
-        else
-          value_v='WRONG'
-          row_ok=0
-        fi
+        # Optional `<run-stdout>%%<build-stdout>` split. Where `run` is expected
+        # to REJECT, its exit code alone says only "something went wrong" -- a
+        # startup failure or a panic on an unrelated line satisfies it equally.
+        # Pinning the stdout `run` DID emit before dying pins HOW FAR IT GOT.
+        # ⚠️ That is a reach point, not a reason: the harness cannot grade `run`'s
+        # stderr (#1130), so the panic signature stays unpinnable and a different
+        # fault at the same line would still pass. Rows using this must say so.
+        case "$value" in
+          *%%*)
+            rwant="${value%%\%\%*}"
+            bwant="${value#*\%\%}"
+            printf '%b\n' "$rwant" >"$TMP/$base.expected.run"
+            printf '%b\n' "$bwant" >"$TMP/$base.expected"
+            if ! cmp -s "$TMP/$base.run.out" "$TMP/$base.expected.run"; then
+              value_v='RUN-STDOUT-DIFF'
+              row_ok=0
+            elif cmp -s "$TMP/$base.build.out" "$TMP/$base.expected"; then
+              value_v='ok(reach)'
+            else
+              value_v='WRONG'
+              row_ok=0
+            fi
+            ;;
+          *)
+            printf '%b\n' "$value" >"$TMP/$base.expected"
+            if cmp -s "$TMP/$base.build.out" "$TMP/$base.expected"; then
+              value_v='ok'
+            else
+              value_v='WRONG'
+              row_ok=0
+            fi
+            ;;
+        esac
       else
         value_v='n/a'
       fi
@@ -444,8 +514,31 @@ printf '%s\n' "$IRS" | while IFS='|' read -r entry label kind pat; do
       continue
     fi
   fi
-  hits="$(grep -cE "$pat" "$TMP/$base.ir.ll" 2>/dev/null || true)"
+  # ⚠️ GRADE grep's EXIT STATUS, NOT JUST ITS COUNT. `grep -c` exits 0 on match,
+  # 1 on no-match, and >=2 on an ERROR (a malformed regex, an unreadable file).
+  # On an error it prints nothing, so `hits` would fall back to 0 -- which `HAS`
+  # reads as "not found" (a safe failure) but `LACKS` reads as "absent" (a
+  # VACUOUS PASS). A single mistyped bracket in a LACKS pattern would then assert
+  # nothing, forever, while the row printed `ok`. Anything above 1 is a broken
+  # assertion and must FAIL the row, never satisfy it.
+  #
+  # ⚠️ AND THE PATTERNS ARE NOT PORTABLE BY DEFAULT: `grep` on the primary dev box
+  # is **ugrep**, not GNU grep (it reports e.g. `ugrep: error: ... mismatched
+  # [ ]`), while CI runs GNU grep on ubuntu-latest. A pattern that behaves one way
+  # locally can behave differently there. Keep these patterns to plain POSIX ERE
+  # -- literal symbol names with escaped `(` and an optional `^` anchor -- and do
+  # not reach for PCRE-isms (`\d`, `\b`, lookaround, non-greedy) that only one of
+  # the two implementations accepts.
+  hits="$(grep -cE "$pat" "$TMP/$base.ir.ll" 2>"$TMP/$base.grep.err")"
+  grep_rc=$?
   [ -n "$hits" ] || hits=0
+  if [ "$grep_rc" -gt 1 ]; then
+    printf 'FAIL ir     %-44s grep FAILED (exit %d) on pattern: %s\n' "$entry" "$grep_rc" "$pat"
+    sed 's/^/                   /' "$TMP/$base.grep.err" 2>/dev/null | head -3
+    printf '                 %s\n' "$label"
+    echo "FAIL" >>"$TMP/v3"
+    continue
+  fi
   case "$kind" in
     HAS)
       if [ "$hits" -gt 0 ]; then

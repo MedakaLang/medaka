@@ -1,0 +1,40 @@
+-- DICT-SEMANTICS §2's EXCEPTION to "projecting methods.m yields a directly-
+-- applicable value": "a method whose OWN signature adds a constraint over a fresh
+-- variable NOT FIXED BY THE INSTANCE keeps that dictionary ABSTRACT; projection
+-- then yields a value still awaiting that dict at the call site." This is `Q_m`
+-- in §3 W3's `m : ∀ā_C. C ā_C ⇒ ∀b̄ μ̄. Q_m ⇒ τ_m`.
+--
+-- SPEC ANSWER (hand-derived): `render : Debug b => a -> b -> String` carries a
+-- method-level `Debug b` over a `b` the instance head `Box K` does not fix. So
+-- the `Box K` dictionary's `render` slot cannot close over a `Debug` dict at
+-- CONSTRUCTION -- there is no single `b` to close over. The dict must be supplied
+-- per call site by §4 `var`, at whatever `b` that site instantiates:
+--   `render (K 1) (2 : Int)` -> `Debug Int`   -> "1" ++ "/" ++ "2"     => 1/2
+--   `render (K 1) True`      -> `Debug Bool`  -> "1" ++ "/" ++ "True"  => 1/True
+--
+-- OBSERVED: check/run/build all ACCEPT and print `1/2` then `1/True`. CONFORMANT.
+--
+-- The two lines are the whole assertion: they project the SAME method slot out of
+-- the SAME instance dictionary and apply it at TWO DIFFERENT `b`. A construction
+-- that had baked one `Debug` dict into the slot would answer identically on both
+-- lines (or crash on the second), so the pair -- not either line -- is what shows
+-- the method dict stayed abstract.
+--
+-- Added after an adversarial review (F2) found this clause neither covered nor
+-- listed as uncovered. It is OBSERVABLE FROM BEHAVIOUR, so the gate's separate
+-- "§2 dictionary record shape" exclusion (which needs the Core-IR dump) does not
+-- cover it -- that exclusion is about the `{methods, supers}` layout, this is
+-- about when a slot is closed over versus left awaiting a dict.
+interface Box a where
+  wrap : a -> Int
+  render : Debug b => a -> b -> String
+
+data K = K Int
+
+impl Box K where
+  wrap (K n) = n
+  render (K n) x = debug n ++ "/" ++ debug x
+
+main =
+  println (render (K 1) (2 : Int))
+  println (render (K 1) True)

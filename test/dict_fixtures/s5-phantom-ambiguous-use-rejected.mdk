@@ -1,0 +1,47 @@
+-- DICT-SEMANTICS §5 PHANTOM POSITION, part 1 of 2: the AMBIGUOUS use.
+--
+-- SPEC ANSWER (hand-derived -- and note this CORRECTS an earlier revision of this
+-- file, which claimed the spec accepts this program and prints 7. It does not):
+--   §5's phantom bullet says only that WHEN a phantom method dispatches, it does
+--   so from the static dictionary -- "same: only the static dictionary determines
+--   it". It supplies no rule making THIS program resolvable. At `println (phantom
+--   : Int)`, §4 `var` must instantiate `phantom`'s scheme `∀a. Mk a ⇒ Int` and
+--   then discharge `Mk ?a` with `?a` entirely unconstrained: the annotation pins
+--   the RESULT type `Int`, which §5 says is irrelevant, since `ā_C` is absent from
+--   `τ_m`. Nothing fixes `a`, Medaka has no visible type application, and §3's
+--   `inst` needs `min⊑(match(IE, C τ̄))` at a τ̄ that does not exist yet.
+--   The program is therefore AMBIGUOUS under the spec, i.e. REJECTED.
+--
+-- OBSERVED: check/run/build all REJECT with `T-PHANTOM-METHOD`
+-- ("Method 'phantom' in interface 'Mk' does not mention interface parameter(s)
+-- 'a'; cannot dispatch"). CONFORMANT ON THE VERDICT.
+--
+-- ⚠️ CONFORMANT-WITH-CAVEAT, and the caveat is the whole reason this row exists.
+-- Spec and implementation agree that this program is rejected, but for DIFFERENT
+-- REASONS AT DIFFERENT SITES: the spec rejects the ambiguous USE, the
+-- implementation rejects the interface/impl DECLARATION outright, before any use
+-- is considered. The spec is silent on where the rejection belongs, so that
+-- difference is not itself a divergence -- it is unspecified.
+--
+-- 🔬 WHY THE PAIR MATTERS: this row alone cannot tell "the implementation
+-- enforces §5 correctly" from "the implementation rejects phantom methods
+-- wholesale". Its sibling `s5-phantom-determined-use-rejected.mdk` settles it --
+-- there the class parameter IS determined, the spec resolves the program, and
+-- the implementation still rejects. So the implementation's rule is strictly
+-- BROADER than the spec's, and only the pair shows it.
+--
+-- Whether §5 should license phantom dispatch at all is owed spec work: #1107
+-- paragraph (d), "Impl completeness / phantom-method rejection -- enforced today
+-- with no governing clause". ⚠️ #1107 is SPEC-ONLY with no behaviour change, so
+-- no behavioural drain is hung on it here -- see the sibling for that discussion.
+interface Mk a where
+  mk : Int -> a
+  phantom : Int
+
+data Red = Red Int
+
+impl Mk Red where
+  mk n = Red n
+  phantom = 7
+
+main = println (phantom : Int)
