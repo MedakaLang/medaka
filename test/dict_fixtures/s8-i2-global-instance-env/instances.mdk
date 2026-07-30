@@ -1,0 +1,8 @@
+-- The ONLY `impl Sz Coin` in the program. `main.mdk` never imports this module.
+import iface.{Sz, sz, Coin(..)}
+
+export impl Sz Coin where
+  sz (Coin n) = n
+
+export bump : Coin -> Coin
+bump (Coin n) = Coin (n + 1)

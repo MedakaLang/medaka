@@ -1,0 +1,111 @@
+-- DICT-SEMANTICS §3 `inst` / §6 C1 / §6 "uniform resolution" / §10's last-but-one
+-- bullet ("Suspect any resolution code path that ... KEYS INSTANCES BY
+-- CLASS-PLUS-HEAD-CONSTRUCTOR ALONE, WHICH CANNOT SEPARATE `List Int` FROM
+-- `List a`").
+--
+-- 🚨 PINNED DIVERGENCE -- **#1128** (OPEN, S0: silent wrongness, `verified`).
+-- Found while building this gate; independently reproduced by the orchestrator on
+-- a second cold-built binary at `c4ef6dbe` with `MEDAKA_STRICT=1`, control and IR
+-- grep included, before the issue was filed.
+-- Severity as observed: **S0, silent wrongness** -- `check` exits 0 with no
+-- diagnostic and BOTH engines print a value produced by an impl whose head the
+-- goal DOES NOT MATCH.
+--
+-- SPEC ANSWER (hand-derived, before running anything):
+--   `match(IE, π)` = { I | ∃φ. φ(head(I)) = π } (§3). `head(impl Tag (Box Int))`
+--   is `Box Int`; no substitution makes it `Box String` or `Box Bool`. So:
+--     goal `Tag (Box Int)`    -> match {Tag a, Tag (Box Int)}, min⊑ = Box Int => 99
+--     goal `Tag (Box String)` -> match {Tag a} ALONE                          => 10
+--     goal `Tag (Box Bool)`   -> match {Tag a} ALONE                          => 10
+--   Expected output: 99, 10, 10.
+--
+-- OBSERVED on this binary: **99, 99, 99** -- on `check` (exit 0, no diagnostic),
+-- on `run`, and on the shipped native binary alike. Two of the three lines call
+-- an impl their goal does not match.
+--
+-- ⚠️ THE TRIGGER IS THE GENERAL IMPL'S HEAD BEING A BARE TYPE VARIABLE. IT IS
+-- INDEPENDENT OF THE TYPE CONSTRUCTOR -- `Box` here is incidental. Probed
+-- directly, same interface, same two goals, ONE token different:
+--     impl Tag a       + impl Tag (List Int)  ->  99 / 99   WRONG
+--     impl Tag (List a) + impl Tag (List Int) ->  99 / 10   CORRECT
+-- Both impls sit at the SAME tycon in the second, and it answers correctly.
+--
+-- ⚠️ AN EARLIER REVISION OF THIS COMMENT SAID THE MANGLED SYMBOL "DROPS THE TYPE
+-- ARGUMENTS" AND THAT SELECTION IS "KEYED ON `Box`". THAT IS FALSIFIED BY THIS
+-- CORPUS -- if arguments were dropped, the `List a` vs `List Int` row could not
+-- answer 99/10. The symbols show what actually happens:
+--     general head `a`      -> `@mdk_impl___none___tag` + `@mdk_impl_List_tag`
+--     general head `List a` -> `@mdk_impl_Tag__List_a___tag`
+--                            + `@mdk_impl_Tag__List_Int___tag`
+-- When two impls share a head tycon the mangler disambiguates with the FULL head
+-- and selection is correct. The short name in the buggy case is a SYMPTOM of the
+-- head bucket having exactly one member, not the cause.
+--
+-- MECHANISM, in two tiers -- keep them apart, because collapsing them is the
+-- mistake this comment already made once:
+--
+--   OBSERVED here, off `medaka build --keep-ir`: all three call sites lower to
+--   one DIRECT call to the `Box Int` impl, and the general impl is emitted and
+--   never called. Because the call is direct, the decision is taken during
+--   ELABORATION, not at run time.
+--
+--   TRACED TO SOURCE by a later independent analysis (attributed, and both lines
+--   re-read here before citing rather than taken on trust):
+--   `headTyconTy` returns `None` for a `TyVar` -- its `TyCon`/`TyApp`/`TyTuple`
+--   arms are the only ones that yield `Some`, and a bare type variable falls to
+--   the catch-all (`compiler/types/typecheck.mdk`, `headTyconTy`, ~:11632).
+--   `keyEntryOf` then emits a `KeyEntry` ONLY on `Some tag`, with `None => []`
+--   (~:11362). So an `impl C a` produces NO key entry at all: the candidate is
+--   never collected into the registry the goal searches, rather than being
+--   collected and then out-ranked. That is why the general impl is unreachable
+--   for EVERY goal, not merely mis-ranked at one -- and it is a sharper statement
+--   than the `univConcreteBucket`/`univHeadless` split this comment previously
+--   offered as a lead, which is a DIFFERENT registry. Line numbers drift;
+--   re-derive with `grep -n '^headTyconTy' compiler/types/typecheck.mdk`.
+--
+-- NOT #1072: that is runtime arm-matching, and it states "single-module
+-- permutations are CLEAN", which this single-module program contradicts. NOT
+-- #667 either: that was the FLAT shape (`impl Sz Int` + `impl Sz a`), was
+-- interpreter-only, and its exact repro prints the intended 999/999 on both
+-- engines here -- genuinely fixed.
+--
+-- 🔗 The target-architecture task most likely to SUBSUME this is **#1113**
+-- (ARCH B-2, "identity-stamped evidence ... min-specificity only at `inst`,
+-- emitter word-set retirement"). §11's arg-tag row names the same granularity
+-- defect one layer down -- `runtimeTypeTag` discriminating at bare head-tycon
+-- width, so it cannot separate `T Int` from `T Bool` either. That row is about
+-- eval's `filterByTag` RUNTIME fallback; this fixture's call is a DIRECT call
+-- decided at elaboration, so they are different sites of one keying assumption.
+-- Recorded as a pointer, not a dedup claim: #1128 is the tracked entry.
+--
+-- 🔬 THE CONTROL. `s3-min-fully-general-control.mdk` is THE ONE-TOKEN control:
+-- byte-identical to this file except the general impl's head reads `(Box a)`
+-- instead of `a`. It answers 99 / 10 / 10 -- correctly.
+-- ⚠️ `s5-argtag-unsound-under-overlap.mdk` is NOT the one-token control, though an
+-- earlier revision of this comment claimed it was. It differs in the type
+-- constructor (`List` vs `Box`), the general head, AND the number of call sites,
+-- so it cannot isolate a single variable. It remains a useful SECOND data point
+-- (the bug reproduces at `List` too), just not a control.
+-- `s3-nested-obligation-most-specific.mdk` is a third data point at parametric
+-- width. So the trigger is a bare-type-variable general head beside a
+-- tycon-headed impl -- not overlap as such, and not declaration order.
+--
+-- ⚠️ THIS ROW PINS A WRONG ANSWER ON PURPOSE, AND THE VALUE IT PINS IS NOT
+-- CORRECT. Do not "confirm" it against the engines -- they are the thing that is
+-- wrong. It goes RED the day selection starts keying on the full head, which is
+-- the signal to re-pin it to the spec answer `99\n10\n10` and close #1128.
+data Box a = Box a
+
+interface Tag a where
+  tag : a -> Int
+
+impl Tag a where
+  tag _ = 10
+
+impl Tag (Box Int) where
+  tag _ = 99
+
+main =
+  println (tag (Box (1 : Int)))
+  println (tag (Box "s"))
+  println (tag (Box True))

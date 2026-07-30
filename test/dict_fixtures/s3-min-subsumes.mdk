@@ -1,0 +1,24 @@
+-- DICT-SEMANTICS §3 `inst` + the specificity order `⊑`.
+--
+-- SPEC ANSWER (hand-derived): `⊑` compares heads only. `impl Default Int` is a
+-- substitution instance of `impl Default a` (σ = [Int/a]) and not vice versa,
+-- so `Int ⊏ a`. At the ground goal `Default Int` the matching set is
+-- {`Default a`, `Default Int`} and its unique ⊑-minimum is `Default Int`.
+-- `inst` selects THAT instance, so `dflt` is the Int impl: 1.
+--
+-- The wrong answer this row exists to catch is 0 — first-match / declaration
+-- order, which is the #609 (S0, CLOSED) defect and the general shape of #203.
+-- Declaration order here is deliberately GENERAL FIRST so that a first-match
+-- resolver would print 0 and this row would go red.
+--
+-- OBSERVED: run/build both print 1. CONFORMANT.
+interface Default a where
+  dflt : a -> Int
+
+impl Default a where
+  dflt _ = 0
+
+impl Default Int where
+  dflt _ = 1
+
+main = println (dflt (3 : Int))

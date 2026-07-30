@@ -1,0 +1,78 @@
+-- DICT-SEMANTICS §6.1 choice-point 4 + §6 C2 under overlap + §3 `super`.
+--
+-- 🚨 PINNED DIVERGENCE -- **#1127** (OPEN, S0: silent wrongness, `verified`).
+-- Found while building this gate; independently reproduced by the orchestrator on
+-- a second cold-built binary at `c4ef6dbe` with `MEDAKA_STRICT=1`, control
+-- included, before the issue was filed.
+-- Severity as observed: **S0, silent wrongness on the BUILD PATH** -- `check`
+-- exits 0, `run` prints the CORRECT answer, and the shipped native binary prints
+-- a value produced by the WRONG dictionary, also at exit 0.
+--
+-- SPEC ANSWER (hand-derived, before running anything):
+--   line 1, `useD ([1] : List Int)`.
+--     `var` discharges `C (List Int)`. Only `impl C (List a)` matches, selected
+--     at φ = [Int/a]. §3 `inst` fills its `supers.D` by resolving `D (List Int)`
+--     THROUGH ENTAILMENT AT THE CONSTRUCTION GOAL, whose matching set is
+--     {`D (List a)`, `D (List Int)`} with ⊑-minimum `D (List Int)`.
+--     Inside `useD` the goal `D a` (rigid `a`) is not an assumption, but
+--     `D ā_C ∈ super(C)`, so `super` projects that very field -- "pure
+--     projection into the nested record, NEVER a re-resolution".        => 77
+--   line 2, `dm ([1] : List Int)` as an independent top-level goal.       => 77
+--   Expected output: 77, 77 -- and C2 requires them EQUAL: "A super-projection
+--   that reaches a general `D`-dict while an independent top-level goal `D τ̄`
+--   resolves to a specific one is a C2 violation even though both are
+--   `D`-evidence."
+--
+-- OBSERVED on this binary:
+--   check  ACCEPT, no diagnostic
+--   run    ACCEPT, prints  77 / 77   -- CORRECT
+--   build  ACCEPT, and the shipped binary prints  20 / 77   -- LINE 1 IS WRONG
+--
+-- 20 is `impl D (List a)`, the GENERAL instance -- i.e. the native path does
+-- precisely what §6.1.4 calls "THE TEMPTING-BUT-WRONG IMPLEMENTATION ... pre-
+-- resolving a polymorphic instance's supers once, against its general head, at
+-- declaration -- that turns every ground construction into a C2 violation under
+-- overlap." Line 2 in the SAME program resolves most-specifically, so the two
+-- arms disagree inside one binary, which is the C2 break stated exactly.
+--
+-- 🔬 THE DISCRIMINATING CONTROL IS IN THE CORPUS: `s6-1-4-direct-constraint-
+-- control.mdk` is this program with `useD : C a => …` replaced by
+-- `useD : D a => …` -- the SAME goal at the SAME type, reached WITHOUT the
+-- superclass projection -- and native prints 77, correctly. So the defect is
+-- specifically the `super` arm, not min⊑ selection and not the impl-`requires`
+-- context arm.
+--
+-- RELATIONSHIP to #412 (CLOSED, S0): #412 was the same §6.1.4 violation for a
+-- STRUCTURED IMPL CONTEXT (`impl P (List a) requires S (List a)`). Its exact
+-- repro was re-run on this binary and now prints the correct 3, so #412 really
+-- is fixed and this is a DISTINCT SURVIVING ARM of the same family -- the
+-- interface-`requires` / `supers` arm rather than the impl-`requires` arm.
+--
+-- ⚠️ THIS ROW PINS A WRONG BUILD VALUE ON PURPOSE. Do not "confirm" 20 against
+-- the binary -- the binary is the thing that is wrong. The row goes RED the day
+-- native starts printing 77, which is the signal to re-pin it to ALL_EXACT
+-- `77\n77` and close #1127.
+interface D a where
+  dm : a -> Int
+
+interface C a requires D a where
+  cm : a -> Int
+
+impl D Int where
+  dm _ = 1
+
+impl D (List a) requires D a where
+  dm _ = 20
+
+impl D (List Int) where
+  dm _ = 77
+
+impl C (List a) requires D a where
+  cm _ = 5
+
+useD : C a => a -> Int
+useD x = dm x
+
+main =
+  println (useD ([1] : List Int))
+  println (dm ([1] : List Int))

@@ -1,0 +1,25 @@
+-- DICT-SEMANTICS §6 C1 + §3 "Specificity": "Two instances with α-equal heads are
+-- ⊑-equivalent yet distinct, which C1 (§6) rejects as ambiguous -- DUPLICATE
+-- HEADS NEVER TIE-BREAK."
+--
+-- SPEC ANSWER (hand-derived): `match(IE, Tag Int)` = both impls. They are
+-- mutually ⊑ (identity substitution both ways), so there is no UNIQUE ⊑-minimal
+-- element and hence no minimum. `inst` is inapplicable and the program is
+-- REJECTED as ambiguous overlap -- "most-specific-wins is a total tie-break, not
+-- a licence to pick".
+--
+-- OBSERVED: check/run/build all REJECT with `T-CONFLICTING-IMPL`. CONFORMANT.
+--
+-- This is the floor beneath the whole overlap regime: an implementation that
+-- silently picked one (first-match, declaration order) would be nondeterministic
+-- across resolution paths, which is exactly #203.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag _ = 1
+
+impl Tag Int where
+  tag _ = 2
+
+main = println (tag (1 : Int))

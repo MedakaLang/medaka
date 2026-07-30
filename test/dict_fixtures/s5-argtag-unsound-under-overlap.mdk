@@ -1,0 +1,35 @@
+-- DICT-SEMANTICS §5 "Arg-tag dispatch is an OPTIMIZATION, not a semantics":
+-- "Overlap narrows this side condition sharply: a head tag alone does not
+-- separate overlapping instances below one constructor -- a `List` tag cannot
+-- distinguish the `List Int` instance from the `List a` instance -- so for any
+-- class with such overlap, arg-tag selection at that constructor is UNSOUND, not
+-- merely incomplete."
+--
+-- SPEC ANSWER (hand-derived): both calls pass a value whose runtime head tag is
+-- `List`, and each goal is matched by at least the parametric instance:
+--   `tag ([1] : List Int)`      -> match = {List a, List Int}, min⊑ = List Int  => 99
+--   `tag (["a"] : List String)` -> match = {List a} only                        => 10
+-- An arg-tag evaluator sees a `List` cons cell in both cases and must answer the
+-- same way twice; whichever it picks, one line is wrong. This is the minimal
+-- statement of the §5/§7 argument, with no nesting to confound it.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 99 then 10. CONFORMANT.
+--
+-- ⚠️ Agreement across engines is evidence here ONLY because the two lines
+-- disagree with EACH OTHER. Three engines agreeing on one line would prove
+-- nothing -- several known S0s have every engine equally wrong. And note the
+-- sibling fixture s3-min-fully-general-sibling.mdk (**#1128**): replacing
+-- `impl Tag (List a)` below with the FULLY GENERAL `impl Tag a` makes this exact
+-- discriminator fail silently on both engines. The two rows differ in one token.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag (List a) where
+  tag _ = 10
+
+impl Tag (List Int) where
+  tag _ = 99
+
+main =
+  println (tag ([1] : List Int))
+  println (tag (["a"] : List String))

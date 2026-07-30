@@ -1,0 +1,24 @@
+-- DICT-SEMANTICS §8 I3: "EVIDENCE TRAVELS, IT IS NOT RE-DERIVED. When a
+-- constrained binding crosses a module boundary, its callers discharge its
+-- residual predicates from THEIR ambient `P` (§4 `var`); THE BINDING ITSELF DOES
+-- NOT RE-RESOLVE THEM. This keeps a single derivation per predicate-occurrence
+-- and preserves C2/C3 across modules."
+--
+-- SPEC ANSWER (hand-derived): the only `impl Sz Coin` is declared HERE, strictly
+-- DOWNSTREAM of `prov.twice` -- `prov` does not import `main` and cannot see it.
+-- So `twice` provably could not have resolved this evidence itself; the dict is
+-- supplied by this call site. `twice (Coin 21)` = 21 + 21 = 42.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 42. CONFORMANT.
+--
+-- The downstream placement is the whole design of this fixture: with the impl in
+-- `prov.mdk` the row would pass under an implementation that re-resolves at the
+-- definition site, and would prove nothing about I3.
+import prov.{Sz, sz, twice}
+
+data Coin = Coin Int
+
+impl Sz Coin where
+  sz (Coin n) = n
+
+main = println (twice (Coin 21))

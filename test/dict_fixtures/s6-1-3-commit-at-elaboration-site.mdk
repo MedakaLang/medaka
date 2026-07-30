@@ -1,0 +1,49 @@
+-- DICT-SEMANTICS §6.1 choice-point 3: "Non-ground goals: SELECTION COMMITS AT
+-- THE ELABORATION SITE (specialization is not retroactive)." The spec flags this
+-- as the one place most-specific-wins is weaker than it looks, and says it
+-- "states it loudly rather than letting it be discovered". This fixture is that
+-- statement, executable.
+--
+-- SPEC ANSWER (hand-derived):
+--   line 1, `wrap (1 : Int)`. Inside `wrap : Tag a => a -> Int` the goal is
+--     `Tag (List a)` over a RIGID, signature-bound `a`. Only the general
+--     instance matches it, and it is discharged THERE, ONCE, when `wrap` is
+--     elaborated. "If `f` is later used at `a := Int`, `f`'s body still runs the
+--     general instance's evidence (closed over the caller's `Default Int` dict);
+--     it is NOT retroactively re-resolved." So the body runs `10 + tag y` with
+--     `tag` the caller-supplied `Tag Int` dict: 10 + 1               => 11
+--   line 2, `tag ([1] : List Int)`. A GROUND goal at the same predicate: the
+--     matching set has `Tag (List Int)` as its ⊑-minimum               => 99
+--
+-- So the SAME ground predicate `Tag (List Int)` receives DIFFERENT evidence at
+-- the two lines. §6.1.3 is explicit that this does not violate §6 coherence
+-- (which quantifies over derivations of the SAME judgment) and that GHC behaves
+-- identically -- "but it is real and observable".
+--
+-- OBSERVED: check/run/build all ACCEPT and print 11 then 99. CONFORMANT.
+--
+-- ⚠️ DO NOT "FIX" LINE 1 TO 99. A reviewer who reads only line 2 will read 11 as
+-- a most-specific-wins failure. It is the specified behaviour, and the
+-- alternatives §6.1.3 lists are (i) rejecting the generic code that motivates
+-- the general instance at all, or (ii) whole-program monomorphization, which §8
+-- rules out. If the owner ever revisits this trade, this row is the one to move.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag _ = 1
+
+impl Tag (List a) requires Tag a where
+  tag xs = match xs
+    (y :: _) => 10 + tag y
+    [] => 10
+
+impl Tag (List Int) where
+  tag _ = 99
+
+wrap : Tag a => a -> Int
+wrap x = tag [x]
+
+main =
+  println (wrap (1 : Int))
+  println (tag ([1] : List Int))

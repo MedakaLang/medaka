@@ -1,0 +1,26 @@
+-- DICT-SEMANTICS §3 well-formedness W1: "the superclass relation is ACYCLIC --
+-- otherwise `super`-search loops".
+--
+-- SPEC ANSWER (hand-derived): `P requires Q` and `Q requires P` is a cycle, so
+-- W1 fails and entailment is not decidable. The program must be REJECTED, and
+-- rejected STATICALLY -- a compiler that instead loops in `super`-search is the
+-- failure W1 exists to forbid, and would show up here as a hang, not a verdict.
+--
+-- OBSERVED: check/run/build all REJECT with `T-CYCLIC-SUPERINTERFACE`
+-- ("Cyclic superinterface: P requires Q requires P"). CONFORMANT.
+--
+-- The gate bounds every invocation at 60s, so a regression to the looping
+-- behavior surfaces as a row failure rather than a hung CI job.
+interface P a requires Q a where
+  pm : a -> Int
+
+interface Q a requires P a where
+  qm : a -> Int
+
+impl P Int where
+  pm n = n
+
+impl Q Int where
+  qm n = n
+
+main = println (pm (1 : Int))

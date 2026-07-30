@@ -1,0 +1,57 @@
+-- DICT-SEMANTICS §4 `gen-sig` second consequence (#619) + §3 `super` + §6 C2's
+-- transitive (diamond) form, in one program.
+--
+-- SPEC ANSWER (hand-derived):
+--   * SCHEME. `viaC : C a => a -> Int`. Its body calls `useB`, inferring
+--     `P'ᵢ = {B a}`. `C requires D, E` and both `D` and `E` require `B`, so
+--     `Q_sig = {C a}` entails `B a` under `requires`-closure. §4: "a predicate
+--     the body infers that `Q_sig` ALREADY ENTAILS VIA A SUPERCLASS is DROPPED,
+--     NOT DISPLAYED". So the scheme reads `C a => a -> Int`, NOT
+--     `(B a, C a) => a -> Int` (the pre-#619 behaviour: sound, but redundant and
+--     propagated to every caller).
+--   * VALUE. `viaC (W 10)` = `useB (W 10) + cm (W 10)` = `bm (W 10)` + (`bm (W
+--     10)` + 3) = 10 + 13 = 23. `useB`'s `B a` goal is discharged by `super`
+--     projection out of the in-scope `C a` dict -- pure projection into the
+--     nested record, "never a re-resolution" (§3).
+--   * DIAMOND. `C` reaches `B` along TWO superclass paths (via `D` and via `E`).
+--     C2's transitive form requires both to yield ≡ `B`-evidence. Here there is
+--     one `impl B W`, so either path gives 10 and the sum is 23 regardless --
+--     which is the point: a path-sensitive or flat representation is what
+--     "breaks first" (§6 C2), and it would break as a crash or a wrong sum, not
+--     as a disagreement this program could paper over.
+--
+-- OBSERVED: check ACCEPT, scheme `viaC : C a => a -> Int`, run/build print 23.
+-- CONFORMANT.
+interface B a where
+  bm : a -> Int
+
+interface D a requires B a where
+  dm : a -> Int
+
+interface E a requires B a where
+  em : a -> Int
+
+interface C a requires D a, E a where
+  cm : a -> Int
+
+data W = W Int
+
+impl B W where
+  bm (W n) = n
+
+impl D W where
+  dm w = bm w + 1
+
+impl E W where
+  em w = bm w + 2
+
+impl C W where
+  cm w = bm w + 3
+
+useB : B a => a -> Int
+useB x = bm x
+
+viaC : C a => a -> Int
+viaC x = useB x + cm x
+
+main = println (viaC (W 10))

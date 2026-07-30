@@ -1,0 +1,37 @@
+-- DICT-SEMANTICS §5, RESULT-POSITION case: "`ā_C` occurs only in the result
+-- (e.g. `pure : a -> F a` ...): there is NO ARGUMENT whose runtime tag reveals
+-- the instance. Dispatch is possible ONLY because `e` was determined statically
+-- by `var`/entailment. This is the formal reason return-position dispatch must
+-- go through the dictionary and cannot be an evaluator-time argument
+-- inspection."
+--
+-- SPEC ANSWER (hand-derived): `mk : Int -> a`. In `unRed (mk 1)` the surrounding
+-- context fixes `a := Red`, so `var` instantiates `Mk Red` and `(method)`
+-- projects the Red impl -> `Red 1` -> `unRed` -> 1. Symmetrically `unBlue (mk
+-- 2)` fixes `a := Blue` -> 2. Both calls have byte-identical ARGUMENTS (an Int
+-- literal) and differ only in the statically-resolved dictionary, which is
+-- exactly the discriminator §5 asks for: an arg-tag evaluator has nothing to
+-- inspect and must either pick one impl for both lines or crash.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 1 then 2. CONFORMANT.
+interface Mk a where
+  mk : Int -> a
+
+data Red = Red Int
+data Blue = Blue Int
+
+impl Mk Red where
+  mk n = Red n
+
+impl Mk Blue where
+  mk n = Blue n
+
+unRed : Red -> Int
+unRed (Red n) = n
+
+unBlue : Blue -> Int
+unBlue (Blue n) = n
+
+main =
+  println (unRed (mk 1))
+  println (unBlue (mk 2))

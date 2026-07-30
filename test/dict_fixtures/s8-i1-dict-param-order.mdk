@@ -1,0 +1,43 @@
+-- DICT-SEMANTICS §8 I1 / §4 `gen`, the ORDER half: "The dictionary parameters a
+-- generalized binding abstracts -- their COUNT, ORDER, and predicates -- are part
+-- of that binding's elaborated type", and §4 `gen`: producers abstract, consumers
+-- apply, "and the two must agree on ORDER AND ARITY of the dictionary
+-- parameters".
+--
+-- SPEC ANSWER (hand-derived): `pair2 : (Aa p, Bb q) => p -> q -> Int` abstracts
+-- TWO dict params, in the declared order (`Aa` then `Bb`), and every call site
+-- applies them in that same order. At `pair2 3 5`, `av 3` = 3 and `bv 5` = 500,
+-- so the result is 503.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 503. CONFORMANT. The emitted
+-- `define` for `pair2` takes FOUR parameters (2 dicts + 2 values), asserted
+-- structurally in the gate's IR section.
+--
+-- The two impls are deliberately asymmetric (`av n = n`, `bv n = n * 100`) and
+-- both live at `Int`, so the ONLY thing distinguishing the two dicts is their
+-- POSITION. A producer/consumer disagreement on order -- passing the `Bb` dict
+-- where `Aa` is expected -- swaps the two methods and yields 300 + 5 = 305, or
+-- crashes; it cannot coincidentally still print 503. Had the two interfaces been
+-- at different types, unification would have masked the swap.
+--
+-- Added after an adversarial review (F2) observed that every other ACCEPTED
+-- fixture in this corpus abstracts AT MOST ONE dict, and the only two-predicate
+-- signature in the corpus (s9-vector-valued-entailment-rejected) is a REJECT row
+-- that never reaches elaboration -- so dict-param ORDER was never exercised at
+-- all, while §8 I1's row read as covered.
+interface Aa a where
+  av : a -> Int
+
+interface Bb b where
+  bv : b -> Int
+
+impl Aa Int where
+  av n = n
+
+impl Bb Int where
+  bv n = n * 100
+
+pair2 : (Aa p, Bb q) => p -> q -> Int
+pair2 x y = av x + bv y
+
+main = println (pair2 (3 : Int) (5 : Int))

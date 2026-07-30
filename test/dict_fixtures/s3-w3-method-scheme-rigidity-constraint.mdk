@@ -1,0 +1,22 @@
+-- DICT-SEMANTICS §3 W3 (method-scheme fidelity), CONSTRAINT axis.
+--
+-- SPEC ANSWER (hand-derived): `mkv : a -> b` quantifies `b` at the METHOD level;
+-- W3 requires the impl body to inhabit that scheme with `b` RIGID -- "the body
+-- may not instantiate a `b ∈ b̄` to a constructed type". A body of `42` needs
+-- `Num b`, a constraint the declared scheme does not license, so every caller's
+-- free choice of `b` (a type with no `Num` impl) would break. REJECT.
+--
+-- OBSERVED: check/run/build all REJECT with `T-IMPL-TOO-SPECIFIC`. CONFORMANT.
+--
+-- This is the #814 vein (§10's last bullet): an impl body checked with FLEXIBLE
+-- method-scheme variables pins a variable the caller owns -- a type crash when
+-- pinned to a mismatched concrete type, silent EFFECT LAUNDERING when pinned to
+-- an effect-bearing one. The effect axis is EFFECTS-SEMANTICS' to gate; this row
+-- pins only that the type-axis check is live.
+interface Mk a where
+  mkv : a -> b
+
+impl Mk Int where
+  mkv _ = 42
+
+main = println (mkv (1 : Int) : Int)

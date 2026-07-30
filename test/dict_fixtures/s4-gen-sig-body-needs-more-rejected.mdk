@@ -1,0 +1,24 @@
+-- DICT-SEMANTICS §4 `gen-sig` side condition `Q_sig ⊩ P'ᵢ`, and §9 "Signature
+-- authority": "a signature is a CONTRACT THE BODY MUST SATISFY, NOT A FLOOR IT
+-- CAN RAISE".
+--
+-- SPEC ANSWER (hand-derived): the ascribed context is EMPTY, so `Q_sig = ∅` and
+-- `gen-sig` still fires. The body's `sz x` infers `P'ᵢ = {Sz a}`. `∅ ⊩ {Sz a}`
+-- fails, so the program is REJECTED with `T-MISSING-CONSTRAINT` -- "never
+-- silently widened to `Q_sig ∪ P'ᵢ`". Silent widening is the alternative this
+-- row exists to forbid: it would accept, and then every caller of `noCtx` would
+-- have to discharge a predicate the author never wrote.
+--
+-- OBSERVED: check/run/build all REJECT with `T-MISSING-CONSTRAINT`
+-- ("Could not deduce 'Sz a' from the signature of 'noCtx' ... add 'Sz a =>'").
+-- CONFORMANT.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz n = n
+
+noCtx : a -> Int
+noCtx x = sz x
+
+main = println (noCtx (7 : Int))

@@ -1,0 +1,79 @@
+-- DICT-SEMANTICS §5 PHANTOM POSITION, part 2 of 2: the DETERMINED use -- the
+-- discriminating half of the pair, and the row that shows the implementation's
+-- rule is strictly BROADER than the spec's.
+--
+-- 🚨 PINNED DIVERGENCE -- **#1134** (OPEN, S3: friction & debt, `verified`):
+-- "phantom-method rejection fires at the IMPL declaration and over-rejects -- a
+-- use with the dictionary in scope over a rigid tyvar is resolvable, and is
+-- rejected anyway". Constructed 2026-07-30 while correcting the ambiguous
+-- sibling (adversarial-review finding F5). The observed half was reproduced
+-- independently by the orchestrator before filing -- the caret lands on
+-- `phantom = 7`, the impl declaration, never on a use site.
+-- Severity as observed: **S3, an OVER-rejection** -- loud, located, and nothing
+-- unsound is accepted.
+--
+-- ⚠️ #1134 IS THE BEHAVIOURAL ISSUE; #1107 (d) IS THE SPEC ONE. They are not
+-- interchangeable and this row hangs on the first, not the second: #1107 (d) is
+-- spec-only and changes no behaviour, so a REJECT-pinned row could never drain on
+-- it -- see the long note at the bottom of this file for the full reasoning,
+-- which is worth keeping because it is the mistake an earlier revision made.
+--
+-- SPEC ANSWER (hand-derived): unlike the ambiguous sibling, NOTHING here is
+-- undetermined.
+--   * Inside `useBoth : Mk a => a -> Int`, the predicate `Mk a` is in scope as an
+--     assumption over the signature's RIGID `a`, so §3 `assum` discharges the
+--     goal directly -- "a constraint already in scope is witnessed by its bound
+--     variable", no `inst`, no search, nothing to be ambiguous about.
+--   * §5 `(method)` then projects `methods(e).phantom` out of that dictionary.
+--     This is exactly the case §5's phantom bullet describes: `ā_C` is absent
+--     from `τ_m`, so "only the static dictionary determines it" -- and here the
+--     static dictionary IS determined, by `assum`.
+--   * At the call `useBoth (Red 1)`, §4 `var` instantiates `a := Red` and
+--     discharges `Mk Red` against the one impl.
+--   Under the spec this program is ACCEPTED and prints 7.
+--
+-- OBSERVED: check/run/build all REJECT with `T-PHANTOM-METHOD`, at the IMPL
+-- ("Method 'phantom' in interface 'Mk' does not mention interface parameter(s)
+-- 'a'; cannot dispatch"). The rejection fires on the DECLARATION and never looks
+-- at a use site, so it cannot see that this one is fully determined.
+--
+-- 🔬 WHAT THE PAIR PROVES that neither row proves alone: the ambiguous sibling is
+-- rejected by BOTH spec and implementation, so it is compatible with a correct
+-- §5 implementation. This row is rejected ONLY by the implementation. Together:
+-- the implementation rejects a strict superset of what the spec rejects, and the
+-- extra rejections are programs the spec resolves.
+--
+-- ⚠️ THE DRAIN IS HUNG ON #1134, NOT ON #1107. An earlier revision pinned this
+-- finding to #1107 paragraph (d); that was wrong and the note is kept so it is
+-- not repeated: **#1107 is SPEC-ONLY and changes no behaviour** -- it closes by
+-- writing the missing §5 paragraph and leaves `checkPhantomMethods` untouched. A
+-- REJECT-pinned row would therefore stay green through #1107's entire lifetime,
+-- and a self-draining pin that cannot drain is worse than no pin at all.
+-- What this row DOES drain on is the BEHAVIOUR change #1134 tracks: it goes RED
+-- the day `checkPhantomMethods` is narrowed to reject only ambiguous USES, at
+-- which point it should be re-pinned to ACCEPT with value 7 and #1134 closed.
+--
+-- ⚠️ THE TWO RESOLUTIONS OF #1107 (d) MOVE IN OPPOSITE DIRECTIONS, and only one
+-- of them reaches this row automatically:
+--   * narrow the checker  -> #1134 closes AS A FIX, this row goes RED, re-pin it
+--                            to ACCEPT 7. Automatic.
+--   * forbid phantom methods in §5 -> #1134 closes AS WORKING-AS-INTENDED, the
+--                            verdict here becomes correct, NOTHING GOES RED, and
+--                            this row plus its ambiguous sibling must be
+--                            relabelled BY HAND. Not automatable.
+-- Whoever closes #1107 (d) owns that second case. Stated rather than papered
+-- over -- it is also recorded on #1134 itself so it survives outside this file.
+interface Mk a where
+  mk : Int -> a
+  phantom : Int
+
+data Red = Red Int
+
+impl Mk Red where
+  mk n = Red n
+  phantom = 7
+
+useBoth : Mk a => a -> Int
+useBoth _ = phantom
+
+main = println (useBoth (Red 1))

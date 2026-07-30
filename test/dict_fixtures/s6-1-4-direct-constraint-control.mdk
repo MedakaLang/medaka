@@ -1,0 +1,45 @@
+-- THE DISCRIMINATING CONTROL for s6-1-4-supers-per-construction-goal
+-- (**#1127**, the build-path S0). Byte-for-byte the same instance environment; the
+-- ONLY change is that the helper declares `D a` DIRECTLY instead of reaching `D`
+-- through `C`'s superclass edge:
+--
+--     bug row: useDdirect : C a => a -> Int   -- `dm x` goes via §3 `super`
+--     this row: useDdirect : D a => a -> Int  -- `dm x` goes via §3 `assum`
+--
+-- SPEC ANSWER (hand-derived): identical to the bug row's -- the goal is
+-- `D (List Int)` at both lines, whose ⊑-minimum is `impl D (List Int)`. 77, 77.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 77 then 77 -- including the
+-- NATIVE binary, which prints 20 on line 1 of the bug row. CONFORMANT.
+--
+-- Why the pair is the evidence and neither row is: the bug row alone is
+-- compatible with "min⊑ selection is broken for `D`", which is FALSE and would
+-- send a fixer at the selector. This row holds the selector, the instance set,
+-- the goal type and the call shape fixed and varies only the ENTAILMENT RULE
+-- that reaches the dict (`super` vs `assum`) -- so it localises the defect to
+-- the superclass-projection arm, and it will go red if a "fix" to that arm
+-- regresses the ordinary one.
+interface D a where
+  dm : a -> Int
+
+interface C a requires D a where
+  cm : a -> Int
+
+impl D Int where
+  dm _ = 1
+
+impl D (List a) requires D a where
+  dm _ = 20
+
+impl D (List Int) where
+  dm _ = 77
+
+impl C (List a) requires D a where
+  cm _ = 5
+
+useDdirect : D a => a -> Int
+useDdirect x = dm x
+
+main =
+  println (useDdirect ([1] : List Int))
+  println (dm ([1] : List Int))

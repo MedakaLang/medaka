@@ -1,0 +1,30 @@
+-- THE DISCRIMINATING CONTROL for s6.1c-per-goal-unique-min-rejected (#614/#311):
+-- the same program with `impl C (Pair Int Int)` -- the unique ⊑-minimum -- DELETED.
+--
+-- SPEC ANSWER (hand-derived): now `match(IE, C (Pair Int Int))` = {`Pair Int a`,
+-- `Pair a Int`}, which are ⊑-incomparable with no matching instance below both.
+-- No ⊑-minimum exists, so this is "ambiguous overlap" and BOTH condition (a) and
+-- condition (c) REJECT it. The verdict here is CONFORMANT under either reading.
+--
+-- OBSERVED: check/run/build all REJECT with `T-CONFLICTING-IMPL`, and the
+-- message is BYTE-IDENTICAL to its sibling's (it names only the first two
+-- impls). CONFORMANT verdict.
+--
+-- Why the pair is the evidence and neither row is: a gate holding only the
+-- sibling could be "explained" by a correct (c) implementation that merely has a
+-- bug. This row shows adding the unique ⊑-minimum -- the exact move §6.1 says
+-- rescues the program -- changes NOTHING, so the checker is condition (a) BY
+-- CONSTRUCTION: it fires pairwise at the `impl` site and never consults the goal
+-- or the rest of the instance environment. That is #614's own argument, pinned.
+data Pair a b = MkPair a b
+
+interface C a where
+  cname : a -> Int
+
+impl C (Pair Int a) where
+  cname _ = 1
+
+impl C (Pair a Int) where
+  cname _ = 2
+
+main = println (cname (MkPair 1 1))

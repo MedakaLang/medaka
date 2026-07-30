@@ -1,0 +1,38 @@
+-- THE ONE-TOKEN CONTROL for `s3-min-fully-general-sibling.mdk` (#1128).
+-- Byte-identical to that file except for a single token: the general impl's head
+-- reads `(Box a)` here and `a` there. Same interface, same concrete impl, same
+-- data type, same three call sites, same declaration order.
+--
+-- SPEC ANSWER (hand-derived): `Box Int ⊏ Box a`, so
+--   goal `Tag (Box Int)`    -> match {Box a, Box Int}, ⊑-minimum is Box Int => 99
+--   goal `Tag (Box String)` -> match {Box a} alone                           => 10
+--   goal `Tag (Box Bool)`   -> match {Box a} alone                           => 10
+--
+-- OBSERVED: check/run/build all ACCEPT and print 99, 10, 10. CONFORMANT.
+--
+-- Why this file exists: the #1128 row's comment previously named
+-- `s5-argtag-unsound-under-overlap.mdk` as its "one token away" control, which an
+-- adversarial review (F3) correctly rejected -- that fixture differs in the type
+-- constructor, the general head AND the call-site count, so it varies three
+-- things at once and isolates nothing. This file varies exactly one, which is
+-- what makes #1128's trigger claim (a BARE TYPE-VARIABLE general head, not the
+-- tycon and not overlap as such) an observation rather than an inference.
+--
+-- It also guards the fix: a change that makes #1128's row go green by breaking
+-- most-specific selection for parametric heads would red THIS row instead of
+-- passing silently.
+data Box a = Box a
+
+interface Tag a where
+  tag : a -> Int
+
+impl Tag (Box a) where
+  tag _ = 10
+
+impl Tag (Box Int) where
+  tag _ = 99
+
+main =
+  println (tag (Box (1 : Int)))
+  println (tag (Box "s"))
+  println (tag (Box True))

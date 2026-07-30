@@ -1,0 +1,4 @@
+-- UNCONSTRAINED binding sharing the surface name `widget` with lefty's. Its dict
+-- arity is 0, independently of lefty's 1 (DICT-SEMANTICS §8 I1).
+export widget : Int -> Int
+widget n = n + 200

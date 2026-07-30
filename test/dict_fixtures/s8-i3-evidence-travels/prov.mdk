@@ -1,0 +1,8 @@
+-- `twice` is elaborated HERE, where NO impl of `Sz` exists at all. Under
+-- DICT-SEMANTICS §8 I3 it does not need one: it abstracts the dict and its
+-- callers discharge the predicate from THEIR ambient `P`.
+export interface Sz a where
+  sz : a -> Int
+
+export twice : Sz a => a -> Int
+twice x = sz x + sz x
