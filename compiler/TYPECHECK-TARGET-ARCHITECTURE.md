@@ -746,6 +746,54 @@ orders merges, and the plan does not pretend otherwise.
   IMPLEMENTED claim); **(f) local-binder `gen`** (predicate deferral across
   nested binders, the value-restriction gate, evaluation-timing neutrality) —
   F-1's gate. Each lands with its enforcement-table row (L5).
+
+  ✅ **LANDED 2026-07-30 (#1107): all six, in `docs/spec/DICT-SEMANTICS.md`** —
+  (a) **§8 I4/I5**, (b) **§6.2**, (c) **§6.3**, (d) **§5.1**, (e) **§7.1**,
+  (f) **§4.1**, each with a §11 row. Three of them settle a question this document
+  left open or stated loosely, and the differences bind:
+  - **§6.2 T4/T5 adopt quiescence and explicitly REJECT freeze-at-module-close**,
+    the choice §2 S delegated here. But T3/T4's row records that today's drain is
+    keyed on the **module** boundary (`elabModuleStamp`) while the tyvar cells
+    outlive it — so quiescence *extends* today's behaviour rather than describing
+    it, and §2 S's parenthetical *"matching today's whole-module-then-stamp
+    behavior"* must be read as *extends*, not *describes*. **E-4's S-2(b) gate is
+    lifted.**
+  - **§8 I5's consequences of global candidacy are NOT one, and the list is derived
+    rather than enumerated** — a new candidate can change the outcome at whether a
+    `⊑`-minimum exists, at which instance it is, and at whether that instance's own
+    context is dischargeable. §5 R2 sees only the acceptance widening (1). The others
+    are (2) **new C1 ambiguity rejections**, where a newly-visible `⊑`-incomparable
+    instance destroys a minimum a smaller candidate set had; (3) **silent answer
+    changes**, where a newly-visible instance is strictly more specific than the
+    previous winner; and (4) **new rejections with C1 fully satisfied**, where the
+    newly-visible instance wins uncontested but its own `requires` context is
+    unsatisfiable and `inst` does not backtrack — an error naming an interface the
+    author never wrote, from a module they never imported. A-3's
+    could-not-pass-before fixture covers (1) only; (2), (3) and (4) each need their
+    own accounting in that PR, and (4) is the one with the worst diagnostic.
+  - **⚠️ Sequencing: E-4 (T4) must not land before A-3 (I5)** — §6.2 T4 now says so
+    normatively. Deferring commitment while candidacy is still the topological prefix
+    puts two candidate sets in one program (closed goals see the prefix at their
+    group's end, deferred goals see the whole accumulation), which is a C3/C4
+    violation the deferral itself creates. The DAG already orders A before E; this is
+    the semantic reason, not just a dependency.
+  - **§5.1 M3 decides (d) in the direction that NARROWS THE CHECKER**, so #1134 is a
+    fix: `test/dict_fixtures/s5-phantom-determined-use-rejected.mdk` goes red on the
+    fix and re-pins to ACCEPT `7`, and the "relabel by hand" contingency in both
+    phantom fixtures' headers does not apply.
+  - **One K-relevant relocation**: §5.1 **M2** (an impl may not define a method the
+    interface does not declare) is enforced **at resolve**, not typecheck —
+    `checkMethodMember` → `MethodNotInInterface` / `R-METHOD-NOT-IN-INTERFACE`, with
+    `inferImplMethod`'s own arm inert. §2 K lists impl completeness among the checks
+    that move to declaration-time analysis; this half of it already lives upstream of
+    typecheck, and A-3 should relocate it deliberately rather than discover it. (This
+    row was first recorded here as "no implementing site" — wrong, and corrected: the
+    search was scoped to `typecheck.mdk` and the check lives one stage earlier. §11's
+    preamble now carries that lesson.)
+
+  **F-1's S-2(f) gate is lifted**, with one constraint added: §4.1 **G4** forbids the
+  interim pin's shape by name — an implementation that cannot dict-abstract a local
+  must **reject** the multi-type use, never monomorphise (#1052).
 - **S-3. Enforcement tables for DICT and EFFECTS** (clause → site → keying
   assumption), SHADOW-§3-style, added to the specs and gated by the doc gates.
   The map's §4 spec column is the seed.

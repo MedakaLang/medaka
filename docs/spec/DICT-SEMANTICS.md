@@ -44,6 +44,24 @@ Terminology bridge (Medaka surface → theory; no implementation terms):
 | `requires` on an impl / `=>` in a signature | instance context / qualifier predicate |
 | dictionary (informal) | evidence value for a predicate |
 
+**Revision (2026-07-30): six rules that the implementation had been enforcing — or
+failing to enforce — with no governing clause are now written down** (#1107, Stage S
+of the typechecker target-architecture arc, epic #1122). They are **§4.1** (`gen` at a
+local binder: uniform abstraction, the value-restriction gate, evaluation-timing
+neutrality, predicate deferral), **§5.1** (impl completeness, extraneous methods, and
+where a phantom-method rejection belongs), **§6.2** (group scheduling and when `inst`
+may commit), **§6.3** (numeric-literal defaulting), **§7.1** (driver unimodality), and
+**§8 I4/I5** (module-qualified identity in every namespace; graph-global instance
+candidacy). Each carries a §11 row, and not one of those rows reads ENFORCED-as-stated
+— they are UNIMPLEMENTED, PARTIAL, DIVERGENT or HOLED. **These clauses describe the
+target, not the tree.** Two of them license behaviour changes stated in the clause
+itself rather than left to a migration to discover — **I5** (whose consequences are
+*derived*, not enumerated, and only one of which is an acceptance widening) and
+**§6.2 T4** (which carries a normative "not before I5" constraint). And one, **§4.1
+G3**, is explicitly a valid argument about a value set the implementation does **not**
+have (#1139), so it may not be cited as discharged: it is F-1's (#1082) gate, and the
+gate is not open.
+
 **Revision (2026-07-16): overlapping instances are specified.** Overlap with
 specialization — `impl Foo Int` alongside `impl Foo a`, the more specific
 instance winning — is an **intended Medaka feature** (owner decision); the
@@ -502,6 +520,125 @@ Reading.
 The arity and order of `(d₁:π₁)…(dₘ:πₘ)` are part of the binding's elaborated
 type and **travel with the binding's identity**, not its surface name.
 
+### 4.1 `gen` at a local binder
+
+`gen`, `gen-rec` and `gen-sig` are stated over `let`, and are therefore rules about
+**every** binder that generalizes: a top-level binding, an `impl` method, a class
+default, **and a `let`/`where` binding inside a body**. Nothing above distinguishes
+them. This subsection says so normatively, because the distinction has repeatedly
+been *read into* the rules by implementations, and reading it in is the structural
+cause of an entire defect family (#866 / #1040 / #1043 / #1045 / #1052; the remedy is
+tracked as #1082, gated on this clause).
+
+- **G1 — Uniform abstraction.** A local binding generalized over a predicate set `P'`
+  abstracts one dictionary parameter per predicate, exactly as `gen` states, and each
+  of its use sites applies them by `var`. `gen-rec` likewise governs a *recursive*
+  local: its recursive occurrences reuse the group's `d̄`, never a fresh entailment.
+  A local binding's dictionary arity and order are part of **its** elaborated type
+  and are keyed by **that binder's identity** — the local reading of §8 I1. Two
+  `where` helpers spelled `g` in two different bodies have independent dictionary
+  arities; a table keyed by the bare name `g` conflates them, with exactly the
+  under-/over-application I1 describes.
+
+- **G2 — The value-restriction gate, with the value set defined HERE.** A local
+  binding **may abstract dictionaries only where it generalizes at all**, and it
+  generalizes only where the value restriction licenses it: the bound expression must
+  be a **syntactic value**. A non-value local is monomorphic, has no quantified
+  variable for a predicate to range over, and therefore abstracts nothing. Dictionary
+  abstraction is not a *second* gate stacked on generalization — it is a consequence
+  of it. No local that fails the value restriction may acquire a `λd̄.` prefix.
+
+  **Definition (syntactic value).** `v` is a syntactic value iff it is a literal, a
+  variable, a lambda, or a **construction whose every component is a syntactic
+  value** — a tuple, a list literal, a record construction, or an application of a
+  data constructor, in each case with **all** parts syntactic values — modulo
+  location/origin wrappers and type ascriptions, which are transparent. A constructor
+  that allocates a **mutable cell** is not admitted at any position. Everything else
+  is *expansive*.
+
+  🚨 **This definition is given in full, rather than by naming the implementation's
+  predicate, and that is deliberate.** An earlier revision of this clause defined the
+  set as *"whatever `isNonexpansive` accepts"*. That is the #1093 shape — a rule
+  stated in terms of an existing relation silently inherits that relation's bugs —
+  and it inherited one: `isNonexpansive`'s constructor-application arm tests only the
+  **final** argument of the spine (`isNonexpansive (EApp f x) = isCtorAppHead (EApp f
+  x) && isNonexpansive x`, `compiler/types/typecheck.mdk:3550`, where `f` reaches only
+  `isCtorAppHead`, which walks to the head discarding every argument at `:3565`), so a
+  mutable cell in any non-final position is admitted. The three sibling arms
+  (`ETuple`, `EListLit`, `ERecordCreate`) each fold with `allList isNonexpansive`;
+  the constructor arm is the one that does not, and the source comment above it
+  asserts that it does (*"every spine argument is itself non-expansive"*, `:3547`).
+  **"All parts" above is the words that arm is missing.** Tracked as #1139.
+
+- **G3 — Evaluation-timing neutrality, and exactly what it is contingent on.**
+  Wrapping a bound expression `e` as `λd̄. e` moves `e`'s evaluation from binding time
+  to each use. **For the value set G2 defines, that is unobservable**, and the
+  argument is what makes G2 the *right* gate rather than a convenient one: every such
+  value's evaluation performs no effect, cannot diverge or panic, and allocates
+  nothing whose identity a program can observe — mutable-cell constructors are
+  excluded from the value set at every position **precisely so that generalizing them
+  stays sound**, which is the same exclusion this argument needs. Re-evaluating such
+  a value per use can therefore change *allocation cost* and nothing else. Anything
+  that could raise, diverge, or perform on evaluation is expansive, is not
+  generalized, and is never wrapped.
+
+  🚨 **This is a valid argument about G2's set, NOT a discharged theorem about the
+  tree, and the difference is load-bearing because this clause is F-1's (#1082)
+  gate.** The implementation's value predicate is **not** G2's set: by the ⚠️ above it
+  admits a mutable cell in a non-final constructor argument, and such a binding is
+  generalized today (#1139 — `check` clean, `run` `E-NOT-A-FUNCTION`, native
+  SEGFAULT). Wrapping *that* binding in `λd̄.` would additionally re-allocate the cell
+  per use, so neutrality does not hold for it either. **An implementation may not cite
+  G3 while its value predicate is holed:** either the predicate is repaired to G2's
+  set first, or the dict-abstraction of locals is restricted to a set that is
+  independently shown to satisfy G2. Landing F-1 on the current predicate would take
+  a live unsoundness and give it a second, calling-convention-shaped channel.
+
+  ⚠️ **Why the argument has to be made at a local binder at all** — the top-level case
+  looks like it never needed it, and the reason is *not* established. A top-level
+  binding is gated by the same value predicate (`memberClauseIsValue`,
+  `compiler/types/typecheck.mdk:16023`, calling the same `isNonexpansive`), and once
+  it is dict-abstracted its body is likewise re-entered per use, so "evaluated at most
+  once per program" is a claim about **CAF memoization of a nullary top-level
+  binding** — which this document has **not verified** and does not assert. Treat the
+  top-level/local asymmetry as unestablished. What does not depend on it: a proposal
+  to "generalize locals a little more eagerly than the value restriction allows" is
+  not an ergonomic loosening of G2, it is a proposal to move evaluation, and it owes
+  this argument again from scratch.
+
+- **G4 — Predicate deferral across nested binders.** Let a local binding `b` sit
+  inside an enclosing binder `E`. Partition the predicates `b`'s body infers by the
+  variables they mention:
+  - every variable is generalizable at `b` ⇒ the predicate is **`b`'s own**: `gen`
+    abstracts it on `b`, and each use site of `b` discharges it by §3 in `E`'s scope;
+  - some variable is free in `E`'s environment (it belongs to `E`, or to a binder
+    outside `E`) ⇒ the predicate is **deferred outward**, unchanged, to the nearest
+    enclosing binder that generalizes that variable; `b` abstracts nothing for it;
+  - some variable is **rigid** (bound by `E`'s ascribed signature) ⇒ the predicate is
+    discharged **in place** by `assum` against `E`'s own dictionary parameter (§3
+    precedence), and abstracted nowhere.
+
+  A predicate mixing the first two kinds is **`b`'s own** — abstracted on `b` — and
+  its discharge at each use site is an ordinary §3 goal in `E`'s scope. That goal may
+  succeed by `assum` (when it matches structurally: §3's matching is on rigid
+  variables, never unification), succeed by `inst`, or **fail**, in which case the
+  **use site** is rejected.
+
+  🚨 **It is never discharged by monomorphising `b`, and that prohibition is
+  normative.** The tempting shortcut for a local an implementation cannot yet
+  dict-abstract is to decline generalization and let unification sort it out. That is
+  unsound the moment two use sites instantiate the predicate's variable at two
+  *distinct* types: monomorphising `b` unifies them, and when those are `E`'s own
+  rigid signature variables it merges two variables the signature declared distinct —
+  silently collapsing `E`'s dictionary parameters so one use runs on the other's
+  evidence. #1052 is exactly that program (`useTwo : (Sized a, Sized b) => …` sharing
+  one `where` helper: printed `2` where this clause says `3`, on both engines, exit
+  0, no diagnostic). Under G4 the helper abstracts `Sized c` and the two uses
+  discharge by `assum` against `E`'s two distinct dictionary parameters, which is the
+  specified answer. **An implementation that cannot yet abstract locals must REJECT
+  the multi-type use with a located diagnostic; declining to generalize is not an
+  admissible approximation of this clause, it is a different and unsound rule.**
+
 ---
 
 ## 5. Method dispatch, including return position
@@ -544,6 +681,98 @@ dispatch and must never be the *only* mechanism, because result/phantom-position
 methods have no such argument. A semantics that decides dispatch in the
 evaluator is therefore wrong in general; §7 makes the evaluator dictionary-
 directed and demotes arg-tag to an admissible optimization.
+
+### 5.1 What a dictionary must contain, and where an undispatchable method is rejected
+
+§3 `inst` fills `methods` from `I`'s impl and `(method)` projects out of it. Three
+well-formedness rules follow. None was written down before; each is stated here, at
+the clause whose meaning it protects.
+
+- **M1 — Impl completeness.** For `I = (instance Q ⇒ C T̄)`, `I` must supply a body
+  for every method of `C` for which `CE` records no default. `inst` builds
+  `methods = φ(impl_C)`; a missing method leaves `methods(e).m` undefined, so
+  `(method)` has nothing to project and the program has no meaning. The rejection
+  belongs at the **impl declaration**: it is a property of `I` and `CE` alone,
+  decidable with no use site in hand, and there is no goal to attribute it to.
+
+- **M2 — No extraneous methods.** `I` may not supply a body under a name that is not
+  a method of `C`. Such a body inhabits no method scheme, so §3 **W3** has nothing to
+  check it against and `(method)` can never project it: it is code the type system
+  has not looked at and the program cannot reach. Rejecting it is the only reading
+  under which W3's *"the dictionary's method values must actually inhabit those
+  schemes"* quantifies over the whole dictionary rather than over an implementation's
+  choice of which entries to notice.
+
+  **Why M2 must be its own clause and cannot be left to M1.** When the extraneous name
+  is a near-miss for a method with **no** default, M1 already rejects the impl, so M2
+  adds only a better message. When it is a near-miss for a method that **does** have a
+  default, M1 is silent by construction — the default fills the slot, and without M2
+  the misspelled body would be unreachable, never typechecked, and the program would
+  run the default while its author believed it ran the override. That case is the
+  whole reason the clause exists, and it is the one M1 structurally cannot see.
+
+  ✅ **ENFORCED, at resolve rather than typecheck** — `checkMethodMember`
+  (`compiler/frontend/resolve.mdk:1252`) → `MethodNotInInterface`,
+  code `R-METHOD-NOT-IN-INTERFACE`; so M2 is a description of current behaviour, not a
+  narrowing. See the §11 row for the one thing that *is* owed (the diagnostic's
+  location) and for the keying assumption it rests on.
+
+- **M3 — A phantom method is legal at the declaration; an undetermined *use* is not.**
+  A method `m : ∀ā_C. C ā_C ⇒ τ_m` whose `τ_m` mentions no `a ∈ ā_C` (§5's *phantom
+  position*) is a well-formed declaration. §5 already says what such a method means —
+  *"only the static dictionary determines it"* — and §3/§4 already say when that
+  dictionary exists, so no new rule is needed for the accept case. What is needed is
+  the placement of the **reject**, and it is not new either: it is `var` failing to
+  discharge `C ?ā` with `?ā` unconstrained, which is the rejection any undetermined
+  predicate already gets. Concretely, with `interface Mk a where mk : Int -> a;
+  phantom : Int`:
+  - `phantom` used inside `f : Mk a => …` is **accepted**. `Mk a` is in scope over the
+    signature's rigid `a`, `assum` discharges it (§3 precedence — no `inst`, no
+    search, nothing undetermined), and `(method)` projects `methods(e).phantom`. At a
+    call `f (Red 1)`, §4 `var` instantiates `a := Red` against the matching impl.
+  - `println (phantom : Int)`, with no `Mk` in scope, is **rejected**. The annotation
+    fixes `τ_m`, which §5 says is irrelevant here, and nothing fixes `ā_C`.
+
+  ⚠️ **The rejection has TWO mechanisms, and citing only the first is incomplete.**
+  Where every visible instance of `C` has a rigid head (the shape above — `impl Mk
+  Red` and nothing more general), `match(IE, C ?ā)` is **empty**: matching is one-sided
+  from head to goal (§3), and no substitution on a ground head produces a
+  metavariable, so `inst` is inapplicable and the rejection is `var` failing to
+  discharge, as stated. Where a **fully-general** `impl C a` is also visible, that is
+  no longer true: `match(IE, C ?ā)` is non-empty with a unique `⊑`-minimum, so `inst`
+  would fire and pick it — and the program would be *accepted* with `?ā` still
+  undetermined, which is meaningless rather than wrong-but-defined. In that case the
+  rejection comes from **§6.2 T4**: a goal still not closed at quiescence is
+  ambiguous, and is rejected there. The verdict is the same either way; the mechanism
+  is not, and an implementation that only implements the first will accept the second
+  shape.
+
+  An implementation **MAY** warn at the declaration that a phantom method is usable
+  only under an ambient assumption. **Acceptance is per use site.**
+
+  ⚠️ **The parallel with §6.1 choice-point 2 goes only part of the way, and the part
+  it does not go is the load-bearing one.** There, the declaration-time condition (a)
+  *implies* the per-goal condition (c), so a declaration-time rejection is merely
+  *early* — never wrong. Here it does not: *"this method mentions no class
+  parameter"* and *"this use's class parameter is undetermined"* are **logically
+  independent**. A phantom method has determined uses (the first bullet above), and a
+  non-phantom method has undetermined ones. So a declaration-time *rejection* is not
+  a conservative approximation of M3; it is a strictly broader and different rule,
+  and every program in the difference is one this document resolves. That difference
+  is tracked as **#1134** and pinned as
+  `test/dict_fixtures/s5-phantom-determined-use-rejected.mdk`; its ambiguous sibling
+  `…-ambiguous-use-rejected.mdk` is conformant on the verdict and stays conformant
+  under M3, with the caveat in its header now settled rather than open.
+
+  ✅ **Which of #1134's two directions this clause takes, so nobody has to re-derive
+  it.** Both fixtures' headers enumerate two opposite resolutions and note that only
+  one reaches them automatically. M3 takes the first: **§5 keeps licensing phantom
+  dispatch, so the checker narrows to reject only the undetermined use.** Therefore
+  `s5-phantom-determined-use-rejected.mdk` goes **red** the day that lands — which is
+  the drain working — and is re-pinned to ACCEPT with value `7`. The second direction
+  (forbid phantom methods in §5), under which nothing goes red and both rows need
+  relabelling by hand, is **not taken**, and that contingency in the fixtures' headers
+  can be struck rather than carried forward.
 
 ---
 
@@ -719,6 +948,247 @@ to it later is a semantics change, not a bug fix.
    point 3 — consistently with what top-level resolution at that same goal
    would produce, so uniformity is preserved there too.)
 
+### 6.2 Scheduling, and when `inst` may commit
+
+§3 requires selection to be a function of `(IE, CE, P, π)` and of nothing else —
+*"never of search order, declaration order, or resolution position"*. An
+implementation that elaborates a program in pieces therefore owes a statement of
+**when** each piece's goals are decided: a commitment taken before a goal's type is
+final is a commitment taken at a different `π` than the one the program means, and
+"which piece I was in when I committed" is precisely a resolution position. This
+subsection is that schedule. It fixes the semantics; how many passes realize it is
+an implementation matter.
+
+- **T1 — Binding groups.** Bindings are partitioned into **groups**. A group is a
+  strongly-connected component of the reference graph over the bindings of **one
+  module**: a mutually-recursive set is one group (`gen-rec` gives it one shared
+  `λd̄.` prefix over the whole group); a non-recursive binding is a group of one.
+  Groups are elaborated in a topological order of that graph, dependencies first, and
+  modules in the loader's own dependency-first order — so the whole graph's group
+  order is the concatenation. That order exists, and no group can reference a later
+  group: within a module, a reference from an earlier group to a later one would put
+  both in the same SCC; across modules, an import cycle is rejected by the loader, so
+  **no group ever spans two modules**.
+
+  ⚠️ **The node set is every binding whose body is inferred, not just the ones that
+  look like a dependency graph's nodes.** `impl` method bodies, class default bodies,
+  and any other body the elaborator visits are bindings under T1, and a schedule that
+  enumerates only top-level function definitions has silently left them unscheduled —
+  which reads as "they work" for exactly as long as something else happens to infer
+  them at a point where the schedule's guarantees happen to hold.
+
+- **T2 — What a later group may observe of an earlier one.** A later group observes
+  an earlier group's **scheme**: its quantifiers, its principal context (`P'` for
+  `gen`, `Q_sig` for `gen-sig`), and the arity and order of its dictionary parameters
+  (§8 I1). It observes **nothing else** — not which instance any goal inside the
+  earlier group resolved to, not any evidence value, not any route. This is what
+  makes `var` at a use site a *fresh* application of §3 (§8 I3) rather than a lookup
+  of somebody else's answer, and it is why two use sites of one binding may legally
+  receive different evidence.
+
+  One consequence must be stated rather than left to be discovered: for a
+  **non-generalized** (value-restricted) binding the "scheme" a later group observes
+  is a monotype containing **live metavariables**, physically shared with the
+  observer. A later group can therefore *ground* an earlier group's type. That is not
+  a leak — it is the ordinary meaning of a monomorphic binding — but it is exactly
+  the channel T3 and T4 exist to regulate.
+
+- **T3 — Generalization is final per group; `inst` is not.** `gen`/`gen-rec`/`gen-sig`
+  fire when a group finishes, and the scheme they produce is final. `inst` is
+  different. It may fire on a goal only when that goal is **closed**: every variable
+  in `π` is either quantified by the scheme just produced (so no later unification
+  can reach it) or already ground. The goals of a **non-generalized** binding are not
+  closed at their group's end, by T2's last paragraph — so committing them there
+  would make instance selection a function of where a group boundary happened to
+  fall, which §3 forbids in as many words.
+
+- **T4 — Quiescence.** Route resolution, `inst` commitment for goals not closed at
+  their group's end, and numeric-literal defaulting for the same (§6.3) run as
+  **whole-graph post-passes at quiescence** — after every group of every module of
+  the graph has been inferred, in one pass, in one written order. At quiescence every
+  metavariable that anything in the program can determine has been determined, so the
+  goal `inst` sees is the goal the program means. A goal still not closed at
+  quiescence is genuinely undetermined: nothing in the program fixes it, and it is
+  **rejected as ambiguous** — never committed to a default instance, and never left
+  to an engine to pick.
+
+  Note what quiescence is *not* waiting for. `IE` and `CE` are assembled once, before
+  any body is elaborated, and do not grow during elaboration (C4, §8 I2/I5) — so the
+  only thing that changes between a group's end and quiescence is **the goal**. If
+  `IE` could still grow, deferring would be a second, independent order-dependence
+  rather than a cure for the first; it is I5 that makes T4 a purely beneficial delay.
+
+  🚨 **Normative migration constraint: T4 MUST NOT be implemented before I5.** This is
+  not advice about ordering work, it is a condition on T4's soundness. While candidacy
+  is still assembled incrementally — the topological-prefix behaviour §11's I5 row
+  records — deferring some goals to quiescence puts **two different candidate sets in
+  one program**: a closed goal commits at its group's end against the prefix visible
+  *then*, while a deferred goal resolves against the whole accumulation. Two goals in
+  the same program would then be answered from different instance environments, which
+  is a C4 violation outright and a C3 violation in effect — and, unlike the
+  order-dependence T4 exists to cure, this one would be **created by the deferral
+  itself**. An implementation that lands T4 first has made the problem worse in the
+  name of fixing it.
+
+- **T5 — The alternative is REJECTED, explicitly.** The alternative schedule is
+  *freeze at the module boundary*: when a module closes, reject any of its goals
+  still carrying a free metavariable as ambiguous, so that commitment is only ever
+  taken on a closed goal. It is **sound** — it never commits at a non-final type —
+  and it is nearer to what implementations naturally do, since a module's inference
+  state is normally torn down when the module closes. It is rejected for two reasons,
+  neither of which is convenience:
+  1. **It narrows the language.** A binding whose type only a later module determines
+     is well-formed under T4 and rejected under T5, with a diagnostic the author
+     cannot act on where it is reported (*"ambiguous"* — but it is not; a later
+     module determines it). Every other acceptance change in this document's vicinity
+     is a widening carried by a program that could not previously be written. A
+     narrowing has no such witness, and this one has no compensating soundness gain
+     over T4.
+  2. **It makes module partitioning semantically significant.** Moving two bindings
+     between files, changing nothing else, would change whether the program is
+     accepted. §3's order-freedom requirement is exactly the refusal to let that class
+     of fact matter, and C4's single global `IE` is the same refusal one level up.
+
+- **T6 — What T4 costs, stated rather than discovered.** Under T4 the elaboration of a
+  module is a function of the **whole loaded graph**, not of the module and its
+  imports. For the bindings T4 covers — the non-closed ones — that forecloses
+  elaborating a module once and reusing the result across different entry graphs.
+  This is the same price §6.1.3's alternative (ii) is rejected for, and it is bounded
+  in the same way: it applies to non-closed goals **only**. Every *closed* goal —
+  which is every goal of every generalized binding, and every ground goal — still
+  commits where it stands, at its own elaboration site, per §6.1.3, unaffected.
+
+  ⚠️ **T4 is not retroactive re-elaboration, and that distinction is the whole of why
+  it is compatible with §6.1.3.** §6.1.3 refuses to *re-resolve* a goal already
+  discharged at a rigid or generalizable variable, when a later instantiation would
+  make a more specific instance match. T4 re-resolves nothing: a non-closed goal is
+  discharged **exactly once**, at the one type the program gives it, later than a
+  naive schedule would have. Reading T4 as licence to revisit a settled commitment
+  reinstates alternative (ii) and is not what it says.
+
+### 6.3 Defaulting for numeric literals
+
+An integer literal elaborates as a `Num`-constrained value, so a program with no
+other constraint on a literal's type poses a goal `Num ?a` with `?a` undetermined.
+Rejecting every such program is unusable, so the language **defaults** the variable.
+Defaulting is a *solving* step, not an inference step, and it owes three statements:
+where it sits, which variables it may touch, and what it is not allowed to do.
+
+- **D1 — Placement.** Defaulting is the **last determination step** at the boundary it
+  runs at, and therefore runs:
+  * **after** the boundary's bodies are inferred — nothing later can constrain the
+    variable *through the body*;
+  * **before** generalization at that boundary — a defaulted variable must not be
+    quantified, or the choice becomes per-use rather than per-literal;
+  * **before** any check that rejects on an undetermined variable: the ambiguity
+    rejection of §6.2 T4, and the obligation checks of §4 `var`.
+
+  The third is normative, not tidiness. Run in the other order, a program whose only
+  problem is an undefaulted literal is reported as an *interface ambiguity* — a
+  diagnostic about a rule the program did not break, pointing at machinery the author
+  never used.
+
+  ⚠️ **"The boundary it runs at" is plural, and reconciling that with §6.2 T4 is part
+  of the rule, not a loose end.** A candidate variable the boundary **closes** — one
+  it is about to quantify, or one nothing outside it can reach — is defaulted **at
+  that boundary**, before it generalizes. A candidate variable that survives its
+  boundary as a live metavariable (§6.2 T2's non-generalized case) has not had its
+  last chance yet: something later may still ground it, and defaulting early would
+  pre-empt a determination the program actually makes. It is therefore defaulted **at
+  quiescence** (T4), under this same D1 ordering relative to the checks that run
+  there. Read either half alone and D1 and T4 look like two different placements. They
+  are one rule — *default at the last point that can still determine the variable* —
+  applied at the two points where "last" can fall.
+
+- **D2 — Defaulting never discharges.** Defaulting **substitutes**: it makes `?a`
+  ground, and does nothing else. Every predicate on that variable — including `Num`
+  itself — is afterwards checked exactly as it would have been had the program
+  written the type out. A defaulted variable carrying a predicate the default does
+  not satisfy yields a **rejected** program, never a silently accepted one. An
+  implementation that treats a defaulted variable's obligations as already discharged
+  has turned a convenience into a soundness hole.
+
+- **D3 — Which variables (the taint rule).** A variable is a defaulting **candidate**
+  iff
+  1. some predicate on it is `Num`, **and**
+  2. **no channel that outlives the boundary can determine it.**
+
+  Clause 2 is the substantive half, and it must be stated **by channel**, not by
+  syntactic position, because the available channels differ by binder kind. The
+  channels are: an **argument** the caller supplies; the binding's own **result**,
+  when the binding's type is a *declared* scheme somebody else instantiates; and a
+  **dictionary** — an abstracted `d̄` (§4 `gen`), the method dictionary of an
+  `impl`-method body, or the matcher `φ` of the instance head that body is checked at
+  (§3 `inst`) — each of which lets a caller or a construction goal choose the
+  variable.
+
+  🚨 **Clause 2's dictionary channel is evaluated as the channels stand BEFORE
+  generalization, and that is a resolution of a circularity, not a refinement.** At a
+  binding whose type is *inferred*, whether it abstracts a `d̄` at all is an **output**
+  of `gen` — which D1 orders *after* the test that would consult it. Read naively,
+  clause 2 asks a question whose answer does not exist yet. The rule is therefore:
+  **only a `d̄` that exists independently of this boundary's generalization decision is
+  a channel** — a `gen-sig` binding's declared `d̄_sig`, an `impl`-method body's method
+  dictionary, the matcher `φ` of the instance head it is checked at. A dictionary
+  parameter that generalization *would* mint for this very binding is **not** a
+  channel, because the whole point of defaulting is to decide, first, whether there is
+  anything left to generalize over.
+
+  Two consequences fall out. The first is the direct application of that resolution,
+  and it is a **flagged design choice only in which direction the circularity is cut**:
+  * **At a binding whose type is inferred and about to be generalized, result position
+    is NOT a determination channel.** `let n = 1` grounds; it does not generalize to
+    `∀a. Num a ⇒ a`. This is a deliberate monomorphism-for-`Num` restriction — the
+    same trade Haskell's monomorphism restriction and `default` declaration make.
+    *Alternative:* generalize, and let each use choose. **Rejected here**, because it
+    makes the representation of the literal `1`, and hence which `Num` impl runs, a
+    property of the *use site* rather than of the literal — the very
+    position-dependence this rule exists to remove.
+    ⚠️ **Cross-reference §4.1 G4, which reads as a contradiction of this bullet and is
+    not one.** G4 says a local binding's own predicates are abstracted on it and
+    discharged per use site — which for `let n = 1` would mean a `Num` dictionary
+    parameter and a per-use choice, exactly what this bullet forbids. They reconcile
+    **only through D1's ordering**: defaulting runs *before* generalization, so by the
+    time G4's partition is computed there is no `Num` predicate left on that variable
+    to abstract. Without D1's ordering the two clauses genuinely conflict, and the
+    conflict becomes reachable the moment locals are dict-abstracted at all (§11 G1 —
+    #1082). **Anyone landing #1082 must land it under D1's ordering**, not alongside it.
+  * **At an `impl`-method body, result position IS a determination channel**, because
+    both the method's declared scheme and the instance head are instantiated by
+    somebody else. `empty : a` at `impl Monoid (Acc b)` has its `b` chosen by the goal
+    `Monoid (Acc Float)`; grounding it inside the impl would monomorphise a variable
+    the construction site had already fixed.
+
+  ⚠️ These two are not in tension, and the difference is **not** "result position
+  behaves differently in two places". In the first case the variable belongs to a
+  type this binder is about to **quantify**; in the second it belongs to a scheme
+  somebody else **instantiates**. It is one rule — *no surviving channel* — read
+  against two different sets of channels.
+
+  🚧 **Open, and deliberately not settled here.** Whether the *instance head's*
+  matcher is a channel for a **body-local** literal whose variable appears nowhere in
+  the method's own type is not settled by the paragraph above. This document says it
+  is (the `Acc b` case). **#563** records the implementation grounding such a variable
+  to `Int` and panicking at `Acc Float`, and #563 closes against this clause. The
+  residual question is the opposite direction: whether treating the head as a channel
+  can **under**-default and leave a genuinely undetermined variable live at
+  quiescence. No such shape has been constructed. One should be looked for before
+  this bullet is promoted from *specified* to *settled*.
+
+- **D4 — Scope, and the level discipline.** Defaulting, and the ambiguity check that
+  follows it, are scoped to the variables the boundary **owns**. A variable belonging
+  to an inner binder that has already generalized and been checked must not be
+  defaulted or reported here — its obligation merely leaks into this boundary's
+  window. A variable belonging to an **enclosing** binder must not be defaulted here
+  either, since that binder still has channels open. Expressing "belongs to this
+  boundary" requires the boundary to have a **level** — the ordinary Hindley–Milner
+  binding level, entered before its bodies and exited before defaulting — because
+  "this boundary's obligations" and "this boundary's variables" are different sets
+  and only the level distinguishes them. A boundary with no level discipline can
+  state the first half of D4 and not the second, and therefore cannot host the
+  ambiguity check at all. **#564** records that prerequisite for the `impl`-method
+  body boundary, and #564 closes against this clause.
+
 ---
 
 ## 7. Core operational semantics and the single-evaluator law
@@ -762,6 +1232,59 @@ This law is the formal statement of the unification the implementation has been
 moving toward: elaboration is the *only* place dispatch is decided, and the
 evaluators are interchangeable refinements.
 
+### 7.1 Driver unimodality: a single file is a 1-module graph
+
+The single-evaluator law fixes that dispatch is decided **in elaboration** and
+nowhere else. It is silent on how many *elaborations* there are, and that silence has
+been read as licence for two — a whole-program "flat" path for a single file, and a
+per-module path for a graph. It is not.
+
+- **U1 — The unit of elaboration is a module graph.** A single source file is the
+  module graph with exactly one node, its import set being empty. The prelude is a
+  node like any other (`SHADOW-SEMANTICS.md` S1: *"the PRELUDE IS A MODULE"*, whose
+  own bodies are therefore not in the user's shadow scope). There is no smaller unit
+  of elaboration and no second mode.
+
+- **U2 — No clause may be conditioned on the number of modules.** Every rule in this
+  document holds of a 1-node graph by holding of graphs; none of them may be
+  restated, relaxed, or re-ordered for the degenerate case. Any observable difference
+  between elaborating a program as a single file and elaborating it as the 1-node
+  graph containing it is a **defect**, not a configuration — by §7 the two *are* two
+  elaborations, and two elaborations that can disagree about a dispatch decision are
+  two semantics, which is the same violation as an eval-vs-emit fork.
+
+  The two rules that make the degenerate case non-trivial, and that a flat path
+  therefore has to re-derive rather than inherit, are worth naming: **§6.2 T1**'s
+  group order is over one unit either way, but **C4/§8 I5**'s instance environment and
+  **SHADOW S1**'s per-module shadow scoping both quantify over *modules*, and a path
+  that flattens the prelude into the user's program has erased the boundary both of
+  them are stated against.
+
+**The place someone will push back, and what U2 actually says about it.** The doctest
+runner splits on whether the file under test has imports (`runChosen`,
+`compiler/tools/test_cmd.mdk:213-216`, on `hasUseDecls`), and the split is deliberate
+and documented. It is **not** a second elaboration mode — `runSingle`'s own comment
+says so (*"route the degenerate no-import file through the SAME multi-module path …
+the 1-module wrappers"*, `:225-227`), and both arms reach `elaborateModules`. So U2 is
+not violated by the split *as a driver choice*. What the split carries is a residual
+**flatten**: the prelude is concatenated into the user's declaration list rather than
+being a node of the graph, which is why the no-import arm must first compute
+`livePrelude` = *"the shadow-dropped core"* (`dropShadowedExp`, `:237-240`) and why it
+needs a `programIsCore` guard (`:255`) to avoid double-declaring everything when the
+file under test *is* the prelude. Under **U1** the prelude is a node like any other,
+so a genuine 2-node graph needs neither the pre-drop nor the guard — SHADOW S1's
+per-module scoping already answers the question they exist to work around. **Those two
+are defects of the flatten, not legitimate 1-module behaviour**, and U2 is what makes
+that judgement rather than leaving it to taste.
+
+⚠️ **U1/U2 are clauses, not a description of the current state, and that difference
+has already misled.** `compiler/DRIVER-COLLAPSE-PLAN.md` records U1 as its own
+governing invariant (*"the degenerate 1-module case automatically satisfies the flat
+path's invariants"*) and carries the status **IMPLEMENTED**. It is not implemented: a
+second mode is live, and its consumers are live production paths rather than
+remnants (see the §11 row). U1 is what that plan was trying to state; its status line
+is **superseded by this clause** and must not be read as evidence that U1 holds.
+
 ---
 
 ## 8. Identity, arity, and cross-module elaboration
@@ -789,6 +1312,108 @@ module-qualified identity.
   *their* ambient `P` (§4 `var`); the binding itself does not re-resolve them.
   This keeps a single derivation per predicate-occurrence and preserves C2/C3
   across modules.
+
+- **I4 — Identity is module-qualified in every namespace, and a collision surfaces at
+  the USE site.** I1 states this for value bindings; it is a property of every
+  declaration, and the rest of this document depends on the general form. Every
+  declaration — **top-level** value binding, type constructor, type alias, data
+  constructor, record and each of its fields, interface, and interface method — has an
+  identity `(originModule, name)`, assigned once where it is declared. (A **local**
+  binder needs an identity too, and `(originModule, name)` is not one for it: two
+  `where` helpers spelled `g` in one module are distinct. Local binder identity is
+  §4.1 G1's, and I4 does not attempt to give it.) Every occurrence is
+  resolved to one such identity **before** entailment or elaboration runs, and all
+  downstream keying is on the identity: dictionary arity and order (I1), instance
+  lookup (I2), method schemes, record-field ownership, interface parameter kinds, and
+  every cross-module table. A key that is a bare `String` name is, by this clause,
+  not a key.
+
+  Two modules **may** declare the same name. That is legal at both declarations, and
+  it is never the declarations that are rejected — this is the Haskell/Rust model, and
+  the reject-at-declaration alternative is not adopted. What is rejected is a **use
+  site** at which the scoping rules yield no unique identity.
+
+  Three qualifications, each of which changes the rule rather than decorating it:
+  1. **Ambiguity is the *failure of the scoping rules* to produce a unique identity —
+     not the mere existence of two.** Where scoping already selects (a same-module
+     declaration over an import; the shadowing order of
+     [`SHADOW-SEMANTICS.md`](SHADOW-SEMANTICS.md) S1–S9), there is no ambiguity and no
+     diagnostic. Stated without this qualification, the rule would make every
+     prelude-shadowing program ambiguous and would contradict SHADOW outright.
+  2. **It applies only to occurrences resolved BY NAME.** A record-field selection
+     `r.f` is resolved by the *type* of `r`, not by the spelling `f`, so two records
+     in scope sharing a field name are not an ambiguous use — where the field's owner
+     is determined, so is the field's identity. Record *construction* and record
+     *patterns* name the record, and are ambiguous exactly when that name is.
+  3. **Aliases stay transparent.** A `type` alias has an identity, used to resolve the
+     occurrence; the type that occurrence *denotes* is the expansion, carrying the
+     expansion's identities. Two distinct alias identities with the same expansion
+     denote the same type. I4 is about resolution, not about type equality, and does
+     not turn an alias into a nominal type.
+
+  🚧 **Open: effect labels.** Whether two same-named `effect` declarations in
+  different modules are one capability or two is **not settled by this clause**, and
+  is deliberately left open rather than decided in passing: the answer is a
+  capability-semantics question (`EFFECTS-SEMANTICS.md` §7 — a label is a name in the
+  host's grant vocabulary, and a manifest names labels) and not a dictionary one.
+  Until it is settled, an implementation must not infer from I4 that effect labels are
+  module-qualified.
+
+- **I5 — Instance candidacy is graph-global; import scoping filters NAMES, never
+  instances.** This is C4's own sentence, made operational. For a goal `C τ̄` arising
+  anywhere in a module graph, `match(IE, C τ̄)` (§3) ranges over **every** instance
+  declared in **every** module of the loaded graph. Not only the modules the goal's
+  own module imports; not only the modules that precede it in a load, topological, or
+  any other order; and not only the instances whose declarations are marked public —
+  an instance's visibility annotation, if the surface language has one, governs
+  nothing here. `IE` and `CE` are assembled once, before any body is elaborated (I2).
+  Import scoping decides which **names** a module may write. It never decides which
+  instances exist.
+
+  ⚠️ **This is a semantics change, and only the first of its consequences is an
+  acceptance widening.** The classes below are *derived*, not enumerated: a new
+  candidate can change the outcome at three points — whether a `⊑`-minimum exists
+  (C1), which instance it is (`inst`'s selection), and whether the selected instance's
+  own context `Q` is dischargeable (`inst`'s recursive premise) — and each point
+  yields one class, plus the trivial case of a goal that previously matched nothing.
+  **Do not treat this list as closed; derive against those four points instead.**
+  1. **New acceptances.** An impl declared in a module that no path reaches before the
+     goal's module — a topologically later one, or a sibling — becomes usable. A
+     program that did not compile now compiles. This is the orphan-instance-style
+     widening, and it is carried by a fixture that could not pass before.
+  2. **New rejections via C1.** Enlarging `match(IE, π)` can destroy a `⊑`-minimum
+     that a smaller candidate set had. Two `⊑`-incomparable instances, one of which
+     was previously invisible at the goal, make the goal **ambiguous overlap** under
+     C1 — so a program that compiles today can stop compiling. A candidate-set
+     widening is *not* an acceptance widening.
+  3. **Silent answer changes.** A newly-visible instance that is strictly more
+     specific than the previous winner *wins*, by §3. The program still compiles, and
+     prints something different. There is no diagnostic, because nothing is wrong: the
+     new answer is the specified one and the old answer was the artifact. Any
+     migration onto I5 must treat this as its primary hazard rather than as golden
+     churn.
+  4. **New rejections via an UNSATISFIABLE CONTEXT — with C1 fully satisfied.** The
+     newly-visible instance is strictly more specific, so it wins uncontested; but its
+     own `Q` cannot be discharged at the goal, and `inst` has no backtracking to the
+     runner-up. Given `impl Show2 (List a)` and `impl Show2 (List (Option a)) requires
+     Sized a`, the goal `Show2 (List (Option Blob))` with no `Sized Blob` in scope
+     compiles and prints `generic` while only the general instance is visible, and is
+     **rejected** — `No impl of Sized for Blob` — once both are. This is class (2)'s
+     outcome by class (3)'s mechanism, and it is neither: the two instances here are
+     perfectly `⊑`-comparable and C1 holds throughout, so the mechanism stated in (2)
+     does not apply. It falls out of §6.1 choice-point 1 (`⊑` compares heads only;
+     contexts play no role in selection) combined with `inst`'s commitment to the
+     `⊑`-minimum. ⚠️ **This class has the worst migration diagnostic of the four**: an
+     error naming an interface the author never wrote, arising from a module they
+     never imported, at a call site they did not change. A migration that plans only
+     for goldens and ambiguity will meet this one unprepared.
+
+  The price I5 pays for coherence is that a program's meaning is a function of the
+  **whole loaded graph**: adding an unrelated module to a build can change an existing
+  module's dispatch. That is not a defect of I5 — it is what C4 buys coherence with,
+  and the alternative (per-module candidate sets) is exactly the state in which "C1/C2
+  hold only locally and coherence fails across module boundaries", which C4 forbids by
+  name.
 
 ---
 
@@ -850,8 +1475,16 @@ module-qualified identity.
 > `impl C a` beside a concrete impl at a parametric head: every call resolves to
 > the concrete impl, *both engines*, exit 0). Each ships with a one-token
 > discriminating control in the same corpus. The other ledger rows are #323, #614
-> /#311, and phantom-position rejection — which is **not** a bug to file but the
-> spec paragraph owed as **#1107 (d)**.
+> /#311, and phantom-position rejection.
+>
+> ⚠️ **The phantom row's own framing has since been corrected, and the correction is
+> worth keeping.** An earlier revision of this notice read *"which is **not** a bug to
+> file but the spec paragraph owed as #1107 (d)"* — a false dichotomy. It is **both**:
+> #1107 (d) owed the spec paragraph (now **§5.1 M3**), and the over-rejection M3
+> identifies is a behavioural defect filed separately as **#1134**. The pair of
+> fixtures pins them apart: `s5-phantom-ambiguous-use-rejected` is conformant on the
+> verdict, `s5-phantom-determined-use-rejected` is not, and only the second can drain
+> — on #1134, never on #1107, which changes no behaviour.
 >
 > ⚠️ **§11 below and this gate answer different questions — do not substitute one
 > for the other.** §11 maps each clause to its **source site** and keying
@@ -881,8 +1514,17 @@ specific clause; that mapping is the audit's starting point.
 - **Superclass (`requires`) entailment** → §3 `super` + C2: superclass access is
   projection of a field that must equal the canonical dict. Suspect re-resolution
   at the use site.
-- **Cross-module same-name collision** → §8 I1: dictionary arity keyed by bare
-  name instead of binding identity. Suspect any bare-name arity table.
+- **Cross-module same-name collision** → §8 I1, and its general form **I4**:
+  dictionary arity keyed by bare name instead of binding identity. Suspect any
+  bare-name arity table — and, per I4, any bare-name table at all: an interface's
+  required-method list, a method scheme, a record's field owners, an interface
+  parameter's kind. The failure is last-write-wins and therefore silent.
+- **An impl that is only usable from some modules** → §8 **I5** + C4: candidacy
+  narrowed to what a module happened to have loaded. Suspect any instance universe
+  that is *accumulated* in load order rather than assembled once.
+- **A local helper that dispatches to the wrong impl** → §4.1 **G4**: a `let`/`where`
+  binding that forwards a dictionary but abstracts none. Suspect any generalization
+  site that answers "this local forwards a dict" by declining to generalize.
 - **Eval-vs-emit dispatch fork** → §7 single-evaluator law: dispatch decided in
   an evaluator rather than in elaboration. Suspect any evaluator-time impl
   selection that is not a uniformly-applied, side-condition-guarded refinement
@@ -916,8 +1558,26 @@ Seeded from [`compiler/TYPECHECK-ARCHITECTURE.md`](../../compiler/TYPECHECK-ARCH
 directly against source at `c4ef6dbe` (this document's `$BASE`; line numbers drift —
 re-derive with `grep -n '^<symbol>' <file>` rather than trusting them). Follows
 [`SHADOW-SEMANTICS.md`](SHADOW-SEMANTICS.md) §3's form. A clause with no located
-site is marked **UNIMPLEMENTED** rather than skipped — per this document's own §1
+site is marked **UNIMPLEMENTED** rather than skipped — per this document's own §0
 non-derivation principle, that is a finding, not a formatting gap.
+
+The rows for **§4.1, §5.1, §6.2, §6.3, §7.1 and §8 I4/I5** were added with those
+clauses (#1107) and verified against source at `128da26c`. Every one of them is
+UNIMPLEMENTED, PARTIAL, or DIVERGENT — which is expected and is the point: those
+clauses were written *because* behaviour existed with no governing rule, so the rows
+record where the behaviour and the rule now differ rather than pretending the clauses
+were already in force.
+
+⚠️ **Where a row claims "no site exists", read the *derivation* in it, not the
+verdict.** Two such claims made here were **wrong on the first pass** and are
+corrected above (§5.1 **M2**; the record-field half of §8 **I4**). Both failed the
+same way: the search used the *implementation's* vocabulary rather than the spec's —
+the W2 lesson, applied — but was **scoped to `typecheck.mdk`**, and in both cases the
+check lives elsewhere: at the **resolve stage** for M2, and under a name none of the
+search terms covered for I4. A negative result scoped to one file is not a negative
+result, and neither is one scoped to one stage. The single surviving "no site" claim
+(§4.1 **G1**) is therefore stated with a tree-wide derivation over the *name-minting*
+function rather than over the pass that was expected to call it.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
@@ -934,17 +1594,34 @@ non-derivation principle, that is a finding, not a formatting gap.
 | §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
+| §4.1 **G1** (uniform dict abstraction at a local binder) | **UNIMPLEMENTED — confirmed absent TREE-WIDE, not just in `typecheck.mdk`.** `dictPassDecl:12377` has exactly four declaration arms — `DFunDef` (`:12378`), top-level `DLetGroup` (`:12388`), `DImpl` methods (`:12397`), `DInterface` default bodies (`:12403`) — then a catch-all `dictPassDecl _ _ d = d` (`:12407`); no arm descends into an expression. The stronger check is on the **name-minting** function: `dictParamName:12685` is the sole producer of a `$dict_<fn>_<slot>` binder, and tree-wide (`grep -rn dictParamName compiler/ --include='*.mdk'`) its only *pattern*-producing callers are `dictParamsGo:12671` and `dictParamsFrom:12680`, reachable only from those four arms — every other caller builds an `RDict` route or an `activeDictVars` entry, i.e. a **reference** to a param a declaration already bound. `llvm_emit.mdk`'s `dictParamNameE:6130` re-derives the same string for a method and creates nothing. And there is **no lambda-lifting pass** that could route a local through the `DFunDef` arm (`grep -rn 'lambdaLift\|hoistLocal\|liftLocal\|closureConv' compiler/` → 0 hits; `desugar.mdk` maps `ELetGroup` structurally at `:73`/`:120-121` and never hoists it) | — | so no `let`/`where` binding receives a `λd̄.` prefix at **any** stage — resolve, desugar, marker, typecheck, IR lowering, or either backend. Separately, even the implemented half has no per-binder key for G1 to extend: the arity a top-level binding gets is read by `dictArityOf:12662`, which is **bare-name** (see the I1 row). G1 additionally needs *local* binder identity — `(name, binding-id)` keying already exists for local scheme *obligations* (`registerLocalScheme:7866`, #837) and is the shape the arity table would need. ⚠️ **G1's absence is uniform across BOTH local spellings** — the `dictParamName` derivation above covers `let` and `where` alike — so an observed `let`-vs-`where` behavioural difference (e.g. #1052's two spellings printing `3` and `2`) is **not** explained by this row. It is explained by the G4 row below: the five sites do not share one pin predicate |
+| §4.1 **G2** (value-restriction gate) | 🔴 **HOLED — the gate exists and its predicate is not G2's set.** `genRestricted:3606` is gated on `isNonexpansive:3534` at all five local generalization sites (`blockRecLet:5205`, `blockLet:5221`, `inferRecLet:7835`, `inferLetBody:7904`, `generalizeGroup:9331` via `clausesAreValue:9344`) **and at the top-level site** (`sccSchemes:16017` via `memberClauseIsValue:16023`) | a binding generalizes only at a syntactic value | 🔴 **#1139 (OPEN, S0, verified): the constructor-application arm folds over ONE argument, not all of them.** `isNonexpansive (EApp f x) = isCtorAppHead (EApp f x) && isNonexpansive x` (`:3550`): only `x`, the spine's **final** argument, is tested for non-expansiveness; `f` reaches only `isCtorAppHead`, whose recursive arm `isCtorAppHead (EApp f _) = isCtorAppHead f` (`:3565`) **discards every argument** on its walk to the head. So `Ref` is excluded in final position and admitted in any other — `data BR a = BR (Ref (List a)) Bool` with `let b = BR (Ref []) True` generalizes: `check` exit 0, `run` `E-NOT-A-FUNCTION`, native **SEGFAULT** (exit 139); the control with the `Ref` moved to final position is correctly rejected. The three sibling arms each use `allList isNonexpansive` (`:3543`, `:3544`, `:3552-3555`); this is the only arm that does not, **and the comment directly above it says it does** (`:3546-3547`, *"every spine argument is itself non-expansive"*) — so the source's own documentation is the specification and the code is the divergence. ⚠️ **The hazard is NOT the future extern the comment at `:3528-3530` warns about.** That warning ("any future uppercase mutable-cell extern MUST be added to the exclusion") describes a maintenance risk; plain `Ref`, already excluded by name at `:3566`, escapes **today** by position. G3 may not be cited as discharged while this stands |
+| §4.1 **G4** (predicate deferral; monomorphising is NOT an approximation) | 🔴 **DIVERGENT.** The five sites above conjoin the value test with `not (pinLocalIfDictForwarded:8947 …)` — the #866/#1021 all-or-nothing pin, which handles a dict-forwarding local by **declining to generalize** it, exactly the move G4 forbids | — | 🚨 **The five sites do NOT share one pin predicate, and this is where a `let`-vs-`where` divergence comes from.** The four `let`-shaped sites call `pinLocalIfDictForwarded:8947`, whose pin set is `dictForwardedPairs callN0 dictN0` (`:8928`) — the dict-app and call-obligation windows, and nothing else. The `where`/let-group site is different: `processLetGroup:8770` computes `pinned = methodConstrainedIds () ++ map fst dictPairs` (`:8791`) and hands it to `generalizeGroup:9310`, which pins on `anyIn free constrained` (`:9318`). So the `where` path pins on a **strictly larger** set — it consults the METHOD-constrained channel that the `let` path never reads. One judgment, two predicates, is an L1 fork, and it is the structural difference that would make #1052's `let` spelling generalize (unpinned ⇒ correct `3`) where its `where` spelling pins (⇒ the collapse to `2`). Stated as the mechanism the source supports; not probed here (no binary). 🔴 **#1052 (OPEN, S0)** is the clause's counterexample and is already filed as one: monomorphising a `where` helper merges two *distinct rigid signature* variables and drops a dictionary slot, printing `2` where G4 says `3`, on both engines, exit 0. #1082 is the migration vehicle; the pin is documented as an interim at `registerLocalScheme`'s `#866 NARROWED THE PREMISE` comment (`:7850-7865`), which states the trade in the same terms |
 | §5 method dispatch (arg/result/phantom position) | `inferMethodAt:4619`; `resolveSites:10057` (return-position); `argDispatchIndices:2746`/`prePassDictArg:9742` (arg-position) | dispatch type is fixed by `var`'s instantiation regardless of `ā_C`'s position in `τ_m` | — |
 | §5 arg-tag dispatch = optimization, not semantics | (i) `narrowMethod`/`methodAtNarrow:1048-1069` narrows by a STATICALLY-computed `Route` key, not a runtime inspection. (ii) The genuine runtime-argument-inspection fallback is `applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg:870` → `filterByTag:888-891` → `runtimeTypeTag:384-397` → `matchesTag:1088-1090` (all `compiler/eval/eval.mdk`) — reached whenever a VMulti (unnarrowed method candidates) is applied to a runtime argument | (i) is sound by construction (the key was already the `min⊑` winner at typecheck time — this is NOT arg-tag dispatch in §5's sense at all, despite the name). (ii) IS §5's arg-tag dispatch, and its side condition is **not verified**: `runtimeTypeTag` discriminates at **bare head-tycon granularity only** (`VList _ => Some "List"`, `:391`) — it cannot distinguish `List Int` from `List a`, nor (per the sharper counterexample below) `T Int` from `T Bool` | 🔴 **Already tracked, more precisely than this row first put it: #1113** (OPEN, part of this same target-architecture arc). #1113's own text corrects the "no overlap below the head" framing this row started from: *"`impl C (T Int)` / `impl C (T Bool)` don't overlap and the tag `T` determines nothing; multi-param interfaces likewise"* — so even NON-overlapping instances differing past the head are mis-discriminated by `runtimeTypeTag`'s granularity. #1113's own stated target fix ("computed once post-K from the global IE, frozen into the elaboration output... never re-derived") confirms today's `filterByTag` is exactly the ad-hoc mechanism it plans to retire |
+| §5.1 **M1** (impl completeness) | `checkImplCompleteness:10862` (whole-program scan) **and** `checkImplCompletenessMap:10922` (the multi-module keyed twin), pushing `T-INCOMPLETE-IMPL` via `pushIncompleteImpl:10868`; required set from `requiredMethodNames:10908` (methods whose merged `IfaceMethod` carries no default) | every non-defaulted interface method has a body in the impl, so `methods(e).m` is total | ⚠️ two implementations of one judgment (the scan and the map), kept in step by hand — the map's comment (`:10920-10921`) states its keying assumption outright: *"Interface names are globally unique, so the map's last-write-wins carries the same required-method list the scan's first-match returned."* **§8 I4 makes that premise false**, and the failure is silent in the last-write-wins direction: two same-named interfaces in one graph, one required-method list. Error location is `firstImplMethodLoc:10892` — the first present method body, `None` for a wholly-empty impl |
+| §5.1 **M2** (no extraneous methods) | ✅ **ENFORCED — at RESOLVE, not typecheck.** `checkImplDecl:1227` → `checkImplIface:1241` → `checkMethodMember:1252`, which rejects any `ImplMethod` whose name is absent from `ifaceMethodsOf iface env.ifaceMethods` with `MethodNotInInterface` (`resolve.mdk:119`), rendered at `ppResError:1912`, code `R-METHOD-NOT-IN-INTERFACE` (`resErrorCode:1955`). Runs on **both** env paths — `ifaceMethods` is populated at `resolve.mdk:1428` (single-file: prelude ++ user) and `:2472` (multi-module: ++ imported) — so it fires on `check`, `run` and `build`. Typecheck's own arm is **inert**: `inferImplMethod:14396`'s `None` arm (`:14398`) is `()`, so the extraneous body is never inferred; the guarantee comes entirely from resolve | an impl body under a name the interface does not declare is rejected before typecheck ever sees it | ⚠️ **keyed on the BARE interface name**, and `ifaceMethodsOf:1246` is a **first-match** assoc over `pIfaces ++ uIfaces ++ impIfaceMethods`. Two interfaces sharing a name in one graph resolve to the *first* list, which can both spuriously reject a legitimate method of the second and spuriously accept an extraneous name that happens to be in the first — §8 I4's hazard on this exact check (structural reading; not reproduced here, no binary). ⚠️ **Quality residual, not a soundness one:** the error is constructed with `None` for its location (`:1257`) and so prints `<unknown location>`, even though `checkImplMethod:1237` has `firstExprLoc body` in hand two lines away — an unfilled slot, `compiler/ERROR-QUALITY.md` dimension. **Scope note:** M2 is a rule about the *name* only; a body under a **correct** name with the wrong arity or type is W3's business (`inferImplMethod`'s unification), not M2's, and this row does not claim otherwise |
+| §5.1 **M3** (phantom methods: reject the undetermined USE, not the declaration) | 🔴 **DIVERGENT.** `checkPhantomMethods:10995` → `phantomMethodMsgs:11001` → `phantomMethodMsg:11007`, pushing `T-PHANTOM-METHOD`, run from `runFinalChecks:11052` | rejects a method whose declared type mentions none of the interface's parameters | 🔴 keyed on the **`DInterface` declaration alone** — `phantomMethodMsgs` matches `DInterface` and nothing else, so the rule fires with **zero impls and zero uses in the program** and can never see whether a use is determined. This is #1134's over-rejection, stated structurally rather than behaviourally. ⚠️ a second, separable defect in the same site: the diagnostic is pushed with `pushTypeError:2932`, which attributes to `currentLoc.value` — the *live* location at the end of the run, not the declaration — so the caret lands wherever inference last was (on #1134's repro, the impl body). The location is not a deliberate attribution and should not be read as one |
 | §6 **C1** (unique most-specific instance) | `cohFirstConflict:10769`/`cohConflictWith:10775`/`cohAnonConflict:10786`/`cohStrictlyMoreSpecific:10735`, invoked from `checkCoherence:10809` (`compiler/types/typecheck.mdk`) | rejects ambiguous overlap at declaration time | 🔴 **SPEC-VS-CODE DIVERGENCE (already tracked: #614, #311).** `cohConflictWith` scans **all declared pairs** and rejects on any `⊑`-incomparable pair — §6.1 choice-point 2's condition **(a) global comparability** — not the spec's stated recommendation **(c) per-goal unique minimum**. The spec's own `Pair` counterexample (`C (Pair Int a)`, `C (Pair a Int)`, `C (Pair Int Int)` — accepted under (c), rejected under (a)) is exactly what this implementation currently gets wrong |
 | §6 **C2** (superclass consistency) | No SINGLE dedicated check — but TWO independent by-construction mechanisms were located, not merely the spec's own disclaimer. (a) `argImplDictRoutesForEncl:12187-12192`/`entailInst`'s EKReturn+EKArg arms (`:11974-11978`, the #609 fix); (b) `expandSupersTable:5037-5041` (WS-1b) | (a) selects the SAME impl for the dispatch route and its own `requires`-context routes — comment at `:12175-12177` names the failure mode explicitly as "evidence for instance A attached to methods of instance B (§2 "evidence is a tree"; §6 C2 coherence)". (b) sidesteps the question for `=>`-constrained-fn super slots by construction: the dict *value* is a bare type tag identical across the whole `requires` chain, so "the super slot's route is identical to the sub slot's route — no separate projection is needed" (comment at `:5028-5029`) | (a) is keyed by the SAME goal-vector selection as `inst` (row above); (b) is keyed by (fn, transitive-superinterface) slot pairs, deduped by `(iface, id)`. Neither is a dedicated "check that C2 holds" — both are designs that make a C2 *violation* structurally unreachable, which is a stronger form of the spec's own claim ("the invariant to check, not an independent obligation") than a blank "no site" first suggested |
 | §6 **C3** (resolution determinism) | same dispatch path as `inst`/precedence rows above | entailment returns the same evidence regardless of search order | ⚠️ **#1072 (OPEN S0)**: "most-specific-wins is decided by MODULE ORDER — the bare-head word is OR'd into every arm, so a site whose module sees only the general impl calls it instead of the specific one" — a live counterexample to order-independence |
 | §6 **C4** (single instance environment) | `loadDataUniverse:16973`/`storeDataUniverse:16983`/`appendUniverseAccums:16925`; `univConcreteBucket:13702`/`univHeadless:13707` (`compiler/types/typecheck.mdk`) | `IE`/`CE` global after import resolution | see I2 below for the identity-keying discipline this depends on |
 | §6 uniform resolution corollary | no single dedicated site — structural consequence of every resolution position sharing `entail:11892` | all resolution positions agree on the same-goal evidence | audit-level claim, not an independently-checkable function |
+| §6.2 **T1** (groups = SCCs of the reference graph, topological order) | `processTopGroups:15568` → `tarjanSCCs` over `depGraphMap` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`); `isLetrecGroup:15789` distinguishes a multi-member group from a singleton | dependency-first group order; one shared `λd̄.` per mutually-recursive group | ⚠️ the graph's node set is **top-level value bindings only** — `depsOf:15579` builds edges from `allEVars` over `clausesOf`, so `impl` bodies, `default` bodies, prop and test bodies are **not nodes**. They are inferred after every SCC has generalized (`processTopGroups` at `:13009`; `inferImplBodiesIfEnabledIn` at `:13020`/`:13035`), which satisfies T1 for them only because nothing schedules them at all |
+| §6.2 **T2** (a later group observes only the earlier group's scheme) | structural: `processSCCs:15600` threads the environment forward as `snd er ++ …` over `fst er`, and the only thing added is `extendVars env (dropSchemesNamed …) schemes` (`:15782`) | no evidence, route, or instance choice crosses a group boundary — only schemes | keyed by binder name into the environment. The second half of T2 (a non-generalized binding's monotype carries **live** metavariables into later groups) is structural too: `genRestricted:3606`'s non-value arm returns `monoScheme t` after `lowerToCurrent:3582`, i.e. the same cells |
+| §6.2 **T3/T4** (`inst` commits only on a closed goal; non-closed goals resolve at graph quiescence) | 🔴 **DIVERGENT — the drain is per-MODULE, not per-graph.** `elabModuleStamp:18570` runs `checkModuleFullImpl` and then all nine stampers (`resolveSites`/`resolveOpSites`×2/`resolveArithSites`/`resolveArgStamps`/`resolveRLocalSites`/`realizeRecDictApps`/`resolveDictApps`/`resolveMethodDicts`, `:18581-18589`) for that module before the next one; the flat twin is `elaborateDict:9424` | — | the module boundary is what today's drain is keyed on, and its own comment (`:18558-18561`) states the assumption: *"the tyvar cells are still bound (the next module's `resetState` hasn't run yet)"*. `resetState:3265` mints a fresh `PerRun`, which drops the pending-site lists — but **not** the tyvar cells, which live in the `Mono` values an exported scheme shares. So a later module can still ground a metavariable whose routes were already stamped. T4 exists to remove that window; it is **not** a formalization of current behaviour, and the target-architecture note that quiescence "matches today's whole-module-then-stamp behavior, extended" should be read as *extends*, not *describes* |
+| §6.2 **T5** (freeze-at-module-close REJECTED) | N/A — a rejected alternative | — | recorded so a later implementation does not adopt it as an optimization: it is sound but narrowing, and it makes module partitioning semantically significant |
+| §6.3 **D1** (defaulting placement) | four boundaries, each running the defaulting primitive *before* `registerAmbiguousConstraints:9199` and before generalization: `blockRecLet:5202-5203`, `blockLet:5218-5219`, `inferRecLet:7832-7833`, `inferLetSimple:7897-7898`, and the group boundary `processSCC:15754-15756` (`defaultGroupNum` then `defaultEachMember` then `registerAmbiguousConstraints`); plus two method-body boundaries with no paired ambiguity check — `inferDefaultMethod:13489` and `inferImplMethod:14546`, both `defaultBodyLocalNum` | defaulting is the last determination step at its boundary | ENFORCED as an ordering at each site; there is no single place the order is written, so D1 holds seven times by construction rather than once by statement |
+| §6.3 **D2** (defaulting substitutes, never discharges) | `groundNumVars:9273` grounds by `unify m (TCon "Int")` (`:9277`) — an ordinary unification, so the now-ground predicate is checked by whatever would have checked it | a defaulted variable's obligations are still obligations | ENFORCED by mechanism (substitution, not removal). Note the *choice* this encodes: the target is always `Int`, with no `default`-declaration analogue and no fall-through to a second type |
+| §6.3 **D3** (the taint rule) | candidate set from `numConstrainedIds:9103`/`numObligIds:9106` (`iface == "Num"` only); the surviving-channel filter is **two different predicates**: `monoArgUnboundIds:9096` (outermost arrow **domains** only) at `defaultAmbiguousNum:9111` and `defaultGroupNum:9129`, versus `monoUnboundIds` over the **whole** member type at `defaultBodyLocalNum:9164` | which `Num`-constrained variables may ground | 🔴 **PARTIAL / tracked.** Neither predicate is D3's channel rule: `monoArgUnboundIds` under-approximates it (a return-position variable, and *every* variable of a nullary method type, get zero protection — the function returns `[]` on any non-`TFun`), and `defaultBodyLocalNum`'s whole-type test approximates it from the other side. The **instance-head** channel D3's open bullet asks about is in neither. Tracked as **#563** (return/nullary blind spot, `verified`) and **#564** (the missing ambiguity pairing); both close against §6.3 |
+| §6.3 **D4** (level discipline) | `registerAmbiguousConstraints:9199` computes `groupLevel = perRun.value.currentLevel.value + 1` (`:9205`) and `registerDispatchMonos:9250` filters on `snd p <= groupLevel` against `monoUnboundVarLevels:9263` | "belongs to this boundary" vs. an inner binder's leaked obligation | ⚠️ the level is derived from the **ambient** `currentLevel`, valid only because every precedent site runs `enterLevel`/`exitLevel` around its bodies and calls this post-`exitLevel`. The impl-method-body boundary has **no `enterLevel`/`exitLevel` at all**, which is why it hosts `defaultBodyLocalNum` and *not* `registerAmbiguousConstraints` — #564's recorded prerequisite, stated here as the keying assumption it is |
 | §7 single-evaluator law | `evalMethodAt:1223`/`dictOfRoute:1025`/`applyDicts:1013` (`compiler/eval/eval.mdk`); `emitMethod:4226` (`compiler/backend/llvm_emit.mdk`); `emitMethodRef:3548` (`compiler/backend/wasm_emit.mdk`); cross-engine agreement enforced by the GATE `test/diff_compiler_engines.sh`, not a shared source site | three independent emit/eval implementations of the same `Route` dispatch stay in agreement | agreement is kept by convention + the differential gate, not by one shared function body |
+| §7.1 **U1/U2** (driver unimodality) | 🔴 **DIVERGENT — a second mode is live.** `data CheckMode = Flat (List Decl) \| Module String (List Decl) (List Decl)` (`compiler/types/typecheck.mdk:12822`); `checkBodyImpl:12824` branches on it at **20 `Flat` arms** (derive: `grep -c '^    Flat ' compiler/types/typecheck.mdk`, against 21 `match mode` sites), and the two paths run different route-stamper sequences (`elaborateDict:9424` vs `elabModuleStamp:18570`) | — | the sole `Flat` constructor site is `checkProgramSeededSplit:12804`. **Do not read a consumer count out of this row — derive it:** `grep -rln 'elaborateDict\|checkProgramSchemes' compiler/entries/ compiler/tools/`, then `grep -n` each hit to separate real call sites from comments (at `128da26c` the file grep yields **12**, of which **10** call and 2 mention it only in prose). An earlier revision of this row listed five files and said "six external consumers" — wrong, and wrong in the way this table's own preamble warns about; the missing ones are load-bearing: **`tools/lsp.mdk:694`**, **`tools/snapshot.mdk:624`** (so a *gate* runs on the flat path), and **both typed emit entries**, `entries/llvm_emit_typed_main.mdk:66` and `entries/wasm_emit_typed_main.mdk:61` — which is where U2 bites hardest, because those paths produce **IR**. Add `entries/profile_main.mdk:247` and the flat re-entries inside `typecheck.mdk` itself: the promotion fallback (`:9434`, `:9463`, `:9556`) and `checkMatchToLines:16722` (`:16725`). ⚠️ `compiler/DRIVER-COLLAPSE-PLAN.md`'s **status line says IMPLEMENTED**; this row is the measured counterexample §7.1 retires it with |
 | §8 **I1** (evidence abstraction keyed by binding identity) | `dictArityOf:12662` (BARE-NAME, define-side only) vs. the cross-module qualified path `crossModuleFunConstraintsQualRef:2545`/`inferDictAtFound:4918` | dict-param count/order is part of the binding's identity, not its bare name | ⚠️ self-documented live hazard at lines 2415-2444: `dictArityOf`'s bare-name first-match "returns the WRONG module's arity" for two same-named fns of different `=>`-arity. The qualified table fixes the CALL-SITE (importer) leg; `dictArityOf` itself stays bare-name, safe only for the DEFINE-side prepend within the owning module — a residual sharp edge, not asserted as a currently-reproducing bug here |
 | §8 **I2** (global instance environment after import resolution) | `importFormSchemes:17309`/`aliasSchemes:17290`/`aliasConstraintEntries:17324` (`compiler/types/typecheck.mdk`) | import scoping affects visibility, never evidence identity | — |
 | §8 **I3** (evidence travels, not re-derived) | No INDEPENDENT site — but not because none was located; re-audited with I1's vocabulary (`inferDictAtFound`, `crossModuleFunConstraintsQualRef`) rather than I3's, and the same site applies: `inferDictAtFound:4918` (row I1 above) is exactly the mechanism that lets a cross-module CALLER supply the callee's dict args rather than the callee re-deriving anything | a cross-module call passes evidence as ordinary leading dict arguments (`var`, row above), sized by the callee's identity-keyed arity (I1) — there is nothing *for* the callee to re-resolve; it receives dicts as parameters like any other argument | this is a structural consequence of dict-PASSING itself (the callee is a function of its dict params, not a re-resolver), not a separately-checkable rule — same shape as C2's finding: the right conclusion is "enforced by the calling convention," not "unimplemented" |
+| §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ENFORCED for **values**: `checkVar:588` → `isAmbiguous:639`/`ambigMods:644` → `AmbiguousOccurrence`, code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1967`), set built by `ambiguousSet:2264`/`keepAmbiguous:2270`. ENFORCED for **data constructors** (#674): `checkPat:392` and `checkVar:602` → `isCtorAmbiguous:651` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5392` → `resolveFieldAmbiguous:5403`, which pushes `T-AMBIGUOUS-FIELD` (`:5406`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:338`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported`) with no ambiguity arm, and `checkConstraint:386` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4047` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3126` but *called* at `compiler/types/typecheck.mdk:12839`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. 🔴 **The type half is stronger than "a missing diagnostic", and this row understated it at first.** `fromAstTypeE:4047`'s `TyCon` arm bottoms out at `_ => TCon n` (`:4059`) — a **bare-name** `Mono`. Two modules that each `public export data Thing` therefore do not merely go undiagnosed at the use site: their types are *the same `Mono`* and are silently **identified**, so a function declared over one module's `Thing` accepts the other's constructor, typechecks green, and dies at run time on a pattern match that cannot see the foreign constructor. That is a type-identity collapse — the `Mono`-level half of #1070 that its own audit records as *"impossible to re-key per table, because the collapse already happened upstream"*, and #1047's family. I4 is what makes it unwritable; a use-site ambiguity diagnostic alone would not. `keepAmbiguous:2273` additionally exempts `core` and any same-module top-level, which is I4's qualification 1 (scoping resolves before ambiguity applies) already realized for values |
+| §8 **I5** (instance candidacy is graph-global) | 🔴 **PARTIAL — cumulative, not global.** `foldModules:17745` threads `accAll ++ prog` and `appendUniverseAccums:16925` grows the persistent impl universe (`growImplUniverse` over `implDeclsWithReqs:14030`) one module at a time, in the loader's dependency-first topological order (`compiler/driver/loader.mdk:570`) | the candidate set a goal is resolved against | so a module's candidate set is *every impl of every module earlier in the topological order*, plus its own — which is **strictly more** than its transitive imports (an unrelated sibling subtree fully visited earlier is included) and **strictly less** than the graph (nothing later is). The first half is order-dependence of exactly #1072's kind; the second is what I5 removes. ✅ the visibility half of I5 already holds: `implDeclWithReqs:14033` matches `DImpl { iface, tys, reqs, … }` and **never reads its `pub` field** (`compiler/frontend/ast.mdk:437-443`), so an impl's declared visibility governs no candidacy today — and `SHADOW-SEMANTICS.md` S2 already asserts the universe is *"GLOBAL — local ∪ imported ∪ prelude"* for its own routing rule |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
 **Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
@@ -959,6 +1636,56 @@ rejected, and there is no diagnostic at depth 33.
 unique minimum) — already tracked as #614 and #311; this table independently
 re-confirms it against source at `c4ef6dbe`, with the exact reject site
 (`cohConflictWith`) and the exact spec passage it contradicts (§6.1 choice-point 2).
+
+**UNIMPLEMENTED found by the #1107 rows (1), with no site anywhere in the tree:**
+**§4.1 G1** — a `let`/`where` binding never receives dictionary parameters. This one
+survived the harder test: not just "`dictPassDecl` has four declaration arms", but
+"`dictParamName` is the sole minter of a `$dict_` binder and its only
+pattern-producing callers are reachable from those four arms", plus "no
+lambda-lifting pass exists to route a local through them". See the row.
+
+🚨 **A second row was first written UNIMPLEMENTED and is WRONG — the correction is
+kept because the failure mode is this table's own recurring one.** §5.1 **M2** was
+recorded as having no site, on the strength of a vocabulary search (`T-UNKNOWN-*`,
+"not a method", "does not declare") **scoped to `typecheck.mdk`**. The check exists,
+one file over and one *stage* earlier: `checkMethodMember` in
+`compiler/frontend/resolve.mdk`, raising `MethodNotInInterface` /
+`R-METHOD-NOT-IN-INTERFACE` — a **resolve** error with no `T-` code at all, which no
+search of typecheck's vocabulary could ever have found. The observation that led to
+the wrong verdict was itself correct (`inferImplMethod`'s `None` arm really is inert);
+the *inference* from it — "therefore nothing rejects this" — did not survive a probe.
+**The W2 lesson is not only "search the implementation's vocabulary" but "search
+every STAGE the judgment could live in":** a guarantee this table attributes to
+typecheck may be discharged at resolve, and a negative result scoped to one file is
+not a negative result. Two of the four "no site" claims attempted here failed that
+way (M2, and the field half of I4); both are corrected above.
+
+**Further divergences found by the #1107 rows (4):** **§5.1 M3** (`checkPhantomMethods`
+keys on the `DInterface` declaration alone and can never see a use site — #1134,
+whose resolution is decided in M3's favour: the checker narrows, so the pinned
+`test/dict_fixtures/s5-phantom-determined-use-rejected.mdk` goes **red** on the fix
+and re-pins to ACCEPT `7`; the "relabel by hand" contingency in both phantom
+fixtures' headers does **not** apply and can be struck);
+**§4.1 G4** (the local-dict pin monomorphises where the clause requires a reject —
+#1052 — and, separately, the five local sites do not share one pin predicate, which is
+where a `let`-vs-`where` divergence comes from); **§6.2 T3/T4** (the route-stamper
+drain is keyed on the **module** boundary, while the tyvar cells it depends on survive
+it); **§7.1 U1/U2** (`CheckMode` is live, with 20 `Flat` arms and a consumer set to be
+derived by the command in that row, against `compiler/DRIVER-COLLAPSE-PLAN.md`'s
+status line of IMPLEMENTED).
+
+🔴 **One row is HOLED rather than divergent, and it is the most serious finding in this
+table: §4.1 G2** (`isNonexpansive`'s constructor arm folds over the spine's **final
+argument only**, so a mutable cell in any other position is generalized — **#1139**,
+OPEN, S0, memory-safety: `check` exit 0, native SEGFAULT). It matters beyond its own
+severity because it is the premise **§4.1 G3** rests on, and G3 is **F-1's (#1082)
+gate**: landing dict-abstracted locals on the current value predicate would give a
+live unsoundness a second, calling-convention-shaped channel. ⚠️ **This row asserted
+the opposite** in its first revision — *"`isNonexpansive`'s only allocating arms are
+… over non-expansive parts"* — a claim contradicted by the very lines it cited, and
+the fourth first-pass error in this table. The three others were "no site" verdicts
+under-searched; this one was a **positive** claim read off a line whose sibling arms
+made it look obvious. Neither kind is caught by a doc gate.
 
 ---
 
