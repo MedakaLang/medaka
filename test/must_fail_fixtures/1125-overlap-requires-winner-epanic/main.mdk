@@ -1,0 +1,41 @@
+-- issue #1125: an interface with two overlapping impls, where the min-sqsubseteq
+-- (most-specific) winner carries a `requires` context, makes the INTERPRETER lose
+-- the recursively-discharged dictionary and panic -- while the native backend
+-- dispatches correctly. `Box (List a)` is strictly more specific than `Box a`, so
+-- `specific:INT` is the answer DICT-SEMANTICS SS3 specifies, and native produces it.
+--
+-- `medaka check`            -> exit 0, clean (`use : Speak a => a -> String`)
+-- `medaka run` (eval)       -> prints "START", then panics:
+--                              runtime error [E-PANIC]: putStrLn: not a String
+-- `medaka build` + run      -> prints "START" then "specific:INT" (correct), exit 0
+--
+-- The "START" print is a deliberate marker: it proves eval got all the way through
+-- resolving/desugaring and STARTED executing main before the dict-passing bug fires
+-- inside evaluating `use (Box [1, 2])` -- the crash is not a parse/typecheck-time
+-- rejection in disguise.
+interface Tag a where
+  tagOf : a -> String
+
+impl Tag Int where
+  tagOf _ = "INT"
+
+interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"
+
+data Box a = Box a
+
+impl Speak (Box a) where
+  speak _ = "general"
+
+impl Speak (Box (List a)) requires Tag a where
+  speak (Box xs) = match xs
+    [] => "specific:empty"
+    (y::_) => "specific:" ++ tagOf y
+
+use : Speak a => a -> String
+use x = speak x
+
+main =
+  println "START"
+  println (use (Box [1, 2]))
