@@ -70,8 +70,8 @@
 # ###################################################################
 # # THE LEDGER -- rows pinned to a KNOWN divergence, newest first    #
 # ###################################################################
-# * s6-1-4-supers-per-construction-goal -- ⚠️ UNFILED, S0 SILENT WRONGNESS ON
-#   THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
+# * s6-1-4-supers-per-construction-goal -- #1127 (OPEN, S0 `verified`). SILENT
+#   WRONGNESS ON THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
 #   constructed at a GROUND goal reaches the GENERAL `D`-dict, not the
 #   most-specific one: `check` exits 0, `run` prints the correct 77/77, and the
 #   SHIPPED NATIVE BINARY prints 20/77. §6 C2 names this exact break ("a
@@ -87,7 +87,8 @@
 #   ⚠️ This is the row the whole gate justifies: `run` and `build` share the
 #   entire front end, so their DISAGREEMENT is a real observation about codegen,
 #   and no existing gate drives this shape.
-# * s3-min-fully-general-sibling  -- ⚠️ UNFILED, S0 SILENT WRONGNESS. A fully
+# * s3-min-fully-general-sibling  -- #1128 (OPEN, S0 `verified`). SILENT
+#   WRONGNESS ON BOTH ENGINES. A fully
 #   general `impl Tag a` beside `impl Tag (Box Int)` makes EVERY `Box`-headed
 #   goal call the `Box Int` impl: `tag (Box "s")` prints 99 where 10 is correct,
 #   on check (exit 0, no diagnostic), on run, and on the shipped binary. Selection
@@ -95,10 +96,14 @@
 #   defect ("keys instances by class-plus-head-constructor alone, which cannot
 #   separate `List Int` from `List a`"). The control is one token away:
 #   s5-argtag-unsound-under-overlap is the same program with `impl Tag (List a)`
-#   in place of `impl Tag a`, and it is CORRECT. Reported to the orchestrator
-#   2026-07-30 with this repro; adjacent to but not obviously the same as #1072,
-#   which is a runtime arm-matching bug and states that "single-module
-#   permutations are CLEAN" -- this program is single-module and is not.
+#   in place of `impl Tag a`, and it is CORRECT. Adjacent to but not the same as
+#   #1072, which is a runtime arm-matching bug and states that "single-module
+#   permutations are CLEAN" -- this program is single-module and is not; and NOT
+#   #667 (CLOSED, flat `impl Sz Int`+`impl Sz a`, interpreter-only, re-probed
+#   correct here). 🔗 #1113 (ARCH B-2) is the target-architecture task most likely
+#   to subsume it -- §11's arg-tag row names the same bare-head-tycon granularity
+#   one layer down, in eval's `runtimeTypeTag`/`filterByTag` RUNTIME fallback,
+#   where this fixture's site is a DIRECT call decided at elaboration.
 # * s3-nested-obligation-two-levels -- #323 (OPEN, S3). At nesting depth >= 2
 #   under overlap the RUN path E-PANICs `unknown op '+'` while `check` and the
 #   NATIVE binary are both correct (119). A §7 single-evaluator-law violation.
@@ -111,11 +116,17 @@
 #   the §6.1 separating case is rejected. SOUND (an over-rejection), and #311
 #   records the 2026-07-16 owner decision to keep (a) for now.
 #   s6-1c-incomparable-no-minimum-control is the discriminating control.
-# * s5-phantom-position-rejected -- ⚠️ UNFILED, S3. §5 lists phantom position
-#   ("`ā_C` absent from `τ_m`") as a supported dispatch case; the checker rejects
-#   it at the impl with a dedicated `T-PHANTOM-METHOD` code. Defensible (Medaka
-#   has no visible type application, so a use site cannot fix `a`), but
-#   unreconciled -- §5 still licenses it and nothing records the decision.
+# * s5-phantom-position-rejected -- #1107 paragraph (d) (OPEN, S3). §5 lists
+#   phantom position ("`ā_C` absent from `τ_m`") as a supported dispatch case; the
+#   checker rejects it at the impl with a dedicated `T-PHANTOM-METHOD` code.
+#   Defensible (Medaka has no visible type application, so a use site cannot fix
+#   `a`), but unreconciled -- §5 still licenses it and nothing records the
+#   decision. ⚠️ This is NOT an unfiled bug and must NOT be filed as one: #1107 is
+#   "ARCH S-2: write the owed spec paragraphs", and its paragraph (d) is this
+#   finding verbatim -- "Impl completeness / phantom-method rejection -- enforced
+#   today with no governing clause (map §4 Layer 5)". It is SPEC work with no
+#   behaviour change; the paragraph decides the direction and the checker follows.
+#   The row pins TODAY'S rejection either way, so it goes red on either outcome.
 #
 # ###################################################################
 # # NOT YET COVERED -- an honest punch-list, not a silent gap        #
@@ -192,7 +203,7 @@ s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` 
 s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
 s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (119). build`s value is pinned because it is RIGHT; the row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
-s3-min-fully-general-sibling.mdk|§3/§10 LEDGER ⚠️ UNFILED S0 SILENT WRONGNESS: a fully general `impl Tag a` beside `impl Tag (Box Int)` sends EVERY Box-headed goal to the Box Int impl -- selection keyed on the head tycon with type ARGS DROPPED. Spec answer 99/10/10; both engines print 99/99/99 at exit 0. PINS THE WRONG ANSWER ON PURPOSE|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n99\n99|
+s3-min-fully-general-sibling.mdk|§3/§10 LEDGER #1128 (OPEN, S0 SILENT WRONGNESS, both engines): a fully general `impl Tag a` beside `impl Tag (Box Int)` sends EVERY Box-headed goal to the Box Int impl -- selection keyed on the head tycon with type ARGS DROPPED. Spec answer 99/10/10; both engines print 99/99/99 at exit 0. PINS THE WRONG ANSWER ON PURPOSE|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n99\n99|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
 s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
@@ -203,14 +214,14 @@ s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` + §3 `super` + §6 C2
 s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
-s5-phantom-position-rejected.mdk|§5 PHANTOM position -- LEDGER ⚠️ UNFILED S3: §5 lists it as supported ("same -- only the static dictionary determines it"); the checker rejects it at the impl. An over-rejection with a dedicated code, so deliberate but unreconciled with the spec|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
+s5-phantom-position-rejected.mdk|§5 PHANTOM position -- LEDGER #1107 paragraph (d) (OPEN, S3): §5 lists it as supported ("same -- only the static dictionary determines it"); the checker rejects it at the impl. An over-rejection with a dedicated code, so deliberate but unreconciled -- and the reconciliation is OWED SPEC WORK, not a bug: #1107 (d) is "impl completeness / phantom-method rejection -- enforced today with no governing clause". Do NOT file separately|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
 s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
 s6-1c-per-goal-unique-min-rejected.mdk|§6.1 choice-point 2 -- LEDGER #614/#311 (both OPEN): the §6.1 SEPARATING CASE. Spec commits to (c) per-goal unique minimum and would ACCEPT, printing 3; the declaration-time sweep enforces (a) global comparability and rejects. Sound over-rejection; #311 records the owner decision to keep (a) for now|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
 s6-1c-incomparable-no-minimum-control.mdk|CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject -- and the message is byte-identical to its sibling`s, which is the evidence the checker is condition (a) BY CONSTRUCTION|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
 s6-1-3-commit-at-elaboration-site.mdk|§6.1 choice-point 3: selection COMMITS AT THE ELABORATION SITE. A rigid-variable goal inside a signed binding takes the general instance (11) and is NOT retroactively re-resolved when the caller instantiates at Int, while the same ground predicate resolved directly gives 99. ⚠️ DO NOT "FIX" 11 TO 99|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|11\n99|
-s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER ⚠️ UNFILED S0 SILENT WRONGNESS ON THE BUILD PATH: a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
-s6-1-4-direct-constraint-control.mdk|CONTROL for the row above: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
+s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER #1127 (OPEN, S0 SILENT WRONGNESS ON THE BUILD PATH): a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
+s6-1-4-direct-constraint-control.mdk|CONTROL for #1127: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1: dict arity is keyed by BINDING IDENTITY, not bare name -- two modules` same-named `widget` abstract 1 and 0 dicts respectively (arity asserted structurally in section 3)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|101\n201|
 s8-i2-global-instance-env/main.mdk|§8 I2 / §6 C4: `IE` is assembled across the WHOLE import graph -- the sole `impl Sz Coin` is reached only transitively, and `main` never imports its module at all|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
 s8-i3-evidence-travels/main.mdk|§8 I3: a constrained binding does not re-resolve its own predicates -- the only impl is declared DOWNSTREAM of `twice`, so the dict provably came from the call site|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
@@ -235,8 +246,8 @@ IRS='s4-gen-sig-declared-context-kept.mdk|§4 `gen` a declared-but-never-dispatc
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the CONSTRAINED same-named binding abstracts ONE dict: arity 2|HAS|^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the UNCONSTRAINED same-named binding abstracts NONE: arity 1. A bare-name arity table would force a phantom dict param here and the call site would over-apply|HAS|^define i64 @mdk_righty__widget\(i64 %arg0\)
 s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl -- a direct call, no runtime arm-matching|HAS|call i64 @mdk_impl_Int_dflt\(
-s3-min-fully-general-sibling.mdk|⚠️ UNFILED S0 MECHANISM PIN: all THREE call sites lower to the SAME direct call to the `Box Int` impl, whose mangled symbol carries the head tycon with the type ARGUMENTS DROPPED. The general impl is emitted and never called. This is the evidence the defect is in SELECTION (elaboration), not in runtime arm-matching -- which is what distinguishes it from #1072|HAS|define i64 @mdk_impl___none___tag\(
-s3-min-fully-general-sibling.mdk|⚠️ UNFILED S0 MECHANISM PIN (second half): no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\('
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN: all THREE call sites lower to the SAME direct call to the `Box Int` impl, whose mangled symbol carries the head tycon with the type ARGUMENTS DROPPED. The general impl is emitted and never called. This is the evidence the defect is in SELECTION (elaboration), not in runtime arm-matching -- which is what distinguishes it from #1072|HAS|define i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN (second half): no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\('
 
 # ── Coverage self-audit ──────────────────────────────────────────────────────
 # Every top-level fixture unit (a .mdk file, or a directory) in FIXDIR must

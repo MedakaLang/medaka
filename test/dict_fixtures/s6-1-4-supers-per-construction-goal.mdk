@@ -1,7 +1,9 @@
 -- DICT-SEMANTICS §6.1 choice-point 4 + §6 C2 under overlap + §3 `super`.
 --
--- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED. Reported to the orchestrator on 2026-07-30
--- with this repro and the control below; no open issue matched when this landed.
+-- 🚨 PINNED DIVERGENCE -- **#1127** (OPEN, S0: silent wrongness, `verified`).
+-- Found while building this gate; independently reproduced by the orchestrator on
+-- a second cold-built binary at `c4ef6dbe` with `MEDAKA_STRICT=1`, control
+-- included, before the issue was filed.
 -- Severity as observed: **S0, silent wrongness on the BUILD PATH** -- `check`
 -- exits 0, `run` prints the CORRECT answer, and the shipped native binary prints
 -- a value produced by the WRONG dictionary, also at exit 0.
@@ -49,7 +51,7 @@
 -- ⚠️ THIS ROW PINS A WRONG BUILD VALUE ON PURPOSE. Do not "confirm" 20 against
 -- the binary -- the binary is the thing that is wrong. The row goes RED the day
 -- native starts printing 77, which is the signal to re-pin it to ALL_EXACT
--- `77\n77` and close the issue this becomes.
+-- `77\n77` and close #1127.
 interface D a where
   dm : a -> Int
 

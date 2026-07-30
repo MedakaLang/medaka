@@ -842,6 +842,23 @@ module-qualified identity.
 > carries the live ledger and an explicit **NOT YET COVERED** punch-list; read
 > both before concluding a clause is enforced. Whichever clause you are editing
 > here, check whether it has a row there, and add one if it does not.
+>
+> **Building it found two S0s that no existing gate could see**, both `verified`
+> and both pinned as ledger rows: **#1127** (§6.1.4/C2 — a dictionary reached by
+> *superclass projection* selects the general instance on the native build:
+> `check` 0, `run` correct, binary wrong) and **#1128** (§3/§10 — a fully-general
+> `impl C a` beside a concrete impl at a parametric head: every call resolves to
+> the concrete impl, *both engines*, exit 0). Each ships with a one-token
+> discriminating control in the same corpus. The other ledger rows are #323, #614
+> /#311, and phantom-position rejection — which is **not** a bug to file but the
+> spec paragraph owed as **#1107 (d)**.
+>
+> ⚠️ **§11 below and this gate answer different questions — do not substitute one
+> for the other.** §11 maps each clause to its **source site** and keying
+> assumption (what the code *is*); the gate observes **behaviour** on programs the
+> compiler's own source never exercises (what the code *does*). §11 is what
+> located #614/#311 and #1113 by reading; #1127 and #1128 were invisible to
+> reading and only fell out of running. A clause wants both rows.
 
 **Audit completed 2026-06-21 — see [`archive/DICT-CONFORMANCE-AUDIT.md`](../../archive/DICT-CONFORMANCE-AUDIT.md) (archived); all D1–D10 divergences closed.** (That audit predates the
 overlap extension of §3/§6; D1–D10 concerned the non-overlapping regime. The

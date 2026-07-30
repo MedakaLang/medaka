@@ -9,8 +9,7 @@
 -- occurrence side condition. Under that reading this program is ACCEPTED and
 -- prints 7.
 --
--- OBSERVED -- A DIVERGENCE, ⚠️ UNFILED (no open issue found; reported to the
--- orchestrator with this repro on 2026-07-30 for triage):
+-- OBSERVED -- A DIVERGENCE, tracked as **#1107 paragraph (d)** (OPEN):
 --   check/run/build all REJECT at the IMPL site with a dedicated diagnostic code
 --   `T-PHANTOM-METHOD`: "Method 'phantom' in interface 'Mk' does not mention
 --   interface parameter(s) 'a'; cannot dispatch".
@@ -20,12 +19,22 @@
 -- defensible: Medaka has no visible type application, so a use site of `phantom`
 -- has no way to FIX `a`, and §5 never says how it would. What is missing is the
 -- reconciliation: §5 still lists phantom position as supported, and nothing in
--- the tree records the decision. Either §5 should carve phantom position out
--- (naming the no-type-application reason) or the checker should allow it.
+-- the tree records the decision.
+--
+-- ⚠️ THAT RECONCILIATION IS ALREADY OWED AS SPEC WORK, NOT A NEW BUG. #1107 is
+-- "ARCH S-2: write the owed spec paragraphs the target architecture depends on",
+-- and its paragraph **(d)** is exactly this finding, verbatim: "Impl completeness
+-- / phantom-method rejection -- ENFORCED TODAY WITH NO GOVERNING CLAUSE (map §4
+-- Layer 5)." So do NOT file this separately, and do NOT "fix" it by relaxing
+-- `checkPhantomMethods` -- the spec paragraph decides which way it goes, and only
+-- then does the checker follow. #1107 is spec-only work with no behaviour change.
 --
 -- SEVERITY as observed: S3 (friction & debt). It is a LOUD, LOCATED reject with
 -- a helpful message, and it is an OVER-rejection -- nothing unsound is accepted.
--- This row pins the reject, so it self-drains if the checker is ever relaxed.
+-- This row pins TODAY'S REJECTION, so whichever way #1107 (d) resolves it goes
+-- RED: if the paragraph carves phantom position out of §5, the row stays and its
+-- label is corrected to "conformant"; if the paragraph instead keeps §5 licensing
+-- it, the checker relaxes and the row must be re-pinned to ACCEPT, value 7.
 interface Mk a where
   mk : Int -> a
   phantom : Int

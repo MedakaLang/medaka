@@ -18,9 +18,9 @@
 -- ⚠️ Agreement across engines is evidence here ONLY because the two lines
 -- disagree with EACH OTHER. Three engines agreeing on one line would prove
 -- nothing -- several known S0s have every engine equally wrong. And note the
--- sibling fixture s3-min-fully-general-sibling.mdk: replacing `impl Tag (List a)`
--- below with the FULLY GENERAL `impl Tag a` makes this exact discriminator fail
--- silently on both engines. The two rows differ in one token.
+-- sibling fixture s3-min-fully-general-sibling.mdk (**#1128**): replacing
+-- `impl Tag (List a)` below with the FULLY GENERAL `impl Tag a` makes this exact
+-- discriminator fail silently on both engines. The two rows differ in one token.
 interface Tag a where
   tag : a -> Int
 

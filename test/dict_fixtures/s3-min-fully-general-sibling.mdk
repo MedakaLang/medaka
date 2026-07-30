@@ -3,8 +3,10 @@
 -- CLASS-PLUS-HEAD-CONSTRUCTOR ALONE, WHICH CANNOT SEPARATE `List Int` FROM
 -- `List a`").
 --
--- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED. Reported to the orchestrator on 2026-07-30
--- with this repro and the control below; no open issue matched when this landed.
+-- 🚨 PINNED DIVERGENCE -- **#1128** (OPEN, S0: silent wrongness, `verified`).
+-- Found while building this gate; independently reproduced by the orchestrator on
+-- a second cold-built binary at `c4ef6dbe` with `MEDAKA_STRICT=1`, control and IR
+-- grep included, before the issue was filed.
 -- Severity as observed: **S0, silent wrongness** -- `check` exits 0 with no
 -- diagnostic and BOTH engines print a value produced by an impl whose head the
 -- goal DOES NOT MATCH.
@@ -29,7 +31,18 @@
 -- during elaboration, not at run time -- so it is not the runtime arm-matching
 -- site of #1072, and #1072 states explicitly that "single-module permutations are
 -- CLEAN", which this program contradicts. Treat them as adjacent, not identical,
--- until someone traces both.
+-- until someone traces both. #667 (CLOSED) is also NOT this: it was the FLAT
+-- shape (`impl Sz Int` + `impl Sz a`), was interpreter-only, and its exact repro
+-- prints the intended 999/999 on both engines here -- genuinely fixed.
+--
+-- 🔗 The target-architecture task most likely to SUBSUME this is **#1113**
+-- (ARCH B-2, "identity-stamped evidence ... min-specificity only at `inst`,
+-- emitter word-set retirement"). §11's arg-tag row names the same granularity
+-- defect one layer down -- `runtimeTypeTag` discriminating at bare head-tycon
+-- width, so it cannot separate `T Int` from `T Bool` either. That row is about
+-- eval's `filterByTag` RUNTIME fallback; this fixture's call is a DIRECT call
+-- decided at elaboration, so they are different sites of one keying assumption.
+-- Recorded as a pointer, not a dedup claim: #1128 is the tracked entry.
 --
 -- 🔬 THE CONTROL IS IN THE CORPUS, ONE TOKEN AWAY. `s5-argtag-unsound-under-
 -- overlap.mdk` is this program with the general sibling written `impl Tag (List a)`
@@ -42,8 +55,7 @@
 -- ⚠️ THIS ROW PINS A WRONG ANSWER ON PURPOSE, AND THE VALUE IT PINS IS NOT
 -- CORRECT. Do not "confirm" it against the engines -- they are the thing that is
 -- wrong. It goes RED the day selection starts keying on the full head, which is
--- the signal to re-pin it to the spec answer `99\n10\n10` and close the issue
--- this becomes.
+-- the signal to re-pin it to the spec answer `99\n10\n10` and close #1128.
 data Box a = Box a
 
 interface Tag a where

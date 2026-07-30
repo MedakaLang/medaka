@@ -1,5 +1,5 @@
--- THE DISCRIMINATING CONTROL for s6-1-4-supers-per-construction-goal (the
--- ⚠️ UNFILED build-path S0). Byte-for-byte the same instance environment; the
+-- THE DISCRIMINATING CONTROL for s6-1-4-supers-per-construction-goal
+-- (**#1127**, the build-path S0). Byte-for-byte the same instance environment; the
 -- ONLY change is that the helper declares `D a` DIRECTLY instead of reaching `D`
 -- through `C`'s superclass edge:
 --
