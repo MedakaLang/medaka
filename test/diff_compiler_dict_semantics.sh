@@ -116,7 +116,8 @@
 #   the §6.1 separating case is rejected. SOUND (an over-rejection), and #311
 #   records the 2026-07-16 owner decision to keep (a) for now.
 #   s6-1c-incomparable-no-minimum-control is the discriminating control.
-# * s4-gen-rec-inferred-asymmetric -- ⚠️ UNFILED, S1 LOUD BREAKAGE. An INFERRED
+# * s4-gen-rec-inferred-asymmetric -- #1133 (OPEN, S1 `verified`). LOUD BREAKAGE.
+#   An INFERRED
 #   mutually-recursive group in which only ONE body dispatches on the class:
 #   `check` accepts AND reports both schemes correctly as `Sz a =>`, then NEITHER
 #   engine will execute it -- `run` E-PANICs `unbound identifier:
@@ -130,7 +131,11 @@
 #   FOUND BY FIXING AN INERT ASSERTION -- the symmetric row used to claim it
 #   discriminated group from per-binding sourcing, which it could not; making the
 #   discriminator real is what exposed this.
-# * s5-phantom-determined-use-rejected -- ⚠️ UNFILED, S3 OVER-REJECTION. Inside
+# * s5-phantom-determined-use-rejected -- ⚠️ UNFILED, S3 OVER-REJECTION. THE ONLY
+#   REMAINING UNFILED PIN IN THIS CORPUS, knowingly: #1107 (d) owns the SPEC
+#   reconciliation but is spec-only and cannot drain a behavioural row, and no
+#   open issue covers the behaviour. One `grep -rn UNFILED test/` hit is the
+#   correct state here -- do not delete the marker to make the grep clean. Inside
 #   `useBoth : Mk a => a -> Int` the `Mk a` dict is in scope over a RIGID `a`, so
 #   §3 `assum` discharges the goal and §5 `(method)` projects: the spec ACCEPTS
 #   and prints 7. The checker rejects at the interface/impl DECLARATION and never
@@ -253,7 +258,7 @@ s4-gen-sig-body-needs-more-rejected.mdk|§4 `gen-sig` side condition `Q_sig ⊩ 
 s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|23|
 s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note. ⚠️ BOTH bodies dispatch, so this row does NOT discriminate group sourcing from per-binding sourcing (an earlier revision wrongly claimed it did); it is a regression guard on the schemes and values. The discriminating form is the asymmetric row below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
-s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- LEDGER ⚠️ UNFILED S1 LOUD BREAKAGE: an INFERRED mutually-recursive group in which only ONE body dispatches. check ACCEPTS and reports BOTH schemes as `Sz a =>` (the group-wide `P` attribution is right), then NEITHER engine will execute it -- run E-PANICs `unbound identifier: $dict_evenSz_0`, build dies `unbound dict witness ... in emit env (dict not threaded to this site)`. §4`s named failure mode, caught before it can become a wrong value. Controls: the ascribed twin and the symmetric row both run fine; mirroring which body dispatches fails symmetrically|ACCEPT|REJECT|REJECT|NONE||
+s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- LEDGER #1133 (OPEN, S1 LOUD BREAKAGE): an INFERRED mutually-recursive group in which only ONE body dispatches. check ACCEPTS and reports BOTH schemes as `Sz a =>` (the group-wide `P` attribution is right), then NEITHER engine will execute it -- run E-PANICs `unbound identifier: $dict_evenSz_0`, build dies `unbound dict witness ... in emit env (dict not threaded to this site)`. §4`s named failure mode, caught before it can become a wrong value. Controls: the ascribed twin and the symmetric row both run fine; mirroring which body dispatches fails symmetrically|ACCEPT|REJECT|REJECT|NONE||
 s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
 s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER ⚠️ UNFILED S3 OVER-REJECTION: inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ NOT drained by #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD

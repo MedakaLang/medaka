@@ -2,9 +2,22 @@
 -- discriminating half of the pair, and the row that shows the implementation's
 -- rule is strictly BROADER than the spec's.
 --
--- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED. Constructed 2026-07-30 while correcting the
--- ambiguous sibling (adversarial-review finding F5). Severity as observed: **S3,
--- an OVER-rejection** -- loud, located, and nothing unsound is accepted.
+-- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED, KNOWINGLY AND AS OF 2026-07-30 THE ONLY
+-- ONE LEFT IN THIS CORPUS. Every other pin here names an issue; this one has no
+-- behavioural issue to name, and that is a real state rather than an oversight:
+--   * #1107 (d) owns the SPEC reconciliation ("impl completeness / phantom-method
+--     rejection -- enforced today with no governing clause"), but it is spec-only
+--     and changes no behaviour, so it cannot be this row's drain -- see the long
+--     note at the bottom of this file for why pinning to it was wrong.
+--   * No open issue covers the BEHAVIOUR (the checker rejecting a use the spec
+--     resolves). A search of open issues for "phantom" at the time of writing
+--     returns #1107 and unrelated shapes only.
+-- So `grep -rn UNFILED test/` returning ONE hit -- this file -- is the correct
+-- state, not a missed cleanup. If a behavioural issue is later filed, replace
+-- this marker with its number; do NOT delete the marker to make the grep clean.
+-- Constructed 2026-07-30 while correcting the ambiguous sibling
+-- (adversarial-review finding F5). Severity as observed: **S3, an
+-- OVER-rejection** -- loud, located, and nothing unsound is accepted.
 --
 -- SPEC ANSWER (hand-derived): unlike the ambiguous sibling, NOTHING here is
 -- undetermined.

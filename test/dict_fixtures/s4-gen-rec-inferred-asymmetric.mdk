@@ -3,10 +3,13 @@
 -- class. `oddSz`'s body never mentions an `Sz` method, so it can acquire the
 -- predicate only from the GROUP.
 --
--- 🚨 PINNED DIVERGENCE -- ⚠️ UNFILED. Found 2026-07-30 while removing an inert
--- claim from `s4-gen-rec-inferred-context.mdk` (adversarial-review finding F6:
--- that fixture had `sz w` in BOTH bodies, so it could not distinguish per-binding
--- from group sourcing). Making the discriminator real is what exposed this.
+-- 🚨 PINNED DIVERGENCE -- **#1133** (OPEN, S1: loud breakage, `verified`).
+-- Found 2026-07-30 while removing an inert claim from
+-- `s4-gen-rec-inferred-context.mdk` (adversarial-review finding F6: that fixture
+-- had `sz w` in BOTH bodies, so it could not distinguish per-binding from group
+-- sourcing). Making the discriminator real is what exposed this. Independently
+-- reproduced by the orchestrator before filing; the three controls below are
+-- recorded in the issue.
 -- Severity as observed: **S1, loud breakage** -- `check` accepts and prints the
 -- CORRECT schemes; NEITHER engine will then execute the program. No silent
 -- wrongness: both failures are loud, located and name the missing dict.
@@ -48,7 +51,7 @@
 --
 -- ⚠️ THIS ROW PINS A BROKEN BUILD ON PURPOSE. It goes RED the day either engine
 -- starts executing it, which is the signal to re-pin it to ALL_EXACT `True\nTrue`
--- and close the issue this becomes.
+-- and close #1133.
 interface Sz a where
   sz : a -> Int
 
