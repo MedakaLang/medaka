@@ -907,8 +907,12 @@ non-derivation principle, that is a finding, not a formatting gap.
 | §8 **I3** (evidence travels, not re-derived) | No INDEPENDENT site — but not because none was located; re-audited with I1's vocabulary (`inferDictAtFound`, `crossModuleFunConstraintsQualRef`) rather than I3's, and the same site applies: `inferDictAtFound:4918` (row I1 above) is exactly the mechanism that lets a cross-module CALLER supply the callee's dict args rather than the callee re-deriving anything | a cross-module call passes evidence as ordinary leading dict arguments (`var`, row above), sized by the callee's identity-keyed arity (I1) — there is nothing *for* the callee to re-resolve; it receives dicts as parameters like any other argument | this is a structural consequence of dict-PASSING itself (the callee is a function of its dict params, not a re-resolver), not a separately-checkable rule — same shape as C2's finding: the right conclusion is "enforced by the calling convention," not "unimplemented" |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
-**UNIMPLEMENTED found:** §3 W2 (instance-context termination/Paterson coverage) — no
-site located.
+**Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
+termination/Paterson coverage) has no *static, declaration-time* check, but a *dynamic,
+resolution-time* depth cutoff does exist — `routeOfD`/`argImplRequiresRoutesRecD`, the
+#217 "WS-4b fuse", bounded at depth 32. See the W2 row above for why that is not
+equivalent to the spec's condition: a non-shrinking context terminates but is never
+rejected, and there is no diagnostic at depth 33.
 
 **Prominent divergence found:** §6 C1's implementation enforces condition (a)
 (global pairwise comparability) where the spec commits to condition (c) (per-goal
