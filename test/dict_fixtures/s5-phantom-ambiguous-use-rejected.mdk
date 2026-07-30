@@ -27,13 +27,20 @@
 -- enforces §5 correctly" from "the implementation rejects phantom methods
 -- wholesale". Its sibling `s5-phantom-determined-use-rejected.mdk` settles it --
 -- there the class parameter IS determined, the spec resolves the program, and
--- the implementation still rejects. So the implementation's rule is strictly
--- BROADER than the spec's, and only the pair shows it.
+-- the implementation still rejects -- filed as **#1134**. So the implementation's
+-- rule is strictly BROADER than the spec's, and only the pair shows it.
 --
--- Whether §5 should license phantom dispatch at all is owed spec work: #1107
--- paragraph (d), "Impl completeness / phantom-method rejection -- enforced today
--- with no governing clause". ⚠️ #1107 is SPEC-ONLY with no behaviour change, so
--- no behavioural drain is hung on it here -- see the sibling for that discussion.
+-- TWO ISSUES, TWO DIFFERENT THINGS, and they are not interchangeable:
+--   * **#1134** (OPEN, S3) is the BEHAVIOUR -- the over-rejection the sibling
+--     pins. That is where a behavioural drain can hang.
+--   * **#1107 paragraph (d)** is the SPEC work: "Impl completeness /
+--     phantom-method rejection -- enforced today with no governing clause". It is
+--     spec-only and changes no behaviour, so no drain is hung on it anywhere in
+--     this corpus -- see the sibling for the full reasoning.
+-- ⚠️ THIS ROW IS THE ONE THAT NEEDS RELABELLING BY HAND if #1107 (d) resolves by
+-- forbidding phantom methods in §5: the verdict would stay REJECT and correct,
+-- nothing would go red, and only the "CONFORMANT-WITH-CAVEAT" reading above
+-- would be stale (the caveat would simply disappear).
 interface Mk a where
   mk : Int -> a
   phantom : Int

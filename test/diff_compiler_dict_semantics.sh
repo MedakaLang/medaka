@@ -131,26 +131,25 @@
 #   FOUND BY FIXING AN INERT ASSERTION -- the symmetric row used to claim it
 #   discriminated group from per-binding sourcing, which it could not; making the
 #   discriminator real is what exposed this.
-# * s5-phantom-determined-use-rejected -- ⚠️ UNFILED, S3 OVER-REJECTION. THE ONLY
-#   REMAINING UNFILED PIN IN THIS CORPUS, knowingly: #1107 (d) owns the SPEC
-#   reconciliation but is spec-only and cannot drain a behavioural row, and no
-#   open issue covers the behaviour. One `grep -rn UNFILED test/` hit is the
-#   correct state here -- do not delete the marker to make the grep clean. Inside
+# * s5-phantom-determined-use-rejected -- #1134 (OPEN, S3 `verified`).
+#   OVER-REJECTION. Inside
 #   `useBoth : Mk a => a -> Int` the `Mk a` dict is in scope over a RIGID `a`, so
 #   §3 `assum` discharges the goal and §5 `(method)` projects: the spec ACCEPTS
 #   and prints 7. The checker rejects at the interface/impl DECLARATION and never
 #   looks at the use site. Paired with s5-phantom-ambiguous-use-rejected (which
 #   BOTH spec and impl reject) this shows the implementation rejects a strict
-#   SUPERSET of what the spec does.
-#   ⚠️ NOT PINNED TO #1107 (d), deliberately, and this correction is worth keeping:
-#   #1107 is "ARCH S-2: write the owed spec paragraphs", its paragraph (d) is this
-#   finding verbatim -- but it is SPEC-ONLY WITH NO BEHAVIOUR CHANGE. A REJECT row
+#   SUPERSET of what the spec does -- the pair is what makes the finding land.
+#   ⚠️ PINNED TO #1134 (BEHAVIOUR), NOT #1107 (d) (SPEC), and that distinction is
+#   worth keeping because an earlier revision got it wrong: #1107 is "ARCH S-2:
+#   write the owed spec paragraphs" and its paragraph (d) is this finding
+#   verbatim -- but it is SPEC-ONLY WITH NO BEHAVIOUR CHANGE, so a REJECT row
 #   pinned to it would stay green through its entire lifetime and then go stale
-#   silently: a self-draining pin that cannot drain is worse than no pin. What
-#   this row drains on is a BEHAVIOUR change (the checker narrowing to reject only
-#   ambiguous USES). If #1107 (d) instead decides §5 should forbid phantom methods
-#   outright, nothing here goes red and whoever closes it must re-label by hand --
-#   stated in the fixture rather than papered over.
+#   silently. A self-draining pin that cannot drain is worse than no pin.
+#   ⚠️ #1107 (d)'s TWO RESOLUTIONS MOVE IN OPPOSITE DIRECTIONS: narrowing the
+#   checker closes #1134 as a FIX and reds this row (automatic, re-pin to ACCEPT
+#   7); forbidding phantom methods in §5 closes #1134 as WORKING-AS-INTENDED,
+#   reds nothing, and needs this row plus its sibling relabelled BY HAND. The
+#   second case cannot be automated and is recorded on #1134 itself.
 #
 # ###################################################################
 # # NOT YET COVERED -- an honest punch-list, not a silent gap        #
@@ -261,7 +260,7 @@ s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather t
 s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- LEDGER #1133 (OPEN, S1 LOUD BREAKAGE): an INFERRED mutually-recursive group in which only ONE body dispatches. check ACCEPTS and reports BOTH schemes as `Sz a =>` (the group-wide `P` attribution is right), then NEITHER engine will execute it -- run E-PANICs `unbound identifier: $dict_evenSz_0`, build dies `unbound dict witness ... in emit env (dict not threaded to this site)`. §4`s named failure mode, caught before it can become a wrong value. Controls: the ascribed twin and the symmetric row both run fine; mirroring which body dispatches fails symmetrically|ACCEPT|REJECT|REJECT|NONE||
 s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
 s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
-s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER ⚠️ UNFILED S3 OVER-REJECTION: inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ NOT drained by #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
+s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER #1134 (OPEN, S3 OVER-REJECTION): inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ Drains on #1134 (BEHAVIOUR), never on #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
 s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
 s6-1c-per-goal-unique-min-rejected.mdk|§6.1 choice-point 2 -- LEDGER #614/#311 (both OPEN): the §6.1 SEPARATING CASE. Spec commits to (c) per-goal unique minimum and would ACCEPT, printing 3; the declaration-time sweep enforces (a) global comparability and rejects. Sound over-rejection; #311 records the owner decision to keep (a) for now|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
