@@ -746,6 +746,34 @@ orders merges, and the plan does not pretend otherwise.
   IMPLEMENTED claim); **(f) local-binder `gen`** (predicate deferral across
   nested binders, the value-restriction gate, evaluation-timing neutrality) —
   F-1's gate. Each lands with its enforcement-table row (L5).
+
+  ✅ **LANDED 2026-07-30 (#1107): all six, in `docs/spec/DICT-SEMANTICS.md`** —
+  (a) **§8 I4/I5**, (b) **§6.2**, (c) **§6.3**, (d) **§5.1**, (e) **§7.1**,
+  (f) **§4.1**, each with a §11 row. Three of them settle a question this document
+  left open or stated loosely, and the differences bind:
+  - **§6.2 T4/T5 adopt quiescence and explicitly REJECT freeze-at-module-close**,
+    the choice §2 S delegated here. But T3/T4's row records that today's drain is
+    keyed on the **module** boundary (`elabModuleStamp`) while the tyvar cells
+    outlive it — so quiescence *extends* today's behaviour rather than describing
+    it, and §2 S's parenthetical *"matching today's whole-module-then-stamp
+    behavior"* must be read as *extends*, not *describes*. **E-4's S-2(b) gate is
+    lifted.**
+  - **§8 I5 names THREE consequences of global candidacy, not one.** §5 R2 calls it
+    an acceptance widening; the candidate-set widening also (2) creates **new C1
+    ambiguity rejections**, where a newly-visible `⊑`-incomparable instance destroys
+    a minimum a smaller candidate set had, and (3) **silently changes answers**,
+    where a newly-visible instance is strictly more specific than the previous
+    winner. A-3's could-not-pass-before fixture covers (1) only; (2) and (3) need
+    their own accounting in that PR.
+  - **§5.1 M3 decides (d) in the direction that NARROWS THE CHECKER**, so #1134 is a
+    fix and the determined-use fixture flips to ACCEPT (re-pin by hand). §5.1 **M2**
+    additionally states a rule with no implementing site anywhere — an impl may not
+    define a method the interface does not declare — whose silent case, a misspelled
+    override of a *defaulted* method, has no diagnostic on any engine.
+
+  **F-1's S-2(f) gate is lifted**, with one constraint added: §4.1 **G4** forbids the
+  interim pin's shape by name — an implementation that cannot dict-abstract a local
+  must **reject** the multi-type use, never monomorphise (#1052).
 - **S-3. Enforcement tables for DICT and EFFECTS** (clause → site → keying
   assumption), SHADOW-§3-style, added to the specs and gated by the doc gates.
   The map's §4 spec column is the seed.

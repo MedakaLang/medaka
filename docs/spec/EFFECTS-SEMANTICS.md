@@ -1239,12 +1239,26 @@ in argument types. What generalizes is the **invariant on `φ`**, not a signatur
 so the obligation is a checkable property of each declared eliminator, not
 something an interface can impose.
 
-**Nothing enforces it today, and the index it would protect is itself unchecked.**
-Probed on a binary built from `main` (2026-07-26), then independently reproduced
-and filed. These are conformance findings against §9, not claims about the spec.
+**The obligation itself is still unenforced for interface methods; the index it
+protects is no longer unchecked.** Probed on a binary built from `main`
+(2026-07-26), then independently reproduced and filed. These are conformance
+findings against §9, not claims about the spec.
 
-**Finding 1 — the `Effect`-kinded argument slot is not checked at unification (see
-#1094).** On the shipped `Async`:
+⚠️ **Status, 2026-07-30: Finding 1 is CLOSED; Finding 2 is OPEN.** The two findings
+below were both live when this section was written and their statuses have since
+diverged. **#1094 closed 2026-07-27** (PR #1102): `unifyN (TEff r1) (TEff r2) =
+unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) now routes an
+`Effect`-kinded index slot through `unifyIndexRow:1040` / `unifyIndexRowN:1043` /
+`indexRowEqCheck:1056`, which enforces exactly the invariant-equality rule §9
+specifies. **#1095 remains OPEN.** Finding 1's text is kept below because it is the
+record of what was wrong and why the fix had to land at unification rather than
+downstream — but every present-tense claim in it that the slot is unchecked is
+**historical**, and the corrections at its end say which. The division of labour the
+two findings' closing note describes is unchanged: fixing either always left the
+other standing, and one of them is still standing.
+
+**Finding 1 (CLOSED — #1094, fixed 2026-07-27) — the `Effect`-kinded argument slot
+was not checked at unification.** On the shipped `Async`, as of 2026-07-26:
 
 ```
 import async.{Async, liftIO, runAsync}
@@ -1296,8 +1310,24 @@ also records: because `rowArgOf`'s catch-all returns the pure row, an ordinary
 **type** written in the index slot (`Box Int Int`) is silently read as
 `Box ⟨ ⟩ Int`.
 
-Until #1094 is addressed the index is decorative: **the graded story's soundness is
-currently resting on a check that does not run.**
+**Resolution (2026-07-27, PR #1102).** The fix landed exactly where the paragraph
+above predicted it had to: `unifyN`'s `(TEff, TEff)` case no longer reaches the
+arrow-row unifier at all. It dispatches to `unifyIndexRow`, whose closed-vs-closed
+and same-tail-open arms are **equality-only**, falling through to ordinary
+`unifyRowN` only when the two tails are provably distinct metavariables (a genuine
+instantiation, not an interchange). The probe above is rejected on a current binary.
+The sentence this paragraph used to end with — *"until #1094 is addressed the index
+is decorative: the graded story's soundness is currently resting on a check that does
+not run"* — was true when written and is **no longer true**; it is quoted rather than
+deleted because it is the clearest statement of what the missing check cost.
+
+⚠️ Two of Finding 1's sub-observations were **not** part of #1094's headline and
+should be re-probed rather than assumed closed with it: that `rowArgOf`'s catch-all
+returns `pureRow`, so an ordinary **type** written in the index slot (`Box Int Int`)
+reads as `Box ⟨ ⟩ Int`; and that a bare `<e>` open-tail target can absorb silently,
+landing the rejection downstream of the index. Both are recorded in this section's
+own text above, and the target architecture carries the first as a task
+(*"`rowArgOf`'s catch-all must be a kind error, not `pureRow`"*).
 
 **Finding 2 — the eager-arm fork is a soundness question, not a preference (see
 #1095).** The refinement matters and this document previously got it a notch wrong.
@@ -1637,11 +1667,18 @@ the extern catalog is trusted, like any FFI boundary.
   invariance does not rest on how sibling type-argument positions behave; it
   stands on the variance argument above alone.
 
-  ⚠️ **Probed and currently FALSE on the implementation** — see §6.7, finding 1,
-  and #1094: the closed-versus-closed arm of the row unifier is a documented
-  silent no-op whose justification is arrow-specific and does not transfer to an
-  invariant index. (Unaffected by the correction above: the implementation was
-  never enforcing `≤` at this slot either — it enforces nothing.)
+  ✅ **ENFORCED since 2026-07-27 (#1094 closed, PR #1102).** This bullet read
+  *"Probed and currently FALSE on the implementation"* until 2026-07-30, and by then
+  the statement was two days stale: `unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2`
+  (`compiler/types/typecheck.mdk:3396`) routes an `Effect`-kinded index slot to
+  `unifyIndexRow:1040` / `unifyIndexRowN:1043` / `indexRowEqCheck:1056`, which is
+  equality-only on the closed-vs-closed (`:1044`) and same-tail-open (`:1046-1048`)
+  forms and falls through to ordinary `unifyRowN` (`:1049`) only when the tails are
+  distinct metavariables. The arrow-row unifier's closed-vs-closed silent no-op still
+  exists and is still correct **for arrows** — the fix was to stop routing indices
+  through it, not to change it. The *rule* stated above was never wrong; only this
+  note about the implementation was. (Also unaffected by the correction above: the
+  implementation was never enforcing `≤` at this slot either.)
 - **Deferred discharge.** Every elimination form of an effect-indexed type that
   *runs* a registered computation charges that computation's index on its own
   latent row (§6.7). Together with index fidelity this is what makes "registered
@@ -1693,10 +1730,12 @@ a clause:
   `F <IO> τ` accepted where `F ⟨ ⟩ τ` is demanded — the *value* slot being checked
   is not evidence that the index slot is, and an ordinary type accepted in the
   index slot (`F Int τ` read as `F ⟨ ⟩ τ`) is the same gap seen from the other
-  side. Both open against this clause today: #1094 (index unchecked) and #1095 (a
-  result-index occurrence miscounted as a charge in a method signature). Note
-  neither shows up as an engine divergence — both engines are equally wrong — so
-  `diff_compiler_engines` cannot see this class.
+  side. Of the two issues once open against this clause, **#1094 (index unchecked) is
+  CLOSED** (2026-07-27, PR #1102 — see the §9 bullet) and **#1095 (a result-index
+  occurrence miscounted as a charge in a method signature) is OPEN**. Note neither
+  showed up as an engine divergence — both engines were equally wrong — so
+  `diff_compiler_engines` could not see this class, and cannot see the half that
+  remains.
 - **Erasure / backend agreement** → §8: any divergence in result (not just
   acceptance) between evaluators traceable to effects violates the single-meaning law.
 - **`main` policy** → §7: a *language-internal* upper-bound gate on `main` would be a
@@ -1714,16 +1753,16 @@ re-derive with `grep -n '^<symbol>' <file>` rather than trusting them). Follows
 [`SHADOW-SEMANTICS.md`](SHADOW-SEMANTICS.md) §3's form. A clause with no located
 site is marked **UNIMPLEMENTED**, not skipped, per §0's non-derivation principle.
 
-⚠️ **This table found the spec's own narrative stale in one place.** §6.7 Finding 1
-and the §9 "index fidelity" correction both assert the `Effect`-kinded argument slot
-is "currently FALSE on the implementation" / "nothing enforces it today" (#1094).
-**That is no longer true**: `#1094` is CLOSED (2026-07-27), and
-`unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2`
-(`compiler/types/typecheck.mdk:3396`) now routes index rows through
-`unifyIndexRow:1040`/`unifyIndexRowN:1043`/`indexRowEqCheck:1056`, which enforces
-exactly the invariant-equality rule §9 specifies. The *rule* was never wrong; the
-*prose describing today's implementation* is — this document was not updated after
-#1094 landed. See the "Index fidelity" row below.
+✅ **The staleness this table found in the document's own narrative is now fixed
+(2026-07-30, #1107).** When these rows were built, §6.7 Finding 1 and the §9 "index
+fidelity" bullet both asserted the `Effect`-kinded argument slot was *"currently FALSE
+on the implementation"* / *"nothing enforces it today"*, citing #1094 — which had
+closed on 2026-07-27. Rather than leave the contradiction standing behind a notice,
+both passages have been corrected in place, with the superseded sentences quoted so
+the record survives; §10's "index fidelity and deferred discharge" bullet was corrected
+with them. The lesson is the durable part: **a `$BASE`-verified enforcement table can
+be newer than the prose above it**, so a clause's narrative and its row must be
+re-read together, and the row is the one with a derivation.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
@@ -1777,11 +1816,14 @@ kinds" design of §6.1-§6.5 has no parser support yet, only the *old*, narrower
 inference-only mechanism §6.8 says it should retire. Plus, separately: §6.7
 deferred-elimination obligation for interface methods (#1095, tracked, OPEN).
 
-**Prominent finding — spec narrative is stale, not the rule:** §6.7 Finding 1 / §9
-"index fidelity" describe the `Effect`-kinded argument slot as currently unenforced
-(citing #1094). #1094 closed 2026-07-27 and the fix (`unifyIndexRow` et al.) is
-live at `$BASE`. The *normative rule* was correct throughout; only this document's
-prose about *today's implementation state* needs updating.
+**Prominent finding — spec narrative was stale, not the rule (RESOLVED 2026-07-30):**
+§6.7 Finding 1 / §9 "index fidelity" / §10 described the `Effect`-kinded argument slot
+as currently unenforced, citing #1094. #1094 closed 2026-07-27 and the fix
+(`unifyIndexRow` et al.) is live. The *normative rule* was correct throughout; only
+this document's prose about *today's implementation state* was wrong, and #1107
+corrected all three passages. **#1095 is untouched by that correction and is still
+OPEN** — the deferred-elimination obligation for interface methods remains the one
+place §9's "deferred discharge" statement has no enforcement behind it.
 
 ---
 

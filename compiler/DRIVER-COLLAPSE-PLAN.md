@@ -1,9 +1,26 @@
 # DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers
 
-**Status:** IMPLEMENTED — `6874c3f6`, 2026-06-13. All phases done; single-file/
-multi-module drivers collapsed; `medaka check` resolves imports (option A — no
-single-file-only tool variant kept). `checkProgram`, the flat `elaborate`, `evalProgram`,
-and `evalOutput` were deleted per the doc's own Phase-5 log.
+**Status:** PARTIALLY IMPLEMENTED — the ENTRY POINTS collapsed (`6874c3f6`,
+2026-06-13); the DRIVER did not. `medaka check` resolves imports (option A — no
+single-file-only tool variant kept), and `checkProgram`, the flat `elaborate`,
+`evalProgram` and `evalOutput` were deleted per this doc's own Phase-5 log. **But the
+flat typecheck *path* is live**: `data CheckMode = Flat … | Module …`
+(`compiler/types/typecheck.mdk:12822`) with **20 `Flat` arms** in `checkBodyImpl`
+(derive: `grep -c '^    Flat ' compiler/types/typecheck.mdk`), a second route-stamper
+sequence (`elaborateDict` vs `elabModuleStamp`), and six external consumers — repl,
+`check_policy`, `doc`, playground, the `core_ir_dict_pp_main` entry, and the
+promotion fallback inside `typecheck.mdk` itself.
+
+🚨 **This doc's own governing invariant — *"the degenerate 1-module case
+automatically satisfies the flat path's invariants"* (§"Entry points being
+collapsed") — is a STATED INVARIANT WITH A MEASURED COUNTEREXAMPLE, and reading the
+old status line as evidence for it has misled at least one design.** The invariant is
+correct and is now **normative** as `docs/spec/DICT-SEMANTICS.md` **§7.1** (driver
+unimodality: U1/U2), with its enforcement row in that document's §11 recording the
+divergence above. **§7.1 supersedes this status line.** Finishing the collapse is
+tracked as Stage E of the typechecker target-architecture arc (`compiler/`
+`TYPECHECK-TARGET-ARCHITECTURE.md` §6, epic #1122: E-1 consumers → E-2 `CheckMode`
+collapse → E-3 defaulting placement → E-4 scheduled marking).
 
 Status: APPROVED 2026-06-13 (user). Implements `compiler/TYPECHECK-AUDIT.md §6`
 ("Dual drivers … the recurring defect"). Collapse the single-file typecheck+eval
