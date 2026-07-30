@@ -1092,3 +1092,69 @@ lessons generalise past this subsystem.
   twice in one session. Grep bodies and commit messages; skip comments. *A warning you learn to
   ignore is worse than no warning.*
 
+
+## Stage S of the typecheck arc, 2026-07-30 — building the gate found more than hunting would have
+
+Twelve issues, three of them S0, from landing three PRs. **Six came out of BUILDING and
+REVIEWING a conformance gate and its specs, not from looking for bugs.** #616's premise —
+a spec with no executing gate accumulates divergence silently — is now measured rather
+than argued: two of the S0s are invisible to `diff_compiler_engines` *by construction*,
+because both engines agree on the wrong value.
+
+- 🔴 **PROVING A NEGATIVE INSIDE ONE FILE IS NOT PROVING A NEGATIVE. Four wrong verdicts,
+  one root cause.** An enforcement-table row saying "no implementing site" is a *negative
+  existence claim*, and every one that failed this session failed the same way:
+  - DICT §3 **W2** — grepped for the spec's words (Paterson, coverage condition,
+    structurally smaller); the code calls it a **fuse** (`routeOfD`, depth-32, #217).
+    *Wrong vocabulary.* (Backticks deliberately omitted: those are search strings that
+    resolve to nothing, and `agent-doc-symbols` correctly flags a backticked one as a
+    dead symbol claim — it caught this paragraph on its first run.)
+  - DICT §5.1 **M2** — searched `typecheck.mdk` for `T-*` codes; the check is
+    `MethodNotInInterface` in **`resolve.mdk`**, no `T-` code at all. *Wrong stage.*
+  - DICT §8 **I4** field half — right file, but no search word covered
+    `T-AMBIGUOUS-FIELD`. *Right place, wrong words.*
+  - DICT §4.1 **G2** — a *positive* misread: "over non-expansive parts", written after
+    reading the very line that refutes it, because the three sibling arms (`ETuple`,
+    `EListLit`, `ERecordCreate`, all `allList`) made the wrong reading look obvious.
+
+  **My guidance caused three of them.** I wrote *"search the implementation's vocabulary,
+  not the spec's"* with synonym families (fuse/fuel/depth, guard/gate/check) — a purely
+  **lexical** widening, and the example I cited was also lexical, which reinforced the
+  incomplete reading. The rule is **vocabulary AND stage**. Index the *error constructors*
+  (`ppResError`'s arms) rather than only `T-` codes.
+- 🔴 **A spec-only (no-build) agent's "no site exists" is a HYPOTHESIS, not a finding.**
+  Both M2 and I4 died to one probe each. The no-build constraint is right for a spec task
+  — it is also exactly why the coordinator must probe the enforcement rows before merging.
+  Budget for it; it is cheap and it caught two false claims in one round.
+- ⭐ **Reviewing a rule ≠ reviewing its citations — and it found a memory-safety S0.**
+  #1139 (clean typecheck → **segfault**) came from asking *"is §4.1 G3 sound?"*, tracing
+  its premise to `isNonexpansive`, and finding the constructor arm tests only the LAST
+  spine argument. Nobody was hunting a value-restriction bug. **And the comment directly
+  above the defect specifies the correct rule** — so the code diverges from its own
+  documentation, which makes the fix need no adjudication. Ask it of every normative
+  paragraph.
+- ⚠️ **A proposed LAW may be covering for an unenforced one.** An analysis proposed a sixth
+  design law (L6, "elaboration output is total"). Adversarial review killed it: the
+  flagship bug was an **L1 violation** — `ImplUniverse` is complete (unions `univHeadless`),
+  `KeyBuckets` is not — with a working reference implementation 1200 lines away. The plan
+  already prohibited it; what was missing was that the stage blast lists never named the
+  incomplete copy. **Before adding a law, check whether an existing one is being violated
+  unnoticed.** Its own completeness argument was circular (the bucket is exhaustive
+  *because* the tyvar-headed entries were dropped at construction).
+- ⚠️ **"Write the command, never the number" needs a caveat: a FILE grep is a candidate
+  list, not an answer.** `grep -rln elaborateDict` over-counted the `Flat` consumer set by
+  two (files that mention the symbol only to say they don't use it). Ship the command *plus*
+  the narrowing step.
+- ⚠️ **The closing-keyword trap fires from QUOTED material.** An agent nearly pasted a
+  ledger's quotation of another issue's decision record — *"Both options close #817/#825
+  equally"* — into a live comment, which would have closed two open issues. The precise
+  rule (derived while dodging it): GitHub acts only when the keyword **directly precedes**
+  the number, so `"#1095 is closed by the arc"` is inert and `"close #817"` is not. That
+  is why a keyword scan yields both true and false positives, and why each hit needs a
+  human look rather than an auto-rewrite.
+- ⚠️ **I overstated my own issue count by four**, in a session spent enforcing
+  derive-don't-encode on everyone else. `gh issue list --author @me --search created:<date>`
+  is one command. Derive the tally before reporting it.
+- ⚠️ **My worktree was 4 commits stale at wrap-up and a pin-status grep reported everything
+  ABSENT.** I nearly reported a false alarm about missing fixtures. `git merge origin/main`
+  before *any* wrap-up derivation — the state you are auditing is on `main`, not in your tree.
