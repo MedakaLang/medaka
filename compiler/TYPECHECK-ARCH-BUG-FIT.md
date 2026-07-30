@@ -5,9 +5,19 @@ against [`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) (
 and epic #1122 (the stage table). Derived first-hand from `compiler/**/*.mdk` at
 `13b9fafe` (2026-07-30). Extends §4's traceability matrix from *families* to
 *individual bugs*, and states a falsifiable prediction for every DRAINED-BY verdict so
-each row is **gradeable the day its stage merges**. The design document is the
-authority; nothing here amends it — the proposed changes in the GAP sections are
-proposals for the orchestrator.
+each row is **gradeable the day its stage merges**. The design document is the authority.
+Two of this ledger's proposals were adjudicated and are now **adopted into it** (§2 K
+match-preserving indices; §2 E arity in the output contract, plus a §2 K correction to a
+false W2 claim); every other proposal below is a proposal for the orchestrator, not a
+change of record.
+
+**Revision, 2026-07-30 — the synthesis was rewritten after adversarial review.** The
+first version classified all gaps as one shape and proposed a sixth design law (L6). The
+review falsified both, and I verified each counter-claim against source. **Every per-bug
+verdict, mechanism and falsifiable prediction survived unchanged**; only the synthesis,
+the #1128 row's diagnosis, and the G-7/G-8 remedies moved. The corrected classification
+is three shapes plus one genuine absence; the withdrawn L6 and *why* it failed are kept
+below rather than deleted, because the two ways it broke are the more useful record.
 
 > **The burden of proof here is inverted.** "The plan covers this" is the claim that
 > needs a mechanism plus a prediction; "this is a gap" is the cheap answer. A row with
@@ -37,68 +47,152 @@ proposals for the orchestrator.
 | #1121 contravariant Type parameter widens | DRAINED-BY **D-2** (#1119) | D |
 | #1125 eval loses a `requires` dict under overlap | DRAINED-BY **B-1 + B-2** (both required) — and it re-prices B-1's owed #323 scope decision | B |
 | #1127 superclass-projected dict picks the general instance | DRAINED-BY **B-1 + B-2** (hypothesis CONFIRMED) — **plus GAP G-5** (`activeDictVars` keying is in neither task's blast list) | B + G-5 |
-| #1128 `impl C a` beside a concrete parametric-head impl | **GAP** — B-2 covers half; nothing makes the candidate set complete. **NOT** engine-realization (hypothesis disproved) | B-2 + new law; see G-6 |
+| #1128 `impl C a` beside a concrete parametric-head impl | **GAP (L1 fork)** — B-2 covers the route half; candidate collection is complete on the obligation path (`univHeadless`) and not on the route path. **NOT** engine-realization (hypothesis disproved) | A-3 + B-2; see G-6 |
 
 **Exclusion re-audit** (§4's engine-realization list): #1034 ✅ holds · #826 ✅ holds ·
 #1101 ✅ holds · #1043-emitter-half ✅ holds · **#1020 ⚠️ partially misclassified** —
-see G-7. All five, plus #1101, additionally share an uncovered **L1** class defect (G-8).
+see G-7. Separately, #1034/#826/#1101 share an **L1** class defect (arity, G-8) that had
+no owner; §2 E's amendment now gives it one.
 
 ---
 
-## What the gaps have in common — read this before the rows
+## How the eight gaps classify — read this before the rows
 
-Seven gaps. **Every one of them is a completeness gap, not a keying gap**, and the
-design has no law that covers completeness.
+> **⚠️ This section was rewritten after adversarial review (2026-07-30). The first
+> version claimed eight gaps were "seven gaps, every one a completeness gap" and
+> proposed a sixth law, **L6 — elaboration output is total**, to cover them. The review
+> broke L6 and falsified the synthesis; the per-bug verdicts, mechanisms and predictions
+> below survived unchanged. What follows is the corrected classification. The L6 proposal
+> is **withdrawn** — see "Why L6 was wrong" at the end of this section, which is kept
+> because the two ways it failed are the interesting part.
 
-The five laws in §1 are all properties of *how a decision is made and carried*:
-L1 one implementation · L2 identity not spelling · L3 order specified-or-irrelevant ·
-L4 evidence structured and uniform · L5 the spec is executable. Together they make the
-*decision* unambiguous. **None of them says anything about whether the decision's
-INPUTS, or the engines' INPUTS, are complete.** And that is exactly where the residue
-sits:
+**Eight gaps, G-1 … G-8, in three distinct shapes.** They do *not* share one shape, and
+saying they did was the first version's central error.
 
-- **#1128** — the fully-general `impl Tag a` produces **no registry entry at all**
-  (`keyEntryOf` → `headTyconTy (TyVar _)` → `None` → `[]`). A perfect `min⊑` selector
-  over an incomplete candidate set still returns the wrong instance.
-- **#1020** — a cross-module impl that overrides only defaults produces **no lowered
-  entry at all** (`lowerDeclImpl` emits one entry per method *defined*;
-  `fillImplDefaults` is same-module only). Each engine then re-synthesizes the missing
-  arm privately, and wasm forgot to.
-- **#1127** — the super slot exists but carries **no distinguishing key**
-  (`activeDictVars : Ref (List (Int, String))` — tyvar id only, no interface
-  component), so the body's `D a` goal cannot name its own dict.
-- **#1034 / #826 / #1101** — the elaboration output carries routes and dicts but **not
-  arity**, so three consumers derive it three ways and two of them disagree.
+### Shape 1 — L1 forks: one judgment, two implementations, one of them incomplete (G-6, G-7)
 
-Contrast the *keying* problems (#1069/#1070/#1092/#1072): those are exactly what
-Stage A is built for, and the plan handles them cleanly. The plan is a plan about keys.
+This is **not** a missing law. It is L1's core prohibition — *"Each spec judgment has
+exactly one implementation, parameterized where call sites differ, never forked"* —
+violated by construction, with a working reference implementation already in the tree.
 
-There is a second, smaller shape worth naming because the design document itself fell
-into it: **three bugs (#819, #1095, and #817/#825) are placed in a family by TOPIC and
-then the family's design element does not reach them.** #819 sits in family G whose
-element is "W3 rigid everywhere" — but W3 exempts impl-head variables *by construction*,
-so the element is structurally incapable of draining it. That is the same
-pattern-match-onto-a-plausible-stage failure this ledger's own instructions warn
-against, committed once inside the matrix.
+- **G-6 / #1128.** "Which instances match this goal?" has **two** implementations in
+  `compiler/types/typecheck.mdk`. The obligation-checking path is **complete**: it
+  unions the headless bucket into every lookup —
 
-### Proposed plan change (the one that subsumes four gaps)
+  ```
+  13617: implMatchesU univ iface (a0::rest) = bucketArgsMatch (univConcreteBucket univ iface (headTyconMono a0)) (a0::rest)
+  13618:   || bucketArgsMatch (univHeadless univ iface) (a0::rest)
+  ```
 
-Add a sixth law and give it a stage:
+  with `implMatchesReceiverU` (`:13628-13629`) and `findMatchingImplReqsU`
+  (`:13666-13669`) doing the same, and the source stating the reason outright at
+  `:13661-13662`: *"Headless impls carry no head tycon and so are absent from
+  KeyBuckets — the headless bucket fallback (still over the ImplUniverse) covers
+  them."* The **route-stamping** path is not: `keyEntryOf` (`:11362`) emits no entry
+  when `headTyconTy` is `None` (`:11632`), so `matchingEntries` (`:11427`) never sees a
+  fully-general `impl C a`. **The fix is twelve hundred lines away in the same file.**
+  ⚠️ `matchingEntries`' own completeness argument (`:11421-11423`) is **circular** — its
+  bucket is exhaustive *because* tyvar-headed entries were dropped at construction — so
+  it must not be read as evidence that the two paths agree.
+- **G-7 / #1020.** "What is this instance's method table?" is answered in four places:
+  `fillImplDefaults` (same-module only, `desugar.mdk:851`), `eval.mdk`'s untagged
+  `defaultEntry` (`:1888`), LLVM's `emitDefaultDispatchChain`, and wasm's absent peer.
+  `lowerDeclImpl` (`core_ir_lower.mdk:1267`) emits one entry per method *defined*, so a
+  cross-module default-only impl lowers to zero entries and each engine must invent the
+  arm privately. Same shape, no complete reference implementation.
 
-> **L6 — Elaboration output is total.** Every instance in `IE` carries its **complete**
-> method table (interface defaults resolved whole-graph, not per-module and not
-> per-engine); every candidate set consulted by `min⊑` contains **every declared
-> instance**, including heads with no head tycon; and every fact an engine needs —
-> route, evidence reference, admissibility predicate, **and arity / calling
-> convention** — is present in the elaboration output rather than re-derived by the
-> engine from a partial view. An engine that must *supply* something the elaboration
-> omitted has forked the judgment exactly as surely as one that *recomputes* something
-> the elaboration provided (L1's dual).
+### Shape 2 — keying gaps L2 does not reach, because it constrains the key's TYPE, not its PROVENANCE (G-4, G-5)
 
-L6 is the dual of L1 and it is the missing half: L1 forbids re-deriving what was
-decided; L6 forbids *not deciding* something an engine then has to invent. Concretely
-it makes A-3 (K) own instance method-table completion, makes B-2 own candidate-set
-completeness, and gives #1034/#826/#1101's class an owner for the first time.
+L2 reads *"no component keys anything by a bare `String` name"*, and the registry
+ratchet is mechanical on that: *"A bare-`String` key fails the check."* Both gaps here
+key by something that is not a bare `String` and would pass unchanged:
+
+- **G-4 / #1092** — `(module, name)`, a tuple, still under-determining (two interfaces
+  in one module declaring the same method name).
+- **G-5 / #1127** — `activeDictVars : Ref (List (Int, String))` (`:3139`), a bare
+  **tyvar id**, with no interface component at all.
+
+The defect is that L2 is a constraint on the key's *representation* where it needs to be
+a constraint on its *provenance* — every key must be derived from the resolved identity
+of the thing being keyed, whatever type that identity is encoded in.
+
+### Shape 3 — plan-scope / ownership holes, no law implicated (G-1, G-2, G-3)
+
+Nothing in §1 is violated; a stage simply does not exist, or two stages point at each
+other. **#819** (no stage owns instance-head fidelity; family G's "W3 rigid everywhere"
+cannot reach it because W3 exempts head vars by construction), **#1043** (F-1's scope
+says "local bindings" where the defect is four uncovered inference paths), **#1095 /
+#817 / #825** (D-3 defers to #823; #823's record says there is nothing to decide).
+
+Worth naming because the design document itself fell into it once: these three are
+placed in a family by **topic**, and then the family's design element does not reach
+them. That is the pattern-match-onto-a-plausible-stage failure, committed inside the
+matrix.
+
+### The one genuine absence from the output contract (G-8)
+
+**Exactly one** item is a fact the elaboration never carries and therefore has no owner
+anywhere: **per-method arity and calling convention** (#1034 / #826 / #1101's class).
+`eval.mdk`'s `implMethodValue` (`:1837`) builds a closure from the impl clause's `pats`;
+`methodArityOf` (`backend/emit_support.mdk:485`) reads a table `methodIfaceTable`
+(`core_ir_lower.mdk:1399`) builds from `methodArgTys` (`:1382-1386`), which walks the
+whole arrow spine. §2 E's output contract listed routes, dicts, evidence and
+admissibility — not arity.
+
+### Why L6 was wrong (kept, because the failure modes are the finding)
+
+**It was unnecessary.** The claim it rested on — *"none of L1–L5 says anything about
+whether the decision's INPUTS are complete"* — is false twice over. L1's own text
+(`TYPECHECK-TARGET-ARCHITECTURE.md`, L1) already names **"admissibility predicates"**
+among the derived artifacts that must be consumed and never re-derived; and, decisively,
+#1128 *is* a fork of one judgment into two implementations, which is L1's core
+prohibition verbatim. A new law was proposed for a case an existing law already forbids.
+
+**It was unachievable as stated, and one clause was actively dangerous.**
+
+- *Route/evidence totality cannot hold.* W2 is a **depth-32 fuse**
+  (`argImplRequiresRoutesRecD`: `if depth >= 32 then []`), not a static condition, so
+  elaboration's route data is deliberately partial at depth ≥32. Making W2 static would
+  *reject* programs `main` accepts — a language-visible acceptance **narrowing**, where
+  §5 R2 enumerates exactly two exceptions and both are widenings carried by a
+  could-not-pass-before fixture.
+- *The "complete method table per instance" clause conflicts with two settled rules.*
+  §2 S requires **a disjoint word class for synthesized default-method arms, "which
+  exist for receiver tags with no impl at all and must not be collapsed into the
+  instance namespace"** — an instance-keyed complete table cannot express "no impl at
+  all". And DICT §3's **W3** rule checks a default body **at the class head `C ā_C`,
+  with `ā_C` held rigid** (*"it is the class-provided impl, at the head `C ā_C` itself
+  with `ā_C` also held rigid"*), not at any instance head; filling defaults into
+  instances checks it at `C T̄` instead — a different judgment. Not speculative:
+  `fillImplDefaults`' own header
+  (`desugar.mdk:840-870`) records what doing it at *same-module* scale cost — an `Ord`
+  *"unbound dict witness"* and a `Foldable` **SIGSEGV** — both since fixed, both
+  re-openable by a whole-graph version.
+
+**The two amendments that replace it, now ADOPTED into the design (§2 K and §2 E):**
+
+1. **Match-preserving indices (§2 K).** IE's candidate set for `C τ̄` is every matching
+   instance; an index may narrow a lookup only when it *provably cannot drop a match*.
+   Head-tycon bucketing is match-preserving only for instances that have a head tycon,
+   so tyvar-headed (`__none__`) instances are unioned into every bucket lookup — exactly
+   as `univHeadless` already does. This is the L1 fork closed at the substrate, and it
+   does **not** touch method tables or W2.
+2. **Arity in the output contract (§2 E),** with a *mandatory* hand-derived conformance
+   fixture — see the sequencing warning under G-8.
+
+### ⚠️ Sequencing hazard on amendment 1 (loud-over-quiet) — flagged by the review
+
+`pickMostSpecificEntry` (`:11441-11444`) resolves a non-unique winner by **silently
+keeping the head of the list** — declaration order, no diagnostic (`None => Some e`; its
+own comment: *"if no such unique entry exists … keep the head of the list"*). DICT §11's
+`⊑`/`min⊑` row already flags this and ties it to #614/#311.
+
+Completing the candidate set routes strictly **more** goals into that path. Each change
+is individually correct, and the combination is a severity increase: a program that
+today reaches no candidate and fails loudly could land on a silent first-match instead.
+**A-3/B-2's completeness change must land with, or after, F-3 (#311/#614)'s per-goal
+unique-minimum diagnostic**, never before it. This is the "a fix that makes a defect
+QUIETER is a severity INCREASE" rule applied to the plan's own ordering.
 
 ---
 
@@ -329,13 +423,34 @@ decision is at elaboration. That is right, but the cause is one step earlier sti
   `Some`; `headTyconTy` (`:11632`) has arms for `TyCon` / `TyApp` / `TyTuple` and falls
   to `headTyconTy _ = None` for a `TyVar`. `implEntryFromTys` (`:11318`) and
   `implHeadTagForIface` (`:12071`) gate identically.
-- Therefore **`impl Tag a` produces no entry in `KeyBuckets`, no entry in `ImplBuckets`,
-  and no head tag in `implHeadTagsForIface` — it is invisible to every selector the
-  typechecker has.** `matchingEntries` (`:11427`) then scans only the bucket at
-  `goalHeadCon goals` = `Box`, and `keyForSite` returns `None`, so the caller keeps the
-  fallback `tag`: `let routeKey = fromOption tag (keyForSite keyTable name paramMonos)`
-  (`:11950`, `:11981`). The route is `RKey "Box"` — the *receiver's* head tycon, which
-  happens to name the concrete impl's symbol.
+- Therefore `impl Tag a` produces no entry in `KeyBuckets`, none in `ImplBuckets`, and
+  no head tag in `implHeadTagsForIface`. `matchingEntries` (`:11427`) then scans only
+  the bucket at `goalHeadCon goals` = `Box`, `keyForSite` returns `None`, and the caller
+  keeps the fallback `tag`: `let routeKey = fromOption tag (keyForSite keyTable name
+  paramMonos)` (`:11950`, `:11981`). The route is `RKey "Box"` — the *receiver's* head
+  tycon, which happens to name the concrete impl's symbol.
+- ⚠️ **Correction (adversarial review, 2026-07-30): this row previously said the general
+  impl is "invisible to EVERY selector the typechecker has". That is false, and the
+  correction changes the diagnosis.** The **obligation-checking** path sees it perfectly
+  well, by unioning a headless bucket into every lookup:
+
+  ```
+  13617: implMatchesU univ iface (a0::rest) = bucketArgsMatch (univConcreteBucket univ iface (headTyconMono a0)) (a0::rest)
+  13618:   || bucketArgsMatch (univHeadless univ iface) (a0::rest)
+  ```
+
+  — likewise `implMatchesReceiverU` (`:13628-13629`) and `findMatchingImplReqsU`
+  (`:13666-13669`), with `univHeadless` at `:13707`. The source even states the gap it
+  is compensating for, at `:13661-13662`: *"Headless impls carry no head tycon and so
+  are absent from KeyBuckets — the headless bucket fallback (still over the
+  ImplUniverse) covers them."*
+
+  So this is **not a missing law — it is an L1 fork**: one judgment ("which instances
+  match this goal?"), two implementations in one file, one complete (`ImplUniverse`) and
+  one not (`KeyBuckets`), with the incomplete one on the path that decides emitted code.
+  ⚠️ Note `matchingEntries`' own completeness argument (`:11421-11423`) is **circular** —
+  the bucket is exhaustive *because* `keyEntryOf` dropped tyvar-headed entries at
+  construction — so it is not evidence that the two paths agree.
 - Downstream, `headTycon (TyApp a _) = headTycon a` (`eval.mdk:488`) drops the type
   arguments, so `Box Int` and `Box String` are the same tag. That is the *rendering*
   step #1128 observed, but it is faithfully rendering a route the typechecker chose.
@@ -358,21 +473,29 @@ head-tycon bucketing (the hot maps are `Map String`, the +56% lesson). If A-3
 re-implements IE as "the same buckets, identity-keyed" — the natural reading — **#1128
 survives Stage A and Stage B untouched**, because `impl Tag a` still has no bucket.
 
-**Proposed plan change.** Make candidate-set completeness a stated law of K's IE, in
-A-3's issue (#1112) and B-2's (#1113):
+**Plan change — ADOPTED into §2 K (2026-07-30).** Stated as *match-preservation* rather
+than as a new law, since L1 already forbids the fork:
 
-> IE's candidate collection for a goal `C τ̄` is `bucket(headTycon τ₀) ∪ general`, where
-> `general` holds every instance whose head-0 is a bare type variable. A goal's candidate
-> set is never a proper subset of the matching instances. Any bucketing is an index over
-> a total set, never a filter on it — the same discipline C4 already requires of import
-> scoping ("visibility filter, never a candidacy filter").
+> IE's candidate set for a goal `C τ̄` is every instance of `C` that matches `τ̄`. An
+> index over IE is admissible only if it is **match-preserving**: every instance it
+> excludes from a lookup provably cannot match that goal. Head-tycon bucketing is
+> match-preserving only for instances that *have* a head tycon, so tyvar-headed
+> (`__none__`) instances must be unioned into every bucket lookup — exactly as
+> `univHeadless` already does on the obligation-checking path.
 
-This is small, it is measurable (one extra list union per goal, over a bucket that is
-empty in every program in the tree today), and it is a precondition for B-2's frozen
-arg-tag admissibility to mean anything: "every constructor reachable at that position
-must map to exactly one `min⊑` winner" is computed against the same candidate set, so an
+This is small and measurable (one list union per goal, over a bucket that is empty in
+every program in the tree today), it needs no new machinery (the reference
+implementation is `implMatchesU`), and it is a precondition for B-2's frozen arg-tag
+admissibility to mean anything: *"every constructor reachable at that position must map
+to exactly one `min⊑` winner"* is computed against the same candidate set, so an
 incomplete set yields a *confidently wrong* admissibility verdict frozen into the
 elaboration output and consumed by every engine — strictly worse than today.
+
+⚠️ **Sequencing (loud-over-quiet).** Completing the candidate set routes strictly more
+goals into `pickMostSpecificEntry` (`:11441-11444`), which resolves a non-unique winner
+by **silently keeping the head of the list**. This change must land **with, or after**,
+F-3 (#311/#614)'s per-goal unique-minimum diagnostic — never before it. Also recorded in
+§2 K.
 
 **Falsifiable prediction (conditional on the change above being adopted).** With A-3's IE
 carrying a general bucket **and** B-2's `InstId` routes, #1128's repro must print
@@ -806,12 +929,16 @@ And add `activeDictVars` (and its readers `activeDictVarOf`, `activeDictVarForEn
 `firstDictForEncl`) to **B-1's** blast list, since B-1 is what makes the super-slot
 degenerate case disappear.
 
-### G-6 — candidate-set completeness (the #1128 change), stated above
+### G-6 — the candidate-collection L1 fork (the #1128 change) — **ADOPTED into §2 K**
 
-See #1128's row. This is the single highest-value proposed change in this document,
-because B-2's frozen arg-tag admissibility is computed against the same candidate set: an
-incomplete set turns a today-latent bug into a *frozen, consumed-by-every-engine* wrong
-answer.
+See #1128's row for the mechanism and the `univHeadless` reference implementation. This
+is the highest-value change in this document, because B-2's frozen arg-tag admissibility
+is computed against the same candidate set: an incomplete set turns a today-latent bug
+into a *frozen, consumed-by-every-engine* wrong answer.
+
+Landed in §2 K as **match-preservation**, not as a new law — L1 already forbids the
+fork — together with the `pickMostSpecificEntry` sequencing constraint (land with or
+after F-3).
 
 ### G-7 — #1020 is partially misclassified as engine-realization
 
@@ -837,14 +964,41 @@ calls out *"the disjoint default-tag word namespace (synthesized default-method 
 for receiver tags with no impl — do not collapse them into the instance namespace)"*.
 
 **Proposed plan change.** Reclassify #1020 as **split**: the wasm dispatch arm stays
-engine-realization; the *cause* — cross-module default-method table completion — becomes
-part of **A-3 (K)**, whose IE is already specified to carry "every impl with its full head,
-context, **and method table**". Make that phrase load-bearing: the method table is
-**complete** (defaults resolved whole-graph), computed once, and consumed. Then the wasm
-fix becomes "read the table" rather than "grow a fourth private copy of the rule".
+engine-realization; the *cause* — one judgment with four implementations — is an L1 item
+that **A-3 (K)** should own.
 
-Leaving it wholly on the exclusion list is the invisible-work hazard: the list says nothing
-can help it, so nobody revisits the part that a stage genuinely would.
+⚠️ **The remedy is a per-method DISPOSITION, not a filled-in method table.** The first
+version of this ledger proposed making IE's method table *complete* (defaults resolved
+whole-graph). **Adversarial review broke that, and it was right:**
+
+- §2 S requires **a disjoint word class for synthesized default arms, "which exist for
+  receiver tags with no impl at all and must not be collapsed into the instance
+  namespace"**. An instance-keyed *complete* table cannot express "no impl at all" — it
+  erases the very distinction §2 S preserves, and DICT §5's arg-tag reasoning needs it.
+- DICT §3's **W3 (method-scheme fidelity)** rule checks a default body **at the class
+  head `C ā_C`, with `ā_C` held rigid** — *"or by the class's **default**, which is
+  checked by this same rule (it is the class-provided impl, at the head `C ā_C` itself
+  with `ā_C` also held rigid)"*. Filling defaults into instances checks the body at
+  `C T̄` instead: a different judgment, not a completion.
+- This is measured, not hypothetical. `fillImplDefaults`' own header
+  (`compiler/frontend/desugar.mdk:840-870`) records what specializing defaults per-impl
+  cost at **same-module** scale: an `Ord` *"unbound dict witness"* and a `Foldable`
+  **SIGSEGV** (*"the tagged copy wasn't eta-expanded so a saturated call dropped the
+  container and returned an unapplied PAP"*). Both are fixed; a whole-graph version
+  re-opens the same surface at larger scale.
+
+The non-conflicting shape: elaboration records, per `(instance, method)`, its
+**disposition** — *supplied by this instance* | *inherited from the class default* —
+as data in a namespace disjoint from instance identity. "The instance omits the method"
+stays representable (it *is* a disposition), the default body remains one body checked
+once at the class head, and each engine **reads** the disposition instead of inventing
+an arm. That closes the fork without touching where any body is checked.
+
+**Not adopted into the design** — unlike the §2 K and §2 E amendments, this one needs
+owner adjudication, since it touches the default-arm namespace §2 S already legislates.
+
+Leaving #1020 wholly on the exclusion list remains the invisible-work hazard: the list
+says nothing can help it, so nobody revisits the part that a stage genuinely would.
 
 ### G-8 — arity / calling convention has no owner (the #1034 / #826 / #1101 class)
 
@@ -862,23 +1016,37 @@ and I am not proposing to move any of them:
   LLVM's opaque-pointer model. Pure emit. ✅ holds.
 - **#1043's emitter half** — an unlocated, uncoded, wrong-cause `E-PANIC`. ✅ holds.
 
-**But the class has no owner.** Method arity is derived independently by at least three
-consumers: `eval.mdk` builds `VClosure env pats body` (`:1837`) from the **impl clause's
-pattern count**; `core_ir_lower` derives `methodArityOf` from the **declared interface
-signature** (`:1410-1411`); and #826 is literally a third disagreement between a define
-and its call sites. Under **L1** — *"consume, never re-derive … extends to every derived
-artifact of a decision"* — that is three implementations of one judgment. §2 E's output
-contract lists what elaboration produces: *"the typed, dict-explicit, route-stamped AST"*
-and *"evidence references and frozen admissibility data"*. **Arity and calling convention
-are not in it.**
+**But the class has no owner, and this is the ONE genuine absence from the output
+contract.** Method arity is derived independently by at least three consumers:
+`eval.mdk`'s `implMethodValue` builds `VClosure env pats body` (`:1837`) from the **impl
+clause's pattern count**; `methodArityOf` (`compiler/backend/emit_support.mdk:485`) reads
+a table `methodIfaceTable` (`compiler/ir/core_ir_lower.mdk:1399`) builds from
+`methodArgTys` (`:1382-1386`), i.e. from the **declared signature's whole arrow spine**;
+and #826 is a third disagreement, define vs call site. Under **L1** — *"consume, never
+re-derive … extends to every derived artifact of a decision"* — that is three
+implementations of one judgment. §2 E's output contract listed *"the typed,
+dict-explicit, route-stamped AST"* and *"evidence references and frozen admissibility
+data"*. **Arity and calling convention were not in it.**
 
-**Proposed plan change.** Extend E's output contract (and hence L6, above) to carry
-per-binding and per-method **arity and calling convention** — number of leading dict
-params, source arity, eta-expansion target — as elaboration output consumed by both
-engines. That does not fix #1034 (the over-count still has to be corrected once, in the
-lowering, which is why the exclusion holds); it stops the *next* one, and it is the only
-change that would make #826's "make the two arity oracles agree" a structural property
-rather than a patch that #1034 already proved insufficient.
+**Plan change — ADOPTED into §2 E (2026-07-30).** The output carries, per binding and
+per method, its arity and calling convention (leading dict-param count and order per
+DICT §8 I1, source arity, eta-expansion target) as data; no engine derives arity from a
+clause pattern count or from a declared signature. That does **not** fix #1034 — the
+over-count still needs one correction in the lowering, and `a -> (Unit -> Unit)` /
+`a -> Unit -> Unit` remain the same `Ty`, which is why the exclusion holds — but it
+removes the substrate that keeps regrowing the class, and it makes #826's "make the two
+arity oracles agree" a structural property rather than the patch #1034 already proved
+insufficient.
+
+🚨 **The amendment ships with a MANDATORY hand-derived conformance fixture, and the
+reason is a severity trap, not hygiene.** #1034 was findable **only because the engines
+disagreed** — eval right, native wrong, a divergence `diff_compiler_engines` could show.
+Centralizing arity makes both engines consume the *same* arity, so a wrong centralized
+arity becomes a **unanimity no differential can structurally see** — #1047's failure
+mode exactly. Removing the only signal that found this class, without replacing it with
+an oracle derived by hand from the clause, converts a visible divergence into silent
+wrongness: a severity increase disguised as a consolidation. The fixture is the
+replacement signal.
 
 ---
 

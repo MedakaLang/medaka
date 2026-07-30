@@ -175,10 +175,26 @@ keyed by qualified identity, **assembled once and never per-module**:
   coverage, EFFECTS §6) checked here, at the declaration, where they are
   decidable without dispatch.
 - **`IE`** (instance environment): every impl with its full head, context, and
-  method table; W2 termination; impl completeness and phantom-method rejection
+  method table; impl completeness and phantom-method rejection
   (currently enforced with no spec — the owed paragraph is task S-2 in §6);
   declaration-time overlap diagnostics (advisory (a)-warnings; acceptance stays
   per-goal C1(c)).
+  ⚠️ **W2 is NOT among these, and this bullet claimed it was.** No static,
+  declaration-time W2 (instance-context termination / Paterson coverage) exists
+  anywhere in the tree. What exists is a *dynamic* resolution-time cutoff —
+  `argImplRequiresRoutesRecD`'s `if depth >= 32 then []`
+  (`compiler/types/typecheck.mdk`) — under which a non-shrinking context
+  (`impl C (T a) requires C (T (T a))`) terminates by silently yielding no
+  further requires-routes rather than being rejected, and, per DICT §11's W2
+  row, *"the program is accepted either way."* This design **keeps the fuse and
+  leaves W2 unenforced**: making it static would *reject* programs `main`
+  accepts today — a language-visible acceptance **narrowing**, and §5 R2's two
+  enumerated exceptions are both widenings carried by a could-not-pass-before
+  fixture, a bar a narrowing cannot meet. Promoting W2 to a static check is
+  therefore a separate, owner-adjudicated decision with its own migration and
+  fixture story, deliberately **not** taken here. Note the consequence for K's
+  outputs: because the fuse can truncate a requires chain, IE's derived route
+  data is *not* total at depth ≥32, and no clause below may assume otherwise.
 - **`DataEnv`**: datatypes, constructor schemes, records and field ownership,
   aliases with cycle rejection.
 
@@ -199,6 +215,33 @@ of evidence. Note this has one deliberate, language-visible consequence beyond
 golden churn: an impl living in a topo-*later* module of the loaded graph
 becomes usable by an earlier module (orphan-instance-style acceptance change);
 §5 R2 owns it, and S-2(a) writes the candidacy sentence into the spec.
+
+**Candidate collection is complete; an index may narrow it only when it
+provably cannot drop a match.** IE's candidate set for a goal `C τ̄` is every
+instance of `C` that matches `τ̄`. Any index over IE is admissible only if it is
+**match-preserving**: every instance the index excludes from a lookup provably
+cannot match that goal. Head-tycon bucketing is match-preserving *only for
+instances that have a head tycon*, so **tyvar-headed (`__none__`) instances must
+be unioned into every bucket lookup** — exactly as `implMatchesU` /
+`implMatchesReceiverU` / `findMatchingImplReqsU` already do today via
+`univHeadless` on the obligation-checking path, and exactly as the route-stamping
+path's `KeyBuckets` does **not** (`keyEntryOf` emits no entry when `headTyconTy`
+is `None`, so a fully-general `impl C a` is absent from it entirely — #1128).
+Two implementations of one judgment, one complete and one not, is an L1 fork;
+K's IE is the single environment both must read. ⚠️ Note that `matchingEntries`'
+own completeness argument is circular — its bucket is exhaustive *because*
+tyvar-headed entries were dropped at construction — so "the buckets already
+collect the same entries" must not be read as evidence against this clause.
+
+⚠️ **Sequencing constraint (loud-over-quiet).** Completing the candidate set
+routes strictly *more* goals into `pickMostSpecificEntry`, which resolves a
+non-unique winner by **silently keeping the head of the list** — declaration
+order, no diagnostic (`compiler/types/typecheck.mdk`, its own comment: *"if no
+such unique entry exists … keep the head of the list"*). Landing completeness
+before the C1 per-goal-unique-minimum diagnostic would enlarge the population
+reaching a silent-wrong-answer path — a severity increase even though each
+individual fix is correct. **A-3/B-2's completeness change lands with, or after,
+F-3 (#311/#614).**
 
 ### I — Inference (kept structurally intact)
 
@@ -393,6 +436,33 @@ AST that *both* engines and the Core-IR lowering consume — one elaboration
 (decided 2026-07-15: the owner would sooner retire the tree-walker than keep two).
 Dispatch decisions live entirely in evidence references and frozen admissibility
 data (single-evaluator law, §7); engines project and apply, never select.
+
+The output additionally carries, **per binding and per method, its arity and
+calling convention** — leading dict-param count and order (DICT §8 I1), source
+arity, eta-expansion target — as data. **No engine derives arity from a clause
+pattern count or from a declared signature.** Both routes exist today and
+disagree: `eval.mdk`'s `implMethodValue` builds a closure from the impl clause's
+`pats`, while the emit side's `methodArityOf` (`backend/emit_support.mdk`) reads
+a table `core_ir_lower`'s `methodIfaceTable` builds from `methodArgTys`, which
+walks the declared signature's whole arrow spine
+(`methodArgTys (TyFun a b) = a :: methodArgTys b`) — so a method whose result
+type is itself a function is over-counted and lowered to a PAP whose strict
+prefix never runs (#1034); #826 is a third disagreement, define vs call site.
+This is L1 applied to arity: one decision, computed once, consumed. It does not
+by itself fix #1034 — the over-count still needs one
+correction in the lowering, and `a -> (Unit -> Unit)` and `a -> Unit -> Unit`
+remain the same `Ty` — but it removes the substrate that keeps regrowing it.
+
+⚠️ **This clause must ship with a hand-derived conformance fixture for arity
+(L5), and the reason is not hygiene.** #1034 was findable *only because the
+engines disagreed*: eval was right, native was wrong, and `diff_compiler_engines`
+had a divergence to show. Centralizing arity makes both engines consume the
+*same* arity — so a wrong centralized arity becomes a **unanimity no differential
+can see**, which is #1047's failure mode exactly. Removing the only signal that
+found this class, without replacing it with an oracle derived by hand from the
+clause, converts a visible divergence into silent wrongness — a severity
+increase disguised as a consolidation. The fixture is the replacement signal,
+not paperwork.
 
 ### G — Global checks
 
