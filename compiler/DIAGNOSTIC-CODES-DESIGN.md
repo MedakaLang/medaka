@@ -292,6 +292,21 @@ A warning is a full diagnostic, so it gets a code the same way an error does:
    `diagOfTypeWarning` strips it.
 2. Add the code to the table above.
 
+**The `W-` prefix is load-bearing, not a naming convention.** The JSON `kind` is
+derived from the code's prefix (`codeKind`), so the code you author decides how
+every consumer classifies the diagnostic. A demoted error that keeps its `T-*` code
+reads as a type *error* to anything filtering the per-stage taxonomy. `diagKind`
+(`compiler/driver/diagnostics.mdk`) stops that from rendering incoherently — a
+`SevWarning` diagnostic can never emit a per-stage kind — but it deliberately does
+**not** rewrite your code: inventing `W-FOO` from `T-FOO` would be the same
+derive-identity-from-spelling mistake in the other direction. Author a new `W-*`
+code; do not reuse the error's.
+
+⚠️ `diagKind`'s rule is *"a warning may not render a per-STAGE kind"*, **not**
+*"severity 2 implies kind `warning`"*. `lint` is a genuine severity-2 kind —
+`medaka lint --json` ships `{"code":"rule-…","kind":"lint","severity":2}` through
+the same envelope — so the narrower rule is what keeps lint's kind intact.
+
 Two rules, both paid for:
 
 - **Do not leave the code `""` and let the conversion guess.** Until 2026-07-31
@@ -302,14 +317,29 @@ Two rules, both paid for:
   channel carried exactly two warnings with distinguishable prefixes; a third would
   have been silently relabelled a non-exhaustive-match warning. §5 below already
   prescribed authoring the code at the push; the conversion now simply carries it.
+  (§5 is right about *where* the code is authored and wrong about *what* it is — it
+  prescribes `W-NONEXHAUSTIVE` for **both** sites, which is incorrect for the
+  unreachable-arm one. That site takes `W-UNREACHABLE-ARM`, per the table above.)
 - **Do not demote an error to a warning by pushing severity 2 through
   `recordTypeError`.** The `typeErrors` channel is not a pure report: it arms
   `typeErrorsSticky` (which `hadTypeErrors` uses to abort `build`/`run`) and bumps
-  `errorsDetected` (which `erredDuring` polls to gate inference — issue 1146). Such a
-  "warning" would keep both of an error's side effects while printing as severity 2.
-  `diagOfTypeError` therefore hardcodes `SevError` on purpose and ignores the
-  `TcDiag`'s severity field. `matchWarnings` has neither side effect; demote by
+  `errorsDetected` (which `erredDuring` polls to gate inference — issue 1146).
+  `recordTypeError` does both **unconditionally, without reading severity at all**,
+  so such a "warning" keeps both of an error's side effects. The *side effects* are
+  the reason; be careful with the rendering claim, because the sloppy version invites
+  the wrong fix. It does **not** print as severity 2 today: `diagOfTypeError` binds
+  the severity field to `_` and hardcodes `SevError`, so it prints severity 1 — it
+  does not even look like the warning its author intended. Removing that hardcode
+  would not rescue the idea either; it would print severity 2 and *still* abort the
+  build and steer inference. `matchWarnings` has neither side effect; demote by
   moving the push to that channel.
+
+⚠️ `matchWarnings` is control-coupling-free, which is **not** the same as
+consumer-free. `hadMatchWarnings` (`compiler/types/typecheck.mdk`) answers "did the
+last pass push any warning at all", and `compiler/tools/snapshot.mdk` reads it to
+decide whether a rendered `# TYPES` section is `--bless`-able. A new warning that
+fires on existing corpus code can therefore make snapshots that bless today stop
+blessing — budget for that when you add one.
 
 ### Eval / runtime — `E-*` (`compiler/eval/eval.mdk`, `medaka run`)
 
