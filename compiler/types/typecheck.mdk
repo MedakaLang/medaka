@@ -3142,8 +3142,35 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- keyed `matchWarningHelp`) INLINE — no parallel lists, no lookup-by-message.  The
 -- `TcDiag.msg` holds the FULL "Warning: …"-prefixed string exactly as the old
 -- `List String` did, so the text-rendering paths (checkMatchToLines,
--- checkToLinesWithRuntime, checkModulesEntryReport) stay byte-identical; the
--- `W-*` code and the prefix strip happen on the driver/diagnostics.mdk side.
+-- checkToLinesWithRuntime, checkModulesEntryReport) stay byte-identical; only the
+-- prefix strip happens on the driver/diagnostics.mdk side.
+--
+-- ⚠️ THE `W-*` CODE IS AUTHORED AT THE PUSH SITE — write it into the `TcDiag`, never
+-- leave it `""` for a downstream reader to guess.  `driver/diagnostics.mdk`'s
+-- `diagOfTypeWarning` carries whatever code it finds here straight through to
+-- `--json`; it used to re-derive one by prefix-matching this message text, which
+-- silently relabelled any third warning `W-NONEXHAUSTIVE` (see that function's own
+-- note, and DIAGNOSTIC-CODES-DESIGN.md — "*No chokepoint can infer these*").
+-- Register the code in DIAGNOSTIC-CODES-DESIGN.md's warning table in the same change.
+--
+-- ⚠️ THE `W-` PREFIX IS LOAD-BEARING, not a naming convention.  The JSON `kind` is
+-- DERIVED from the code's prefix (`codeKind`), so the code you write here decides
+-- how every consumer classifies the diagnostic.  A demoted error that KEEPS its
+-- `T-*` code is the trap: it reads as a type error to anything filtering the
+-- per-stage taxonomy.  `diagKind` now stops that from rendering an incoherent
+-- `{"kind":"type","severity":2}`, but it deliberately does NOT rewrite your code —
+-- inventing `W-FOO` from `T-FOO` would be the same derive-identity-from-spelling
+-- mistake in the other direction.  Author a `W-*` code; do not reuse the error's.
+--
+-- This is THE channel for a typecheck-stage warning — including one that used to be
+-- an error.  Do NOT demote an error by pushing a severity-2 `TcDiag` through
+-- `recordTypeError` instead: it arms `typeErrorsSticky` (aborts `build`/`run`) and
+-- bumps `errorsDetected` (steers `erredDuring`-gated inference, issue 1146)
+-- UNCONDITIONALLY, without reading severity at all — so the "warning" keeps both of
+-- an error's side effects.  It does not even RENDER as a warning: `diagOfTypeError`
+-- binds the severity field to `_` and prints severity 1.  (Removing that hardcode
+-- would not rescue the idea — it would print severity 2 and still abort the build.
+-- The side effects are the reason, not the rendering.)  `matchWarnings` has neither.
 
 -- True iff the last typecheck pass pushed any match warning.  Read by the snapshot
 -- runner (`tools/snapshot.mdk`) to decide whether a rendered `# TYPES` section carries
@@ -8003,7 +8030,7 @@ checkMatchExhaustive scrutTy arms =
     let (msg, help) = nonExhaustiveMsg scrutTy rows
     setRef
       driverState.value.matchWarnings
-      (TcDiag "" 2 currentLoc.value msg help None :: driverState.value.matchWarnings.value)
+      (TcDiag "W-NONEXHAUSTIVE" 2 currentLoc.value msg help None :: driverState.value.matchWarnings.value)
   else ()
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -8041,7 +8068,7 @@ checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
   let dp = desugarPat driverState.value.matchOracle.value pat
   let _ = if armUnreachable col0 prec heads offCol dp then
-    setRef driverState.value.matchWarnings (TcDiag "" 2 (orElseLoc (exprLoc body) currentLoc.value) unreachableArmWarning None None :: driverState.value.matchWarnings.value)
+    setRef driverState.value.matchWarnings (TcDiag "W-UNREACHABLE-ARM" 2 (orElseLoc (exprLoc body) currentLoc.value) unreachableArmWarning None None :: driverState.value.matchWarnings.value)
   else ()
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range collapses to a wildcard that over-states coverage

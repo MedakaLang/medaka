@@ -1,5 +1,5 @@
 # META
-source_lines=1106
+source_lines=1185
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -135,7 +135,29 @@ diagOfResError e =
 -- Convert a typecheck error `TcDiag` to a Diag.  #159: the code, span, and any
 -- structured help/fix (e.g. the record-field did-you-mean that
 -- `pushTypeErrorHelpFixAt` attaches) now ride INSIDE the TcDiag — no message-keyed
--- side-channel lookup.  A type-error TcDiag always carries SevError severity.
+-- side-channel lookup.
+--
+-- ⚠️ `SevError` is HARDCODED here ON PURPOSE, and the TcDiag's own `severity` field
+-- is deliberately NOT consulted — do not "fix" this to read `tcSeverity`.  The
+-- `typeErrors` channel this converts is not a pure report: every push funnels
+-- through `recordTypeError` (`compiler/types/typecheck.mdk`), which also arms
+-- `typeErrorsSticky` — the gate `hadTypeErrors` uses to ABORT `build`/`run` — and
+-- bumps `errorsDetected`, the occurrence counter `erredDuring` polls to decide
+-- whether gated `unify` calls run (issue 1146).  `recordTypeError` does both
+-- UNCONDITIONALLY, without reading severity at all — so a severity-2 `TcDiag`
+-- pushed here still ABORTS the build and still STEERS inference.  The side effects
+-- are the reason this hardcode stands; the rendering is not.
+--
+-- ⚠️ Be precise about the rendering, because the imprecise version invites the wrong
+-- fix.  Such a diagnostic does NOT print as severity 2 today — this arm binds the
+-- severity field to `_`, so it prints severity 1, i.e. it does not even LOOK like the
+-- warning its author intended.  And removing the hardcode would not rescue the idea:
+-- it would only trade one wrong answer for another, printing severity 2 while
+-- continuing to abort the build and steer inference.  Neither variant is a warning.
+--
+-- A typecheck-stage diagnostic that really is a WARNING belongs on the
+-- `matchWarnings` channel instead — see `diagOfTypeWarning` below, which is
+-- control-flow-free and carries the author's own `W-*` code end to end.
 export diagOfTypeError : TcDiag -> Diag
 diagOfTypeError (TcDiag code _ loc msg help fix) =
   Diag SevError code msg loc help (map fixOfLocRepl fix)
@@ -143,27 +165,84 @@ diagOfTypeError (TcDiag code _ loc msg help fix) =
 fixOfLocRepl : (Loc, String) -> Fix
 fixOfLocRepl (l, r) = Fix l r
 
--- Convert a non-exhaustive-match warning `TcDiag` (whose `msg` is the full
--- "Warning: …" string, carrying its captured loc and any actionable-fix hint as
--- `help`) to a Diag.  #159: the hint rides in the TcDiag's `help` field — no
--- `matchWarningHelp` lookup.  The `W-*` code and the prefix strip are computed
--- here from the full message.  No machine `fix` — the hint has no single
--- mechanical edit.
-diagOfMatchWarning : TcDiag -> Diag
-diagOfMatchWarning (TcDiag _ _ loc w help _) =
-  Diag SevWarning (matchWarnCode w) (stripWarnPrefix w) loc help None
+-- THE typecheck-stage WARNING channel.  Converts a `TcDiag` off `matchWarnings`
+-- (whose `msg` is the full "Warning: …" string, carrying its captured loc and any
+-- actionable-fix hint as `help`) to a `SevWarning` Diag.  #159: the hint rides in
+-- the TcDiag's `help` field — no `matchWarningHelp` lookup.  The `W-*` code is the
+-- one the TcDiag ALREADY CARRIES, authored at the push site.  Only the "Warning: "
+-- prefix strip is computed from the message — that is presentation, not identity.
+-- No machine `fix`: the hint has no single mechanical edit.
+--
+-- ⚠️ NEVER re-derive the code from the message text here.  This arm used to bind
+-- the code field to `_`, throw it away, and recompute one via a `startsWith` prefix
+-- match on the rendered message whose `otherwise` arm returned "W-NONEXHAUSTIVE".
+-- That is diagnostic IDENTITY keyed on SPELLING — design law L2
+-- (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §1: identity is resolved, never
+-- re-derived from spelling) — and it was correct only by coincidence: there were
+-- exactly two warnings on this channel and their messages happened to differ in
+-- their first 30 characters.  A THIRD warning fell into the `otherwise` arm and was
+-- silently relabelled a non-exhaustive-match warning: the "a new constructor is
+-- swallowed by a `_` arm" shape, in the diagnostics layer.  `DIAGNOSTIC-CODES-DESIGN.md`
+-- had already prescribed the right fix ("The two `setRef matchWarnings` sites
+-- similarly gain `W-NONEXHAUSTIVE`.  *No chokepoint can infer these*"); this is that
+-- design, restored.
+--
+-- This channel is also the ONLY correct home for a new typecheck warning: unlike
+-- `typeErrors` (see `diagOfTypeError` above) `matchWarnings` has no sticky
+-- build-abort gate and no occurrence counter behind it, so pushing to it reports
+-- without steering `build`/`run` exit status or inference control flow.
+--
+-- ⚠️ "No control coupling" is NOT "no consumer" — `matchWarnings` has one, and a new
+-- warning inherits it.  `hadMatchWarnings` (`compiler/types/typecheck.mdk`) reports
+-- whether the last pass pushed ANY warning, and `compiler/tools/snapshot.mdk` reads
+-- it to decide whether a rendered `# TYPES` section is `--bless`-able.  So adding a
+-- warning that fires on existing corpus code can make snapshots that bless today
+-- stop blessing.  Nothing here pushes a new warning, so nothing changes now.
+diagOfTypeWarning : TcDiag -> Diag
+diagOfTypeWarning (TcDiag code _ loc w help _) =
+  Diag SevWarning code (stripWarnPrefix w) loc help None
 
--- The two typecheck match warnings share the `matchWarnings` channel but carry
--- distinct codes; disambiguate by the message shape (the unreachable-arm warning
--- names an "unreachable match arm", the exhaustiveness one does not).
-matchWarnCode : String -> String
-matchWarnCode w
-  | startsWith "Warning: unreachable match arm" w = "W-UNREACHABLE-ARM"
-  | otherwise = "W-NONEXHAUSTIVE"
+-- THE JSON `kind`, derived from the code prefix AND the severity TOGETHER.  Use
+-- this, not bare `codeKind`, wherever the severity is not already a literal.
+--
+-- `codeKind` alone reads only the CODE, so it renders a per-stage kind whenever the
+-- code carries a per-stage prefix — no matter what severity the diagnostic actually
+-- has.  That is harmless only while every stage-prefixed code is an error, and it
+-- lies silently the moment one is not.  Two shapes, both reachable the instant a
+-- warning is authored on the `matchWarnings` channel (see `diagOfTypeWarning`):
+--
+--   {"code":"T-…","kind":"type",  "severity":2}   a demoted error that KEPT its
+--       `T-*` code — a consumer filtering the documented per-stage taxonomy drops
+--       it, because it reads as a type ERROR.
+--   {"code":"",    "kind":"error","severity":2}   a push site that forgot its code
+--       (`""` is what a copy-pasted one produces) — self-contradictory JSON, exit 0,
+--       and nothing anywhere reports it.
+--
+-- So: a `SevWarning` diagnostic may never render a per-STAGE kind.
+--
+-- ⚠️ That is NOT the same rule as "severity 2 implies kind `warning`", and the
+-- difference is load-bearing: `lint` is a real severity-2 kind — `medaka lint --json`
+-- ships `{"code":"rule-…","kind":"lint","severity":2}` through this very envelope —
+-- so collapsing every severity-2 diagnostic to `warning` would REGRESS every lint
+-- finding's kind.  Only the four stage kinds, and `codeKind`'s `otherwise = "error"`
+-- fallback (which is not even a stage), collapse to `warning`.
+--
+-- The CODE is passed through verbatim and is never rewritten.  Normalising `T-FOO`
+-- to `W-FOO` would invent an identity from a spelling — the exact L2 violation this
+-- change exists to remove, committed silently — so an off-taxonomy code stays
+-- visible as itself, now rendered beside `"kind":"warning"`.  The mismatch is then
+-- legible to its author on their first run, instead of being confidently mislabelled
+-- as a type error.
+export diagKind : Severity -> String -> String
+diagKind SevError code = codeKind code
+diagKind SevWarning code
+  | codeKind code == "lint" = "lint"
+  | otherwise = "warning"
 
 -- Derive the JSON `kind` from a code's per-stage prefix (DIAGNOSTIC-CODES-DESIGN
 -- §2): L→lex, P→parse, R→resolve, T→type, W→warning.  An unrecognized prefix
--- falls back to "error".
+-- falls back to "error".  ⚠️ Severity-blind by construction — prefer `diagKind`
+-- above unless the severity at your call site is a literal 1.
 export codeKind : String -> String
 codeKind code
   | startsWith "L-" code = "lex"
@@ -455,7 +534,7 @@ analyzeFrom runtimeSrc coreSrc raw internalGuard =
   let tcDiags = match resErrs
     [] =>
       let (tcErrs, tcWarns) = checkProgramDiags runtimeP coreP desugared
-      map diagOfTypeError tcErrs ++ map diagOfMatchWarning tcWarns
+      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
     _ => []
   -- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
   -- (`main = (Red, 5)`) is auto-printed via `Display` at emit, so its Display
@@ -847,7 +926,7 @@ foldModuleTc oracleDecls ((mid, path, prog)::rest) tcByMid buckets =
     Some ds => ds
     None => []
   let errDiags = filterList (d => not (isRedundantUnbound existing d)) (map diagOfTypeError tcErrs)
-  let warnDiags = map diagOfMatchWarning tcWarns
+  let warnDiags = map diagOfTypeWarning tcWarns
   let guardWarns = checkGuardExhaustivenessWith oracleDecls prog
   let guardDiags = map guardWarnToDiag guardWarns
   let deriveDiags = map deriveErrToDiag (checkDerives prog)
@@ -955,7 +1034,7 @@ cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject
 export cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
-    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (codeKind code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
+    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (diagKind sev code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
 -- `src` is the file's source text (for whole-doc range fallback).
@@ -1134,10 +1213,11 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "diagOfTypeError" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EApp (EApp (EVar "map") (EVar "fixOfLocRepl")) (EVar "fix"))))
 (DTypeSig false "fixOfLocRepl" (TyFun (TyTuple (TyCon "Loc") (TyCon "String")) (TyCon "Fix")))
 (DFunDef false "fixOfLocRepl" ((PTuple (PVar "l") (PVar "r"))) (EApp (EApp (EVar "Fix") (EVar "l")) (EVar "r")))
-(DTypeSig false "diagOfMatchWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
-(DFunDef false "diagOfMatchWarning" ((PCon "TcDiag" PWild PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "matchWarnCode") (EVar "w"))) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
-(DTypeSig false "matchWarnCode" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "matchWarnCode" ((PVar "w")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Warning: unreachable match arm"))) (EVar "w")) (ELit (LString "W-UNREACHABLE-ARM")) (EIf (EVar "otherwise") (ELit (LString "W-NONEXHAUSTIVE")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "diagOfTypeWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
+(DFunDef false "diagOfTypeWarning" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
+(DTypeSig true "diagKind" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "diagKind" ((PCon "SevError") (PVar "code")) (EApp (EVar "codeKind") (EVar "code")))
+(DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1177,7 +1257,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "analyzeLocatedG" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "analyzeLocatedG" ((PVar "allowInternal") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))) (EApp (EVar "internalGuardFor") (EVar "allowInternal"))))
 (DTypeSig false "analyzeFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "analyzeFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "tcDiags") (EMatch (EVar "resErrs") (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EVar "map") (EVar "diagOfMatchWarning")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoLet false false (PVar "autoDiags") (EMatch (EVar "resErrs") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "tcDiags")) (EApp (EApp (EApp (EVar "autoPrintObligationDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (arm PWild () (EListLit)))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "resDiags")) (EVar "tcDiags")) (EVar "autoDiags")))))
+(DFunDef false "analyzeFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "tcDiags") (EMatch (EVar "resErrs") (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoLet false false (PVar "autoDiags") (EMatch (EVar "resErrs") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "tcDiags")) (EApp (EApp (EApp (EVar "autoPrintObligationDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (arm PWild () (EListLit)))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "resDiags")) (EVar "tcDiags")) (EVar "autoDiags")))))
 (DTypeSig false "autoPrintObligationDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "autoPrintObligationDiags" ((PVar "runtimeP") (PVar "coreP") (PVar "desugared")) (EBlock (DoLet false false (PVar "modules") (EListLit (ETuple (ELit (LString "__main__")) (EVar "desugared")))) (DoExpr (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreP")) (EVar "modules")) (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EApp (EApp (EApp (EVar "underivedMainDiags") (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "autoPrintWrapModules") (EVar "modules")))) (EListLit)))))
 (DTypeSig false "diagMsg" (TyFun (TyCon "Diag") (TyCon "String")))
@@ -1255,7 +1335,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "isRedundantUnbound" ((PVar "existing") (PVar "d")) (EIf (EBinOp "!=" (EApp (EVar "diagCode") (EVar "d")) (ELit (LString "T-UNBOUND"))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "diagLoc") (EVar "d")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dl")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "diagCode") (EVar "e")) (ELit (LString "R-UNBOUND"))) (EMatch (EApp (EVar "diagLoc") (EVar "e")) (arm (PCon "Some" (PVar "el")) () (EApp (EApp (EVar "locEq") (EVar "dl")) (EVar "el"))) (arm (PCon "None") () (EVar "False")))))) (EVar "existing")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldModuleTc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
 (DFunDef false "foldModuleTc" (PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "oracleDecls") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EVar "map") (EVar "diagOfMatchWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "oracleDecls")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
+(DFunDef false "foldModuleTc" ((PVar "oracleDecls") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "oracleDecls")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1283,7 +1363,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
 (DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
@@ -1335,10 +1415,11 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "diagOfTypeError" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EVar "loc")) (EVar "help")) (EApp (EApp (EMethodRef "map") (EVar "fixOfLocRepl")) (EVar "fix"))))
 (DTypeSig false "fixOfLocRepl" (TyFun (TyTuple (TyCon "Loc") (TyCon "String")) (TyCon "Fix")))
 (DFunDef false "fixOfLocRepl" ((PTuple (PVar "l") (PVar "r"))) (EApp (EApp (EVar "Fix") (EVar "l")) (EVar "r")))
-(DTypeSig false "diagOfMatchWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
-(DFunDef false "diagOfMatchWarning" ((PCon "TcDiag" PWild PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EApp (EVar "matchWarnCode") (EVar "w"))) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
-(DTypeSig false "matchWarnCode" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "matchWarnCode" ((PVar "w")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "Warning: unreachable match arm"))) (EVar "w")) (ELit (LString "W-UNREACHABLE-ARM")) (EIf (EVar "otherwise") (ELit (LString "W-NONEXHAUSTIVE")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "diagOfTypeWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
+(DFunDef false "diagOfTypeWarning" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
+(DTypeSig true "diagKind" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "diagKind" ((PCon "SevError") (PVar "code")) (EApp (EVar "codeKind") (EVar "code")))
+(DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1378,7 +1459,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "analyzeLocatedG" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "analyzeLocatedG" ((PVar "allowInternal") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))) (EApp (EVar "internalGuardFor") (EVar "allowInternal"))))
 (DTypeSig false "analyzeFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "analyzeFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "tcDiags") (EMatch (EVar "resErrs") (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EMethodRef "map") (EVar "diagOfMatchWarning")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoLet false false (PVar "autoDiags") (EMatch (EVar "resErrs") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "tcDiags")) (EApp (EApp (EApp (EVar "autoPrintObligationDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (arm PWild () (EListLit)))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "resDiags")) (EVar "tcDiags")) (EVar "autoDiags")))))
+(DFunDef false "analyzeFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreP") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "tcDiags") (EMatch (EVar "resErrs") (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")))))) (arm PWild () (EListLit)))) (DoLet false false (PVar "autoDiags") (EMatch (EVar "resErrs") (arm (PList) () (EApp (EApp (EVar "filterNewDiags") (EVar "tcDiags")) (EApp (EApp (EApp (EVar "autoPrintObligationDiags") (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (arm PWild () (EListLit)))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "resDiags")) (EVar "tcDiags")) (EVar "autoDiags")))))
 (DTypeSig false "autoPrintObligationDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "autoPrintObligationDiags" ((PVar "runtimeP") (PVar "coreP") (PVar "desugared")) (EBlock (DoLet false false (PVar "modules") (EListLit (ETuple (ELit (LString "__main__")) (EVar "desugared")))) (DoExpr (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreP")) (EVar "modules")) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EApp (EApp (EApp (EVar "underivedMainDiags") (EVar "runtimeP")) (EVar "coreP")) (EApp (EVar "autoPrintWrapModules") (EVar "modules")))) (EListLit)))))
 (DTypeSig false "diagMsg" (TyFun (TyCon "Diag") (TyCon "String")))
@@ -1456,7 +1537,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "isRedundantUnbound" ((PVar "existing") (PVar "d")) (EIf (EBinOp "!=" (EApp (EVar "diagCode") (EVar "d")) (ELit (LString "T-UNBOUND"))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EVar "diagLoc") (EVar "d")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dl")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "diagCode") (EVar "e")) (ELit (LString "R-UNBOUND"))) (EMatch (EApp (EVar "diagLoc") (EVar "e")) (arm (PCon "Some" (PVar "el")) () (EApp (EApp (EVar "locEq") (EVar "dl")) (EVar "el"))) (arm (PCon "None") () (EVar "False")))))) (EVar "existing")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldModuleTc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))
 (DFunDef false "foldModuleTc" (PWild (PList) PWild (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "foldModuleTc" ((PVar "oracleDecls") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfMatchWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "oracleDecls")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
+(DFunDef false "foldModuleTc" ((PVar "oracleDecls") (PCons (PTuple (PVar "mid") (PVar "path") (PVar "prog")) (PVar "rest")) (PVar "tcByMid") (PVar "buckets")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "tcByMid"))) (DoLet false false (PVar "existing") (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "path")) (EVar "buckets")) (arm (PCon "Some" (PVar "ds")) () (EVar "ds")) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "errDiags") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isRedundantUnbound") (EVar "existing")) (EVar "d"))))) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")))) (DoLet false false (PVar "warnDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EVar "oracleDecls")) (EVar "prog"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "prog")))) (DoLet false false (PVar "buckets2") (EApp (EApp (EApp (EVar "pushDiags") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "errDiags")) (EVar "warnDiags"))) (EVar "buckets"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldModuleTc") (EVar "oracleDecls")) (EVar "rest")) (EVar "tcByMid")) (EVar "buckets2")))))
 (DTypeSig false "lookupTcDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "lookupTcDiags" (PWild (PList)) (ETuple (EListLit) (EListLit)))
 (DFunDef false "lookupTcDiags" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "d")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "mid")) (EVar "d") (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTcDiags") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1484,7 +1565,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
 (DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
