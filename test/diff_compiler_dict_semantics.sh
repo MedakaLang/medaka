@@ -271,6 +271,8 @@ trap 'rm -rf "$TMP"' EXIT
 TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
 s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
+s3-nary-requires-goal-vector.mdk|§1/§3 `match(IE,C τ̄)` is ONE φ against the WHOLE vector: a nested `requires Ix a Char` at `Sh (Box Int)` has the SINGLETON matching set {`Ix Int Char`}, so `Ix Int Bool` never reaches the selector at all (#1154 regression pin -- the arg-0-only fallback made both match, they were incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it too. ⚠️ SINGLE-entry `requires`, the arity at which route order and dict-slot order cannot disagree -- the multi-entry row below raises it. ⚠️ Pins the `requires` leg ONLY; the `=>`-constrained-call leg of the same defect is #1161, still OPEN|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
+s3-nary-requires-multi-entry.mdk|§1/§3 the same judgement at a TWO-ENTRY `requires Dbg2 a, Ix a Char`: the second obligation grounds to `Ix Int Char` and its matching set is again the singleton, so 222+5=227 (pre-fix this printed 116). ⚠️ Its SIBLING ORDERING `requires Ix a Char, Dbg2 a` STILL prints 116 on this binary and is pinned as a must-fail at test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/ -- do NOT reorder this clause to match the body|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|227|
 s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
 s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
@@ -607,13 +609,24 @@ done
 # declaration order, or resolution position"). For any fixture with >=2 `impl`
 # blocks of the SAME interface, this reverses the order of exactly those
 # blocks -- nothing else in the source moves -- and asserts `check`'s verdict,
-# `run`'s stdout and `build`'s stdout are all unchanged. #1154 (OPEN, S0
-# verified, pinned separately at
-# test/must_fail_fixtures/1154-no-unique-min-decl-order-decides/ -- NOT
-# re-pinned here, see that fixture's own header for why a second pin would
-# double-count) is the shape this exists to catch: swapping two disjoint
-# `impl Ix Int _` blocks changes a program's answer from 111 to 222 with
+# `run`'s stdout and `build`'s stdout are all unchanged. #1154 (S0 verified,
+# now FIXED) is the shape this exists to catch: swapping two disjoint
+# `impl Ix Int _` blocks changed a program's answer from 111 to 222 with
 # `check --json` clean on both engines.
+#
+# ⚠️ #1154's must-fail pin (test/must_fail_fixtures/1154-no-unique-min-decl-
+# order-decides/) DRAINED when the fix landed and was deleted in that same
+# commit, per its own header's instruction. The shape now lives in this gate
+# instead, as `s3-nary-requires-goal-vector.mdk` -- graded on its VALUE by
+# Section 1 and on its ORDER-FREEDOM here. That is not the double-count the
+# deleted header warned about: a must-fail row asserts the bug STILL
+# REPRODUCES and cannot coexist with a row asserting it is fixed.
+#
+# ⚠️ Still OPEN and NOT covered by that fixture: #1161, the same defect on the
+# top-level `=>`-constrained-call leg (`useIx : Ix a Char => a -> Int`), which
+# has no goal vector to thread because the dict slots there are shattered one
+# per tyvar. It is not pinned in this corpus because a fixture for it would be
+# a must-fail row, not a dict-semantics row.
 echo
 echo '=== 4. declaration-order permutation (DICT §3 order-freedom; #1154/#1155) ==='
 

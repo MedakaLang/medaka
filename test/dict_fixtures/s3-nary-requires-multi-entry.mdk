@@ -1,0 +1,60 @@
+-- DICT-SEMANTICS §1/§3, at a `requires` clause of TWO entries.
+--
+-- Companion to s3-nary-requires-goal-vector.mdk, which uses a SINGLE-entry
+-- `requires`. That arity is the one at which a caller's route order and a
+-- callee's dict-slot order cannot disagree, so a single-entry fixture is
+-- structurally blind to anything ordering-related. This row raises the arity.
+--
+-- SPEC ANSWER (hand-derived from §1/§3, NOT captured from any engine):
+--   `impl Sh (Box a) requires Dbg2 a, Ix a Char` pins the SECOND `Ix`
+--   parameter to `Char`. At the goal `Sh (Box Int)` the head match binds
+--   a ↦ Int, so the second obligation is the ground predicate `Ix Int Char`.
+--   §3's matching set is `{ I | ∃φ. φ(head(I)) = C τ̄ }`, ONE φ against the
+--   WHOLE vector: φ(`Ix Int Bool`) would need Bool = Char, so it is NOT in the
+--   set; φ(`Ix Int Char`) = identity. The set is the singleton
+--   {`impl Ix Int Char`} and `inst` selects it -- 222.
+--   The first obligation `Dbg2 a` at a ↦ Int selects `impl Dbg2 Int`, so
+--   `dbg2 5` is 5. 222 + 5 = 227.
+--   Independently: the body calls `ix x 'z'` with `'z' : Char`, so no other
+--   instance is type-correct at that call.
+--
+-- The wrong answer this row catches is 116 (= 111, the `Ix Int Bool` body,
+-- + 5) -- which is what the PRE-FIX binary printed here. Declaration order
+-- here is deliberately WRONG-ANSWER-FIRST (`Ix Int Bool` before
+-- `Ix Int Char`), so a regression to the arg-0-only fallback reds this row.
+-- Section 4 additionally reverses the two `Ix` blocks and asserts the answer
+-- does not move.
+--
+-- 🚨 THIS ROW IS ORDER-SENSITIVE IN A DIMENSION IT DOES NOT ASSERT, AND THAT
+-- IS DELIBERATE. Writing the requires clause the OTHER way round --
+-- `requires Ix a Char, Dbg2 a` -- still prints 116 on this binary. That
+-- residual is pinned as a MUST-FAIL at
+-- test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/, and
+-- it is why this file must keep `Dbg2 a` first. Do NOT "tidy" the requires
+-- clause into source order to match the body: that turns a green row red and
+-- double-pins an open bug. The trigger is NOT a simple positional rule --
+-- five measured orderings do not fit one -- see that fixture's claim.txt.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+interface Dbg2 a where
+  dbg2 : a -> Int
+
+impl Dbg2 Int where
+  dbg2 n = n
+
+data Box a = MkBox a
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Box a) requires Dbg2 a, Ix a Char where
+  sh (MkBox x) = ix x 'z' + dbg2 x
+
+main = println (sh (MkBox 5))
