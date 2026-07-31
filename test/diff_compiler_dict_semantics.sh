@@ -725,6 +725,24 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
     o_run=$?
     bound "$MEDAKA" run "$permfile" >"$TMP/$base.p.run.out" 2>"$TMP/$base.p.run.err"
     p_run=$?
+    # Three-way split, not a 0/0-vs-everything-else guard: an ASYMMETRIC pair
+    # (one ordering runs, the other doesn't) is the LOUDEST form of the
+    # property this section exists to catch -- declaration order deciding
+    # whether the program runs at all -- and must FAIL the row, never read as
+    # a benign skip. A SYMMETRIC failure (both orderings fail) still owes an
+    # assertion: DICT §3 order-freedom binds there too, so the two orderings
+    # must fail the SAME way. The level graded is the EXIT CODE, not stderr
+    # TEXT: verified by hand that medaka's runtime panics are not uniformly
+    # location-free (`E-DIV-ZERO` prints `file:L:C: runtime error [...]`,
+    # while the `E-PANIC` this very corpus's s3-nested-obligation-two-levels.mdk
+    # hits prints no location at all) -- and permutation deterministically
+    # shifts every line number below the reordered blocks, so a byte-diff of
+    # stderr would FAIL a program panicking for the IDENTICAL reason purely
+    # because the panic's line moved: a false positive with nothing to do with
+    # order-sensitivity. This mirrors why Section 1's REJECT rows compare
+    # `check --json`'s diagnostic CODE, never message text -- `run` has no
+    # such structured code (#1130), so exit code is the coarsest thing that is
+    # both meaningful and immune to location drift.
     if [ "$o_run" -eq 0 ] && [ "$p_run" -eq 0 ]; then
       if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
         run_v='ok'
@@ -733,15 +751,30 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
         row_ok=0
         reason="${reason:+$reason; }run stdout differs under permutation"
       fi
+    elif [ "$o_run" -ne 0 ] && [ "$p_run" -ne 0 ]; then
+      if [ "$o_run" -eq "$p_run" ]; then
+        run_v="ok(fails-both, exit $o_run)"
+      else
+        run_v="FAIL-DIFF-EXIT($o_run/$p_run)"
+        row_ok=0
+        reason="${reason:+$reason; }run fails on both orderings but with DIFFERENT exit codes: orig=$o_run perm=$p_run"
+      fi
     else
-      run_v="n/a($o_run/$p_run)"
+      run_v="FAIL-ASYMMETRIC($o_run/$p_run)"
+      row_ok=0
+      reason="${reason:+$reason; }run exit code diverges under permutation: orig=$o_run perm=$p_run (order changed whether the program runs at all)"
     fi
 
     bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.o.bin" >"$TMP/$base.o.build.log" 2>&1
     o_build=$?
     bound "$MEDAKA" build "$permfile" -o "$TMP/$base.p.bin" >"$TMP/$base.p.build.log" 2>&1
     p_build=$?
-    if [ "$o_build" -eq 0 ] && [ "$p_build" -eq 0 ] && [ -x "$TMP/$base.o.bin" ] && [ -x "$TMP/$base.p.bin" ]; then
+    # "Effective success" folds the -x check into the same 0/1 the run arm
+    # grades on, so a build that exits 0 but somehow emits no executable is
+    # treated as a failure rather than silently matching the success branch.
+    o_build_ok=0; [ "$o_build" -eq 0 ] && [ -x "$TMP/$base.o.bin" ] && o_build_ok=1
+    p_build_ok=0; [ "$p_build" -eq 0 ] && [ -x "$TMP/$base.p.bin" ] && p_build_ok=1
+    if [ "$o_build_ok" -eq 1 ] && [ "$p_build_ok" -eq 1 ]; then
       bound "$TMP/$base.o.bin" >"$TMP/$base.o.exec.out" 2>"$TMP/$base.o.exec.err"
       bound "$TMP/$base.p.bin" >"$TMP/$base.p.exec.out" 2>"$TMP/$base.p.exec.err"
       if [ -n "$kb_line" ]; then
@@ -770,8 +803,23 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
           reason="${reason:+$reason; }build stdout differs under permutation"
         fi
       fi
+    elif [ "$o_build_ok" -eq 0 ] && [ "$p_build_ok" -eq 0 ]; then
+      # Same reasoning as the run arm's symmetric-failure branch: compare exit
+      # codes, not build-log TEXT. `medaka build`'s own diagnostics can embed
+      # the source path, which differs between entrypath and permfile by
+      # construction (different filenames), so a textual diff would flag
+      # cosmetic noise as a finding.
+      if [ "$o_build" -eq "$p_build" ]; then
+        build_v="ok(fails-both, exit $o_build)"
+      else
+        build_v="FAIL-DIFF-EXIT($o_build/$p_build)"
+        row_ok=0
+        reason="${reason:+$reason; }build fails on both orderings but with DIFFERENT exit codes: orig=$o_build perm=$p_build"
+      fi
     else
-      build_v="n/a($o_build/$p_build)"
+      build_v="FAIL-ASYMMETRIC($o_build/$p_build)"
+      row_ok=0
+      reason="${reason:+$reason; }build exit code (or missing binary) diverges under permutation: orig=$o_build(ok=$o_build_ok) perm=$p_build(ok=$p_build_ok)"
     fi
     runbuild="run=$run_v build=$build_v"
   fi
