@@ -3,15 +3,14 @@
 -- CLASS-PLUS-HEAD-CONSTRUCTOR ALONE, WHICH CANNOT SEPARATE `List Int` FROM
 -- `List a`").
 --
--- 🚨 PINNED DIVERGENCE -- **#1128** (OPEN, S0: silent wrongness, `verified`).
--- Found while building this gate; independently reproduced by the orchestrator on
--- a second cold-built binary at `c4ef6dbe` with `MEDAKA_STRICT=1`, control and IR
--- grep included, before the issue was filed.
--- Severity as observed: **S0, silent wrongness** -- `check` exits 0 with no
--- diagnostic and BOTH engines print a value produced by an impl whose head the
--- goal DOES NOT MATCH.
+-- ✅ DRAINED -- **#1128** (S0: silent wrongness, `verified`), fixed by F-3b on
+-- 2026-08-01. This file pinned the WRONG answer 99/99/99 on purpose from the day
+-- the gate was built until then; it now pins the SPEC answer below, which was
+-- hand-derived before the bug was even filed and is unchanged since.
+-- History kept deliberately: the mechanism section is the useful part of this
+-- comment and the trap it records nearly cost two more agents a session each.
 --
--- SPEC ANSWER (hand-derived, before running anything):
+-- SPEC ANSWER (hand-derived, before running anything; now also the OBSERVED one):
 --   `match(IE, π)` = { I | ∃φ. φ(head(I)) = π } (§3). `head(impl Tag (Box Int))`
 --   is `Box Int`; no substitution makes it `Box String` or `Box Bool`. So:
 --     goal `Tag (Box Int)`    -> match {Tag a, Tag (Box Int)}, min⊑ = Box Int => 99
@@ -19,16 +18,17 @@
 --     goal `Tag (Box Bool)`   -> match {Tag a} ALONE                          => 10
 --   Expected output: 99, 10, 10.
 --
--- OBSERVED on this binary: **99, 99, 99** -- on `check` (exit 0, no diagnostic),
--- on `run`, and on the shipped native binary alike. Two of the three lines call
--- an impl their goal does not match.
+-- OBSERVED WHILE #1128 WAS OPEN: **99, 99, 99** -- on `check` (exit 0, no
+-- diagnostic), on `run`, and on the shipped native binary alike. Two of the three
+-- lines called an impl their goal does not match.
 --
--- ⚠️ THE TRIGGER IS THE GENERAL IMPL'S HEAD BEING A BARE TYPE VARIABLE. IT IS
+-- ⚠️ THE TRIGGER WAS THE GENERAL IMPL'S HEAD BEING A BARE TYPE VARIABLE. IT IS
 -- INDEPENDENT OF THE TYPE CONSTRUCTOR -- `Box` here is incidental. Probed
 -- directly, same interface, same two goals, ONE token different:
---     impl Tag a       + impl Tag (List Int)  ->  99 / 99   WRONG
---     impl Tag (List a) + impl Tag (List Int) ->  99 / 10   CORRECT
--- Both impls sit at the SAME tycon in the second, and it answers correctly.
+--     impl Tag a       + impl Tag (List Int)  ->  99 / 99   WRONG (pre-F-3b)
+--     impl Tag (List a) + impl Tag (List Int) ->  99 / 10   CORRECT (always)
+-- Both impls sit at the SAME tycon in the second, and it answered correctly even
+-- while this file did not.
 --
 -- ⚠️ AN EARLIER REVISION OF THIS COMMENT SAID THE MANGLED SYMBOL "DROPS THE TYPE
 -- ARGUMENTS" AND THAT SELECTION IS "KEYED ON `Box`". THAT IS FALSIFIED BY THIS
@@ -44,24 +44,34 @@
 -- MECHANISM, in two tiers -- keep them apart, because collapsing them is the
 -- mistake this comment already made once:
 --
---   OBSERVED here, off `medaka build --keep-ir`: all three call sites lower to
---   one DIRECT call to the `Box Int` impl, and the general impl is emitted and
+--   OBSERVED (pre-fix), off `medaka build --keep-ir`: all three call sites lowered
+--   to one DIRECT call to the `Box Int` impl, and the general impl was emitted and
 --   never called. Because the call is direct, the decision is taken during
---   ELABORATION, not at run time.
+--   ELABORATION, not at run time. Post-fix the same command shows the 3-site
+--   partition the gate now pins by COUNT: two calls to `@mdk_impl___none___tag`,
+--   one to `@mdk_impl_Box_tag`.
 --
 --   TRACED TO SOURCE by a later independent analysis (attributed, and both lines
 --   re-read here before citing rather than taken on trust):
 --   `headTyconTy` returns `None` for a `TyVar` -- its `TyCon`/`TyApp`/`TyTuple`
---   arms are the only ones that yield `Some`, and a bare type variable falls to
---   the catch-all (`compiler/types/typecheck.mdk`, `headTyconTy`, ~:11632).
---   `keyEntryOf` then emits a `KeyEntry` ONLY on `Some tag`, with `None => []`
---   (~:11362). So an `impl C a` produces NO key entry at all: the candidate is
+--   arms are the only ones that yield `Some`, and a bare type variable fell to
+--   the catch-all. `keyEntryOf` then emitted a `KeyEntry` ONLY on `Some tag`, with
+--   `None => []`. So an `impl C a` produced NO key entry at all: the candidate was
 --   never collected into the registry the goal searches, rather than being
---   collected and then out-ranked. That is why the general impl is unreachable
+--   collected and then out-ranked. That is why the general impl was unreachable
 --   for EVERY goal, not merely mis-ranked at one -- and it is a sharper statement
 --   than the `univConcreteBucket`/`univHeadless` split this comment previously
 --   offered as a lead, which is a DIFFERENT registry. Line numbers drift;
 --   re-derive with `grep -n '^headTyconTy' compiler/types/typecheck.mdk`.
+--
+--   🚨 THE HALF THAT COST TWO AGENTS A SESSION EACH. Registering the entry and
+--   unioning it into the lookups is NECESSARY AND NOT SUFFICIENT -- built on its
+--   own it is INERT and this file stays at 99/99/99. A headless winner sits alone
+--   in the `noneHeadTag` bucket, so `keyForSite`'s head-collision gate never fired,
+--   it answered `None`, and `entailInst`'s `fromOption tag (…)` fell back to the
+--   GOAL's head tycon -- discarding the correctly-selected candidate one line
+--   after selecting it. F-3b's third part is that `else` arm. If you are probing
+--   this area and your control will not move, that is where to look.
 --
 -- NOT #1072: that is runtime arm-matching, and it states "single-module
 -- permutations are CLEAN", which this single-module program contradicts. NOT
@@ -85,15 +95,16 @@
 -- earlier revision of this comment claimed it was. It differs in the type
 -- constructor (`List` vs `Box`), the general head, AND the number of call sites,
 -- so it cannot isolate a single variable. It remains a useful SECOND data point
--- (the bug reproduces at `List` too), just not a control.
+-- (the bug reproduced at `List` too), just not a control.
 -- `s3-nested-obligation-most-specific.mdk` is a third data point at parametric
--- width. So the trigger is a bare-type-variable general head beside a
+-- width. So the trigger was a bare-type-variable general head beside a
 -- tycon-headed impl -- not overlap as such, and not declaration order.
 --
--- ⚠️ THIS ROW PINS A WRONG ANSWER ON PURPOSE, AND THE VALUE IT PINS IS NOT
--- CORRECT. Do not "confirm" it against the engines -- they are the thing that is
--- wrong. It goes RED the day selection starts keying on the full head, which is
--- the signal to re-pin it to the spec answer `99\n10\n10` and close #1128.
+-- ⚠️ THE ROW NOW PINS THE SPEC ANSWER, WHICH IS NOT THE SAME AS PINNING WHAT THE
+-- ENGINE DOES. `99\n10\n10` was written into this comment before the fix existed
+-- and was not recaptured from the fixed binary; the fix was graded against it, not
+-- the other way round. If this row ever goes red again, re-derive from §3 first --
+-- do not bless.
 data Box a = Box a
 
 interface Tag a where

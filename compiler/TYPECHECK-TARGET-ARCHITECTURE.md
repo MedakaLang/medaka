@@ -224,14 +224,33 @@ cannot match that goal. Head-tycon bucketing is match-preserving *only for
 instances that have a head tycon*, so **tyvar-headed (`__none__`) instances must
 be unioned into every bucket lookup** — exactly as `implMatchesU` /
 `implMatchesReceiverU` / `findMatchingImplReqsU` already do today via
-`univHeadless` on the obligation-checking path, and exactly as the route-stamping
-path's `KeyBuckets` does **not** (`keyEntryOf` emits no entry when `headTyconTy`
-is `None`, so a fully-general `impl C a` is absent from it entirely — #1128).
-Two implementations of one judgment, one complete and one not, is an L1 fork;
-K's IE is the single environment both must read. ⚠️ Note that `matchingEntries`'
-own completeness argument is circular — its bucket is exhaustive *because*
-tyvar-headed entries were dropped at construction — so "the buckets already
-collect the same entries" must not be read as evidence against this clause.
+`univHeadless` on the obligation-checking path.
+
+✅ **The route-stamping path now does it too (F-3b, 2026-08-01, #1128 CLOSED).**
+This paragraph read "and exactly as the route-stamping path's `KeyBuckets` does
+**not** (`keyEntryOf` emits no entry when `headTyconTy` is `None`, so a
+fully-general `impl C a` is absent from it entirely — #1128)". `keyEntryOf` now
+registers a tyvar head under `noneHeadTag` and `candidateBucket` unions that
+bucket into `matchingEntries` / `matchingEntriesByIface`. The union is a stable
+merge on a declaration index carried by `KeyEntry`, not a concatenation:
+concatenating would make "concrete always first" the tie-break
+`pickMostSpecificEntry` falls back on, which is an arbitrary internal constant
+and is invisible to the declaration-order permutation differential.
+⚠️ **Registration and union are NOT the whole clause.** A headless winner is
+*selectable* the moment the union lands and still not *routable*: `keyForSite`
+upgraded the route key only on a head-tag collision, and a headless winner sits
+alone in its bucket, so it answered `None` and the caller fell back to the
+goal's head tycon. Two independent implementations of exactly the text above
+were inert for this reason. Completing candidate collection obliges you to
+check that the selected candidate survives to the route.
+
+Two implementations of one judgment, one complete and one not, was an L1 fork;
+K's IE is the single environment both must read, and that consolidation is still
+owed — F-3b closed the *completeness* gap on the route path without merging the
+two registries. ⚠️ Note that `matchingEntries`' pre-F-3b completeness argument was
+circular — its bucket was exhaustive *because* tyvar-headed entries were dropped
+at construction — so "the buckets already collect the same entries" must not be
+read as evidence against this clause.
 
 ⚠️ **Sequencing constraint (loud-over-quiet).** Completing the candidate set
 routes strictly *more* goals into `pickMostSpecificEntry`, which resolves a

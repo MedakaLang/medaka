@@ -33,8 +33,9 @@
 # CONFORMANT; where they disagree the row says so in its label and names the
 # issue. THREE ENGINES AGREEING DOES NOT PROVE CORRECTNESS -- several known S0s
 # have every engine equally wrong, which is exactly why `diff_compiler_engines`
-# cannot see them, and one of the rows below (s3-min-fully-general-sibling) is
-# such a cell: both engines print the same WRONG number at exit 0.
+# cannot see them. s3-min-fully-general-sibling WAS such a cell (both engines
+# printing the same WRONG number at exit 0) until #1128 was fixed on 2026-08-01;
+# s6-1-4-supers-per-construction-goal still is one, on the build arm alone.
 #
 # ###################################################################
 # # FOUR ASSERTION SECTIONS, BECAUSE VERDICTS ARE NOT ENOUGH        #
@@ -101,23 +102,29 @@
 #   BUILD arm from the wrong 20 to the right 77 while `run` stays 77/77 either
 #   way -- i.e. #1127 is ALSO order-sensitive on the path Section 4 grades.
 #   Pinned there as a KNOWN-BAD permutation row rather than silently excluded.
-# * s3-min-fully-general-sibling  -- #1128 (OPEN, S0 `verified`). SILENT
-#   WRONGNESS ON BOTH ENGINES. A fully
-#   general `impl Tag a` beside `impl Tag (Box Int)` makes EVERY `Box`-headed
-#   goal call the `Box Int` impl: `tag (Box "s")` prints 99 where 10 is correct,
-#   on check (exit 0, no diagnostic), on run, and on the shipped binary. Selection
-#   is keyed on the HEAD TYCON with the type ARGUMENTS DROPPED -- §10's named
-#   defect ("keys instances by class-plus-head-constructor alone, which cannot
-#   separate `List Int` from `List a`"). The control is one token away:
-#   s5-argtag-unsound-under-overlap is the same program with `impl Tag (List a)`
-#   in place of `impl Tag a`, and it is CORRECT. Adjacent to but not the same as
-#   #1072, which is a runtime arm-matching bug and states that "single-module
-#   permutations are CLEAN" -- this program is single-module and is not; and NOT
-#   #667 (CLOSED, flat `impl Sz Int`+`impl Sz a`, interpreter-only, re-probed
-#   correct here). 🔗 #1113 (ARCH B-2) is the target-architecture task most likely
-#   to subsume it -- §11's arg-tag row names the same bare-head-tycon granularity
-#   one layer down, in eval's `runtimeTypeTag`/`filterByTag` RUNTIME fallback,
-#   where this fixture's site is a DIRECT call decided at elaboration.
+# * s3-min-fully-general-sibling -- #1128 (S0 `verified`) is FIXED and this row
+#   HAS DRAINED (F-3b, 2026-08-01). Kept in the ledger as the worked example of a
+#   self-drain, because the shape of the fix is the useful part:
+#     WAS: a fully general `impl Tag a` beside `impl Tag (Box Int)` made EVERY
+#     `Box`-headed goal call the `Box Int` impl -- `tag (Box "s")` printed 99
+#     where 10 is correct, on check (exit 0, no diagnostic), on run, and on the
+#     shipped binary.
+#     MECHANISM: a bare-type-variable head has no head tycon, so `keyEntryOf`
+#     emitted NO `KeyEntry` for it. The general impl was never COLLECTED into the
+#     registry the goal searches -- it could not be out-ranked, only missed.
+#     FIX: register it under `noneHeadTag`, union that bucket into every goal-head
+#     lookup (merged on declaration index, not concatenated), and let `keyForSite`
+#     return the winner's own head tag instead of `None`, which was throwing the
+#     correctly-selected candidate away one line later.
+#   ⚠️ The first two thirds of that fix, WITHOUT the third, are INERT -- two
+#   independent agents built them and this row never moved. If you are re-deriving
+#   this area, that is the trap: a headless winner is selectable long before it is
+#   routable.
+#   🔗 #1113 (ARCH B-2) still owns the deeper form -- §11's arg-tag row names the
+#   same bare-head-tycon granularity one layer down, in eval's
+#   `runtimeTypeTag`/`filterByTag` RUNTIME fallback, where this fixture's site is a
+#   DIRECT call decided at elaboration. F-3b did NOT retire the head-tag hedge in
+#   `keyForSite`; it only stopped it lying about the selected instance.
 # * s3-nested-obligation-two-levels -- #323 (OPEN, S3). At nesting depth >= 2
 #   under overlap the RUN path E-PANICs `unknown op '+'` while `check` and the
 #   NATIVE binary are both correct (119). A §7 single-evaluator-law violation.
@@ -289,7 +296,7 @@ s3-nary-requires-multi-entry.mdk|§1/§3 the same judgement at a TWO-ENTRY `requ
 s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
 s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
-s3-min-fully-general-sibling.mdk|§3/§10 LEDGER #1128 (OPEN, S0 SILENT WRONGNESS, both engines): a fully general `impl Tag a` beside `impl Tag (Box Int)` sends EVERY Box-headed goal to the Box Int impl -- selection keyed on the head tycon with type ARGS DROPPED. Spec answer 99/10/10; both engines print 99/99/99 at exit 0. PINS THE WRONG ANSWER ON PURPOSE|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n99\n99|
+s3-min-fully-general-sibling.mdk|§3 `inst` = min⊑(match) WITH A FULLY-GENERAL SIBLING -- the #1128 DRAIN (F-3b). `impl Tag a` beside `impl Tag (Box Int)`: goal `Tag (Box Int)` matches BOTH and min⊑ takes the concrete one (99); goals `Tag (Box String)` / `Tag (Box Bool)` match the general one ALONE, because no substitution makes `Box Int` into `Box String` (10, 10). This row pinned the WRONG 99/99/99 until 2026-08-01; the value below is the SPEC answer the fixture`s own header hand-derived before the fix existed, not a recapture of what the engine started doing|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10\n10|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
 s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
@@ -333,16 +340,25 @@ s4-gen-rec-inferred-context.mdk|§4 `gen-rec` P` is the GROUP`s, so BOTH binding
 s4-gen-rec-inferred-context.mdk|§4 `gen-rec` the other half of the group|oddSz : Sz a => a -> Int -> Bool'
 
 # ── Section 3 table: emitted-LLVM structural assertions ──────────────────────
-# entry | label | HAS|LACKS | extended-regex over the kept .ll
+# entry | label | HAS|LACKS|COUNT=<n> | extended-regex over the kept .ll
 #   The IR is produced BEFORE clang runs, so no optimization level can change it
 #   (AGENTS.md, "Parallelism"): these patterns are stable against -O0/-O2.
+#
+#   ⚠️ `COUNT=<n>` exists because HAS/LACKS CANNOT EXPRESS THE #1128 DRAIN. That
+#   fix's discriminating observation is "the general impl is called at exactly the
+#   TWO sites whose goal matches only it, and the concrete impl at exactly the ONE
+#   site that does" -- and HAS is satisfied by a single call, so a regression routing
+#   ALL THREE sites back through one symbol would keep both HAS rows green. The
+#   pre-fix pin could use LACKS (zero is a count HAS/LACKS can state); the post-fix
+#   pin cannot. A row that can only assert "at least one" is exactly the unasserted
+#   label the adversarial-review F1 note below already caught once.
 IRS='s4-gen-sig-declared-context-kept.mdk|§4 `gen` a declared-but-never-dispatched constraint STILL ABSTRACTS ITS DICT PARAM -- arity 2 (dict + value) for a 1-argument source function. Invisible from behaviour: the value is 9 with or without the slot|HAS|^define i64 @mdk_s4_gen_sig_declared_context_kept__sz2\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the CONSTRAINED same-named binding abstracts ONE dict: arity 2|HAS|^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the UNCONSTRAINED same-named binding abstracts NONE: arity 1. A bare-name arity table would force a phantom dict param here and the call site would over-apply|HAS|^define i64 @mdk_righty__widget\(i64 %arg0\)
 s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl -- a direct call, no runtime arm-matching|HAS|call i64 @mdk_impl_Int_dflt\(
-s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 1/3: the general impl IS emitted -- so it was not DCE`d away, and its absence from the call sites below is a selection decision rather than a missing definition|HAS|define i64 @mdk_impl___none___tag\(
-s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 2/3: no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\(
-s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 3/3: the calls that DO exist go to the `Box Int` impl. Without this the row`s own label ("all three sites lower to the same direct call") was UNASSERTED -- a change routing all three through some THIRD symbol while leaving the general impl uncalled would have kept the row green under a false label (adversarial review F1)|HAS|call i64 @mdk_impl_Box_tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 1/3: the general impl IS emitted -- so it was not DCE`d away, and (pre-F-3b) its absence from every call site was a selection decision rather than a missing definition. Retained post-drain: it is what makes PIN 2/3 an assertion about DISPATCH rather than about existence|HAS|define i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 2/3, RE-PINNED BY THE F-3b DRAIN: the general impl is now called at EXACTLY THE TWO sites whose goal matches it alone. This row read `LACKS` (found 0) while #1128 was open. COUNT, not HAS, is load-bearing here: `HAS` would be satisfied by one call, so a regression collapsing all three sites onto the general impl -- the mirror image of the original bug -- would keep it green|COUNT=2|call i64 @mdk_impl___none___tag\(
+s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 3/3, RE-PINNED: exactly ONE site calls the `Box Int` impl -- the only goal it matches. Paired with PIN 2/3 this pins the whole 3-site partition (2 general + 1 concrete = 3 calls), which no behavioural assertion can see and which `HAS` left half-unstated (adversarial review F1: a change routing all three through some THIRD symbol kept the old row green under a false label)|COUNT=1|call i64 @mdk_impl_Box_tag\(
 s8-i1-dict-param-order.mdk|§8 I1 ORDER, structural half: a TWO-predicate binding must abstract FOUR parameters (2 dicts + 2 values). The value 503 alone cannot see a count change that unification happens to absorb|HAS|^define i64 @mdk_s8_i1_dict_param_order__pair2\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\)
 s3-nary-sig-constraint-goal-vector.mdk|#1161 ARITY-NEUTRALITY PIN. Recording the predicate`s ARGUMENT VECTOR must not move emitted dict arity -- that is the property the whole F-3a-ii design rests on (the vector table is SLOT-PARALLEL to funConstraintsRef, never inside it, so dictArityOf/dictPass/scopeArities are untouched). `Ix a Char => a -> Int` shatters into ONE bare-tyvar slot, so `useIx` abstracts 1 dict + 1 value = arity 2. NO behavioural assertion can see this: promoting the predicate to a joint dict slot would print the same 222|HAS|^define i64 @mdk_s3_nary_sig_constraint_goal_vector__useIx\(i64 %arg0, i64 %arg1\)
 s3-nary-sig-constraint-structured-arg.mdk|#1161 ARITY-NEUTRALITY PIN, structured half: `Ix a (List b) =>` still shatters into exactly ONE slot -- `b` occurs only INSIDE `List b`, so it is not a bare-tyvar argument and gets no slot of its own -- giving 1 dict + 2 values = arity 3. Guards the sibling mistake to the one above: giving every tyvar MENTIONED in a predicate a slot, rather than every bare-tyvar ARGUMENT|HAS|^define i64 @mdk_s3_nary_sig_constraint_structured_arg__useIx\(i64 %arg0, i64 %arg1, i64 %arg2\)'
@@ -610,6 +626,17 @@ printf '%s\n' "$IRS" | while IFS='|' read -r entry label kind pat; do
         echo "PASS" >>"$TMP/v3"
       else
         printf 'FAIL ir     %-44s LACKS %s -- FOUND %d\n' "$entry" "$pat" "$hits"
+        printf '                 %s\n' "$label"
+        echo "FAIL" >>"$TMP/v3"
+      fi
+      ;;
+    COUNT=*)
+      want="${kind#COUNT=}"
+      if [ "$hits" -eq "$want" ]; then
+        printf 'ok   ir     %-44s COUNT=%s %s\n' "$entry" "$want" "$pat"
+        echo "PASS" >>"$TMP/v3"
+      else
+        printf 'FAIL ir     %-44s COUNT=%s %s -- FOUND %d\n' "$entry" "$want" "$pat" "$hits"
         printf '                 %s\n' "$label"
         echo "FAIL" >>"$TMP/v3"
       fi
