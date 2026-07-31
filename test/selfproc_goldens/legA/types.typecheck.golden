@@ -68,8 +68,8 @@ argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argImplDictRoutesFor : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> List (String, Mono) -> List Require -> Int -> List Route
-argImplRequiresRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
-argLitFits : Expr -> Mono -> Bool
+argImplRequiresRoutesRec : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Route
+argImplRequiresRoutesRecD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
@@ -368,7 +368,6 @@ depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (L
 depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derivableIface : String -> Bool
-detectSwappedArgs2 : TcEnv -> Expr -> Expr -> Option Mono
 dictAppMonoIds : (Ref (List Route), List Mono, List String) -> List (Int, String)
 dictArityOf : String -> Int
 dictForwardedPairs : Int -> Int -> List (Int, String)
@@ -447,7 +446,6 @@ elaborateDict : List Decl -> List String -> List String -> List Decl -> List Dec
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
-emitSwapDiag : String -> Expr -> Expr -> Option Mono
 emitValueShadowGate : String -> Bool
 emptyImplUniverse : ImplUniverse
 enclDictVarOf : Mono -> String -> Option String
@@ -555,7 +553,6 @@ funClausePair : FunClause -> (List Pat, Expr)
 funClauseSites : FunClause -> List (Ref Route)
 funDefs : List Decl -> List (String, (List Pat, Expr))
 funDomain : Mono -> Mono
-funParams2 : Mono -> Option (Mono, Mono)
 genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
@@ -787,7 +784,6 @@ isDefinerShadow : String -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool
-isLitArg : Expr -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : Expr -> Bool
@@ -915,17 +911,13 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
-monoConcrete : Mono -> Bool
 monoHeadCon : Mono -> Option String
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
-monoIsFloat : Mono -> Bool
 monoIsFunction : Mono -> Bool
-monoIsNumeric : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoSameGiven : Mono -> Mono -> Bool
-monoSameShape : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
 monoSpineHeadIsCon : Mono -> Bool
 monoTyvarId : Mono -> Int
@@ -1159,7 +1151,6 @@ renderCallArgs : List Expr -> Option (List String)
 renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List (String, List Int) -> List String
 renderEffTailVars : List String -> String
 renderKindArrow : List Kind -> String
-renderLitArg : Expr -> Option String
 renderProductLit : List (String, Param) -> String
 reopenRow : Bool -> EffRow -> EffRow
 reopenRowN : Bool -> EffRow -> EffRow
@@ -1213,7 +1204,7 @@ rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
 routeOf : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> Route
-routeOfD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
+routeOfD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> Int -> Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Route
 routesOfMonos : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List Route
@@ -1247,7 +1238,7 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
 selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
-selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
+selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> Option (Ty, List Require)
 selfBinding : String -> (String, String)
 setCardCap : Int
 setCoherenceUserDecls : List Decl -> Unit
@@ -1326,7 +1317,6 @@ supersFix : List String -> List String -> List String
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String
 survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
-swapArgFix : Expr -> Expr -> String -> Option (Loc, String)
 tagAllLitLocs : Mono -> String -> Unit
 tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
 tagNumlitCtxIf : Mono -> Mono -> String -> Unit
@@ -1346,7 +1336,6 @@ toggles : Ref Toggles
 transitiveImporterDecls : String -> List (String, List Decl) -> List Decl
 transitiveImporterIds : String -> List (String, List Decl) -> List String
 transitivelyImports : String -> String -> List (String, List Decl) -> Bool
-trySwapReport : String -> Expr -> Expr -> Mono -> Mono -> Option Mono
 tupleArgElems : Expr -> Option (List Expr)
 tupleCallHintFor : Mono -> Option (String, Option (Loc, String))
 tupleCallShapeHint : Expr -> Expr -> Mono -> Option (String, Option (Loc, String))
@@ -1359,7 +1348,6 @@ tupleTagArity : String -> Option Int
 tupleTagArityGo : String -> Int -> Option Int
 tupleUnifyClash : Mono -> Mono -> Bool
 tvarMonoOfIn : Mono -> Int -> Mono
-twoArgCallee : TcEnv -> Expr -> Option (String, Expr, Mono, Mono)
 tyAppSpine : Ty -> (Ty, List Ty)
 tyConNamesInConstraint : Constraint -> List String
 tyConNamesInTy : Ty -> List String
@@ -1414,7 +1402,6 @@ unknownFieldFresh : String -> String -> List String -> Mono
 unknownFieldMsg : String -> String -> String
 unknownRecordFresh : String -> Mono
 unknownRecordMsg : String -> String
-unlocExpr : Expr -> Expr
 unopMethod : String -> Option String
 unopMethodApp : String -> Expr -> Ref Route -> Expr
 unreachableArmWarning : String

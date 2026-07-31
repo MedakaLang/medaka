@@ -1,5 +1,5 @@
 # META
-source_lines=18934
+source_lines=18714
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -6405,37 +6405,6 @@ recordMethodLevelSlotObls ((vname, iface)::rest) subst =
 -- USE, and recordLocalBind captures the right hover type.  Purely additive: the
 -- final `unify ft (TFun xt …)` in inferApp imposes the same equality regardless,
 -- so the solution is unchanged — we only make it available earlier.
--- ── Batch B #5: swapped-argument detection (2-arg transposition) ───────────
--- A 2-arg application whose in-order arg/param types clash but whose
--- TRANSPOSITION type-checks is almost always a caller who wrote the arguments
--- in the wrong order (`greet 3 "Alice"` for `greet : String -> Int -> …`).
--- Detect that shape UPSTREAM in inferAppExpr — where the callee name + BOTH
--- args are still in scope — and emit ONE actionable diagnostic naming the
--- swapped call, instead of letting the two per-arg `inferApp` mismatches leak
--- (`Int vs String` + `Int literal vs String`) with no hint that a swap fixes it.
---
--- SOUNDNESS (a wrong "swap" suggestion is worse than the status quo): fire ONLY
--- when the transposition GENUINELY type-checks.  Two guards make the structural
--- test exact — never a wildcard-var approximation:
---   (1) both callee params must be fully CONCRETE (no free tyvars).  A
---       polymorphic param accepts any argument, so a "swap" past it is
---       meaningless AND its fit can't be decided structurally.
---   (2) both arguments must be LITERALS.  A literal's type is known exactly
---       from its syntax (WITHOUT re-inference side effects), so `argLitFits`
---       decides the transposition's type-fit structurally.  A numeric literal
---       (`ENumLit`/`LInt`) fits any `Int`/`Float` param (it is `Num`-poly); a
---       float literal fits only `Float`; other literals fit their exact type.
--- Under both guards, `(not in-order) && swapped` holds only for a real
--- transposition, so the suggested swap always type-checks.  We further require
--- the two params to DIFFER (same-type params ⇒ order is irrelevant, no swap).
--- Anything outside this scope (>2 args, non-literal args, polymorphic params,
--- same-type params) falls through to the normal per-arg path unchanged.
-
-unlocExpr : Expr -> Expr
-unlocExpr (ELoc _ e) = unlocExpr e
-unlocExpr (EDoOrigin _ e) = unlocExpr e
-unlocExpr e = e
-
 exprLoc : Expr -> Option Loc
 exprLoc (ELoc l _) = Some l
 exprLoc (EDoOrigin l _) = Some l
@@ -6448,142 +6417,6 @@ appArgLoc : Expr -> Option Loc
 appArgLoc (ELoc _ e) = appArgLoc e
 appArgLoc (EApp _ x) = exprLoc x
 appArgLoc _ = None
-
--- True iff [m] has NO unbound tyvar anywhere (a fully concrete type).
-monoConcrete : Mono -> Bool
-monoConcrete m = match normalize m
-  TVar _ => False
-  TCon _ => True
-  TApp a b => monoConcrete a && monoConcrete b
-  TFun a _ b => monoConcrete a && monoConcrete b
-  TEff _ => True
-
--- structural equality of two concrete monos (both guaranteed var-free here)
-monoSameShape : Mono -> Mono -> Bool
-monoSameShape a b = match normalize a
-  TCon x => match normalize b
-    TCon y => x == y
-    _ => False
-  TApp a1 b1 => match normalize b
-    TApp a2 b2 => monoSameShape a1 a2 && monoSameShape b1 b2
-    _ => False
-  TFun a1 _ b1 => match normalize b
-    TFun a2 _ b2 => monoSameShape a1 a2 && monoSameShape b1 b2
-    _ => False
-  _ => False
-
-monoIsNumeric : Mono -> Bool
-monoIsNumeric m = match normalize m
-  TCon "Int" => True
-  TCon "Float" => True
-  _ => False
-
-monoIsFloat : Mono -> Bool
-monoIsFloat m = match normalize m
-  TCon "Float" => True
-  _ => False
-
-isLitArg : Expr -> Bool
-isLitArg e = match unlocExpr e
-  ENumLit _ _ _ _ => True
-  ELit _ => True
-  _ => False
-
--- does the LITERAL argument [e] fit the CONCRETE param type [pt]?
-argLitFits : Expr -> Mono -> Bool
-argLitFits e pt = match unlocExpr e
-  ENumLit _ _ _ _ => monoIsNumeric pt
-  ELit (LInt _) => monoIsNumeric pt
-  ELit (LFloat _) => monoIsFloat pt
-  ELit l => monoSameShape (litType l) pt
-  _ => False
-
--- render a literal argument back to its source text (for the swapped-call hint)
-renderLitArg : Expr -> Option String
-renderLitArg e = match unlocExpr e
-  ENumLit n _ _ _ => Some (intToString n)
-  ELit (LInt n) => Some (intToString n)
-  ELit (LFloat f) => Some (floatToString f)
-  ELit (LString s) => Some ("\"" ++ s ++ "\"")
-  ELit (LChar c) => Some ("'" ++ c ++ "'")
-  ELit (LBool b) => Some (if b then "True" else "False")
-  ELit LUnit => Some "()"
-  _ => None
-
--- the two param types of a function of arity EXACTLY 2 (result NOT an arrow).
--- Requiring exact arity 2 keeps the detector off a >2-arg call's inner 2-arg
--- SUB-spine: currying makes `g 3 "Alice"` a real inferAppExpr node inside
--- `g 3 "Alice" True`, and firing there would suggest `g "Alice" 3`, silently
--- dropping the third argument.  A 3-param `g` has a `Bool -> String` result
--- after two params, so it bails here; only a genuinely 2-param callee matches.
-funParams2 : Mono -> Option (Mono, Mono)
-funParams2 m = match normalize m
-  TFun p1 _ rest => match normalize rest
-    TFun p2 _ result => match normalize result
-      TFun _ _ _ => None
-      _ => Some (p1, p2)
-    _ => None
-  _ => None
-
--- Machine fix: replace the span from arg1's start to arg2's end with the
--- swapped source text.  Requires both args to carry real source spans.
-swapArgFix : Expr -> Expr -> String -> Option (Loc, String)
-swapArgFix a1 a2 repl = match (exprLoc a1, exprLoc a2)
-  (Some (Loc f sl sc _ _), Some (Loc _ _ _ el ec)) =>
-    Some (Loc f sl sc el ec, repl)
-  _ => None
-
--- If [f] is exactly `<callee> arg1` (a 2-arg call's function part — the callee
--- applied to just its first argument, NOT itself a nested application), resolve
--- the callee to its NAME and its two concrete param types.  `None` for any
--- other shape (nested spine, unbound callee, non-arity-2 type).
-twoArgCallee : TcEnv -> Expr -> Option (String, Expr, Mono, Mono)
-twoArgCallee env f = match unlocExpr f
-  EApp g a1 => match unlocExpr g
-    EApp _ _ => None                           -- 3+ args: out of scope
-    gHead =>
-      do
-        name <- appSpineName gHead
-        scheme <- lookupVar env name
-        (p1, p2) <- funParams2 (instantiate scheme)
-        Some (name, a1, p1, p2)
-  _ => None
-
--- Detect a 2-argument transposition on `f x` (`f` = callee applied to arg1, `x`
--- = arg2).  Returns `Some resultVar` (poisoned, so no cascade) when it fires and
--- has emitted the diagnostic; `None` to fall through to the normal path.
-detectSwappedArgs2 : TcEnv -> Expr -> Expr -> Option Mono
-detectSwappedArgs2 env f a2
-  | not (isLitArg a2) = None
-  | otherwise = match twoArgCallee env f
-    None => None
-    Some (name, a1, p1, p2) =>
-      if not (isLitArg a1) then
-        None
-      else
-        trySwapReport name a1 a2 p1 p2
-
-trySwapReport : String -> Expr -> Expr -> Mono -> Mono -> Option Mono
-trySwapReport name a1 a2 p1 p2
-  | not (monoConcrete p1 && monoConcrete p2) = None
-  | monoSameShape p1 p2 = None                 -- same-type params: order is moot
-  | otherwise =
-    let inOrder = argLitFits a1 p1 && argLitFits a2 p2
-    let swapped = argLitFits a2 p1 && argLitFits a1 p2
-    if (not inOrder) && swapped then emitSwapDiag name a1 a2 else None
-
-emitSwapDiag : String -> Expr -> Expr -> Option Mono
-emitSwapDiag name a1 a2 = match (renderLitArg a1, renderLitArg a2)
-  (Some s1, Some s2) =>
-    let swappedCall = "\{name} \{s2} \{s1}"
-    let msg = "Arguments to '\{name}' are in the wrong order. Try '\{swappedCall}'"
-    let help = "swap the arguments: \{swappedCall}"
-    let fix = swapArgFix a1 a2 "\{s2} \{s1}"
-    let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" (orElseLoc (exprLoc a1) currentLoc.value) msg help fix
-    let v = freshVar ()
-    let _ = poisonMismatchVars v v
-    Some v
-  _ => None
 
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
 inferAppExpr env f x = match lamUnderLoc x
@@ -6601,20 +6434,18 @@ inferAppExpr env f x = match lamUnderLoc x
        Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
        None => match definerShadowVarHead f
         Some dname => inferDefinerShadowVarApp env dname f x
-        None => match detectSwappedArgs2 env f x
-         Some swapResult => swapResult
-         None =>
-          let ft = infer env f
-          let xt = infer env x
-          -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
-          -- its domain with the tuple), then record the residual result so a
-          -- downstream no-impl / mismatch can surface the tailored hint.
-          let pend = tupleCallShapeHint f x ft
-          let res = inferApp (envAlphaLets env) (EApp f x) ft xt
-          let _ = match pend
-            Some (help, fix) => setRef perRun.value.tupleCallCandidates ((res, help, fix)::perRun.value.tupleCallCandidates.value)
-            None => ()
-          res
+        None =>
+         let ft = infer env f
+         let xt = infer env x
+         -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
+         -- its domain with the tuple), then record the residual result so a
+         -- downstream no-impl / mismatch can surface the tailored hint.
+         let pend = tupleCallShapeHint f x ft
+         let res = inferApp (envAlphaLets env) (EApp f x) ft xt
+         let _ = match pend
+           Some (help, fix) => setRef perRun.value.tupleCallCandidates ((res, help, fix)::perRun.value.tupleCallCandidates.value)
+           None => ()
+         res
 
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
@@ -11978,12 +11809,12 @@ matchStep _ _ = MFail
 
 -- #217: the return-position BLIND requires chain (implReqRoutes → reqRoute →
 -- implRequiresRoutesRec[D]) has been UNIFIED onto the activeDictVar-AWARE arg chain
--- (argImplReqRoutes → argReqRoute → routeOf → argImplRequiresRoutes).  The old
+-- (argImplReqRoutes → argReqRoute → routeOf → argImplRequiresRoutesRec[D]).  The old
 -- blind chain resolved an abstract element var to RNone (a null dict cell, the
 -- historical SIGSEGV source) even when that var was an in-scope enclosing-method
 -- constraint var whose dict param IS available; the aware chain routes it RDict per
 -- DICT-SEMANTICS §3 `assum`.  The WS-4b depth fuse (max 32) was RETAINED — it now lives
--- on the aware recursion (argImplRequiresRoutes) so the unified chain is aware +
+-- on the aware recursion (argImplRequiresRoutesRecD) so the unified chain is aware +
 -- fused, not aware-and-diverging on a non-shrinking impl context.
 
 -- find the ImplEntry in [implTable] for interface [iface] whose head tycon is
@@ -12039,9 +11870,8 @@ data Undetermined = KeepNone | CountImpls (List Decl) String
 --     preferring `activeDictVarOfEncl`.  EKReturn routes RDictFwd when the method is
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn upgrades the head tag to the canonical full-type key (`keyForSite`)
---     and fills element routes via `implDictRoutesForFull`; EKNestedTop stamps the
---     canonical key of the min⊑ winner + `argImplRequiresRoutes`-packed requires (with
---     the W2 depth fuse).
+--     and fills element routes via `implDictRoutesForFull`; EKNestedTop keeps the bare
+--     head tag + `argImplRequiresRoutesRecD`-packed requires (with the W2 depth fuse).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
 -- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
 data EntailKind =
@@ -12052,13 +11882,7 @@ data EntailKind =
   -- #203: now carries the ALL-impls KeyBuckets (was structurally unable to reach the
   -- min⊑ selector), so the arm can stamp the canonical key of the most-specific impl
   -- (mirroring EKReturn) instead of a bare ambiguous head tag.
-  -- #1154 (F-3a): the predicate's goal args PAST arg 0.  Arg 0 stays in `entail`'s
-  -- own [m] (it keys `assum` and supplies the head tag), so this field holds only the
-  -- TAIL — storing the whole vector would duplicate arg 0 and let the two copies
-  -- drift.  `[]` at every caller with no vector to offer, which reproduces the
-  -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
-  -- `fullMono` only THEY need.
-  | EKNestedTop KeyBuckets String Undetermined Int (List Mono)
+  | EKNestedTop KeyBuckets String Undetermined Int
   -- #156 S3c: arg-position stamp (resolveArgStamp).  keyTable for keyForSite.  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
   -- RKey primary as EKReturn but element routes via argImplDictRoutesForEncl keyed on
@@ -12104,7 +11928,7 @@ entailAssum m encl name kind = match entailAssumVar m encl name kind
 -- ignored by the non-op kinds.
 entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
 entailAssumVar m encl _ (EKReturn _ _ _) = activeDictVarOfEncl m encl
-entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl
+entailAssumVar m encl _ (EKNestedTop _ _ _ _) = activeDictVarForEncl m encl
 entailAssumVar m encl _ (EKArg _ _) = activeDictVarOfEncl m encl
 entailAssumVar m encl name (EKOp isBinop _ inImpl) =
   opDictVarOf isBinop name m inImpl encl
@@ -12115,7 +11939,7 @@ entailAssumRoute dname (EKReturn _ _ isRp) =
     RDictFwd dname
   else
     RDict dname
-entailAssumRoute dname (EKNestedTop _ _ _ _ _) = RDict dname
+entailAssumRoute dname (EKNestedTop _ _ _ _) = RDict dname
 entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _ _) = RDict dname
 
@@ -12144,22 +11968,14 @@ entailInst implTable name m encl tag (EKReturn keyTable fullMono _) =
 -- primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed, head-
 -- collision-gated exactly like keyForSite ⇒ a non-overlapping site keeps its bare tag,
 -- byte-identical), and the packed requires come from that same winner (F).
--- #1154 (F-3a): a nested/top `requires` goal is a PREDICATE, so its goal is the
--- predicate's whole argument vector (§3 `match(IE, C τ̄)`), not its subject mono.
--- `argReqRoute` used to keep `(arg::_)` and drop the rest, so `requires Ix a Char`
--- arrived here as the singleton `[Int]`; `entryHeadMatches` then took its arg-0
--- fallback, `Ix Int Bool` and `Ix Int Char` both "matched", `entryCovers` found them
--- incomparable, and `pickMostSpecificEntry` returned the FIRST-DECLARED — so swapping
--- two impl blocks changed the program's answer, at exit 0, on both engines (#1154).
--- [rest] is `[]` at every caller that has no vector, so those sites are unchanged.
--- ⚠️ This threads the `requires` leg ONLY.  The top-level `=>`-constrained-call leg
--- (routesOfMonosTop ← funConstraintsRef's SHATTERED per-tyvar dict slots) has no
--- vector to thread — building one is #607 punch-list item 3 (dict slot = predicate),
--- which moves emitted dict arity.  That leg is #1161 and is deliberately NOT here.
-entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
-  let routeKey = fromOption tag (keyForSiteByIface keyTable iface (m::rest))
+entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth) =
+  -- #609: a nested/top `requires` goal arrives as a single subject mono, so the
+  -- goal vector is the singleton — unchanged behaviour.  Threading the full
+  -- predicate vector down this leg needs the n-ary obligation representation and
+  -- is #607's scope, not this fix's.
+  let routeKey = fromOption tag (keyForSiteByIface keyTable iface [m])
   (
-    RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),
+    RKey routeKey (argImplRequiresRoutesRecD implTable keyTable iface encl tag m depth),
     [],
   )
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
@@ -12186,7 +12002,7 @@ entailInst implTable name m _ tag (EKOp isBinop keyTable _) =
 
 entailFallback : ImplBuckets -> EntailKind -> Route
 entailFallback _ (EKReturn _ _ _) = RNone
-entailFallback implTable (EKNestedTop keyTable _ policy _ _) =
+entailFallback implTable (EKNestedTop keyTable _ policy _) =
   undeterminedRoute implTable keyTable policy
 entailFallback _ (EKArg _ _) = RNone
 entailFallback _ (EKOp _ _ _) = RNone
@@ -12198,28 +12014,22 @@ entailFallback _ (EKOp _ _ _) = RNone
 -- arm (see Undetermined).
 routeOf : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> Route
 routeOf implTable keyTable iface encl policy m =
-  routeOfD implTable keyTable iface encl policy m [] 0
+  routeOfD implTable keyTable iface encl policy m 0
 
 -- #217: depth-carrying core of routeOf.  [depth] threads the WS-4b fuse (max 32)
--- through the aware recursion (routeOfD → argImplRequiresRoutes → argImplReqRoutes
+-- through the aware recursion (routeOfD → argImplRequiresRoutesRecD → argImplReqRoutes
 -- → argReqRoute → routeOfD), the guard retained from the removed blind chain so a
 -- non-shrinking impl context (`impl C (T a) requires C (T (T a))`) terminates instead of
 -- diverging at route-resolution time.  Depth is unchanged here; it increments once per
--- impl level in argImplRequiresRoutes.
--- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
-routeOfD : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
+-- impl level in argImplRequiresRoutesRecD.
+routeOfD : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> Int -> Route
 -- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
--- here via argImplRequiresRoutes → argImplReqRoutes → argReqRoute → routeOfD, with
+-- here via argImplRequiresRoutesRecD → argImplReqRoutes → argReqRoute → routeOfD, with
 -- [depth] threaded through the EKNestedTop payload.
-routeOfD implTable keyTable iface encl policy m rest depth =
-  fst (entail
-    implTable
-    ""
-    m
-    encl
-    (EKNestedTop keyTable iface policy depth rest))
+routeOfD implTable keyTable iface encl policy m depth =
+  fst (entail implTable "" m encl (EKNestedTop keyTable iface policy depth))
 
 undeterminedRoute : ImplBuckets -> KeyBuckets -> Undetermined -> Route
 undeterminedRoute _ _ KeepNone = RNone
@@ -12251,7 +12061,7 @@ routeUndeterminedTop prog implTable keyTable iface
   | iface == "" = RNone
   | otherwise = match implHeadTagsForIface prog iface
     [] => RNone
-    [tag] => RKey tag (argImplRequiresRoutes implTable keyTable iface "" tag (TCon tag) [] 0)
+    [tag] => RKey tag (argImplRequiresRoutesRec implTable keyTable iface "" tag (TCon tag))
     _ => reportAmbiguousImpl iface
 
 reportAmbiguousImpl : String -> Route
@@ -12301,39 +12111,25 @@ routesOfMonos implTable keyTable (m::rest) =
 -- (implDictRoutesIn) routes through here too, no longer through a blind twin.  [encl]
 -- threads the enclosing method so nested element dicts forward its own
 -- `$dict_<encl>_<slot>` params (encl == "" recovers the global routing).
--- #217/WS-4b: [depth] guards a non-shrinking impl context (`impl C (T a) requires C
--- (T (T a))`) — the fuse RETAINED from the removed blind chain, now on the aware
--- recursion so unifying the two chains did not import a typecheck hang.  Depth 32 is
--- ample for valid programs (real nesting rarely exceeds 3–4 levels); on limit-hit we
--- return [] (RNone element → null cell), safe because such an impl is ill-formed and
--- never produces a valid concrete instantiation in a well-typed program.  (#1154
--- folded away the depth-0 wrapper `argImplRequiresRoutesRec`: two names for one body,
--- one caller each.  Seed `[] 0` at an entry point instead.)
---
--- #1154 (F-3a): [rest] is the predicate's goal args past arg 0.  [goals] is bound ONCE
--- and fed to BOTH the SELECTION and the head SUBSTITUTION — §6 C2 requires the impl
--- dispatched to and the impl whose context is discharged to be the SAME impl, and a
--- scalar select paired with a vector subst could bind an impl's trailing head vars
--- from a DIFFERENT impl's goal.  (`entailInst`'s EKArg arm binds its goals once for
--- exactly this reason.)
---
--- ⚠️ The iface-UNKNOWN arm (iface == "", the method-dict / untyped-fallback path) has
--- no interface and therefore no arity to give a vector meaning, so it stays SCALAR —
--- and `goals` is pinned to `[m]` there so the substitution is scalar too.  That is not
--- a special case bolted on: at `listLen goals == 1`, `headSubstWithParams h itys m [m]`
--- IS `matchTyMono h m` (augmentWithParams gates on `listLen paramMonos > 1`), so this
--- arm reduces to the pre-#1154 body term for term, algebraically.
-argImplRequiresRoutes : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
-argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
+argImplRequiresRoutesRec : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Route
+argImplRequiresRoutesRec implTable keyTable iface encl tag m =
+  argImplRequiresRoutesRecD implTable keyTable iface encl tag m 0
+
+-- #217/WS-4b: depth-fused core.  [depth] guards a non-shrinking impl context (`impl C
+-- (T a) requires C (T (T a))`) — the fuse RETAINED from the removed blind chain, now on
+-- the aware recursion so unifying the two chains did not import a typecheck hang.  Depth
+-- 32 is ample for valid programs (real nesting rarely exceeds 3–4 levels); on limit-hit
+-- we return [] (RNone element → null cell), safe because such an impl is ill-formed and
+-- never produces a valid concrete instantiation in a well-typed program.
+argImplRequiresRoutesRecD : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> Int -> List Route
+argImplRequiresRoutesRecD implTable keyTable iface encl tag m depth =
   if depth >= 32 then []
-  else
-    let goals = if iface == "" then [m] else m::rest
-    match selectReqImpl keyTable implTable iface tag m goals
-      Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
-        Some subst =>
-          argImplReqRoutes implTable keyTable encl subst reqs (depth + 1)
-        None => []
+  else match selectReqImpl keyTable implTable iface tag m
+    Some (headTy, reqs) => match matchTyMono headTy m
+      Some subst =>
+        argImplReqRoutes implTable keyTable encl subst reqs (depth + 1)
       None => []
+    None => []
 
 -- #203 (F): pick the impl whose `requires` this nested obligation must discharge.
 --   • iface known → the MOST-SPECIFIC impl of that iface over the ALL-impls KeyBuckets
@@ -12343,15 +12139,10 @@ argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
 --     so it was structurally blind to `List Int` and always returned `List a`'s requires.
 --   • iface unknown ("" — the method-dict / untyped-fallback path, never the typed
 --     dispatch of #203) → the historical first-by-tag `findImplEntry`, byte-identical.
--- #1154 (F-3a): also returns the winner's FULL head-type vector `itys`, so the caller
--- can build the head substitution from the SAME impl it selected (headSubstWithParams)
--- instead of re-matching the arg-0 pattern alone.  [m] is arg 0 (the bucket key, and
--- the only thing the iface-unknown arm can select on); [goals] is the vector the
--- iface-known arm selects on — the caller pins them consistent, see argImplRequiresRoutes.
-selectReqImpl : KeyBuckets -> ImplBuckets -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
-selectReqImpl keyTable implTable iface tag m goals
-  | iface == "" = map ((ImplEntry _ _ headTy reqs itys _) => (headTy, itys, reqs)) (findImplEntry implTable iface tag m)
-  | otherwise = map ((KeyEntry _ _ headTy _ _ itys reqs) => (headTy, itys, reqs)) (selectImplEntryByIface keyTable iface goals)
+selectReqImpl : KeyBuckets -> ImplBuckets -> String -> String -> Mono -> Option (Ty, List Require)
+selectReqImpl keyTable implTable iface tag m
+  | iface == "" = map ((ImplEntry _ _ headTy reqs _ _) => (headTy, reqs)) (findImplEntry implTable iface tag m)
+  | otherwise = map ((KeyEntry _ _ headTy _ _ _ reqs) => (headTy, reqs)) (selectImplEntryByIface keyTable iface [m])
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -12411,7 +12202,7 @@ argImplDictRoutesForEncl implTable keyTable encl name _tag mono goals = match ma
   None => []
 
 -- #217: [depth] carries the WS-4b fuse through the aware recursion (see
--- argImplRequiresRoutes).  Arg-position entry points seed 0; the return position
+-- argImplRequiresRoutesRecD).  Arg-position entry points seed 0; the return position
 -- (implDictRoutesForFull) also seeds 0.
 argImplReqRoutes : ImplBuckets -> KeyBuckets -> String -> List (String, Mono) -> List Require -> Int -> List Route
 argImplReqRoutes _ _ _ _ [] _ = []
@@ -12419,20 +12210,8 @@ argImplReqRoutes implTable keyTable encl subst ((Require rIface rargs)::rest) de
 
 argReqRoute : ImplBuckets -> KeyBuckets -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argReqRoute _ _ _ _ _ [] _ = RNone
--- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
--- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
--- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
--- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
-argReqRoute implTable keyTable iface encl subst (arg::more) depth =
-  routeOfD
-    implTable
-    keyTable
-    iface
-    encl
-    KeepNone
-    (fromAstType subst arg)
-    (map (fromAstType subst) more)
-    depth
+argReqRoute implTable keyTable iface encl subst (arg::_) depth =
+  routeOfD implTable keyTable iface encl KeepNone (fromAstType subst arg) depth
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
 -- method-level constraint, from the instantiated constraint mono.  A concrete head
@@ -13940,7 +13719,7 @@ findMatchingImplReqsU univ iface (a0::rest) = match concreteReqMatchByIface ifac
 
 -- #326: the concrete-receiver-head requires match, routed through the shared min⊑
 -- selector over the all-impls KeyBuckets registry (the router's `selectReqImpl` /
--- `argImplRequiresRoutes` select the SAME entry the SAME way).  Bind the winning
+-- `argImplRequiresRoutesRecD` select the SAME entry the SAME way).  Bind the winning
 -- impl's typaram vars by matching its FULL head types against [args] (multi-param subst
 -- preserved), then hand back that impl's OWN requires.  A selected entry whose full head
 -- fails to match [args] yields None, so findMatchingImplReqsU falls through to the
@@ -15488,9 +15267,10 @@ monoIsBareTyvar m = match normalize m
   _ => False
 
 -- structural equality of two monos that may contain RIGID tyvars, compared by tyvar
--- IDENTITY (`monoSameShape` is documented var-free and answers False on any TVar, so it
--- cannot serve here).  Deliberately NOT unification: a given must match a goal only when
--- it IS that goal, never by binding the given's variables.
+-- IDENTITY.  Deliberately NOT unification: a given must match a goal only when it IS
+-- that goal, never by binding the given's variables.  (This used to contrast itself
+-- against a var-free same-shape helper; that helper existed only to serve the
+-- swapped-argument hint and was deleted with it — issue 1147.)
 monoSameGiven : Mono -> Mono -> Bool
 monoSameGiven a b = match normalize a
   TVar c1 => match normalize b
@@ -20329,10 +20109,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "recordMethodLevelSlotObls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))
 (DFunDef false "recordMethodLevelSlotObls" ((PList) PWild) (ELit LUnit))
 (DFunDef false "recordMethodLevelSlotObls" ((PCons (PTuple (PVar "vname") (PVar "iface")) (PVar "rest")) (PVar "subst")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "vname")) (EVar "subst")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EApp (EVar "recordObl") (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit (EVar "m")))))) (ELit (LInt 0))) (EVar "PMethodLevel")) (EFieldAccess (EVar "currentLoc") "value"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "recordMethodLevelSlotObls") (EVar "rest")) (EVar "subst")))))
-(DTypeSig false "unlocExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "unlocExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "unlocExpr") (EVar "e")))
-(DFunDef false "unlocExpr" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "unlocExpr") (EVar "e")))
-(DFunDef false "unlocExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EDoOrigin" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
@@ -20341,34 +20117,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "appArgLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appArgLoc") (EVar "e")))
 (DFunDef false "appArgLoc" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "exprLoc") (EVar "x")))
 (DFunDef false "appArgLoc" (PWild) (EVar "None"))
-(DTypeSig false "monoConcrete" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoConcrete" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "False")) (arm (PCon "TCon" PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "a")) (EApp (EVar "monoConcrete") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "a")) (EApp (EVar "monoConcrete") (EVar "b")))) (arm (PCon "TEff" PWild) () (EVar "True"))))
-(DTypeSig false "monoSameShape" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameShape" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameShape") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameShape") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameShape") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameShape") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
-(DTypeSig false "monoIsNumeric" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoIsNumeric" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PLit (LString "Int"))) () (EVar "True")) (arm (PCon "TCon" (PLit (LString "Float"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "monoIsFloat" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoIsFloat" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PLit (LString "Float"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "isLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isLitArg" ((PVar "e")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "argLitFits" (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "argLitFits" ((PVar "e") (PVar "pt")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EApp (EVar "monoIsNumeric") (EVar "pt"))) (arm (PCon "ELit" (PCon "LInt" PWild)) () (EApp (EVar "monoIsNumeric") (EVar "pt"))) (arm (PCon "ELit" (PCon "LFloat" PWild)) () (EApp (EVar "monoIsFloat") (EVar "pt"))) (arm (PCon "ELit" (PVar "l")) () (EApp (EApp (EVar "monoSameShape") (EApp (EVar "litType") (EVar "l"))) (EVar "pt"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "renderLitArg" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "renderLitArg" ((PVar "e")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))) (arm (PCon "ELit" (PCon "LFloat" (PVar "f"))) () (EApp (EVar "Some") (EApp (EVar "floatToString") (EVar "f")))) (arm (PCon "ELit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))) (arm (PCon "ELit" (PCon "LChar" (PVar "c"))) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "c")) (ELit (LString "'"))))) (arm (PCon "ELit" (PCon "LBool" (PVar "b"))) () (EApp (EVar "Some") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False"))))) (arm (PCon "ELit" (PCon "LUnit")) () (EApp (EVar "Some") (ELit (LString "()")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "funParams2" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "Mono")))))
-(DFunDef false "funParams2" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "p1") PWild (PVar "rest")) () (EMatch (EApp (EVar "normalize") (EVar "rest")) (arm (PCon "TFun" (PVar "p2") PWild (PVar "result")) () (EMatch (EApp (EVar "normalize") (EVar "result")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (ETuple (EVar "p1") (EVar "p2")))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "swapArgFix" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))))
-(DFunDef false "swapArgFix" ((PVar "a1") (PVar "a2") (PVar "repl")) (EMatch (ETuple (EApp (EVar "exprLoc") (EVar "a1")) (EApp (EVar "exprLoc") (EVar "a2"))) (arm (PTuple (PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")) (EVar "repl")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "twoArgCallee" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "twoArgCallee" ((PVar "env") (PVar "f")) (EMatch (EApp (EVar "unlocExpr") (EVar "f")) (arm (PCon "EApp" (PVar "g") (PVar "a1")) () (EMatch (EApp (EVar "unlocExpr") (EVar "g")) (arm (PCon "EApp" PWild PWild) () (EVar "None")) (arm (PVar "gHead") () (EApp (EApp (EVar "andThen") (EApp (EVar "appSpineName") (EVar "gHead"))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name"))) (ELam ((PVar "scheme")) (EApp (EApp (EVar "andThen") (EApp (EVar "funParams2") (EApp (EVar "instantiate") (EVar "scheme")))) (ELam ((PTuple (PVar "p1") (PVar "p2"))) (EApp (EVar "Some") (ETuple (EVar "name") (EVar "a1") (EVar "p1") (EVar "p2")))))))))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "detectSwappedArgs2" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "detectSwappedArgs2" ((PVar "env") (PVar "f") (PVar "a2")) (EIf (EApp (EVar "not") (EApp (EVar "isLitArg") (EVar "a2"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "twoArgCallee") (EVar "env")) (EVar "f")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "name") (PVar "a1") (PVar "p1") (PVar "p2"))) () (EIf (EApp (EVar "not") (EApp (EVar "isLitArg") (EVar "a1"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "trySwapReport") (EVar "name")) (EVar "a1")) (EVar "a2")) (EVar "p1")) (EVar "p2"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "trySwapReport" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono"))))))))
-(DFunDef false "trySwapReport" ((PVar "name") (PVar "a1") (PVar "a2") (PVar "p1") (PVar "p2")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "p1")) (EApp (EVar "monoConcrete") (EVar "p2")))) (EVar "None") (EIf (EApp (EApp (EVar "monoSameShape") (EVar "p1")) (EVar "p2")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "inOrder") (EBinOp "&&" (EApp (EApp (EVar "argLitFits") (EVar "a1")) (EVar "p1")) (EApp (EApp (EVar "argLitFits") (EVar "a2")) (EVar "p2")))) (DoLet false false (PVar "swapped") (EBinOp "&&" (EApp (EApp (EVar "argLitFits") (EVar "a2")) (EVar "p1")) (EApp (EApp (EVar "argLitFits") (EVar "a1")) (EVar "p2")))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "inOrder")) (EVar "swapped")) (EApp (EApp (EApp (EVar "emitSwapDiag") (EVar "name")) (EVar "a1")) (EVar "a2")) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "emitSwapDiag" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "emitSwapDiag" ((PVar "name") (PVar "a1") (PVar "a2")) (EMatch (ETuple (EApp (EVar "renderLitArg") (EVar "a1")) (EApp (EVar "renderLitArg") (EVar "a2"))) (arm (PTuple (PCon "Some" (PVar "s1")) (PCon "Some" (PVar "s2"))) () (EBlock (DoLet false false (PVar "swappedCall") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString "")))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Arguments to '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' are in the wrong order. Try '"))) (EApp (EVar "display") (EVar "swappedCall"))) (ELit (LString "'")))) (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "swap the arguments: ")) (EApp (EVar "display") (EVar "swappedCall"))) (ELit (LString "")))) (DoLet false false (PVar "fix") (EApp (EApp (EApp (EVar "swapArgFix") (EVar "a1")) (EVar "a2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "a1"))) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "help")) (EVar "fix"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "inferAppExpr" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferAppExpr" ((PVar "env") (PVar "f") (PVar "x")) (EMatch (EApp (EVar "lamUnderLoc") (EVar "x")) (arm (PCon "Some" (PTuple (PVar "loc") (PVar "pats") (PVar "body"))) () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false (PVar "lamExpected") (EApp (EVar "funDomain") (EApp (EVar "normalize") (EVar "ft")))) (DoLet false false (PVar "xt") (EApp (EApp (EApp (EApp (EVar "inferLamChecked") (EVar "env")) (EApp (EApp (EVar "expectedParamTypes") (EVar "lamExpected")) (EApp (EVar "listLen") (EVar "pats")))) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")) (arm (PCon "Some" (PTuple (PVar "mname") (PVar "tagRefs"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowApp") (EVar "env")) (EVar "mname")) (EVar "tagRefs")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowArgHead") (EVar "f")) (arm (PCon "Some" (PTuple (PVar "dname") (PVar "dtagRef") (PVar "dimplRef"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowApp") (EVar "env")) (EVar "dname")) (EVar "dtagRef")) (EVar "dimplRef")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowVarHead") (EVar "f")) (arm (PCon "Some" (PVar "dname")) () (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowVarApp") (EVar "env")) (EVar "dname")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "detectSwappedArgs2") (EVar "env")) (EVar "f")) (EVar "x")) (arm (PCon "Some" (PVar "swapResult")) () (EVar "swapResult")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "pend") (EApp (EApp (EApp (EVar "tupleCallShapeHint") (EVar "f")) (EVar "x")) (EVar "ft"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EMatch (EVar "pend") (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates")) (EBinOp "::" (ETuple (EVar "res") (EVar "help") (EVar "fix")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates") "value")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "res"))))))))))))))
+(DFunDef false "inferAppExpr" ((PVar "env") (PVar "f") (PVar "x")) (EMatch (EApp (EVar "lamUnderLoc") (EVar "x")) (arm (PCon "Some" (PTuple (PVar "loc") (PVar "pats") (PVar "body"))) () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false (PVar "lamExpected") (EApp (EVar "funDomain") (EApp (EVar "normalize") (EVar "ft")))) (DoLet false false (PVar "xt") (EApp (EApp (EApp (EApp (EVar "inferLamChecked") (EVar "env")) (EApp (EApp (EVar "expectedParamTypes") (EVar "lamExpected")) (EApp (EVar "listLen") (EVar "pats")))) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")) (arm (PCon "Some" (PTuple (PVar "mname") (PVar "tagRefs"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowApp") (EVar "env")) (EVar "mname")) (EVar "tagRefs")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowArgHead") (EVar "f")) (arm (PCon "Some" (PTuple (PVar "dname") (PVar "dtagRef") (PVar "dimplRef"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowApp") (EVar "env")) (EVar "dname")) (EVar "dtagRef")) (EVar "dimplRef")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowVarHead") (EVar "f")) (arm (PCon "Some" (PVar "dname")) () (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowVarApp") (EVar "env")) (EVar "dname")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "pend") (EApp (EApp (EApp (EVar "tupleCallShapeHint") (EVar "f")) (EVar "x")) (EVar "ft"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EMatch (EVar "pend") (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates")) (EBinOp "::" (ETuple (EVar "res") (EVar "help") (EVar "fix")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates") "value")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "res"))))))))))))
 (DTypeSig false "shadowStandaloneHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))))
 (DFunDef false "shadowStandaloneHead" ((PVar "env") (PCon "ELoc" PWild (PVar "f"))) (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")))
 (DFunDef false "shadowStandaloneHead" ((PVar "env") (PCon "EMethodAt" (PVar "name") (PVar "tagRef") PWild PWild)) (EIf (EApp (EVar "isShadowStandalone") (EVar "name")) (EApp (EVar "Some") (ETuple (EVar "name") (EListLit (EVar "tagRef")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -21633,35 +21383,35 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "resolveDictApps" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "resolveDictApps" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PTuple (PVar "routesRef") (PVar "monos") (PVar "ifaces")) (PVar "rest"))) (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "monos")) (EVar "ifaces"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "resolveDictApps") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))
 (DData Private "Undetermined" () ((variant "KeepNone" (ConPos)) (variant "CountImpls" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))) ())
-(DData Private "EntailKind" () ((variant "EKReturn" (ConPos (TyCon "KeyBuckets") (TyCon "Mono") (TyCon "Bool"))) (variant "EKNestedTop" (ConPos (TyCon "KeyBuckets") (TyCon "String") (TyCon "Undetermined") (TyCon "Int") (TyApp (TyCon "List") (TyCon "Mono")))) (variant "EKArg" (ConPos (TyCon "KeyBuckets") (TyCon "Mono"))) (variant "EKOp" (ConPos (TyCon "Bool") (TyCon "KeyBuckets") (TyCon "Bool")))) ())
+(DData Private "EntailKind" () ((variant "EKReturn" (ConPos (TyCon "KeyBuckets") (TyCon "Mono") (TyCon "Bool"))) (variant "EKNestedTop" (ConPos (TyCon "KeyBuckets") (TyCon "String") (TyCon "Undetermined") (TyCon "Int"))) (variant "EKArg" (ConPos (TyCon "KeyBuckets") (TyCon "Mono"))) (variant "EKOp" (ConPos (TyCon "Bool") (TyCon "KeyBuckets") (TyCon "Bool")))) ())
 (DTypeSig false "entail" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "entail" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "kind")) (EMatch (EApp (EApp (EApp (EApp (EVar "entailAssum") (EVar "m")) (EVar "encl")) (EVar "name")) (EVar "kind")) (arm (PCon "Some" (PVar "dname")) () (ETuple (EApp (EApp (EVar "entailAssumRoute") (EVar "dname")) (EVar "kind")) (EListLit))) (arm (PCon "None") () (EMatch (EApp (EVar "headTyconMono") (EVar "m")) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "entailInst") (EVar "implTable")) (EVar "name")) (EVar "m")) (EVar "encl")) (EVar "tag")) (EVar "kind"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "entailFallback") (EVar "implTable")) (EVar "kind")) (EListLit)))))))
 (DTypeSig false "entailAssum" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "entailAssum" ((PVar "m") (PVar "encl") (PVar "name") (PVar "kind")) (EMatch (EApp (EApp (EApp (EApp (EVar "entailAssumVar") (EVar "m")) (EVar "encl")) (EVar "name")) (EVar "kind")) (arm (PCon "Some" (PVar "dname")) () (EApp (EVar "Some") (EVar "dname"))) (arm (PCon "None") () (EMatch (EApp (EVar "ifaceOfMethodName") (EVar "name")) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "activeDictPredOf") (EVar "iface")) (EVar "m")) (EVar "encl"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "entailAssumVar" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKReturn" PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "m")) (EVar "encl")))
-(DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKNestedTop" PWild PWild PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "encl")))
+(DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKNestedTop" PWild PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "encl")))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKArg" PWild PWild)) (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "m")) (EVar "encl")))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") (PVar "name") (PCon "EKOp" (PVar "isBinop") PWild (PVar "inImpl"))) (EApp (EApp (EApp (EApp (EApp (EVar "opDictVarOf") (EVar "isBinop")) (EVar "name")) (EVar "m")) (EVar "inImpl")) (EVar "encl")))
 (DTypeSig false "entailAssumRoute" (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyCon "Route"))))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKReturn" PWild PWild (PVar "isRp"))) (EIf (EVar "isRp") (EApp (EVar "RDictFwd") (EVar "dname")) (EApp (EVar "RDict") (EVar "dname"))))
-(DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKNestedTop" PWild PWild PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
+(DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKNestedTop" PWild PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKArg" PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKOp" PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DTypeSig false "entailInst" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))))))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKReturn" (PVar "keyTable") (PVar "fullMono") PWild)) (EBlock (DoLet false false (PVar "paramMonos") (EApp (EApp (EVar "fromOption") (EListLit (EVar "m"))) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))) (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSite") (EVar "keyTable")) (EVar "name")) (EVar "paramMonos")))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implDictRoutesForFull") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "name")) (EVar "tag")) (EVar "m")) (EVar "paramMonos"))))))
-(DFunDef false "entailInst" ((PVar "implTable") PWild (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKNestedTop" (PVar "keyTable") (PVar "iface") PWild (PVar "depth") (PVar "rest"))) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSiteByIface") (EVar "keyTable")) (EVar "iface")) (EBinOp "::" (EVar "m") (EVar "rest"))))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (EVar "rest")) (EVar "depth"))) (EListLit)))))
+(DFunDef false "entailInst" ((PVar "implTable") PWild (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKNestedTop" (PVar "keyTable") (PVar "iface") PWild (PVar "depth"))) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSiteByIface") (EVar "keyTable")) (EVar "iface")) (EListLit (EVar "m"))))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRecD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (EVar "depth"))) (EListLit)))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKArg" (PVar "keyTable") (PVar "fullMono"))) (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EVar "fromOption") (EListLit (EVar "m"))) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))) (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSite") (EVar "keyTable")) (EVar "name")) (EVar "goals")))) (DoLet false false (PVar "dictName") (EIf (EApp (EApp (EApp (EVar "implDefinesMethodAt") (EVar "implTable")) (EVar "name")) (EVar "tag")) (EVar "name") (EApp (EVar "innerDefaultMethod") (EVar "name")))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "dictName")) (EVar "tag")) (EVar "m")) (EVar "goals"))))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") PWild (PVar "tag") (PCon "EKOp" (PVar "isBinop") (PVar "keyTable") PWild)) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stampOpRouteVal") (EVar "isBinop")) (EVar "implTable")) (EVar "keyTable")) (EVar "name")) (EVar "m")) (EVar "tag")) (EListLit)))
 (DTypeSig false "entailFallback" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "EntailKind") (TyCon "Route"))))
 (DFunDef false "entailFallback" (PWild (PCon "EKReturn" PWild PWild PWild)) (EVar "RNone"))
-(DFunDef false "entailFallback" ((PVar "implTable") (PCon "EKNestedTop" (PVar "keyTable") PWild (PVar "policy") PWild PWild)) (EApp (EApp (EApp (EVar "undeterminedRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "policy")))
+(DFunDef false "entailFallback" ((PVar "implTable") (PCon "EKNestedTop" (PVar "keyTable") PWild (PVar "policy") PWild)) (EApp (EApp (EApp (EVar "undeterminedRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "policy")))
 (DFunDef false "entailFallback" (PWild (PCon "EKArg" PWild PWild)) (EVar "RNone"))
 (DFunDef false "entailFallback" (PWild (PCon "EKOp" PWild PWild PWild)) (EVar "RNone"))
 (DTypeSig false "routeOf" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyCon "Route"))))))))
-(DFunDef false "routeOf" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "policy")) (EVar "m")) (EListLit)) (ELit (LInt 0))))
-(DTypeSig false "routeOfD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyCon "Route"))))))))))
-(DFunDef false "routeOfD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m") (PVar "rest") (PVar "depth")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "implTable")) (ELit (LString ""))) (EVar "m")) (EVar "encl")) (EApp (EApp (EApp (EApp (EApp (EVar "EKNestedTop") (EVar "keyTable")) (EVar "iface")) (EVar "policy")) (EVar "depth")) (EVar "rest")))))
+(DFunDef false "routeOf" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "policy")) (EVar "m")) (ELit (LInt 0))))
+(DTypeSig false "routeOfD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Route")))))))))
+(DFunDef false "routeOfD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m") (PVar "depth")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "implTable")) (ELit (LString ""))) (EVar "m")) (EVar "encl")) (EApp (EApp (EApp (EApp (EVar "EKNestedTop") (EVar "keyTable")) (EVar "iface")) (EVar "policy")) (EVar "depth")))))
 (DTypeSig false "undeterminedRoute" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "Undetermined") (TyCon "Route")))))
 (DFunDef false "undeterminedRoute" (PWild PWild (PCon "KeepNone")) (EVar "RNone"))
 (DFunDef false "undeterminedRoute" ((PVar "implTable") (PVar "keyTable") (PCon "CountImpls" (PVar "prog") (PVar "iface"))) (EApp (EApp (EApp (EApp (EVar "routeUndeterminedTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "iface")))
@@ -21670,7 +21420,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "routesOfMonosTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest")) (PList)) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (ELit (LString ""))) (EApp (EApp (EVar "CountImpls") (EVar "prog")) (ELit (LString "")))) (EVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")) (EListLit))))
 (DFunDef false "routesOfMonosTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest")) (PCons (PVar "iface") (PVar "ifacesRest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EApp (EApp (EVar "CountImpls") (EVar "prog")) (EVar "iface"))) (EVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")) (EVar "ifacesRest"))))
 (DTypeSig false "routeUndeterminedTop" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyCon "Route"))))))
-(DFunDef false "routeUndeterminedTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "implHeadTagsForIface") (EVar "prog")) (EVar "iface")) (arm (PList) () (EVar "RNone")) (arm (PList (PVar "tag")) () (EApp (EApp (EVar "RKey") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EVar "tag")) (EApp (EVar "TCon") (EVar "tag"))) (EListLit)) (ELit (LInt 0))))) (arm PWild () (EApp (EVar "reportAmbiguousImpl") (EVar "iface")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "routeUndeterminedTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "implHeadTagsForIface") (EVar "prog")) (EVar "iface")) (arm (PList) () (EVar "RNone")) (arm (PList (PVar "tag")) () (EApp (EApp (EVar "RKey") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRec") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EVar "tag")) (EApp (EVar "TCon") (EVar "tag"))))) (arm PWild () (EApp (EVar "reportAmbiguousImpl") (EVar "iface")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reportAmbiguousImpl" (TyFun (TyCon "String") (TyCon "Route")))
 (DFunDef false "reportAmbiguousImpl" ((PVar "iface")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EApp (EVar "ambiguousImplMsg") (EVar "iface")))) (DoExpr (EVar "RNone"))))
 (DTypeSig false "implHeadTagsForIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -21684,10 +21434,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "routesOfMonos" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))
 (DFunDef false "routesOfMonos" (PWild PWild (PList)) (EListLit))
 (DFunDef false "routesOfMonos" ((PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (ELit (LString ""))) (EVar "KeepNone")) (EVar "m")) (EApp (EApp (EApp (EVar "routesOfMonos") (EVar "implTable")) (EVar "keyTable")) (EVar "rest"))))
-(DTypeSig false "argImplRequiresRoutes" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))))
-(DFunDef false "argImplRequiresRoutes" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m") (PVar "rest") (PVar "depth")) (EIf (EBinOp ">=" (EVar "depth") (ELit (LInt 32))) (EListLit) (EBlock (DoLet false false (PVar "goals") (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EListLit (EVar "m")) (EBinOp "::" (EVar "m") (EVar "rest")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "selectReqImpl") (EVar "keyTable")) (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EBinOp "+" (EVar "depth") (ELit (LInt 1))))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
-(DTypeSig false "selectReqImpl" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))))))
-(DFunDef false "selectReqImpl" ((PVar "keyTable") (PVar "implTable") (PVar "iface") (PVar "tag") (PVar "m") (PVar "goals")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PCon "ImplEntry" PWild PWild (PVar "headTy") (PVar "reqs") (PVar "itys") PWild)) (ETuple (EVar "headTy") (EVar "itys") (EVar "reqs")))) (EApp (EApp (EApp (EApp (EVar "findImplEntry") (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PCon "KeyEntry" PWild PWild (PVar "headTy") PWild PWild (PVar "itys") (PVar "reqs"))) (ETuple (EVar "headTy") (EVar "itys") (EVar "reqs")))) (EApp (EApp (EApp (EVar "selectImplEntryByIface") (EVar "keyTable")) (EVar "iface")) (EVar "goals"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argImplRequiresRoutesRec" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Route")))))))))
+(DFunDef false "argImplRequiresRoutesRec" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRecD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (ELit (LInt 0))))
+(DTypeSig false "argImplRequiresRoutesRecD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route"))))))))))
+(DFunDef false "argImplRequiresRoutesRecD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m") (PVar "depth")) (EIf (EBinOp ">=" (EVar "depth") (ELit (LInt 32))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "selectReqImpl") (EVar "keyTable")) (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "reqs"))) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "headTy")) (EVar "m")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EBinOp "+" (EVar "depth") (ELit (LInt 1))))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))
+(DTypeSig false "selectReqImpl" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Require"))))))))))
+(DFunDef false "selectReqImpl" ((PVar "keyTable") (PVar "implTable") (PVar "iface") (PVar "tag") (PVar "m")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PCon "ImplEntry" PWild PWild (PVar "headTy") (PVar "reqs") PWild PWild)) (ETuple (EVar "headTy") (EVar "reqs")))) (EApp (EApp (EApp (EApp (EVar "findImplEntry") (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PCon "KeyEntry" PWild PWild (PVar "headTy") PWild PWild PWild (PVar "reqs"))) (ETuple (EVar "headTy") (EVar "reqs")))) (EApp (EApp (EApp (EVar "selectImplEntryByIface") (EVar "keyTable")) (EVar "iface")) (EListLit (EVar "m")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "argImplDictRoutesFor" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Route"))))))))
 (DFunDef false "argImplDictRoutesFor" ((PVar "implTable") (PVar "keyTable") (PVar "name") (PVar "tag") (PVar "mono")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (EVar "name")) (EVar "tag")) (EVar "mono")) (EListLit (EVar "mono"))))
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))))))
@@ -21697,7 +21449,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "argImplReqRoutes" ((PVar "implTable") (PVar "keyTable") (PVar "encl") (PVar "subst") (PCons (PCon "Require" (PVar "rIface") (PVar "rargs")) (PVar "rest")) (PVar "depth")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "rIface")) (EVar "encl")) (EVar "subst")) (EVar "rargs")) (EVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "rest")) (EVar "depth"))))
 (DTypeSig false "argReqRoute" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "Int") (TyCon "Route")))))))))
 (DFunDef false "argReqRoute" (PWild PWild PWild PWild PWild (PList) PWild) (EVar "RNone"))
-(DFunDef false "argReqRoute" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "subst") (PCons (PVar "arg") (PVar "more")) (PVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EApp (EApp (EVar "map") (EApp (EVar "fromAstType") (EVar "subst"))) (EVar "more"))) (EVar "depth")))
+(DFunDef false "argReqRoute" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "subst") (PCons (PVar "arg") PWild) (PVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EVar "depth")))
 (DTypeSig false "resolveMethodDicts" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "Unit")))))
 (DFunDef false "resolveMethodDicts" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "resolveMethodDicts" ((PVar "implTable") (PVar "keyTable") (PCons (PTuple (PVar "methodRef") (PVar "monos")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodRef")) (EApp (EApp (EApp (EVar "routesOfMonos") (EVar "implTable")) (EVar "keyTable")) (EVar "monos")))) (DoExpr (EApp (EApp (EApp (EVar "resolveMethodDicts") (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))
@@ -24450,10 +24202,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "recordMethodLevelSlotObls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))
 (DFunDef false "recordMethodLevelSlotObls" ((PList) PWild) (ELit LUnit))
 (DFunDef false "recordMethodLevelSlotObls" ((PCons (PTuple (PVar "vname") (PVar "iface")) (PVar "rest")) (PVar "subst")) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "vname")) (EVar "subst")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EApp (EApp (EVar "recordObl") (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit (EVar "m")))))) (ELit (LInt 0))) (EVar "PMethodLevel")) (EFieldAccess (EVar "currentLoc") "value"))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "recordMethodLevelSlotObls") (EVar "rest")) (EVar "subst")))))
-(DTypeSig false "unlocExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "unlocExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "unlocExpr") (EVar "e")))
-(DFunDef false "unlocExpr" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "unlocExpr") (EVar "e")))
-(DFunDef false "unlocExpr" ((PVar "e")) (EVar "e"))
 (DTypeSig false "exprLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EDoOrigin" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
@@ -24462,34 +24210,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "appArgLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "appArgLoc") (EVar "e")))
 (DFunDef false "appArgLoc" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "exprLoc") (EVar "x")))
 (DFunDef false "appArgLoc" (PWild) (EVar "None"))
-(DTypeSig false "monoConcrete" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoConcrete" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "False")) (arm (PCon "TCon" PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "a")) (EApp (EVar "monoConcrete") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "a")) (EApp (EVar "monoConcrete") (EVar "b")))) (arm (PCon "TEff" PWild) () (EVar "True"))))
-(DTypeSig false "monoSameShape" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameShape" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameShape") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameShape") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameShape") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameShape") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
-(DTypeSig false "monoIsNumeric" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoIsNumeric" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PLit (LString "Int"))) () (EVar "True")) (arm (PCon "TCon" (PLit (LString "Float"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "monoIsFloat" (TyFun (TyCon "Mono") (TyCon "Bool")))
-(DFunDef false "monoIsFloat" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PLit (LString "Float"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "isLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isLitArg" ((PVar "e")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig false "argLitFits" (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "argLitFits" ((PVar "e") (PVar "pt")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EApp (EVar "monoIsNumeric") (EVar "pt"))) (arm (PCon "ELit" (PCon "LInt" PWild)) () (EApp (EVar "monoIsNumeric") (EVar "pt"))) (arm (PCon "ELit" (PCon "LFloat" PWild)) () (EApp (EVar "monoIsFloat") (EVar "pt"))) (arm (PCon "ELit" (PVar "l")) () (EApp (EApp (EVar "monoSameShape") (EApp (EVar "litType") (EVar "l"))) (EVar "pt"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "renderLitArg" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "renderLitArg" ((PVar "e")) (EMatch (EApp (EVar "unlocExpr") (EVar "e")) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))) (arm (PCon "ELit" (PCon "LFloat" (PVar "f"))) () (EApp (EVar "Some") (EApp (EVar "floatToString") (EVar "f")))) (arm (PCon "ELit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EVar "s")) (ELit (LString "\""))))) (arm (PCon "ELit" (PCon "LChar" (PVar "c"))) () (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EVar "c")) (ELit (LString "'"))))) (arm (PCon "ELit" (PCon "LBool" (PVar "b"))) () (EApp (EVar "Some") (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False"))))) (arm (PCon "ELit" (PCon "LUnit")) () (EApp (EVar "Some") (ELit (LString "()")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "funParams2" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "Mono")))))
-(DFunDef false "funParams2" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "p1") PWild (PVar "rest")) () (EMatch (EApp (EVar "normalize") (EVar "rest")) (arm (PCon "TFun" (PVar "p2") PWild (PVar "result")) () (EMatch (EApp (EVar "normalize") (EVar "result")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (ETuple (EVar "p1") (EVar "p2")))))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "swapArgFix" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))))
-(DFunDef false "swapArgFix" ((PVar "a1") (PVar "a2") (PVar "repl")) (EMatch (ETuple (EApp (EVar "exprLoc") (EVar "a1")) (EApp (EVar "exprLoc") (EVar "a2"))) (arm (PTuple (PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild)) (PCon "Some" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")))) () (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")) (EVar "repl")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "twoArgCallee" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "twoArgCallee" ((PVar "env") (PVar "f")) (EMatch (EApp (EVar "unlocExpr") (EVar "f")) (arm (PCon "EApp" (PVar "g") (PVar "a1")) () (EMatch (EApp (EVar "unlocExpr") (EVar "g")) (arm (PCon "EApp" PWild PWild) () (EVar "None")) (arm (PVar "gHead") () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "appSpineName") (EVar "gHead"))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name"))) (ELam ((PVar "scheme")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "funParams2") (EApp (EVar "instantiate") (EVar "scheme")))) (ELam ((PTuple (PVar "p1") (PVar "p2"))) (EApp (EVar "Some") (ETuple (EVar "name") (EVar "a1") (EVar "p1") (EVar "p2")))))))))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "detectSwappedArgs2" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "detectSwappedArgs2" ((PVar "env") (PVar "f") (PVar "a2")) (EIf (EApp (EVar "not") (EApp (EVar "isLitArg") (EVar "a2"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "twoArgCallee") (EVar "env")) (EVar "f")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "name") (PVar "a1") (PVar "p1") (PVar "p2"))) () (EIf (EApp (EVar "not") (EApp (EVar "isLitArg") (EVar "a1"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EVar "trySwapReport") (EVar "name")) (EVar "a1")) (EVar "a2")) (EVar "p1")) (EVar "p2"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "trySwapReport" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono"))))))))
-(DFunDef false "trySwapReport" ((PVar "name") (PVar "a1") (PVar "a2") (PVar "p1") (PVar "p2")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "monoConcrete") (EVar "p1")) (EApp (EVar "monoConcrete") (EVar "p2")))) (EVar "None") (EIf (EApp (EApp (EVar "monoSameShape") (EVar "p1")) (EVar "p2")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "inOrder") (EBinOp "&&" (EApp (EApp (EVar "argLitFits") (EVar "a1")) (EVar "p1")) (EApp (EApp (EVar "argLitFits") (EVar "a2")) (EVar "p2")))) (DoLet false false (PVar "swapped") (EBinOp "&&" (EApp (EApp (EVar "argLitFits") (EVar "a2")) (EVar "p1")) (EApp (EApp (EVar "argLitFits") (EVar "a1")) (EVar "p2")))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "inOrder")) (EVar "swapped")) (EApp (EApp (EApp (EVar "emitSwapDiag") (EVar "name")) (EVar "a1")) (EVar "a2")) (EVar "None")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "emitSwapDiag" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Mono"))))))
-(DFunDef false "emitSwapDiag" ((PVar "name") (PVar "a1") (PVar "a2")) (EMatch (ETuple (EApp (EVar "renderLitArg") (EVar "a1")) (EApp (EVar "renderLitArg") (EVar "a2"))) (arm (PTuple (PCon "Some" (PVar "s1")) (PCon "Some" (PVar "s2"))) () (EBlock (DoLet false false (PVar "swappedCall") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString "")))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Arguments to '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' are in the wrong order. Try '"))) (EApp (EMethodRef "display") (EVar "swappedCall"))) (ELit (LString "'")))) (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "swap the arguments: ")) (EApp (EMethodRef "display") (EVar "swappedCall"))) (ELit (LString "")))) (DoLet false false (PVar "fix") (EApp (EApp (EApp (EVar "swapArgFix") (EVar "a1")) (EVar "a2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "a1"))) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "help")) (EVar "fix"))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EApp (EVar "Some") (EVar "v"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "inferAppExpr" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono")))))
-(DFunDef false "inferAppExpr" ((PVar "env") (PVar "f") (PVar "x")) (EMatch (EApp (EVar "lamUnderLoc") (EVar "x")) (arm (PCon "Some" (PTuple (PVar "loc") (PVar "pats") (PVar "body"))) () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false (PVar "lamExpected") (EApp (EVar "funDomain") (EApp (EVar "normalize") (EVar "ft")))) (DoLet false false (PVar "xt") (EApp (EApp (EApp (EApp (EVar "inferLamChecked") (EVar "env")) (EApp (EApp (EVar "expectedParamTypes") (EVar "lamExpected")) (EApp (EVar "listLen") (EVar "pats")))) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")) (arm (PCon "Some" (PTuple (PVar "mname") (PVar "tagRefs"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowApp") (EVar "env")) (EVar "mname")) (EVar "tagRefs")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowArgHead") (EVar "f")) (arm (PCon "Some" (PTuple (PVar "dname") (PVar "dtagRef") (PVar "dimplRef"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowApp") (EVar "env")) (EVar "dname")) (EVar "dtagRef")) (EVar "dimplRef")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowVarHead") (EVar "f")) (arm (PCon "Some" (PVar "dname")) () (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowVarApp") (EVar "env")) (EVar "dname")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "detectSwappedArgs2") (EVar "env")) (EVar "f")) (EVar "x")) (arm (PCon "Some" (PVar "swapResult")) () (EVar "swapResult")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "pend") (EApp (EApp (EApp (EVar "tupleCallShapeHint") (EVar "f")) (EVar "x")) (EVar "ft"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EMatch (EVar "pend") (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates")) (EBinOp "::" (ETuple (EVar "res") (EVar "help") (EVar "fix")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates") "value")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "res"))))))))))))))
+(DFunDef false "inferAppExpr" ((PVar "env") (PVar "f") (PVar "x")) (EMatch (EApp (EVar "lamUnderLoc") (EVar "x")) (arm (PCon "Some" (PTuple (PVar "loc") (PVar "pats") (PVar "body"))) () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false PWild (EApp (EVar "setLocIfSome") (EVar "loc"))) (DoLet false false (PVar "lamExpected") (EApp (EVar "funDomain") (EApp (EVar "normalize") (EVar "ft")))) (DoLet false false (PVar "xt") (EApp (EApp (EApp (EApp (EVar "inferLamChecked") (EVar "env")) (EApp (EApp (EVar "expectedParamTypes") (EVar "lamExpected")) (EApp (EVar "listLen") (EVar "pats")))) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")) (arm (PCon "Some" (PTuple (PVar "mname") (PVar "tagRefs"))) () (EApp (EApp (EApp (EApp (EApp (EVar "inferShadowApp") (EVar "env")) (EVar "mname")) (EVar "tagRefs")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowArgHead") (EVar "f")) (arm (PCon "Some" (PTuple (PVar "dname") (PVar "dtagRef") (PVar "dimplRef"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowApp") (EVar "env")) (EVar "dname")) (EVar "dtagRef")) (EVar "dimplRef")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EMatch (EApp (EVar "definerShadowVarHead") (EVar "f")) (arm (PCon "Some" (PVar "dname")) () (EApp (EApp (EApp (EApp (EVar "inferDefinerShadowVarApp") (EVar "env")) (EVar "dname")) (EVar "f")) (EVar "x"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ft") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xt") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "x"))) (DoLet false false (PVar "pend") (EApp (EApp (EApp (EVar "tupleCallShapeHint") (EVar "f")) (EVar "x")) (EVar "ft"))) (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EVar "inferApp") (EApp (EVar "envAlphaLets") (EVar "env"))) (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EMatch (EVar "pend") (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates")) (EBinOp "::" (ETuple (EVar "res") (EVar "help") (EVar "fix")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "tupleCallCandidates") "value")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "res"))))))))))))
 (DTypeSig false "shadowStandaloneHead" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Route"))))))))
 (DFunDef false "shadowStandaloneHead" ((PVar "env") (PCon "ELoc" PWild (PVar "f"))) (EApp (EApp (EVar "shadowStandaloneHead") (EVar "env")) (EVar "f")))
 (DFunDef false "shadowStandaloneHead" ((PVar "env") (PCon "EMethodAt" (PVar "name") (PVar "tagRef") PWild PWild)) (EIf (EApp (EVar "isShadowStandalone") (EVar "name")) (EApp (EVar "Some") (ETuple (EVar "name") (EListLit (EVar "tagRef")))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -25754,35 +25476,35 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "resolveDictApps" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "resolveDictApps" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PTuple (PVar "routesRef") (PVar "monos") (PVar "ifaces")) (PVar "rest"))) (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "monos")) (EVar "ifaces"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "routesRef")) (EVar "routes"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "resolveDictApps") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))
 (DData Private "Undetermined" () ((variant "KeepNone" (ConPos)) (variant "CountImpls" (ConPos (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))) ())
-(DData Private "EntailKind" () ((variant "EKReturn" (ConPos (TyCon "KeyBuckets") (TyCon "Mono") (TyCon "Bool"))) (variant "EKNestedTop" (ConPos (TyCon "KeyBuckets") (TyCon "String") (TyCon "Undetermined") (TyCon "Int") (TyApp (TyCon "List") (TyCon "Mono")))) (variant "EKArg" (ConPos (TyCon "KeyBuckets") (TyCon "Mono"))) (variant "EKOp" (ConPos (TyCon "Bool") (TyCon "KeyBuckets") (TyCon "Bool")))) ())
+(DData Private "EntailKind" () ((variant "EKReturn" (ConPos (TyCon "KeyBuckets") (TyCon "Mono") (TyCon "Bool"))) (variant "EKNestedTop" (ConPos (TyCon "KeyBuckets") (TyCon "String") (TyCon "Undetermined") (TyCon "Int"))) (variant "EKArg" (ConPos (TyCon "KeyBuckets") (TyCon "Mono"))) (variant "EKOp" (ConPos (TyCon "Bool") (TyCon "KeyBuckets") (TyCon "Bool")))) ())
 (DTypeSig false "entail" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "entail" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "kind")) (EMatch (EApp (EApp (EApp (EApp (EVar "entailAssum") (EVar "m")) (EVar "encl")) (EVar "name")) (EVar "kind")) (arm (PCon "Some" (PVar "dname")) () (ETuple (EApp (EApp (EVar "entailAssumRoute") (EVar "dname")) (EVar "kind")) (EListLit))) (arm (PCon "None") () (EMatch (EApp (EVar "headTyconMono") (EVar "m")) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "entailInst") (EVar "implTable")) (EVar "name")) (EVar "m")) (EVar "encl")) (EVar "tag")) (EVar "kind"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "entailFallback") (EVar "implTable")) (EVar "kind")) (EListLit)))))))
 (DTypeSig false "entailAssum" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "entailAssum" ((PVar "m") (PVar "encl") (PVar "name") (PVar "kind")) (EMatch (EApp (EApp (EApp (EApp (EVar "entailAssumVar") (EVar "m")) (EVar "encl")) (EVar "name")) (EVar "kind")) (arm (PCon "Some" (PVar "dname")) () (EApp (EVar "Some") (EVar "dname"))) (arm (PCon "None") () (EMatch (EApp (EVar "ifaceOfMethodName") (EVar "name")) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "activeDictPredOf") (EVar "iface")) (EVar "m")) (EVar "encl"))) (arm (PCon "None") () (EVar "None"))))))
 (DTypeSig false "entailAssumVar" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKReturn" PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "m")) (EVar "encl")))
-(DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKNestedTop" PWild PWild PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "encl")))
+(DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKNestedTop" PWild PWild PWild PWild)) (EApp (EApp (EVar "activeDictVarForEncl") (EVar "m")) (EVar "encl")))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") PWild (PCon "EKArg" PWild PWild)) (EApp (EApp (EVar "activeDictVarOfEncl") (EVar "m")) (EVar "encl")))
 (DFunDef false "entailAssumVar" ((PVar "m") (PVar "encl") (PVar "name") (PCon "EKOp" (PVar "isBinop") PWild (PVar "inImpl"))) (EApp (EApp (EApp (EApp (EApp (EVar "opDictVarOf") (EVar "isBinop")) (EVar "name")) (EVar "m")) (EVar "inImpl")) (EVar "encl")))
 (DTypeSig false "entailAssumRoute" (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyCon "Route"))))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKReturn" PWild PWild (PVar "isRp"))) (EIf (EVar "isRp") (EApp (EVar "RDictFwd") (EVar "dname")) (EApp (EVar "RDict") (EVar "dname"))))
-(DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKNestedTop" PWild PWild PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
+(DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKNestedTop" PWild PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKArg" PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DFunDef false "entailAssumRoute" ((PVar "dname") (PCon "EKOp" PWild PWild PWild)) (EApp (EVar "RDict") (EVar "dname")))
 (DTypeSig false "entailInst" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "EntailKind") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route"))))))))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKReturn" (PVar "keyTable") (PVar "fullMono") PWild)) (EBlock (DoLet false false (PVar "paramMonos") (EApp (EApp (EVar "fromOption") (EListLit (EVar "m"))) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))) (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSite") (EVar "keyTable")) (EVar "name")) (EVar "paramMonos")))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implDictRoutesForFull") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "name")) (EVar "tag")) (EVar "m")) (EVar "paramMonos"))))))
-(DFunDef false "entailInst" ((PVar "implTable") PWild (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKNestedTop" (PVar "keyTable") (PVar "iface") PWild (PVar "depth") (PVar "rest"))) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSiteByIface") (EVar "keyTable")) (EVar "iface")) (EBinOp "::" (EVar "m") (EVar "rest"))))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (EVar "rest")) (EVar "depth"))) (EListLit)))))
+(DFunDef false "entailInst" ((PVar "implTable") PWild (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKNestedTop" (PVar "keyTable") (PVar "iface") PWild (PVar "depth"))) (EBlock (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSiteByIface") (EVar "keyTable")) (EVar "iface")) (EListLit (EVar "m"))))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRecD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (EVar "depth"))) (EListLit)))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") (PVar "encl") (PVar "tag") (PCon "EKArg" (PVar "keyTable") (PVar "fullMono"))) (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EVar "fromOption") (EListLit (EVar "m"))) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))) (DoLet false false (PVar "routeKey") (EApp (EApp (EVar "fromOption") (EVar "tag")) (EApp (EApp (EApp (EVar "keyForSite") (EVar "keyTable")) (EVar "name")) (EVar "goals")))) (DoLet false false (PVar "dictName") (EIf (EApp (EApp (EApp (EVar "implDefinesMethodAt") (EVar "implTable")) (EVar "name")) (EVar "tag")) (EVar "name") (EApp (EVar "innerDefaultMethod") (EVar "name")))) (DoExpr (ETuple (EApp (EApp (EVar "RKey") (EVar "routeKey")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "dictName")) (EVar "tag")) (EVar "m")) (EVar "goals"))))))
 (DFunDef false "entailInst" ((PVar "implTable") (PVar "name") (PVar "m") PWild (PVar "tag") (PCon "EKOp" (PVar "isBinop") (PVar "keyTable") PWild)) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stampOpRouteVal") (EVar "isBinop")) (EVar "implTable")) (EVar "keyTable")) (EVar "name")) (EVar "m")) (EVar "tag")) (EListLit)))
 (DTypeSig false "entailFallback" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "EntailKind") (TyCon "Route"))))
 (DFunDef false "entailFallback" (PWild (PCon "EKReturn" PWild PWild PWild)) (EVar "RNone"))
-(DFunDef false "entailFallback" ((PVar "implTable") (PCon "EKNestedTop" (PVar "keyTable") PWild (PVar "policy") PWild PWild)) (EApp (EApp (EApp (EVar "undeterminedRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "policy")))
+(DFunDef false "entailFallback" ((PVar "implTable") (PCon "EKNestedTop" (PVar "keyTable") PWild (PVar "policy") PWild)) (EApp (EApp (EApp (EVar "undeterminedRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "policy")))
 (DFunDef false "entailFallback" (PWild (PCon "EKArg" PWild PWild)) (EVar "RNone"))
 (DFunDef false "entailFallback" (PWild (PCon "EKOp" PWild PWild PWild)) (EVar "RNone"))
 (DTypeSig false "routeOf" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyCon "Route"))))))))
-(DFunDef false "routeOf" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "policy")) (EVar "m")) (EListLit)) (ELit (LInt 0))))
-(DTypeSig false "routeOfD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyCon "Route"))))))))))
-(DFunDef false "routeOfD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m") (PVar "rest") (PVar "depth")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "implTable")) (ELit (LString ""))) (EVar "m")) (EVar "encl")) (EApp (EApp (EApp (EApp (EApp (EVar "EKNestedTop") (EVar "keyTable")) (EVar "iface")) (EVar "policy")) (EVar "depth")) (EVar "rest")))))
+(DFunDef false "routeOf" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "policy")) (EVar "m")) (ELit (LInt 0))))
+(DTypeSig false "routeOfD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Undetermined") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Route")))))))))
+(DFunDef false "routeOfD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "policy") (PVar "m") (PVar "depth")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "implTable")) (ELit (LString ""))) (EVar "m")) (EVar "encl")) (EApp (EApp (EApp (EApp (EVar "EKNestedTop") (EVar "keyTable")) (EVar "iface")) (EVar "policy")) (EVar "depth")))))
 (DTypeSig false "undeterminedRoute" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "Undetermined") (TyCon "Route")))))
 (DFunDef false "undeterminedRoute" (PWild PWild (PCon "KeepNone")) (EVar "RNone"))
 (DFunDef false "undeterminedRoute" ((PVar "implTable") (PVar "keyTable") (PCon "CountImpls" (PVar "prog") (PVar "iface"))) (EApp (EApp (EApp (EApp (EVar "routeUndeterminedTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "iface")))
@@ -25791,7 +25513,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "routesOfMonosTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest")) (PList)) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (ELit (LString ""))) (EApp (EApp (EVar "CountImpls") (EVar "prog")) (ELit (LString "")))) (EVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")) (EListLit))))
 (DFunDef false "routesOfMonosTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest")) (PCons (PVar "iface") (PVar "ifacesRest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EApp (EApp (EVar "CountImpls") (EVar "prog")) (EVar "iface"))) (EVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")) (EVar "ifacesRest"))))
 (DTypeSig false "routeUndeterminedTop" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyCon "Route"))))))
-(DFunDef false "routeUndeterminedTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "implHeadTagsForIface") (EVar "prog")) (EVar "iface")) (arm (PList) () (EVar "RNone")) (arm (PList (PVar "tag")) () (EApp (EApp (EVar "RKey") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EVar "tag")) (EApp (EVar "TCon") (EVar "tag"))) (EListLit)) (ELit (LInt 0))))) (arm PWild () (EApp (EVar "reportAmbiguousImpl") (EVar "iface")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "routeUndeterminedTop" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "implHeadTagsForIface") (EVar "prog")) (EVar "iface")) (arm (PList) () (EVar "RNone")) (arm (PList (PVar "tag")) () (EApp (EApp (EVar "RKey") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRec") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (ELit (LString ""))) (EVar "tag")) (EApp (EVar "TCon") (EVar "tag"))))) (arm PWild () (EApp (EVar "reportAmbiguousImpl") (EVar "iface")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "reportAmbiguousImpl" (TyFun (TyCon "String") (TyCon "Route")))
 (DFunDef false "reportAmbiguousImpl" ((PVar "iface")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EApp (EVar "ambiguousImplMsg") (EVar "iface")))) (DoExpr (EVar "RNone"))))
 (DTypeSig false "implHeadTagsForIface" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -25805,10 +25527,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "routesOfMonos" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))
 (DFunDef false "routesOfMonos" (PWild PWild (PList)) (EListLit))
 (DFunDef false "routesOfMonos" ((PVar "implTable") (PVar "keyTable") (PCons (PVar "m") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOf") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (ELit (LString ""))) (EVar "KeepNone")) (EVar "m")) (EApp (EApp (EApp (EVar "routesOfMonos") (EVar "implTable")) (EVar "keyTable")) (EVar "rest"))))
-(DTypeSig false "argImplRequiresRoutes" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))))
-(DFunDef false "argImplRequiresRoutes" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m") (PVar "rest") (PVar "depth")) (EIf (EBinOp ">=" (EVar "depth") (ELit (LInt 32))) (EListLit) (EBlock (DoLet false false (PVar "goals") (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EListLit (EVar "m")) (EBinOp "::" (EVar "m") (EVar "rest")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "selectReqImpl") (EVar "keyTable")) (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "itys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "itys")) (EVar "m")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EBinOp "+" (EVar "depth") (ELit (LInt 1))))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))))
-(DTypeSig false "selectReqImpl" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))))))
-(DFunDef false "selectReqImpl" ((PVar "keyTable") (PVar "implTable") (PVar "iface") (PVar "tag") (PVar "m") (PVar "goals")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ImplEntry" PWild PWild (PVar "headTy") (PVar "reqs") (PVar "itys") PWild)) (ETuple (EVar "headTy") (EVar "itys") (EVar "reqs")))) (EApp (EApp (EApp (EApp (EVar "findImplEntry") (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m"))) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PCon "KeyEntry" PWild PWild (PVar "headTy") PWild PWild (PVar "itys") (PVar "reqs"))) (ETuple (EVar "headTy") (EVar "itys") (EVar "reqs")))) (EApp (EApp (EApp (EVar "selectImplEntryByIface") (EVar "keyTable")) (EVar "iface")) (EVar "goals"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argImplRequiresRoutesRec" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Route")))))))))
+(DFunDef false "argImplRequiresRoutesRec" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplRequiresRoutesRecD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "tag")) (EVar "m")) (ELit (LInt 0))))
+(DTypeSig false "argImplRequiresRoutesRecD" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route"))))))))))
+(DFunDef false "argImplRequiresRoutesRecD" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "tag") (PVar "m") (PVar "depth")) (EIf (EBinOp ">=" (EVar "depth") (ELit (LInt 32))) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "selectReqImpl") (EVar "keyTable")) (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "reqs"))) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "headTy")) (EVar "m")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "reqs")) (EBinOp "+" (EVar "depth") (ELit (LInt 1))))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit)))))
+(DTypeSig false "selectReqImpl" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Require"))))))))))
+(DFunDef false "selectReqImpl" ((PVar "keyTable") (PVar "implTable") (PVar "iface") (PVar "tag") (PVar "m")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ImplEntry" PWild PWild (PVar "headTy") (PVar "reqs") PWild PWild)) (ETuple (EVar "headTy") (EVar "reqs")))) (EApp (EApp (EApp (EApp (EVar "findImplEntry") (EVar "implTable")) (EVar "iface")) (EVar "tag")) (EVar "m"))) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PCon "KeyEntry" PWild PWild (PVar "headTy") PWild PWild PWild (PVar "reqs"))) (ETuple (EVar "headTy") (EVar "reqs")))) (EApp (EApp (EApp (EVar "selectImplEntryByIface") (EVar "keyTable")) (EVar "iface")) (EListLit (EVar "m")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "argImplDictRoutesFor" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Route"))))))))
 (DFunDef false "argImplDictRoutesFor" ((PVar "implTable") (PVar "keyTable") (PVar "name") (PVar "tag") (PVar "mono")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplDictRoutesForEncl") (EVar "implTable")) (EVar "keyTable")) (ELit (LString ""))) (EVar "name")) (EVar "tag")) (EVar "mono")) (EListLit (EVar "mono"))))
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route"))))))))))
@@ -25818,7 +25542,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "argImplReqRoutes" ((PVar "implTable") (PVar "keyTable") (PVar "encl") (PVar "subst") (PCons (PCon "Require" (PVar "rIface") (PVar "rargs")) (PVar "rest")) (PVar "depth")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "implTable")) (EVar "keyTable")) (EVar "rIface")) (EVar "encl")) (EVar "subst")) (EVar "rargs")) (EVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "implTable")) (EVar "keyTable")) (EVar "encl")) (EVar "subst")) (EVar "rest")) (EVar "depth"))))
 (DTypeSig false "argReqRoute" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "Int") (TyCon "Route")))))))))
 (DFunDef false "argReqRoute" (PWild PWild PWild PWild PWild (PList) PWild) (EVar "RNone"))
-(DFunDef false "argReqRoute" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "subst") (PCons (PVar "arg") (PVar "more")) (PVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "fromAstType") (EVar "subst"))) (EVar "more"))) (EVar "depth")))
+(DFunDef false "argReqRoute" ((PVar "implTable") (PVar "keyTable") (PVar "iface") (PVar "encl") (PVar "subst") (PCons (PVar "arg") PWild) (PVar "depth")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EVar "implTable")) (EVar "keyTable")) (EVar "iface")) (EVar "encl")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EVar "depth")))
 (DTypeSig false "resolveMethodDicts" (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))) (TyCon "Unit")))))
 (DFunDef false "resolveMethodDicts" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "resolveMethodDicts" ((PVar "implTable") (PVar "keyTable") (PCons (PTuple (PVar "methodRef") (PVar "monos")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodRef")) (EApp (EApp (EApp (EVar "routesOfMonos") (EVar "implTable")) (EVar "keyTable")) (EVar "monos")))) (DoExpr (EApp (EApp (EApp (EVar "resolveMethodDicts") (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))

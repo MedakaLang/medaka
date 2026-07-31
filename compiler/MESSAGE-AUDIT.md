@@ -31,12 +31,19 @@ panics — see Appendix):
 | Lex | 6 | 0 |
 | Parse | ~42 | 5 |
 | Resolve | 22 | 12 |
-| Typecheck | ~46 | 17 |
+| Typecheck | ~45 | 16 |
 | Exhaust | 1 | 1 |
 | Runtime / Eval / native / stdlib | ~24 | 10 |
 | CLI / Driver / tools | ~60 | 12 |
 | Lint (+ check_policy) | 25 | 8 |
 | **Total** | **~226** | **~65** |
+
+> Typecheck went ~46/17 → ~45/16 when the swapped-argument hint's
+> `T-TYPE-MISMATCH (swap)` row was dropped: that message no longer exists (the
+> whole hint was deleted, issue 1147), so an audit row for it could only send
+> someone to rewrite a string that isn't there. Two prose mentions of its "look
+> swapped" hedge (§ capitalization, § no-hedging) went with it. Noted rather than
+> silently edited because a *count* with no derivation is exactly what rots here.
 
 **Roughly 29% of user-facing strings carry a tone or consistency flag.** Almost
 all flags are *consistency* (casing / trailing-period / identifier-quoting /
@@ -161,7 +168,6 @@ Medaka uses '\{sug}')` (:535).
 | T-MISSING-FIELD | `Missing field \{fname} in construction of record \{rname}` | :4071 | inconsistent (unquoted identifiers) | quote both |
 | T-ABSTRACT-FIELD | `'\{tname}' is exported abstractly; its field '\{fname}' is not accessible (declare it `public export` to expose its fields).` | :4067 | inconsistent (trailing period) | drop period; align to resolve R-ABSTRACT-FIELD |
 | T-MUT-LET (do-block) | `'let mut \{x}' is not allowed inside a `do` block; do blocks are for monadic composition. Use a bare sequential block instead.` | :1016 | inconsistent (two sentences + period vs sibling `mutLetRequiresBlockMsg`) | `'let mut \{x}' is not allowed inside a `do` block — use a bare sequential block` |
-| T-TYPE-MISMATCH (swap) | `arguments to '\{name}' look swapped — try '\{swappedCall}'.` | :4727 | inconsistent (lowercase + period + "look" hedge) | `Arguments to '\{name}' are in the wrong order — try '\{swappedCall}'` |
 | T-CONFLICTING-IMPL | `conflicting `impl \{iface}`: defined in \{mid2} and \{mid1}` | :6994 | inconsistent (lowercase; peers say "Overlapping"/"Multiple") | `Conflicting `impl \{iface}` — defined in \{mid2} and \{mid1}` |
 | T-MISSING-SUPER-IMPL | `impl \{iface} \{tys} requires a superinterface impl 'impl \{superName} \{tys}', which is missing` | :7177 | inconsistent (lowercase) | capitalize |
 | T-CYCLIC-SUPERINTERFACE | `cyclic superinterface: \{joinWith " requires " path}` | :7138 | inconsistent (lowercase) | capitalize |
@@ -272,7 +278,7 @@ the flags. Proposed rules:
    lowercase today, mostly OCaml-oracle-era wording): resolve `extern`/`module`/
    `the clauses`/`ambiguous occurrence`; typecheck `conflicting impl`/`cyclic
    superinterface`/`ambiguous instance`/`missing super impl`/the numlit-context
-   `if`/`list`/`cons` messages/`arguments … look swapped`; parser `inline 'let'`.
+   `if`/`list`/`cons` messages; parser `inline 'let'`.
    *(Lint findings are deliberately lowercase as a family — keep them; the rule
    is for diagnostics.)*
 2. **No trailing period.** Terse diagnostics carry none today; the long
@@ -294,7 +300,7 @@ the flags. Proposed rules:
    trailing `?`, single-quoted candidate) everywhere (resolve arms, T-UNKNOWN-FIELD
    field suggestion, parser `/=`).
 6. **No hedging in definitive diagnostics.** Replace "may not be covered" /
-   "guards may not be exhaustive" / "look swapped" / "might" with assertive
+   "guards may not be exhaustive" / "might" with assertive
    phrasing. The exhaustiveness checker already computes a witness — prefer the
    assertive witness form and demote the hedged fallback.
 7. **No persona / over-explanation.** No first person (`I can't tell…` → state

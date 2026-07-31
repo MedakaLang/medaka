@@ -51,11 +51,15 @@ for the full re-score. Rows updated: `apply_non_function`,
 `if_branch_mismatch`, `list_heterogeneous`, `cons_type_mismatch`,
 `wrong_arg_type_in_map` (help-only hint appended / reframed), and
 `arg_order_swapped` (collapsed to one diagnostic + a real machine `fix`).
+**🚫 The `arg_order_swapped` half of that has since been REVERTED** — the
+swapped-argument hint was deleted (issue 1147) because it only ever fired on
+literal arguments; the fixture is back to two diagnostics. Its row below is
+current; `GRADING.md`'s post-Batch-B score for it is retracted there.
 
 | Fixture | Intended mistake | Message (excerpt) | Observation |
 |---|---|---|---|
 | `type_mismatch_int_string` | pass String to Int fn | `…:3:34: Type mismatch: Int vs String` | Clear, located, caret |
-| `arg_order_swapped` | swapped args | `…:3:22: arguments to 'greet' look swapped — try 'greet "Alice" 3'.` | **Fixed**: one diagnostic (was two), names the swap, and `--json` carries a real machine `fix` performing the transposition |
+| `arg_order_swapped` | swapped args | `…:3:24: Type mismatch: Int vs String` + `…:3:22: Type mismatch: Int literal vs String` | Two diagnostics, each correctly located on its own argument. The swap hint that once collapsed these into one message + machine `fix` was deleted (issue 1147) — it only fired on literal arguments, so the same mistake spelled with variables never got it |
 | `too_few_args` | `add 1 + 10` (forgot arg) | `…:3:31: No impl of Num for (Int -> Int)` | **Cryptic**: the "forgot an arg" is reported as a Num-instance failure on a function type |
 | `too_many_args` | `inc 1 2` | `…:3:29: 'inc' takes 1 argument(s) but is applied to 2.` | Reframed (Tier-3): names the actual counts, no raw tyvar |
 | `float_where_int` | `factorial 3.5` | `…:3:33: Type mismatch: Int vs Float` | Clear |

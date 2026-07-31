@@ -495,14 +495,26 @@ runs over K's environments; none of it holds private registries.
 
 ### D — Diagnostics
 
-The ~1,200 lines / ~110 functions of error-path-only machinery (message
-construction, mis-framing provenance, swapped-argument detection, cascade
-suppression) extract to a sibling module with a narrow interface (push a
-structured `TcDiag`, read the accumulators). Fires only on failure, must not
-perturb inference, has no inbound dependency from the inference core — the map's
-safest extraction (§7.4). The accumulating-errors discipline and
-`typeErrorsSticky`'s position outside every reset bundle are unchanged
-(settled).
+The ~1,050 lines / ~96 functions of error-path-only machinery (message
+construction, mis-framing provenance, cascade suppression) extract to a sibling
+module with a narrow interface (push a structured `TcDiag`, read the
+accumulators). Fires only on failure, must not perturb inference, has no inbound
+dependency from the inference core — the map's safest extraction (§7.4). The
+accumulating-errors discipline and `typeErrorsSticky`'s position outside every
+reset bundle are unchanged (settled).
+
+> ⚠️ **Issue 1147 shrank D and falsified one of its stated invariants.**
+> *Swapped-argument detection* was a fourth item in that list (~145 lines,
+> 14 functions); it is deleted, and the figures above are the old
+> 1,200/~110 minus it. More importantly, "fires only on failure" and "must not
+> perturb inference" were **not true** of that component: it ran ahead of
+> inference on every two-argument application whose last argument was a literal
+> (measured 3.2% / 1.2% of application nodes) and called `instantiate` there. The
+> perturbation turned out to be unobservable — deleting the component left 170
+> programs and the emitted LLVM IR byte-identical — but nothing *checked* that,
+> and nothing checks it for the surviving components either. Treat this
+> paragraph's invariants as design intent to be verified at extraction time, not
+> as properties the current code has.
 
 ### Cross-cutting substrate
 
