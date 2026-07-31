@@ -929,11 +929,34 @@ additionally record, per slot, the **whole predicate's argument vector** with it
 arguments resolved, so the route selects on `[Int, Char]` while the dict-passing
 convention is untouched. It is redundant where a predicate has two variable arguments (two
 slots, one predicate, two identical goals) and it does **not** move toward L4's evidence
-unit — so it is a second transitional step, not the target — but it closes legs 2–4 and
-unblocks F-3c without touching emitted arity. The machinery it needs already exists:
-`constraintArgMonos` (`:16451-16455`) resolves a predicate's argument vector, and
-`headSubstWithParams` (`:11850-11856`) already matches a goal vector against an impl head
-vector at two other call sites.
+unit — so it is a second transitional step, not the target — but it closes legs 2–3 and
+unblocks F-3c without touching emitted arity.
+
+⚠️ **Two claims in this paragraph were MEASURED WRONG and are corrected here (2026-07-31),
+by a scoping pass that built the change rather than reading it.**
+
+- It said **"closes legs 2–4."** It closes **2–3**. Leg 4 — an unsatisfiable partially-concrete
+  constraint being accepted — was tested directly: `recordCallObligations` was made n-ary at
+  exactly the site that now carries the vector, built, and run, and the program is **still
+  accepted at exit 0**. Leg 4's home is `declaredSchemeOblsFor` → `declaredOblOne` →
+  `constraintArgMonos`, on a channel whose payload is `List (String, List Int)` — **ids only,
+  with no room for a concrete argument.** Widening it is a separate obligation-payload change,
+  not a rider on this one.
+- It said the machinery **"already exists: `constraintArgMonos`."** That function is **not
+  usable here**: it returns `None` for any non-tyvar argument, which is exactly the `Char` in
+  `Ix a Char` that the whole fix is about. The correct resolver is **`fromAstType tvMap`**.
+  This is the more expensive of the two errors — it names a real symbol that resolves, so it
+  reads as verified, and it points an implementer at a function that silently drops the datum.
+
+`headSubstWithParams` (`:11850-11856`) does already match a goal vector against an impl head
+vector, and is reached without a new call site — that part of the claim holds.
+
+⚠️ Two further constraints, both **silent** if missed, established by the same pass: the
+substitution must be **`substMono`**, not top-level only (a top-level substitution leaves an
+interior signature tyvar unmapped, `matchTyMonos` fails, the candidate set goes **empty**, and
+the route degrades to bare-tag first-match — the original bug at a different shape); and
+**F-3c does not catch that class**, because `pickMostSpecificEntry []` returns `None` rather
+than the ambiguity arm.
 
 ---
 
