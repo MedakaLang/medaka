@@ -1,5 +1,5 @@
 # META
-source_lines=19195
+source_lines=19278
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -11480,6 +11480,27 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconTy headTy
 --    narrowing arm of this arc is F-3c (#1155), which owns
 --    `pickMostSpecificEntry`'s no-unique-minimum arm; this shape belongs on ITS
 --    declared flip list, not smuggled in here.  Left unchanged, deliberately.
+--
+-- ⚠️ THERE IS A SECOND SET, and the audit above did not enumerate it — recorded here
+-- so the next reader inherits it rather than re-deriving it.  The set above is the
+-- REGISTRARS (who writes a bucket).  The set below is the READERS that still index
+-- `bucketOf tag` DIRECTLY and so are now out of step with `candidateBucket`:
+-- `implExistsForHead`, `countHead`/`headCollides`, `countHeadByIface`/
+-- `headCollidesByIface`.
+--
+-- The sharp one is `countHead`.  It is METHOD-NAME keyed, and `bucketOf noneHeadTag`
+-- holds the headless impls of EVERY interface, while two interfaces declaring the
+-- same method name are accepted.  So `countHead <method> "__none__"` can reach 2,
+-- `headCollides` fires, and `keyForSite` takes its CANONICAL-KEY branch with a
+-- `__none__` winner — a branch that was UNREACHABLE before this change, because that
+-- bucket was always empty.
+--
+-- 🚨 NEWLY REACHABLE, UNREPRODUCED.  This is not a defect claim: adversarial review
+-- could not materialise one from it (the direct-call form is byte-identical, and the
+-- dict-forwarding form is rejected identically by the base and patched binaries).
+-- Do not "fix" it on the strength of this note — reproduce first, or leave it.
+-- `keyForSiteByIface` is NOT exposed: it is iface-keyed, and at most one headless
+-- impl per interface survives coherence.
 implMethodNameTc : ImplMethod -> String
 implMethodNameTc (ImplMethod n _ _) = n
 
@@ -11580,11 +11601,32 @@ implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
 -- observable (proved twice, two independent agents, both probes inert).
 --
 -- So the arm now returns the WINNER'S OWN route key rather than declining to speak.
--- ⚠️ This is byte-identical at every pre-existing site BY CONSTRUCTION, not by
--- measurement: `matchingEntries` only ever yields entries from `bucketOf tag` (whose
+--
+-- ⚠️ DO NOT READ THIS AS "byte-identical at every pre-existing site".  An earlier
+-- revision of this comment said exactly that, "BY CONSTRUCTION, not by measurement",
+-- and it is FALSE — three pre-existing fixtures emit DIFFERENT IR under this change:
+-- `test/engine_fixtures/general_instance_overlap.mdk` (three 1-word dict constants
+-- become two) and `general_beats_default.mdk` / `default_when_omitted.mdk` (4 lines
+-- each).  `useSz True` / `useSz "hi"` now carry the general instance's route word
+-- instead of their goal's head tag.  That is the fix WORKING — the dict word names
+-- the instance actually selected — but it is an IR change, and a claim of byte
+-- identity would have made the next person dismiss a real diff as impossible.
+--
+-- What IS true by construction is narrower, and it is only about a NON-HEADLESS
+-- winner: `matchingEntries` only ever yields entries from `bucketOf tag` (whose
 -- members all carry `tag2 == tag`) or from the headless bucket, so a non-headless
 -- winner's `tag` IS the `tag` the caller was about to fall back to, and `Some tag`
--- is that fallback spelled out.  The collision branch is untouched.
+-- is that fallback spelled out.  The collision branch is untouched.  Every site whose
+-- winner has a head tycon is therefore unmoved; the three fixtures above are the
+-- sites whose winner is HEADLESS, which is the whole point of the change.
+--
+-- ⚠️ And BEHAVIOUR surviving that IR change is EMPIRICAL, not structural.  It rests
+-- on the emitter's general-instance fallback tier: an `RKey` whose word matches no
+-- tagged impl falls to `emitGeneralRKey` → `findByTag noneHeadTag`
+-- (`compiler/backend/llvm_emit.mdk`, and `pickTagFallback` in eval.mdk is its peer).
+-- Those three fixtures pass because that tier catches them, not because the word did
+-- not move.  If that tier is ever narrowed, re-derive this — a green suite here is
+-- evidence about the fallback, not about the route word.
 --
 -- The key/tag split deliberately mirrors `core_ir_lower.declRouteKey` (bare head when
 -- that head is unique among the interface's declared impls, canonical full-type key
@@ -11676,15 +11718,47 @@ matchingEntries buckets name goals = match goalHeadCon goals
 --      permutes source order while bucket order stays put.  Merging on the
 --      declaration index instead makes the tie-break DECLARATION ORDER, which is
 --      what the rest of this file already documents as the fallback and which that
---      gate CAN see.  On the route path both operands really are in forward
---      declaration order: `buildKeyTable` reverseL's every bucket for exactly that
---      reason, and it is `buildKeyTable`'s result — not the cross-module accumulator
---      — that `resolveSites`/`resolveArgStamps`/`resolveOpSites`/`resolveDictApps`
---      thread to `keyForSite`.
+--      gate CAN see.
 --
--- The `tag == noneHeadTag` guard is defensive: `goalHeadCon` reads a MONO's spine
--- head, which is a real type constructor name and can never be the reserved
--- `"__none__"`, but merging a list with itself would silently double every candidate.
+--      ⚠️ THAT ARGUMENT IS SCOPED TO THE ROUTE PATH, AND THE ROUTE PATH IS NOT THE
+--      ONLY CONSUMER.  It holds where the table is `buildKeyTable`'s result, which
+--      passes `omEmpty` and applies `omMapValues reverseL` per bucket — so both merge
+--      operands are in forward declaration order and the stable merge yields exactly
+--      the flat declaration order restricted to the two buckets.  That is the table
+--      `resolveSites`/`resolveArgStamps`/`resolveOpSites`/`resolveDictApps` thread to
+--      `keyForSite`.
+--
+--      It does NOT hold for `universeKeyBucketsRef`, and that table reaches this
+--      merge on EVERY MULTI-MODULE COMPILE: `appendUniverseAccums` calls
+--      `bucketKeyEntries` once per module with a NON-EMPTY accumulator, so
+--      `bucketKeyEntriesFrom` restarts at 0 (indices DUPLICATE across modules within
+--      one bucket) and nothing ever reverses it (each module's slice is in
+--      DESCENDING index order).  `checkBodyImpl`'s Module arm copies it into
+--      `shadowKeyTableRef`, which `concreteReqMatchByIface` reads →
+--      `selectImplEntryByIface` → `matchingEntriesByIface` → here.  So
+--      `mergeByDeclIdx`'s ascending-operands precondition is VIOLATED on that
+--      consumer and its output order there is deterministic but arbitrary.
+--
+--      Why that is recorded rather than fixed: list order only decides an ANSWER
+--      when `pickMostSpecificEntry` has no unique min⊑ and falls back to
+--      head-of-list, and no such set containing a headless entry has been
+--      constructed (a bare-TyVar head subsumes every concrete head, so at a
+--      single-param interface the minimum is always unique).  And F-3c (#1155)
+--      turns that fallback arm into a HARD DIAGNOSTIC, which removes the only path
+--      by which list order can decide an answer at all.  The exposure is therefore
+--      self-limiting and CLOSES WITH F-3c.  If F-3c is descoped, this is the comment
+--      to come back to.
+--
+-- 🚨 The `tag == noneHeadTag` guard is LOAD-BEARING, not defensive.  An earlier
+-- revision of this comment claimed `goalHeadCon` reads a MONO's spine head, "a real
+-- type constructor name [that] can never be the reserved `__none__`".  That is
+-- false: `paramMonoOf` synthesises `TCon tp` from a TYPE-PARAMETER NAME for any
+-- param an occurrence leaves unbound (`fromOption (TCon tp) (lookupAssoc tp subst)`),
+-- and `__none__` lexes as a legal type VARIABLE — `data __none__ = N` is a parse
+-- error, but `impl Q __none__ where …` type-checks at exit 0.  So an interface
+-- declared as `Ix __none__ e` puts `TCon "__none__"` at `goals[0]`, `goalHeadCon`
+-- answers `Some "__none__"`, and without this guard the headless bucket would be
+-- merged with ITSELF — silently doubling every candidate.
 candidateBucket : KeyBuckets -> String -> List KeyEntry
 candidateBucket buckets tag = match bucketOf noneHeadTag buckets
   [] => bucketOf tag buckets
@@ -11694,10 +11768,19 @@ candidateBucket buckets tag = match bucketOf noneHeadTag buckets
     else
       mergeByDeclIdx (bucketOf tag buckets) headless
 
--- stable merge of two declaration-ordered entry lists on the declaration index.
--- Ties keep the LEFT operand (the goal's own head bucket) first; indices are unique
--- within one `bucketKeyEntriesFrom` numbering, so a tie can only arise between two
--- tables numbered independently, and the route path uses exactly one.
+-- stable merge of two entry lists on the declaration index.  Ties keep the LEFT
+-- operand (the goal's own head bucket) first.
+-- ⚠️ The PRECONDITION — both operands ascending by index — is a property of the
+-- CALLER'S TABLE, not of this function, and it does not hold everywhere.  An
+-- earlier revision claimed "indices are unique within one `bucketKeyEntriesFrom`
+-- numbering, so a tie can only arise between two tables numbered independently, and
+-- the route path uses exactly one".  Both halves are wrong for
+-- `universeKeyBucketsRef`: `appendUniverseAccums` re-enters `bucketKeyEntries` per
+-- module with a non-empty accumulator, so the numbering RESTARTS AT 0 within one
+-- table (indices duplicate) and each module's slice is prepended, never reversed
+-- (descending).  See `candidateBucket` for which consumers that reaches and why it
+-- is recorded rather than repaired.  On an unsorted operand this still terminates
+-- and is still deterministic; it is only the "= declaration order" claim that fails.
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeByDeclIdx [] ys = ys
 mergeByDeclIdx xs [] = xs
