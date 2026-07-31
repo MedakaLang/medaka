@@ -5174,7 +5174,7 @@ recordCallObligations (iface::ifs) (mono::ms)
     -- the acceptance decision is made upstream in `declaredSchemeOblsFor` →
     -- `declaredOblOne` → `constraintArgMonos`, which returns `None` for a non-tyvar
     -- argument on an ids-only payload.  That is #1161 symptom 2, pinned in
-    -- test/must_fail_fixtures/dict_multiparam_sig_constraint_unsatisfiable/.
+    -- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
     let _ = recordObl (Predicate { iface = iface, args = [mono] }) 0 PCallSlot currentLoc.value
     recordCallObligations ifs ms
 
@@ -5209,6 +5209,15 @@ instantiateTracked (Forall ids evars t) =
 -- tyvarCounter), so they would need the same id re-attribution `attributeModuleArities`
 -- does for the ids table.  A vector attributed with the WRONG module's ids substitutes
 -- to a wrong-but-concrete goal — strictly worse than missing.  See #1161's residual note.
+-- ⚠️ SECOND RESIDUAL, same shape and same reasoning: `resolveRLocalSites` /
+-- `SKRLocal` (the standalone-shadow arg-position stamp) fills its dict routes with the
+-- SCALAR `routesOfMonosTop`, not `routesOfMonosTopV`, so an importer-shadowed
+-- constrained standalone with a multi-argument predicate keeps today's per-tyvar goal.
+-- Threading it would mean widening the `SKRLocal` payload at all four of its producers,
+-- whose monos come from `shadowStandaloneDictSlots` → `declaredConstraintSlots` — i.e.
+-- it is ENTANGLED with the cross-module residual above and inherits its id-attribution
+-- hazard, so it is deliberately not a rider either.  Neither residual is WRONGER than
+-- before; both are simply NOT COVERED, and this comment is the only place that says so.
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintArgs name =
   fromOption [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)

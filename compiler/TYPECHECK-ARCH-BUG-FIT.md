@@ -880,6 +880,18 @@ unimplemented and the table records it as satisfied. That is a §11 row this arc
 written changes #1161's behaviour**: variants A and B must still print `111` and `222`
 after every stage S–F lands, and `check --types` must still print `useIx : a -> Int`.
 
+🚨 **GRADED 2026-07-31 — HALF REFUTED, and by a stage the arc did not have when this was
+written.** F-3a-ii (the arity-neutral intermediate this row *offered as an option*, since
+scheduled ahead of F-3b) makes variant A print **`222`** on `run` and on the shipped
+binary, and makes A and B agree. So the first half of the prediction is dead. The second
+half **still holds**: `check` still prints `useIx : a -> Int` with the context erased, and
+the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, above.
+⚠️ Read what that does and does not license. A null prediction is one-directional (§ its
+own caveat), so this refutation says the GAP verdict was wrong about *reachability* for
+legs 2–3 — not that the row's mechanism analysis was wrong. Legs 1–3 are correctly
+described; what the row could not know is that the vector is recoverable from the
+signature without unshattering the dict slots.
+
 ⚠️ **Read the direction before grading it.** This is a *null* prediction — the kind a
 stage that does nothing satisfies, including a **broken** stage — and it is
 **one-directional**: an observed change **refutes** the GAP verdict, but no amount of
@@ -929,11 +941,34 @@ additionally record, per slot, the **whole predicate's argument vector** with it
 arguments resolved, so the route selects on `[Int, Char]` while the dict-passing
 convention is untouched. It is redundant where a predicate has two variable arguments (two
 slots, one predicate, two identical goals) and it does **not** move toward L4's evidence
-unit — so it is a second transitional step, not the target — but it closes legs 2–4 and
-unblocks F-3c without touching emitted arity. The machinery it needs already exists:
-`constraintArgMonos` (`:16451-16455`) resolves a predicate's argument vector, and
-`headSubstWithParams` (`:11850-11856`) already matches a goal vector against an impl head
-vector at two other call sites.
+unit — so it is a second transitional step, not the target — but it closes legs 2–3 and
+unblocks F-3c without touching emitted arity.
+
+⚠️ **CORRECTED 2026-07-31, and the correction was MEASURED, not re-reasoned.** This
+paragraph read *"closes legs 2–4"*. It closes **2–3**. Leg 4 (the obligation check) was
+tested directly during F-3a-ii scoping: `recordCallObligations` was made n-ary at exactly
+the site that now HAS the vector, built, and run — and the unsatisfiable program is
+**still accepted at exit 0**. The acceptance decision is made upstream, in
+`declaredSchemeOblsFor` → `declaredOblOne` → `constraintArgMonos`, on a channel whose
+payload is `List (String, List Int)` — **ids only, with no room for a concrete argument**.
+Widening it is a separate obligation-payload change, not a rider on the routing fix. That
+surviving half is #1161 symptom 2, now pinned at
+`test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+
+⚠️ **This paragraph's own suggestion for HOW to build the vector is also wrong, in a way
+that silently produces nothing.** It names `constraintArgMonos` — which returns `None` for
+any argument that is not a bare tyvar, i.e. exactly the `Char` in `Ix a Char` that the
+whole vector exists to carry. (That is the same function leg 4 is stuck behind, four
+paragraphs up.) The shipped fix resolves arguments with `fromAstType tvMap` instead
+(`constraintVarArgMonos`). `headSubstWithParams` is correctly named: the vector reaches it
+through `routesOfMonosTopV` → `topRouteV` → `routeOfD` → `argImplRequiresRoutes`.
+
+**LANDED 2026-07-31 as F-3a-ii** (`funConstraintArgsRef`, a table slot-parallel to
+`funConstraintsRef`; `routesOfMonosTopV`/`topRouteV`/`vectorGoal` route on it;
+`substArgVec` substitutes **structurally** with `substMono`, which is load-bearing — a
+top-level-only substitution empties the candidate set and restores first-match at a
+structured argument). Arity-neutral as this paragraph predicted, and now pinned as such by
+two emitted-IR rows in `test/diff_compiler_dict_semantics.sh`.
 
 ---
 
