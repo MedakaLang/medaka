@@ -1,0 +1,54 @@
+-- DICT-SEMANTICS §3 `inst`, on the `=>`-CONSTRAINED-SIGNATURE leg.
+--
+-- HAND-DERIVED EXPECTED VALUE — 222.  Derived from the spec BEFORE the binary was
+-- consulted, per this gate's "a captured golden records what the engine did, not
+-- what is correct" rule.  Nothing here was produced by CAPTURE=1.
+--
+--   §4 `gen-sig` elaborates `useIx : Ix a Char => a -> Int` with the declared
+--   context P = { Ix a Char }.  At the call `useIx 1` the signature's `a` is
+--   instantiated to Int, so the goal §3 receives is the PREDICATE
+--       π = Ix Int Char
+--   — a two-argument vector `C τ̄`, not the singleton `Ix Int _`.
+--   IE = { Ix Int Bool, Ix Int Char }.  §3's matching set is
+--       match(IE, π) = { I | ∃φ. φ(head I) = π }.
+--   Both heads are ground, so φ = id and the test is head equality:
+--   `Ix Int Bool` ≠ `Ix Int Char` and is therefore NOT IN THE MATCHING SET AT
+--   ALL.  match(IE, π) = { Ix Int Char } — a SINGLETON, whose ⊑-minimum is
+--   itself, so `inst` applies with no tie-break needed and `ix x 'z'` projects
+--   `Ix Int Char`'s method.  222.
+--
+--   §3's tie-break "must be a property of the instances and the goal alone —
+--   never of search order, declaration order, or resolution position", so 222 is
+--   also the answer for every permutation of the two `impl` blocks.  Section 4 of
+--   this gate grades that half by reversing them.
+--
+-- #1161 (S0, verified) REGRESSION PIN.  Before F-3a-ii the signature's predicate
+-- was SHATTERED at registration into one dict slot per bare-tyvar ARGUMENT:
+-- `constraintTyVars`/`tyVarArgNames` kept only arguments that are a single type
+-- variable, so `Ix a Char` registered as ("Ix","a") and `Char` was gone before
+-- funConstraintsRef was written.  The goal reaching the selector was the singleton
+-- `Ix Int _`; both impls matched through `entryHeadMatches`' arg-0 fallback, they
+-- are ⊑-incomparable, and `pickMostSpecificEntry` returned the FIRST-DECLARED.
+-- This file printed 111 at exit 0 on BOTH engines with `check --json` clean, and
+-- swapping the two `impl` blocks printed 222.
+--
+-- ⚠️ STILL OPEN on this same program: the inferred scheme prints `useIx : a ->
+-- Int` with the context dropped, and the sibling shape `Ix a Bool =>` (which NO
+-- impl satisfies) is accepted at exit 0.  That is #1161 symptom 2, whose home is
+-- `declaredSchemeOblsFor` → `declaredOblOne` → `constraintArgMonos` on an
+-- ids-only obligation payload — a different channel from the routing one this
+-- fixture grades.  Pinned at
+-- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+useIx : Ix a Char => a -> Int
+useIx x = ix x 'z'
+
+main = println (useIx 1)

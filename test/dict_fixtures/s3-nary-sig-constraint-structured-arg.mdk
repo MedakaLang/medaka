@@ -1,0 +1,48 @@
+-- DICT-SEMANTICS §3 `inst` with a STRUCTURED predicate argument — the sibling of
+-- s3-nary-sig-constraint-goal-vector.mdk that raises the goal vector from "all
+-- arguments are ground or bare variables" to "an argument is a type APPLICATION
+-- containing an interior signature variable".
+--
+-- HAND-DERIVED EXPECTED VALUE — 222.  Derived from the spec, not captured.
+--
+--   §4 `gen-sig` elaborates `useIx : Ix a (List b) => a -> b -> Int` with
+--   P = { Ix a (List b) }.  Only `a` is a bare type variable, so this predicate
+--   contributes exactly ONE dict slot; `b` occurs only inside `List b`.
+--   At the call `useIx 1 'z'` the signature instantiates a := Int and b := Char,
+--   so §3's goal is the predicate
+--       π = Ix Int (List Char).
+--   IE = { Ix Int (List Bool), Ix Int (List Char) }.  Both heads are ground, so
+--   match(IE, π) tests head equality: `Ix Int (List Bool)` ≠ π and is not in the
+--   matching set.  match(IE, π) = { Ix Int (List Char) }, a singleton; `inst`
+--   applies and `ix x [y]` projects its method.  222 — at every declaration
+--   order, per §3's order-freedom clause (Section 4 grades that).
+--
+-- ⚠️ WHY THIS FIXTURE EXISTS SEPARATELY, AND WHAT IT IS THE ONLY DEFENCE FOR.
+-- Recording the predicate's argument vector at signature registration stores it
+-- in the SIGNATURE's instantiation variables; the call site's substitution maps
+-- the SCHEME's quantified ids to that call's monos.  A top-level-only
+-- substitution (map each stored argument through the id table, then stop) leaves
+-- the interior `b` of `List b` as a stale signature variable — `matchTyMonos`
+-- then fails against BOTH ground heads, the candidate set comes back EMPTY, and
+-- the route silently degrades to the bare head tag, i.e. first-declared-wins.
+-- That is the original defect at a different shape, and it is invisible to the
+-- flat fixture above (whose `Char` argument needs no substitution at all).
+-- Measured during scoping: a top-level substitution moved this shape 222 → 111.
+-- The fix is `substMono` — a STRUCTURAL substitution — in `substArgVec`.
+-- ⚠️ F-3c (issue #1155) will NOT cover this class: `pickMostSpecificEntry []`
+-- returns None rather than taking the ambiguity arm, so an EMPTY candidate set
+-- stays silently first-match even after the no-unique-minimum arm goes loud.
+-- This fixture and its Section 4 permutation are the whole defence.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int (List Bool) where
+  ix _ _ = 111
+
+impl Ix Int (List Char) where
+  ix _ _ = 222
+
+useIx : Ix a (List b) => a -> b -> Int
+useIx x y = ix x [y]
+
+main = println (useIx 1 'z')

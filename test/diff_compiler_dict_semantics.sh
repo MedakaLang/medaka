@@ -271,7 +271,7 @@ trap 'rm -rf "$TMP"' EXIT
 TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
 s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
-s3-nary-requires-goal-vector.mdk|§1/§3 `match(IE,C τ̄)` is ONE φ against the WHOLE vector: a nested `requires Ix a Char` at `Sh (Box Int)` has the SINGLETON matching set {`Ix Int Char`}, so `Ix Int Bool` never reaches the selector at all (#1154 regression pin -- the arg-0-only fallback made both match, they were incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it too. ⚠️ SINGLE-entry `requires`, the arity at which route order and dict-slot order cannot disagree -- the multi-entry row below raises it. ⚠️ Pins the `requires` leg ONLY; the `=>`-constrained-call leg of the same defect is #1161, still OPEN|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
+s3-nary-requires-goal-vector.mdk|§1/§3 `match(IE,C τ̄)` is ONE φ against the WHOLE vector: a nested `requires Ix a Char` at `Sh (Box Int)` has the SINGLETON matching set {`Ix Int Char`}, so `Ix Int Bool` never reaches the selector at all (#1154 regression pin -- the arg-0-only fallback made both match, they were incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it too. ⚠️ SINGLE-entry `requires`, the arity at which route order and dict-slot order cannot disagree -- the multi-entry row below raises it. ⚠️ Pins the `requires` leg ONLY; the `=>`-constrained-signature leg of the same defect is #1161, whose ROUTING half F-3a-ii fixed and whose row is s3-nary-sig-constraint-goal-vector below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
 s3-nary-requires-multi-entry.mdk|§1/§3 the same judgement at a TWO-ENTRY `requires Dbg2 a, Ix a Char`: the second obligation grounds to `Ix Int Char` and its matching set is again the singleton, so 222+5=227 (pre-fix this printed 116). ⚠️ Its SIBLING ORDERING `requires Ix a Char, Dbg2 a` STILL prints 116 on this binary and is pinned as a must-fail at test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/ -- do NOT reorder this clause to match the body|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|227|
 s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n109|
 s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
@@ -304,6 +304,8 @@ s6-1-4-direct-constraint-control.mdk|CONTROL for #1127: the SAME instance set, g
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1: dict arity is keyed by BINDING IDENTITY, not bare name -- two modules` same-named `widget` abstract 1 and 0 dicts respectively (arity asserted structurally in section 3)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|101\n201|
 s8-i2-global-instance-env/main.mdk|§8 I2 / §6 C4: `IE` is assembled across the WHOLE import graph -- the sole `impl Sz Coin` is reached only transitively, and `main` never imports its module at all|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
 s8-i3-evidence-travels/main.mdk|§8 I3: a constrained binding does not re-resolve its own predicates -- the only impl is declared DOWNSTREAM of `twice`, so the dict provably came from the call site|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
+s3-nary-sig-constraint-goal-vector.mdk|§1/§3 `match(IE,C τ̄)` on the `=>`-CONSTRAINED-SIGNATURE leg: `useIx : Ix a Char => a -> Int` at `a := Int` gives the goal `Ix Int Char`, whose matching set is the SINGLETON {`Ix Int Char`} -- `Ix Int Bool` never reaches the selector. 222 (#1161 regression pin -- the signature`s predicate was SHATTERED into one dict slot per BARE-TYVAR argument, so `Char` was discarded at registration, the arg-0-only goal made both impls match, they are incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it. ⚠️ Pins the ROUTING half only: #1161 symptom 2 (an unsatisfiable `Ix a Bool =>` accepted at exit 0, context dropped from the scheme) is a different channel, still OPEN, pinned at test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
+s3-nary-sig-constraint-structured-arg.mdk|§3 the same judgement with a STRUCTURED predicate argument, `Ix a (List b) =>`: the goal `Ix Int (List Char)` again matches a singleton, 222. THE ONLY DEFENCE against the substitution half of the #1161 fix -- the stored vector lives in the SIGNATURE`s instantiation vars, so a top-level-only substitution leaves the interior `b` of `List b` a stale signature var, `matchTyMonos` fails against BOTH ground heads, and an EMPTY candidate set degrades to first-declared (measured during scoping: 222 -> 111). ⚠️ F-3c (#1155) structurally CANNOT cover this class: `pickMostSpecificEntry []` returns None rather than taking the ambiguity arm, so an empty candidate set stays silently first-match even after that arm goes loud|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|222|
 s9-vector-valued-entailment-rejected.mdk|§9 signature authority: the `Q_sig ⊩ P`ᵢ` side condition is VECTOR-VALUED -- `{Ix a b, Ix c d}` does not entail a joint `Ix a d` even though every ARGUMENT appears. The row that separates a real n-ary obligation from #607`s two single-param facts|REJECT|REJECT|REJECT|NONE||T-MISSING-CONSTRAINT'
 
 # ── Section 2 table: exact `medaka check` scheme lines ────────────────────────
@@ -328,7 +330,9 @@ s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl
 s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 1/3: the general impl IS emitted -- so it was not DCE`d away, and its absence from the call sites below is a selection decision rather than a missing definition|HAS|define i64 @mdk_impl___none___tag\(
 s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 2/3: no call to the general impl exists anywhere in the program, though two of the three goals match ONLY it|LACKS|call i64 @mdk_impl___none___tag\(
 s3-min-fully-general-sibling.mdk|#1128 MECHANISM PIN 3/3: the calls that DO exist go to the `Box Int` impl. Without this the row`s own label ("all three sites lower to the same direct call") was UNASSERTED -- a change routing all three through some THIRD symbol while leaving the general impl uncalled would have kept the row green under a false label (adversarial review F1)|HAS|call i64 @mdk_impl_Box_tag\(
-s8-i1-dict-param-order.mdk|§8 I1 ORDER, structural half: a TWO-predicate binding must abstract FOUR parameters (2 dicts + 2 values). The value 503 alone cannot see a count change that unification happens to absorb|HAS|^define i64 @mdk_s8_i1_dict_param_order__pair2\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\)'
+s8-i1-dict-param-order.mdk|§8 I1 ORDER, structural half: a TWO-predicate binding must abstract FOUR parameters (2 dicts + 2 values). The value 503 alone cannot see a count change that unification happens to absorb|HAS|^define i64 @mdk_s8_i1_dict_param_order__pair2\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\)
+s3-nary-sig-constraint-goal-vector.mdk|#1161 ARITY-NEUTRALITY PIN. Recording the predicate`s ARGUMENT VECTOR must not move emitted dict arity -- that is the property the whole F-3a-ii design rests on (the vector table is SLOT-PARALLEL to funConstraintsRef, never inside it, so dictArityOf/dictPass/scopeArities are untouched). `Ix a Char => a -> Int` shatters into ONE bare-tyvar slot, so `useIx` abstracts 1 dict + 1 value = arity 2. NO behavioural assertion can see this: promoting the predicate to a joint dict slot would print the same 222|HAS|^define i64 @mdk_s3_nary_sig_constraint_goal_vector__useIx\(i64 %arg0, i64 %arg1\)
+s3-nary-sig-constraint-structured-arg.mdk|#1161 ARITY-NEUTRALITY PIN, structured half: `Ix a (List b) =>` still shatters into exactly ONE slot -- `b` occurs only INSIDE `List b`, so it is not a bare-tyvar argument and gets no slot of its own -- giving 1 dict + 2 values = arity 3. Guards the sibling mistake to the one above: giving every tyvar MENTIONED in a predicate a slot, rather than every bare-tyvar ARGUMENT|HAS|^define i64 @mdk_s3_nary_sig_constraint_structured_arg__useIx\(i64 %arg0, i64 %arg1, i64 %arg2\)'
 
 # ── Coverage self-audit ──────────────────────────────────────────────────────
 # Every top-level fixture unit (a .mdk file, or a directory) in FIXDIR must
@@ -622,11 +626,29 @@ done
 # deleted header warned about: a must-fail row asserts the bug STILL
 # REPRODUCES and cannot coexist with a row asserting it is fixed.
 #
-# ⚠️ Still OPEN and NOT covered by that fixture: #1161, the same defect on the
-# top-level `=>`-constrained-call leg (`useIx : Ix a Char => a -> Int`), which
-# has no goal vector to thread because the dict slots there are shattered one
-# per tyvar. It is not pinned in this corpus because a fixture for it would be
-# a must-fail row, not a dict-semantics row.
+# ⚠️ CORRECTED 2026-07-31 (F-3a-ii). This paragraph used to say #1161 -- the same
+# defect on the top-level `=>`-constrained-call leg
+# (`useIx : Ix a Char => a -> Int`) -- "has no goal vector to thread because the
+# dict slots there are shattered one per tyvar", and was therefore unpinnable
+# here. BOTH HALVES WERE WRONG, and the claim was load-bearing for anyone
+# scoping the fix:
+#   * There IS a goal vector. It is built from the SIGNATURE at registration
+#     (`Ix a Char` at `a := Int` is `[Int, Char]`); what the old code did was
+#     DISCARD every constraint argument that was not a bare type variable
+#     before the dict slot was recorded, not fail to have one.
+#   * Recording it does NOT require unshattering the dict slots. Storing the
+#     vector in a table SLOT-PARALLEL to `funConstraintsRef` (rather than inside
+#     it) widens only the GOAL each slot is selected with, leaving emitted dict
+#     arity untouched -- so the shape is an ordinary dict-semantics row, graded
+#     on its value, not a must-fail row.
+# #1161's ROUTING half is now FIXED and lives here as
+# `s3-nary-sig-constraint-goal-vector.mdk` (plus its structured sibling),
+# graded on value by Section 1, on arity-neutrality by Section 3 and on
+# order-freedom here. Its OBLIGATION half -- an unsatisfiable `Ix a Bool =>`
+# accepted at exit 0, and the context dropped from the displayed scheme -- is a
+# different channel (`declaredSchemeOblsFor` -> `declaredOblOne` ->
+# `constraintArgMonos`, whose payload is ids-only) and is STILL OPEN, pinned at
+# test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
 echo
 echo '=== 4. declaration-order permutation (DICT §3 order-freedom; #1154/#1155) ==='
 
