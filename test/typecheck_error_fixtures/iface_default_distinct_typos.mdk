@@ -1,0 +1,31 @@
+-- issue 1146 (PR2) — the CONTROL for iface_default_dedup_cascade.mdk.
+--
+-- Identical to that file except for one field name: m2 misspells `name` instead of
+-- misspelling `age` a second time.  The two bodies are therefore still structurally
+-- identical, still both wrong, still both gated by S1/S2 — the ONLY thing that
+-- changes is that their two rendered messages are no longer equal, so dedup does not
+-- fire.  That isolates message equality as the single variable behind the asymmetry
+-- the sibling fixture pins.
+--
+-- EXPECTED VALUE, DERIVED FROM ERROR-QUALITY.md §3: two independent root causes, two
+-- diagnostics, each naming its own misspelled field and its own suggestion (dim R=2),
+-- and NO `Method 'm1'`/`Method 'm2'` follow-on for either (dim X=2) — both bodies
+-- detected an error, so both boundary unifies are suppressed, symmetrically.
+--
+-- This output is UNCHANGED by issue 1146 PR2 in either direction, which is the point:
+-- PR2 makes the deduped case behave like this one, rather than making this one behave
+-- like the deduped case.  If a future change ever suppresses a diagnostic here, the
+-- gates were made to fire on something other than "an error was detected".
+data Rec = { age : Int, name : Int }
+
+r : Rec
+r = Rec { age = 1, name = 2 }
+
+toB : Int -> Bool
+toB _ = True
+
+interface Dup a where
+  m1 : a -> Int
+  m1 _ = toB r.aeg
+  m2 : a -> Int
+  m2 _ = toB r.nmae

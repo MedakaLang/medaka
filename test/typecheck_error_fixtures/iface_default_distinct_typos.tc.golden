@@ -1,0 +1,2 @@
+TYPE ERROR: Field 'aeg' does not belong to record 'Rec'. Did you mean 'age'?
+TYPE ERROR: Field 'nmae' does not belong to record 'Rec'. Did you mean 'name'?

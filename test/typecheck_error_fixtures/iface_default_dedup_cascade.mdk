@@ -1,0 +1,66 @@
+-- issue 1146 (PR2) — conformance fixture for ERROR-QUALITY.md §6, dim R
+-- ("Pinpoints the single root cause; no cascade") at gates S1/S2 of
+-- compiler/types/typecheck.mdk (inferDefaultMethod / inferDefaultMethodBody).
+--
+-- THE SHAPE.  Two default bodies that are byte-identical bar the method name, each
+-- with the SAME field typo, so each renders the SAME diagnostic text.  Everything
+-- else about them is identical too, which is what makes "two rendered strings are
+-- equal" the single variable — see iface_default_distinct_typos.mdk, the control that
+-- differs from this file in exactly one field name (m2 misspells `name` instead of
+-- misspelling `age` a second time).
+--
+-- WHAT IT PINNED BEFORE THE FIX (asymmetric verdicts on identical bodies):
+--   Field 'aeg' does not belong to record 'Rec'. Did you mean 'age'?   <- m1 only
+--   Method 'm2': expected type Int but got Bool                        <- m2 only
+-- m1's error was STORED, so its gate saw the store and suppressed the outer unify.
+-- m2's identical message was DEDUPED, nothing was stored, the gate read the
+-- diagnostic list, saw no delta, concluded the body was CLEAN, and ran the unify —
+-- which reports the method signature (a cascade victim) instead of the typo (the
+-- root cause).  dim R = 0 for that second line, and dim X = 0 for the pair.
+--
+-- EXPECTED VALUE, DERIVED FROM THE CLAUSE (not captured from the engine): the whole
+-- program has exactly one root cause visible to the reader — the misspelled field —
+-- so dim R/X admit exactly one diagnostic, the one that names it and suggests `age`.
+-- The `Method 'm2'` line must NOT appear: nothing is wrong with m2's signature, and
+-- its type only mismatches because the poisoned field access made the body Bool.
+--
+-- ⚠️ m2's own typo is silently unreported, and that is a DIFFERENT, pre-existing cost
+-- (message-keyed dedup under-reports a second occurrence at another loc — see the
+-- note at typecheck.mdk's `pushTypeErrorOnceAt`, and #480).  Fixing the dedup RELATION
+-- is deliberately out of scope for issue 1146; this fixture pins that the dedup
+-- decision no longer changes an inference VERDICT, not that dedup is right.
+--
+-- ON THE ORDINARY PATH the gate can never turn `rejected` into `accepted`: a dedup
+-- short-circuit fires only when an identical message is ALREADY in this module's
+-- channel, so a diagnostic is stored, `typeErrorsSticky` is armed, and the program is
+-- rejected either way.
+--
+-- ⚠️ That is scoped, and the exception is `discoverPromotedModules` — a SPECULATIVE
+-- joint typecheck whose diagnostics are deliberately discarded (it restores the
+-- channel, the sticky flag AND the counter afterwards).  All three gates run inside
+-- that window, so a detection there is un-stored, un-armed and un-counted and rejects
+-- nothing; what survives is the discovery result (`promoted` + the two `crossRun`
+-- constraint snapshots).  It compounds with S1's gated block not being
+-- diagnostics-only: that block's `unify expected2 actualTy` mutates union-find state
+-- `defaultBodyLocalNum` later reads (#873, body-local `Num` grounding → impl
+-- selection), so skipping it changes dispatch, and "harmless because the program is
+-- rejected anyway" is exactly the premise the speculative window removes.
+-- NOT DEMONSTRATED — it needs a spurious duplicate-message error inside a default
+-- body during the joint flatten, which no sweep has produced — and it WIDENS a hazard
+-- the old `listLen` keying had identically rather than introducing one.  Full
+-- statement: compiler/ERROR-QUALITY.md §6.
+--
+-- Prelude-free on purpose (`toB`, not `not`), so BOTH drivers grade it.
+data Rec = { age : Int, name : Int }
+
+r : Rec
+r = Rec { age = 1, name = 2 }
+
+toB : Int -> Bool
+toB _ = True
+
+interface Dup a where
+  m1 : a -> Int
+  m1 _ = toB r.aeg
+  m2 : a -> Int
+  m2 _ = toB r.aeg

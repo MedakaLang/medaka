@@ -334,6 +334,89 @@ a real span. `help`/`fix` are the follow-on wins and can land per-category.
 
 ---
 
+## 6. Per-clause enforcement table (clause → site → keying assumption)
+
+`TYPECHECK-TARGET-ARCHITECTURE.md` **L5** — *"the spec is executable"* — requires
+every normative clause here to have (a) a row naming the **site** that enforces it
+and the **keying assumption** that site relies on, and (b) at least one conformance
+fixture whose expected value was **derived from the clause by hand**, never captured
+from an engine. *A rule with no site is an unimplemented clause; a site with no
+clause is an owed spec paragraph.* This section starts the table with the rows that
+were owed: three inference gates that had a **site but no clause**, because each
+justified itself by citing the OCaml reference compiler's raise-on-first behaviour —
+and that compiler was **removed 2026-06-26**, so the citation named nothing.
+
+The rubric in §3 is the clause source. Rows are added as sites are audited; absence
+of a row is *"not yet audited"*, not *"unenforced"*.
+
+| Clause | Site | Keying assumption | Conformance fixture |
+|--------|------|-------------------|---------------------|
+| **R** — pinpoints the single root cause; no cascade | **S1** `inferDefaultMethod` (`compiler/types/typecheck.mdk`) — skips the outer `unify expected2 actualTy` + `checkImplEffVarRigidity` when the default body detected an error. ⚠️ **NOT diagnostics-only** — see "S1's gated block mutates inference state" below | "an error was DETECTED in this region", read off `perRun.errorsDetected` through `erredDuring`. **Not** "the diagnostic list grew" — see below | `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk` — pins the shared keying, **not** S1's gate specifically (see the coverage note below) |
+| **R** + **X** — exactly one diagnostic per root cause | **S2** `inferDefaultMethodBody` — skips the launder query + the method-boundary `unify expectedTy actualTy` when `inferClauses` detected an error | same counter, same combinator | `iface_default_dedup_cascade.mdk` (the **skipping** arm); `default_body_type_error.mdk` pins the **non-skipping** arm — see the coverage note below |
+| **X** — one root cause must not emit a storm of follow-ons | **S3** `inferDefaultMethodBody` — on a detected method-boundary mismatch, `wRestore`s `implObls` to the pre-body snapshot, dropping the body's induced obligations (`(5 : Bool)` ⇒ `Num Bool`) | same counter; plus `currentMethodMismatch = Some mname` across that one unify, which selects the specialized `Method '<m>': …` line (dims **C**/**J**) | `default_body_type_error.mdk` |
+
+**Coverage note — what these fixtures actually discriminate.** `default_body_type_error.tc.golden`
+is `TYPE ERROR: Method 'greetDefault': expected type Int but got Bool`, and that line is
+emitted from **inside** the block S2 gates (`typeMismatchReport`'s `Some mname` arm, reached
+only through the `unify` S2 skips). Its presence therefore **proves S2's gate did not fire**
+for that fixture: it pins the non-skipping arm, and it is a genuine conformance fixture for
+**S3** (delete the `wRestore implObls` and `No impl of Num for Bool` reappears under the real
+error) and for dim **X**. Do not read it as covering S2's suppression.
+`iface_default_dedup_cascade.mdk` covers the **keying assumption** shared by all three rows —
+it moves iff a dedup decision reaches a control decision — but the observable that moves in it
+is emitted by **S2's** unify, and S1's region errs for both methods in base and head alike, so
+it does not on its own discriminate S1's gate. Demonstrating that needs a compiler built with
+S1 removed; **nobody has built one**, so no such claim is made here.
+
+**The keying assumption is the load-bearing column, and it is why issue 1146 exists.**
+Until PR 1 these three gates keyed on `listLen perRun.typeErrors` — the *length of the
+diagnostic list*. That makes a **presentation** decision (how many diagnostics are
+worth printing) decide a **control** question (did this region typecheck), so a dedup
+rule, a rendering change or a loc-selection change can silently flip an inference
+branch, and a gated `unify` that does not run is a type error that is not caught. PR 1
+moved them onto an occurrence counter; PR 2 made that counter count errors **detected**
+rather than errors **stored**, so a message-text dedup can no longer reach any of these
+three rows. **A future change that re-derives any of these gates from the diagnostic
+list — including "just check whether the list grew" — violates this column**, and its
+observable symptom is exactly the fixture above: two default bodies that render the
+same message get *asymmetric* verdicts.
+
+Note what these rows do and do not license. **On the ordinary path** they suppress a
+**follow-on** diagnostic for a root cause the compiler has already detected, and they
+never suppress a *rejection*: a gated region that detected an error has stored at least
+one diagnostic (dedup only fires when an identical message is already in this module's
+channel), `typeErrorsSticky` is armed, so the program is rejected either way and the
+blast radius of a wrong verdict is **which** diagnostic the reader sees, not whether the
+program compiles.
+
+⚠️ **That argument is scoped to the ordinary path, and there is exactly one place it does
+not hold.** `discoverPromotedModules` (`compiler/types/typecheck.mdk`) runs a
+**speculative joint typecheck whose diagnostics are deliberately thrown away**: it
+snapshots the channel, the sticky flag and the counter, and afterwards restores all three
+— `resetState ()` → `setRef typeErrorsSticky savedSticky` → `wRestore … savedErrSnap` →
+`setRef … errorsDetected savedDetected`. All three gates above run *inside* that window,
+so a detection there is un-stored, un-armed and un-counted, and **the program is not
+rejected on account of it.** What survives the window is the discovery result — `promoted`
+plus the two `crossRun` constraint snapshots — not a diagnostic. So inside the speculative
+pass a gate that fires changes what discovery concludes, and the "rejected either way"
+premise is unavailable.
+
+**S1's gated block mutates inference state, not just the report.** It runs
+`unify expected2 actualTy`, and `defaultBodyLocalNum` later reads `expected2` *through the
+union-find* — its documented job (#873) is grounding body-local `Num` vars so the right
+impl is selected. Skipping the unify therefore changes grounding, hence dispatch. Outside
+the speculative pass that is harmless *because* the program is rejected; **inside it, that
+reasoning does not apply**, and the two facts compound.
+
+Reachability is **not demonstrated**: it needs a spurious duplicate-message error inside an
+interface default body during the joint flatten, and no sweep has produced one. It is also
+a **widening of a hazard the `listLen` keying already had** — the old gate was equally blind
+inside that window — not a class this table introduces. It is recorded here because an
+unqualified "never whether the program compiles" is the kind of sentence a later change
+would rely on.
+
+---
+
 ## Open decisions
 
 These need a human call before implementation; do not decide unilaterally.

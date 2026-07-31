@@ -1,5 +1,5 @@
 # META
-source_lines=18815
+source_lines=18882
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2893,26 +2893,30 @@ tcFix (TcDiag _ _ _ _ _ f) = f
 -- global last-entered loc afterwards.  `pushTypeError` captures `currentLoc.value`
 -- so locs don't drift as inference continues past the error.  severity = 1.
 --
--- issue 1146 PR1 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
--- is OUTPUT and lives in `perRun.typeErrors`, now a `Windowed TcDiag` like its
+-- issue 1146 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
+-- is OUTPUT and lives in `perRun.typeErrors`, a `Windowed TcDiag` like its
 -- obligation-channel siblings (see `Windowed` above — `wPush`/`wReset`/`wRestore` are
 -- its sole WRITERS, so its list and its count cannot drift apart).  "An error
 -- OCCURRED" is CONTROL and lives in `perRun.errorsDetected`, a monotone-per-module
 -- occurrence counter that is not a diagnostics channel at all.
 --
--- ⚠️ Scope that precisely.  No site polls the diagnostic list's LENGTH any more — the
--- three inference sites that used to now poll the counter, through `erredDuring`.  But
--- the list is still polled by CONTENT, in the three dedup helpers below (`anyList
--- (e => tcMsg e == msg) …`), which decide whether to STORE from rendered message text.
--- So one diagnostics decision can still reach a control decision under PR1, by exactly
--- that route: a dedup short-circuit stores nothing, so `recordTypeError` never runs, so
--- the counter is not bumped, so `erredDuring` answers False and a gated `unify` runs
--- that a non-deduped push would have suppressed.  That route is PRE-EXISTING and
--- unchanged here — the `listLen` gate it replaces had it identically — and closing it
--- is PR2's whole subject.
+-- The counter counts errors DETECTED, not errors STORED (PR2).  The three dedup
+-- helpers below still read the list by CONTENT to decide whether to store, but a
+-- short-circuit bumps the counter anyway (`noteTypeErrorDetected`), so "was an error
+-- detected here" and "is this diagnostic worth printing" are now independent
+-- judgments.  That is the property the whole split exists for: NO diagnostics
+-- decision — dedup key, rendering, ordering, loc selection, code selection — can
+-- reach a control decision, because the only thing control reads is a count of
+-- detections and none of those choices changes whether a detection happened.
 --
--- See `recordTypeError` (the sole writer of both) and `erredDuring` (the sole reader
--- of the counter) below.
+-- PR1 stopped short of this: it bumped only on a real store, so the counter's delta
+-- equalled `listLen typeErrors`'s delta exactly (which is what let PR1 land without
+-- moving a golden), and a deduped push therefore answered `erredDuring` False and let
+-- a gated `unify` run that a non-deduped push would have suppressed.  PR2 gives that
+-- equality up on purpose; it is no longer an invariant and must not be restored.
+--
+-- See `recordTypeError` / `noteTypeErrorDetected` (the counter's sole writers) and
+-- `erredDuring` (its sole reader) below.
 
 -- G1 (SOUNDNESS): a STICKY mirror of typeErrors that resetState does NOT clear.
 -- The multi-module elaborate path (elaborateModules → checkModuleFullImpl) calls
@@ -2941,24 +2945,23 @@ useFastIfaceMethodTy = Ref False
 export hadTypeErrors : Unit -> Bool
 hadTypeErrors _ = typeErrorsSticky.value
 
--- issue 1146 PR1 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
+-- issue 1146 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
 -- or not, helper-mediated or not, funnels through here, so the three facts one push
 -- establishes cannot drift apart at one site and not another: the diagnostic is
 -- STORED, the build/run sticky gate is ARMED, and an error OCCURRED.
 --
--- `perRun.errorsDetected` is INCREMENTED here and nowhere else.  That is what makes
--- its delta over any region IDENTICALLY EQUAL to that region's `listLen typeErrors`
--- delta — the property PR1 is verified against (`capture_goldens.sh --check` empty),
--- and the reason the counter could be introduced without moving a single golden.
--- PR2 deliberately breaks the equality by bumping on the dedup short-circuit too
--- (counting DETECTED rather than STORED errors); that is a behaviour change and is
--- adjudicated separately.
+-- ⚠️ It is NOT the sole writer of `perRun.errorsDetected` — that would put the
+-- counter back in step with the list, which is exactly what PR2 removed.  The counter
+-- is bumped by `noteTypeErrorDetected` below, from here AND from each dedup
+-- short-circuit, so it counts errors DETECTED rather than errors STORED.  Do not
+-- "restore" the equality: a region containing only a deduped push must still answer
+-- `erredDuring` True, or a diagnostics decision reaches a control decision again.
 --
--- ⚠️ The equality carries ONE standing obligation, and it is not discharged here:
--- anywhere the channel is ROLLED BACK, this counter must be rolled back WITH it, or a
--- region straddling the rollback would see the two disagree.  There is exactly one
--- such site today — `discoverPromotedModules`, which snapshots both and restores both.
--- Any future rollback of `typeErrors` owes the same pairing.
+-- ⚠️ ONE standing obligation, and it is not discharged here: anywhere the channel is
+-- ROLLED BACK, this counter must be rolled back WITH it, or a region straddling the
+-- rollback would see a detection that no longer has a diagnostic behind it.  There is
+-- exactly one such site today — `discoverPromotedModules`, which snapshots both and
+-- restores both.  Any future rollback of `typeErrors` owes the same pairing.
 --
 -- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
 -- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
@@ -2967,10 +2970,21 @@ hadTypeErrors _ = typeErrorsSticky.value
 recordTypeError : TcDiag -> Unit
 recordTypeError d =
   let _ = setRef typeErrorsSticky True
-  let _ = setRef perRun.value.errorsDetected (perRun.value.errorsDetected.value + 1)
+  let _ = noteTypeErrorDetected ()
   wPush perRun.value.typeErrors d
 
--- issue 1146 PR1 — THE polling convention for "did region [act] report an error".
+-- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
+-- detected" is written in one place whether or not the diagnostic is stored.
+-- Called from `recordTypeError` (stored) and from all three dedup short-circuits
+-- (detected, suppressed as a duplicate).  It deliberately does NOT arm
+-- `typeErrorsSticky`: a short-circuit means an identical message is already in the
+-- channel, which armed it at its own push, and only `resetTypeErrorsSticky` (once per
+-- build/run, before any inference) clears it.
+noteTypeErrorDetected : Unit -> Unit
+noteTypeErrorDetected _ =
+  setRef perRun.value.errorsDetected (perRun.value.errorsDetected.value + 1)
+
+-- issue 1146 — THE polling convention for "did region [act] DETECT an error".
 --
 -- Three inference sites used to answer that by measuring `listLen typeErrors` before
 -- and after the region.  That made the diagnostic accumulator load-bearing CONTROL
@@ -2978,16 +2992,13 @@ recordTypeError d =
 -- change, a rendering change, a loc-selection change — could silently flip an
 -- inference branch, and a gated `unify` that does not run is a type error that is not
 -- caught.  They now read the occurrence COUNTER, through this ONE combinator, so the
--- judgment is implemented once and no LENGTH-of-diagnostics decision — no dedup-key,
--- rendering, ordering or loc-selection change that moves HOW MANY entries are stored —
--- reaches a control decision.
+-- judgment is implemented once and no diagnostics decision reaches a control decision:
+-- the counter records DETECTIONS, and no dedup, rendering, ordering, loc-selection or
+-- code-selection choice changes whether an error was detected.
 --
--- ⚠️ It is NOT yet true that no diagnostics decision at all can.  The dedup helpers
--- still poll the list by CONTENT to decide whether to store, so a short-circuit stores
--- nothing, the counter is not bumped, and this answers False where a non-deduped push
--- would have answered True.  That route is PRE-EXISTING and unchanged by PR1 (the
--- `listLen` gate it replaces had it identically); PR2 closes it by bumping the counter
--- on the short-circuit too.  See the accumulator header above.
+-- Read the answer as "an error was detected in [act]", NOT as "[act] added a
+-- diagnostic" — since PR2 those differ, and the difference is the point.  Do not
+-- re-derive it from `typeErrors`; that reintroduces the coupling this removes.
 --
 -- ⚠️ Medaka is STRICT, so [act] must be a thunk: `erredDuring (_ => work)`.  Passing
 -- the region's VALUE would evaluate it before the first read and always answer False.
@@ -3011,15 +3022,20 @@ pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorAt code loc msg =
   recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
 
--- #11 soundness: push an obligation error only if the SAME message isn't already
+-- #11 soundness: REPORT an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
 -- (the original deferred obligation, once it grounds) and checkCallObligations (the
--- call-site instantiation) — the oracle raises ONE error per missing impl, so dedup
--- by message to keep native == oracle (one TYPE ERROR line).
+-- call-site instantiation); ERROR-QUALITY dim R/X want one diagnostic per root cause,
+-- so the second detection is suppressed from the REPORT.
+--
+-- issue 1146 PR2: suppressed from the report, NOT from the record of what happened —
+-- the short-circuit still calls `noteTypeErrorDetected`.  Dedup is a presentation
+-- judgment keyed on rendered text; letting it also decide "did an error occur here"
+-- is what made a message-rendering change able to flip an inference branch.
 pushTypeErrorOnce : String -> String -> Unit
 pushTypeErrorOnce code msg =
   if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
-    ()
+    noteTypeErrorDetected ()
   else
     pushTypeError code msg
 
@@ -3028,11 +3044,12 @@ pushTypeErrorOnce code msg =
 -- check — inference has long since left the offending ELoc).  The loc was
 -- snapshotted into the obligation tuple at the record site.  `None` falls back
 -- to the live `currentLoc` (the old behaviour) so an obligation that never
--- captured a span is unchanged.
+-- captured a span is unchanged.  issue 1146 PR2: the short-circuit bumps the
+-- occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt code loc msg =
   if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
-    ()
+    noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
 
@@ -3042,10 +3059,12 @@ pushTypeErrorOnceAt code loc msg =
 -- message-keyed side channel.  `Fix`/`Diag` live in driver/diagnostics.mdk (which
 -- imports this module), so the fix is carried as a plain (Loc, String)
 -- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
+-- issue 1146 PR2: the short-circuit bumps the occurrence counter (see
+-- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 pushTypeErrorHelpFixAt code loc msg help fix =
   if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
-    ()
+    noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg (Some help) fix)
 
@@ -3538,8 +3557,9 @@ typeMismatchInDo a b doLoc
 -- issue 1146 PR1: this is the SIXTH push site — it open-coded the cons + sticky set
 -- rather than going through one of the five named `pushTypeError*` helpers, so it is
 -- invisible to a grep for them.  It now routes through `recordTypeError` like every
--- other push, which is what keeps the occurrence counter's delta equal to the
--- channel's length delta on the `do`-requires-a-monad path too.
+-- other push, which is what makes this path's detection reach the counter too.
+-- (It does NOT re-establish "counter delta == list-length delta": PR2 abolished that
+-- equality on purpose — see `recordTypeError`.)
 recordDoMonadError : Loc -> Unit
 recordDoMonadError doLoc =
   let _ = setRef currentDoOrigin None
@@ -9632,17 +9652,36 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- restores land on FRESH cells; wRestore reinstates the channel's list AND its
   -- count, where the old two-`setRef` form could only do the list.
   --
-  -- ⚠️ THE COUNTER IS ROLLED BACK WITH THE CHANNEL, and must stay that way.  This is
-  -- the ONLY site that rolls `typeErrors` back, and `freshPerRun` re-mints
-  -- `errorsDetected` to 0 — so restoring only the channel would leave
-  -- `typeErrors.n == savedN` beside `errorsDetected == 0`: the single place their
-  -- deltas could disagree, and the one exception to the equality `recordTypeError`
-  -- documents.  Nothing observes it today (every `erredDuring` region lives inside
-  -- inferDefaultMethod/inferDefaultMethodBody, and `resetState`'s callers are
+  -- ⚠️ THE COUNTER IS ROLLED BACK WITH THE CHANNEL, and must stay that way — the
+  -- standing obligation `recordTypeError` states.  This is the ONLY site that rolls
+  -- `typeErrors` back, and `freshPerRun` re-mints `errorsDetected` to 0, so restoring
+  -- only the channel would leave `typeErrors.n == savedN` beside
+  -- `errorsDetected == 0`: a region straddling this would see the speculative pass's
+  -- detections vanish.  Nothing observes it today (every `erredDuring` region lives
+  -- inside inferDefaultMethod/inferDefaultMethodBody, and `resetState`'s callers are
   -- top-of-pipeline drivers unreachable from inference, so no region straddles this
   -- re-mint) — but the `listLen typeErrors` signal this replaces WAS restored here,
-  -- and PR2 makes the counter the sole control signal with no list to fall back on.
+  -- and the counter is now the SOLE control signal with no list to fall back on.
   -- Keep the pair in step rather than relying on the straddle staying impossible.
+  --
+  -- `typeErrorsSticky` is restored too (below), which is what keeps dedup honest ACROSS
+  -- this rollback: a short-circuit can never fire against a message that was rolled out
+  -- of the channel, so "a detection implies a stored diagnostic implies a rejected
+  -- program" is intact for everything AFTER the window.
+  --
+  -- ⚠️ INSIDE the window it does not hold, and that is deliberate — this whole pass
+  -- exists to typecheck speculatively and DISCARD the diagnostics.  A gate that fires
+  -- in here (S1/S2/S3 all run within it, via the joint typecheck's default-method
+  -- bodies) is un-stored, un-armed and un-counted afterwards, so it rejects nothing;
+  -- what survives is the discovery result, `promoted` + the two `crossRun` snapshots.
+  -- That matters because S1's gated block is NOT diagnostics-only: its
+  -- `unify expected2 actualTy` mutates union-find state `defaultBodyLocalNum` later
+  -- reads (#873), so skipping it moves grounding, hence impl selection.  Outside this
+  -- window that is harmless because the program is rejected; here that premise is
+  -- unavailable.  NOT DEMONSTRATED (it needs a spurious duplicate-message error inside
+  -- a default body during the joint flatten, which no sweep has produced), and it
+  -- WIDENS a hazard the pre-1146 `listLen` keying had identically rather than
+  -- introducing one.  Full statement: compiler/ERROR-QUALITY.md §6.
   let savedErrSnap = wSnapshot perRun.value.typeErrors
   let savedDetected = perRun.value.errorsDetected.value
   -- Drop the prelude/core defs AND signatures shadowed by a same-named user-module
@@ -13564,8 +13603,25 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 -- Unconstrained arm (empty ids): method has no method-level constraints (e.g. Ord.lt):
 --   Instantiate scheme, infer body, unify — same but no dict registration.
 --
--- Double-error guard: snapshot typeErrors length before body inference; skip the
--- outer unify if new errors were added (matches the oracle's single-error raise).
+-- Double-error guard (GATE S1).  If the body itself detected a type error, skip the
+-- outer unify: the body's own error IS the root cause, and unifying its poisoned
+-- result against the declared type would add a `Method '<m>': …` line that blames the
+-- victim.  NORMATIVE HOME: `compiler/ERROR-QUALITY.md` §3 dim R ("Pinpoints the single
+-- root cause; no cascade") and its §6 enforcement table, which names this site.
+-- ⚠️ It used to cite "the oracle's single-error raise" instead.  That compiler was
+-- removed 2026-06-26, so the citation named nothing; the rule is ours now, and its
+-- conformance fixture is `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk`
+-- (which pins the shared KEYING; it does not on its own discriminate this gate — that
+-- would need a compiler built with S1 removed, and nobody has built one).
+--
+-- ⚠️ THE GATED BLOCK IS NOT DIAGNOSTICS-ONLY.  `unify expected2 actualTy` mutates
+-- union-find state that `defaultBodyLocalNum` reads below — its job (#873) is grounding
+-- body-local `Num` vars so the right impl is selected — so skipping it moves GROUNDING,
+-- hence dispatch, not just what prints.  On the ordinary path that is harmless because
+-- a detection here means the program is rejected anyway; inside
+-- `discoverPromotedModules`'s speculative pass that premise is unavailable (see there).
+-- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
+-- diagnostic list (issue 1146).
 inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
@@ -13598,7 +13654,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- solution through [effMap2] (contortion #3; 2c retires this rebuild).
   let effMap2 = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn dscope mty))
   let expected2 = fromAstTypeE effMap2 (freshTvMap (removeAllS (rowArgNamesIn dscope mty) (dedup (tyVarNames mty)))) mty
-  -- issue 1146: "did the body report an error" is a CONTROL judgment, so it is read
+  -- issue 1146: "did the body DETECT an error" is a CONTROL judgment, so it is read
   -- off the occurrence counter, not off `listLen typeErrors`.  The region is the
   -- whole body inference — which is broader than any one unify, and is why no
   -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
@@ -13650,21 +13706,26 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   registerMethodDictSlots mname 0 ids (snd inst)
 inferDefaultMethod _ _ _ _ _ = ()
 
--- Infer a default method body against [expectedTy], suppressing the outer
--- unify if the body itself already pushed a type error (prevents duplicates
--- that would arise when the accumulating compiler differs from the oracle's
--- raise-on-first behaviour: oracle's TypeMismatch from inside `infer` never
--- reaches the outer `unify`, whereas compiler would report both).
+-- Infer a default method body against [expectedTy], suppressing this unify if the
+-- body itself already detected a type error (GATE S2).  Medaka ACCUMULATES rather
+-- than raising, so without the gate one root cause inside the body would be reported
+-- twice: once as itself and once as the shape mismatch it induces at the method
+-- boundary.  NORMATIVE HOME: `compiler/ERROR-QUALITY.md` §3 dim R (single root cause,
+-- no cascade) and dim X (exactly one diagnostic per root cause), tabulated in that
+-- file's §6.  ⚠️ This paragraph used to justify itself by "the oracle's raise-on-first
+-- behaviour"; that compiler was removed 2026-06-26 and the citation named nothing.
 --
--- C8b Gap 2: the outer unify runs with `currentMethodMismatch = Some mname` so a
--- leaf TypeMismatch reports the oracle's single specialized line
+-- C8b Gap 2 (GATE S3): the unify runs with `currentMethodMismatch = Some mname` so a
+-- leaf TypeMismatch reports the specialized single line
 -- `Method '<mname>': expected type <e> but got <a>` rather than a bare
--- `Type mismatch`.  When that unify pushed a mismatch, the body's own added
--- impl obligations are TRUNCATED back to the pre-body snapshot — the oracle's
--- `fail (MethodTypeMismatch …)` RAISES, so its later check_method_usages never
--- sees the body's `Num <wrong-type>` usage (e.g. `(5 : Bool)` ⇒ `Num Bool`);
--- dropping them here mirrors that single-error outcome instead of cascading a
--- spurious `No impl of Num for Bool`.
+-- `Type mismatch` — dim C (accurate diagnosis) plus dim J (the user's vocabulary is
+-- the method name, not two anonymous monotypes).  When that unify DID detect a
+-- mismatch, the body's own added impl obligations are TRUNCATED back to the pre-body
+-- snapshot: the method's type is already known wrong, so its body's induced
+-- obligations (e.g. `(5 : Bool)` ⇒ `Num Bool`) are cascade victims, and reporting
+-- them would add a spurious `No impl of Num for Bool` under the real error — dim X
+-- again.  All three gates read `perRun.errorsDetected` via `erredDuring`, never the
+-- diagnostic list (issue 1146).
 inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
 inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
   let oblSnapshot = wSnapshot perRun.value.implObls
@@ -13683,17 +13744,23 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
     let declArrows = allArrowEffs expectedTy
     let actualArrows = allArrowEffs actualTy
     let _ = setRef currentMethodMismatch (Some mname)
-    -- issue 1146: keyed on the UNIFY's error delta ONLY (the pre-unify walk kept its
-    -- own launder push out of this baseline by running before the region; the query
-    -- below runs after the unify, so the region is exactly this one unify, closed
-    -- before anything else can push).  The region is a THUNK because Medaka is
+    -- issue 1146: keyed on the UNIFY's detection delta ONLY (the pre-unify walk kept
+    -- its own launder push out of this baseline by running before the region; the
+    -- query below runs after the unify, so the region is exactly this one unify,
+    -- closed before anything else can push).  The region is a THUNK because Medaka is
     -- strict — the unify has to run between the counter's two reads.
+    --
+    -- The leaf mismatch this expects is pushed NON-deduped: `currentMethodMismatch`
+    -- is `Some mname` across the whole region, which selects typeMismatchReport's
+    -- first arm.  So the PR2 dedup bump does not change what this particular region
+    -- normally sees; it only makes the reading honest if some other deduped push ever
+    -- becomes reachable from inside a unify.
     let unifyErred = fst (erredDuring (_ => unify expectedTy actualTy))
     let _ = setRef currentMethodMismatch None
     let _ = match launderEscapeFromLog declArrows actualArrows (wWindow perRun.value.absorptions launderMark)
       [] => ()
       escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" defLoc (defaultEffectLaunderMsg subject escaping)
-    -- mismatch reported ⇒ restore the pre-body obligation list (drop the body's
+    -- mismatch detected ⇒ restore the pre-body obligation list (drop the body's
     -- own added `Num <wrong-type>` cascade, prepended at the front)
     if unifyErred then wRestore perRun.value.implObls oblSnapshot else ()
   actualTy
@@ -19384,7 +19451,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EFieldAccess (EVar "typeErrorsSticky") "value"))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
 (DFunDef false "erredDuring" ((PVar "act")) (EBlock (DoLet false false (PVar "before") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value")) (DoLet false false (PVar "result") (EApp (EVar "act") (ELit LUnit))) (DoExpr (ETuple (EBinOp "!=" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (EVar "before")) (EVar "result")))))
 (DTypeSig false "pushTypeError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
@@ -19392,11 +19461,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushTypeErrorAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig false "pushTypeErrorOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
+(DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
 (DTypeSig false "pushTypeErrorOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
 (DTypeSig false "pushTypeErrorHelpFixAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit")))))))
-(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
+(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
 (DTypeSig false "currentLoc" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "currentLoc" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "currentDoOrigin" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -23505,7 +23574,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "hadTypeErrors" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadTypeErrors" (PWild) (EFieldAccess (EVar "typeErrorsSticky") "value"))
 (DTypeSig false "recordTypeError" (TyFun (TyCon "TcDiag") (TyCon "Unit")))
-(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DFunDef false "recordTypeError" ((PVar "d")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "typeErrorsSticky")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "noteTypeErrorDetected") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors")) (EVar "d")))))
+(DTypeSig false "noteTypeErrorDetected" (TyFun (TyCon "Unit") (TyCon "Unit")))
+(DFunDef false "noteTypeErrorDetected" (PWild) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected")) (EBinOp "+" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (ELit (LInt 1)))))
 (DTypeSig false "erredDuring" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyTuple (TyCon "Bool") (TyVar "a"))))
 (DFunDef false "erredDuring" ((PVar "act")) (EBlock (DoLet false false (PVar "before") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value")) (DoLet false false (PVar "result") (EApp (EVar "act") (ELit LUnit))) (DoExpr (ETuple (EBinOp "!=" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "errorsDetected") "value") (EVar "before")) (EVar "result")))))
 (DTypeSig false "pushTypeError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
@@ -23513,11 +23584,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushTypeErrorAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "pushTypeErrorAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None"))))
 (DTypeSig false "pushTypeErrorOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
+(DFunDef false "pushTypeErrorOnce" ((PVar "code") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EApp (EVar "pushTypeError") (EVar "code")) (EVar "msg"))))
 (DTypeSig false "pushTypeErrorOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
+(DFunDef false "pushTypeErrorOnceAt" ((PVar "code") (PVar "loc") (PVar "msg")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EVar "None")) (EVar "None")))))
 (DTypeSig false "pushTypeErrorHelpFixAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))) (TyCon "Unit")))))))
-(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (ELit LUnit) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
+(DFunDef false "pushTypeErrorHelpFixAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help") (PVar "fix")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "e")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "noteTypeErrorDetected") (ELit LUnit)) (EApp (EVar "recordTypeError") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 1))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "msg")) (EApp (EVar "Some") (EVar "help"))) (EVar "fix")))))
 (DTypeSig false "currentLoc" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "currentLoc" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig false "currentDoOrigin" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Loc"))))
