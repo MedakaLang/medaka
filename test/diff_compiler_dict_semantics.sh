@@ -37,7 +37,7 @@
 # such a cell: both engines print the same WRONG number at exit 0.
 #
 # ###################################################################
-# # THREE ASSERTION SECTIONS, BECAUSE VERDICTS ARE NOT ENOUGH       #
+# # FOUR ASSERTION SECTIONS, BECAUSE VERDICTS ARE NOT ENOUGH        #
 # ###################################################################
 #   1. VERDICT + VALUE. `check`/`run`/`build` each ACCEPT or REJECT as the row
 #      specifies; where run and build both accept, their stdouts must be
@@ -57,6 +57,15 @@
 #      arity skew (§8 I1) -- both invisible from behaviour alone -- and it is
 #      what turned "I think the wrong impl is selected" into
 #      `call @mdk_impl_Box_tag` on the screen for the S0 below.
+#   4. DECLARATION-ORDER PERMUTATION. Sections 1-3 all pin ONE declaration
+#      order per fixture and pass BY CONSTRUCTION for an ACCEPTANCE WIDENING --
+#      every golden covers the order it was captured at. For any fixture with
+#      >=2 `impl` blocks of one interface, reversing exactly those blocks must
+#      not change `check`'s verdict, `run`'s stdout, or `build`'s stdout. This
+#      needs no ground truth (DICT §3: selection is never "a function of search
+#      order, declaration order, or resolution position"), which is what makes
+#      it the one section that can catch "the winner is decided by order"
+#      without knowing the right answer -- #1154's exact shape.
 #
 # ⚠️ #616 item 4 asks for the TYPED, DICT-PASSED CORE IR
 # (`compiler/entries/core_ir_typed_modules_dump_main.mdk`). Section 3 uses
@@ -87,6 +96,11 @@
 #   ⚠️ This is the row the whole gate justifies: `run` and `build` share the
 #   entire front end, so their DISAGREEMENT is a real observation about codegen,
 #   and no existing gate drives this shape.
+#   🔗 Section 4 (declaration-order permutation) finds a SECOND symptom of this
+#   same mechanism: reversing the fixture's three `D` impl blocks flips the
+#   BUILD arm from the wrong 20 to the right 77 while `run` stays 77/77 either
+#   way -- i.e. #1127 is ALSO order-sensitive on the path Section 4 grades.
+#   Pinned there as a KNOWN-BAD permutation row rather than silently excluded.
 # * s3-min-fully-general-sibling  -- #1128 (OPEN, S0 `verified`). SILENT
 #   WRONGNESS ON BOTH ENGINES. A fully
 #   general `impl Tag a` beside `impl Tag (Box Int)` makes EVERY `Box`-headed
@@ -157,8 +171,25 @@
 # The corpus covers §1, §2 (method-level `Q_m`), §3 (selection/`assum`/`super`/W1/
 # W3-type-axis incl. the DEFAULT-body half), §4 (`gen`/`gen-rec`/`gen-sig`), §5
 # (result + phantom + arg-tag), §6/§6.1 (C1/C2/choice-points 2,3,4), §8 (I1 incl.
-# dict-param ORDER, I2, I3) and §9 (signature authority, vector-valued
-# entailment). It does NOT yet cover:
+# dict-param ORDER, I2, I3), §9 (signature authority, vector-valued entailment)
+# and, as of Section 4, §3's DECLARATION-ORDER-FREEDOM clause for every
+# single-file fixture with >=2 impls of one interface (#1154/#1155). It does
+# NOT yet cover:
+#   * Section 4 tests exactly ONE reordering per qualifying fixture -- a full
+#     reversal of the qualifying blocks -- not all N! declaration orders. For
+#     N=2 that IS the only nontrivial permutation; for N=3 (the corpus's max
+#     today) it swaps the first and last block and leaves the middle fixed, so
+#     an order-sensitivity that depended on adjacent-pair position rather than
+#     first/last would not be caught. Adding a genuine 3-cycle would need a
+#     second permutation strategy, not just a bigger corpus.
+#   * Section 4 is scoped to files directly in `test/dict_fixtures/*.mdk` --
+#     directory-based multi-file fixtures (`s8-i1-samename-independent-dict-arity/`
+#     and siblings) are excluded; none of them currently has >=2 impls of one
+#     interface in a single file, so nothing is silently skipped today, but a
+#     future multi-file fixture with that shape would need its own handling
+#     (which file's impl blocks to reorder is not derivable the same way).
+#     Directories don't match the `*.mdk` glob at all, so they are excluded by
+#     construction rather than by an exclusion list.
 #   * §2 -- the dictionary RECORD SHAPE itself (a `supers` field vs a flat
 #     impl-key). Only its observable consequences are pinned; asserting the
 #     representation needs the Core-IR dump probe. ⚠️ This exclusion is about the
@@ -207,7 +238,7 @@ bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-: >"$TMP/v0"; : >"$TMP/v1"; : >"$TMP/v2"; : >"$TMP/v3"
+: >"$TMP/v0"; : >"$TMP/v1"; : >"$TMP/v2"; : >"$TMP/v3"; : >"$TMP/v4"
 
 # ── Section 1 table ───────────────────────────────────────────────────────────
 # entry (relative to FIXDIR) | label | exp_check | exp_run | exp_build | mode | value | code
@@ -571,6 +602,242 @@ printf '%s\n' "$IRS" | while IFS='|' read -r entry label kind pat; do
   esac
 done
 
+# ── Section 4: declaration-order permutation differential ────────────────────
+# DICT §3 makes selection ORDER-FREE ("never a function of search order,
+# declaration order, or resolution position"). For any fixture with >=2 `impl`
+# blocks of the SAME interface, this reverses the order of exactly those
+# blocks -- nothing else in the source moves -- and asserts `check`'s verdict,
+# `run`'s stdout and `build`'s stdout are all unchanged. #1154 (OPEN, S0
+# verified, pinned separately at
+# test/must_fail_fixtures/1154-no-unique-min-decl-order-decides/ -- NOT
+# re-pinned here, see that fixture's own header for why a second pin would
+# double-count) is the shape this exists to catch: swapping two disjoint
+# `impl Ix Int _` blocks changes a program's answer from 111 to 222 with
+# `check --json` clean on both engines.
+echo
+echo '=== 4. declaration-order permutation (DICT §3 order-freedom; #1154/#1155) ==='
+
+# The permuter operates on TOP-LEVEL CHUNKS: a chunk starts at any line with a
+# non-whitespace character in column 0 (the offside rule puts every top-level
+# declaration there) and runs until the next such line; a blank/indented line
+# attaches to the chunk above it. Reversing the chunks tagged with the target
+# interface swaps their CONTENTS across their original slots, so every other
+# declaration -- `data`, `interface`, unrelated `impl`s, `main` -- stays at its
+# original position. This is a source-level reordering, not a rewrite: if a
+# permuted file fails to PARSE where the original did, that is a permuter bug,
+# not a compiler finding (see AGENTS.md STOP guardrail for this gate).
+PERMPL="$TMP/permute.pl"
+cat >"$PERMPL" <<'PERLEOF'
+use strict;
+use warnings;
+my ($in, $iface, $out) = @ARGV;
+open(my $fh, "<", $in) or die "open $in: $!";
+my @lines = <$fh>;
+close $fh;
+my @chunks;
+my $cur;
+for my $line (@lines) {
+  if ($line =~ /^\S/) {
+    push @chunks, $cur if $cur;
+    my $ifacename;
+    $ifacename = $1 if $line =~ /^(?:export\s+)?impl\s+(\w+)/;
+    $cur = { iface => $ifacename, lines => [$line] };
+  } else {
+    $cur = { iface => undef, lines => [] } if !$cur;
+    push @{$cur->{lines}}, $line;
+  }
+}
+push @chunks, $cur if $cur;
+my @idx;
+for my $i (0..$#chunks) {
+  push @idx, $i if defined $chunks[$i]{iface} && $chunks[$i]{iface} eq $iface;
+}
+die "need >=2 impl blocks of $iface, found " . scalar(@idx) . "\n" if scalar(@idx) < 2;
+my @orig = map { $chunks[$_]{lines} } @idx;
+for my $k (0..$#idx) {
+  $chunks[$idx[$k]]{lines} = $orig[$#idx - $k];
+}
+open(my $ofh, ">", $out) or die "open $out: $!";
+print $ofh @{$_->{lines}} for @chunks;
+close $ofh;
+PERLEOF
+
+# The qualifying (fixture, interface) set is DERIVED every run, never hand-
+# listed -- so a fixture added to the corpus tomorrow with >=2 impls of one
+# interface is automatically exercised, with no second place to remember to
+# wire it in. Scoped to files directly in FIXDIR (`*.mdk`, no recursion): a
+# directory doesn't match that glob at all, which is how multi-file fixtures
+# are excluded WITHOUT a name-prefix hazard (AGENTS.md's word-boundary trap
+# does not apply here -- this is a glob over one directory's own entries, not
+# a grep that could bleed into a sibling corpus).
+PAIRS="$(cd "$FIXDIR" && for f in *.mdk; do
+  [ -f "$f" ] || continue
+  grep -oE '^(export )?impl [A-Za-z_][A-Za-z0-9_]*' "$f" 2>/dev/null | awk '{print $NF}' \
+    | sort | uniq -c | awk -v f="$f" '$1>=2{print f"|"$2}'
+done)"
+
+# KNOWN-BAD LEDGER for this section, same convention as the top-of-file ledger:
+# a pair already covered by an OPEN issue is pinned with BOTH observed values
+# and asserted to DIFFER, so the row reds the day they converge (the drain)
+# instead of silently passing or silently being skipped.
+#   entry | iface | orig-build-value | perm-build-value | issue
+KNOWNBAD_PERM='s6-1-4-supers-per-construction-goal.mdk|D|20\n77|77\n77|#1127'
+
+printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | tr '/.' '__')__${iface}"
+  permfile="$TMP/${base}_perm.mdk"
+
+  if ! perl "$PERMPL" "$entrypath" "$iface" "$permfile" 2>"$TMP/$base.permerr"; then
+    printf 'FAIL perm    %-40s [%-8s] PERMUTER ERROR: %s\n' "$entry" "$iface" "$(cat "$TMP/$base.permerr")"
+    echo "FAIL" >>"$TMP/v4"
+    continue
+  fi
+
+  bound "$MEDAKA" check --json "$entrypath" >"$TMP/$base.o.chk.json" 2>&1
+  o_chk=$?
+  o_code="$(grep -o '"code":"[^"]*"' "$TMP/$base.o.chk.json" | head -1)"
+  bound "$MEDAKA" check --json "$permfile" >"$TMP/$base.p.chk.json" 2>&1
+  p_chk=$?
+  p_code="$(grep -o '"code":"[^"]*"' "$TMP/$base.p.chk.json" | head -1)"
+
+  row_ok=1
+  reason=''
+  if [ "$o_chk" -eq 0 ] && [ "$p_chk" -eq 0 ]; then
+    verdict='ACCEPT/ACCEPT'
+  elif [ "$o_chk" -ne 0 ] && [ "$p_chk" -ne 0 ]; then
+    verdict='REJECT/REJECT'
+    if [ "$o_code" != "$p_code" ]; then
+      row_ok=0
+      reason="reject code changed under permutation: $o_code -> $p_code"
+    fi
+  else
+    verdict="DIVERGED($o_chk/$p_chk)"
+    row_ok=0
+    reason='check verdict itself flipped under permutation'
+  fi
+
+  kb_line="$(printf '%s\n' "$KNOWNBAD_PERM" | awk -F'|' -v e="$entry" -v i="$iface" '$1==e && $2==i {print}')"
+  runbuild='n/a'
+  if [ "$o_chk" -eq 0 ] && [ "$p_chk" -eq 0 ]; then
+    bound "$MEDAKA" run "$entrypath" >"$TMP/$base.o.run.out" 2>"$TMP/$base.o.run.err"
+    o_run=$?
+    bound "$MEDAKA" run "$permfile" >"$TMP/$base.p.run.out" 2>"$TMP/$base.p.run.err"
+    p_run=$?
+    # Three-way split, not a 0/0-vs-everything-else guard: an ASYMMETRIC pair
+    # (one ordering runs, the other doesn't) is the LOUDEST form of the
+    # property this section exists to catch -- declaration order deciding
+    # whether the program runs at all -- and must FAIL the row, never read as
+    # a benign skip. A SYMMETRIC failure (both orderings fail) still owes an
+    # assertion: DICT §3 order-freedom binds there too, so the two orderings
+    # must fail the SAME way. The level graded is the EXIT CODE, not stderr
+    # TEXT: verified by hand that medaka's runtime panics are not uniformly
+    # location-free (`E-DIV-ZERO` prints `file:L:C: runtime error [...]`,
+    # while the `E-PANIC` this very corpus's s3-nested-obligation-two-levels.mdk
+    # hits prints no location at all) -- and permutation deterministically
+    # shifts every line number below the reordered blocks, so a byte-diff of
+    # stderr would FAIL a program panicking for the IDENTICAL reason purely
+    # because the panic's line moved: a false positive with nothing to do with
+    # order-sensitivity. This mirrors why Section 1's REJECT rows compare
+    # `check --json`'s diagnostic CODE, never message text -- `run` has no
+    # such structured code (#1130), so exit code is the coarsest thing that is
+    # both meaningful and immune to location drift.
+    if [ "$o_run" -eq 0 ] && [ "$p_run" -eq 0 ]; then
+      if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
+        run_v='ok'
+      else
+        run_v='RUN-DIFF'
+        row_ok=0
+        reason="${reason:+$reason; }run stdout differs under permutation"
+      fi
+    elif [ "$o_run" -ne 0 ] && [ "$p_run" -ne 0 ]; then
+      if [ "$o_run" -eq "$p_run" ]; then
+        run_v="ok(fails-both, exit $o_run)"
+      else
+        run_v="FAIL-DIFF-EXIT($o_run/$p_run)"
+        row_ok=0
+        reason="${reason:+$reason; }run fails on both orderings but with DIFFERENT exit codes: orig=$o_run perm=$p_run"
+      fi
+    else
+      run_v="FAIL-ASYMMETRIC($o_run/$p_run)"
+      row_ok=0
+      reason="${reason:+$reason; }run exit code diverges under permutation: orig=$o_run perm=$p_run (order changed whether the program runs at all)"
+    fi
+
+    bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.o.bin" >"$TMP/$base.o.build.log" 2>&1
+    o_build=$?
+    bound "$MEDAKA" build "$permfile" -o "$TMP/$base.p.bin" >"$TMP/$base.p.build.log" 2>&1
+    p_build=$?
+    # "Effective success" folds the -x check into the same 0/1 the run arm
+    # grades on, so a build that exits 0 but somehow emits no executable is
+    # treated as a failure rather than silently matching the success branch.
+    o_build_ok=0; [ "$o_build" -eq 0 ] && [ -x "$TMP/$base.o.bin" ] && o_build_ok=1
+    p_build_ok=0; [ "$p_build" -eq 0 ] && [ -x "$TMP/$base.p.bin" ] && p_build_ok=1
+    if [ "$o_build_ok" -eq 1 ] && [ "$p_build_ok" -eq 1 ]; then
+      bound "$TMP/$base.o.bin" >"$TMP/$base.o.exec.out" 2>"$TMP/$base.o.exec.err"
+      bound "$TMP/$base.p.bin" >"$TMP/$base.p.exec.out" 2>"$TMP/$base.p.exec.err"
+      if [ -n "$kb_line" ]; then
+        kb_o="$(printf '%s' "$kb_line" | cut -d'|' -f3)"
+        kb_p="$(printf '%s' "$kb_line" | cut -d'|' -f4)"
+        kb_issue="$(printf '%s' "$kb_line" | cut -d'|' -f5)"
+        printf '%b\n' "$kb_o" >"$TMP/$base.kb.o.expected"
+        printf '%b\n' "$kb_p" >"$TMP/$base.kb.p.expected"
+        if cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.p.exec.out"; then
+          build_v='CONVERGED-FIXED'
+          row_ok=0
+          reason="${reason:+$reason; }KNOWN-BAD $kb_issue build divergence has CONVERGED -- re-pin or drop this ledger row"
+        elif cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.kb.o.expected" && cmp -s "$TMP/$base.p.exec.out" "$TMP/$base.kb.p.expected"; then
+          build_v="ok(known-bad $kb_issue)"
+        else
+          build_v='WRONG-KNOWNBAD-VALUE'
+          row_ok=0
+          reason="${reason:+$reason; }KNOWN-BAD $kb_issue row's pinned values no longer match observed output"
+        fi
+      else
+        if cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.p.exec.out"; then
+          build_v='ok'
+        else
+          build_v='BUILD-DIFF'
+          row_ok=0
+          reason="${reason:+$reason; }build stdout differs under permutation"
+        fi
+      fi
+    elif [ "$o_build_ok" -eq 0 ] && [ "$p_build_ok" -eq 0 ]; then
+      # Same reasoning as the run arm's symmetric-failure branch: compare exit
+      # codes, not build-log TEXT. `medaka build`'s own diagnostics can embed
+      # the source path, which differs between entrypath and permfile by
+      # construction (different filenames), so a textual diff would flag
+      # cosmetic noise as a finding.
+      if [ "$o_build" -eq "$p_build" ]; then
+        build_v="ok(fails-both, exit $o_build)"
+      else
+        build_v="FAIL-DIFF-EXIT($o_build/$p_build)"
+        row_ok=0
+        reason="${reason:+$reason; }build fails on both orderings but with DIFFERENT exit codes: orig=$o_build perm=$p_build"
+      fi
+    else
+      build_v="FAIL-ASYMMETRIC($o_build/$p_build)"
+      row_ok=0
+      reason="${reason:+$reason; }build exit code (or missing binary) diverges under permutation: orig=$o_build(ok=$o_build_ok) perm=$p_build(ok=$p_build_ok)"
+    fi
+    runbuild="run=$run_v build=$build_v"
+  fi
+
+  if [ "$row_ok" -eq 1 ]; then
+    result='PASS'
+    echo "PASS" >>"$TMP/v4"
+  else
+    result='FAIL'
+    echo "FAIL" >>"$TMP/v4"
+  fi
+  printf '%-4s perm %-40s [%-8s] %-14s %-40s %s\n' "$result" "$entry" "$iface" "$verdict" "$runbuild" "$reason"
+done
+
+# ⚠️ N == 0 here means the DERIVATION found no qualifying fixture, not that
+# permutation-sensitivity was checked and found absent -- see the empty-section
+# check at the bottom of this file, which fails the whole gate on that.
+
 # ── Tally ────────────────────────────────────────────────────────────────────
 # The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
 # permits it and dash does fork the last pipeline stage), so shell variables
@@ -578,7 +845,7 @@ done
 # FILE, which does, and the totals are derived from that -- never from a
 # variable, and never from an exit code.
 #
-# The verdicts are kept in FOUR files, one per section, because "did this gate
+# The verdicts are kept in FIVE files, one per section, because "did this gate
 # run?" is a PER-SECTION question. A single global count cannot tell a gutted
 # section-3 table from a gate that never had one, and would report `checked 36,
 # 0 failed` over an IR section that made zero observations. Counting per section
@@ -588,10 +855,11 @@ p0="$(cnt v0 PASS)"; f0="$(cnt v0 FAIL)"
 p1="$(cnt v1 PASS)"; f1="$(cnt v1 FAIL)"
 p2="$(cnt v2 PASS)"; f2="$(cnt v2 FAIL)"
 p3="$(cnt v3 PASS)"; f3="$(cnt v3 FAIL)"
-n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3))
-pass=$((p0+p1+p2+p3))
-fail=$((f0+f1+f2+f3))
-asserts=$((n0+n1+n2+n3))
+p4="$(cnt v4 PASS)"; f4="$(cnt v4 FAIL)"
+n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4))
+pass=$((p0+p1+p2+p3+p4))
+fail=$((f0+f1+f2+f3+f4))
+asserts=$((n0+n1+n2+n3+n4))
 
 if [ -s "$TMP/failnotes" ]; then
   echo
@@ -601,18 +869,24 @@ fi
 
 echo
 printf '%s: checked %d assertions -- %d passed, %d failed\n' "$(basename "$0")" "$asserts" "$pass" "$fail"
-printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d\n' "$n0" "$n1" "$n2" "$n3"
+printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d | decl-order-perm %d\n' "$n0" "$n1" "$n2" "$n3" "$n4"
 
 # ⚠️ AN EMPTY SECTION IS A FAILURE, NOT A PASS. Three gates in this tree once
 # shelled out to a tool that was not installed, printed `skipping`, and exited 0
 # -- so a required tandem gate had never once executed on that machine. "Green"
 # is not "ran", and a gate that can silently no-op will. Deleting or commenting
-# out a table here must RED the gate, not shrink it quietly.
+# out a table here must RED the gate, not shrink it quietly. The same applies
+# to Section 4's DERIVED set: if the derivation ever finds zero qualifying
+# fixtures (e.g. a bad edit to the grep/awk pipeline, or every qualifying
+# fixture being deleted), that is n4 == 0, and it fails the gate exactly like
+# an emptied hand-written table would -- a self-no-op is not distinguishable
+# from "nothing to check" and must not be treated as one.
 empty=0
 [ "$n0" -eq 0 ] && { echo "FAIL: the coverage self-audit made ZERO assertions." >&2; empty=1; }
 [ "$n1" -eq 0 ] && { echo "FAIL: section 1 (verdict+value+code) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n2" -eq 0 ] && { echo "FAIL: section 2 (schemes) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n3" -eq 0 ] && { echo "FAIL: section 3 (emitted IR) made ZERO assertions -- it did not run." >&2; empty=1; }
+[ "$n4" -eq 0 ] && { echo "FAIL: section 4 (decl-order-perm) made ZERO assertions -- the derived qualifying set was empty." >&2; empty=1; }
 [ "$empty" -eq 0 ] || exit 1
 
 [ "$fail" -eq 0 ]
