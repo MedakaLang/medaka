@@ -11832,12 +11832,12 @@ matchStep _ _ = MFail
 
 -- #217: the return-position BLIND requires chain (implReqRoutes → reqRoute →
 -- implRequiresRoutesRec[D]) has been UNIFIED onto the activeDictVar-AWARE arg chain
--- (argImplReqRoutes → argReqRoute → routeOf → argImplRequiresRoutesRec[D]).  The old
+-- (argImplReqRoutes → argReqRoute → routeOf → argImplRequiresRoutes).  The old
 -- blind chain resolved an abstract element var to RNone (a null dict cell, the
 -- historical SIGSEGV source) even when that var was an in-scope enclosing-method
 -- constraint var whose dict param IS available; the aware chain routes it RDict per
 -- DICT-SEMANTICS §3 `assum`.  The WS-4b depth fuse (max 32) was RETAINED — it now lives
--- on the aware recursion (argImplRequiresRoutesRecD) so the unified chain is aware +
+-- on the aware recursion (argImplRequiresRoutes) so the unified chain is aware +
 -- fused, not aware-and-diverging on a non-shrinking impl context.
 
 -- find the ImplEntry in [implTable] for interface [iface] whose head tycon is
@@ -11893,8 +11893,9 @@ data Undetermined = KeepNone | CountImpls (List Decl) String
 --     preferring `activeDictVarOfEncl`.  EKReturn routes RDictFwd when the method is
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn upgrades the head tag to the canonical full-type key (`keyForSite`)
---     and fills element routes via `implDictRoutesForFull`; EKNestedTop keeps the bare
---     head tag + `argImplRequiresRoutesRecD`-packed requires (with the W2 depth fuse).
+--     and fills element routes via `implDictRoutesForFull`; EKNestedTop stamps the
+--     canonical key of the min⊑ winner + `argImplRequiresRoutes`-packed requires (with
+--     the W2 depth fuse).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
 -- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
 data EntailKind =
@@ -11905,7 +11906,13 @@ data EntailKind =
   -- #203: now carries the ALL-impls KeyBuckets (was structurally unable to reach the
   -- min⊑ selector), so the arm can stamp the canonical key of the most-specific impl
   -- (mirroring EKReturn) instead of a bare ambiguous head tag.
-  | EKNestedTop KeyBuckets String Undetermined Int
+  -- #1154 (F-3a): the predicate's goal args PAST arg 0.  Arg 0 stays in `entail`'s
+  -- own [m] (it keys `assum` and supplies the head tag), so this field holds only the
+  -- TAIL — storing the whole vector would duplicate arg 0 and let the two copies
+  -- drift.  `[]` at every caller with no vector to offer, which reproduces the
+  -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
+  -- `fullMono` only THEY need.
+  | EKNestedTop KeyBuckets String Undetermined Int (List Mono)
   -- #156 S3c: arg-position stamp (resolveArgStamp).  keyTable for keyForSite.  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
   -- RKey primary as EKReturn but element routes via argImplDictRoutesForEncl keyed on
@@ -11951,7 +11958,7 @@ entailAssum m encl name kind = match entailAssumVar m encl name kind
 -- ignored by the non-op kinds.
 entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
 entailAssumVar m encl _ (EKReturn _ _ _) = activeDictVarOfEncl m encl
-entailAssumVar m encl _ (EKNestedTop _ _ _ _) = activeDictVarForEncl m encl
+entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl
 entailAssumVar m encl _ (EKArg _ _) = activeDictVarOfEncl m encl
 entailAssumVar m encl name (EKOp isBinop _ inImpl) =
   opDictVarOf isBinop name m inImpl encl
@@ -11962,7 +11969,7 @@ entailAssumRoute dname (EKReturn _ _ isRp) =
     RDictFwd dname
   else
     RDict dname
-entailAssumRoute dname (EKNestedTop _ _ _ _) = RDict dname
+entailAssumRoute dname (EKNestedTop _ _ _ _ _) = RDict dname
 entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _ _) = RDict dname
 
@@ -11991,14 +11998,22 @@ entailInst implTable name m encl tag (EKReturn keyTable fullMono _) =
 -- primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed, head-
 -- collision-gated exactly like keyForSite ⇒ a non-overlapping site keeps its bare tag,
 -- byte-identical), and the packed requires come from that same winner (F).
-entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth) =
-  -- #609: a nested/top `requires` goal arrives as a single subject mono, so the
-  -- goal vector is the singleton — unchanged behaviour.  Threading the full
-  -- predicate vector down this leg needs the n-ary obligation representation and
-  -- is #607's scope, not this fix's.
-  let routeKey = fromOption tag (keyForSiteByIface keyTable iface [m])
+-- #1154 (F-3a): a nested/top `requires` goal is a PREDICATE, so its goal is the
+-- predicate's whole argument vector (§3 `match(IE, C τ̄)`), not its subject mono.
+-- `argReqRoute` used to keep `(arg::_)` and drop the rest, so `requires Ix a Char`
+-- arrived here as the singleton `[Int]`; `entryHeadMatches` then took its arg-0
+-- fallback, `Ix Int Bool` and `Ix Int Char` both "matched", `entryCovers` found them
+-- incomparable, and `pickMostSpecificEntry` returned the FIRST-DECLARED — so swapping
+-- two impl blocks changed the program's answer, at exit 0, on both engines (#1154).
+-- [rest] is `[]` at every caller that has no vector, so those sites are unchanged.
+-- ⚠️ This threads the `requires` leg ONLY.  The top-level `=>`-constrained-call leg
+-- (routesOfMonosTop ← funConstraintsRef's SHATTERED per-tyvar dict slots) has no
+-- vector to thread — building one is #607 punch-list item 3 (dict slot = predicate),
+-- which moves emitted dict arity.  That leg is #1161 and is deliberately NOT here.
+entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
+  let routeKey = fromOption tag (keyForSiteByIface keyTable iface (m::rest))
   (
-    RKey routeKey (argImplRequiresRoutesRecD implTable keyTable iface encl tag m depth),
+    RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),
     [],
   )
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
@@ -12025,7 +12040,7 @@ entailInst implTable name m _ tag (EKOp isBinop keyTable _) =
 
 entailFallback : ImplBuckets -> EntailKind -> Route
 entailFallback _ (EKReturn _ _ _) = RNone
-entailFallback implTable (EKNestedTop keyTable _ policy _) =
+entailFallback implTable (EKNestedTop keyTable _ policy _ _) =
   undeterminedRoute implTable keyTable policy
 entailFallback _ (EKArg _ _) = RNone
 entailFallback _ (EKOp _ _ _) = RNone
@@ -12037,22 +12052,28 @@ entailFallback _ (EKOp _ _ _) = RNone
 -- arm (see Undetermined).
 routeOf : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> Route
 routeOf implTable keyTable iface encl policy m =
-  routeOfD implTable keyTable iface encl policy m 0
+  routeOfD implTable keyTable iface encl policy m [] 0
 
 -- #217: depth-carrying core of routeOf.  [depth] threads the WS-4b fuse (max 32)
--- through the aware recursion (routeOfD → argImplRequiresRoutesRecD → argImplReqRoutes
+-- through the aware recursion (routeOfD → argImplRequiresRoutes → argImplReqRoutes
 -- → argReqRoute → routeOfD), the guard retained from the removed blind chain so a
 -- non-shrinking impl context (`impl C (T a) requires C (T (T a))`) terminates instead of
 -- diverging at route-resolution time.  Depth is unchanged here; it increments once per
--- impl level in argImplRequiresRoutesRecD.
-routeOfD : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> Int -> Route
+-- impl level in argImplRequiresRoutes.
+-- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
+routeOfD : ImplBuckets -> KeyBuckets -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
 -- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
--- here via argImplRequiresRoutesRecD → argImplReqRoutes → argReqRoute → routeOfD, with
+-- here via argImplRequiresRoutes → argImplReqRoutes → argReqRoute → routeOfD, with
 -- [depth] threaded through the EKNestedTop payload.
-routeOfD implTable keyTable iface encl policy m depth =
-  fst (entail implTable "" m encl (EKNestedTop keyTable iface policy depth))
+routeOfD implTable keyTable iface encl policy m rest depth =
+  fst (entail
+    implTable
+    ""
+    m
+    encl
+    (EKNestedTop keyTable iface policy depth rest))
 
 undeterminedRoute : ImplBuckets -> KeyBuckets -> Undetermined -> Route
 undeterminedRoute _ _ KeepNone = RNone
@@ -12084,7 +12105,7 @@ routeUndeterminedTop prog implTable keyTable iface
   | iface == "" = RNone
   | otherwise = match implHeadTagsForIface prog iface
     [] => RNone
-    [tag] => RKey tag (argImplRequiresRoutesRec implTable keyTable iface "" tag (TCon tag))
+    [tag] => RKey tag (argImplRequiresRoutes implTable keyTable iface "" tag (TCon tag) [] 0)
     _ => reportAmbiguousImpl iface
 
 reportAmbiguousImpl : String -> Route
@@ -12134,25 +12155,49 @@ routesOfMonos implTable keyTable (m::rest) =
 -- (implDictRoutesIn) routes through here too, no longer through a blind twin.  [encl]
 -- threads the enclosing method so nested element dicts forward its own
 -- `$dict_<encl>_<slot>` params (encl == "" recovers the global routing).
-argImplRequiresRoutesRec : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Route
-argImplRequiresRoutesRec implTable keyTable iface encl tag m =
-  argImplRequiresRoutesRecD implTable keyTable iface encl tag m 0
-
--- #217/WS-4b: depth-fused core.  [depth] guards a non-shrinking impl context (`impl C
--- (T a) requires C (T (T a))`) — the fuse RETAINED from the removed blind chain, now on
--- the aware recursion so unifying the two chains did not import a typecheck hang.  Depth
--- 32 is ample for valid programs (real nesting rarely exceeds 3–4 levels); on limit-hit
--- we return [] (RNone element → null cell), safe because such an impl is ill-formed and
--- never produces a valid concrete instantiation in a well-typed program.
-argImplRequiresRoutesRecD : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> Int -> List Route
-argImplRequiresRoutesRecD implTable keyTable iface encl tag m depth =
+-- #217/WS-4b: [depth] guards a non-shrinking impl context (`impl C (T a) requires C
+-- (T (T a))`) — the fuse RETAINED from the removed blind chain, now on the aware
+-- recursion so unifying the two chains did not import a typecheck hang.  Depth 32 is
+-- ample for valid programs (real nesting rarely exceeds 3–4 levels); on limit-hit we
+-- return [] (RNone element → null cell), safe because such an impl is ill-formed and
+-- never produces a valid concrete instantiation in a well-typed program.  (#1154
+-- folded away the depth-0 wrapper `argImplRequiresRoutesRec`: two names for one body,
+-- one caller each.  Seed `[] 0` at an entry point instead.)
+--
+-- #1154 (F-3a): [rest] is the predicate's goal args past arg 0.  [goals] is bound ONCE
+-- and fed to BOTH the SELECTION and the head SUBSTITUTION — §6 C2 requires the impl
+-- dispatched to and the impl whose context is discharged to be the SAME impl, and a
+-- scalar select paired with a vector subst could bind an impl's trailing head vars
+-- from a DIFFERENT impl's goal.  (`entailInst`'s EKArg arm binds its goals once for
+-- exactly this reason.)
+--
+-- ⚠️ The iface-UNKNOWN arm (iface == "", the method-dict / untyped-fallback path) has
+-- no interface and therefore no arity to give a vector meaning, so it stays SCALAR —
+-- and `goals` is pinned to `[m]` there so the substitution is scalar too.  That is not
+-- a special case bolted on: at `listLen goals == 1`, `headSubstWithParams h itys m [m]`
+-- IS `matchTyMono h m` (augmentWithParams gates on `listLen paramMonos > 1`), so this
+-- arm reduces to the pre-#1154 body term for term, algebraically.
+--
+-- ⚠️ Be precise about what that pin buys, because the obvious reading is wrong:
+-- `selectReqImpl`'s `iface == ""` arm IGNORES [goals] entirely (it selects with
+-- `findImplEntry … m`), so pinning `goals` there changes NOTHING about selection and is
+-- inert on that consumer today.  Its only live effect is on the SUBSTITUTION, and it is
+-- a FORWARD guard against the two drifting apart if that arm is ever made vector-aware.
+-- The property this function actually rests on is therefore NOT anything about `iface`:
+-- it is that **only `argReqRoute` ever supplies a non-empty [rest]**.  Every other entry
+-- point seeds `[] 0`, so every other caller lands on `goals == [m]` whichever arm runs.
+-- If a second non-empty-[rest] caller appears, re-derive this.
+argImplRequiresRoutes : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
+argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
   if depth >= 32 then []
-  else match selectReqImpl keyTable implTable iface tag m
-    Some (headTy, reqs) => match matchTyMono headTy m
-      Some subst =>
-        argImplReqRoutes implTable keyTable encl subst reqs (depth + 1)
+  else
+    let goals = if iface == "" then [m] else m::rest
+    match selectReqImpl keyTable implTable iface tag m goals
+      Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
+        Some subst =>
+          argImplReqRoutes implTable keyTable encl subst reqs (depth + 1)
+        None => []
       None => []
-    None => []
 
 -- #203 (F): pick the impl whose `requires` this nested obligation must discharge.
 --   • iface known → the MOST-SPECIFIC impl of that iface over the ALL-impls KeyBuckets
@@ -12162,10 +12207,15 @@ argImplRequiresRoutesRecD implTable keyTable iface encl tag m depth =
 --     so it was structurally blind to `List Int` and always returned `List a`'s requires.
 --   • iface unknown ("" — the method-dict / untyped-fallback path, never the typed
 --     dispatch of #203) → the historical first-by-tag `findImplEntry`, byte-identical.
-selectReqImpl : KeyBuckets -> ImplBuckets -> String -> String -> Mono -> Option (Ty, List Require)
-selectReqImpl keyTable implTable iface tag m
-  | iface == "" = map ((ImplEntry _ _ headTy reqs _ _) => (headTy, reqs)) (findImplEntry implTable iface tag m)
-  | otherwise = map ((KeyEntry _ _ headTy _ _ _ reqs) => (headTy, reqs)) (selectImplEntryByIface keyTable iface [m])
+-- #1154 (F-3a): also returns the winner's FULL head-type vector `itys`, so the caller
+-- can build the head substitution from the SAME impl it selected (headSubstWithParams)
+-- instead of re-matching the arg-0 pattern alone.  [m] is arg 0 (the bucket key, and
+-- the only thing the iface-unknown arm can select on); [goals] is the vector the
+-- iface-known arm selects on — the caller pins them consistent, see argImplRequiresRoutes.
+selectReqImpl : KeyBuckets -> ImplBuckets -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
+selectReqImpl keyTable implTable iface tag m goals
+  | iface == "" = map ((ImplEntry _ _ headTy reqs itys _) => (headTy, itys, reqs)) (findImplEntry implTable iface tag m)
+  | otherwise = map ((KeyEntry _ _ headTy _ _ itys reqs) => (headTy, itys, reqs)) (selectImplEntryByIface keyTable iface goals)
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -12225,7 +12275,7 @@ argImplDictRoutesForEncl implTable keyTable encl name _tag mono goals = match ma
   None => []
 
 -- #217: [depth] carries the WS-4b fuse through the aware recursion (see
--- argImplRequiresRoutesRecD).  Arg-position entry points seed 0; the return position
+-- argImplRequiresRoutes).  Arg-position entry points seed 0; the return position
 -- (implDictRoutesForFull) also seeds 0.
 argImplReqRoutes : ImplBuckets -> KeyBuckets -> String -> List (String, Mono) -> List Require -> Int -> List Route
 argImplReqRoutes _ _ _ _ [] _ = []
@@ -12233,8 +12283,20 @@ argImplReqRoutes implTable keyTable encl subst ((Require rIface rargs)::rest) de
 
 argReqRoute : ImplBuckets -> KeyBuckets -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argReqRoute _ _ _ _ _ [] _ = RNone
-argReqRoute implTable keyTable iface encl subst (arg::_) depth =
-  routeOfD implTable keyTable iface encl KeepNone (fromAstType subst arg) depth
+-- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
+-- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
+-- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
+-- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
+argReqRoute implTable keyTable iface encl subst (arg::more) depth =
+  routeOfD
+    implTable
+    keyTable
+    iface
+    encl
+    KeepNone
+    (fromAstType subst arg)
+    (map (fromAstType subst) more)
+    depth
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
 -- method-level constraint, from the instantiated constraint mono.  A concrete head
@@ -13742,7 +13804,7 @@ findMatchingImplReqsU univ iface (a0::rest) = match concreteReqMatchByIface ifac
 
 -- #326: the concrete-receiver-head requires match, routed through the shared min⊑
 -- selector over the all-impls KeyBuckets registry (the router's `selectReqImpl` /
--- `argImplRequiresRoutesRecD` select the SAME entry the SAME way).  Bind the winning
+-- `argImplRequiresRoutes` select the SAME entry the SAME way).  Bind the winning
 -- impl's typaram vars by matching its FULL head types against [args] (multi-param subst
 -- preserved), then hand back that impl's OWN requires.  A selected entry whose full head
 -- fails to match [args] yields None, so findMatchingImplReqsU falls through to the

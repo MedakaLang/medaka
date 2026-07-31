@@ -68,8 +68,7 @@ argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argImplDictRoutesFor : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> List (String, Mono) -> List Require -> Int -> List Route
-argImplRequiresRoutesRec : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Route
-argImplRequiresRoutesRecD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> Int -> List Route
+argImplRequiresRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
@@ -1204,7 +1203,7 @@ rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
 routeOf : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> Route
-routeOfD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> Int -> Route
+routeOfD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Route
 routesOfMonos : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List Route
@@ -1238,7 +1237,7 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
 selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
-selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> Option (Ty, List Require)
+selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
 selfBinding : String -> (String, String)
 setCardCap : Int
 setCoherenceUserDecls : List Decl -> Unit

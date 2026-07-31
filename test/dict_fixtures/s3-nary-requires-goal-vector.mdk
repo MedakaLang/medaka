@@ -1,0 +1,61 @@
+-- DICT-SEMANTICS §3 `match(IE, π)` over an n-ary predicate + §3 declaration-
+-- order freedom.  Regression pin for #1154 (S0, silent wrongness, both engines),
+-- which was fixed by threading the FULL goal vector through the nested/top
+-- `requires` route (F-3a; the must-fail fixture
+-- test/must_fail_fixtures/1154-no-unique-min-decl-order-decides drained on that
+-- landing and was deleted in the same commit, per its own header's instruction).
+--
+-- SPEC ANSWER (hand-derived from §3, NOT captured from any engine):
+--   §1 gives `π ::= C τ̄` — a predicate is a class applied to a VECTOR — and §3
+--   defines the matching set as `match(IE, C τ̄) = { I | ∃φ. φ(head(I)) = C τ̄ }`,
+--   i.e. ONE substitution φ against the WHOLE vector.
+--   `impl Sh (Box a) requires Ix a Char` pins the SECOND interface parameter to
+--   `Char`.  At the goal `Sh (Box Int)` the head match binds a ↦ Int, so the
+--   nested obligation is the ground predicate `Ix Int Char`.
+--   Against that vector: φ(`Ix Int Bool`) would need Bool = Char — no φ exists,
+--   so it is NOT in the matching set.  φ(`Ix Int Char`) = identity.  The
+--   matching set is the singleton {`impl Ix Int Char`}; `inst` selects it with
+--   no ⊑ comparison needed at all.  Its body returns 222.
+--   Independently: the impl body calls `ix x 'z'` and `'z' : Char`, so no other
+--   instance is even type-correct at that call.
+--   Therefore the answer is 222, and it is 222 for EITHER declaration order.
+--
+-- The wrong answer this row exists to catch is 111 — the pre-fix behaviour.
+-- `entryHeadMatches` fell back to matching ARG 0 ALONE whenever the goal
+-- vector's length differed from the impl's, and `argReqRoute` passed a
+-- SINGLETON (it kept `(arg::_)` and dropped the rest of the predicate), so
+-- `Ix Int Bool` and `Ix Int Char` both "matched" on `Int`.  Coherence never
+-- compared them — `cohAnonConflict` only fires on heads that UNIFY, and
+-- `[Int, Bool]` vs `[Int, Char]` do not — so they reached
+-- `pickMostSpecificEntry` as incomparable and its no-unique-minimum arm
+-- returned THE HEAD OF THE LIST.  Declaration order decided the answer, with
+-- `check --json` clean and both engines agreeing on 111.
+--
+-- Declaration order here is deliberately WRONG-ANSWER-FIRST (`Ix Int Bool`
+-- before `Ix Int Char`), so a resolver that regressed to the arg-0 fallback
+-- would print 111 and this row would go red.  Section 4 additionally reverses
+-- the two `Ix` blocks and asserts the answer does not move, which catches the
+-- order-sensitivity WITHOUT needing to know that 222 is right.
+--
+-- ⚠️ Scope: this pins the `requires` leg only.  The top-level
+-- `=>`-constrained-call leg of the SAME defect (`useIx : Ix a Char => a -> Int`)
+-- is #1161 and is still OPEN — it has no goal vector to thread, because the
+-- dict slots there are shattered one-per-tyvar (#607 punch-list item 3).
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+data Box a = MkBox a
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Box a) requires Ix a Char where
+  sh (MkBox x) = ix x 'z'
+
+main = println (sh (MkBox 1))
