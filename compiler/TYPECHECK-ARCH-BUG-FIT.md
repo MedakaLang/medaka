@@ -895,6 +895,25 @@ the shipped native binary, with A and B agreeing. The first half of the predicti
 The second half **still holds**: `check` still prints `useIx : a -> Int` with the context
 erased, and the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, below,
 now pinned at `test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+
+⚠️ **SCOPE THE REFUTATION PRECISELY — the unqualified reading is WRONG.** "Order no longer
+decides on this leg" holds only when the multi-argument predicate is the **first predicate
+declared over its type variable**. Measured A/B, cold builds either side, varying only
+`compiler/types/typecheck.mdk`:
+
+| `=>` context | main | F-3a-ii | correct |
+|---|---|---|---|
+| `(Ix a Char, Dbg a)` | 116 | **227** ✅ | 227 |
+| `(Dbg a, Ix a Char)` | 116 | 116 ❌ | 227 |
+| `(Dbg c, Ix a Char)` — distinct tyvars | 116 | **227** ✅ | 227 |
+
+The residue is a **different defect on the other side of the same slot**, filed as **#1177**
+(S0, verified): `funConstraintsRef` is per-tyvar, so two predicates over one `a` register
+two slots with the **same id**, and `enclDictVarOf`'s `indexOfId` returns the **first**
+match — every use in the body reads slot 0. F-3a-ii's route is computed correctly and lands
+in the right slot; the body consumes the wrong one. Not a regression (main is 116 either
+way), and **no gate can see it**: `diff_compiler_dict_semantics.sh` §4 permutes `impl`
+blocks, and nothing in the tree permutes predicate order in a signature.
 ⚠️ Read what that licenses. Because the prediction is one-directional, the refutation says
 the GAP verdict was wrong about **reachability** for legs 2–3 — *not* that the mechanism
 analysis was wrong. Legs 1–3 are described correctly; what the row could not know is that

@@ -5209,6 +5209,13 @@ instantiateTracked (Forall ids evars t) =
 -- tyvarCounter), so they would need the same id re-attribution `attributeModuleArities`
 -- does for the ids table.  A vector attributed with the WRONG module's ids substitutes
 -- to a wrong-but-concrete goal — strictly worse than missing.  See #1161's residual note.
+-- ⚠️ AND NAME WHAT THE RESIDUAL NOW COSTS, not just that it exists: because the
+-- IN-MODULE path is fixed and this one is not, byte-identical source now ANSWERS
+-- DIFFERENTLY depending on where it is called from.  Measured: `useIx : Ix a Char =>
+-- a -> Int` prints 222 when its module is compiled alone and 111 when the same module
+-- is imported (both engines, exit 0, no diagnostic).  That inconsistency did not exist
+-- before — pre-F-3a-ii both sites printed 111 — so closing the gap here also closes a
+-- same-source-different-answer split that is worse to debug than the uniform bug was.
 -- ⚠️ SECOND RESIDUAL, same shape and same reasoning: `resolveRLocalSites` /
 -- `SKRLocal` (the standalone-shadow arg-position stamp) fills its dict routes with the
 -- SCALAR `routesOfMonosTop`, not `routesOfMonosTopV`, so an importer-shadowed

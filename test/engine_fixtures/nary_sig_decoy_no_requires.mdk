@@ -1,0 +1,35 @@
+-- POSITIVE DISCRIMINATOR 2 of 2 for nary_sig_requires_decoy: the decoy is KEPT and the
+-- winning instance's `requires` context is REMOVED.  The complementary one-dimension
+-- change to its sibling, so the two together separate the decoy from the `requires`.
+--
+-- HAND-DERIVED EXPECTED VALUE -- 107, from DICT-SEMANTICS §3, not captured.
+--   Goal π = Ix Int (Box Int); IE = { Ix Int Bool, Ix Int (Box c) }.  `Ix Int Bool`
+--   differs from π at argument 1 and is not in the matching set; `Ix Int (Box c)`
+--   matches under φ = [Int/c].  Singleton, so `inst` applies with an EMPTY context.
+--   Body: 107.
+--
+-- WHAT IT LOCALISES, AND IT IS ALSO A FIX.  All three engines AGREE here.  Measured on
+-- cold builds either side of F-3a-ii:
+--     BASE  run 111 (exit 0) | native 111 (exit 0)   -- both WRONG: the shattered goal
+--                                                       arg-0-matched the decoy
+--     PR    run 107 (exit 0) | native 107 (exit 0)   -- both RIGHT
+-- So the decoy alone does NOT cause the sibling's `run` panic -- with the decoy still
+-- in place, eval selects correctly and executes.  Combined with
+-- nary_sig_requires_no_decoy (no decoy, `requires` present, also fine), the panic
+-- requires BOTH: a decoy in the candidate set AND a winner carrying a `requires`
+-- context.  Neither discriminator alone would have told you that.
+data Box c = MkBox c
+
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int (Box c) where
+  ix _ _ = 107
+
+useIx : Ix a (Box Int) => a -> Int
+useIx x = ix x (MkBox 7)
+
+main = println (useIx 1)

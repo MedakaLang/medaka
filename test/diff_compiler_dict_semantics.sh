@@ -175,6 +175,19 @@
 # and, as of Section 4, §3's DECLARATION-ORDER-FREEDOM clause for every
 # single-file fixture with >=2 impls of one interface (#1154/#1155). It does
 # NOT yet cover:
+#   * 🚨 Section 4 permutes `impl` BLOCKS. It does NOT permute the PREDICATE ORDER
+#     IN A SIGNATURE, and nothing else in the tree does either -- so that axis of
+#     DICT §3's order-freedom clause is untested by construction, and no fixture
+#     added to this corpus can reach it. That is not hypothetical: #1177 (S0,
+#     verified) is exactly this shape -- `(Dbg a, Ix a Char) => ...` prints 116
+#     where `(Ix a Char, Dbg a) => ...` prints 227, same program, both engines,
+#     check clean -- and it survived a PR (#1176) whose entire subject was
+#     order-freedom, because this section could not see it. Pinned meanwhile at
+#     test/must_fail_fixtures/1177-sig-predicate-order-decides/. Closing #1177
+#     should either add a second permutation strategy here (reverse the predicates
+#     of a `=>` context the same way the block permuter reverses impls) or record
+#     why not. ⚠️ A permutation differential is only order-free along the axis it
+#     actually permutes -- do not read section 4's green as "order does not decide".
 #   * Section 4 tests exactly ONE reordering per qualifying fixture -- a full
 #     reversal of the qualifying blocks -- not all N! declaration orders. For
 #     N=2 that IS the only nontrivial permutation; for N=3 (the corpus's max
