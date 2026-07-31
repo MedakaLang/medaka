@@ -3517,21 +3517,49 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- dotted name (`rewriteAliasQual`, frontend/desugar.mdk, via `qualifiedLocal`
 -- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` reads
 -- `'H'` and says True: EVERY alias-qualified call in the language is
--- classified as a constructor application and generalized.  `let m = H.new ()`
--- over `stdlib/hash_map.mdk` yields a polymorphic mutable table — `check` exit
--- 0, `run` E-NOT-A-FUNCTION, built binary SEGFAULT.
+-- CLASSIFIED as a constructor application.  Classification is not the whole
+-- test — `isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x`
+-- still rejects the spine if any argument is expansive, so `H.f (g 1)` is
+-- classified but NOT generalized.  It is enough for the repro, whose argument
+-- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yields a
+-- polymorphic mutable table — `check` exit 0, `run` E-NOT-A-FUNCTION, built
+-- binary SEGFAULT.
 --
--- ⚠️ The residual hole is therefore NOT the "future uppercase mutable-cell
--- extern" this comment used to warn about, and that audit (`grep '^extern
--- [A-Z]' stdlib/runtime.mdk`) is CLEAN — one hit, `Ref` — while the predicate
--- is broken anyway.  Note also that `Ref` is not a *constructor* at all: it is
--- an extern FUNCTION (`extern Ref : a -> Ref a`, stdlib/runtime.mdk), never
--- passed to `addCtor`, and calling it one is what made this heuristic look
--- principled.  The fix is to stop guessing from spelling and ask the
--- environment — `lookupCtor` is populated only by `addCtor`, whose sole call
--- site is `addVariants`, reached only from data/record declarations — which
--- also deletes the hand-written `"Ref"` name test rather than adding another
--- special case.  See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
+-- ⚠️ The residual hole TODAY is not the "future uppercase mutable-cell extern"
+-- this comment used to warn about: that audit (`grep '^extern [A-Z]'
+-- stdlib/runtime.mdk`) is CLEAN — one hit, `Ref` — and the predicate is
+-- defeated by the alias route anyway.  But that retirement is CONDITIONAL on
+-- the alias hole staying open, because the GRAMMAR still permits the hazard:
+-- `externNameFor (TUpper x) = emit x` (frontend/parser.mdk:2312) accepts an
+-- uppercase extern NAME, whereas `identNameFor` (:251-253, same file) accepts
+-- only `TIdent` for an ordinary identifier.  So the moment issue 1150 is closed
+-- NARROWLY — e.g. by rejecting a dotted name in the head test, a one-line patch
+-- that satisfies every sentence above — an uppercase mutable-cell extern
+-- becomes the SOLE remaining way to defeat the head test.  The clause "the
+-- predicate is defeated anyway" expires with that fix; the warning does not,
+-- for as long as the head test is spelling-based.
+--
+-- Note also that `Ref` is not a *constructor* at all: it is an extern FUNCTION
+-- (`extern Ref : a -> Ref a`, stdlib/runtime.mdk), never passed to `addCtor`,
+-- and calling it one is what made this heuristic look principled.  The
+-- principled fix is to stop guessing from spelling and ask the environment:
+-- `lookupCtor:4398` reads `TcEnv`'s 2nd `OrdMap`, and that map is written in
+-- exactly TWO places — `addCtor:4425` (sole call site, inside `addVariants`,
+-- at :8561, reached only from `registerVariants:8316`, itself called only from
+-- `registerData`'s `DData` (:8239) and `DNewtype` (:8244) arms) and the two
+-- prelude ctors `True`/`False`, hand-seeded straight into the map by
+-- `initialEnv:15519`, bypassing `addCtor` entirely.  Both writers are
+-- constructor-only, so the lookup is sound — but "populated only by
+-- `addCtor`", which this comment asserted until 2026-07-31, was false.
+-- Re-derive with `grep -n 'addCtor\|initialEnv' compiler/types/typecheck.mdk`.
+--
+-- ⚠️ That fix is NOT local, and the unstated cost is what makes the cheap
+-- spelling patch attractive: `isNonexpansive:3567`, `isCtorAppSpine:3614`,
+-- `clausesAreValue:9396`, `memberClauseIsValue:16063` and `sccSchemes:16054`
+-- all take no `TcEnv` today, so threading one rewrites every one of them.
+-- Paying that is exactly the branch on which the uppercase-extern warning
+-- above starts to matter.
+-- See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
 --
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
@@ -3548,7 +3576,8 @@ isNonexpansive (EHeadAnnot e _) = isNonexpansive e
 isNonexpansive (ETuple es) = allList isNonexpansive es
 isNonexpansive (EListLit es) = allList isNonexpansive es
 -- Constructor application: non-expansive iff the spine head is an
--- uppercase-initial EVar (a data/record constructor) that is NOT `Ref`, and
+-- uppercase-initial EVar — NOT an actual constructor lookup, so a module alias
+-- passes it too; see the 🚨 above and issue 1150 — that is NOT `Ref`, and
 -- every spine argument is itself non-expansive.  Partial ctor applications
 -- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
 -- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
@@ -3561,10 +3590,14 @@ isNonexpansive (ERecordCreate _ fs) = allList
 isNonexpansive _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
--- on the way, and finally test whether the head is a data/record constructor
--- (uppercase-initial EVar) that is safe to generalize.  `Ref` is excluded
--- because it is the only uppercase extern that builds a mutable cell — see the
--- comment on `isNonexpansive` above.
+-- on the way, and finally test whether the head LOOKS LIKE a constructor that
+-- is safe to generalize: an uppercase-initial EVar — **not** an actual
+-- constructor lookup, so an uppercase module alias passes it (issue 1150, OPEN,
+-- S0, memory-safety; see the 🚨 on `isNonexpansive` above, which this docblock
+-- contradicted until 2026-07-31).  `Ref` is excluded by name because it is the
+-- only uppercase extern that builds a mutable cell TODAY (`grep '^extern [A-Z]'
+-- stdlib/runtime.mdk` — one hit); the grammar permits more, so that is an
+-- audit, not an invariant.
 --
 -- The arguments are tested HERE, on the single walk to the head, rather than by
 -- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
@@ -10569,8 +10602,10 @@ cohImplsOf d = cohImplsOfMid "" d
 -- module-tagged variant: stamp every harvested CohImpl with [mid].
 --
 -- #414: the span to blame for an impl comes from its head types, via
--- `firstTyLocList` (`frontend/ast.mdk` — one walk shared with resolve, issue
--- 480).  A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
+-- `firstTyLocList` (`frontend/ast.mdk`), which folds `firstTyLoc` — that inner
+-- walk is the one shared with resolve (`dupSigOf`); resolve does not call
+-- `firstTyLocList` itself (issue 480).
+-- A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
 -- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
 -- (`parser.mdk`'s parseTyAtom: `TyCon c (Some (locOfSpan s q))`), so the head's
 -- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
