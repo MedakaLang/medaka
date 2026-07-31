@@ -6,15 +6,15 @@
 -- `otherwise = "W-NONEXHAUSTIVE"`.  Nothing pinned `W-UNREACHABLE-ARM` in
 -- `check --json` at all, and nothing pinned the two codes coexisting.
 --
--- ⚠️ Honest scope: this fixture CANNOT detect a re-derivation regression on its
--- own, and it is not claimed to.  Both shipped codes are exactly what a
--- message-prefix matcher produces, so a refactor reintroducing derivation would
--- leave it green.  What it does pin is the coverage gap that made the original
--- defect invisible: that the second code exists in `--json`, that the two codes
--- do not collapse to one, that each binds to its own arm, and that both render
--- `"kind":"warning"` with `"severity":2` (the kind/severity coherence `diagKind`
--- guarantees).  A third, non-`W-` code is the case that would discriminate; it
--- needs a third warning, which does not exist yet.
+-- ⚠️ Honest scope: this fixture CANNOT detect a re-derivation regression, and it
+-- does NOT exercise `diagKind` — both shipped codes are exactly what a
+-- message-prefix matcher produces, and `codeKind "W-…"` already returns
+-- "warning", so every assertion below holds identically with either one reverted.
+-- Only a third, non-`W-` code discriminates, and that needs a third warning,
+-- which does not exist yet.  What this DOES pin is the coverage gap that made the
+-- original defect invisible: that the second code exists in `--json`, that the
+-- two codes do not collapse to one, that each binds to its own arm, and that
+-- both render `"kind":"warning"` with `"severity":2`.
 --
 -- Expected values DERIVED BY HAND, not captured-then-accepted:
 --   `nonExhaustive` — scrutinee `Color` has ctors Red|Green|Blue; the arms cover
