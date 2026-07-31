@@ -953,6 +953,7 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
+noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
 nthTy : Int -> List Ty -> Option Ty

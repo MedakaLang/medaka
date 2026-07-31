@@ -334,6 +334,49 @@ a real span. `help`/`fix` are the follow-on wins and can land per-category.
 
 ---
 
+## 6. Per-clause enforcement table (clause → site → keying assumption)
+
+`TYPECHECK-TARGET-ARCHITECTURE.md` **L5** — *"the spec is executable"* — requires
+every normative clause here to have (a) a row naming the **site** that enforces it
+and the **keying assumption** that site relies on, and (b) at least one conformance
+fixture whose expected value was **derived from the clause by hand**, never captured
+from an engine. *A rule with no site is an unimplemented clause; a site with no
+clause is an owed spec paragraph.* This section starts the table with the rows that
+were owed: three inference gates that had a **site but no clause**, because each
+justified itself by citing the OCaml reference compiler's raise-on-first behaviour —
+and that compiler was **removed 2026-06-26**, so the citation named nothing.
+
+The rubric in §3 is the clause source. Rows are added as sites are audited; absence
+of a row is *"not yet audited"*, not *"unenforced"*.
+
+| Clause | Site | Keying assumption | Conformance fixture |
+|--------|------|-------------------|---------------------|
+| **R** — pinpoints the single root cause; no cascade | **S1** `inferDefaultMethod` (`compiler/types/typecheck.mdk`) — skips the outer `unify expected2 actualTy` + `checkImplEffVarRigidity` when the default body detected an error | "an error was DETECTED in this region", read off `perRun.errorsDetected` through `erredDuring`. **Not** "the diagnostic list grew" — see below | `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk` |
+| **R** + **X** — exactly one diagnostic per root cause | **S2** `inferDefaultMethodBody` — skips the launder query + the method-boundary `unify expectedTy actualTy` when `inferClauses` detected an error | same counter, same combinator | `iface_default_dedup_cascade.mdk`, `default_body_type_error.mdk` |
+| **X** — one root cause must not emit a storm of follow-ons | **S3** `inferDefaultMethodBody` — on a detected method-boundary mismatch, `wRestore`s `implObls` to the pre-body snapshot, dropping the body's induced obligations (`(5 : Bool)` ⇒ `Num Bool`) | same counter; plus `currentMethodMismatch = Some mname` across that one unify, which selects the specialized `Method '<m>': …` line (dims **C**/**J**) | `default_body_type_error.mdk` |
+
+**The keying assumption is the load-bearing column, and it is why issue 1146 exists.**
+Until PR 1 these three gates keyed on `listLen perRun.typeErrors` — the *length of the
+diagnostic list*. That makes a **presentation** decision (how many diagnostics are
+worth printing) decide a **control** question (did this region typecheck), so a dedup
+rule, a rendering change or a loc-selection change can silently flip an inference
+branch, and a gated `unify` that does not run is a type error that is not caught. PR 1
+moved them onto an occurrence counter; PR 2 made that counter count errors **detected**
+rather than errors **stored**, so a message-text dedup can no longer reach any of these
+three rows. **A future change that re-derives any of these gates from the diagnostic
+list — including "just check whether the list grew" — violates this column**, and its
+observable symptom is exactly the fixture above: two default bodies that render the
+same message get *asymmetric* verdicts.
+
+Note what these rows do and do not license. They suppress a **follow-on** diagnostic
+for a root cause the compiler has already detected; they never suppress a *rejection*.
+A gated region that detected an error has stored at least one diagnostic somewhere
+(dedup only fires when an identical message is already in the channel), so the program
+is rejected either way — the blast radius of a wrong verdict here is **which**
+diagnostic the reader sees, never whether the program compiles.
+
+---
+
 ## Open decisions
 
 These need a human call before implementation; do not decide unilaterally.
