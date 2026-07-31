@@ -1,0 +1,44 @@
+-- CONTROL for issue #1154.  Byte-identical to main.mdk except for ONE flipped
+-- dimension: the FIRST-DECLARED impl's head is the fully-general `impl Ix Int a`
+-- instead of the disjoint `impl Ix Int Bool`.  That single change gives the candidate
+-- set a UNIQUE sqsubseteq-minimum (`Ix Int Char` is strictly more specific than
+-- `Ix Int a`), and the selector then honours it: this prints 222 even though the 111
+-- impl is still declared FIRST.  So the wrong answer in main.mdk is specifically the
+-- NO-MINIMUM path, not a general first-match bug.
+--
+-- WHY main's `println` is replaced by an equality test here.  This harness grades a
+-- control on its EXIT CODE ONLY (#1144: `control:` can express nothing but "exits 0",
+-- and no stdout assertion is applied to a control).  For a bug whose observable is a
+-- WRONG VALUE AT EXIT 0, a control that merely printed its answer would exit 0 whether
+-- it printed 222 or 111 -- i.e. it could not fail, and a control that cannot fail is
+-- not a control.  Making the control ASSERT ITS OWN VALUE and `panic` otherwise moves
+-- the value into the exit code, which is the one thing the harness does read.
+-- Verified by hand on this tree: changing the comparand to a value the program cannot
+-- produce makes `medaka run` exit 1 with `runtime error [E-PANIC]`, so this control
+-- genuinely discriminates.
+--
+-- If this control goes RED, min-sqsubseteq selection broke IN GENERAL -- that is a
+-- broken environment, NOT a fix for #1154.  Do not close the issue on it.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int a where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+data Box a = MkBox a
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Box a) requires Ix a Char where
+  sh (MkBox x) = ix x 'z'
+
+main =
+  let r = sh (MkBox 1)
+  if r == 222 then
+    println "control-ok:222"
+  else
+    panic "control regressed: a unique min-sqsubseteq candidate is no longer selected"
