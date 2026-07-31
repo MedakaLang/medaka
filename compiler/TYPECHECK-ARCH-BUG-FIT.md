@@ -880,18 +880,6 @@ unimplemented and the table records it as satisfied. That is a §11 row this arc
 written changes #1161's behaviour**: variants A and B must still print `111` and `222`
 after every stage S–F lands, and `check --types` must still print `useIx : a -> Int`.
 
-🚨 **GRADED 2026-07-31 — HALF REFUTED, and by a stage the arc did not have when this was
-written.** F-3a-ii (the arity-neutral intermediate this row *offered as an option*, since
-scheduled ahead of F-3b) makes variant A print **`222`** on `run` and on the shipped
-binary, and makes A and B agree. So the first half of the prediction is dead. The second
-half **still holds**: `check` still prints `useIx : a -> Int` with the context erased, and
-the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, above.
-⚠️ Read what that does and does not license. A null prediction is one-directional (§ its
-own caveat), so this refutation says the GAP verdict was wrong about *reachability* for
-legs 2–3 — not that the row's mechanism analysis was wrong. Legs 1–3 are correctly
-described; what the row could not know is that the vector is recoverable from the
-signature without unshattering the dict slots.
-
 ⚠️ **Read the direction before grading it.** This is a *null* prediction — the kind a
 stage that does nothing satisfies, including a **broken** stage — and it is
 **one-directional**: an observed change **refutes** the GAP verdict, but no amount of
@@ -899,6 +887,19 @@ stage that does nothing satisfies, including a **broken** stage — and it is
 claim *is* "nothing reaches this") and it is strictly weaker evidence than the positive
 predictions elsewhere in this ledger, e.g. #1162's, which names a specific new diagnostic
 at a specific stage. Do not treat the two as equally gradeable.
+
+🚨 **GRADED 2026-07-31 — HALF REFUTED, by a stage the arc did not have when this was
+written.** F-3a-ii — the arity-neutral intermediate this row *offered as an option*, since
+scheduled ahead of F-3b — **landed**, and variant A now prints **`222`** on `run` and on
+the shipped native binary, with A and B agreeing. The first half of the prediction is dead.
+The second half **still holds**: `check` still prints `useIx : a -> Int` with the context
+erased, and the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, below,
+now pinned at `test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+⚠️ Read what that licenses. Because the prediction is one-directional, the refutation says
+the GAP verdict was wrong about **reachability** for legs 2–3 — *not* that the mechanism
+analysis was wrong. Legs 1–3 are described correctly; what the row could not know is that
+the goal vector is recoverable **from the signature at registration**, without unshattering
+the dict slots at all.
 
 Two corollaries make the diagnosis sharper, and both must hold or it is wrong. ⚠️ **Neither
 is currently executable** — F-3a is unmerged (probe only) and B-2 (#1113) has not started —
@@ -944,31 +945,49 @@ slots, one predicate, two identical goals) and it does **not** move toward L4's 
 unit — so it is a second transitional step, not the target — but it closes legs 2–3 and
 unblocks F-3c without touching emitted arity.
 
-⚠️ **CORRECTED 2026-07-31, and the correction was MEASURED, not re-reasoned.** This
-paragraph read *"closes legs 2–4"*. It closes **2–3**. Leg 4 (the obligation check) was
-tested directly during F-3a-ii scoping: `recordCallObligations` was made n-ary at exactly
-the site that now HAS the vector, built, and run — and the unsatisfiable program is
-**still accepted at exit 0**. The acceptance decision is made upstream, in
-`declaredSchemeOblsFor` → `declaredOblOne` → `constraintArgMonos`, on a channel whose
-payload is `List (String, List Int)` — **ids only, with no room for a concrete argument**.
-Widening it is a separate obligation-payload change, not a rider on the routing fix. That
-surviving half is #1161 symptom 2, now pinned at
-`test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+⚠️ **Two claims in this paragraph were MEASURED WRONG and are corrected here (2026-07-31),
+by a scoping pass that built the change rather than reading it.**
 
-⚠️ **This paragraph's own suggestion for HOW to build the vector is also wrong, in a way
-that silently produces nothing.** It names `constraintArgMonos` — which returns `None` for
-any argument that is not a bare tyvar, i.e. exactly the `Char` in `Ix a Char` that the
-whole vector exists to carry. (That is the same function leg 4 is stuck behind, four
-paragraphs up.) The shipped fix resolves arguments with `fromAstType tvMap` instead
-(`constraintVarArgMonos`). `headSubstWithParams` is correctly named: the vector reaches it
-through `routesOfMonosTopV` → `topRouteV` → `routeOfD` → `argImplRequiresRoutes`.
+- It said **"closes legs 2–4."** It closes **2–3**. Leg 4 — an unsatisfiable partially-concrete
+  constraint being accepted — was tested directly: `recordCallObligations` was made n-ary at
+  exactly the site that now carries the vector, built, and run, and the program is **still
+  accepted at exit 0**. Leg 4's home is `declaredSchemeOblsFor` → `declaredOblOne` →
+  `constraintArgMonos`, on a channel whose payload is `List (String, List Int)` — **ids only,
+  with no room for a concrete argument.** Widening it is a separate obligation-payload change,
+  not a rider on this one.
+- It said the machinery **"already exists: `constraintArgMonos`."** That function is **not
+  usable here**: it returns `None` for any non-tyvar argument, which is exactly the `Char` in
+  `Ix a Char` that the whole fix is about. The correct resolver is **`fromAstType tvMap`**.
+  This is the more expensive of the two errors — it names a real symbol that resolves, so it
+  reads as verified, and it points an implementer at a function that silently drops the datum.
 
-**LANDED 2026-07-31 as F-3a-ii** (`funConstraintArgsRef`, a table slot-parallel to
-`funConstraintsRef`; `routesOfMonosTopV`/`topRouteV`/`vectorGoal` route on it;
-`substArgVec` substitutes **structurally** with `substMono`, which is load-bearing — a
-top-level-only substitution empties the candidate set and restores first-match at a
-structured argument). Arity-neutral as this paragraph predicted, and now pinned as such by
-two emitted-IR rows in `test/diff_compiler_dict_semantics.sh`.
+`headSubstWithParams` (`:11850-11856`) does already match a goal vector against an impl head
+vector, and is reached without a new call site — that part of the claim holds.
+
+✅ **LANDED 2026-07-31 as F-3a-ii**, exactly as this paragraph describes it, and every
+claim above survived contact with the implementation. `funConstraintArgsRef` is a table
+**slot-parallel** to `funConstraintsRef` (its payload untouched, so `dictArityOf` /
+`dictPass` / `scopeArities` / the cross-module arity snapshot are literally unmodified);
+`routesOfMonosTopV` / `topRouteV` / `vectorGoal` route on it, gated on vector length > 1 so
+the 1-ary path is byte-identical **by construction**; `constraintVarArgMonos` resolves the
+arguments with `fromAstType tvMap`; `substArgVec` substitutes with `substMono`. Arity
+neutrality is now pinned STRUCTURALLY by two emitted-IR rows in
+`test/diff_compiler_dict_semantics.sh` (`useIx` at arity 2 and arity 3) — no behavioural
+assertion can see an arity move, which is why the value rows alone were not enough.
+⚠️ **Two residuals were left SCALAR and are named at `declaredConstraintArgs`**, not
+covered by anything: the cross-module qual table (there is no `(definer, name)`-keyed
+vector table, and a stored vector's tyvar arguments carry per-module ids that would need
+`attributeModuleArities`-style re-attribution — a mis-attributed vector is a
+wrong-but-**concrete** goal, strictly worse than a missing one), and
+`resolveRLocalSites`/`SKRLocal`, which is entangled with the first through
+`shadowStandaloneDictSlots` → `declaredConstraintSlots`.
+
+⚠️ Two further constraints, both **silent** if missed, established by the same pass: the
+substitution must be **`substMono`**, not top-level only (a top-level substitution leaves an
+interior signature tyvar unmapped, `matchTyMonos` fails, the candidate set goes **empty**, and
+the route degrades to bare-tag first-match — the original bug at a different shape); and
+**F-3c does not catch that class**, because `pickMostSpecificEntry []` returns `None` rather
+than the ambiguity arm.
 
 ---
 
