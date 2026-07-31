@@ -44,6 +44,43 @@ Terminology bridge (Medaka surface → theory; no implementation terms):
 | `requires` on an impl / `=>` in a signature | instance context / qualifier predicate |
 | dictionary (informal) | evidence value for a predicate |
 
+**Revision (2026-07-31): C1's quantifier is corrected — it is the closed goals `inst`
+decides, not the ground goals** (owed before **F-3d** of #311/#614; recorded on issue
+1155). §6 C1 said *"for any ground `C τ̄`"* while §6.1.3 says `inst` also fires at
+**rigid**-variable goals and commits there, and §3's determinism paragraph already
+cited C1 as covering them (*"wherever `inst` fires"*). C1, and with it §6.1.2's (b)
+and (c), now quantify over every goal that **reaches** `inst` — closed, not discharged
+by `assum`/`super`, **and not abstracted by `gen` into the binding's context** (that
+third exit is what keeps the clause off deferred predicates). The class is the ground
+goals plus the rigid-variable ones. The argument that the old wording genuinely left
+the rigid class uncovered rests on §6.1.2's *"acceptance is per-goal"* — **not** on any
+claim that the old wording was unsatisfiable or undecidable, both of which were offered
+in an earlier draft and are wrong; §6 C1's ⚠️ states the strongest opposing reading and
+defeats it there.
+
+**The change is a two-way move on acceptance, and both directions are real.** Rigid
+goals enter C1's scope (a narrowing that changes no program's status under this
+document — §3 `inst` was already inapplicable without a `⊑`-minimum, rigid or ground —
+and moves only what an implementation is obliged to check and diagnose). Predicates
+discharged by `assum`/`super` leave it, and that is a genuine **acceptance widening**
+in (c)'s direction: a program whose only occurrence of an ambiguous predicate is
+discharged from a context, with no caller, was rejected before and is accepted now.
+Correct under per-goal semantics, unobservable in any program that constructs the
+evidence — but a widening, and §6 C1 carries the counterexample rather than the word
+"inert".
+
+Two side repairs travel with it. C1 now says **at most one** `⊑`-minimal element, so an
+**empty** matching set is `inst` inapplicability rather than a C1 violation — it was
+literally a violation before, under either quantifier. Every clause that read
+**totality** out of C1 is corrected to stop; **§6 C1's ⚠️ carries the list, and this
+banner deliberately does not repeat it** — an earlier draft kept a second copy here,
+which went stale the moment the list grew, exactly as the count inside that ⚠️ had.
+One list, one place. And §6.1.2 now records
+that the (a) → (b) → (c) ladder **breaks at α-equal heads** — at (b) ⇒ (c) under the
+preorder reading of (b) the document now fixes, at (a) ⇒ (b) under the antisymmetric
+one, and either way **(a) ⇏ (c)** — so C1's rigid half may not be derived from (a).
+See §6 C1's ⚠️ and §11's C1 row.
+
 **Revision (2026-07-30): six rules that the implementation had been enforcing — or
 failing to enforce — with no governing clause are now written down** (#1107, Stage S
 of the typechecker target-architecture arc, epic #1122). They are **§4.1** (`gen` at a
@@ -76,6 +113,17 @@ relaxes C1 (§6) to "unique most-specific match", so that entailment remains a
 argument, return, nested `requires`, superclass projection — is obligated to
 the *same* winner. Points where a defensible alternative design exists are
 collected in §6.1 rather than silently chosen.
+
+⚠️ **Two phrases in the paragraph above are SUPERSEDED by the 2026-07-31 revision
+and are kept only as the historical record of what that revision said.** C1's
+condition is now *"at most one `⊑`-minimal element"*, not *"unique
+most-specific match"* — the difference is existence, and it matters. And C1 does
+**not** make entailment a *total* function and never did: it bounds the winner
+from above and asserts no existence, so a goal with an empty matching set leaves
+entailment undefined (the missing-instance rejection). Read §6 C1 and §3's
+well-formedness paragraph for the operative statements; this paragraph is
+history, and is deliberately not rewritten, because a superseded revision note
+that has been quietly edited stops being a record of anything.
 
 ---
 
@@ -237,13 +285,17 @@ match(IE, π) = { I ∈ IE  |  ∃φ.  φ(head(I)) = π }
 ```
 
 Overlap — `|match(IE, π)| > 1` at some goal — is **permitted**. What §6 C1
-requires is a unique winner: `match(IE, π)` must have a **unique ⊑-minimal
-element**, the goal's *most-specific matching instance*, written
-`min⊑(match(IE, π))`. (The matching set is finite, and in a finite preorder a
-unique minimal element is a minimum — equivalently, one matching instance is
-`⊑` every other matching instance.) If two `⊑`-incomparable instances match
-and no matching instance lies `⊑`-below both, no minimum exists and the goal
-is **ambiguous overlap** — rejected, not chosen from.
+requires is that there be no *rival* winner: `match(IE, π)` must have **at most
+one** `⊑`-minimal element. Where one exists it is the goal's *most-specific
+matching instance*, written `min⊑(match(IE, π))`. (The matching set is finite,
+and in a finite preorder a unique minimal element is a minimum — equivalently,
+one matching instance is `⊑` every other matching instance.) If two
+`⊑`-incomparable instances match and no matching instance lies `⊑`-below both,
+no minimum exists and the goal is **ambiguous overlap** — rejected, not chosen
+from. ⚠️ The other way to have no minimum is for `match(IE, π)` to be **empty**;
+that is *not* ambiguous overlap and not a C1 violation but `inst` inapplicability
+— the missing-instance rejection. C1 bounds the winner from above and asserts no
+existence (§6 C1).
 
 *Example (the #203 shape).* Let `IE` contain `DL_a = (Default a ⇒ Default
 (List a))` and `DL_Int = (Default (List Int))`. Then `DL_Int ⊏ DL_a` (via
@@ -288,26 +340,44 @@ Notes.
 - **`super`** is pure projection into the nested record — never a re-resolution.
   It is the formal meaning of `requires` on an interface.
 - **`inst`** is the only rule that *builds* a fresh dictionary. It selects the
-  goal's **unique most-specific matching instance** `I` — when the matching set
-  has no `⊑`-minimum the program is rejected as ambiguous overlap (§6 C1) —
-  and resolves to *`I`'s* evidence: it recursively discharges **`I`'s own
+  goal's **unique most-specific matching instance** `I` and resolves to *`I`'s*
+  evidence: it recursively discharges **`I`'s own
   context `φ(Q)`** at the goal's (specific) instantiation through this same
   judgment — so nested obligations themselves resolve most-specifically —
   captures that evidence `ē` in the method closures, fills `methods` from
   `I`'s impl, and fills each `supers.D` by resolving `D τ̄` through entailment
   — not through `super`, which would need the very dict being built. Its
   recursive premises are what force the representation to be a tree.
+- **When `inst` does NOT apply**, the formal premise above says only that the
+  rule is **inapplicable** (`none/no-unique ⇒ rule inapplicable`), and *which*
+  rejection follows depends on **why**. Two `⊑`-incomparable matches with none
+  `⊑`-below both is **ambiguous overlap** (§6 C1). An **empty** matching set is
+  the **missing-instance** rejection and is *not* a C1 violation (§6 C1's ⚠️) —
+  and it need not be a rejection at all, since §3's precedence may already have
+  discharged the goal by `assum`. ⚠️ This note read *"when the matching set has
+  no `⊑`-minimum the program is rejected as ambiguous overlap"*, which collapsed
+  the two and contradicted §6 C1 from inside the same section.
 
 **Resolution determinism.** Entailment is intended to be a *function*: for a
 given `(IE, CE, P, π)` at most one derivation exists up to evidence
 equivalence (§6) — now **the unique most-specific derivation**, not the
 unique derivation. Instance heads may overlap; `inst` stays deterministic not
 by forbidding overlap but through its minimality premise: it applies only for
-`min⊑(match(IE, π))`, which §6 C1 requires to exist uniquely wherever `inst`
+`min⊑(match(IE, π))`, which §6 C1 keeps free of a **rival** wherever `inst`
 fires. Two `⊑`-incomparable matches with no common `⊑`-lower match are
 **ambiguous overlap** and the program is rejected — most-specific-wins is a
 total tie-break, never "pick one". That reject is an `inst`-vs-`inst` rule and
 scopes to `inst` alone.
+
+⚠️ **Note precisely what C1 supplies here, because this sentence used to
+over-state it.** C1 gives *at most one* `⊑`-minimal element — never that one
+**exists**. So `inst`'s minimality premise is either met by exactly one instance
+or not met at all, and an **empty** matching set fails it just as an ambiguous
+one does, for a different reason and with a different verdict (§6 C1). Existence
+is `inst`'s applicability, not C1's guarantee. This sentence read *"which §6 C1
+**requires to exist uniquely** wherever `inst` fires"* until the at-most-one
+repair; its quantifier was already right, which is why it is cited in §6 C1 — and
+is exactly why the rest of it went unexamined for a round.
 
 When both `assum`/`super` and `inst` could apply, **`assum`/`super` takes
 precedence**: a predicate already in scope is used, and `inst` fires only when
@@ -328,8 +398,8 @@ In particular, the choice among overlapping instances is made **here, once,
 during elaboration** — never re-made per resolution position, per engine, or at
 run time (§6 "uniform resolution", §7).
 
-**Well-formedness (for entailment to be a total function).** Beyond unique
-most-specific matches (§6 C1), resolution is decidable only if (W1) the
+**Well-formedness (for entailment to be a single-valued function).** Beyond
+at-most-one most-specific match (§6 C1), resolution is decidable only if (W1) the
 **superclass relation is acyclic** — otherwise `super`-search loops — and (W2)
 **instance resolution terminates** — each `inst` premise `πᵢ ∈ φ(Q)` (the
 context of the *selected* instance) must be structurally smaller than the goal
@@ -338,8 +408,19 @@ context of the *selected* instance) must be structurally smaller than the goal
 `match(IE, π)` is a finite subset of a finite `IE`, membership is one
 one-sided matching problem per instance, and `⊑` between two heads is one
 more — so `min⊑` is computed by finitely many decidable comparisons, before
-any recursion. W1 + W2 + C1 together make entailment the function the
-elaboration of §4 assumes it to be.
+any recursion. W1 + W2 + C1 together make entailment the **function** the
+elaboration of §4 assumes it to be — **single-valued**, and that is the whole of
+what they deliver. ⚠️ **They do not deliver TOTALITY, and this heading over-claimed
+it in both of its previous forms.** C1 bounds the winner from above ("at most one
+`⊑`-minimal element") and asserts no existence, so it cannot carry totality and
+never could. Nor is entailment *"defined exactly where a matching instance
+exists"* — a briefly-written repair that is false in **both** directions, by this
+document's own cases: a non-empty matching set can still fail, when the selected
+instance's own context `Q` is underivable (§8 I5's class-4 shape); and an
+**empty** one can still succeed, when `assum` discharges the goal from `P`
+(§5.1 M3's first bullet, where `match(IE, Mk a)` is empty at rigid `a` and the
+program is nonetheless accepted). Where entailment is defined is `inst`'s
+applicability *and* §3's precedence, not C1's business.
 
 **W3 (method-scheme fidelity).** `inst` fills `methods` from `I`'s impl, and
 `var` at every use site instantiates the **method's declared scheme** — so the
@@ -776,8 +857,12 @@ the clause whose meaning it protects.
 
   ⚠️ **The parallel with §6.1 choice-point 2 goes only part of the way, and the part
   it does not go is the load-bearing one.** There, the declaration-time condition (a)
-  *implies* the per-goal condition (c), so a declaration-time rejection is merely
-  *early* — never wrong. Here it does not: *"this method mentions no class
+  *implies* the per-goal condition (c) — **with one exception, recorded at §6.1.2's
+  own ⚠️: α-equal heads satisfy (a) and (b) while failing (c), so the implication is
+  (a) ⇒ (c) *only for instance sets carrying no duplicate heads*. Read that exception
+  as narrowing what follows, not as licensing it** — outside it, a declaration-time
+  rejection is merely *early*, never wrong. Here it does not hold at all: *"this method
+  mentions no class
   parameter"* and *"this use's class parameter is undetermined"* are **logically
   independent**. A phantom method has determined uses (the first bullet above), and a
   non-phantom method has undetermined ones. So a declaration-time *rejection* is not
@@ -812,18 +897,202 @@ Coherence is the property the recurring bugs violate. It is guaranteed by the
 following conditions; the implementation must enforce them or reject the
 program.
 
-- **C1 — Unique most-specific instance.** For any ground `C τ̄`, the matching
-  set `match(IE, C τ̄)` (§3) has a **unique ⊑-minimal element** —
-  equivalently (the set is finite), a `⊑`-minimum: one matching instance at
-  least as specific as every other. Overlap — more than one matching head —
-  is permitted *iff* this holds. Two `⊑`-incomparable matching instances with
-  no matching instance `⊑`-below both make the goal **ambiguous overlap**,
-  and the program is rejected; so are α-equal duplicate heads (mutually `⊑`,
-  no *unique* minimal instance). This is the retained coherence guarantee:
-  most-specific-wins is a total tie-break, not a licence to pick. (The old
-  C1 — "at most one match" — is the special case where every matching set is
-  a singleton, which is why the relaxation is conservative over previously
-  legal programs.)
+- **C1 — At most one most-specific instance.** For every goal `C τ̄` **that reaches
+  `inst`** — every predicate the elaboration poses that (i) §3's precedence leaves
+  undischarged by `assum`/`super`, (ii) §4 `gen`/`gen-rec`/`gen-sig` does **not**
+  abstract into the enclosing binding's context as a dict parameter, and (iii) is
+  **closed at the point `inst` is applied to it** (§6.2 T3) — the matching set
+  `match(IE, C τ̄)` (§3) has **at most one** `⊑`-minimal element — equivalently (the
+  set is finite), and whenever it is non-empty, a `⊑`-minimum: one matching instance
+  at least as specific as every other. **An EMPTY matching set is not a C1
+  violation.** It is `inst` inapplicability (§3) — the missing-instance rejection,
+  a different verdict reached for a different reason. C1 governs *which* of several
+  instances answers a goal, never *whether* one exists; read otherwise, every
+  program with a missing instance "violates C1", which is not what any part of this
+  document means (see §5.1's phantom-method rejection, which turns on `match(IE, C
+  ?ā)` being empty and attributes the verdict to `var`/T4, not here). Overlap — more
+  than one matching head — is permitted *iff* this holds. Two `⊑`-incomparable
+  matching instances with no matching instance `⊑`-below both make the goal
+  **ambiguous overlap**, and the program is rejected; so are α-equal duplicate heads
+  (mutually `⊑`, hence **two** `⊑`-minimal elements, not one). This is the retained
+  coherence guarantee: most-specific-wins is a total tie-break, not a licence to
+  pick. (The **original** C1 — *at most one matching instance*, a different condition
+  from this one's *at most one `⊑`-minimal* instance — is the special case where
+  every matching set is a singleton, which is why the relaxation is conservative over
+  previously legal programs.)
+
+  ⚠️ **Read "at most one" strictly throughout, and do not restore "unique" from the
+  older wording.** This clause bounds the winner from **above only**. It says nothing
+  about a winner *existing* — that is `inst`'s applicability, a separate question with
+  a separate verdict — so C1 alone no longer delivers **totality** of entailment. Every
+  clause that leaned on it for totality is corrected to say so: §3's **well-formedness**
+  paragraph, §3's **`min⊑` restatement**, §3's **resolution-determinism** sentence,
+  §3's **`inst` note**, and the **coherence theorem** below. ⚠️ **That list is named
+  rather than counted on purpose** — an earlier draft of this ⚠️ said *"the three
+  places"* and was wrong the moment a fourth was found, which is what a count in a
+  document like this always does. Re-derive it rather than trust it: sweep for `C1` by
+  name, then again for the unnamed restatements (`unique`, `total`, `at most one`,
+  `minim*`), which is where the misses were.
+  The clause title was *"Unique most-specific instance"* until this revision; that
+  word was doing existence-work and at-most-one-work at once, which is exactly the
+  conflation this repair removes.
+
+  ⚠️ **The quantifier is the goals `inst` DECIDES, not the ground goals.** C1 read
+  *"for any ground `C τ̄`"* until this revision. The strongest reading of that wording
+  is not idle and very nearly closes the gap on its own, so it is worth stating before
+  it is set aside: quantify over **every** ground predicate, and read the condition as
+  *no ambiguous overlap* among the instances matching it. That is satisfiable, and it
+  is **decidable** despite the infinite quantifier — for each `⊑`-incomparable pair
+  whose heads unify with mgu `θ`, ask whether some declared head is α-equal to `θ`'s
+  common instance, which is precisely §6.1.2's `Pair`-triple test. It also subsumes the
+  rigid goals: a rigid variable behaves as a fresh constant under one-sided matching,
+  so a rigid goal's matching set coincides with that of a ground predicate, and
+  quantifying over *all* ground predicates catches it.
+
+  **What defeats that reading is §6.1.2's own commitment — *"acceptance is
+  per-goal."*** Quantified over every ground predicate, the condition rejects a program
+  declaring `C (Pair Int a)` and `C (Pair a Int)` and nothing else, *even if no goal in
+  the program ever reaches `C (Pair Int Int)`*. Condition (c) — the semantics this
+  document adopts — accepts exactly that program. So C1 is not a condition on the
+  instance environment in the abstract; it is a condition at the goals a program
+  **poses**, and it must name that class correctly. The goals a program poses are not
+  all ground: §3's precedence paragraph is explicit that given `S a` in scope the goal
+  `S (List a)` is *not* an assumption, so `assum` stays silent and `inst` commits;
+  §6.1.3 is explicit that the commitment is **final**. A rigid goal is put to `min⊑`
+  and answered by it, so it is a goal at which the tie-break must be total. That class
+  — the goals `inst` decides that are not ground — is what the old wording left outside
+  the condition, and it is the whole of what this revision adds. §3's determinism
+  paragraph already cites C1 with the corrected quantifier — **"wherever `inst`
+  fires"** — so this is C1 stating what the rest of the document already attributes to
+  it.
+
+  ⚠️ **That sentence is also a cautionary case, and it is worth naming because this
+  revision nearly repeated it.** It read *"which §6 C1 **requires to exist uniquely**
+  wherever `inst` fires"*, and an earlier draft of this paragraph quoted it in full,
+  approvingly, as evidence for the quantifier. Its second half attributes **existence**
+  to C1 and restores the very word the ⚠️ above says not to restore — so one sentence
+  was at once the best support for the requantification and a casualty of the
+  at-most-one repair. It is corrected in §3. **When a sentence is cited as support, the
+  half not being quoted is exactly the half to check.**
+
+  **The class is the CLOSED goals** — §6.2 **T3**: `inst` may fire only on a goal
+  every variable of which is either quantified by the scheme just produced or already
+  ground — that neither §3's precedence discharges nor §4's `gen` abstracts. That is
+  the ground goals **plus** the rigid-variable ones.
+
+  ⚠️ **Exit (ii) is not decoration, and a gloss that omits it over-includes by a whole
+  class.** A residual predicate over a **generalizable** variable is deferred by `gen`
+  and becomes a dict parameter (§4's `P'`; §6.1.3's *second* sentence says so outright) —
+  it is never posed to `inst`, and C1 has nothing to say about it. Without exit (ii)
+  a reader gets the opposite: an *inferred* binding whose residual predicate is
+  `C (T a Int Int)`, against `⊑`-incomparable `C (T a b Int)` and `C (T a Int b)`, would
+  be rejected **at its definition with no goal having reached `inst`** — the same fault
+  this clause rejects the commitment-site reading for, one exit over. (Exit (iii)'s
+  *"at the point `inst` is applied to it"* is load-bearing for the same case and is why
+  it is spelled that way: T3 indexes closedness to the scheme just produced, but the
+  question C1 asks is about the goal `inst` is handed, so the two must be read at the
+  same instant.) ⚠️ Do not read **T6**'s spelling of the closed class — *"every goal of
+  every generalized binding, and every ground goal"* — as C1's quantifier. T6 is
+  characterizing **closedness**, which is a strictly larger class: it includes the
+  goals `gen` abstracts, and exit (ii) removes those.
+
+  Closedness is *part of the quantifier*, not a gloss on it, and the alternative
+  reading — "every goal at which an implementation in fact commits" — is rejected
+  here, for two reasons.
+
+  It would **forbid a legal program.** Under §6.2 **T4** a *non-closed* goal — say
+  `D (T ?z Int Int)` with `?z` determined by a later group — is **deferred, not
+  decided**, and is resolved exactly once at quiescence. At the moment it is posed it
+  is undischarged by `assum`/`super` and its matching set may well have no minimum;
+  a C1 quantified over commitment sites would reject it, while T4 and T6 say it is
+  well-formed and that deferral is the whole point. And it would make C1's extent
+  **implementation-relative**: *"does program P satisfy C1?"* would have no answer
+  without knowing where some particular — possibly buggy — implementation happened to
+  commit. Every other condition in this section is a property of programs, and the
+  coherence theorem below reads C1 as one. An implementation that commits at a
+  non-closed goal (§11's T3/T4 row records one) is violating **T3**; C1 is not the
+  clause that catches it, and stretching C1 to cover it would cost C1 its status as a
+  property of the program.
+
+  "Reaches" is deliberate in the other direction as well: the class is *not* delimited
+  by `inst` **succeeding**. `inst`'s own minimality premise makes the rule inapplicable
+  where no minimum exists, so a condition quantified over the goals at which `inst`
+  succeeds would be vacuous — it would assert a minimum exists exactly where one was
+  already found. For the **`assum`** leg, whether a goal reaches `inst` is settled
+  before any matching set is compared: `assum` is a lookup in `P`. The **`super`** leg
+  is not settled that cheaply — its premise `P ⊢ C T̄ ⇝ e` is an arbitrary entailment
+  that may itself need `inst` — so "decided in advance" is a claim about `assum` only,
+  and is stated as one. No soundness consequence follows: C2 is what requires the two
+  answers to agree.
+
+  Making C1's *scope* a function of the ambient `P` — precedence is — is not §6.1.1's
+  rejected alternative, which makes the *winner* a function of `P`. Selection at a goal
+  that reaches `inst` remains a function of `(IE, π)` and nothing else, exactly as C3
+  requires. **C2 needs one clause more than C3 does**, and the site must be named
+  carefully. C2's obligation is *not* discharged at the instance **head**: §3 `inst`
+  fills `supers.D` by entailment **at the construction goal's instantiation**, and
+  §6.1.4 calls pre-resolving supers against the general head at declaration *"the
+  tempting-but-wrong implementation"* — so no `D T̄` goal at the declared head is ever
+  posed to `inst`, and C1 owes it nothing. Where C2 genuinely gains is §6.1.4's
+  **rigid construction goal**: when a general `C`-instance is constructed at a goal
+  whose variables are rigid, its `supers.D` is resolved at *that* goal, and §6.1.4
+  asserts the result agrees with what top-level resolution at the same goal would
+  produce. That agreement needs at most one winner **at a rigid goal** — which the old
+  quantifier did not supply and this one does. So the `P`-dependence reaches C2 too,
+  and it is a gain rather than a loss: under the old wording that goal had **no** C1
+  backing at all.
+
+  ⚠️ **The requantification is a TWO-WAY move, and BOTH directions are live.** The new
+  class is not a superset of the old one, so no reader may lean on "strictly wider" —
+  and the half that leaves is **not** inert, which an earlier draft of this paragraph
+  wrongly claimed.
+
+  **What leaves is an acceptance WIDENING, deliberate and in (c)'s direction.** Take
+  `impl D (Pair Int a)` and `impl D (Pair a Int)` — `⊑`-incomparable, no third
+  instance below both — together with
+
+  ```
+  f : D (Pair Int Int) => Pair Int Int -> Int
+  f p = dv p
+  ```
+
+  and **no caller**. `f`'s body poses the *ground* goal `D (Pair Int Int)`, which
+  `assum` discharges from `f`'s own context, so it never reaches `inst`. Under the old
+  ground quantifier that predicate was in C1's scope, had two `⊑`-minimal elements, and
+  the program was **rejected**; under this one it is **accepted**. That is the correct
+  verdict under per-goal semantics — no evidence for the predicate is ever constructed
+  in this program, so no coherence question arises — but it *is* a widening, and the
+  honest statement of it is: **unobservable in any program that actually constructs the
+  evidence** (a caller re-poses the predicate where `inst` decides it, and C1 binds
+  there), not "inert".
+
+  **What arrives — the rigid goals — is the narrowing half**, and it changes no
+  program's status under **this document**: §3 `inst` was already inapplicable at any
+  goal, ground or rigid, whose matching set has no `⊑`-minimum, so a program posing one
+  was already unelaborable. What changes there is the **obligation** on an
+  implementation, which is audited clause by clause (§11): ambiguous overlap at a rigid
+  goal owes a diagnostic, the check may not be gated on groundness, and such a goal may
+  not be answered from a fallback. §11's C1 row records why the present
+  declaration-time site does not discharge this half, and what currently stands in
+  for it.
+
+  That the change is not merely editorial is best seen in **two clauses elsewhere in
+  this section that cited a C1 which did not reach them**:
+  **§6.1.4**'s parenthetical asserts that at a *rigid-variable* construction goal the
+  super-dict agrees with what top-level resolution at that same goal would produce,
+  which needs at most one winner **at that rigid goal**; and **C2**'s pinning of *which*
+  `D`-dict fills `supers.D` inherits that same goal (see the C2 paragraph above — the
+  site is the construction goal, not the declared head). ⚠️ Note the claim is exactly
+  *"cited a C1 that did not reach them"* and not *"true only under the corrected
+  quantifier"* — an earlier draft said the latter, which does presupposition-failure
+  work rather than truth-value work, since §3 `inst`'s minimality premise already
+  forecloses the bad case under either quantifier. The weaker claim is the true one and
+  is sufficient. ⚠️ The **coherence theorem**'s sketch is *not* a third witness, though an
+  earlier draft of this paragraph offered it as one: its *"total on the goals
+  elaboration poses"* is repaired below for the at-most-one reading, not for the
+  quantifier, and citing a sentence this same revision had to fix would have been
+  circular.
+
 - **C2 — Superclass consistency (an invariant, largely implied by C1+C3+C4).**
   For every instance `Q ⇒ C T̄` and every `D ā_C ∈ super(C)`, the evidence in
   `supers.D` must be `≡` to resolving `D T̄` independently via §3 — the nested
@@ -877,15 +1146,24 @@ back to first-match (or declaration order, or crashes) under overlap is
 exactly the defect class of §10.
 
 **Coherence theorem (target).** If C1–C4 hold, elaboration is coherent.
-(Argument sketch under overlap: W1+W2+C1 make entailment total on the goals
-elaboration poses, and a function of `(IE, CE, P, π)` — `assum` is keyed by
-`P`, `super` by the already-unique sub-derivation, and `inst` by the unique
-`⊑`-minimum, which no search order can vary (C3). C4 fixes one global `IE`,
-so "the" minimum is the same at every site. Two derivations of the same
-judgment thus produce `≡` evidence pointwise, and elaborated terms differ at
-most in the derivation path, not the evidence — the same argument as the
-non-overlapping theorem with "the unique match" replaced by "the unique
-minimum".)
+(Argument sketch under overlap: W1+W2+C1 make entailment a **single-valued
+partial** function of `(IE, CE, P, π)` on the goals elaboration poses — `assum` is keyed
+by `P`, `super` by the already-unique sub-derivation, and `inst` by the
+`⊑`-minimum, which is unique where it exists and which no search order can vary
+(C3). C4 fixes one global `IE`, so "the" minimum is the same at every site. Two
+derivations of the same judgment thus produce `≡` evidence pointwise, and
+elaborated terms differ at most in the derivation path, not the evidence — the
+same argument as the non-overlapping theorem with "the unique match" replaced by
+"the unique minimum".)
+
+⚠️ **Coherence is what this theorem claims; TOTALITY is not, and the earlier
+wording ("make entailment total on the goals elaboration poses") over-claimed.**
+C1 bounds the winner from above only, so a goal with an **empty** matching set
+leaves entailment undefined — the missing-instance rejection, which is a *failed
+elaboration*, not an incoherent one. Coherence quantifies over derivations of the
+same judgment; a judgment with **zero** derivations satisfies it vacuously. So
+the theorem is unaffected by the at-most-one reading, and only its sketch's
+choice of word was wrong.
 
 ### 6.1 Design choice-points in the overlap regime (owner-visible)
 
@@ -911,10 +1189,14 @@ to it later is a semantics change, not a bug fix.
    - (a) *global comparability*: any two instances of a class whose heads
      unify must be `⊑`-comparable — checkable once at declaration time,
      earliest errors; implies (b);
-   - (b) *per-goal total order*: at every ground goal the matching set is
-     totally ordered by `⊑`; implies (c);
-   - (c) *per-goal unique minimum*: at every ground goal the matching set has
-     a unique `⊑`-minimal element — what C1 states.
+   - (b) *per-goal total order*: at every goal that reaches `inst` the matching
+     set is totally ordered by `⊑` — **pairwise `⊑`-comparability**, i.e. a
+     total *preorder*, since §3 makes `⊑` a preorder on instances and only a
+     partial order on heads *up to renaming*; implies (c) ⚠️ **except at
+     α-equal heads — see the hole recorded below**;
+   - (c) *per-goal unique minimum*: at every goal that reaches `inst` the
+     matching set has **at most one** `⊑`-minimal element — a unique minimum
+     whenever it is non-empty — which is what C1 states.
    (c) is exactly what `inst`-determinism requires — no more. The separating
    case: `C (Pair Int a)`, `C (Pair a Int)`, `C (Pair Int Int)` all declared.
    At the goal `C (Pair Int Int)` the first two are incomparable, but the
@@ -924,9 +1206,47 @@ to it later is a semantics change, not a bug fix.
    still fully static, never at run time. An implementation MAY additionally
    warn at declaration time on (a)-violations as an early diagnostic, but
    acceptance is per-goal. Note the task-level intuition "overlap is allowed
-   iff totally ordered by specificity at each ground goal" is condition (b):
-   sound, slightly stronger than needed, and the difference only shows on
-   instance sets like the `Pair` triple above.
+   iff totally ordered by specificity at each ground goal" is condition (b)
+   **under C1's old quantifier**: stronger than needed at the goals it does
+   cover — the difference showing on instance sets like the `Pair` triple
+   above — and silent at every rigid goal, which is the half §6 C1's ⚠️
+   repairs.
+
+   "Goal that reaches `inst`" is C1's quantifier and carries C1's meaning: the
+   **closed** goals — the ground ones **and** the rigid-variable ones. Both (b)
+   and (c) are per-*goal* conditions, so both inherit it; (a) is quantified over
+   declared instance **pairs**, not over goals, so its own statement is unchanged.
+
+   ⚠️ **But the ladder has a hole exactly where C1 has its explicit carve-out, and
+   no migration may lean on the chain across it.** Two **α-equal** heads are
+   mutually `⊑`. They therefore satisfy (a) (they are `⊑`-comparable) *and* (b) (a
+   two-element set, pairwise comparable, is totally preordered) — while C1 rejects
+   them outright, because mutual `⊑` gives **two** `⊑`-minimal elements, not one.
+   **So the broken link is (b) ⇒ (c), not (a) ⇒ (b)**, and the composite that fails
+   is the one a migration would actually want: **(a) ⇏ (c)**, hence **(a) does not
+   subsume C1.**
+
+   That placement depends on reading (b)'s "totally ordered" as *pairwise
+   comparable*, which is why the bullet now says so outright. It is the only reading
+   available: §3 makes `⊑` a **preorder** on instances — antisymmetric on heads only
+   *up to renaming*, and α-equal heads are exactly the case where the quotient
+   matters — so an antisymmetric reading of (b) would not be a condition on the
+   matching set of *instances* at all. Under the antisymmetric reading (b) fails
+   too, and the hole moves to (a) ⇒ (b); **the ladder is broken somewhere either
+   way, and (a) ⇏ (c) is the invariant conclusion.**
+
+   An implementation MAY close the hole by demanding *strict* specificity in one
+   direction rather than mere comparability, and §11's C1 row records that this one
+   does — but that is the implementation being stronger than (a), not (a) being
+   strong enough. **Do not derive C1's rigid half from (a) at the level of this
+   document.** §5.1's *"(a) implies (c), so a declaration-time rejection is merely
+   early"* carries this exception explicitly.
+
+   What *is* true, and is a fact about the tree rather than a theorem about (a):
+   the strengthened declaration-time check currently rejects every
+   `⊑`-incomparable overlapping pair before any goal is posed, so C1's rigid half
+   is unreachable until (a) is relaxed to (c) — and reachable the moment it is.
+   §11's C1 row carries the probe.
 
 3. **Non-ground goals: selection commits at the elaboration site
    (specialization is not retroactive).** `inst` fires on the goal *as it
@@ -1626,7 +1946,7 @@ function rather than over the pass that was expected to call it.
 | §5.1 **M1** (impl completeness) | `checkImplCompleteness:10862` (whole-program scan) **and** `checkImplCompletenessMap:10922` (the multi-module keyed twin), pushing `T-INCOMPLETE-IMPL` via `pushIncompleteImpl:10868`; required set from `requiredMethodNames:10908` (methods whose merged `IfaceMethod` carries no default) | every non-defaulted interface method has a body in the impl, so `methods(e).m` is total | ⚠️ two implementations of one judgment (the scan and the map), kept in step by hand — the map's comment (`:10920-10921`) states its keying assumption outright: *"Interface names are globally unique, so the map's last-write-wins carries the same required-method list the scan's first-match returned."* **§8 I4 makes that premise false**, and the failure is silent in the last-write-wins direction: two same-named interfaces in one graph, one required-method list. Error location is `firstImplMethodLoc:10892` — the first present method body, `None` for a wholly-empty impl |
 | §5.1 **M2** (no extraneous methods) | ✅ **ENFORCED — at RESOLVE, not typecheck.** `checkImplDecl:1227` → `checkImplIface:1241` → `checkMethodMember:1252`, which rejects any `ImplMethod` whose name is absent from `ifaceMethodsOf iface env.ifaceMethods` with `MethodNotInInterface` (`resolve.mdk:119`), rendered at `ppResError:1912`, code `R-METHOD-NOT-IN-INTERFACE` (`resErrorCode:1955`). Runs on **both** env paths — `ifaceMethods` is populated at `resolve.mdk:1428` (single-file: prelude ++ user) and `:2472` (multi-module: ++ imported) — so it fires on `check`, `run` and `build`. Typecheck's own arm is **inert**: `inferImplMethod:14396`'s `None` arm (`:14398`) is `()`, so the extraneous body is never inferred; the guarantee comes entirely from resolve | an impl body under a name the interface does not declare is rejected before typecheck ever sees it | ⚠️ **keyed on the BARE interface name**, and `ifaceMethodsOf:1246` is a **first-match** assoc over `pIfaces ++ uIfaces ++ impIfaceMethods`. Two interfaces sharing a name in one graph resolve to the *first* list, which can both spuriously reject a legitimate method of the second and spuriously accept an extraneous name that happens to be in the first — §8 I4's hazard on this exact check (structural reading; not reproduced here, no binary). ⚠️ **Quality residual, not a soundness one:** the error is constructed with `None` for its location (`:1257`) and so prints `<unknown location>`, even though `checkImplMethod:1237` has `firstExprLoc body` in hand two lines away — an unfilled slot, `compiler/ERROR-QUALITY.md` dimension. **Scope note:** M2 is a rule about the *name* only; a body under a **correct** name with the wrong arity or type is W3's business (`inferImplMethod`'s unification), not M2's, and this row does not claim otherwise |
 | §5.1 **M3** (phantom methods: reject the undetermined USE, not the declaration) | 🔴 **DIVERGENT.** `checkPhantomMethods:10995` → `phantomMethodMsgs:11001` → `phantomMethodMsg:11007`, pushing `T-PHANTOM-METHOD`, run from `runFinalChecks:11052` | rejects a method whose declared type mentions none of the interface's parameters | 🔴 keyed on the **`DInterface` declaration alone** — `phantomMethodMsgs` matches `DInterface` and nothing else, so the rule fires with **zero impls and zero uses in the program** and can never see whether a use is determined. This is #1134's over-rejection, stated structurally rather than behaviourally. ⚠️ a second, separable defect in the same site: the diagnostic is pushed with `pushTypeError:2932`, which attributes to `currentLoc.value` — the *live* location at the end of the run, not the declaration — so the caret lands wherever inference last was (on #1134's repro, the impl body). The location is not a deliberate attribution and should not be read as one |
-| §6 **C1** (unique most-specific instance) | `cohFirstConflict:10769`/`cohConflictWith:10775`/`cohAnonConflict:10786`/`cohStrictlyMoreSpecific:10735`, invoked from `checkCoherence:10809` (`compiler/types/typecheck.mdk`) | rejects ambiguous overlap at declaration time | 🔴 **SPEC-VS-CODE DIVERGENCE (already tracked: #614, #311).** `cohConflictWith` scans **all declared pairs** and rejects on any `⊑`-incomparable pair — §6.1 choice-point 2's condition **(a) global comparability** — not the spec's stated recommendation **(c) per-goal unique minimum**. The spec's own `Pair` counterexample (`C (Pair Int a)`, `C (Pair a Int)`, `C (Pair Int Int)` — accepted under (c), rejected under (a)) is exactly what this implementation currently gets wrong |
+| §6 **C1** (at most one most-specific instance) | `cohFirstConflict`/`cohConflictWith`/`cohAnonConflict`/`cohStrictlyMoreSpecific`, invoked from `checkCoherence` (`compiler/types/typecheck.mdk`) — **symbol names only, deliberately.** This row's line numbers were captured at `c4ef6dbe` and had drifted by the time it was next read, which is the failure this table's preamble warns about. ⚠️ **A number was not merely stale, it was UNRECOVERABLE by re-measurement: drift here is NON-MONOTONE.** Two agents re-derived this row's drift honestly, in different trees, and got answers an order of magnitude apart — a large deletion upstream in `typecheck.mdk` pulls every citation below it back *toward* its captured value, so "how stale is this citation" has no single answer and a recorded delta is worth less than no delta at all. Re-derive each symbol with `grep -n '^<symbol>' compiler/types/typecheck.mdk`, as this table's preamble already instructs | rejects ambiguous overlap at declaration time | 🔴 **SPEC-VS-CODE DIVERGENCE (already tracked: #614, #311).** `cohConflictWith` scans **all declared pairs** and rejects on any `⊑`-incomparable pair — §6.1 choice-point 2's condition **(a) global comparability** — not the spec's stated recommendation **(c) per-goal unique minimum**. The spec's own `Pair` counterexample (`C (Pair Int a)`, `C (Pair a Int)`, `C (Pair Int Int)` — accepted under (c), rejected under (a)) is exactly what this implementation currently gets wrong. 🔴 **The cited site is GOAL-BLIND, so it does not EXERCISE this clause as reworded — it SUBSTITUTES for it, and only by being stronger than it** (stronger than the spec-level (a) too — see the last ⚠️ in this cell). `checkCoherence` folds over declared impls and never sees a goal, rigid or ground, so C1's rigid half (the ⚠️ in §6 C1) is covered here by accident of that strength, not by anything that would survive (a)'s relaxation. **The rigid half is live, and both halves of that were probed on a worktree build at `c88859c0`, not inferred.** (i) `min⊑` really does run and decide at a rigid goal: against `impl D (P a b)` + `impl D (P a Int)`, the binding `g : P x Int -> Int` / `g p = dv p` emits `call @mdk_impl_D__P_a_Int___dv` as the whole of `g`'s body (`medaka build --keep-ir`) — the strictly-more-specific of the two instances matching the rigid goal `D (P x Int)`, with both impls emitted in the module, so the choice is the typechecker's and not DCE's; `run` and the built binary both print `2`. (ii) (a) is what keeps that goal out of the ambiguous case: add a third impl and make the pair incomparable — `impl D (T a b Int)` / `impl D (T a Int b)` / `impl D (T Int Int Int)` — and the program is rejected at the *second declaration*, *"Overlapping impls of D: T a Int b and T c d Int can match the same type. Make them disjoint, or wrap one type in a newtype"*, even though its **only** `D` goal is the rigid `D (T x Int Int)` inside `g : T x Int Int -> Int`. Relax (a) to (c) (**F-3d** of #311) and the per-goal site inheriting the clause is the §3 `min⊑` row's `pickMostSpecificEntry`, whose no-unique-minimum arm returns the head of the candidate list. ⚠️ **That §3 row's forward reference to "why this path is believed unreachable" resolves here, and the answer is that it is NOT unreachable — the belief holds only for the goals whose candidate set really is `match(IE, π)`.** (a) compares only pairs whose heads unify, so it never sees two **disjoint** impls that a *deformed* candidate set delivers to the selector together; issue **#1154** (OPEN, S0) is that path, reproduced first-hand here rather than relayed — `111` with its two `Ix` impls in one order, `222` with them swapped, `check --json` reporting `"diagnostics":[]` and exit 0 both ways. (Its context predicate `Ix a Char` is *written* at the rigid impl-head variable `a`; whether the selector is reached at `a` or at its ground instantiation was **not** established here, and this row does not claim it — the deformation, not the rigidity, is what defeats (a) in that case.) ⚠️ **The site is also STRONGER than the (a) §6.1.2 states, which matters to anyone deriving one from the other.** (a) asks only for `⊑`-**comparability**, which two α-equal heads satisfy; `cohAnonConflict` instead falls through only on `cohStrictlyMoreSpecific xs ys` or `cohStrictlyMoreSpecific ys xs`, so mutually-subsuming heads reach its `otherwise` arm and are rejected — closing, in the implementation, the ladder hole §6.1.2's ⚠️ records (at **(b) ⇒ (c)** under the preorder reading of (b), at (a) ⇒ (b) under the antisymmetric one; **(a) ⇏ (c)** either way). Read the direction carefully: the tree is stronger than the clause here, so this is a place where auditing the implementation against (a) would *understate* what it enforces |
 | §6 **C2** (superclass consistency) | No SINGLE dedicated check — but TWO independent by-construction mechanisms were located, not merely the spec's own disclaimer. (a) `argImplDictRoutesForEncl:12187-12192`/`entailInst`'s EKReturn+EKArg arms (`:11974-11978`, the #609 fix); (b) `expandSupersTable:5037-5041` (WS-1b) | (a) selects the SAME impl for the dispatch route and its own `requires`-context routes — comment at `:12175-12177` names the failure mode explicitly as "evidence for instance A attached to methods of instance B (§2 "evidence is a tree"; §6 C2 coherence)". (b) sidesteps the question for `=>`-constrained-fn super slots by construction: the dict *value* is a bare type tag identical across the whole `requires` chain, so "the super slot's route is identical to the sub slot's route — no separate projection is needed" (comment at `:5028-5029`) | (a) is keyed by the SAME goal-vector selection as `inst` (row above); (b) is keyed by (fn, transitive-superinterface) slot pairs, deduped by `(iface, id)`. Neither is a dedicated "check that C2 holds" — both are designs that make a C2 *violation* structurally unreachable, which is a stronger form of the spec's own claim ("the invariant to check, not an independent obligation") than a blank "no site" first suggested |
 | §6 **C3** (resolution determinism) | same dispatch path as `inst`/precedence rows above | entailment returns the same evidence regardless of search order | ⚠️ **#1072 (OPEN S0)**: "most-specific-wins is decided by MODULE ORDER — the bare-head word is OR'd into every arm, so a site whose module sees only the general impl calls it instead of the specific one" — a live counterexample to order-independence |
 | §6 **C4** (single instance environment) | `loadDataUniverse:16973`/`storeDataUniverse:16983`/`appendUniverseAccums:16925`; `univConcreteBucket:13702`/`univHeadless:13707` (`compiler/types/typecheck.mdk`) | `IE`/`CE` global after import resolution | see I2 below for the identity-keying discipline this depends on |
@@ -1660,6 +1980,19 @@ rejected, and there is no diagnostic at depth 33.
 unique minimum) — already tracked as #614 and #311; this table independently
 re-confirms it against source at `c4ef6dbe`, with the exact reject site
 (`cohConflictWith`) and the exact spec passage it contradicts (§6.1 choice-point 2).
+⚠️ **The divergence is currently in the SAFE direction, and that is the trap** — but
+**not** for the reason it is tempting to give. The safe reason is *not* "(a) is
+stronger than (c)": §6.1.2's own ⚠️ shows the ladder from (a) to (c) breaks at α-equal
+heads, so **(a) ⇏ (c)** and (a) alone would leave a duplicate-head pair accepted where
+C1 rejects it. Safety comes from the **site being stronger than (a)** —
+`cohAnonConflict` falls through only on *strict* specificity in one direction, so
+mutually-subsuming heads are rejected too (the C1 row establishes this). On that true
+premise the site over-rejects rather than mis-answers, including over the
+rigid-variable goals C1's quantifier now names explicitly, and is therefore
+*standing in for* a per-goal check that does not exist. The C1 row above carries the
+probes; the consequence is that (a)'s relaxation and a per-goal ambiguity reject are
+one change, not two, and ordering them the other way is what issue 1155 is filed to
+prevent.
 
 **UNIMPLEMENTED found by the #1107 rows (1), with no site anywhere in the tree:**
 **§4.1 G1** — a `let`/`where` binding never receives dictionary parameters. This one
