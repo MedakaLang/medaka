@@ -6,7 +6,8 @@
 -- with the SAME field typo, so each renders the SAME diagnostic text.  Everything
 -- else about them is identical too, which is what makes "two rendered strings are
 -- equal" the single variable — see iface_default_distinct_typos.mdk, the control that
--- differs from this file in exactly one character (`aeg` -> `nmae`).
+-- differs from this file in exactly one field name (m2 misspells `name` instead of
+-- misspelling `age` a second time).
 --
 -- WHAT IT PINNED BEFORE THE FIX (asymmetric verdicts on identical bodies):
 --   Field 'aeg' does not belong to record 'Rec'. Did you mean 'age'?   <- m1 only
@@ -29,9 +30,25 @@
 -- is deliberately out of scope for issue 1146; this fixture pins that the dedup
 -- decision no longer changes an inference VERDICT, not that dedup is right.
 --
--- The gate can still never turn `rejected` into `accepted`: a dedup short-circuit
--- fires only when an identical message is ALREADY in the channel, so a diagnostic is
--- stored either way and the program is rejected either way.
+-- ON THE ORDINARY PATH the gate can never turn `rejected` into `accepted`: a dedup
+-- short-circuit fires only when an identical message is ALREADY in this module's
+-- channel, so a diagnostic is stored, `typeErrorsSticky` is armed, and the program is
+-- rejected either way.
+--
+-- ⚠️ That is scoped, and the exception is `discoverPromotedModules` — a SPECULATIVE
+-- joint typecheck whose diagnostics are deliberately discarded (it restores the
+-- channel, the sticky flag AND the counter afterwards).  All three gates run inside
+-- that window, so a detection there is un-stored, un-armed and un-counted and rejects
+-- nothing; what survives is the discovery result (`promoted` + the two `crossRun`
+-- constraint snapshots).  It compounds with S1's gated block not being
+-- diagnostics-only: that block's `unify expected2 actualTy` mutates union-find state
+-- `defaultBodyLocalNum` later reads (#873, body-local `Num` grounding → impl
+-- selection), so skipping it changes dispatch, and "harmless because the program is
+-- rejected anyway" is exactly the premise the speculative window removes.
+-- NOT DEMONSTRATED — it needs a spurious duplicate-message error inside a default
+-- body during the joint flatten, which no sweep has produced — and it WIDENS a hazard
+-- the old `listLen` keying had identically rather than introducing one.  Full
+-- statement: compiler/ERROR-QUALITY.md §6.
 --
 -- Prelude-free on purpose (`toB`, not `not`), so BOTH drivers grade it.
 data Rec = { age : Int, name : Int }

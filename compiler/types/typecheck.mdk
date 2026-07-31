@@ -3553,8 +3553,9 @@ typeMismatchInDo a b doLoc
 -- issue 1146 PR1: this is the SIXTH push site — it open-coded the cons + sticky set
 -- rather than going through one of the five named `pushTypeError*` helpers, so it is
 -- invisible to a grep for them.  It now routes through `recordTypeError` like every
--- other push, which is what keeps the occurrence counter's delta equal to the
--- channel's length delta on the `do`-requires-a-monad path too.
+-- other push, which is what makes this path's detection reach the counter too.
+-- (It does NOT re-establish "counter delta == list-length delta": PR2 abolished that
+-- equality on purpose — see `recordTypeError`.)
 recordDoMonadError : Loc -> Unit
 recordDoMonadError doLoc =
   let _ = setRef currentDoOrigin None
@@ -9659,10 +9660,24 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- and the counter is now the SOLE control signal with no list to fall back on.
   -- Keep the pair in step rather than relying on the straddle staying impossible.
   --
-  -- `typeErrorsSticky` is restored too (below), which is what keeps dedup honest
-  -- across this rollback: a short-circuit can never fire against a message that was
-  -- rolled out of the channel, so "a detection implies a stored diagnostic implies a
-  -- rejected program" survives the speculative pass.
+  -- `typeErrorsSticky` is restored too (below), which is what keeps dedup honest ACROSS
+  -- this rollback: a short-circuit can never fire against a message that was rolled out
+  -- of the channel, so "a detection implies a stored diagnostic implies a rejected
+  -- program" is intact for everything AFTER the window.
+  --
+  -- ⚠️ INSIDE the window it does not hold, and that is deliberate — this whole pass
+  -- exists to typecheck speculatively and DISCARD the diagnostics.  A gate that fires
+  -- in here (S1/S2/S3 all run within it, via the joint typecheck's default-method
+  -- bodies) is un-stored, un-armed and un-counted afterwards, so it rejects nothing;
+  -- what survives is the discovery result, `promoted` + the two `crossRun` snapshots.
+  -- That matters because S1's gated block is NOT diagnostics-only: its
+  -- `unify expected2 actualTy` mutates union-find state `defaultBodyLocalNum` later
+  -- reads (#873), so skipping it moves grounding, hence impl selection.  Outside this
+  -- window that is harmless because the program is rejected; here that premise is
+  -- unavailable.  NOT DEMONSTRATED (it needs a spurious duplicate-message error inside
+  -- a default body during the joint flatten, which no sweep has produced), and it
+  -- WIDENS a hazard the pre-1146 `listLen` keying had identically rather than
+  -- introducing one.  Full statement: compiler/ERROR-QUALITY.md §6.
   let savedErrSnap = wSnapshot perRun.value.typeErrors
   let savedDetected = perRun.value.errorsDetected.value
   -- Drop the prelude/core defs AND signatures shadowed by a same-named user-module
@@ -13591,7 +13606,16 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 -- root cause; no cascade") and its §6 enforcement table, which names this site.
 -- ⚠️ It used to cite "the oracle's single-error raise" instead.  That compiler was
 -- removed 2026-06-26, so the citation named nothing; the rule is ours now, and its
--- conformance fixture is `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk`.
+-- conformance fixture is `test/typecheck_error_fixtures/iface_default_dedup_cascade.mdk`
+-- (which pins the shared KEYING; it does not on its own discriminate this gate — that
+-- would need a compiler built with S1 removed, and nobody has built one).
+--
+-- ⚠️ THE GATED BLOCK IS NOT DIAGNOSTICS-ONLY.  `unify expected2 actualTy` mutates
+-- union-find state that `defaultBodyLocalNum` reads below — its job (#873) is grounding
+-- body-local `Num` vars so the right impl is selected — so skipping it moves GROUNDING,
+-- hence dispatch, not just what prints.  On the ordinary path that is harmless because
+-- a detection here means the program is rejected anyway; inside
+-- `discoverPromotedModules`'s speculative pass that premise is unavailable (see there).
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
 inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
