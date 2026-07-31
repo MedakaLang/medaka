@@ -280,6 +280,37 @@ kebab-case; never renumber (append only).
 | `W-GUARD-INEXHAUSTIVE` | guards may not be exhaustive (exhaust) |
 | `W-NONEXHAUSTIVE-CLAUSES` | non-exhaustive clauses of a multi-clause function — a constructor is not covered by any clause (exhaust; the function-clause analog of `W-NONEXHAUSTIVE`) |
 
+#### Adding a typecheck-stage warning
+
+A warning is a full diagnostic, so it gets a code the same way an error does:
+**authored at the push site, never inferred downstream.** Concretely:
+
+1. Push a `TcDiag <code> 2 <loc> <msg> <help> None` onto **`matchWarnings`**
+   (`compiler/types/typecheck.mdk`). Despite the name that channel is the general
+   typecheck-warning channel, not a match-specific one. `<msg>` keeps the leading
+   `"Warning: "` — the text renderers print it verbatim and only
+   `diagOfTypeWarning` strips it.
+2. Add the code to the table above.
+
+Two rules, both paid for:
+
+- **Do not leave the code `""` and let the conversion guess.** Until 2026-07-31
+  `diagOfTypeWarning` (then `diagOfMatchWarning`) discarded the `TcDiag`'s code and
+  recomputed one by prefix-matching the *rendered message*, with `otherwise =
+  "W-NONEXHAUSTIVE"`. That is identity keyed on spelling — design law **L2**
+  (`TYPECHECK-TARGET-ARCHITECTURE.md` §1) — and it happened to work only because the
+  channel carried exactly two warnings with distinguishable prefixes; a third would
+  have been silently relabelled a non-exhaustive-match warning. §5 below already
+  prescribed authoring the code at the push; the conversion now simply carries it.
+- **Do not demote an error to a warning by pushing severity 2 through
+  `recordTypeError`.** The `typeErrors` channel is not a pure report: it arms
+  `typeErrorsSticky` (which `hadTypeErrors` uses to abort `build`/`run`) and bumps
+  `errorsDetected` (which `erredDuring` polls to gate inference — issue 1146). Such a
+  "warning" would keep both of an error's side effects while printing as severity 2.
+  `diagOfTypeError` therefore hardcodes `SevError` on purpose and ignores the
+  `TcDiag`'s severity field. `matchWarnings` has neither side effect; demote by
+  moving the push to that channel.
+
 ### Eval / runtime — `E-*` (`compiler/eval/eval.mdk`, `medaka run`)
 
 Runtime errors surfaced by the tree-walking interpreter. Unlike the compile-time
@@ -347,7 +378,9 @@ code from the per-stage helper below — not 20 ad-hoc literals.
   `pushTypeError*` call sites gain a code argument** — this is the bulk of the
   authoring work, but it is mechanical (each site's kind is obvious from its
   message; see §1 table). The two `setRef matchWarnings` sites similarly gain
-  `W-NONEXHAUSTIVE`. *No chokepoint can infer these* — the message strings are
+  `W-NONEXHAUSTIVE`/`W-UNREACHABLE-ARM` (SHIPPED 2026-07-31 — they were the last two
+  push sites still passing `""`; see "Adding a typecheck-stage warning" above).
+  *No chokepoint can infer these* — the message strings are
   built inline/by helpers, so the code must be authored at the push. (Signature
   variant considered and rejected: a single `pushTypeError code msg` wrapper that
   defaults the code — the language has no default args, so it saves nothing.)
