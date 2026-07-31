@@ -1,0 +1,29 @@
+-- Issue 1139, weaker consequence (2) — an EFFECT in a non-final constructor
+-- argument.  Same hole as reject_1139_nonfinal_ctor_ref.mdk with the mutable
+-- cell swapped for an IO effect: `println "EFFECT"` is an application, hence
+-- expansive, and it sits in NON-final position of `Box _ _`.  Before the fix
+-- only the final argument (`[]`) was tested, so `b` generalized to `Box a` and
+-- could be consumed at `Box Int` AND `Box String` in the same program.
+--
+-- WHY TWO TYPES: with a one-type use the binding needs no generalization and
+-- the fixture would sit green whether or not the hole is open.  The two
+-- conflicting instantiations are the entire point — they are what makes the
+-- wrongly-generalized scheme observable at the type level.
+--
+-- The effect is written INLINE inside `main` on purpose.  Hoisting it into a
+-- helper (`shout : Unit -> Int` that prints) does NOT work: the effect checker
+-- rejects the helper first (`declared with <> but also performs <IO>`) and the
+-- probe never reaches the value restriction at all.
+--
+-- Verdict: REJECT, by a type-mismatch diagnostic at the second instantiation.
+data Box a = Box Unit (List a)
+
+useI : Box Int -> Int
+useI (Box _ xs) = length xs
+
+useS : Box String -> Int
+useS (Box _ xs) = length xs
+
+main =
+  let b = Box (println "EFFECT") []
+  println (debug (useI b + useS b))

@@ -1,0 +1,30 @@
+-- Issue 1139, weaker consequence (3) — a DIVERGING call in a non-final
+-- constructor argument.  `boom ()` is an application, hence expansive, and it
+-- sits in NON-final position of `PA _ _`.  Before the fix only the final
+-- argument (`[]`) was tested, so `p` generalized to `PA a` and could be
+-- consumed at `PA Int` AND `PA String` in the same program.
+--
+-- WHY TWO TYPES: see reject_1139_nonfinal_ctor_effect.mdk.  A one-type use
+-- cannot distinguish fixed from broken.  Note also that the free type variable
+-- is load-bearing — it comes from the empty list `[]`.  Give the binding a
+-- ground type (`data PA a = PA Int a`, `PA (boom ()) True`) and generalization
+-- is vacuous, so the fixture would pass for the wrong reason.
+--
+-- Verdict: REJECT, by a type-mismatch DIAGNOSTIC — specifically NOT by the
+-- panic.  The gate's Bug #40 check enforces that distinction: if the program
+-- were still admitted, `run` would report E-PANIC instead, which is graded
+-- RANPANIC and fails even though the exit code is 1 either way.
+data PA a = PA Unit (List a)
+
+boom : Unit -> Unit
+boom _ = panic "BOOM"
+
+useI : PA Int -> Int
+useI (PA _ xs) = length xs
+
+useS : PA String -> Int
+useS (PA _ xs) = length xs
+
+main =
+  let p = PA (boom ()) []
+  println (debug (useI p + useS p))

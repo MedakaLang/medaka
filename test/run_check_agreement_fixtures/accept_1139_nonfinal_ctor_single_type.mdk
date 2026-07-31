@@ -1,0 +1,44 @@
+-- Issue 1139 OVER-NARROWING GUARD — the half of the fix that no pre-existing
+-- test could have caught.
+--
+-- The fix for 1139 makes `isNonexpansive` fold over EVERY spine argument, which
+-- REMOVES programs from the accepted set.  Every test written before it covers
+-- the old, wider behaviour, so nothing in the suite can notice if the narrowing
+-- goes too far — the failure mode is silent over-rejection, and it would show up
+-- as unrelated code that suddenly stops compiling.
+--
+-- So: a constructor application carrying a NON-VALUE in NON-FINAL position, used
+-- at a SINGLE type, must still typecheck AND run correctly.  It no longer
+-- generalizes — that is the point of the fix — but a monomorphic binding is
+-- perfectly sound and must keep working.  Two flavours of non-value are covered:
+--
+--   * `Ref []`  — the mutable cell the S0 was about (the strongest case: it is
+--     the expression the exclusion names by hand).  Used only at `BR Int`.
+--   * `idf 7`   — an ordinary function application, i.e. the general expansive
+--     case behind consequences (2) and (3).  Used only at `Pair Int`.
+--
+-- If either line stops compiling, the narrowing overshot.  Verdict: ACCEPT, and
+-- `.out` pins the values: the cell must read back exactly what was written into
+-- it, and the pair must carry the identity of 7.
+data BR a = BR (Ref (List a)) Bool
+
+data Pair a = Pair a Bool
+
+idf : a -> a
+idf x = x
+
+putI : BR Int -> Unit
+putI (BR r _) = r := [4, 5, 6]
+
+readI : BR Int -> List Int
+readI (BR r _) = r.value
+
+fstOf : Pair Int -> Int
+fstOf (Pair n _) = n
+
+main =
+  let b = BR (Ref []) True
+  let _ = putI b
+  let p = Pair (idf 7) False
+  let _ = println (readI b)
+  println (debug (fstOf p))

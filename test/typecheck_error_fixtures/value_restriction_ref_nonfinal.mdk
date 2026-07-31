@@ -1,0 +1,13 @@
+-- Sibling of value_restriction_ref.mdk: that one puts the `Ref` in the ctor's
+-- FINAL argument, this one in a NON-final argument.  Together they pin that the
+-- exclusion is position-INDEPENDENT, which is issue 1139 (S0, memory-safety).
+-- The old rule tested only the last spine argument for non-expansiveness, so a
+-- `Ref` anywhere else was never examined and the binding generalized -- a cell
+-- written at one type could be read at another.
+-- Prelude-free (bare-HM driver A must reject it too), hence the local `Flag`.
+extern Ref : a -> Ref a
+data Flag = On
+data BR a = BR (Ref a) Flag
+b = BR (Ref (x => x)) On
+-- Using b at two different function types in one tuple must produce a type error.
+pair = ((b : BR (Int -> Int)), (b : BR (String -> String)))

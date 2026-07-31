@@ -1,5 +1,5 @@
 # META
-source_lines=18668
+source_lines=18676
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3530,7 +3530,7 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- uppercase constructor that builds a mutable cell (`extern Ref : a -> Ref a` in
 -- stdlib/runtime.mdk).  Generalizing `Ref x` would be unsound (polymorphic
 -- reference: write at one type, read at another).  ANY future uppercase
--- mutable-cell extern MUST be added to the exclusion in `isCtorAppHead` below
+-- mutable-cell extern MUST be added to the exclusion in `isCtorAppSpine` below
 -- — audit with `grep '^extern [A-Z]' stdlib/runtime.mdk` to find candidates.
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
@@ -3550,8 +3550,8 @@ isNonexpansive (EListLit es) = allList isNonexpansive es
 -- uppercase-initial EVar (a data/record constructor) that is NOT `Ref`, and
 -- every spine argument is itself non-expansive.  Partial ctor applications
 -- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
--- cells.  `isCtorAppHead` strips ELoc/EDoOrigin wrappers before testing.
-isNonexpansive (EApp f x) = isCtorAppHead (EApp f x) && isNonexpansive x
+-- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
+isNonexpansive (EApp f x) = isCtorAppSpine (EApp f x)
 -- Record creation: non-expansive iff every field expression is non-expansive.
 isNonexpansive (ERecordCreate _ fs) = allList
   (fa => match fa
@@ -3559,17 +3559,25 @@ isNonexpansive (ERecordCreate _ fs) = allList
   fs
 isNonexpansive _ = False
 
--- Walk the left spine of an application to its head and test whether the
--- head is a data/record constructor (uppercase-initial EVar) that is safe to
--- generalize.  `Ref` is excluded because it is the only uppercase extern that
--- builds a mutable cell — see the comment on `isNonexpansive` above.
-isCtorAppHead : Expr -> Bool
-isCtorAppHead (ELoc _ e) = isCtorAppHead e
-isCtorAppHead (EDoOrigin _ e) = isCtorAppHead e
-isCtorAppHead (EApp f _) = isCtorAppHead f
-isCtorAppHead (EVar name) = name != "Ref" && ctorHeadIsUpper name
-isCtorAppHead (EVarId name _) = name != "Ref" && ctorHeadIsUpper name
-isCtorAppHead _ = False
+-- Walk the left spine of an application to its head, testing EVERY argument met
+-- on the way, and finally test whether the head is a data/record constructor
+-- (uppercase-initial EVar) that is safe to generalize.  `Ref` is excluded
+-- because it is the only uppercase extern that builds a mutable cell — see the
+-- comment on `isNonexpansive` above.
+--
+-- The arguments are tested HERE, on the single walk to the head, rather than by
+-- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
+-- the whole spine per level, i.e. quadratic in the constructor's arity.  Testing
+-- only the LAST argument was #1139 — a `Ref` in any non-final position escaped
+-- the exclusion entirely, so `let b = BR (Ref []) True` generalized and a cell
+-- written at `Int` could be read at `Int -> Int`.
+isCtorAppSpine : Expr -> Bool
+isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
+isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
+isCtorAppSpine (EApp f x) = isNonexpansive x && isCtorAppSpine f
+isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
+isCtorAppSpine (EVarId name _) = name != "Ref" && ctorHeadIsUpper name
+isCtorAppSpine _ = False
 
 -- True iff the first character of a name is an ASCII uppercase letter,
 -- i.e. the name looks like a data constructor or type name.
@@ -19364,16 +19372,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isNonexpansive" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "isNonexpansive") (EVar "e")))
 (DFunDef false "isNonexpansive" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "isNonexpansive")) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "isNonexpansive")) (EVar "es")))
-(DFunDef false "isNonexpansive" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "isCtorAppHead") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EApp (EVar "isNonexpansive") (EVar "x"))))
+(DFunDef false "isNonexpansive" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "isCtorAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "isNonexpansive" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "isNonexpansive") (EVar "e")))))) (EVar "fs")))
 (DFunDef false "isNonexpansive" (PWild) (EVar "False"))
-(DTypeSig false "isCtorAppHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isCtorAppHead" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isCtorAppHead") (EVar "e")))
-(DFunDef false "isCtorAppHead" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isCtorAppHead") (EVar "e")))
-(DFunDef false "isCtorAppHead" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "isCtorAppHead") (EVar "f")))
-(DFunDef false "isCtorAppHead" ((PCon "EVar" (PVar "name"))) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
-(DFunDef false "isCtorAppHead" ((PCon "EVarId" (PVar "name") PWild)) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
-(DFunDef false "isCtorAppHead" (PWild) (EVar "False"))
+(DTypeSig false "isCtorAppSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isCtorAppSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isCtorAppSpine") (EVar "e")))
+(DFunDef false "isCtorAppSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isCtorAppSpine") (EVar "e")))
+(DFunDef false "isCtorAppSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "isNonexpansive") (EVar "x")) (EApp (EVar "isCtorAppSpine") (EVar "f"))))
+(DFunDef false "isCtorAppSpine" ((PCon "EVar" (PVar "name"))) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
+(DFunDef false "isCtorAppSpine" ((PCon "EVarId" (PVar "name") PWild)) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
+(DFunDef false "isCtorAppSpine" (PWild) (EVar "False"))
 (DTypeSig false "ctorHeadIsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "ctorHeadIsUpper" ((PVar "name")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "name"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
 (DTypeSig false "lowerToCurrent" (TyFun (TyCon "Mono") (TyCon "Unit")))
@@ -23508,16 +23516,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "isNonexpansive" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "isNonexpansive") (EVar "e")))
 (DFunDef false "isNonexpansive" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "isNonexpansive")) (EVar "es")))
 (DFunDef false "isNonexpansive" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "isNonexpansive")) (EVar "es")))
-(DFunDef false "isNonexpansive" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "isCtorAppHead") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))) (EApp (EVar "isNonexpansive") (EVar "x"))))
+(DFunDef false "isNonexpansive" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "isCtorAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "isNonexpansive" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "isNonexpansive") (EVar "e")))))) (EVar "fs")))
 (DFunDef false "isNonexpansive" (PWild) (EVar "False"))
-(DTypeSig false "isCtorAppHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isCtorAppHead" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isCtorAppHead") (EVar "e")))
-(DFunDef false "isCtorAppHead" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isCtorAppHead") (EVar "e")))
-(DFunDef false "isCtorAppHead" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "isCtorAppHead") (EVar "f")))
-(DFunDef false "isCtorAppHead" ((PCon "EVar" (PVar "name"))) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
-(DFunDef false "isCtorAppHead" ((PCon "EVarId" (PVar "name") PWild)) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
-(DFunDef false "isCtorAppHead" (PWild) (EVar "False"))
+(DTypeSig false "isCtorAppSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isCtorAppSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isCtorAppSpine") (EVar "e")))
+(DFunDef false "isCtorAppSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isCtorAppSpine") (EVar "e")))
+(DFunDef false "isCtorAppSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "isNonexpansive") (EVar "x")) (EApp (EVar "isCtorAppSpine") (EVar "f"))))
+(DFunDef false "isCtorAppSpine" ((PCon "EVar" (PVar "name"))) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
+(DFunDef false "isCtorAppSpine" ((PCon "EVarId" (PVar "name") PWild)) (EBinOp "&&" (EBinOp "!=" (EVar "name") (ELit (LString "Ref"))) (EApp (EVar "ctorHeadIsUpper") (EVar "name"))))
+(DFunDef false "isCtorAppSpine" (PWild) (EVar "False"))
 (DTypeSig false "ctorHeadIsUpper" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "ctorHeadIsUpper" ((PVar "name")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "name"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
 (DTypeSig false "lowerToCurrent" (TyFun (TyCon "Mono") (TyCon "Unit")))
