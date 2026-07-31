@@ -645,6 +645,22 @@ narrative lives at the link.
   ask *what happens to a program that never touches it* — and if the answer is "nothing, it
   is keyed per-X", **prove the key is scoped** rather than asserting it (`<iface>@<slot>`,
   never a program-global bare name).
+- ⚠️ **A FIXTURE'S LINE COUNT IS LOAD-BEARING — a COMMENT-only edit can move its own
+  golden.** Many `test/*_fixtures/*.mdk` have a golden pinning `file:LINE:COL`. Replacing a
+  5-line comment header with a 6-line one shifts every line below it and moves the golden,
+  on a change that touched no code. Two agents hit this on 2026-07-31; one caught it only
+  because a STOP guardrail made them suspicious. **Keep fixture comment edits
+  line-count-neutral** (`git diff --numstat` should read `N N`), or re-derive the golden
+  and say why it moved. The shared-corpus bullet below covers adding/moving/deleting a
+  fixture; it does not cover editing one in place, which is the quieter hazard.
+- ⚠️ **In `PerRun` (`compiler/types/typecheck.mdk`) you CANNOT insert a standalone comment
+  line.** `medaka fmt` re-associates that record's trailing side comments as a column-wise
+  river; an interpolated `--` line makes it drag *pre-existing, unrelated* comments off
+  their own fields onto the closing brace and leaves a dangling fragment below the record.
+  **`fmt --check` passes on the damaged result**, so no gate catches it. Lengthen or shorten
+  an existing trailing comment instead. ⚠️ Note the consequence for reading: a long trailing
+  comment there **wraps onto the NEXT field's line**, so a comment beside a field may
+  describe the field above it — check before believing one.
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**
