@@ -1158,3 +1158,62 @@ because both engines agree on the wrong value.
 - ⚠️ **My worktree was 4 commits stale at wrap-up and a pin-status grep reported everything
   ABSENT.** I nearly reported a false alarm about missing fixtures. `git merge origin/main`
   before *any* wrap-up derivation — the state you are auditing is on `main`, not in your tree.
+
+## The typecheck arc, 2026-07-31 — five merges, and SCOPING outperformed hunting 3-for-3
+
+Val's lane: #1139 → #480 → #1146 → F-3 → A-spine. Merged `f3da5bb0` (#1139 memory-safety
+S0), `ec51c28e` (#480, 8 forked implementations → 3), `c06fa1bf` (#1150 pinned + bug-fit
+rows), `adda533c` + the #1146 PR-2 pair, `08821074` (#1154 pinned). Filed #1145, #1146,
+#1147, #1148, #1150, #1154, #1155. **Withdrew a planned stage that could not build.**
+
+- ⭐ **A READ-ONLY SCOPING PASS BEFORE EACH STAGE PAID OFF EVERY TIME — 3 for 3.** F-2
+  (#1120) was withdrawn because all three of its design claims were false and the
+  prescribed 2-module split is a **hard loader cycle**; #1146's stated mechanism was
+  refuted and its counts were wrong (my "−3 duplicated judgments" was really −1); F-3's
+  scoping found an **unfiled S0** (#1154) and proved the epic's "single-PR sized" wrong.
+  Cost: one read-only agent each. The alternative was an implementer discovering it after
+  hours — or worse, finding a shape that *does* build by exporting five pieces of
+  inference state. **Scope the stage, then implement it.**
+- 🔴 **FOUR OF MY OWN PRESCRIPTIONS WERE UNSAFE, AND AN AGENT CAUGHT EVERY ONE BY
+  BUILDING.** (1) "replace the spelling heuristic with `isSome (lookupCtor env name)`" —
+  introduced a **strictly worse S0**, because the ctor map is bare-name and graph-wide.
+  (2) "put the comment on its own `--` line" — `medaka fmt` mangled unrelated comments.
+  (3) "run bare `make medaka`" — denied by the classifier, repeatedly.
+  (4) "wrap it in a scratch script" — **swallowed the exit code**, producing two false
+  "this gate is broken" reports. None was catchable by reasoning. **Prescribe the
+  intent and the constraint; let the agent derive the mechanism, and treat its
+  divergence report as the deliverable it is.**
+- ⭐ **"Ask the environment instead of guessing from spelling" is NOT automatically L2
+  compliance.** A table keyed by a bare name *is* spelling. Before endorsing a lookup, ask
+  **what is that table keyed by, and who writes to it.** Membership ≠ resolution.
+- ⭐ **Reviewing a spec's ENFORCEMENT TABLE means asking whether each row actually
+  enforces.** Twice this session a table cited a fixture that provably never exercises the
+  clause it was listed under (proof: the fixture's golden contains a line emitted *from
+  inside the block the gate skips*). A row that does not enforce is worse than no row — it
+  retires the question. This is the L5 analogue of "review the rule, not its citations."
+- ⚠️ **For an acceptance WIDENING, every existing golden passes by construction.** They all
+  cover the narrower behaviour. The check that bites is a **declaration-order permutation
+  differential** — permute and assert byte-identical output; it detects an order-decided
+  winner *without knowing the right answer*. Corollary: make the ambiguous case **loud**
+  before widening, and the blind spot closes by construction.
+- ⚠️ **`sh test/build_native_medaka.sh`, not `make medaka`, in agent briefs.** Bare,
+  foreground, in-worktree `make medaka` was denied for two agents — one *after* an
+  identical invocation had succeeded minutes earlier — while the script (which is literally
+  the Makefile target's body) has never been denied. Also: the EnterWorktree tool is a dead
+  end here (an isolated agent's cwd is already the worktree, so there is nothing to enter),
+  and cwd **does** persist between Bash calls, contra the note in `AGENTS.md`.
+  ⚠️ Backticks deliberately omitted on those two tool names — `agent-doc-symbols` resolves
+  every backticked token against `.mdk`/`.c` source and correctly flags a harness tool name
+  as a dead symbol claim. It caught this very paragraph on its first run, in a doc that
+  already warns about it.
+- ⚠️ **Four agents died ending a turn with a build in flight**, returning a status line and
+  producing nothing; one then lost its worktree *with* the build. Put the failure mode in
+  the prompt **by name**, and say that partial verbatim results beat a status line.
+- ⚠️ **Reproduce a friction item before filing it.** An agent reported the strongest gate in
+  the tree silently exiting 0; the source says `exit 2` and the gate is correct — the
+  wrapper *I* had prescribed ate the code. Filing it would have aimed someone at working
+  code. Four agent claims this session did not survive checking.
+- ⚠️ **An unreachable memory is not a memory.** The index had **87 orphaned entries**, one of
+  which — *"ask what property the fix now RESTS ON"* — is precisely the check that would
+  have caught prescription (1) above. It had been on disk for a week with nothing linking
+  to it.
