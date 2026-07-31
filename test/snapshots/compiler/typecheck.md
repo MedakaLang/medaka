@@ -1,5 +1,5 @@
 # META
-source_lines=18729
+source_lines=18741
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3157,12 +3157,24 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- note, and DIAGNOSTIC-CODES-DESIGN.md — "*No chokepoint can infer these*").
 -- Register the code in DIAGNOSTIC-CODES-DESIGN.md's warning table in the same change.
 --
+-- ⚠️ THE `W-` PREFIX IS LOAD-BEARING, not a naming convention.  The JSON `kind` is
+-- DERIVED from the code's prefix (`codeKind`), so the code you write here decides
+-- how every consumer classifies the diagnostic.  A demoted error that KEEPS its
+-- `T-*` code is the trap: it reads as a type error to anything filtering the
+-- per-stage taxonomy.  `diagKind` now stops that from rendering an incoherent
+-- `{"kind":"type","severity":2}`, but it deliberately does NOT rewrite your code —
+-- inventing `W-FOO` from `T-FOO` would be the same derive-identity-from-spelling
+-- mistake in the other direction.  Author a `W-*` code; do not reuse the error's.
+--
 -- This is THE channel for a typecheck-stage warning — including one that used to be
 -- an error.  Do NOT demote an error by pushing a severity-2 `TcDiag` through
--- `recordTypeError` instead: that channel arms `typeErrorsSticky` (aborts
--- `build`/`run`) and bumps `errorsDetected` (steers `erredDuring`-gated inference,
--- issue 1146), so the "warning" would keep both of an error's side effects while
--- printing as severity 2.  `matchWarnings` has neither.
+-- `recordTypeError` instead: it arms `typeErrorsSticky` (aborts `build`/`run`) and
+-- bumps `errorsDetected` (steers `erredDuring`-gated inference, issue 1146)
+-- UNCONDITIONALLY, without reading severity at all — so the "warning" keeps both of
+-- an error's side effects.  It does not even RENDER as a warning: `diagOfTypeError`
+-- binds the severity field to `_` and prints severity 1.  (Removing that hardcode
+-- would not rescue the idea — it would print severity 2 and still abort the build.
+-- The side effects are the reason, not the rendering.)  `matchWarnings` has neither.
 
 -- True iff the last typecheck pass pushed any match warning.  Read by the snapshot
 -- runner (`tools/snapshot.mdk`) to decide whether a rendered `# TYPES` section carries

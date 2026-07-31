@@ -1,5 +1,5 @@
 # META
-source_lines=1133
+source_lines=1185
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -143,10 +143,17 @@ diagOfResError e =
 -- through `recordTypeError` (`compiler/types/typecheck.mdk`), which also arms
 -- `typeErrorsSticky` — the gate `hadTypeErrors` uses to ABORT `build`/`run` — and
 -- bumps `errorsDetected`, the occurrence counter `erredDuring` polls to decide
--- whether gated `unify` calls run (issue 1146).  A "warning" pushed here would
--- therefore fail the build and steer inference while merely PRINTING as severity 2:
--- silently wrong, in both of the ways issue 1146 exists to prevent.  Severity on
--- this channel is a channel-level fact, so it is written once, here.
+-- whether gated `unify` calls run (issue 1146).  `recordTypeError` does both
+-- UNCONDITIONALLY, without reading severity at all — so a severity-2 `TcDiag`
+-- pushed here still ABORTS the build and still STEERS inference.  The side effects
+-- are the reason this hardcode stands; the rendering is not.
+--
+-- ⚠️ Be precise about the rendering, because the imprecise version invites the wrong
+-- fix.  Such a diagnostic does NOT print as severity 2 today — this arm binds the
+-- severity field to `_`, so it prints severity 1, i.e. it does not even LOOK like the
+-- warning its author intended.  And removing the hardcode would not rescue the idea:
+-- it would only trade one wrong answer for another, printing severity 2 while
+-- continuing to abort the build and steer inference.  Neither variant is a warning.
 --
 -- A typecheck-stage diagnostic that really is a WARNING belongs on the
 -- `matchWarnings` channel instead — see `diagOfTypeWarning` below, which is
@@ -184,13 +191,58 @@ fixOfLocRepl (l, r) = Fix l r
 -- `typeErrors` (see `diagOfTypeError` above) `matchWarnings` has no sticky
 -- build-abort gate and no occurrence counter behind it, so pushing to it reports
 -- without steering `build`/`run` exit status or inference control flow.
+--
+-- ⚠️ "No control coupling" is NOT "no consumer" — `matchWarnings` has one, and a new
+-- warning inherits it.  `hadMatchWarnings` (`compiler/types/typecheck.mdk`) reports
+-- whether the last pass pushed ANY warning, and `compiler/tools/snapshot.mdk` reads
+-- it to decide whether a rendered `# TYPES` section is `--bless`-able.  So adding a
+-- warning that fires on existing corpus code can make snapshots that bless today
+-- stop blessing.  Nothing here pushes a new warning, so nothing changes now.
 diagOfTypeWarning : TcDiag -> Diag
 diagOfTypeWarning (TcDiag code _ loc w help _) =
   Diag SevWarning code (stripWarnPrefix w) loc help None
 
+-- THE JSON `kind`, derived from the code prefix AND the severity TOGETHER.  Use
+-- this, not bare `codeKind`, wherever the severity is not already a literal.
+--
+-- `codeKind` alone reads only the CODE, so it renders a per-stage kind whenever the
+-- code carries a per-stage prefix — no matter what severity the diagnostic actually
+-- has.  That is harmless only while every stage-prefixed code is an error, and it
+-- lies silently the moment one is not.  Two shapes, both reachable the instant a
+-- warning is authored on the `matchWarnings` channel (see `diagOfTypeWarning`):
+--
+--   {"code":"T-…","kind":"type",  "severity":2}   a demoted error that KEPT its
+--       `T-*` code — a consumer filtering the documented per-stage taxonomy drops
+--       it, because it reads as a type ERROR.
+--   {"code":"",    "kind":"error","severity":2}   a push site that forgot its code
+--       (`""` is what a copy-pasted one produces) — self-contradictory JSON, exit 0,
+--       and nothing anywhere reports it.
+--
+-- So: a `SevWarning` diagnostic may never render a per-STAGE kind.
+--
+-- ⚠️ That is NOT the same rule as "severity 2 implies kind `warning`", and the
+-- difference is load-bearing: `lint` is a real severity-2 kind — `medaka lint --json`
+-- ships `{"code":"rule-…","kind":"lint","severity":2}` through this very envelope —
+-- so collapsing every severity-2 diagnostic to `warning` would REGRESS every lint
+-- finding's kind.  Only the four stage kinds, and `codeKind`'s `otherwise = "error"`
+-- fallback (which is not even a stage), collapse to `warning`.
+--
+-- The CODE is passed through verbatim and is never rewritten.  Normalising `T-FOO`
+-- to `W-FOO` would invent an identity from a spelling — the exact L2 violation this
+-- change exists to remove, committed silently — so an off-taxonomy code stays
+-- visible as itself, now rendered beside `"kind":"warning"`.  The mismatch is then
+-- legible to its author on their first run, instead of being confidently mislabelled
+-- as a type error.
+export diagKind : Severity -> String -> String
+diagKind SevError code = codeKind code
+diagKind SevWarning code
+  | codeKind code == "lint" = "lint"
+  | otherwise = "warning"
+
 -- Derive the JSON `kind` from a code's per-stage prefix (DIAGNOSTIC-CODES-DESIGN
 -- §2): L→lex, P→parse, R→resolve, T→type, W→warning.  An unrecognized prefix
--- falls back to "error".
+-- falls back to "error".  ⚠️ Severity-blind by construction — prefer `diagKind`
+-- above unless the severity at your call site is a literal 1.
 export codeKind : String -> String
 codeKind code
   | startsWith "L-" code = "lex"
@@ -982,7 +1034,7 @@ cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject
 export cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
-    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (codeKind code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
+    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (diagKind sev code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
 -- `src` is the file's source text (for whole-doc range fallback).
@@ -1163,6 +1215,9 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "fixOfLocRepl" ((PTuple (PVar "l") (PVar "r"))) (EApp (EApp (EVar "Fix") (EVar "l")) (EVar "r")))
 (DTypeSig false "diagOfTypeWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
 (DFunDef false "diagOfTypeWarning" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
+(DTypeSig true "diagKind" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "diagKind" ((PCon "SevError") (PVar "code")) (EApp (EVar "codeKind") (EVar "code")))
+(DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1308,7 +1363,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
 (DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EVar "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EVar "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
@@ -1362,6 +1417,9 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "fixOfLocRepl" ((PTuple (PVar "l") (PVar "r"))) (EApp (EApp (EVar "Fix") (EVar "l")) (EVar "r")))
 (DTypeSig false "diagOfTypeWarning" (TyFun (TyCon "TcDiag") (TyCon "Diag")))
 (DFunDef false "diagOfTypeWarning" ((PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "w") (PVar "help") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevWarning")) (EVar "code")) (EApp (EVar "stripWarnPrefix") (EVar "w"))) (EVar "loc")) (EVar "help")) (EVar "None")))
+(DTypeSig true "diagKind" (TyFun (TyCon "Severity") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "diagKind" ((PCon "SevError") (PVar "code")) (EApp (EVar "codeKind") (EVar "code")))
+(DFunDef false "diagKind" ((PCon "SevWarning") (PVar "code")) (EIf (EBinOp "==" (EApp (EVar "codeKind") (EVar "code")) (ELit (LString "lint"))) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "warning")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "codeKind" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "codeKind" ((PVar "code")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "L-"))) (EVar "code")) (ELit (LString "lex")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "P-"))) (EVar "code")) (ELit (LString "parse")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "R-"))) (EVar "code")) (ELit (LString "resolve")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "T-"))) (EVar "code")) (ELit (LString "type")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "W-"))) (EVar "code")) (ELit (LString "warning")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "rule-"))) (EVar "code")) (ELit (LString "lint")) (EIf (EVar "otherwise") (ELit (LString "error")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "isReservedKwMsg" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1507,7 +1565,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "cjFixJson" (TyFun (TyCon "Fix") (TyCon "Json")))
 (DFunDef false "cjFixJson" ((PCon "Fix" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EApp (EApp (EApp (EVar "cjRange") (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (EBinOp "-" (EVar "el") (ELit (LInt 1)))) (EVar "ec"))) (ETuple (ELit (LString "replacement")) (EApp (EVar "JString") (EVar "repl"))))))
 (DTypeSig true "cjDiagnostic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "Json")))))
-(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EVar "codeKind") (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
+(DFunDef false "cjDiagnostic" (PWild (PVar "src") (PCon "Diag" (PVar "sev") (PVar "code") (PVar "msg") (PVar "loc") (PVar "help") (PVar "fix"))) (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (EVar "code")))) (EApp (EApp (EVar "optField") (ELit (LString "fix"))) (EApp (EApp (EMethodRef "map") (EVar "cjFixJson")) (EVar "fix")))) (EApp (EApp (EVar "optField") (ELit (LString "help"))) (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "help")))) (EListLit (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (EApp (EApp (EVar "diagKind") (EVar "sev")) (EVar "code")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EApp (EApp (EVar "cjRangeOfLoc") (EVar "src")) (EVar "loc"))) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (EApp (EVar "cjSevCode") (EVar "sev")))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))))
 (DTypeSig true "cjFileEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Json")))))
 (DFunDef false "cjFileEntry" ((PVar "path") (PVar "src") (PVar "diags")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "cjDiagnostic") (EVar "path")) (EVar "src"))) (EVar "diags"))))))))
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
