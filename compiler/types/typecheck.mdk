@@ -2888,6 +2888,27 @@ tcFix (TcDiag _ _ _ _ _ f) = f
 -- into `Type_error (e, !current_loc)` at the RAISE site rather than reading the
 -- global last-entered loc afterwards.  `pushTypeError` captures `currentLoc.value`
 -- so locs don't drift as inference continues past the error.  severity = 1.
+--
+-- issue 1146 PR1 — THE CHANNEL IS SPLIT BY ROLE.  "Which diagnostics are REPORTED"
+-- is OUTPUT and lives in `perRun.typeErrors`, now a `Windowed TcDiag` like its
+-- obligation-channel siblings (see `Windowed` above — `wPush`/`wReset`/`wRestore` are
+-- its sole WRITERS, so its list and its count cannot drift apart).  "An error
+-- OCCURRED" is CONTROL and lives in `perRun.errorsDetected`, a monotone-per-module
+-- occurrence counter that is not a diagnostics channel at all.
+--
+-- ⚠️ Scope that precisely.  No site polls the diagnostic list's LENGTH any more — the
+-- three inference sites that used to now poll the counter, through `erredDuring`.  But
+-- the list is still polled by CONTENT, in the three dedup helpers below (`anyList
+-- (e => tcMsg e == msg) …`), which decide whether to STORE from rendered message text.
+-- So one diagnostics decision can still reach a control decision under PR1, by exactly
+-- that route: a dedup short-circuit stores nothing, so `recordTypeError` never runs, so
+-- the counter is not bumped, so `erredDuring` answers False and a gated `unify` runs
+-- that a non-deduped push would have suppressed.  That route is PRE-EXISTING and
+-- unchanged here — the `listLen` gate it replaces had it identically — and closing it
+-- is PR2's whole subject.
+--
+-- See `recordTypeError` (the sole writer of both) and `erredDuring` (the sole reader
+-- of the counter) below.
 
 -- G1 (SOUNDNESS): a STICKY mirror of typeErrors that resetState does NOT clear.
 -- The multi-module elaborate path (elaborateModules → checkModuleFullImpl) calls
@@ -2916,13 +2937,66 @@ useFastIfaceMethodTy = Ref False
 export hadTypeErrors : Unit -> Bool
 hadTypeErrors _ = typeErrorsSticky.value
 
+-- issue 1146 PR1 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
+-- or not, helper-mediated or not, funnels through here, so the three facts one push
+-- establishes cannot drift apart at one site and not another: the diagnostic is
+-- STORED, the build/run sticky gate is ARMED, and an error OCCURRED.
+--
+-- `perRun.errorsDetected` is INCREMENTED here and nowhere else.  That is what makes
+-- its delta over any region IDENTICALLY EQUAL to that region's `listLen typeErrors`
+-- delta — the property PR1 is verified against (`capture_goldens.sh --check` empty),
+-- and the reason the counter could be introduced without moving a single golden.
+-- PR2 deliberately breaks the equality by bumping on the dedup short-circuit too
+-- (counting DETECTED rather than STORED errors); that is a behaviour change and is
+-- adjudicated separately.
+--
+-- ⚠️ The equality carries ONE standing obligation, and it is not discharged here:
+-- anywhere the channel is ROLLED BACK, this counter must be rolled back WITH it, or a
+-- region straddling the rollback would see the two disagree.  There is exactly one
+-- such site today — `discoverPromotedModules`, which snapshots both and restores both.
+-- Any future rollback of `typeErrors` owes the same pairing.
+--
+-- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
+-- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
+-- hand-placed bump at "the five helpers" would have left that one silent, and the
+-- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
+recordTypeError : TcDiag -> Unit
+recordTypeError d =
+  let _ = setRef typeErrorsSticky True
+  let _ = setRef perRun.value.errorsDetected (perRun.value.errorsDetected.value + 1)
+  wPush perRun.value.typeErrors d
+
+-- issue 1146 PR1 — THE polling convention for "did region [act] report an error".
+--
+-- Three inference sites used to answer that by measuring `listLen typeErrors` before
+-- and after the region.  That made the diagnostic accumulator load-bearing CONTROL
+-- FLOW rather than a report: any change to how many entries land in it — a dedup-key
+-- change, a rendering change, a loc-selection change — could silently flip an
+-- inference branch, and a gated `unify` that does not run is a type error that is not
+-- caught.  They now read the occurrence COUNTER, through this ONE combinator, so the
+-- judgment is implemented once and no LENGTH-of-diagnostics decision — no dedup-key,
+-- rendering, ordering or loc-selection change that moves HOW MANY entries are stored —
+-- reaches a control decision.
+--
+-- ⚠️ It is NOT yet true that no diagnostics decision at all can.  The dedup helpers
+-- still poll the list by CONTENT to decide whether to store, so a short-circuit stores
+-- nothing, the counter is not bumped, and this answers False where a non-deduped push
+-- would have answered True.  That route is PRE-EXISTING and unchanged by PR1 (the
+-- `listLen` gate it replaces had it identically); PR2 closes it by bumping the counter
+-- on the short-circuit too.  See the accumulator header above.
+--
+-- ⚠️ Medaka is STRICT, so [act] must be a thunk: `erredDuring (_ => work)`.  Passing
+-- the region's VALUE would evaluate it before the first read and always answer False.
+erredDuring : (Unit -> a) -> (Bool, a)
+erredDuring act =
+  let before = perRun.value.errorsDetected.value
+  let result = act ()
+  (perRun.value.errorsDetected.value != before, result)
+
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
 pushTypeError : String -> String -> Unit
 pushTypeError code msg =
-  let _ = setRef typeErrorsSticky True
-  setRef
-    perRun.value.typeErrors
-    (TcDiag code 1 currentLoc.value msg None None :: perRun.value.typeErrors.value)
+  recordTypeError (TcDiag code 1 currentLoc.value msg None None)
 
 -- Push one type-error message attributed to [loc] rather than the live
 -- `currentLoc` (#414).  Same non-deduping semantics as `pushTypeError` — the
@@ -2931,10 +3005,7 @@ pushTypeError code msg =
 -- back to `currentLoc`, i.e. the old behaviour.
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorAt code loc msg =
-  let _ = setRef typeErrorsSticky True
-  setRef
-    perRun.value.typeErrors
-    (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None :: perRun.value.typeErrors.value)
+  recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
 
 -- #11 soundness: push an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
@@ -2943,7 +3014,7 @@ pushTypeErrorAt code loc msg =
 -- by message to keep native == oracle (one TYPE ERROR line).
 pushTypeErrorOnce : String -> String -> Unit
 pushTypeErrorOnce code msg =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.value then
+  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
     ()
   else
     pushTypeError code msg
@@ -2956,12 +3027,10 @@ pushTypeErrorOnce code msg =
 -- captured a span is unchanged.
 pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt code loc msg =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.value then ()
+  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
+    ()
   else
-    let _ = setRef typeErrorsSticky True
-    setRef
-      perRun.value.typeErrors
-      (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None :: perRun.value.typeErrors.value)
+    recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -2971,12 +3040,10 @@ pushTypeErrorOnceAt code loc msg =
 -- span+replacement pair, converted to a real `Fix` on the diagnostics.mdk side.
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 pushTypeErrorHelpFixAt code loc msg help fix =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.value then ()
+  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
+    ()
   else
-    let _ = setRef typeErrorsSticky True
-    setRef
-      perRun.value.typeErrors
-      (TcDiag code 1 (orElseLoc loc currentLoc.value) msg (Some help) fix :: perRun.value.typeErrors.value)
+    recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg (Some help) fix)
 
 -- Source-location attribution (Phase B.10.2): the innermost ELoc span the
 -- `infer` walk has entered.  Set by infer's transparent ELoc arm before
@@ -3143,7 +3210,8 @@ data PerRun = PerRun {
     flatCoreFnNamesRef : Ref (OrdMap Unit),
     flatUserShadowNamesRef : Ref (List String),
     groupConstraintMonosRef : Ref (List (String, Mono)),
-    typeErrors : Ref (List TcDiag),
+    typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
+    errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
     ifaceParamKindsRef : Ref (List (String, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
@@ -3158,7 +3226,7 @@ data PerRun = PerRun {
 -- on the (hot, allocation-sensitive) unify path.  Per-module by construction:
 -- freshPerRun re-mints it, so a stale entry cannot label a later module.
 
--- Construct all 63 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct all 64 field-Refs fresh (each reproduces its former top-level ref's initial).
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
@@ -3219,7 +3287,8 @@ freshPerRun _ = PerRun {
   flatCoreFnNamesRef = Ref omEmpty,
   flatUserShadowNamesRef = Ref [],
   groupConstraintMonosRef = Ref [],
-  typeErrors = Ref [],
+  typeErrors = wNew (),
+  errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
   ifaceParamKindsRef = Ref [],
@@ -3462,13 +3531,21 @@ typeMismatchInDo a b doLoc
   | otherwise =
     pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
 
+-- issue 1146 PR1: this is the SIXTH push site — it open-coded the cons + sticky set
+-- rather than going through one of the five named `pushTypeError*` helpers, so it is
+-- invisible to a grep for them.  It now routes through `recordTypeError` like every
+-- other push, which is what keeps the occurrence counter's delta equal to the
+-- channel's length delta on the `do`-requires-a-monad path too.
 recordDoMonadError : Loc -> Unit
 recordDoMonadError doLoc =
   let _ = setRef currentDoOrigin None
-  let _ = setRef typeErrorsSticky True
-  setRef
-    perRun.value.typeErrors
-    (TcDiag "T-DO-NOT-MONAD" 1 (Some doLoc) doRequiresMonadMsg None None :: perRun.value.typeErrors.value)
+  recordTypeError (TcDiag
+    "T-DO-NOT-MONAD"
+    1
+    (Some doLoc)
+    doRequiresMonadMsg
+    None
+    None)
 
 monoIsApp : Mono -> Bool
 monoIsApp (TApp _ _) = True
@@ -9545,7 +9622,25 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let joint = coreDecls ++ flatMap snd modules
   let dictSeed = moduleDictNames coreDecls joint modules
   let savedSticky = typeErrorsSticky.value
-  let savedErrors = perRun.value.typeErrors.value
+  -- issue 1146: the hand-rolled save/restore of this channel is now the SAME
+  -- wSnapshot/wRestore pair its obligation-channel siblings make in
+  -- inferUserImplBodies.  The `resetState ()` below re-mints `perRun`, so both
+  -- restores land on FRESH cells; wRestore reinstates the channel's list AND its
+  -- count, where the old two-`setRef` form could only do the list.
+  --
+  -- ⚠️ THE COUNTER IS ROLLED BACK WITH THE CHANNEL, and must stay that way.  This is
+  -- the ONLY site that rolls `typeErrors` back, and `freshPerRun` re-mints
+  -- `errorsDetected` to 0 — so restoring only the channel would leave
+  -- `typeErrors.n == savedN` beside `errorsDetected == 0`: the single place their
+  -- deltas could disagree, and the one exception to the equality `recordTypeError`
+  -- documents.  Nothing observes it today (every `erredDuring` region lives inside
+  -- inferDefaultMethod/inferDefaultMethodBody, and `resetState`'s callers are
+  -- top-of-pipeline drivers unreachable from inference, so no region straddles this
+  -- re-mint) — but the `listLen typeErrors` signal this replaces WAS restored here,
+  -- and PR2 makes the counter the sole control signal with no list to fall back on.
+  -- Keep the pair in step rather than relying on the straddle staying impossible.
+  let savedErrSnap = wSnapshot perRun.value.typeErrors
+  let savedDetected = perRun.value.errorsDetected.value
   -- Drop the prelude/core defs AND signatures shadowed by a same-named user-module
   -- fn before the SCRATCH joint typecheck.  The joint flatten is bare-name, so a
   -- core fn with a concrete signature (e.g. `isEven : Int -> Bool`) would otherwise
@@ -9568,7 +9663,8 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let snapshotIfacesE = snd expandedPair
   let _ = resetState ()
   let _ = setRef typeErrorsSticky savedSticky
-  let _ = setRef perRun.value.typeErrors savedErrors
+  let _ = wRestore perRun.value.typeErrors savedErrSnap
+  let _ = setRef perRun.value.errorsDetected savedDetected
   let _ = setRef crossRun.value.crossModuleFunConstraintsRef snapshotE
   let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef snapshotIfacesE
   promoted
@@ -13296,7 +13392,9 @@ inferImplBodiesIfEnabledIn env allProg decls
 -- #782 (effect leak) then established that the type/effect errors the body inference itself
 -- raises (e.g. an EFFECT LEAK: `putStr` in a pure-typed method body, or a body type mismatch)
 -- are genuine soundness bugs that must reject symmetrically with top-level functions — so those
--- are now KEPT (see the per-axis history and the filter rebuild below).
+-- are now KEPT — and since issue 1146 they are kept because NOTHING REMOVES THEM: the
+-- window that used to rebuild this list is retired (see the retirement note at the end
+-- of inferUserImplBodies below).  Per-axis history follows.
 -- #777 (S0, silent wrongness): a GENUINE type mismatch inside a ground impl-method
 -- body (`sig _ = idInt "str"` where `idInt : Int -> Int` but `sig`'s declared return
 -- is `String`) is a `unify`/`typeMismatch` error pushed DURING body inference, not an
@@ -13323,8 +13421,6 @@ inferImplBodiesIfEnabledIn env allProg decls
 
 inferUserImplBodies : TcEnv -> List Decl -> List Decl -> Unit
 inferUserImplBodies env allProg decls =
-  let savedErrs = perRun.value.typeErrors.value
-  let savedSticky = typeErrorsSticky.value
   let rpNames = returnPosMethodNames allProg
   let _ = setRef useFastIfaceMethodTy True
   -- GROUND heads (#760/#777): infer their bodies and KEEP the obligations they record
@@ -13337,7 +13433,8 @@ inferUserImplBodies env allProg decls =
   -- method body (`sig _ = idInt "str"`, `idInt : Int -> Int` in a String-returning
   -- method) went unenforced end-to-end — `check`/`build` exit 0 and the built binary
   -- printed a wrong value.  Infer these bodies too so the `unify`/`typeMismatch` clash
-  -- is surfaced (it is pushed to `typeErrors`, kept by the filter below), mirroring the
+  -- is surfaced (it is pushed to `typeErrors`, and kept because nothing removes it —
+  -- see the retirement note at the end of this function), mirroring the
   -- ground-head fix.  BUT a parametric impl also records obligations on its ABSTRACT
   -- element tyvar (`impl Eq (List a) requires Eq a` → an `Eq a` obligation over an
   -- unground var); those never ground on the check path and would reach
@@ -13354,15 +13451,22 @@ inferUserImplBodies env allProg decls =
   let _ = inferImplBodies env allProg rpNames (filterList implHeadParametric decls)
   let _ = wRestore perRun.value.implObls implOblsSnap
   let _ = wRestore perRun.value.obls callSnap
-  let _ = setRef useFastIfaceMethodTy False
-  -- The errors pushed DURING inference are the head of the list (consed); savedErrs is
-  -- the tail.  Keep every added error (#782: the effect axis is no longer suppressed —
-  -- an impl-body effect leak is a real error, symmetric with top-level), rebuilding the
-  -- list as (added ++ savedErrs).
-  let curErrs = perRun.value.typeErrors.value
-  let added = takeFirst (listLen curErrs - listLen savedErrs) curErrs
-  let _ = setRef perRun.value.typeErrors (added ++ savedErrs)
-  setRef typeErrorsSticky (savedSticky || isNonEmptyL added)
+  -- issue 1146: the typeErrors save/window/rebuild that used to close this function is
+  -- RETIRED — it was DEAD, an identity dressed as a filter.  It computed
+  -- `added = takeFirst (listLen curErrs - listLen savedErrs) curErrs` and wrote back
+  -- `added ++ savedErrs`, which IS `curErrs`: pushes are CONSED onto the head, and the
+  -- only two sites that replace this channel wholesale (discoverPromotedModules, and
+  -- this rebuild itself) are unreachable from inferImplBodies — the former is called
+  -- once, from the elaborateModules driver.  So `savedErrs` was always a suffix of
+  -- `curErrs` and the rebuild always reproduced it.  The sticky recomputation
+  -- `savedSticky || isNonEmptyL added` was dead for the same reason: every push arms
+  -- the sticky flag in the SAME arm in which it stores, so "added is non-empty" and
+  -- "the flag was armed during this window" are the same fact, and the flag was
+  -- already set.  #782's decision to STOP suppressing the effect axis is what emptied
+  -- the filter (isSuppressedImplBodyErr, gone; see the history block above); nothing
+  -- replaced it, so what remained was a no-op.  Keeping the body's errors is now what
+  -- happens by DOING NOTHING, which is also what the comment block above describes.
+  setRef useFastIfaceMethodTy False
 
 -- True for a DImpl whose head types carry NO type variable (a monomorphic receiver like
 -- `Eq Outer` / `Debug (List Int)`); False for a parametric head (`Eq (List a)`) and every
@@ -13490,13 +13594,17 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- solution through [effMap2] (contortion #3; 2c retires this rebuild).
   let effMap2 = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn dscope mty))
   let expected2 = fromAstTypeE effMap2 (freshTvMap (removeAllS (rowArgNamesIn dscope mty) (dedup (tyVarNames mty)))) mty
-  let errsB0 = listLen perRun.value.typeErrors.value
-  let actualTy = inferDefaultMethodBody mname subject defLoc env (fst inst) pats body
-  let _ = if listLen perRun.value.typeErrors.value == errsB0 then
+  -- issue 1146: "did the body report an error" is a CONTROL judgment, so it is read
+  -- off the occurrence counter, not off `listLen typeErrors`.  The region is the
+  -- whole body inference — which is broader than any one unify, and is why no
+  -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
+  -- also pushes T-EFFECT-LAUNDER, and contains its own gated unify.
+  let (bodyErred, actualTy) = erredDuring (_ => inferDefaultMethodBody mname subject defLoc env (fst inst) pats body)
+  let _ = if bodyErred then
+    ()
+  else
     let _ = unify expected2 actualTy
     checkImplEffVarRigidity subject dscope mty effMap2 False defLoc
-  else
-    ()
   let addedObls = wWindow perRun.value.implObls oblN0
   let addedCallObls = callOblsWindow callN0
   let _ = checkDefaultMethodRigidity
@@ -13556,10 +13664,9 @@ inferDefaultMethod _ _ _ _ _ = ()
 inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
 inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
   let oblSnapshot = wSnapshot perRun.value.implObls
-  let errsBefore = listLen perRun.value.typeErrors.value
-  let actualTy = inferClauses env [(pats, body)]
-  let errsAfter = listLen perRun.value.typeErrors.value
-  let _ = if errsAfter != errsBefore then ()
+  -- issue 1146: the region is the whole of expression inference for this body.
+  let (bodyErred, actualTy) = erredDuring (_ => inferClauses env [(pats, body)])
+  let _ = if bodyErred then ()
   else
     -- #839 2b: the #803 launder residual as a POST-unify query over the absorption
     -- trail (default-path phrasing; keeps defaultEffectLaunderMsg's committed
@@ -13571,14 +13678,14 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
     let launderMark = wMark perRun.value.absorptions
     let declArrows = allArrowEffs expectedTy
     let actualArrows = allArrowEffs actualTy
-    let errsPreUnify = listLen perRun.value.typeErrors.value
     let _ = setRef currentMethodMismatch (Some mname)
-    let _ = unify expectedTy actualTy
+    -- issue 1146: keyed on the UNIFY's error delta ONLY (the pre-unify walk kept its
+    -- own launder push out of this baseline by running before the region; the query
+    -- below runs after the unify, so the region is exactly this one unify, closed
+    -- before anything else can push).  The region is a THUNK because Medaka is
+    -- strict — the unify has to run between the counter's two reads.
+    let unifyErred = fst (erredDuring (_ => unify expectedTy actualTy))
     let _ = setRef currentMethodMismatch None
-    -- keyed on the UNIFY's error delta ONLY (the pre-unify walk kept its own launder
-    -- push out of this baseline by running before the snapshot; the query below runs
-    -- after the unify, so measure the unify's delta here, before it can push).
-    let unifyErred = listLen perRun.value.typeErrors.value != errsPreUnify
     let _ = match launderEscapeFromLog declArrows actualArrows (wWindow perRun.value.absorptions launderMark)
       [] => ()
       escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" defLoc (defaultEffectLaunderMsg subject escaping)
@@ -16681,7 +16788,7 @@ export checkToLines : List Decl -> String
 checkToLines prog =
   let schemes = checkProgramSchemes [] prog
   let _ = runFinalChecks prog prog
-  let errs = reverseL perRun.value.typeErrors.value
+  let errs = reverseL perRun.value.typeErrors.items.value
   match errs
     [] => joinNl (schemeLines schemes)
     _ => joinNl (typeErrorLines (map tcMsg errs))
@@ -16726,7 +16833,7 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
 export checkToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkToLinesWithRuntime runtimeDecls coreProg userProg =
   let schemes = seedAndCheckSplit runtimeDecls coreProg userProg
-  let errs = reverseL perRun.value.typeErrors.value
+  let errs = reverseL perRun.value.typeErrors.items.value
   let warns = map tcMsg (reverseL driverState.value.matchWarnings.value)
   match errs
     [] => joinNl (schemeLines schemes ++ warns)
@@ -16747,7 +16854,7 @@ checkToLinesWithRuntime runtimeDecls coreProg userProg =
 export checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkErrorsWithRuntime runtimeDecls coreProg userProg =
   let _ = seedAndCheckSplit runtimeDecls coreProg userProg
-  match perRun.value.typeErrors.value
+  match perRun.value.typeErrors.items.value
     [] => False
     _ => True
 
@@ -16774,7 +16881,7 @@ export checkProgramDiags : List Decl -> List Decl -> List Decl -> (List TcDiag, 
 checkProgramDiags runtimeDecls coreProg userProg =
   let _ = seedAndCheckSplit runtimeDecls coreProg userProg
   (
-    reverseL perRun.value.typeErrors.value,
+    reverseL perRun.value.typeErrors.items.value,
     reverseL driverState.value.matchWarnings.value,
   )
 
@@ -17923,7 +18030,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   let _ = runFinalChecks prog (accAll ++ accData ++ prog)
   (
     schemes,
-    reverseL perRun.value.typeErrors.value,
+    reverseL perRun.value.typeErrors.items.value,
     reverseL driverState.value.matchWarnings.value,
   )
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported

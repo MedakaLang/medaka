@@ -472,6 +472,7 @@ eqCompareOp : Mono -> Mono -> Mono
 eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
 eqStr : String -> String -> Bool
+erredDuring : (Unit -> a) -> (Bool, a)
 exitLevel : Unit -> Unit
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List String) -> (List (String, List Int), List (String, List String))
@@ -1104,6 +1105,7 @@ recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> 
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordStandaloneSigObligations : String -> String -> Mono -> Unit
+recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
