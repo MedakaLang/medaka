@@ -12150,6 +12150,16 @@ routesOfMonos implTable keyTable (m::rest) =
 -- a special case bolted on: at `listLen goals == 1`, `headSubstWithParams h itys m [m]`
 -- IS `matchTyMono h m` (augmentWithParams gates on `listLen paramMonos > 1`), so this
 -- arm reduces to the pre-#1154 body term for term, algebraically.
+--
+-- ⚠️ Be precise about what that pin buys, because the obvious reading is wrong:
+-- `selectReqImpl`'s `iface == ""` arm IGNORES [goals] entirely (it selects with
+-- `findImplEntry … m`), so pinning `goals` there changes NOTHING about selection and is
+-- inert on that consumer today.  Its only live effect is on the SUBSTITUTION, and it is
+-- a FORWARD guard against the two drifting apart if that arm is ever made vector-aware.
+-- The property this function actually rests on is therefore NOT anything about `iface`:
+-- it is that **only `argReqRoute` ever supplies a non-empty [rest]**.  Every other entry
+-- point seeds `[] 0`, so every other caller lands on `goals == [m]` whichever arm runs.
+-- If a second non-empty-[rest] caller appears, re-derive this.
 argImplRequiresRoutes : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
 argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
   if depth >= 32 then []
