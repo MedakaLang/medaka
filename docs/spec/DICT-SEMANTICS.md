@@ -58,9 +58,11 @@ target, not the tree.** Two of them license behaviour changes stated in the clau
 itself rather than left to a migration to discover — **I5** (whose consequences are
 *derived*, not enumerated, and only one of which is an acceptance widening) and
 **§6.2 T4** (which carries a normative "not before I5" constraint). And one, **§4.1
-G3**, is explicitly a valid argument about a value set the implementation does **not**
-have (#1139), so it may not be cited as discharged: it is F-1's (#1082) gate, and the
-gate is not open.
+G3**, is a valid argument about a value set the implementation **now has** — the two
+holes in the value predicate (#1139, #1150) are repaired and **§4.1 G2 is ENFORCED**,
+which removes G3's own *stated* blocker. G3 is still an argument about that set rather
+than a discharged theorem about the tree, so whether F-1's (#1082) gate is open is
+#1082's adjudication and not this paragraph's.
 
 **Revision (2026-07-16): overlapping instances are specified.** Overlap with
 specialization — `impl Foo Int` alongside `impl Foo a`, the more specific
@@ -557,18 +559,31 @@ tracked as #1082, gated on this clause).
   is *expansive*.
 
   🚨 **This definition is given in full, rather than by naming the implementation's
-  predicate, and that is deliberate.** An earlier revision of this clause defined the
-  set as *"whatever `isNonexpansive` accepts"*. That is the #1093 shape — a rule
-  stated in terms of an existing relation silently inherits that relation's bugs —
-  and it inherited one: `isNonexpansive`'s constructor-application arm tests only the
-  **final** argument of the spine (`isNonexpansive (EApp f x) = isCtorAppHead (EApp f
-  x) && isNonexpansive x`, `compiler/types/typecheck.mdk:3550`, where `f` reaches only
-  `isCtorAppHead`, which walks to the head discarding every argument at `:3565`), so a
-  mutable cell in any non-final position is admitted. The three sibling arms
-  (`ETuple`, `EListLit`, `ERecordCreate`) each fold with `allList isNonexpansive`;
-  the constructor arm is the one that does not, and the source comment above it
-  asserts that it does (*"every spine argument is itself non-expansive"*, `:3547`).
-  **"All parts" above is the words that arm is missing.** Tracked as #1139.
+  predicate, and that is deliberate — and it caught TWO bugs, in two different
+  clauses of itself.** An earlier revision defined the set as *"whatever
+  `isNonexpansive` accepts"*. That is the #1093 shape — a rule stated in terms of an
+  existing relation silently inherits that relation's bugs — and it inherited two:
+
+  - **"with *all* parts syntactic values"** (#1139): the constructor-application arm
+    tested only the spine's **final** argument, so a mutable cell in any other
+    position was admitted. The three sibling arms (`ETuple`, `EListLit`,
+    `ERecordCreate`) each folded with `allList isNonexpansive`; the constructor arm
+    was the one that did not, while the source comment above it asserted that it did.
+  - **"an application of a *data constructor*"** (#1150): the head test asked whether
+    the name's first character was uppercase, excluding `Ref` by hand. A module alias
+    must be capitalized and an alias-qualified value desugars to a flat
+    `EVar "H.new"`, so **every** alias-qualified application in the language answered
+    "data constructor" — `let m = H.new ()` generalized a mutable hash table.
+
+  Both are repaired. `isNonexpansive` now folds over every spine argument, and the
+  head test is `isSome (lookupCtor env name)` — a lookup in the environment's own
+  ctor map, whose only writers are `initialEnv` (`True`/`False`) and `addCtor` (sole
+  caller `addVariants`, reached only from a `data`/`newtype`/record declaration). So
+  *"a constructor that allocates a mutable cell is not admitted at any position"*
+  now holds **structurally rather than by an exclusion list**: every mutable-cell
+  allocator in the language is an `extern` (`Ref`, `arrayMake`, …), an `extern` is a
+  function and never enters the ctor map, and a declared data constructor allocates
+  an immutable block from arguments this same predicate has already checked.
 
 - **G3 — Evaluation-timing neutrality, and exactly what it is contingent on.**
   Wrapping a bound expression `e` as `λd̄. e` moves `e`'s evaluation from binding time
@@ -584,20 +599,33 @@ tracked as #1082, gated on this clause).
 
   🚨 **This is a valid argument about G2's set, NOT a discharged theorem about the
   tree, and the difference is load-bearing because this clause is F-1's (#1082)
-  gate.** The implementation's value predicate is **not** G2's set: by the ⚠️ above it
-  admits a mutable cell in a non-final constructor argument, and such a binding is
-  generalized today (#1139 — `check` clean, `run` `E-NOT-A-FUNCTION`, native
-  SEGFAULT). Wrapping *that* binding in `λd̄.` would additionally re-allocate the cell
-  per use, so neutrality does not hold for it either. **An implementation may not cite
-  G3 while its value predicate is holed:** either the predicate is repaired to G2's
-  set first, or the dict-abstraction of locals is restricted to a set that is
-  independently shown to satisfy G2. Landing F-1 on the current predicate would take
-  a live unsoundness and give it a second, calling-convention-shaped channel.
+  gate.** This 🚨 previously recorded that the implementation's value predicate was
+  **not** G2's set — it admitted a mutable cell in a non-final constructor argument
+  (#1139) and read every alias-qualified application as a constructor application
+  (#1150), and such a binding was generalized: `check` clean, `run`
+  `E-NOT-A-FUNCTION`, native SEGFAULT. Wrapping *that* binding in `λd̄.` would
+  additionally re-allocate the cell per use, so neutrality did not hold for it either.
+  **Both holes are repaired and G2 is now ENFORCED** (see the ⚠️ above for the
+  structural argument), which satisfies the first of the two disjuncts this clause
+  named: *"either the predicate is repaired to G2's set first, or the
+  dict-abstraction of locals is restricted to a set that is independently shown to
+  satisfy G2."*
+
+  ⚠️ **That removes G3's stated blocker; it does not by itself discharge G3, and it is
+  not a clearance for F-1.** G3 remains an argument *about the set*, and the
+  implementation must satisfy more than G2 alone: the **G4** row of §11 separately
+  records that the five local generalization sites **do not share one pin
+  predicate**, which is what explains #1052's `let`-vs-`where` divergence (`3` vs
+  `2`) — a live gap G2's repair does not touch. Whether F-1 may land is #1082's
+  adjudication against the whole of §11, not a conclusion anyone may draw from this
+  paragraph. What is now false is only the specific claim that landing F-1 would give
+  *a live unsoundness in the value predicate* a second, calling-convention-shaped
+  channel — that unsoundness is gone.
 
   ⚠️ **Why the argument has to be made at a local binder at all** — the top-level case
   looks like it never needed it, and the reason is *not* established. A top-level
   binding is gated by the same value predicate (`memberClauseIsValue`,
-  `compiler/types/typecheck.mdk:16023`, calling the same `isNonexpansive`), and once
+  `compiler/types/typecheck.mdk:16051`, calling the same `isNonexpansive`), and once
   it is dict-abstracted its body is likewise re-entered per use, so "evaluated at most
   once per program" is a claim about **CAF memoization of a nullary top-level
   binding** — which this document has **not verified** and does not assert. Treat the
@@ -1595,7 +1623,7 @@ function rather than over the pass that was expected to call it.
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **UNIMPLEMENTED — confirmed absent TREE-WIDE, not just in `typecheck.mdk`.** `dictPassDecl:12377` has exactly four declaration arms — `DFunDef` (`:12378`), top-level `DLetGroup` (`:12388`), `DImpl` methods (`:12397`), `DInterface` default bodies (`:12403`) — then a catch-all `dictPassDecl _ _ d = d` (`:12407`); no arm descends into an expression. The stronger check is on the **name-minting** function: `dictParamName:12685` is the sole producer of a `$dict_<fn>_<slot>` binder, and tree-wide (`grep -rn dictParamName compiler/ --include='*.mdk'`) its only *pattern*-producing callers are `dictParamsGo:12671` and `dictParamsFrom:12680`, reachable only from those four arms — every other caller builds an `RDict` route or an `activeDictVars` entry, i.e. a **reference** to a param a declaration already bound. `llvm_emit.mdk`'s `dictParamNameE:6130` re-derives the same string for a method and creates nothing. And there is **no lambda-lifting pass** that could route a local through the `DFunDef` arm (`grep -rn 'lambdaLift\|hoistLocal\|liftLocal\|closureConv' compiler/` → 0 hits; `desugar.mdk` maps `ELetGroup` structurally at `:73`/`:120-121` and never hoists it) | — | so no `let`/`where` binding receives a `λd̄.` prefix at **any** stage — resolve, desugar, marker, typecheck, IR lowering, or either backend. Separately, even the implemented half has no per-binder key for G1 to extend: the arity a top-level binding gets is read by `dictArityOf:12662`, which is **bare-name** (see the I1 row). G1 additionally needs *local* binder identity — `(name, binding-id)` keying already exists for local scheme *obligations* (`registerLocalScheme:7866`, #837) and is the shape the arity table would need. ⚠️ **G1's absence is uniform across BOTH local spellings** — the `dictParamName` derivation above covers `let` and `where` alike — so an observed `let`-vs-`where` behavioural difference (e.g. #1052's two spellings printing `3` and `2`) is **not** explained by this row. It is explained by the G4 row below: the five sites do not share one pin predicate |
-| §4.1 **G2** (value-restriction gate) | 🔴 **HOLED — the gate exists and its predicate is not G2's set.** `genRestricted:3606` is gated on `isNonexpansive:3534` at all five local generalization sites (`blockRecLet:5205`, `blockLet:5221`, `inferRecLet:7835`, `inferLetBody:7904`, `generalizeGroup:9331` via `clausesAreValue:9344`) **and at the top-level site** (`sccSchemes:16017` via `memberClauseIsValue:16023`) | a binding generalizes only at a syntactic value | 🔴 **#1139 (OPEN, S0, verified): the constructor-application arm folds over ONE argument, not all of them.** `isNonexpansive (EApp f x) = isCtorAppHead (EApp f x) && isNonexpansive x` (`:3550`): only `x`, the spine's **final** argument, is tested for non-expansiveness; `f` reaches only `isCtorAppHead`, whose recursive arm `isCtorAppHead (EApp f _) = isCtorAppHead f` (`:3565`) **discards every argument** on its walk to the head. So `Ref` is excluded in final position and admitted in any other — `data BR a = BR (Ref (List a)) Bool` with `let b = BR (Ref []) True` generalizes: `check` exit 0, `run` `E-NOT-A-FUNCTION`, native **SEGFAULT** (exit 139); the control with the `Ref` moved to final position is correctly rejected. The three sibling arms each use `allList isNonexpansive` (`:3543`, `:3544`, `:3552-3555`); this is the only arm that does not, **and the comment directly above it says it does** (`:3546-3547`, *"every spine argument is itself non-expansive"*) — so the source's own documentation is the specification and the code is the divergence. ⚠️ **The hazard is NOT the future extern the comment at `:3528-3530` warns about.** That warning ("any future uppercase mutable-cell extern MUST be added to the exclusion") describes a maintenance risk; plain `Ref`, already excluded by name at `:3566`, escapes **today** by position. G3 may not be cited as discharged while this stands |
+| §4.1 **G2** (value-restriction gate) | ✅ **ENFORCED.** `genRestricted:3629` is gated on `isNonexpansive:3533` at **three** of the five local generalization sites (`blockLet:5244`, `inferLetBody:7927`, `generalizeGroup:9358` via `clausesAreValue:9367`) **and at the top-level site** (`sccSchemes:16048` via `memberClauseIsValue:16051`). ⚠️ **This row claimed all five until 2026-07-31 — derive them, do not trust the list: `grep -n genRestricted compiler/types/typecheck.mdk` is seven lines.** The two `let rec` sites (`blockRecLet:5228`, `inferRecLet:7858`) pass `not (pinLocalIfDictForwarded …)` and never consult the value predicate. That is **not** a hole: `checkRecBindNonFunction:8634` rejects any `let rec` RHS that is not `isSyntacticLambda`, so those bindings are lambdas — values under G2's own first clause — and `isNonexpansive` would answer `True` unconditionally there. The behaviour satisfies G2; only the citation was wrong | a binding generalizes only at a syntactic value | ✅ The predicate is G2's set. Each arm of `isNonexpansive` maps to one clause of the definition, the four aggregate arms (`ETuple`, `EListLit`, `ERecordCreate`, and the constructor spine via `isCtorAppSpine:3592`) each fold over **all** parts, and the catch-all is `False` — so a future `Expr` constructor lands on *expansive*, i.e. over-restriction, never unsoundness. *"An application of a **data constructor**"* is decided by `isSome (lookupCtor env name)`, a lookup in the environment's ctor map (`lookupCtor:4369`), whose only writers are `initialEnv:15501` (`True`/`False`) and `addCtor:4396` — sole caller `addVariants:8528`, reached only from a `data`/`newtype`/record declaration. *"A constructor that allocates a mutable cell is not admitted at any position"* therefore holds **structurally, with no exclusion list**: a declared data constructor allocates an immutable block from arguments the same predicate has already checked, and every mutable-cell allocator in the language is an `extern` (`Ref`, `arrayMake`, …), which is a function and never enters that map. ⚠️ **This row read 🔴 HOLED until two S0s were closed, and BOTH were in this cell's own words.** #1139: the constructor arm folded over the spine's **final argument only**, so a `Ref` in any other position was admitted (`let b = BR (Ref []) True` generalized — `check` exit 0, `run` `E-NOT-A-FUNCTION`, native **SEGFAULT** exit 139). #1150: the head test was `name != "Ref" && ctorHeadIsUpper name`, a **first-character** heuristic — and since a module alias MUST be capitalized (`frontend/parser.mdk:2514`) while an alias-qualified value desugars to a flat `EVar "H.new"` (`frontend/desugar.mdk:1013-1014`), **100% of the `import m as A` surface** read as a constructor application and `let m = H.new ()` generalized a mutable hash table. The second hole survived the first fix untouched: 1139's repair rewrote the *argument* fold and left the head test verbatim. ⚠️ **The hazard was never the "future uppercase mutable-cell extern" the old source comment warned about** — that comment sent readers to `grep '^extern [A-Z]' stdlib/runtime.mdk`, which returns one line and manufactures confidence, while plain `Ref` escaped **today**, twice, by two different routes |
 | §4.1 **G4** (predicate deferral; monomorphising is NOT an approximation) | 🔴 **DIVERGENT.** The five sites above conjoin the value test with `not (pinLocalIfDictForwarded:8947 …)` — the #866/#1021 all-or-nothing pin, which handles a dict-forwarding local by **declining to generalize** it, exactly the move G4 forbids | — | 🚨 **The five sites do NOT share one pin predicate, and this is where a `let`-vs-`where` divergence comes from.** The four `let`-shaped sites call `pinLocalIfDictForwarded:8947`, whose pin set is `dictForwardedPairs callN0 dictN0` (`:8928`) — the dict-app and call-obligation windows, and nothing else. The `where`/let-group site is different: `processLetGroup:8770` computes `pinned = methodConstrainedIds () ++ map fst dictPairs` (`:8791`) and hands it to `generalizeGroup:9310`, which pins on `anyIn free constrained` (`:9318`). So the `where` path pins on a **strictly larger** set — it consults the METHOD-constrained channel that the `let` path never reads. One judgment, two predicates, is an L1 fork, and it is the structural difference that would make #1052's `let` spelling generalize (unpinned ⇒ correct `3`) where its `where` spelling pins (⇒ the collapse to `2`). Stated as the mechanism the source supports; not probed here (no binary). 🔴 **#1052 (OPEN, S0)** is the clause's counterexample and is already filed as one: monomorphising a `where` helper merges two *distinct rigid signature* variables and drops a dictionary slot, printing `2` where G4 says `3`, on both engines, exit 0. #1082 is the migration vehicle; the pin is documented as an interim at `registerLocalScheme`'s `#866 NARROWED THE PREMISE` comment (`:7850-7865`), which states the trade in the same terms |
 | §5 method dispatch (arg/result/phantom position) | `inferMethodAt:4619`; `resolveSites:10057` (return-position); `argDispatchIndices:2746`/`prePassDictArg:9742` (arg-position) | dispatch type is fixed by `var`'s instantiation regardless of `ā_C`'s position in `τ_m` | — |
 | §5 arg-tag dispatch = optimization, not semantics | (i) `narrowMethod`/`methodAtNarrow:1048-1069` narrows by a STATICALLY-computed `Route` key, not a runtime inspection. (ii) The genuine runtime-argument-inspection fallback is `applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg:870` → `filterByTag:888-891` → `runtimeTypeTag:384-397` → `matchesTag:1088-1090` (all `compiler/eval/eval.mdk`) — reached whenever a VMulti (unnarrowed method candidates) is applied to a runtime argument | (i) is sound by construction (the key was already the `min⊑` winner at typecheck time — this is NOT arg-tag dispatch in §5's sense at all, despite the name). (ii) IS §5's arg-tag dispatch, and its side condition is **not verified**: `runtimeTypeTag` discriminates at **bare head-tycon granularity only** (`VList _ => Some "List"`, `:391`) — it cannot distinguish `List Int` from `List a`, nor (per the sharper counterexample below) `T Int` from `T Bool` | 🔴 **Already tracked, more precisely than this row first put it: #1113** (OPEN, part of this same target-architecture arc). #1113's own text corrects the "no overlap below the head" framing this row started from: *"`impl C (T Int)` / `impl C (T Bool)` don't overlap and the tag `T` determines nothing; multi-param interfaces likewise"* — so even NON-overlapping instances differing past the head are mis-discriminated by `runtimeTypeTag`'s granularity. #1113's own stated target fix ("computed once post-K from the global IE, frozen into the elaboration output... never re-derived") confirms today's `filterByTag` is exactly the ad-hoc mechanism it plans to retire |
@@ -1674,18 +1702,30 @@ it); **§7.1 U1/U2** (`CheckMode` is live, with 20 `Flat` arms and a consumer se
 derived by the command in that row, against `compiler/DRIVER-COLLAPSE-PLAN.md`'s
 status line of IMPLEMENTED).
 
-🔴 **One row is HOLED rather than divergent, and it is the most serious finding in this
-table: §4.1 G2** (`isNonexpansive`'s constructor arm folds over the spine's **final
-argument only**, so a mutable cell in any other position is generalized — **#1139**,
-OPEN, S0, memory-safety: `check` exit 0, native SEGFAULT). It matters beyond its own
-severity because it is the premise **§4.1 G3** rests on, and G3 is **F-1's (#1082)
-gate**: landing dict-abstracted locals on the current value predicate would give a
-live unsoundness a second, calling-convention-shaped channel. ⚠️ **This row asserted
-the opposite** in its first revision — *"`isNonexpansive`'s only allocating arms are
-… over non-expansive parts"* — a claim contradicted by the very lines it cited, and
-the fourth first-pass error in this table. The three others were "no site" verdicts
-under-searched; this one was a **positive** claim read off a line whose sibling arms
-made it look obvious. Neither kind is caught by a doc gate.
+✅ **The one row that was HOLED rather than divergent — §4.1 G2, the most serious
+finding in this table — is now ENFORCED.** It held **two** S0 memory-safety holes, not
+one, and the second outlived the first fix: **#1139** (the constructor arm folded over
+the spine's **final argument only**, so a mutable cell in any other position was
+generalized) and **#1150** (the head test decided "is this a constructor?" from the
+name's **first character**, so every alias-qualified application in the language —
+`let m = H.new ()` — was one). Both: `check` exit 0, native SEGFAULT. The arm now folds
+over every argument and the head test is a `lookupCtor` in the environment's own ctor
+map, so the mutable-cell exclusion is structural rather than a name.
+
+⚠️ **Three lessons this row paid for, in three successive revisions, none catchable by a
+doc gate.** (1) Its **first** revision asserted the *opposite* — *"`isNonexpansive`'s
+only allocating arms are … over non-expansive parts"* — a positive claim read off a
+line whose sibling arms made it look obvious, and contradicted by the very lines it
+cited; the three other first-pass errors in this table were under-searched "no site"
+verdicts, and this one was the reverse kind. (2) Its **second** named #1139 as *the*
+hole and, in ruling out the maintenance risk the source comment warned about
+("any future uppercase mutable-cell extern"), stopped at the argument fold and never
+re-read the head test sitting one line below it — so #1150 was live, and strictly
+wider, the whole time this row claimed to have characterized the defect. **A row that
+names one hole reads as an inventory.** (3) G2 was the premise **§4.1 G3** rests on and
+G3 is **F-1's (#1082) gate**; repairing G2 removes G3's *stated* blocker but does
+**not** discharge G3 or clear F-1 — the **G4** row's unshared pin predicate is
+untouched by any of this.
 
 ---
 

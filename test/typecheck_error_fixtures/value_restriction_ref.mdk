@@ -1,8 +1,13 @@
--- `Ref` is the sole uppercase constructor that builds a mutable cell.
--- Generalizing `Ref x` would be unsound (write at one type, read at another).
--- This binding must NOT generalize — using it at two incompatible types must error.
--- The exclusion in isCtorAppHead is by the name "Ref" so it works regardless of
--- whether Ref is declared locally or comes from the stdlib prelude.
+-- `Ref` builds a mutable cell.  Generalizing `Ref x` would be unsound (write at
+-- one type, read at another).  This binding must NOT generalize — using it at two
+-- incompatible types must error.
+--
+-- `Ref` is excluded WITHOUT being named: `isCtorAppSpine` asks `lookupCtor` whether
+-- the spine head is a declared data constructor, and `Ref` is an extern FUNCTION, so
+-- it is never in that map.  This holds whether `Ref` is declared locally (as below)
+-- or comes from the stdlib prelude — an `extern` never enters the ctor map either way.
+-- The old test named "Ref" by hand and otherwise trusted the first character of the
+-- name, which was issue 1150.
 extern Ref : a -> Ref a
 r = Ref (x => x)
 -- Using r at two different function types in one tuple must produce a type error.

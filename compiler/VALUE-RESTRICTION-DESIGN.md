@@ -1,9 +1,27 @@
 # Generalizing constructor / record applications of values (value-restriction relaxation)
 
-**Status:** IMPLEMENTED — `386a5433`, after 2026-06-30. `isNonexpansive`
-(`compiler/types/typecheck.mdk:2439`) now has an `EApp` arm gated by `isCtorAppHead`
-(`:2455`, excluding `Ref` by name) — a byte-for-byte match to this doc's own "LOCKED
-SCOPE" §D1/D3. Header below ("design only, no code changed") predates the fix.
+**Status:** IMPLEMENTED — `386a5433`, after 2026-06-30, and REPAIRED TWICE since.
+`isNonexpansive` (`compiler/types/typecheck.mdk`) has an `EApp` arm gated by
+`isCtorAppSpine` — a match to this doc's own "LOCKED SCOPE" §D1/D3. Header below
+("design only, no code changed") predates the fix.
+
+⚠️ **Two parts of this doc's design were wrong as landed and are no longer what the
+tree does. Read the source comment on `isCtorAppSpine`, not the sketch in §D1/D3.**
+
+- **Issue 1139** — the arm folded over the spine's **final argument only**, so a `Ref`
+  in any non-final position escaped (`let b = BR (Ref []) True` generalized; `check`
+  exit 0, native SEGFAULT). `isCtorAppSpine` now tests **every** argument on its single
+  walk to the head. The helper this doc calls `isCtorAppHead` was renamed in that fix.
+- **Issue 1150** — the **head** test was a first-character heuristic
+  (`name != "Ref" && ctorHeadIsUpper name`). Because a module alias must be capitalized
+  and an alias-qualified value desugars to a flat `EVar "H.new"`, **every**
+  alias-qualified application read as a constructor application, so `let m = H.new ()`
+  generalized a mutable hash table. The head test is now
+  `isSome (lookupCtor env name)` — the environment's own ctor map. **This doc's central
+  claim that `Ref` is "the one constructor that builds a mutable cell" and must be
+  "special-cased exactly as SML special-cases `ref`" no longer describes the code, and
+  was itself the framing that made the heuristic look principled: `Ref` is an extern
+  FUNCTION, not a constructor, so it is now excluded without being named.**
 
 Original header (predates the fix): **Status:** design only (no code changed). Verified on a `medaka` built from
 a discarded worktree, base `90865a6` (BASE_OK).

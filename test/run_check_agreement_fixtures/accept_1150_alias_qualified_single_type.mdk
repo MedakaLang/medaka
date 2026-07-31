@@ -1,0 +1,38 @@
+-- Issue 1150 OVER-NARROWING GUARD — the half of the fix that no pre-existing
+-- test could have caught.
+--
+-- The fix for 1150 replaces the value restriction's first-character head test
+-- with `isSome (lookupCtor env name)`, which REMOVES programs from the accepted
+-- set: every alias-qualified application (`A.f x`) used to be classified as a
+-- constructor application and generalized, and now is expansive like any other
+-- application.  Every test written before the fix covers the old, wider
+-- behaviour, so nothing in the suite can notice if the narrowing goes too far —
+-- the failure mode is silent over-rejection in unrelated code that suddenly
+-- stops compiling.  (`import_alias_ok` in this same corpus exercises an
+-- alias-qualified call, but never in a `let`-binding position, so it does not
+-- reach the value restriction at all.)
+--
+-- So: an alias-qualified call bound by `let` and used at a SINGLE type must
+-- still typecheck AND run correctly.  It no longer generalizes — that is the
+-- point of the fix — but a monomorphic binding is perfectly sound and must keep
+-- working.  This is the exact program of `reject_1150_alias_qualified_head`
+-- with the second, incompatible view of the table removed.
+--
+-- If this stops compiling, the narrowing overshot.  Verdict: ACCEPT, and `.out`
+-- pins the value: `putI` writes 1 at key "k", so `getI` must read back
+-- `Some 1` and print `1`.
+import hash_map as H
+import hash_map.{HashMap}
+
+putI : HashMap String Int -> Unit
+putI m = H.set "k" 1 m
+
+getI : HashMap String Int -> Option Int
+getI m = H.get "k" m
+
+main =
+  let m = H.new ()
+  let _ = putI m
+  match getI m
+    Some n => println (debug n)
+    None => println "none"

@@ -1,0 +1,49 @@
+-- Issue 1150 (S0, memory-safety) — the value restriction must decide "is this
+-- spine head a constructor?" by ASKING THE ENVIRONMENT, not by looking at the
+-- name's first character.
+--
+-- `isCtorAppSpine`'s head arm used to read
+--   isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
+-- where `ctorHeadIsUpper` tested `isUpper (arrayGetUnsafe 0 (stringToChars name))`.
+-- Three facts in the language compose into a hole that covers 100% of the
+-- `import m as A` surface:
+--
+--   1. a module alias MUST be capitalized — `as h` is a hard parse error
+--      (compiler/frontend/parser.mdk:2514);
+--   2. an alias-qualified value desugars to a FLAT `EVar` carrying the dotted
+--      name (compiler/frontend/desugar.mdk:1013-1014 via
+--      compiler/frontend/ast.mdk:379, `qualifiedLocal alias n = "\{alias}.\{n}"`);
+--   3. so `ctorHeadIsUpper "H.new"` inspects `'H'` and answers True.
+--
+-- Every alias-qualified call was therefore classified as a constructor
+-- application and generalized.  `H.new ()` allocates a MUTABLE hash table
+-- (stdlib/hash_map.mdk:56 — `HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)`),
+-- so `let m = H.new ()` produced a POLYMORPHIC mutable table: `putI` writes an
+-- `Int` into it at `HashMap String Int` and `getF` reads the same cell back at
+-- `HashMap String (Int -> Int)` and applies it.  `check` exited 0 with zero
+-- diagnostics, `run` died with E-NOT-A-FUNCTION, and the BUILT binary SEGFAULTED
+-- (exit 139) jumping through the int as a function pointer.
+--
+-- No user `data` type and no user extern are involved — one stdlib import is
+-- enough.  The discriminator is the ALIAS alone: spell the import selectively
+-- (`import hash_map.{new, ...}`, head `new`) and the same program was already
+-- correctly rejected; and the one spelling that would have been safe (a
+-- lowercase alias) is forbidden by the language.
+--
+-- Verdict: REJECT, by a type-mismatch DIAGNOSTIC from check/run/build alike —
+-- never by a runtime panic and never by a segfault.
+import hash_map as H
+import hash_map.{HashMap}
+
+putI : HashMap String Int -> Unit
+putI m = H.set "k" 1 m
+
+getF : HashMap String (Int -> Int) -> Option (Int -> Int)
+getF m = H.get "k" m
+
+main =
+  let m = H.new ()
+  let _ = putI m
+  match getF m
+    Some f => println (debug (f 10))
+    None => println "none"

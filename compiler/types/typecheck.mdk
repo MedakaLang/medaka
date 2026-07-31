@@ -64,7 +64,6 @@ import frontend.exhaust.{
   renderWitness,
   desugarPat,
 }
-import support.char.{isUpper}
 import backend.private_mangle.{mangledName}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
@@ -3522,65 +3521,81 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- mutable cell: literals, variables and lambdas are values; annotations are
 -- transparent; tuples/lists are values iff their elements are.  Constructor
 -- applications of non-expansive arguments are non-expansive (SML value
--- restriction relaxation, Phase 66 extension) EXCEPT `Ref`, which is the sole
--- uppercase constructor that builds a mutable cell (`extern Ref : a -> Ref a` in
--- stdlib/runtime.mdk).  Generalizing `Ref x` would be unsound (polymorphic
--- reference: write at one type, read at another).  ANY future uppercase
--- mutable-cell extern MUST be added to the exclusion in `isCtorAppSpine` below
--- — audit with `grep '^extern [A-Z]' stdlib/runtime.mdk` to find candidates.
+-- restriction relaxation, Phase 66 extension).
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
 -- generalizes — the separate `mut`-gen hole is a both-sides follow-up (T1b).
-isNonexpansive : Expr -> Bool
-isNonexpansive (ELoc _ e) = isNonexpansive e
-isNonexpansive (EDoOrigin _ e) = isNonexpansive e
-isNonexpansive (ELit _) = True
-isNonexpansive (EVar _) = True
-isNonexpansive (EVarId _ _) = True
-isNonexpansive (ELam _ _) = True
-isNonexpansive (EAnnot e _) = isNonexpansive e
-isNonexpansive (EHeadAnnot e _) = isNonexpansive e
-isNonexpansive (ETuple es) = allList isNonexpansive es
-isNonexpansive (EListLit es) = allList isNonexpansive es
--- Constructor application: non-expansive iff the spine head is an
--- uppercase-initial EVar (a data/record constructor) that is NOT `Ref`, and
--- every spine argument is itself non-expansive.  Partial ctor applications
--- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
--- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
-isNonexpansive (EApp f x) = isCtorAppSpine (EApp f x)
+--
+-- Takes the `TcEnv` solely so the constructor test in `isCtorAppSpine` can be a
+-- LOOKUP rather than a guess about spelling.  The catch-all `_ = False` is the
+-- SAFE default: a future `Expr` constructor lands there and is expansive, i.e.
+-- not generalized — over-restriction, never unsoundness.
+isNonexpansive : TcEnv -> Expr -> Bool
+isNonexpansive env (ELoc _ e) = isNonexpansive env e
+isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
+isNonexpansive _ (ELit _) = True
+isNonexpansive _ (EVar _) = True
+isNonexpansive _ (EVarId _ _) = True
+isNonexpansive _ (ELam _ _) = True
+isNonexpansive env (EAnnot e _) = isNonexpansive env e
+isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
+isNonexpansive env (ETuple es) = allList (e => isNonexpansive env e) es
+isNonexpansive env (EListLit es) = allList (e => isNonexpansive env e) es
+-- Constructor application: non-expansive iff the spine head is a DECLARED data
+-- constructor and every spine argument is itself non-expansive.  Partial ctor
+-- applications (e.g. `MkTwo []`) are also non-expansive — they are closures, not
+-- mutable cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
+isNonexpansive env (EApp f x) = isCtorAppSpine env (EApp f x)
 -- Record creation: non-expansive iff every field expression is non-expansive.
-isNonexpansive (ERecordCreate _ fs) = allList
+isNonexpansive env (ERecordCreate _ fs) = allList
   (fa => match fa
-    FieldAssign _ e => isNonexpansive e)
+    FieldAssign _ e => isNonexpansive env e)
   fs
-isNonexpansive _ = False
+isNonexpansive _ _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
--- on the way, and finally test whether the head is a data/record constructor
--- (uppercase-initial EVar) that is safe to generalize.  `Ref` is excluded
--- because it is the only uppercase extern that builds a mutable cell — see the
--- comment on `isNonexpansive` above.
+-- on the way, and finally ask the ENVIRONMENT whether the head is a declared
+-- data/record constructor.
+--
+-- `lookupCtor` IS the whole test — there is no spelling heuristic and no
+-- hand-maintained exclusion list to keep in sync.  The ctor map has exactly two
+-- writers: `initialEnv` (`True`/`False`) and `addCtor`, whose sole caller is
+-- `addVariants`, reached only from `registerVariants` — i.e. only from a
+-- `data`/`newtype`/record declaration.  So membership means "declared as a data
+-- constructor", and an extern, an ordinary function, an interface method or a
+-- module-qualified name is expansive by construction.
+--
+-- `Ref` is therefore excluded WITHOUT being named.  `extern Ref : a -> Ref a`
+-- (stdlib/runtime.mdk:15) is an extern FUNCTION, not a constructor, so it never
+-- enters the ctor map — probe it directly: `unwrap (Ref x) = x` is rejected
+-- `T-UNKNOWN-CTOR`, and that error comes from `inferPatCon`'s `lookupCtor` call
+-- on this same map.  The old test spelled this out by hand as `name != "Ref" &&
+-- ctorHeadIsUpper name`, and its "uppercase initial ⇒ constructor" half was
+-- issue 1150: a module alias MUST be capitalized (`frontend/parser.mdk:2514`
+-- rejects a lowercase one) and an alias-qualified value desugars to a FLAT
+-- `EVar "H.new"` (`frontend/desugar.mdk:1013-1014` via `frontend/ast.mdk:379`),
+-- so EVERY alias-qualified call in the language read as a constructor
+-- application — `let m = H.new ()` generalized a mutable hash table (`check`
+-- exit 0, `run` E-NOT-A-FUNCTION, native SEGFAULT).
 --
 -- The arguments are tested HERE, on the single walk to the head, rather than by
 -- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
 -- the whole spine per level, i.e. quadratic in the constructor's arity.  Testing
--- only the LAST argument was #1139 — a `Ref` in any non-final position escaped
--- the exclusion entirely, so `let b = BR (Ref []) True` generalized and a cell
--- written at `Int` could be read at `Int -> Int`.
-isCtorAppSpine : Expr -> Bool
-isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
-isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
-isCtorAppSpine (EApp f x) = isNonexpansive x && isCtorAppSpine f
-isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
-isCtorAppSpine (EVarId name _) = name != "Ref" && ctorHeadIsUpper name
-isCtorAppSpine _ = False
-
--- True iff the first character of a name is an ASCII uppercase letter,
--- i.e. the name looks like a data constructor or type name.
-ctorHeadIsUpper : String -> Bool
-ctorHeadIsUpper name =
-  let cs = stringToChars name
-  arrayLength cs > 0 && isUpper (arrayGetUnsafe 0 cs)
+-- only the LAST argument was issue 1139 — a `Ref` in any non-final position
+-- escaped the exclusion entirely, so `let b = BR (Ref []) True` generalized and
+-- a cell written at `Int` could be read at `Int -> Int`.
+--
+-- Head test FIRST, arguments second: the common `let` RHS is an ordinary
+-- application whose head is NOT a constructor, and the head is reachable without
+-- touching a single argument subtree.  Both operands are pure `Bool`, so the
+-- order is semantically inert and strictly cheaper.
+isCtorAppSpine : TcEnv -> Expr -> Bool
+isCtorAppSpine env (ELoc _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
+isCtorAppSpine env (EVar name) = isSome (lookupCtor env name)
+isCtorAppSpine env (EVarId name _) = isSome (lookupCtor env name)
+isCtorAppSpine _ _ = False
 
 -- Lower every unbound var in [t] deeper than the current level down to the
 -- current level, so a value-restricted (non-generalized) binding's vars can't be
@@ -5226,7 +5241,7 @@ blockLet env (PVar x xloc) e =
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
+  let sch = genRestricted (isNonexpansive env e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
   seedAlphaLets (extendLocalVar env x sch) x e
@@ -7909,7 +7924,7 @@ inferLetSimple env pat e1 e2 =
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
+  let sch = genRestricted (isNonexpansive env e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
@@ -9336,7 +9351,7 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
     recordPinnedLocalsGeneric name (clausesLoc clauses) free constrained mono
   else
     False
-  let isVal = clausesAreValue clauses && not pinnedHere
+  let isVal = clausesAreValue env clauses && not pinnedHere
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
   -- alphaCollectBinds rule); a multi-clause / parameterized binding is not a
   -- known prefix.
@@ -9349,12 +9364,12 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
 -- A where-clause binding is a value (generalizable) iff every clause has params
 -- (it's a function) or its zero-arg RHS is non-expansive.  Mirrors the oracle
 -- `ELetGroup` value test (lib/typecheck.ml:1715-1716).
-clausesAreValue : List FunClause -> Bool
-clausesAreValue clauses = allList clauseIsValue clauses
+clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesAreValue env clauses = allList (c => clauseIsValue env c) clauses
 
-clauseIsValue : FunClause -> Bool
-clauseIsValue (FunClause [] rhs) = isNonexpansive rhs
-clauseIsValue (FunClause _ _) = True
+clauseIsValue : TcEnv -> FunClause -> Bool
+clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
+clauseIsValue _ (FunClause _ _) = True
 
 -- infer a clause group (multi-clause function), unifying all clauses to one type
 inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
@@ -15762,7 +15777,12 @@ processSCC env sigs grouped members =
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
-  let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
+  -- [env2] is the environment these clause bodies were inferred under.  sccSchemes
+  -- reads it ONLY through isNonexpansive's `lookupCtor` (the ctor map), and
+  -- `extendVars` writes only the VAR map, so `env` and `env2` carry an identical
+  -- ctor map here — env2 is passed because it is the body-inference environment,
+  -- not because the placeholders matter.
+  let schemes = sccSchemes env2 sigs grouped (isLetrecGroup members) placeholders
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
   -- so a caller of this group re-instantiates them and its own group can ground the
@@ -16019,18 +16039,18 @@ effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{rend
 --   isVal    = plainVal || sigIsFun.
 -- A non-function expansive unsigned binding (`r = Ref []`) is value-restricted and
 -- stays monomorphic.  Mirrors oracle lib/typecheck.ml:2705-2710 + 2756.
-sccSchemes : List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
-sccSchemes _ _ _ [] = []
-sccSchemes sigs grouped isLetrec ((m, v)::rest) =
-  let plainVal = isLetrec || allList memberClauseIsValue (clausesOf m grouped)
+sccSchemes : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
+sccSchemes _ _ _ _ [] = []
+sccSchemes env sigs grouped isLetrec ((m, v)::rest) =
+  let plainVal = isLetrec || allList (c => memberClauseIsValue env c) (clausesOf m grouped)
   let sigIsFun = memberSigIsFun sigs m v
   let isVal = plainVal || sigIsFun
-  (m, genRestricted isVal v) :: sccSchemes sigs grouped isLetrec rest
+  (m, genRestricted isVal v) :: sccSchemes env sigs grouped isLetrec rest
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
-memberClauseIsValue : (List Pat, Expr) -> Bool
-memberClauseIsValue ([], rhs) = isNonexpansive rhs
-memberClauseIsValue (_, _) = True
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
+memberClauseIsValue _ (_, _) = True
 
 -- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool

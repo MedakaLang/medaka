@@ -227,9 +227,9 @@ checkUndeterminedRetEffVarsDecl : Decl -> Unit
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
 clauseImplDictUser : Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
-clauseIsValue : FunClause -> Bool
+clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
-clausesAreValue : List FunClause -> Bool
+clausesAreValue : TcEnv -> List FunClause -> Bool
 clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 clausesLoc : List FunClause -> Option Loc
 clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
@@ -313,7 +313,6 @@ countHeadByIfaceGo : List KeyEntry -> String -> String -> Int
 countHeadGo : List KeyEntry -> String -> String -> Int
 countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
-ctorHeadIsUpper : String -> Bool
 ctorImportTypeNames : Decl -> List String
 ctorMemberTypeName : UseMember -> List String
 currentDoOrigin : Ref (Option Loc)
@@ -785,7 +784,7 @@ ioAliasLabels : List String
 isArithBinop : String -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
-isCtorAppSpine : Expr -> Bool
+isCtorAppSpine : TcEnv -> Expr -> Bool
 isDefinerShadow : String -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
@@ -793,7 +792,7 @@ isLetrecGroup : List String -> Bool
 isLitArg : Expr -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
-isNonexpansive : Expr -> Bool
+isNonexpansive : TcEnv -> Expr -> Bool
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isShadowStandalone : String -> Bool
 isSubTop : Param -> Bool
@@ -880,7 +879,7 @@ maybeStandaloneValueMono : String -> Option Mono
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
 memberAliasEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
 memberBinding : UseMember -> (String, String)
-memberClauseIsValue : (List Pat, Expr) -> Bool
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberDictName : List String -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
@@ -1230,7 +1229,7 @@ rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 runFinalChecks : List Decl -> List Decl -> Unit
 sameRootId : Int -> Mono -> Bool
-sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
+sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
 schemeHasConcreteDomain : Scheme -> Bool
 schemeIds : Scheme -> List Int
 schemeLines : List (String, Scheme) -> List String
