@@ -1,7 +1,7 @@
 issue: 614
 what: The declaration-time coherence check enforces DICT-SEMANTICS §6.1 condition (a)
 what: GLOBAL COMPARABILITY — any two impls whose heads unify must be ⊑-comparable — but
-what: the spec commits to (c) PER-GOAL UNIQUE MINIMUM, which is strictly weaker. §6.1:
+what: the spec commits to (c) PER-GOAL UNIQUE MINIMUM, an INCOMPARABLE condition. §6.1:
 what: "Recommended: (c) as the semantics (it is also GHC's condition) ... An implementation
 what: MAY additionally warn at declaration time on (a)-violations as an early diagnostic,
 what: but ACCEPTANCE IS PER-GOAL." main.mdk is §6.1's OWN named separating case, verbatim:
@@ -30,8 +30,9 @@ why-note: rejection. With only the first two impls the program is genuinely ambi
 why-note: goal and (c) rejects it TOO — the two-impl output is BYTE-IDENTICAL to this one.
 why-note: The third impl being a complete no-op to the checker IS the bug; a probe that
 why-note: removes it cannot see the defect at all.
-why-note: ⚠️ This is an OVER-rejection and it is SOUND — (a) implies (c), so nothing is
-why-note: accepted that the spec would reject. No silent wrongness. Hence S2, not S0.
+why-note: ⚠️ OVER-rejection, and SOUND — the SITE's reject set is a SUPERSET of C1's, so
+why-note: nothing the spec rejects is accepted. (NOT "(a) implies (c)" — DICT §6.1.2 refutes
+why-note: that at α-equal heads, which satisfy (a) while failing (c).) Hence S2, not S0.
 why-note: ⚠️ §6.1 flags this as an owner-visible CHOICE-POINT, so moving to (c) is a
 why-note: semantics change. If Val instead decides (a) is the language, the correct outcome
 why-note: is to amend §6.1 and DELETE this row — not to leave it pinned against the spec.

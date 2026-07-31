@@ -14,13 +14,13 @@
 --     "Overlapping impls of C: Pair a Int and Pair Int b can match the same type.
 --      Make them disjoint, or wrap one type in a newtype"
 --   The declaration-time sweep enforces §6.1 condition (a) (global pairwise
---   comparability), which is STRICTLY STRONGER than (c).
+--   comparability) and rejects strictly MORE than (c) does -- see below.
 --
--- Severity is S2, not S0: (a) implies (c), so this is an OVER-rejection and
--- nothing unsound is accepted. It earns S2 on the diagnostic -- the advice
--- "make them disjoint, or wrap one type in a newtype" is the wrong fix, and the
--- spec's actual remedy (declare the more specific impl) is both unmentioned and
--- INEFFECTIVE: its control below proves adding it changes nothing.
+-- Severity is S2, not S0: the SITE's reject set is a superset of C1's, so
+-- nothing unsound is accepted. (NOT because "(a) implies (c)" -- DICT §6.1.2
+-- refutes that at α-equal heads.) It earns S2 on the DIAGNOSTIC: "make them
+-- disjoint, or wrap one type in a newtype" is the wrong fix, and the spec's
+-- remedy (declare the more specific impl) is unmentioned AND INEFFECTIVE.
 --
 -- ⚠️ Owner-visible: #311 records the 2026-07-16 decision to KEEP (a) for now
 -- (it simplifies the #203 min⊑ fix -- under (a) every accepted matching set is
