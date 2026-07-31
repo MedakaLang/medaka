@@ -5,7 +5,9 @@ explicitly-marked out-of-family section for rows adjudicated on request, against
 [`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) (the design)
 and epic #1122 (the stage table). Derived first-hand from `compiler/**/*.mdk` at
 `13b9fafe` (2026-07-30); the issue-1150, #1139 and #1140 rows added 2026-07-31 and
-derived at `ec51c28e`. Extends §4's traceability matrix from *families* to
+derived at `ec51c28e`; the #1161 and #1162 rows added 2026-07-31 and derived at
+`5c3ded21`, with every behavioural claim in them re-run on a binary cold-built from that
+commit rather than taken from the issues. Extends §4's traceability matrix from *families* to
 *individual bugs*, and states a falsifiable prediction for every DRAINED-BY verdict so
 each row is **gradeable the day its stage merges**. The design document is the authority.
 Two of this ledger's proposals were adjudicated and are now **adopted into it** (§2 K
@@ -27,6 +29,17 @@ memory-safety, filed after the derivation above) joins family A; **#1139** (CLOS
 because they are outside the scope line above and a reader finding nothing here cannot
 tell "out of scope" from "nobody looked". **One new gap, G-9.** Nothing else moved: no
 existing verdict, mechanism or prediction was touched.
+
+**Second addendum, 2026-07-31 — #1161 and #1162**, both OPEN, `verified`, S0,
+`ws:typecheck`, filed after the derivation above and both reproduced first-hand here on a
+binary cold-built in this worktree at `5c3ded21`. #1161 joins family B; #1162 opens a
+**family J** section (§4's coherence row, previously unpopulated here). **Two new gaps,
+G-10 and G-11**, both Shape 1. Nothing else moved. Two consequences reach outside their
+own rows and are stated in them rather than left to a reader: **G-10 must be adjudicated
+before or with G-8's §2 E arity amendment**, which would otherwise freeze the shattered
+dict-slot granularity into the output contract; and **F-3c (#1155) must not land before
+#1161's leg is repaired**, because the arm F-3c makes loud is already reached by that
+leg's deformed goals (traced in #1161's row).
 
 > **The burden of proof here is inverted.** "The plan covers this" is the claim that
 > needs a mechanism plus a prediction; "this is a gap" is the cheap answer. A row with
@@ -58,6 +71,8 @@ existing verdict, mechanism or prediction was touched.
 | #1127 superclass-projected dict picks the general instance | DRAINED-BY **B-1 + B-2** (hypothesis CONFIRMED) — **plus GAP G-5** (`activeDictVars` keying is in neither task's blast list) | B + G-5 |
 | #1128 `impl C a` beside a concrete parametric-head impl | **GAP (L1 fork)** — B-2 covers the route half; candidate collection is complete on the obligation path (`univHeadless`) and not on the route path. **NOT** engine-realization (hypothesis disproved) | A-3 + B-2; see G-6 |
 | #1150 alias-qualified head defeats the value restriction | DRAINED-BY **A-1** (#1110) — A-2 (#1111) contributes the ratchet, not the fact — **with an owed consumer clause, GAP G-9** | A |
+| #1161 the `=>` leg shatters a multi-param predicate into per-tyvar slots | **GAP (L1 fork)** — no stage owns "dict slot becomes a predicate"; the predicate's non-tyvar arguments are discarded at THREE producers and no complete one exists. **NOT** a member of G-8 (argued in the row) | none; see G-10 |
+| #1162 `checkCoherence` sees USER decls only; the key table is prelude ++ user | DRAINED-BY **F-3c** (#1155) for the symptom — belongs on its declared flip list — **plus GAP G-11** for the declaration-time input set, which A-3 must relocate onto K's `IE` and no task names | F-3c + G-11 |
 | #1139 value restriction folded over the LAST ctor argument only | **CLOSED, and NOT DRAINED-BY any stage** — fixed independently at `825f9b14`; no law and no stage reaches a fold-completeness defect. Recorded so the arc is not credited with it | none; see O-1 |
 | #1140 one-line `where` silently drops an interface method | **OUT OF ARC (pipeline stage)** — decided in the lexer/parser, upstream of resolve; verified by `fmt` round-trip. Also outside this ledger's stated scope (S2, `ws:language`/`ws:diagnostics`) | none; see O-2 |
 
@@ -73,7 +88,10 @@ no owner; §2 E's amendment now gives it one.
 *(Derive the member set — `grep -n 'G-[0-9]' compiler/TYPECHECK-ARCH-BUG-FIT.md` — rather
 than trusting a count in this prose; note G-1 and G-3 are stated inline under Shape 3 and
 have no `###` heading of their own, so a heading-only grep under-counts. This heading read
-"the eight gaps" until 2026-07-31, when G-9 was added with issue 1150's row.)*
+"the eight gaps" until 2026-07-31, when G-9 was added with issue 1150's row — and then
+G-10/G-11 the same day with #1161's and #1162's. **The count in this prose has been wrong
+twice; the grep has never been.** Note also that the two-digit numbers make a naive
+`grep -c 'G-1'` match `G-10`/`G-11` as well as `G-1` — word-bound it.)*
 
 > **⚠️ This section was rewritten after adversarial review (2026-07-30). The first
 > version claimed eight gaps were "seven gaps, every one a completeness gap" and
@@ -85,9 +103,12 @@ have no `###` heading of their own, so a heading-only grep under-counts. This he
 
 **G-1 … G-8, in three distinct shapes.** They do *not* share one shape, and saying they
 did was the first version's central error. (**G-9** was added on 2026-07-31 with issue
-1150's row; it belongs to Shape 2 and *widens* it — see the note there.)
+1150's row; it belongs to Shape 2 and *widens* it — see the note there. **G-10** and
+**G-11** were added the same day with #1161's and #1162's rows; both are Shape 1, and
+both are of the G-7 variety — a fork with **no** complete reference implementation
+anywhere in the tree, which is what separates them from G-6.)
 
-### Shape 1 — L1 forks: one judgment, two implementations, one of them incomplete (G-6, G-7)
+### Shape 1 — L1 forks: one judgment, two implementations, one of them incomplete (G-6, G-7, G-10, G-11)
 
 This is **not** a missing law. It is L1's core prohibition — *"Each spec judgment has
 exactly one implementation, parameterized where call sites differ, never forked"* —
@@ -118,6 +139,23 @@ violated by construction, with a working reference implementation already in the
   `lowerDeclImpl` (`core_ir_lower.mdk:1267`) emits one entry per method *defined*, so a
   cross-module default-only impl lowers to zero entries and each engine must invent the
   arm privately. Same shape, no complete reference implementation.
+- **G-10 / #1161.** "What predicate does this binding's `=>` context state?" is answered
+  by **three** producers in `compiler/types/typecheck.mdk`, each with its own loss rule
+  and **none** complete: `constraintTyVars` (`:16040-16042`) keeps one entry per *type
+  variable* and drops every non-tyvar argument; `constraintArgMono` (`:16460-16463`)
+  drops the *whole predicate* if any argument is not a plain tyvar, which is what
+  `declaredSchemeOblsFor` (`:16434-16445`) inherits; and `recordSigConstraintObls`
+  (`:7584-7593`) — the only genuinely n-ary producer — applies the same all-or-nothing
+  drop and is reachable from exactly one caller (`:7559`, the shadow-standalone path).
+  The n-ary *representation* exists (`Predicate { iface, args : List Mono }`); every
+  producer that feeds the dispatch decision refuses to fill it.
+- **G-11 / #1162.** "What is the instance universe?" is answered by **four** collections
+  with two different scopes: `buildKeyTable implDecls` (`:9586`, `:18794`) and the
+  `ImplUniverse`/`ImplBuckets` pair are built over prelude ++ user, while
+  `cohCollectImpls` (`:11381-11383`, via `checkCoherence`'s `userDecls` parameter,
+  `:10984-10985`) and `cohCollectModuleImpls` (`:11396-11399`) are built over user decls
+  only. Note this is a scope disagreement one level *below* G-6's: G-6's two collections
+  agree on the universe and disagree on the index; these disagree on the universe itself.
 
 ### Shape 2 — keying gaps L2 does not reach, because it constrains the key's TYPE, not its PROVENANCE (G-4, G-5)
 
@@ -636,6 +674,171 @@ the reason this row is filed as GAP rather than DRAINED-BY.
 
 ---
 
+### #1161 — the `=>` leg shatters a multi-param predicate into per-tyvar slots · **GAP (G-10)**
+
+**The framing handed to me was that the goal vector "does not exist to be threaded". That
+is right, and the reason is one step earlier than the comment it cites: the vector is not
+lost at the call site, it is destroyed at SIGNATURE REGISTRATION, before any call exists.**
+
+**Mechanism (verified line-for-line, and reproduced on a binary cold-built in this
+worktree at `5c3ded21`).** Four legs.
+
+1. **The predicate's non-tyvar arguments are dropped when the signature is read.**
+   `sigConstraints` → `constraintTyVars (Constraint iface tys) = map (n => (iface, n))
+   (tyVarArgNames tys)` (`:16040-16042`), over `tyVarArgNames ((TyVar n)::rest) = n ::
+   tyVarArgNames rest` / `tyVarArgNames (_::rest) = tyVarArgNames rest` (`:16044-16047`).
+   Its own header says so at `:16034-16035`: *"each constraint argument that is a single
+   type variable; multi-param/structured args skipped"*. So `Ix a Char` registers the
+   single pair `("Ix", "a")` and `Char` is gone before `registerMember` (`:16085-16091`)
+   writes `funConstraintsRef : Ref (List (String, List Int))` (`:3209`).
+2. **The route is therefore selected on a singleton.** `inferDictAtFound` (`:5067`) reads
+   those ids, maps them through the call's subst (`constraintMonosOf`, `:5093`), and
+   pushes `(routesRef, monos, ifaces)`; `resolveDictApps` (`:12013-12014`) hands them to
+   `routesOfMonosTop` (`:12214-12221`), which is `Mono -> Route` **per slot** — it calls
+   `routeOf` (`:12180-12182`) → `routeOfD` (`:12190-12197`) → `entail … (EKNestedTop
+   keyTable iface policy depth)` → `entailInst`'s `EKNestedTop` arm (`:12136-12145`),
+   whose goal is literally `[m]`. That arm's own comment (`:12137-12140`) states the
+   design and names the owner: *"a nested/top `requires` goal arrives as a single subject
+   mono, so the goal vector is the singleton … Threading the full predicate vector down
+   this leg needs the n-ary obligation representation and is #607's scope, not this
+   fix's."*
+3. **A singleton goal is over-matched, and the tie is broken by declaration order.**
+   `keyForSiteByIface` (`:11783`) → `selectImplEntryByIface` (`:11759-11761`) →
+   `matchingEntriesByIfaceGo` (`:11772-11776`) → `entryHeadMatches` (`:11943-11948`),
+   whose `| otherwise` arm matches **arg 0 alone** when the goal length differs from the
+   impl's head length. `Ix Int Bool` and `Ix Int Char` therefore both match the goal
+   `[Int]`; `entryCovers` compares the **full** `itys` vectors (`:11640-11641`, with the
+   `#609` note above it at `:11634-11639` recording that arg-0-only comparison is exactly
+   what made these two ⊑-equal) and finds them incomparable; `pickMostSpecificEntry`
+   (`:11616-11620`) falls to `None => Some e`
+   — the head of the list. This is #1154's terminal mechanism, reached from a second
+   producer.
+4. **The obligation check cannot catch it either, because a 1-ary predicate is checked
+   receiver-only.** `recordCallObligations` (`:5121-5134`) records `Predicate { iface,
+   args = [mono] }`; `implMatchesArgsU univ iface [a] = implMatchesReceiverU univ iface a`
+   (`:14069-14071`), and `bucketRecvMatch` (`:13845-13851`) matches only the impl head
+   vector's **first** element. So the obligation `Ix Int` is discharged by `impl Ix Int
+   Char` — which is symptom 2 exactly: a constraint nothing satisfies is accepted.
+
+⚠️ **One claim in the source is FALSE and the row must not inherit it.**
+`recordCallObligations`' comment (`:5131-5132`) says *"The joint obligation for such a
+predicate is supplied by the declared-context path (`declaredSchemeOblsFor`); this path
+stays as-is."* It is not. `declaredOblOne` (`:16440-16445`) routes through
+`constraintArgMonos` → `constraintArgMono` (`:16460-16463`), which returns `None` for a
+non-tyvar argument, and `declaredSchemeOblsFor`'s own header (`:16429-16433`) states the
+consequence: *"A predicate is kept only if EVERY argument is a plain tyvar … a partial
+vector would be a different predicate."* So `Ix a Char` contributes **nothing** to the
+scheme obligations either — which is why `check --types` prints `useIx : a -> Int` with
+the context erased (verified first-hand). The comment is true only for a predicate all of
+whose arguments are variables, and that is precisely the case that does not need it.
+
+**Why no stage of the plan removes the cause.** The negative was searched in the
+*implementation's* vocabulary and across stages, not only for the issue's phrase:
+
+- **`#607` appears zero times** in `TYPECHECK-TARGET-ARCHITECTURE.md` and in this ledger.
+- **§2 I** completes the obligation channel's *storage* (*"obligations complete the #991
+  unification (one `UObligation` with live provenance arms; `implOblToU` retired)"*). The
+  storage is already n-ary; the producers are not. Storage unification does not restore a
+  discarded argument.
+- **§2's cross-cutting substrate** is the only place the plan touches this table at all:
+  *"Fused lockstep tables (#994). Slot-parallel pairs (`funConstraints`+`Ifaces`, …)
+  become single record-valued tables."* That is B-3, and it preserves the slot
+  **cardinality** exactly — it fuses `(name, List Int)` with `(name, List String)` into
+  one record-valued table with the same one-entry-per-tyvar shape. B-3 edits the defect's
+  home and leaves the defect.
+- **§2 S** and **§2 K** both quantify over a goal `C τ̄` — *"every goal that reaches
+  `inst` goes through the one `min⊑` selector"*, *"IE's candidate set for a goal `C τ̄` is
+  every instance of `C` that matches `τ̄`"*. They legislate what happens **to** `τ̄`. No
+  clause anywhere says who **builds** `τ̄`, or that any producer currently fails to.
+- **§2 E's arity clause** (the G-8 amendment) carries *"leading dict-param count and
+  order (DICT §8 I1)"* as data. It centralizes the count; it does not decide what one
+  slot **means**.
+
+So the plan has no owner for the change the source calls *"the dict-slot=predicate change
+(#607 punch-list item 3)"*.
+
+**Is #1161 a member of G-8? No — and the test is the one this ledger uses everywhere
+else: apply the remedy in full and see whether the repro moves.** Implement G-8 to
+completion — one arity and calling convention, computed once, carried in the elaboration
+output, consumed by eval and both backends. `useIx : Ix a Char => a -> Int` still
+registers one slot, `routesOfMonosTop` still hands `entailInst` the goal `[Int]`, and
+variant A still prints `111`. **G-8 fully landed changes nothing here**, which is this
+ledger's criterion for "not drained by". The two defects differ in kind: G-8's is
+*multiplicity* (three derivations of one arity — `implMethodValue`'s pattern count,
+`methodArityOf`'s arrow spine, define-vs-call), remedied by centralizing; G-10's is
+*loss* (three producers of one predicate, all lossy), remedied by not discarding.
+Centralizing a lossy value is not a repair.
+
+🚨 **But the coupling runs the other way, and it is a sequencing hazard, not a
+footnote.** #1161's fix moves the leading dict-param count for any predicate with two or
+more variable arguments — `Ix a i` is two slots today and one predicate after — which is
+exactly the datum §2 E's amendment freezes into the output contract as data every engine
+consumes. G-8's own warning applies verbatim: *"centralizing arity makes both engines
+consume the same arity, so a wrong centralized arity becomes a unanimity no differential
+can structurally see."* **After G-8's amendment the shattered count is a published
+calling convention**, and changing it becomes a cross-engine migration with a seed re-mint
+rather than a typecheck change. **G-10 must be adjudicated before or with #1137 (G-8's
+owner), not after it.**
+
+**Which law.** **L1**, on this ledger's Shape 1: three producers of one judgment, none
+complete, and the incomplete ones on the path that decides emitted code — with the extra
+sharpness that the n-ary representation they should be filling *already exists* beside
+them. **L4** is implicated too, and not merely in spirit: L4 makes evidence *structured*,
+and DICT §2's evidence unit is the **predicate** — one dictionary discharges `Ix a Char`,
+not one dictionary per variable it mentions. A per-tyvar dict slot is a representation in
+which the evidence for a multi-parameter predicate cannot be named at all, which is why
+the route has nothing to select on. This is **not** L4's binder-uniformity clause (family
+C's); it is L4's first clause, at the evidence unit rather than at the binder. **L3** is
+the law the *symptom* violates (declaration order decides a result the spec makes
+order-free), but L3 is downstream: order-dependence is what an under-determined goal looks
+like when it reaches a first-match tie-break.
+
+**Falsifiable prediction.** **No stage of this arc as written changes #1161's behaviour**
+— variants A and B must still print `111` and `222` after every stage S–F lands, and
+`check --types` must still print `useIx : a -> Int`. That is the gradeable claim and it is
+why this row is GAP. Two corollaries that make it sharper, and both must hold or the
+diagnosis is wrong:
+
+- **F-3a (the `requires`-leg vector threading) must leave both variants unchanged.** Its
+  probe adds a `List Mono` to `EKNestedTop` and delegates from the scalar entry points
+  with `[]`; `routesOfMonosTop`'s leg reaches `entailInst` through `routeOfD`, which is
+  the delegating wrapper — so the goal on this leg stays `[m]` by construction. If a
+  build of F-3a alone makes variant A print `222`, this row's leg-2 trace is wrong.
+- **B-2 must leave them unchanged too.** B-2 stamps an `InstId` wherever `inst` runs; here
+  `inst` runs and selects the wrong instance from a complete candidate set and an
+  incomplete goal. B-2 would stamp the wrong instance's identity faithfully.
+
+**⚠️ Sequencing consequence for F-3, and it inverts the stage's declared order.** F-3c
+(#1155) makes `pickMostSpecificEntry`'s no-unique-minimum arm a hard diagnostic, on the
+stated precondition that the candidate-set deformations feeding it are repaired first
+(F-3a, F-3b). Leg 3 above **is** that arm, reached from this leg, **and neither F-3a nor
+F-3b repairs this producer** — F-3a threads the vector on the `requires` route, F-3b
+unions the headless bucket (#1128), and the `=>` route's vector is destroyed upstream of
+both. So on the order as written, F-3c turns `useIx : Ix a Char => a -> Int` — a program
+that is unambiguous under DICT §3 once the predicate is whole — into a hard reject. That
+trips #1155's own acceptance criterion 3 (*"no fixture outside the declared flip list
+newly rejects"*), which its issue declares a STOP condition. **Sizing: this is not a
+subset of F-3a.** F-3a's probe is ~31/20 lines inside one entail arm and its recursion;
+repairing this leg means changing what a dict slot *is* — `constraintTyVars` /
+`registerMember` / `funConstraintsRef`'s payload, `constraintMonosOf`,
+`routesOfMonosTop`'s per-slot scalarity, `dictArityOf`, and `dictPass`'s prepend — with an
+arity move, a seed re-mint, and both engines' calling convention in the blast radius.
+
+**An arity-neutral intermediate exists and should be priced before the full change is
+scheduled** — offered as an option for the owner, not a recommendation this row makes.
+Keep one dict slot per **tyvar** (arity unchanged, no seed re-mint, no engine change) and
+additionally record, per slot, the **whole predicate's argument vector** with its concrete
+arguments resolved, so the route selects on `[Int, Char]` while the dict-passing
+convention is untouched. It is redundant where a predicate has two variable arguments (two
+slots, one predicate, two identical goals) and it does **not** move toward L4's evidence
+unit — so it is a second transitional step, not the target — but it closes legs 2–4 and
+unblocks F-3c without touching emitted arity. The machinery it needs already exists:
+`constraintArgMonos` (`:16451-16455`) resolves a predicate's argument vector, and
+`headSubstWithParams` (`:11850-11856`) already matches a goal vector against an impl head
+vector at two other call sites.
+
+---
+
 ## Family C — locals not dict-abstracted
 
 ### #1040 — `where`-local helper at two types · **DRAINED-BY F-1** (#1082)
@@ -982,7 +1185,135 @@ marker reads it as coverage.
 
 ---
 
-## Rows outside the families — adjudicated on request (2026-07-31)
+## Family J — coherence condition and scope
+
+*(§4's family J. Its two named issues, #311 and #614, are the *condition* half — (a)
+global comparability where the spec commits to (c) per-goal minimum. #1162 is the *scope*
+half, and it is what makes the condition question secondary: a declaration-time check
+that cannot see half the instance universe is unsound under either condition.)*
+
+### #1162 — `checkCoherence` sees USER decls only; the key table is prelude ++ user · **DRAINED-BY F-3c** (#1155) · **plus GAP G-11**
+
+**The framing handed to me was that this is a scope disagreement, not a keying bug. That
+is right. What the issue does not yet say — and it changes the fix's price — is that the
+exemption which creates the scope is justified by a behaviour that does not exist.**
+
+**Mechanism (verified, and reproduced first-hand on a binary cold-built in this worktree
+at `5c3ded21`).**
+
+- The coherence input is a **parameter**, and every caller passes user decls.
+  `checkCoherence userDecls` (`:10984-10985`) scans `cohCollectImpls userDecls`
+  (`:11381-11383`); `runFinalChecks` (`:11227-11232`) takes `cohDecls` separately from
+  `cycDecls`, with the warning at `:11224-11226`: *"⚠️ trap #5: coherence must see USER
+  decls only, so this helper has NO access to `prog` — the caller decides [cohDecls]
+  explicitly (never a `prog` fallback)."* The module driver passes this module's own
+  `prog` (`:18097`); the single-file drivers pass `driverState.value.coherenceUserDecls`
+  (`:11430`, `:16892`). The cross-module pass is a second, equally narrow collection:
+  `cohCollectModuleImpls` (`:11396-11399`), whose header states the exclusion and its
+  reason at `:11389-11390`.
+- The selector's table is **not** narrow: `buildKeyTable implDecls` (`:18794`, and
+  `buildKeyTable prog2` at `:9586`) is built over the accumulated universe, prelude
+  included. So the goal `Index (List Int) Int Int` collects the prelude's
+  `impl Index (List a) Int a` (`stdlib/core.mdk:1087`) **and** the user's
+  `impl Index (List Int) k Int`, both matching at full vector length (three each, so
+  `entryHeadMatches` takes its length-equal arm, not the arg-0 fallback), neither
+  `entryCovers`-comparable — and `pickMostSpecificEntry` (`:11616-11620`) keeps the head
+  of the list. Verified: `check --json` → `{"diagnostics":[]}`, `run` → `1`, native build
+  and execute → `1`; the user impl never runs. The identical user-vs-user shape is
+  rejected with `Overlapping impls of Idx: List Int a b and List c Int c can match the
+  same type` (verified, exit 1).
+
+🚨 **The exemption's stated justification is false, and this is a new finding rather than
+a restatement of the issue.** `cohCollectModuleImpls`' header (`:11389-11390`) excludes
+prelude impls because *"a user `impl Eq Int` legitimately overrides the prelude one, so
+prelude impls must NOT be in the set"*. Using that comment's **own example**, on the
+binary built here:
+
+- `impl Eq Int where eq _ _ = False` + `main = println (eq (1 : Int) (1 : Int))` →
+  `check` exit 0, `run` → `True`, native build and execute → `True`.
+- `impl Display Int where display _ = "USER"` + `main = println (display (5 : Int))` →
+  `check` exit 0, `run` → `5`.
+- `impl Index (List a) Int a` — head **exactly equal** to the prelude's — `check` exit 0.
+
+The override does not happen on either engine. **The exemption protects a behaviour the
+language does not implement**, and every equal-head user impl of a prelude interface is
+accepted and silently dead — the same S0 shape #1162 reports, reached without needing any
+overlap at all. That matters for the fix's price: widening coherence's input does **not**
+narrow acceptance of any *working* program, so §5 R2's "only widenings are licensed" bar
+is not the obstacle it looks like. It does still change acceptance for programs that
+compile today with a dead impl, which is why the disposition below is the design's own
+`(a)`-warning rather than a new error.
+
+**Why the plan removes the cause — and which half of the plan actually does it.**
+
+§2 K commits the environment: `IE` is *"every impl with its full head, context, and
+method table"*, *"assembled once and never per-module"* over the topologically-loaded
+module graph, and it hosts *"declaration-time overlap diagnostics (advisory
+(a)-warnings; acceptance stays per-goal C1(c))"*. §2 G then commits the consumer, in one
+sentence that is the answer to the crux question: *"All of this runs over K's
+environments; none of it holds private registries."* Coherence is named in that
+paragraph's first clause. So the design **does** commit coherence to consuming the same
+environment as the selector — the crux is answered in the affirmative, and the "K unifies
+only the selector's view" reading is refuted by that sentence.
+
+But §2 K simultaneously **demotes** the declaration-time check to advisory, and moves
+acceptance to the per-goal C1(c) rule. So the stage that turns this program from silent to
+loud is **F-3c (#1155)**, not A-3: F-3c makes `pickMostSpecificEntry`'s no-unique-minimum
+arm a hard diagnostic, and the arm is *already reached* by this goal today, from a
+candidate set that *already* contains both impls. **A-3 contributes nothing to the symptom
+and everything to the declaration-time half** — which is exactly why the gap below is
+scoped to the input set and not to the verdict.
+
+**#1162's flip-list claim is CONFIRMED.** Its goal matches both entries at full vector
+length and they are ⊑-incomparable, so F-3c's arm fires and the program becomes a hard
+reject with `T-AMBIGUOUS-INSTANCE`. That is the correct outcome under DICT §6 C1(c), and
+it must be on #1155's **declared flip list** — under criterion 3, an unlisted new
+rejection is a STOP condition, and this one is reachable from a five-line file against the
+prelude with no imports.
+
+**Is this G-6's second symptom? No — commit: it is a distinct L1 fork, one level below
+G-6's.** G-6's two implementations (`ImplUniverse`, complete via `univHeadless` at
+`:13921-13922`, and `KeyBuckets`, which drops tyvar-headed entries at `keyEntryOf`'s
+`headTyconTy` gate — `:11537-11546`, gate at `:11540`, over `headTyconTy _ = None` at
+`:11811`; ⚠️ G-6's own row still cites the pre-`5c3ded21` lines `:11362`/`:11632` for these
+two, ~175 lines stale — re-derive, do not copy) are built over the
+**same universe** and disagree about the **index**; G-6's remedy is match-preservation,
+and applying it in full leaves #1162 exactly as it is, because `cohCollectImpls` is not an
+index over IE at all — it is a fourth collection with a narrower **universe**. The two
+gaps are also of opposite shape within Shape 1: G-6 has a working reference implementation
+twelve hundred lines from the incomplete one, and G-11 has none — no collection anywhere
+in the tree answers "the whole instance universe, for coherence". A bug filed as new that
+turned out to be an existing gap's second symptom would be a good finding; this one is not
+that, and saying so is the point of checking.
+
+**Applying the `.claude/ORCHESTRATING.md` test — "a proposed new LAW may be covering for
+an existing one being violated unnoticed" — before proposing anything.** No new law is
+needed and none is proposed. **L1** already forbids this verbatim (*"Each spec judgment
+has exactly one implementation … never forked"*), and **L3** already forbids the symptom
+(the winner is decided by candidate-list order at a position DICT §3 makes order-free).
+The reason the laws did not prevent it is the same reason recorded for G-9 and G-5: the
+ratchet built from a law is narrower than the law. L1's enforcement in this arc is the
+per-stage **blast list**, and no stage's blast list names `cohCollectImpls` /
+`cohCollectModuleImpls` / `coherenceUserDecls`. A law with no enumerated consumer is a law
+with no site.
+
+**Falsifiable prediction.** When **F-3c** lands, #1162's repro
+(`impl Index (List Int) k Int` + `let a : Int = index [1, 2, 3] 0`) must change from
+`check` exit 0 / `run` `1` / native `1` to `check` exit 1 with a located
+`T-AMBIGUOUS-INSTANCE` naming both `Index (List a) Int a` and `Index (List Int) k Int` —
+and the user-vs-user control must keep its existing `T-CONFLICTING-IMPL` rejection at the
+declaration, not silently move to the goal-site diagnostic. **A-3 alone must NOT close
+this**: if it is claimed drained after A-3, re-run the repro — K's declaration-time
+diagnostic is advisory by its own text, so an advisory warning plus exit 0 is not a drain.
+**Without the G-11 clause below, the prediction for the declaration-time half is that it
+is unaffected by the entire arc**: A-3 can build a whole-graph `IE` and `checkCoherence`
+keep reading its `userDecls` parameter, because nothing names it as a consumer to move.
+
+⚠️ **Guard when pinning.** The `let a : Int = …` annotation is load-bearing — without it
+the expression is `Display`-ambiguous and the fixture fails for an unrelated reason, which
+would make the pin immune to the defect it means to catch. And pin the **equal-head**
+shape separately from the ⊑-incomparable one: they have different dispositions under the
+plan (warning vs hard reject), so one fixture cannot grade both.
 
 Neither of these is an open `verified` `ws:typecheck` S0/S1 bug, so neither is in this
 ledger's stated scope. Both were adjudicated anyway because a reader looking for them
@@ -1335,11 +1666,91 @@ attractive** (`typecheck.mdk:3556-3561`): `isNonexpansive:3567`, `isCtorAppSpine
 an environment — which is an argument for A-1's "AST carries origin" shape and against
 answering the question from any environment at all.
 
+### G-10 — no stage owns "a dict slot becomes a predicate" (the #1161 class)
+
+Added 2026-07-31 with #1161's row. Shape 1, of the G-7 variety: an L1 fork with **no**
+complete reference implementation. Three producers answer *"what predicate does this
+binding's `=>` context state?"*, each lossy in its own way —
+`constraintTyVars`/`tyVarArgNames` (`:16040-16047`) keeps one entry per type **variable**
+and silently drops a concrete argument; `constraintArgMono` (`:16460-16463`) drops the
+**whole** predicate if any argument is not a plain tyvar, which `declaredSchemeOblsFor`
+(`:16434-16445`) inherits; `recordSigConstraintObls` (`:7584-7593`) is genuinely n-ary but
+applies the same all-or-nothing drop and is reachable from one caller only (`:7559`).
+
+**The plan has no task for it.** `#607` — which `recordCallObligations`' own comment names
+as the owner (*"the dict-slot=predicate change (#607 punch-list item 3), which moves
+emitted arity and is deliberately NOT done here"*) — appears **zero times** in
+`TYPECHECK-TARGET-ARCHITECTURE.md` and zero times in this ledger. §2 I unifies the
+obligation channel's *storage* (already n-ary); §2's `#994` bullet fuses
+`funConstraints`+`Ifaces` while preserving the one-slot-per-tyvar cardinality; §2 S and
+§2 K quantify over a goal `C τ̄` without ever saying who builds `τ̄`; §2 E's arity clause
+centralizes the dict-param **count** without deciding what one slot **means**.
+
+**Two proposed plan changes, and the first is the urgent one.**
+
+1. **Order G-10 before or with G-8's §2 E amendment (#1137).** §2 E makes *"leading
+   dict-param count and order (DICT §8 I1)"* elaboration output that every engine
+   consumes. Under today's producers that count is per-tyvar, so the amendment would
+   publish the shattered granularity as a calling convention — after which changing it is
+   a cross-engine migration with a seed re-mint rather than a typecheck change. G-8's own
+   severity warning (*"a wrong centralized arity becomes a unanimity no differential can
+   structurally see"*) is exactly this hazard, one level up: it is stated there about a
+   wrong arity **value** and it applies equally to a wrong arity **unit**.
+2. **Name the producers, as a SET, in whichever task takes it.** This is G-2's lesson
+   applied one subsystem over: a deliverable phrased as *"thread the predicate vector"*
+   will reach `recordCallObligations` (the site with the comment) and miss
+   `constraintTyVars`, which is where the argument is actually discarded — and a fix at
+   the call site cannot recover an argument the signature reader already threw away.
+
+⚠️ **Cross-gap note.** G-10 and G-6 are the two halves of one sentence in §2 K/§2 S: G-6 is
+*"the candidate set for a goal `C τ̄` must be complete"*, G-10 is *"`τ̄` must be the
+predicate"*. Landing either alone leaves the selector answering a well-posed question about
+the wrong input, or the wrong question about the right input. Both feed
+`pickMostSpecificEntry`'s silent first-match arm, so **both** carry the same
+land-with-or-after-F-3 constraint — and G-10 additionally carries the inverse constraint
+that F-3c must not land before **it** (see #1161's row).
+
+### G-11 — coherence's input set is a fourth collection of the instance universe, and no task names it
+
+Added 2026-07-31 with #1162's row. Shape 1, G-7 variety. "What is the instance universe?"
+is collected four ways: `buildKeyTable implDecls` (`:9586`, `:18794`) and the
+`ImplUniverse`/`ImplBuckets` pair over prelude ++ user; `cohCollectImpls` (`:11381-11383`)
+and `cohCollectModuleImpls` (`:11396-11399`) over user decls only. The narrow pair is
+where coherence reads, and the wide pair is where the selector reads, so the check and the
+decision disagree about what exists.
+
+**The design's commitment is present and the migration's is not.** §2 G says *"All of this
+runs over K's environments; none of it holds private registries"*, with coherence named in
+the same paragraph's first clause, and §2 K hosts the declaration-time overlap diagnostic
+on `IE`. But §6 A-3's scope is *"Build CE/IE/DataEnv once; the **Module path** reads K"* —
+it enumerates producers and the marshalling shim, and names no consumer to relocate. So
+A-3 can land a whole-graph `IE` and `checkCoherence` keep reading its `userDecls`
+parameter unchanged. That is the #1128/G-6 shape and the G-9 shape: **the substrate lands,
+the incomplete consumer is not named, the defect survives.**
+
+**Proposed plan change.** A-3 (#1112) should carry an explicit consumer clause naming
+`checkCoherence`'s `userDecls` parameter, `runFinalChecks`' `cohDecls` argument
+(`:11227`), `driverState.value.coherenceUserDecls` (`:11430`) and `globalCoherenceConflict`
+(`:11418-11420`) as reads that move onto `IE` — the same form G-9 asks of A-1.
+
+⚠️ **The exemption those four implement is justified by a behaviour that does not exist,
+and A-3 should not preserve it unexamined.** `cohCollectModuleImpls`' header excludes the
+prelude because *"a user `impl Eq Int` legitimately overrides the prelude one"*; on the
+current binary that override does not happen (#1162's row records the three probes,
+including the comment's own `Eq Int` example, all accepted at exit 0 with the prelude impl
+still winning on both engines). So relocating coherence onto `IE` does **not** break a
+working feature; what it changes is that a today-silent dead impl becomes visible. §2 K's
+own disposition — an advisory `(a)`-warning at the declaration, with acceptance decided
+per-goal by C1(c) — is the shape that fits: the equal-head case warns, and the
+⊑-incomparable case is rejected at the goal by F-3c. Whether the equal-head case should
+instead be a hard reject, or the override implemented for real, is a language decision
+this ledger does not take.
+
 ---
 
 ## Not established
 
-**None of the family rows.** Every row in families A–G reached a verdict.
+**None of the family rows.** Every row in families A–G and J reached a verdict.
 **Two of the out-of-family rows deliberately do not**: **O-1 (#1139)** and
 **O-2 (#1140)** are `NOT ESTABLISHED` for any DRAINED-BY claim — in both cases I can
 state a mechanism for why no stage reaches the bug, which is a stronger result than a
