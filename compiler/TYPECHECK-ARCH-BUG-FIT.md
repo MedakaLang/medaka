@@ -888,6 +888,38 @@ claim *is* "nothing reaches this") and it is strictly weaker evidence than the p
 predictions elsewhere in this ledger, e.g. #1162's, which names a specific new diagnostic
 at a specific stage. Do not treat the two as equally gradeable.
 
+🚨 **GRADED 2026-07-31 — HALF REFUTED, by a stage the arc did not have when this was
+written.** F-3a-ii — the arity-neutral intermediate this row *offered as an option*, since
+scheduled ahead of F-3b — **landed**, and variant A now prints **`222`** on `run` and on
+the shipped native binary, with A and B agreeing. The first half of the prediction is dead.
+The second half **still holds**: `check` still prints `useIx : a -> Int` with the context
+erased, and the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, below,
+now pinned at `test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+
+⚠️ **SCOPE THE REFUTATION PRECISELY — the unqualified reading is WRONG.** "Order no longer
+decides on this leg" holds only when the multi-argument predicate is the **first predicate
+declared over its type variable**. Measured A/B, cold builds either side, varying only
+`compiler/types/typecheck.mdk`:
+
+| `=>` context | main | F-3a-ii | correct |
+|---|---|---|---|
+| `(Ix a Char, Dbg a)` | 116 | **227** ✅ | 227 |
+| `(Dbg a, Ix a Char)` | 116 | 116 ❌ | 227 |
+| `(Dbg c, Ix a Char)` — distinct tyvars | 116 | **227** ✅ | 227 |
+
+The residue is a **different defect on the other side of the same slot**, filed as **#1177**
+(S0, verified): `funConstraintsRef` is per-tyvar, so two predicates over one `a` register
+two slots with the **same id**, and `enclDictVarOf`'s `indexOfId` returns the **first**
+match — every use in the body reads slot 0. F-3a-ii's route is computed correctly and lands
+in the right slot; the body consumes the wrong one. Not a regression (main is 116 either
+way), and **no gate can see it**: `diff_compiler_dict_semantics.sh` §4 permutes `impl`
+blocks, and nothing in the tree permutes predicate order in a signature.
+⚠️ Read what that licenses. Because the prediction is one-directional, the refutation says
+the GAP verdict was wrong about **reachability** for legs 2–3 — *not* that the mechanism
+analysis was wrong. Legs 1–3 are described correctly; what the row could not know is that
+the goal vector is recoverable **from the signature at registration**, without unshattering
+the dict slots at all.
+
 Two corollaries make the diagnosis sharper, and both must hold or it is wrong. ⚠️ **Neither
 is currently executable** — F-3a is unmerged (probe only) and B-2 (#1113) has not started —
 so they are gradeable *when those stages land*, not today:
@@ -950,6 +982,24 @@ by a scoping pass that built the change rather than reading it.**
 
 `headSubstWithParams` (`:11850-11856`) does already match a goal vector against an impl head
 vector, and is reached without a new call site — that part of the claim holds.
+
+✅ **LANDED 2026-07-31 as F-3a-ii**, exactly as this paragraph describes it, and every
+claim above survived contact with the implementation. `funConstraintArgsRef` is a table
+**slot-parallel** to `funConstraintsRef` (its payload untouched, so `dictArityOf` /
+`dictPass` / `scopeArities` / the cross-module arity snapshot are literally unmodified);
+`routesOfMonosTopV` / `topRouteV` / `vectorGoal` route on it, gated on vector length > 1 so
+the 1-ary path is byte-identical **by construction**; `constraintVarArgMonos` resolves the
+arguments with `fromAstType tvMap`; `substArgVec` substitutes with `substMono`. Arity
+neutrality is now pinned STRUCTURALLY by two emitted-IR rows in
+`test/diff_compiler_dict_semantics.sh` (`useIx` at arity 2 and arity 3) — no behavioural
+assertion can see an arity move, which is why the value rows alone were not enough.
+⚠️ **Two residuals were left SCALAR and are named at `declaredConstraintArgs`**, not
+covered by anything: the cross-module qual table (there is no `(definer, name)`-keyed
+vector table, and a stored vector's tyvar arguments carry per-module ids that would need
+`attributeModuleArities`-style re-attribution — a mis-attributed vector is a
+wrong-but-**concrete** goal, strictly worse than a missing one), and
+`resolveRLocalSites`/`SKRLocal`, which is entangled with the first through
+`shadowStandaloneDictSlots` → `declaredConstraintSlots`.
 
 ⚠️ Two further constraints, both **silent** if missed, established by the same pass: the
 substitution must be **`substMono`**, not top-level only (a top-level substitution leaves an

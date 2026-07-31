@@ -1,0 +1,33 @@
+-- POSITIVE DISCRIMINATOR 1 of 2 for nary_sig_requires_decoy: the same program with the
+-- DECOY REMOVED.  One dimension changes -- `impl Ix Int Bool` is gone -- and nothing
+-- else moves.
+--
+-- HAND-DERIVED EXPECTED VALUE -- 107, from DICT-SEMANTICS §3, not captured.
+--   Goal π = Ix Int (Box Int); IE = { Ix Int (Box c) requires Elem c }; the matching
+--   set is that singleton under φ = [Int/c]; `inst` discharges φ(Q) = { Elem Int } via
+--   `impl Elem Int`.  Body: 100 + elemOf 7 = 107.
+--
+-- WHAT IT LOCALISES.  All three engines AGREE here (eq:eq:eq), and they agreed on this
+-- program before F-3a-ii too -- measured 107/107 on cold builds either side.  So the
+-- sibling fixture's `run` E-PANIC is NOT "eval cannot execute a `requires` instance
+-- reached from a 2-ary `=>` signature": that is precisely what this program does, and
+-- eval executes it fine.  The panic needs the DECOY to be present, which is what makes
+-- the sibling a candidate-set/selection interaction rather than a flat eval gap.
+interface Elem c where
+  elemOf : c -> Int
+
+impl Elem Int where
+  elemOf n = n
+
+data Box c = MkBox c
+
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int (Box c) requires Elem c where
+  ix _ (MkBox c) = 100 + elemOf c
+
+useIx : Ix a (Box Int) => a -> Int
+useIx x = ix x (MkBox 7)
+
+main = println (useIx 1)

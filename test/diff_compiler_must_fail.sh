@@ -27,6 +27,13 @@
 #
 #   Write the fixture. RUN it. Paste the REAL output into claim.txt. Never the reverse.
 #
+# ⚠️ AND MEASURE THE EXIT CODE WITH A FILE REDIRECT, NEVER A PIPELINE. `medaka run x.mdk |
+# head`, `... | grep`, `... | tail` all report the exit status of the LAST stage, so a
+# fixture that E-PANICs at exit 1 reads as exit 0 and you pin the wrong number — silently,
+# with plausible-looking stdout. Write `medaka run x.mdk > out 2>&1; echo $?` and read the
+# file. This has now bitten three people on this suite, including one working from a brief
+# that warned about it.
+#
 # ── HOW A FIXTURE REFUSES TO CONFUSE "STILL BROKEN" WITH "SOMETHING ELSE BROKE" ──
 #
 # This is the whole design problem. A fixture that passes because the compiler crashed

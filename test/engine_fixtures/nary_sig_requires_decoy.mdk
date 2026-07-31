@@ -1,0 +1,54 @@
+-- A 2-ary `=>` signature constraint whose winning instance is itself a `requires`
+-- instance, with an earlier-declared DECOY that the goal does not match.
+--
+-- HAND-DERIVED EXPECTED VALUE -- 107.  Derived from DICT-SEMANTICS, not captured.
+--   `useIx : Ix a (Box Int) => a -> Int` at the call `useIx 1` instantiates a := Int,
+--   so §3's goal is the predicate  π = Ix Int (Box Int).
+--   IE = { Ix Int Bool, Ix Int (Box c) requires Elem c }.
+--   match(IE, π) = { I | ∃φ. φ(head I) = π }.  `Ix Int Bool` ≠ π on argument 1, so it
+--   is NOT in the matching set; `Ix Int (Box c)` matches under φ = [Int/c].  The set is
+--   the singleton, `inst` applies, and its context φ(Q) = { Elem Int } is discharged by
+--   `impl Elem Int`.  Body: 100 + elemOf 7 = 107.
+--
+-- ⚠️ THIS FIXTURE IS LEDGERED IN test/engine_divergence.txt AND IS EXPECTED TO
+-- DIVERGE.  `run` E-PANICs (`intToString: not an Int`); the native binary prints the
+-- correct 107.  Do NOT add a value pin for it -- test/engine_value_pins/README.md
+-- allows a pin only for a fixture with no ledger row.
+--
+-- WHY IT IS HERE.  The eval defect is PRE-EXISTING: the same program with the decoy
+-- declared AFTER the winner panics on the pre-F-3a-ii binary too.  But before
+-- F-3a-ii the shattered goal made this program mis-select the DECOY, so eval printed
+-- 111 and agreed with native -- it dodged the panic by being wrong.  Now that the
+-- goal is the whole predicate and selection is correct, eval reaches the
+-- `requires`-discharge path and dies there.  So this is a NEW run != build pair on a
+-- program that previously agreed, which is exactly the line diff_compiler_engines
+-- exists to hold, and it is owed a row rather than a silent pass.
+--   measured, both directions, on cold builds either side of F-3a-ii:
+--     BASE  run 111 (exit 0) | native 111 (exit 0)   -- agreeing, both WRONG
+--     PR    run E-PANIC (exit 1) | native 107 (exit 0) -- native now RIGHT
+--
+-- Its two positive discriminators are nary_sig_requires_no_decoy (no decoy at all)
+-- and nary_sig_decoy_no_requires (decoy present, winner has no `requires`); both
+-- agree across engines and are value-pinned.  Together they localise the panic to the
+-- `requires`-context discharge, not to the decoy and not to 2-ary selection.
+interface Elem c where
+  elemOf : c -> Int
+
+impl Elem Int where
+  elemOf n = n
+
+data Box c = MkBox c
+
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int (Box c) requires Elem c where
+  ix _ (MkBox c) = 100 + elemOf c
+
+useIx : Ix a (Box Int) => a -> Int
+useIx x = ix x (MkBox 7)
+
+main = println (useIx 1)
