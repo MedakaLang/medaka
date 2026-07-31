@@ -344,15 +344,28 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Structured diagnostic | `tcCode`, `tcLoc`, `tcMsg`, `tcHelp`, `tcFix` | ~39 lines | `compiler/DIAGNOSTIC-CODES-DESIGN.md` |
 | Exhaustiveness bridge | `checkMatchToLines`; cells `matchOracle`, `matchWarnings` → `compiler/frontend/exhaust.mdk` | ~185 lines | — |
 | Unreachable-arm warning | `W-UNREACHABLE-ARM` walk | ~147 lines | — |
-| **Swapped-argument detection** | 2-arg transposition + machine-applicable fix | ~145 lines | `compiler/ERROR-QUALITY.md` |
 | **Num mis-framing provenance** | banner-scoped, error-path only | ~446 lines | `compiler/ERROR-QUALITY.md` |
-| **Cascade suppression** | `poisonMismatchVars`; cell `poisonedVars` | ~8 read sites | — |
+| **Cascade suppression** | `poisonMismatchVars`; cell `poisonedVars` | 5 call sites (`:3489` `:5581` `:7715` `:7716` `:7762`), consumed at `:13926` | — |
 | **Message construction surface** | 59 `*Msg`/`*Hint`/`*Explain`/`*Suggest` functions | ~525 lines | `compiler/ERROR-QUALITY.md` |
 
-**Error-path-only machinery is roughly 1,200 lines / ~110 functions** — about 10% of the
+**Error-path-only machinery is roughly 1,050 lines / ~96 functions** — about 9% of the
 file, not the ~3% the accumulator rows alone suggest. It has distinct invariants (fires
 only on failure; must not perturb inference; needs cascade suppression) and is the
 safest extraction candidate in the file (§7.4).
+
+> ⚠️ Two corrections, issue 1147 — and the second is the reason to re-derive these
+> numbers rather than trust them. (1) A **Swapped-argument detection** row
+> (~145 lines, 14 functions) stood here until the whole hint was deleted; the totals
+> above are the old 1,200/~110 minus that row. (2) The cascade-suppression row said
+> *"~8 read sites"*; the deletion removed exactly ONE `poisonMismatchVars` call, and a
+> recount then found **5**, not 7 — so that figure was already wrong before this change.
+> Neither number had a derivation attached, which is why both drifted unnoticed. The
+> row now carries the call sites themselves, so the next reader can check it in one grep.
+> ⚠️ Also note the invariant sentence above ("fires only on failure; must not perturb
+> inference") was FALSE of the deleted component — it ran on the success path of every
+> two-argument application whose last argument was a literal. Measured at 3.2% and 1.2%
+> of application nodes, with no observable effect; still, the invariant was aspirational,
+> not enforced. Nothing enforces it for the remaining rows either.
 
 ---
 

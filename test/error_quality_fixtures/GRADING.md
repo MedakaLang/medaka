@@ -1101,10 +1101,30 @@ identical to the goldens in both text and JSON shape:
 | `list_heterogeneous` | 2 | 2 | 2 | 1 | 2 | 2 | 2 | 12 | **13** |
 | `cons_type_mismatch` | 2 | 2 | 2 | 1 | 2 | 2 | 2 | 12 | **13** |
 | `wrong_arg_type_in_map` | 2 | 2 | 2 | 1 | 2 | 2 | 2 | 8 | **13** |
-| `arg_order_swapped` | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 11 | **14** |
+| `arg_order_swapped` | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 11 | **14** | 🚫 RETRACTED — see below |
 
-`arg_order_swapped` is now the corpus's newest **perfect 14/14** fixture (a
-real machine fix plus a single, correct, jargon-free, located diagnostic).
+> ### 🚫 The `arg_order_swapped` row above is RETRACTED (issue 1147)
+>
+> The swapped-argument hint was **deleted**. `arg_order_swapped` no longer emits
+> the unified "arguments … are in the wrong order" message or the machine `fix`;
+> it is back to the two-diagnostic baseline (`Type mismatch: Int vs String` +
+> `Type mismatch: Int literal vs String`), which is what its `.out` golden now
+> holds. Per this file's own preamble the golden is the source of truth, so read
+> the golden, not this row: **X and F are no longer 2, and the fixture is not
+> 14/14.** The rest of this session's table is unaffected.
+>
+> Why it went: the hint only ever fired when the arguments were **literals**
+> (`detectSwappedArgs2`'s first guard was `| not (isLitArg a2) = None`), so the
+> identical mistake written with variables got the raw pair anyway. Making it work
+> with variables needs speculative *inference*, not the trial-unification the
+> original note assumed.
+>
+> The corpus total below (`11.66/14`) therefore also overstates by this fixture's
+> +3; it is left as the session's historical record rather than silently rescored.
+
+`arg_order_swapped` was, at the time of that session, the corpus's newest
+**perfect 14/14** fixture (a real machine fix plus a single, correct,
+jargon-free, located diagnostic).
 The other five all reach 13, held off perfect only by **F=1** (a help-only
 hint, not a mechanical edit — genuinely correct: none of the four Batch-A
 messages, nor `wrong_arg_type_in_map`'s, name a *single* unambiguous edit;

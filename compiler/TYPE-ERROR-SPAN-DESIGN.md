@@ -32,8 +32,11 @@ their full atom span — so it is NOT a universal "1-char snapshot." Two separat
 `pendingBinopSites` (`:1373`) does NOT carry operand spans (tuple is
 `(method, Ref Route, Mono, Bool, String)`) — the filed hope that it already threads
 spans is **stale**; it would need widening. Where a full operand span IS wanted, the
-operand `Expr` is in scope and `exprLoc` (`:4630`) extracts it — the pattern used by
-`swapArgFix` (`:4714/:4765`). Downstream (`diagnostics.mdk:cjRangeOfLoc:702`) is a
+operand `Expr` is in scope and `exprLoc` extracts it — the pattern used by
+`binopSpanLoc` and `tupleCallSpanLoc`, which build a two-operand span from a pair of
+`exprLoc`s. (This used to cite a `swapArgFix` helper; it belonged to the
+swapped-argument hint and was deleted with it — issue 1147.)
+Downstream (`diagnostics.mdk:cjRangeOfLoc:702`) is a
 faithful passthrough — the bad span originates upstream.
 
 ## 2. Reproduction matrix (current `check --json`, 0-based)
