@@ -1,9 +1,11 @@
 # Typechecker target architecture — per-bug fit ledger
 
-**Status:** CURRENT — one row per open `verified` `ws:typecheck` S0/S1 bug, adjudicated
-against [`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) (the design)
+**Status:** CURRENT — one row per open `verified` `ws:typecheck` S0/S1 bug, plus an
+explicitly-marked out-of-family section for rows adjudicated on request, against
+[`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) (the design)
 and epic #1122 (the stage table). Derived first-hand from `compiler/**/*.mdk` at
-`13b9fafe` (2026-07-30). Extends §4's traceability matrix from *families* to
+`13b9fafe` (2026-07-30); the issue-1150, #1139 and #1140 rows added 2026-07-31 and
+derived at `ec51c28e`. Extends §4's traceability matrix from *families* to
 *individual bugs*, and states a falsifiable prediction for every DRAINED-BY verdict so
 each row is **gradeable the day its stage merges**. The design document is the authority.
 Two of this ledger's proposals were adjudicated and are now **adopted into it** (§2 K
@@ -18,6 +20,13 @@ verdict, mechanism and falsifiable prediction survived unchanged**; only the syn
 the #1128 row's diagnosis, and the G-7/G-8 remedies moved. The corrected classification
 is three shapes plus one genuine absence; the withdrawn L6 and *why* it failed are kept
 below rather than deleted, because the two ways it broke are the more useful record.
+
+**Addendum, 2026-07-31 — three owed rows.** Issue 1150 (OPEN, `verified`, S0
+memory-safety, filed after the derivation above) joins family A; **#1139** (CLOSED) and
+**#1140** (OPEN, S2, `ws:language`) are adjudicated in a new *out-of-family* section
+because they are outside the scope line above and a reader finding nothing here cannot
+tell "out of scope" from "nobody looked". **One new gap, G-9.** Nothing else moved: no
+existing verdict, mechanism or prediction was touched.
 
 > **The burden of proof here is inverted.** "The plan covers this" is the claim that
 > needs a mechanism plus a prediction; "this is a gap" is the cheap answer. A row with
@@ -48,6 +57,9 @@ below rather than deleted, because the two ways it broke are the more useful rec
 | #1125 eval loses a `requires` dict under overlap | DRAINED-BY **B-1 + B-2** (both required) — and it re-prices B-1's owed #323 scope decision | B |
 | #1127 superclass-projected dict picks the general instance | DRAINED-BY **B-1 + B-2** (hypothesis CONFIRMED) — **plus GAP G-5** (`activeDictVars` keying is in neither task's blast list) | B + G-5 |
 | #1128 `impl C a` beside a concrete parametric-head impl | **GAP (L1 fork)** — B-2 covers the route half; candidate collection is complete on the obligation path (`univHeadless`) and not on the route path. **NOT** engine-realization (hypothesis disproved) | A-3 + B-2; see G-6 |
+| #1150 alias-qualified head defeats the value restriction | DRAINED-BY **A-1** (#1110) — A-2 (#1111) contributes the ratchet, not the fact — **with an owed consumer clause, GAP G-9** | A |
+| #1139 value restriction folded over the LAST ctor argument only | **CLOSED, and NOT DRAINED-BY any stage** — fixed independently at `825f9b14`; no law and no stage reaches a fold-completeness defect. Recorded so the arc is not credited with it | none; see O-1 |
+| #1140 one-line `where` silently drops an interface method | **OUT OF ARC (pipeline stage)** — decided in the lexer/parser, upstream of resolve; verified by `fmt` round-trip. Also outside this ledger's stated scope (S2, `ws:language`/`ws:diagnostics`) | none; see O-2 |
 
 **Exclusion re-audit** (§4's engine-realization list): #1034 ✅ holds · #826 ✅ holds ·
 #1101 ✅ holds · #1043-emitter-half ✅ holds · **#1020 ⚠️ partially misclassified** —
@@ -56,7 +68,12 @@ no owner; §2 E's amendment now gives it one.
 
 ---
 
-## How the eight gaps classify — read this before the rows
+## How the gaps classify — read this before the rows
+
+*(Derive the member set — `grep -n 'G-[0-9]' compiler/TYPECHECK-ARCH-BUG-FIT.md` — rather
+than trusting a count in this prose; note G-1 and G-3 are stated inline under Shape 3 and
+have no `###` heading of their own, so a heading-only grep under-counts. This heading read
+"the eight gaps" until 2026-07-31, when G-9 was added with issue 1150's row.)*
 
 > **⚠️ This section was rewritten after adversarial review (2026-07-30). The first
 > version claimed eight gaps were "seven gaps, every one a completeness gap" and
@@ -66,8 +83,9 @@ no owner; §2 E's amendment now gives it one.
 > is **withdrawn** — see "Why L6 was wrong" at the end of this section, which is kept
 > because the two ways it failed are the interesting part.
 
-**Eight gaps, G-1 … G-8, in three distinct shapes.** They do *not* share one shape, and
-saying they did was the first version's central error.
+**G-1 … G-8, in three distinct shapes.** They do *not* share one shape, and saying they
+did was the first version's central error. (**G-9** was added on 2026-07-31 with issue
+1150's row; it belongs to Shape 2 and *widens* it — see the note there.)
 
 ### Shape 1 — L1 forks: one judgment, two implementations, one of them incomplete (G-6, G-7)
 
@@ -115,6 +133,13 @@ key by something that is not a bare `String` and would pass unchanged:
 The defect is that L2 is a constraint on the key's *representation* where it needs to be
 a constraint on its *provenance* — every key must be derived from the resolved identity
 of the thing being keyed, whatever type that identity is encoded in.
+
+**G-9 (added 2026-07-31 with issue 1150) widens this shape one step further: the
+defect there keys NOTHING.** `ctorHeadIsUpper` reads character 0 of a name and decides
+whether the head is a data constructor — a spelling re-derivation with no table
+anywhere. L2's *headline* ("identity is resolved, never re-derived from spelling") is
+exactly on point; its *operative* clause and the ratchet built from it are about keys,
+so they do not reach it. See G-9.
 
 ### Shape 3 — plan-scope / ownership holes, no law implicated (G-1, G-2, G-3)
 
@@ -298,6 +323,111 @@ only when **all** rows are drained or reclassified — not when the first one is
 audit-verified but **not** independently re-run by #1070's author, and `universeRecordByName`
 is claimed to produce a check-vs-build divergence that no gate has ever observed. Those
 two need first-hand reproduction before A-2 can claim them.
+
+---
+
+### issue 1150 — alias-qualified head defeats the value restriction · **DRAINED-BY A-1** (#1110), with an owed consumer clause (G-9)
+
+**This row is family A on L2's *headline*, not on its operative clause.** It is the only
+row in this ledger where identity is re-derived from spelling with **no table involved
+at all**, which is why it needs G-9 rather than G-4/G-5.
+
+**Mechanism (verified first-hand on a binary built from this branch).** Three facts
+compose, and the source now states the composition itself at
+`compiler/types/typecheck.mdk:3511-3562`:
+
+1. A module alias **must** be uppercase — `aliasNameFor (TUpper x) = emit x`
+   (`compiler/frontend/parser.mdk:2513`) with the `TIdent` arm a hard `failP`
+   (`:2514`). The safe spelling is ungrammatical.
+2. An alias-qualified value desugars to a **flat** `EVar` carrying the dotted name —
+   `EVar a => if contains a aliases then EVar (qualifiedLocal a f) else e`
+   (`compiler/frontend/desugar.mdk:1014`), `qualifiedLocal alias n = "\{alias}.\{n}"`
+   (`compiler/frontend/ast.mdk:425`).
+3. The value restriction's head arms are a first-character test —
+   `isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name` (`:3618`, and
+   `EVarId` identically at `:3619`), over `ctorHeadIsUpper` (`:3624-3627`), which reads
+   `arrayGetUnsafe 0 cs`.
+
+So `ctorHeadIsUpper "H.new"` reads `'H'` and returns `True`: **every alias-qualified
+application in the language is classified as a constructor application.** With
+`stdlib/hash_map.mdk:55-56` (`export new : Unit -> HashMap k v` /
+`new _ = HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)`), `let m = H.new ()`
+generalizes a mutable hash table: `check` exit 0 with zero diagnostics, `run`
+`E-NOT-A-FUNCTION`, built binary **SIGSEGV** (exit 139). The one-token discriminator —
+`H.new ()` spelled `new ()` with `H.set`/`H.get` unchanged — is correctly rejected with
+`Type mismatch: Int -> Int vs Int`. Pinned at
+`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/`.
+
+**Why the plan removes the cause.** The information the predicate is guessing at already
+exists one stage earlier and is thrown away. `resolve.mdk` maintains a **constructor
+namespace distinct from the value namespace** — `ctorNames` (`:1294-1299`) folded into
+`ctorsM` (`:1420`, `:2442`), with cross-module constructor ambiguity already a first-class
+diagnostic (`isCtorAmbiguous:653`, `AmbiguousConstructor`, `ppResError:1914`). What
+reaches `isCtorAppSpine` is a bare `EVar name`, or an `EVarId name id` whose `id` is a
+**binding** id stamped by `stampExpr` (`resolve.mdk:2940-2943`) for obligation keying —
+not a namespace tag. A-1 (#1110) is precisely "resolve-acquired qualified identity …
+AST carries origin"; once the occurrence carries what it resolved to, the two head arms
+read that instead of `ctorHeadIsUpper name`, and **both** known holes close by
+construction:
+
+- the alias case, because `H.new` resolved to a *value exported by `hash_map`*; and
+- the collision case that defeated the obvious patch, because an unrelated module's
+  `data Tagged a = Ref a` is a constructor **this occurrence did not resolve to**.
+
+**A-2's contribution is negative, and worth stating as such.** The registry ratchet does
+not supply the fact; it is what makes the known-bad remedy structurally unwritable.
+`isSome (lookupCtor env name)` (`lookupCtor:4398-4399`, reading `TcEnv`'s bare-name ctor
+`OrdMap`) was tried on `wip/1150-lookupctor-attempt` (commit `8d0fb475`, never merged)
+and produces a **strictly worse S0** — `data Tagged a = Ref a` anywhere in the graph
+makes `Ref []` generalize into a polymorphic mutable cell, reachable by a victim module
+that never has the colliding constructor in scope. That is the same bare-name/graph-wide
+class the must-fail corpus already pins several times over — derive the set with
+`ls test/must_fail_fixtures/ | grep -i 'bare-name\|collision'` — and it would have been
+the first where the consequence is memory unsafety rather than a bad diagnostic.
+**Membership is not resolution**, and the ratchet is the mechanism that says so.
+
+**GAP G-9 — the owed consumer clause.** A-1's stated collision surface (§6 A-1:
+*"parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp, every golden family"*) does not
+name `typecheck.mdk`'s value restriction as a **consumer** of resolved identity, and L2's
+operative clause — *"no component keys anything by a bare `String` name"* — plus the
+ratchet derived from it are both about **keys**. `ctorHeadIsUpper` keys nothing. So A-1
+can land the identity substrate whole and this defect survive untouched. This is the
+#1128/G-6 shape (substrate lands, the incomplete consumer is not named, the bug is
+unaffected), which is why the verdict is **conditional**.
+
+**Falsifiable prediction.** When **A-1** lands *with the G-9 clause*,
+`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/main.mdk` must go
+from `check` exit 0 printing exactly
+
+```
+putI : HashMap String Int -> Unit
+getF : HashMap String (Int -> Int) -> Option (Int -> Int)
+main : Unit
+```
+
+to `check` exit 1 with `Type mismatch: Int -> Int vs Int` at `match getF m` — the same
+diagnostic that fixture's `discriminator.mdk` produces **today** — while its
+`control.mdk` stays exit 0. Two further conditions, and the row is not drained without
+them: the `wip/1150-lookupctor-attempt` counter-repro (`data Tagged a = Ref a` +
+`r = Ref []` + a victim module that imports neither) must **also** be rejected — that is
+what distinguishes a resolved-identity fix from the bare-name lookup that re-introduces
+it one dimension over; and `docs/spec/DICT-SEMANTICS.md` §4.1 **G2** must be rewritten
+rather than flipped green, since G3 may not be cited as discharged while any hole in the
+predicate stands. **A-2 is NOT required for the repro to flip; A-1 alone with the clause
+is sufficient.** **Without the clause, the prediction is that the repro is unaffected by
+the entire arc.**
+
+⚠️ **Narrow-repair hazard, stated by the source and worth holding the plan to**
+(`typecheck.mdk:3528-3540`). Closing this by rejecting a dotted name in the head test
+satisfies every sentence of the mechanism above and leaves the predicate spelling-based.
+The grammar still admits the other hazard — `externNameFor (TUpper x) = emit x`
+(`compiler/frontend/parser.mdk:2312`) accepts an uppercase extern **name**, where
+`identNameFor` (`:251-253`, same file) accepts only `TIdent` for an ordinary
+identifier — so an uppercase
+mutable-cell extern becomes the sole remaining way to defeat the test the moment the
+alias route is closed narrowly. A narrow repair therefore **drains this row without
+satisfying the prediction's second condition**, and must not be read as A-1 having
+landed.
 
 ---
 
@@ -852,6 +982,107 @@ marker reads it as coverage.
 
 ---
 
+## Rows outside the families — adjudicated on request (2026-07-31)
+
+Neither of these is an open `verified` `ws:typecheck` S0/S1 bug, so neither is in this
+ledger's stated scope. Both were adjudicated anyway because a reader looking for them
+here and finding nothing cannot tell "out of scope" from "nobody looked" — which is the
+invisible-work hazard G-7's last paragraph names. Their verdicts are recorded with the
+same burden of proof as every other row.
+
+### O-1 — #1139, value restriction folded over the LAST ctor argument only · **CLOSED, and NOT DRAINED-BY any stage**
+
+**State.** CLOSED. Fixed on `main` at `825f9b14` (merge `f3da5bb0`, PR #1149), one commit
+before this ledger's derivation point.
+
+**Mechanism of the defect (as filed).** The constructor-application arm walked the left
+spine to the head and discarded every argument on the way, so for `C a₁ … aₙ` only `aₙ`
+was tested for non-expansiveness; `let b = BR (Ref []) True` therefore generalized a
+mutable cell. The repair is a fold over the whole spine on the single walk —
+`isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x`
+(`compiler/types/typecheck.mdk:3617`), with the sibling arms (`ETuple`, `EListLit`,
+`ERecordCreate`, `:3576-3589`) already using `allList isNonexpansive`.
+
+**Would the arc have drained it? No — and this is the interesting half.** The hypothesis
+handed to me was that it would not, and I could not falsify it:
+
+- **L1 is not implicated.** There is exactly one implementation of the judgment; the
+  defect is *inside* it. No fork, so nothing for L1's "consume, never re-derive" to bite
+  on.
+- **L2 is not implicated by *this* defect.** The spelling re-derivation in the same
+  function is issue 1150's — a different arm. #1139's hole was in the argument fold,
+  which involves no name at all.
+- **L3, L4 are not implicated.** No order, no evidence tree, no binder set: the defect
+  fired identically at every generalization site, because they all call one predicate
+  (the site list is enumerated in DICT §11's G2 row, with its own re-derivation grep —
+  don't copy it here, it has moved twice).
+- **No stage of §6 owns it.** The only value-restriction item in the plan is **S-2(f)**,
+  and S-2(f) writes the spec paragraph *gating dict abstraction on* the predicate —
+  *"dict abstraction only where the value restriction already licenses generalization"*
+  (`TYPECHECK-TARGET-ARCHITECTURE.md:428-430`). It **consumes** the predicate; nothing in
+  it repairs one.
+- **L5 is the only law with any purchase, and it is not a mechanism.** DICT §4.1 **G2**
+  does define the value set normatively, so an L5 conformance fixture hand-derived from
+  G2 could in principle have caught this. But L5 is a discipline that has to be *aimed*
+  at a shape; "somebody writing conformance fixtures might have picked a non-final `Ref`"
+  is not a stateable mechanism by which a named stage reaches the bug, and this ledger's
+  own rule says so. **NOT ESTABLISHED** is the verdict for any DRAINED-BY claim here.
+
+**Residual prediction (the row's remaining use).** The arc must not be credited with
+#1139, and **DICT §4.1 G2 must not be flipped green on the strength of its closure** —
+G2 stays 🔴 HOLED for issue 1150, whose hole is strictly wider (#1139 needed a
+hand-written `data` type with a `Ref` field; 1150 needs one stdlib import).
+[`../docs/spec/DICT-SEMANTICS.md`](../docs/spec/DICT-SEMANTICS.md) §11's G2 row already
+records exactly this — reason changed on 2026-07-31 from #1139 to issue 1150, verdict
+unchanged.
+
+### O-2 — #1140, a one-line `where` silently drops an interface method · **OUT OF ARC (pipeline stage)**
+
+**Scope.** OPEN, `verified`, but **S2** and labelled `ws:language` / `ws:diagnostics`,
+not `ws:typecheck` — out of this ledger's scope on both axes. Pinned at
+`test/must_fail_fixtures/1140-oneline-where-method-silently-dropped/`.
+
+**Mechanism (verified first-hand, not inferred from the issue).** `medaka fmt --write`
+is a parse→print round trip, so it renders what the parser actually built. On
+`interface Foo a where m : a -> String` it emits (verbatim, stray whitespace included):
+
+```
+interface Foo a where
+  
+
+m : a -> String
+```
+
+— an interface with an **empty body**, and the method re-emitted as a **separate
+top-level declaration**. The indented control round-trips unchanged. So the method is
+lost at **parse**, in the layout handling of a `where` block opened and closed on one
+line; the interface never has a method for any later stage to lose. The eventual
+diagnostic #1140 complains about is emitted at **resolve**, not typecheck —
+`checkMethodMember` (`compiler/frontend/resolve.mdk:1254-1259`) returns
+`[MethodNotInInterface mname iface None]`, and that literal `None` is the
+`<unknown location>` / `range: null` the issue reports (`resErrorLoc:204`,
+`resErrorCode:1935` → `R-METHOD-NOT-IN-INTERFACE`).
+
+**Why no stage of this arc reaches it.** Stages S–G operate at resolve and later; the
+defect is decided before resolve runs. The one place the arc touches the parser is A-1's
+collision surface (§6 A-1: *"parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp"*), and
+that is about carrying an origin field on nodes the parser **already builds** — it does
+not change **which** nodes it builds. And the design's own §6 A-3 note already records
+that this check is upstream of typecheck: *"§5.1 **M2** (an impl may not define a method
+the interface does not declare) is enforced **at resolve**, not typecheck —
+`checkMethodMember` → `MethodNotInInterface` / `R-METHOD-NOT-IN-INTERFACE`"*
+(`TYPECHECK-TARGET-ARCHITECTURE.md`, §6). **NOT ESTABLISHED** for any DRAINED-BY claim: I
+can state no mechanism by which a named stage of this arc reaches a parser layout defect,
+and per this ledger's header that is the honest verdict rather than "probably fine".
+
+**Falsifiable prediction.** **No stage of this arc changes #1140's behaviour at all.**
+Its must-fail row (`check-json main.mdk` → `T-UNBOUND 2:7-2:8 Unbound variable: m`) must
+still reproduce after every stage S–F lands. It drains from the lexer/parser side, per
+the issue's own fork: either the one-line form is rejected at the interface with a
+located diagnostic, or it is accepted and the method registers.
+
+---
+
 ## The remaining gaps, stated once
 
 ### G-2 — F-1's local-binder scope must be a SET, not the phrase "local bindings"
@@ -1048,11 +1279,71 @@ an oracle derived by hand from the clause, converts a visible divergence into si
 wrongness: a severity increase disguised as a consolidation. The fixture is the
 replacement signal.
 
+### G-9 — L2's operative clause is about KEYS; the value restriction's head test keys nothing
+
+Added 2026-07-31 with issue 1150's row. It is Shape 2 (a provenance gap L2 does not
+reach) taken one step further than G-4/G-5: those key by something that is not a bare
+`String`; this **keys nothing at all**.
+
+```
+compiler/types/typecheck.mdk:3618   isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
+compiler/types/typecheck.mdk:3624   ctorHeadIsUpper name =
+compiler/types/typecheck.mdk:3626     let cs = stringToChars name
+compiler/types/typecheck.mdk:3627     arrayLength cs > 0 && isUpper (arrayGetUnsafe 0 cs)
+```
+
+`ctorHeadIsUpper` reads character 0 of a name to decide whether an application head is a
+data constructor. There is no table, so:
+
+- L2's **operative** clause — *"After the resolve phase, no component keys anything by a
+  bare `String` name"* — is silent on it;
+- the registry ratchet built from that clause (*"A bare-`String` key fails the check"*)
+  passes it unchanged, as does G-5's proposed provenance restatement, which is still
+  quantified over *table keys*;
+- L2's **headline** — *"Identity is resolved, never re-derived from spelling"* — names
+  the defect exactly.
+
+That gap between the headline and the operative clause is the whole finding, and it is
+the same failure mode G-5 records: the law is enforceable only over the shape someone
+happened to write the ratchet for.
+
+**Proposed plan change (two parts, both small).**
+
+1. **Widen L2's operative form past keying.** G-5 already proposes *"every table key is
+   the resolved identity of the thing being keyed"*; extend the quantifier:
+
+   > **L2 (operative form).** No component after resolve answers a question about a
+   > name's *identity or namespace* — which module it came from, whether it is a
+   > constructor, which interface owns it — from the name's **spelling**, whether that
+   > answer is used as a table key, a predicate, or a branch condition. Keys are one
+   > instance; this predicate is another.
+
+   The ratchet then has something mechanical to check for beyond key types: a
+   `String`-inspecting predicate on a resolved occurrence.
+
+2. **Name the consumer in A-1's deliverable.** A-1's collision surface (§6 A-1) lists
+   producers of identity and the golden families that move; it does not enumerate the
+   **consumers** that must be switched over. The value restriction's head arms
+   (`isCtorAppSpine`, `:3618-3619`) are one, and they are not reachable from any table
+   audit. Without an explicit consumer clause, A-1 lands whole and issue 1150 is
+   untouched — the #1128/G-6 shape.
+
+⚠️ **The consumer switch is not local, and that is what makes the cheap patch
+attractive** (`typecheck.mdk:3556-3561`): `isNonexpansive:3567`, `isCtorAppSpine:3614`,
+`clausesAreValue:9396`, `memberClauseIsValue:16063` and `sccSchemes:16054` all take no
+`TcEnv` today. Whatever A-1 carries identity *in* has to reach the expression node, not
+an environment — which is an argument for A-1's "AST carries origin" shape and against
+answering the question from any environment at all.
+
 ---
 
 ## Not established
 
-**None.** Every row above reached a verdict. The two rows I came closest to leaving open
+**None of the family rows.** Every row in families A–G reached a verdict.
+**Two of the out-of-family rows deliberately do not**: **O-1 (#1139)** and
+**O-2 (#1140)** are `NOT ESTABLISHED` for any DRAINED-BY claim — in both cases I can
+state a mechanism for why no stage reaches the bug, which is a stronger result than a
+missing verdict, but neither is retired into a stage. The two rows I came closest to leaving open
 were #1125 (settled by the `headCollides` bimodality derivation — see its row for the
 falsification that would move it back to engine-realization) and #1127 (settled by
 grep-proving all three legs). Both carry an explicit "if this is still broken after the
