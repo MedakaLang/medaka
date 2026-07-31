@@ -1,5 +1,5 @@
 # META
-source_lines=451
+source_lines=497
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -49,6 +49,52 @@ public export data Ty =
 
 -- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
 public export data Constraint = Constraint String (List Ty)
+
+-- ── Loc plumbing (issue 480) ──────────────────────────────────────────────
+-- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
+-- infrastructure every stage needs: `resolve` locates a duplicate signature,
+-- `typecheck` locates an effect/kind/coherence error, all from the same
+-- judgment.  They used to be THREE module-private forks of the `Ty` walk
+-- (`firstTyLoc` in resolve, `firstTyConLoc` and `tyFirstLoc` in typecheck) and
+-- TWO of the combinator (`orElseLoc`/`orElseLocL`), which is exactly how the
+-- next one gets written slightly differently.  `rule-duplicate-body` cannot
+-- see that class: its floor is 10 nodes and these bodies are smaller.
+--
+-- ⚠️ The `Expr` walkers are deliberately NOT here.  There are five of them
+-- (`exprLoc` in types/typecheck.mdk AND a differently-behaved `exprLoc` in
+-- frontend/desugar.mdk, `firstExprLoc` in frontend/resolve.mdk,
+-- `clauseBodyLoc` in frontend/exhaust.mdk, `implBodyLoc` in
+-- types/typecheck.mdk) and they are five DIFFERENT judgments — shallow vs
+-- app-head-descending vs deep pre-order vs guard-arm-descending vs
+-- let-chain-only.  Unifying them would move diagnostic locations tree-wide.
+
+-- the first `Some` loc, else the second (so a captured record-site span wins,
+-- and a `None` capture still degrades to the live fallback).
+export orElseLoc : Option Loc -> Option Loc -> Option Loc
+orElseLoc (Some l) _ = Some l
+orElseLoc None fallback = fallback
+
+-- First `Loc` in a PRE-ORDER walk of a `Ty`, keep-first, `None` if the type
+-- carries none.  Only `TyCon` and `TyRow` carry a span of their own; `TyVar`
+-- has none (that residual gap is why a fully-parametric `impl Foo a` head
+-- still falls back to the file-start caret), so a type built only from type
+-- variables yields `None`.  A `DTypeSig` has no `Loc` of its own — only its
+-- `Ty` payload does — so this is how a signature-level diagnostic is located.
+export firstTyLoc : Ty -> Option Loc
+firstTyLoc (TyCon _ l) = l
+firstTyLoc (TyVar _) = None
+firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
+firstTyLoc (TyFun f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
+firstTyLoc (TyTuple ts) = firstTyLocList ts
+firstTyLoc (TyEffect _ _ t) = firstTyLoc t
+firstTyLoc (TyConstrained _ t) = firstTyLoc t
+firstTyLoc (TyRow _ _ l) = l
+
+-- The same walk across a LIST of types, left to right — an impl head's args
+-- (`impl Iface Ty1 Ty2…`), a tuple's elements, a method's signature parts.
+export firstTyLocList : List Ty -> Option Loc
+firstTyLocList [] = None
+firstTyLocList (t::rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 
 -- a resolved typeclass-dispatch route (filled by the typed-pipeline typechecker).
 -- RNone = unresolved / no dispatch (eval keeps the VMulti for arg-tag fallback);
@@ -459,6 +505,21 @@ public export data Decl =
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
+(DTypeSig true "firstTyLoc" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstTyLoc" ((PCon "TyCon" PWild (PVar "l"))) (EVar "l"))
+(DFunDef false "firstTyLoc" ((PCon "TyVar" PWild)) (EVar "None"))
+(DFunDef false "firstTyLoc" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
+(DFunDef false "firstTyLoc" ((PCon "TyFun" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
+(DFunDef false "firstTyLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyLocList") (EVar "ts")))
+(DFunDef false "firstTyLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
+(DTypeSig true "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
+(DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
 (DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
@@ -504,6 +565,21 @@ public export data Decl =
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
+(DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
+(DTypeSig true "firstTyLoc" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstTyLoc" ((PCon "TyCon" PWild (PVar "l"))) (EVar "l"))
+(DFunDef false "firstTyLoc" ((PCon "TyVar" PWild)) (EVar "None"))
+(DFunDef false "firstTyLoc" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
+(DFunDef false "firstTyLoc" ((PCon "TyFun" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
+(DFunDef false "firstTyLoc" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "firstTyLocList") (EVar "ts")))
+(DFunDef false "firstTyLoc" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "firstTyLoc") (EVar "t")))
+(DFunDef false "firstTyLoc" ((PCon "TyRow" PWild PWild (PVar "l"))) (EVar "l"))
+(DTypeSig true "firstTyLocList" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstTyLocList" ((PList)) (EVar "None"))
+(DFunDef false "firstTyLocList" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "t"))) (EApp (EVar "firstTyLocList") (EVar "rest"))))
 (DData Public "Route" () ((variant "RNone" (ConPos)) (variant "RKey" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RDict" (ConPos (TyCon "String"))) (variant "RDictFwd" (ConPos (TyCon "String"))) (variant "RLocal" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route")))) (variant "RScalar" (ConPos (TyCon "String")))) ())
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
 (DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())

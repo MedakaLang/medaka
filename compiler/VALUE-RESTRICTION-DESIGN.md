@@ -1,9 +1,27 @@
 # Generalizing constructor / record applications of values (value-restriction relaxation)
 
-**Status:** IMPLEMENTED — `386a5433`, after 2026-06-30. `isNonexpansive`
-(`compiler/types/typecheck.mdk:2439`) now has an `EApp` arm gated by `isCtorAppHead`
-(`:2455`, excluding `Ref` by name) — a byte-for-byte match to this doc's own "LOCKED
-SCOPE" §D1/D3. Header below ("design only, no code changed") predates the fix.
+**Status:** IMPLEMENTED, then AMENDED — do not read §D1/§D3 below as the shipped
+predicate. `isNonexpansive` (`compiler/types/typecheck.mdk`) has had an `EApp` arm
+excluding `Ref` by name since `386a5433` (after 2026-06-30), originally a
+byte-for-byte match to this doc's own "LOCKED SCOPE" §D1/§D3. Two corrections since:
+
+1. **Issue 1139 (CLOSED, fixed 2026-07-31) — §D1's pseudocode was the bug.** The
+   helper (then `isCtorApp`/`isCtorAppHead`, now **`isCtorAppSpine`**) discarded every
+   argument on its walk to the head, so `isNonexpansive (EApp f x) = isCtorApp (EApp f
+   x) && isNonexpansive x` tested only the spine's **final** argument — a `Ref` in any
+   other position was generalized (`check` exit 0, native SEGFAULT). ⚠️ §D1's own note
+   at "Notes / decisions baked into the above" claims that recursion "checks **each**
+   spine argument"; **it does not**, and that sentence is the defect, preserved here
+   because it is the reason the shipped code had it. `isCtorAppSpine` now tests every
+   argument on its single walk to the head.
+2. **Issue 1150 (OPEN, S0, verified) — §1's premise is false.** This doc's framing
+   ("the single mutable-cell **constructor**", "excluded by name") rests on the head
+   test being a constructor test. It is a first-character check, and a module alias
+   must be uppercase, so `H.new ()` is classified as a constructor application and
+   generalized. See `docs/spec/DICT-SEMANTICS.md` §4.1 G2. `Ref` is also not a
+   constructor: it is an extern function, never passed to `addCtor`.
+
+Header below ("design only, no code changed") predates all of this.
 
 Original header (predates the fix): **Status:** design only (no code changed). Verified on a `medaka` built from
 a discarded worktree, base `90865a6` (BASE_OK).

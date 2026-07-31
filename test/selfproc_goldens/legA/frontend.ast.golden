@@ -1,4 +1,7 @@
 deriveRefName : DeriveRef -> String
+firstTyLoc : Ty -> Option Loc
+firstTyLocList : List Ty -> Option Loc
+orElseLoc : Option Loc -> Option Loc -> Option Loc
 qualifiedLocal : String -> String -> String
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String

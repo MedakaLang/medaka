@@ -6,6 +6,17 @@ Scope: make line:column tracking principled and bulletproof for tooling (LSP/MCP
 document-outline, references/rename, blast-radius) with issue **#331** (decl ranges are
 line-granular, `character` hardcoded to 0) as increment 1.
 
+⚠️ **Symbol rename since this doc was written (issue 480, 2026-07-31).** Everything below
+that names `tyFirstLoc`/`implHeadLoc` (`typecheck.mdk`) is describing what is now
+**`firstTyLoc`/`firstTyLocList`, exported from `compiler/frontend/ast.mdk`** — three
+module-private forks of that one `Ty` walk (`firstTyConLoc`/`tyFirstLoc` in typecheck,
+`firstTyLoc` in resolve) and two of the `orElseLoc`/`orElseLocL` combinator were collapsed
+to one each and rehomed beside `Ty`/`Loc`. Behaviour is unchanged — the forks were
+semantically identical — so every claim below still holds; only the names and files moved.
+The narrative and its (already-stale) line numbers are left as written rather than
+retro-edited. Re-derive with
+`grep -rn 'firstTyLoc\|orElseLoc' compiler/frontend/ast.mdk`.
+
 ## Decisions (locked 2026-07-22 by Val)
 
 **Arc status (2026-07-23):** Increments **1–3 SHIPPED** (decl-name spans #856; child-name spans #858;

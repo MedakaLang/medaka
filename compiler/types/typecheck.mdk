@@ -14,6 +14,8 @@
 import frontend.ast.{
   Lit(..),
   Ty(..),
+  firstTyLoc,
+  firstTyLocList,
   Constraint(..),
   Route(..),
   Pat(..),
@@ -26,6 +28,7 @@ import frontend.ast.{
   LetBind(..),
   Expr(..),
   Loc(..),
+  orElseLoc,
   ConPayload(..),
   Field(..),
   Variant(..),
@@ -1140,7 +1143,7 @@ checkIfaceMethodEffs _ _ [] = ()
 checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
   let _ = match undeterminedRetEffVars scope mty
     [] => ()
-    bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyConLoc mty) (effectUndeterminedMsg iface mname bad)
+    bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyLoc mty) (effectUndeterminedMsg iface mname bad)
   let _ = checkArgEffVarCoverage iface scope mname mty
   checkIfaceMethodEffs iface scope rest
 
@@ -1177,10 +1180,10 @@ checkArgEffVars _ _ _ _ _ [] = ()
 checkArgEffVars iface mname mty argOccs retOccs (v::rest) =
   let vrets = filterList (o => fst o == v) retOccs
   let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
-  let _ = if isEmptyL vrets then pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyConLoc mty) (argOnlyEffVarMsg iface mname v)
+  let _ = if isEmptyL vrets then pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argOnlyEffVarMsg iface mname v)
   else match retOccsEscape vatoms vrets
     [] => ()
-    esc => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyConLoc mty) (argAtomsUncoveredMsg iface mname v esc)
+    esc => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argAtomsUncoveredMsg iface mname v esc)
   checkArgEffVars iface mname mty argOccs retOccs rest
 
 -- first non-empty escape of the argument-side atoms against a non-argument
@@ -1300,21 +1303,6 @@ renderEffTailVars vs = joinWith ", " (map (v => "<\{v}>") vs)
 effectUndeterminedMsg : String -> String -> List String -> String
 effectUndeterminedMsg iface mname vars = "Under-determined effect variable \{renderEffTailVars vars} in method '\{mname}' of interface '\{iface}': the effect appears only in the method's return type, pinned by no argument, so a caller can instantiate it to <> and launder the real effect (a function typed pure would silently perform it). Use a concrete effect row (e.g. `<Stdout>`) or thread the effect through an argument (e.g. a callback `a -> <e> b`)."
 
--- first available source loc in a signature, for locating the diagnostic.
-firstTyConLoc : Ty -> Option Loc
-firstTyConLoc (TyCon _ ml) = ml
-firstTyConLoc (TyApp a b) = orElseLoc (firstTyConLoc a) (firstTyConLoc b)
-firstTyConLoc (TyFun a b) = orElseLoc (firstTyConLoc a) (firstTyConLoc b)
-firstTyConLoc (TyTuple ts) = firstTyConLocList ts
-firstTyConLoc (TyEffect _ _ t) = firstTyConLoc t
-firstTyConLoc (TyConstrained _ t) = firstTyConLoc t
-firstTyConLoc (TyRow _ _ l) = l
-firstTyConLoc _ = None
-
-firstTyConLocList : List Ty -> Option Loc
-firstTyConLocList [] = None
-firstTyConLocList (t::ts) = orElseLoc (firstTyConLoc t) (firstTyConLocList ts)
-
 -- #822 (graded interfaces): an instance head must have the KIND the interface's
 -- corresponding type parameter has.  A graded interface binds the whole row-indexed
 -- FAMILY — `impl GThenable Async`, never a fixed row like `impl GThenable (Async e)`
@@ -1403,7 +1391,7 @@ checkGradedImplHead iface t want = match tyAppSpine t
   -- and reports unlocated.  Fabricating a nearby one would be worse than saying nothing.
   (TyTuple ts, _) => pushTypeErrorOnceAt
     "T-IMPL-KIND-MISMATCH"
-    (firstTyConLocList ts)
+    (firstTyLocList ts)
     (implTupleHeadKindMsg iface (listLen ts) want)
   _ => ()
 
@@ -2990,12 +2978,6 @@ pushTypeErrorHelpFixAt code loc msg help fix =
       perRun.value.typeErrors
       (TcDiag code 1 (orElseLoc loc currentLoc.value) msg (Some help) fix :: perRun.value.typeErrors.value)
 
--- the first `Some` loc, else the second (so a captured record-site span wins,
--- and a `None` capture still degrades to the live currentLoc).
-orElseLoc : Option Loc -> Option Loc -> Option Loc
-orElseLoc (Some l) _ = Some l
-orElseLoc None fallback = fallback
-
 -- Source-location attribution (Phase B.10.2): the innermost ELoc span the
 -- `infer` walk has entered.  Set by infer's transparent ELoc arm before
 -- recursing (mirror of lib/typecheck.ml's `current_loc` ref, set in its ELoc
@@ -3522,12 +3504,35 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- mutable cell: literals, variables and lambdas are values; annotations are
 -- transparent; tuples/lists are values iff their elements are.  Constructor
 -- applications of non-expansive arguments are non-expansive (SML value
--- restriction relaxation, Phase 66 extension) EXCEPT `Ref`, which is the sole
--- uppercase constructor that builds a mutable cell (`extern Ref : a -> Ref a` in
--- stdlib/runtime.mdk).  Generalizing `Ref x` would be unsound (polymorphic
--- reference: write at one type, read at another).  ANY future uppercase
--- mutable-cell extern MUST be added to the exclusion in `isCtorAppSpine` below
--- — audit with `grep '^extern [A-Z]' stdlib/runtime.mdk` to find candidates.
+-- restriction relaxation, Phase 66 extension) EXCEPT `Ref`, excluded by name in
+-- `isCtorAppSpine` below: generalizing `Ref x` would be unsound (polymorphic
+-- reference: write at one type, read at another).
+--
+-- 🚨 THE HEAD TEST IS A FIRST-CHARACTER HEURISTIC, NOT A CONSTRUCTOR LOOKUP,
+-- AND IT IS DEFEATED TODAY — issue 1150 (OPEN, S0, verified, memory-safety).
+-- `isCtorAppSpine`'s head arms accept any name whose first character is
+-- uppercase (`ctorHeadIsUpper` below).  A MODULE ALIAS is REQUIRED to be
+-- uppercase (`aliasNameFor`, frontend/parser.mdk — lowercase is a hard parse
+-- error) and an alias-qualified value desugars to a FLAT `EVar` carrying the
+-- dotted name (`rewriteAliasQual`, frontend/desugar.mdk, via `qualifiedLocal`
+-- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` reads
+-- `'H'` and says True: EVERY alias-qualified call in the language is
+-- classified as a constructor application and generalized.  `let m = H.new ()`
+-- over `stdlib/hash_map.mdk` yields a polymorphic mutable table — `check` exit
+-- 0, `run` E-NOT-A-FUNCTION, built binary SEGFAULT.
+--
+-- ⚠️ The residual hole is therefore NOT the "future uppercase mutable-cell
+-- extern" this comment used to warn about, and that audit (`grep '^extern
+-- [A-Z]' stdlib/runtime.mdk`) is CLEAN — one hit, `Ref` — while the predicate
+-- is broken anyway.  Note also that `Ref` is not a *constructor* at all: it is
+-- an extern FUNCTION (`extern Ref : a -> Ref a`, stdlib/runtime.mdk), never
+-- passed to `addCtor`, and calling it one is what made this heuristic look
+-- principled.  The fix is to stop guessing from spelling and ask the
+-- environment — `lookupCtor` is populated only by `addCtor`, whose sole call
+-- site is `addVariants`, reached only from data/record declarations — which
+-- also deletes the hand-written `"Ref"` name test rather than adding another
+-- special case.  See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
+--
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
 -- generalizes — the separate `mut`-gen hole is a both-sides follow-up (T1b).
@@ -3547,7 +3552,7 @@ isNonexpansive (EListLit es) = allList isNonexpansive es
 -- every spine argument is itself non-expansive.  Partial ctor applications
 -- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
 -- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
-isNonexpansive (EApp f x) = isCtorAppSpine (EApp f x)
+isNonexpansive (app@(EApp _ _)) = isCtorAppSpine app
 -- Record creation: non-expansive iff every field expression is non-expansive.
 isNonexpansive (ERecordCreate _ fs) = allList
   (fa => match fa
@@ -3564,13 +3569,19 @@ isNonexpansive _ = False
 -- The arguments are tested HERE, on the single walk to the head, rather than by
 -- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
 -- the whole spine per level, i.e. quadratic in the constructor's arity.  Testing
--- only the LAST argument was #1139 — a `Ref` in any non-final position escaped
--- the exclusion entirely, so `let b = BR (Ref []) True` generalized and a cell
--- written at `Int` could be read at `Int -> Int`.
+-- only the LAST argument was issue 1139 — a `Ref` in any non-final position
+-- escaped the exclusion entirely, so `let b = BR (Ref []) True` generalized and
+-- a cell written at `Int` could be read at `Int -> Int`.
+--
+-- The head is tested BEFORE the argument: `&&` short-circuits, and the common
+-- RHS at a `let` is an ordinary function application, whose head fails the test
+-- immediately.  Testing the argument first would walk its whole subtree before
+-- discovering the spine was never a constructor application at all.  Both
+-- operands are pure `Bool`, so the order is semantically invisible.
 isCtorAppSpine : Expr -> Bool
 isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
 isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
-isCtorAppSpine (EApp f x) = isNonexpansive x && isCtorAppSpine f
+isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x
 isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
 isCtorAppSpine (EVarId name _) = name != "Ref" && ctorHeadIsUpper name
 isCtorAppSpine _ = False
@@ -4257,7 +4268,7 @@ rowArgOf etbl (TyRow labels tail _) =
 -- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
 -- with `TCon "Unit"`.
 rowArgOf _ ty =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyConLoc ty) (typeInRowSlotMsg ty)
+  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyLoc ty) (typeInRowSlotMsg ty)
   pureRow
 
 -- Names the offending type, so a signature elaborated twice folds into one diagnostic.
@@ -10556,20 +10567,14 @@ cohImplsOf : Decl -> List CohImpl
 cohImplsOf d = cohImplsOfMid "" d
 
 -- module-tagged variant: stamp every harvested CohImpl with [mid].
-cohImplsOfMid : String -> Decl -> List CohImpl
-cohImplsOfMid mid (DAttrib _ d) = cohImplsOfMid mid d
-cohImplsOfMid mid (DImpl { iface, tys, ... }) =
-  [CohImpl iface (cohFreshTys tys) mid (implHeadLoc tys)]
-cohImplsOfMid _ _ = []
-
--- #414: the span to blame for an impl, taken from its head types.  A `DImpl` has no
--- `Loc` of its own (`DUse` is the only `Decl` variant carrying one inline) — but the
--- parser stamps every `TyCon` leaf with its span (`parser.mdk`'s parseTyAtom:
--- `TyCon c (Some (locOfSpan s q))`), so the head's own tycon IS the impl's location.
--- Pre-order, so `impl C (Pair a Int)` blames `Pair` — the head — not the argument.
--- Mirrors `resolve.mdk`'s firstTyLoc, which locates a `DTypeSig` the same way (that
--- copy is module-private, and typecheck deliberately keeps its own loc walkers —
--- cf. `exprLoc` here vs resolve's `firstExprLoc`).
+--
+-- #414: the span to blame for an impl comes from its head types, via
+-- `firstTyLocList` (`frontend/ast.mdk` — one walk shared with resolve, issue
+-- 480).  A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
+-- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
+-- (`parser.mdk`'s parseTyAtom: `TyCon c (Some (locOfSpan s q))`), so the head's
+-- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
+-- `Pair` — the head — not the argument.
 --
 -- ⚠️ RESIDUAL (#414): only `TyCon` leaves carry spans, so a head with NO tycon —
 -- the fully-parametric `impl Foo a` — still yields `None` and falls back to the
@@ -10578,19 +10583,11 @@ cohImplsOfMid _ _ = []
 -- `TyVar` (an ast.mdk change rippling through every `Ty` consumer) or the parser's
 -- `DeclPos` side-table threaded into typecheck; both are out of proportion to an
 -- S3 diagnostic-quality fix.  Every head naming a CONCRETE type is covered.
-implHeadLoc : List Ty -> Option Loc
-implHeadLoc [] = None
-implHeadLoc (t::rest) = orElseLoc (tyFirstLoc t) (implHeadLoc rest)
-
-tyFirstLoc : Ty -> Option Loc
-tyFirstLoc (TyCon _ l) = l
-tyFirstLoc (TyVar _) = None
-tyFirstLoc (TyApp f x) = orElseLoc (tyFirstLoc f) (tyFirstLoc x)
-tyFirstLoc (TyFun f x) = orElseLoc (tyFirstLoc f) (tyFirstLoc x)
-tyFirstLoc (TyTuple ts) = implHeadLoc ts
-tyFirstLoc (TyEffect _ _ t) = tyFirstLoc t
-tyFirstLoc (TyConstrained _ t) = tyFirstLoc t
-tyFirstLoc (TyRow _ _ l) = l
+cohImplsOfMid : String -> Decl -> List CohImpl
+cohImplsOfMid mid (DAttrib _ d) = cohImplsOfMid mid d
+cohImplsOfMid mid (DImpl { iface, tys, ... }) =
+  [CohImpl iface (cohFreshTys tys) mid (firstTyLocList tys)]
+cohImplsOfMid _ _ = []
 
 -- the impl's head args → monos under ONE shared fresh-var map (so a var reused
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
@@ -13443,7 +13440,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- obligations on both channels, exactly as inferImplMethod does.
   let oblN0 = wMark perRun.value.implObls
   let callN0 = wMark perRun.value.obls
-  let defLoc = orElseLoc (implBodyLoc body) (firstTyConLoc mty)
+  let defLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
   let subject = defaultSubject iface mname
   -- EFFECT axis on the generic default path (round-2 adversarial break 2): a
   -- cross-module impl inherits the default via the untagged fallback, so this
@@ -14461,7 +14458,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
     let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
     let actual = inferClauses env [(pats, body)]
-    let launderLoc = orElseLoc (implBodyLoc body) (firstTyConLoc mty)
+    let launderLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
     -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
     -- DECLARED return by the effect the method declares at that same arrow.  An effect an
     -- impl legitimately performs by USING an argument (applying a callback `a -> <e> b`,

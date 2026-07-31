@@ -86,7 +86,9 @@ The parser HAS the positions in hand (`getPos`/`locOfSpan`/`located`,
   captured in `parseTyAtom`; `tySexp` ignores it (byte-identical). ~40 sites
   (fewer than the 127-estimate — many grep hits were comments/dup patterns) across
   typecheck/prop_runner/core_ir_lower/eval/parser/printer/desugar/fuzz_gen/lint/
-  doc. `checkType` threads the TyCon's own loc (`orElseLocL loc cur`) into
+  doc. `checkType` threads the TyCon's own loc (`orElseLoc loc cur` — spelled
+  `orElseLocL` at the time; the two forks were merged in `frontend/ast.mdk` for
+  issue 480) into
   `UnknownType` → `diagnostics.mdk` auto-builds the precise `fix` span.
   **Payoff:** `R-UNKNOWN-TYPE` now located + machine `fix` (`Strng`→`String`), AND
   every type-position hint including the Haskell type-aliases (`Maybe`→`Option`,
