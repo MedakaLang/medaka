@@ -123,6 +123,7 @@ boundTyvarIds : List Int -> List Mono -> Option (List Int)
 bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
 bucketImplEntries : List ImplEntry -> Map String (List ImplEntry) -> Map String (List ImplEntry)
 bucketKeyEntries : List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
+bucketKeyEntriesFrom : Int -> List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
 bucketOf : String -> Map String (List a) -> List a
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
@@ -136,6 +137,7 @@ buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc
 callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
 callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
+candidateBucket : Map String (List KeyEntry) -> String -> List KeyEntry
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
 censusSuperCloseVec : List Decl -> List (String, List Int) -> List (String, List Int)
@@ -801,6 +803,7 @@ keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepGroupNames : Map String Unit -> List String -> List String
 keptConstraintArgs : List (String, Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintIfaces : List (String, Mono) -> List String
+keyEntryIdx : KeyEntry -> Int
 keyEntryOf : Decl -> List KeyEntry
 keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
 keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
@@ -884,6 +887,7 @@ memberMethodRename : List String -> UseMember -> List (String, String)
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
 memberSuffix : String -> String
+mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
 mergeOne : List (String, Mono) -> String -> Mono -> List (String, Mono)
 mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (String, Mono)
 methodArgs : Ty -> List Ty
