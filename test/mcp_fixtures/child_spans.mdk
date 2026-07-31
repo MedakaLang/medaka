@@ -22,8 +22,8 @@ impl Shape Color where
 let rec spin n = spin n
 
 -- #331 increment 5 Part A regression guard: a PARENTHESIZED impl head must
--- still blame the head TyCon inside the parens (`tyFirstLoc` walks INTO a
--- `TyApp` regardless of parens, typecheck.mdk) — not fall back to `impl`
+-- still blame the head TyCon inside the parens (`firstTyLoc` walks INTO a
+-- `TyApp` regardless of parens, frontend/ast.mdk) — not fall back to `impl`
 -- (a depth-0-only scan misses it entirely) and not, in the multi-arg case,
 -- land on a later BARE type argument (a depth-0-only scan matches `Int`
 -- instead of the parenthesized `Box`). Columns hand-verified below.

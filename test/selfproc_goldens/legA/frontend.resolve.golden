@@ -111,8 +111,6 @@ findExports : String -> Map String ModuleExports -> Option ModuleExports
 firstExprLoc : Expr -> Option Loc
 firstLocList : List Expr -> Option Loc
 firstOr : String -> List String -> String
-firstTyLoc : Ty -> Option Loc
-firstTyLocList : List Ty -> Option Loc
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
@@ -171,7 +169,6 @@ oneImportEffects : Map String ModuleExports -> UsePath -> List String
 oneImportIfaceMethods : Map String ModuleExports -> List String -> UsePath -> List (String, List String)
 oneImportedModuleValues : Map String ModuleExports -> UsePath -> List (String, List String)
 optStrEq : Option String -> String -> Bool
-orElseLocL : Option Loc -> Option Loc -> Option Loc
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
 ownersForTypes : List String -> List (String, String) -> List (String, String)

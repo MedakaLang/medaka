@@ -521,8 +521,6 @@ firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Op
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
-firstTyConLoc : Ty -> Option Loc
-firstTyConLocList : List Ty -> Option Loc
 flatGroupIsCore : List String -> Bool
 foldAppFallback : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
@@ -636,7 +634,6 @@ implExistsForHead : Map String (List KeyEntry) -> String -> String -> Bool
 implExistsForHeadGo : List KeyEntry -> String -> String -> Bool
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
-implHeadLoc : List Ty -> Option Loc
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
@@ -976,7 +973,6 @@ occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
 opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
 openRow : Unit -> EffRow
 openRowHint : List Atom -> String
-orElseLoc : Option Loc -> Option Loc -> Option Loc
 ordCompareOp : Mono -> Mono -> Mono
 overAppliedMsg : String -> Int -> Int -> String
 pairIface : String -> Int -> List (String, Int)
@@ -1365,7 +1361,6 @@ twoArgCallee : TcEnv -> Expr -> Option (String, Expr, Mono, Mono)
 tyAppSpine : Ty -> (Ty, List Ty)
 tyConNamesInConstraint : Constraint -> List String
 tyConNamesInTy : Ty -> List String
-tyFirstLoc : Ty -> Option Loc
 tyHeadEqV : List Ty -> List Ty -> Bool
 tyIsConcrete : Ty -> Bool
 tyMatchesAst : Ty -> Ty -> Bool

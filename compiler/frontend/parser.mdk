@@ -3641,15 +3641,15 @@ tokIdxOrNone : Array Token -> Int -> Option Int
 tokIdxOrNone toks i = if i >= 0 && i < arrayLength toks then Some i else None
 
 -- The impl's HEAD-TYPE name-token index (F4, increment 5): the token-walk
--- mirror of `typecheck.mdk`'s `implHeadLoc`/`tyFirstLoc` — the first `TyCon`
+-- mirror of `ast.mdk`'s `firstTyLocList`/`firstTyLoc` — the first `TyCon`
 -- appearing left-to-right across the impl's `tys` (`impl Iface Ty1 Ty2… where`)
 -- — but scanning TOKEN KINDS structurally instead of walking the `Ty` AST, so
 -- #331 stays channel-first (no AST field added; SOURCE-POSITION-DESIGN.md
 -- F2). A `TyCon` can only start at a `TUpper` token (`parseTyAtom`), so the
 -- first `TUpper` IS the first `TyCon` in source order — no need to walk each
 -- `Ty`'s structure separately.  ⚠️ The match is AT ANY PAREN DEPTH, not just
--- depth 0: `tyFirstLoc (TyApp f x) = orElseLoc (tyFirstLoc f) (tyFirstLoc x)`
--- (typecheck.mdk) walks INTO a `TyApp` regardless of parens — so a
+-- depth 0: `firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)`
+-- (ast.mdk) walks INTO a `TyApp` regardless of parens — so a
 -- parenthesized head like `impl Eq (List a) where` must still blame `List`,
 -- not fall through to `a` (no TyCon) or land on a later BARE type argument.
 -- Depth is tracked and gates ONLY the `where`/`requires`/layout-noise STOP
