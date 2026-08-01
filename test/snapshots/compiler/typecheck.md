@@ -1,5 +1,5 @@
 # META
-source_lines=19798
+source_lines=19820
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -13288,6 +13288,16 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
   -- the native emitter picks the Float primitive (bypassing the type-lost
   -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
   -- from the (lost) ref cell to a (surviving) node.
+  --
+  -- ⚠️ #1110 residual: `tag` is a SCALAR-TYPE TAG this pass synthesises (never a
+  -- head the user wrote), and this runs AFTER resolve, so the node it builds is
+  -- one of only two sites that will still carry `OriginUnresolved` once the A-1
+  -- stamping PR lands (the other is `substTyVars` below).  Its only reader is
+  -- `ir/core_ir_lower.mdk`'s `lower (EAnnot (EBinOp …) (TyCon { tyConName }))`,
+  -- which takes the NAME and nothing else — so an absent origin is harmless
+  -- here and re-stamping it would be inventing a module for a builtin scalar.
+  -- Treat it the way `parser.mdk`'s tuple head is treated: it wants the
+  -- reserved builtin origin, not the module under elaboration.
   RScalar tag => EAnnot (EBinOp op l r routeRef) (tyConUnresolved tag None)
   _ => binopMethodApp op l r routeRef
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
@@ -15007,6 +15017,18 @@ implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
 implTysIfMatch _ _ _ = []
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
+--
+-- ⚠️ #1110 residual, and the WORSE of the two in this file: the `TyCon` arm
+-- REBUILDS the node from its name alone, so it drops the span (pre-existing,
+-- deliberate) AND now the `tyConOrigin` identity carrier.  This runs AFTER
+-- resolve, so once the A-1 stamping PR lands it is not merely "still
+-- unresolved" — it DESTROYS an origin that had already been acquired, silently
+-- and with no diagnostic, on every declared `Ty` reached through an impl-head
+-- substitution.  Behaviour-identical today only because nothing populates
+-- origin yet.  The fix is to preserve the matched node's own fields instead of
+-- re-synthesising it (bind the whole `Ty` and return it unchanged, the way
+-- `mapTyKids` in `tools/codemod.mdk` already does) — not to re-stamp here,
+-- which would be guessing an identity this function does not have.
 substTyVars : List (String, Ty) -> Ty -> Ty
 substTyVars sub (TyVar n) = fromOption (TyVar n) (lookupAssoc n sub)
 substTyVars _ (TyCon { tyConName = n }) = tyConUnresolved n None

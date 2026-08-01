@@ -1,5 +1,5 @@
 # META
-source_lines=586
+source_lines=598
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -95,6 +95,16 @@ public export data Ty =
   -- `diff_compiler_lint_cache` caught it.  So: prefix every field on a widely
   -- imported AST node, and never add a bare `name`/`loc`/`kind`/`id` field here.
   --
+  -- ⚠️ THIS FILE DOES NOT YET FOLLOW THAT RULE, and the exception is
+  -- grandfathered, not a counter-argument.  `DImpl`'s `iface`@1 already collides
+  -- with `Predicate`'s `iface`@0 (`types/typecheck.mdk`), and `DInterface`'s
+  -- `name`@2 with `Rule`'s `name`@0 (`tools/lint.mdk`) — same shape as the
+  -- `loc` collision above, live in the tree today, latent only because no
+  -- reachable site accesses those fields on a receiver the emitter mis-resolves.
+  -- They predate #1110 and are tracked with the full field-table enumeration in
+  -- #1216; renaming them is that issue's business, not this carrier's.  Read
+  -- the rule as "do not ADD to the exposure", not as a description of the file.
+  --
   -- 🚨 Match it as a PARTIAL record pattern naming only the fields you want —
   -- `TyCon { tyConName = n }`, or `TyCon {}` to bind nothing.  A partial pattern
   -- already tolerates fields added later (`desugarPat`/`lookupRecField`,
@@ -103,7 +113,9 @@ public export data Ty =
   -- `desugarPat _ (PRec _ _ True) = PWild` collapses a `...` pattern to a
   -- CATCH-ALL, which would silently make every `Ty` match in the compiler
   -- trivially "exhaustive" and turn a future missing-constructor error into a
-  -- runtime match failure.  Measured both ways on this change.
+  -- runtime match failure.  Measured both ways on this change, and the
+  -- underlying `...`-lowering defect is #1217 — so this is a workaround with an
+  -- expiry, not a style rule: when #1217 lands, re-derive rather than assume.
   | TyCon {
       tyConName : String,
       tyConLoc : Option Loc,
