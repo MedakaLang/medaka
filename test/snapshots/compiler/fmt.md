@@ -1,5 +1,5 @@
 # META
-source_lines=523
+source_lines=644
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — port of lib/printer.ml's
@@ -40,7 +40,13 @@ import tools.printer.{
   declBlockLen,
   Doc,
 }
-import frontend.lexer.{Comment, commentLine, commentText, collectComments}
+import frontend.lexer.{
+  Comment,
+  commentLine,
+  commentCol,
+  commentText,
+  collectComments,
+}
 import frontend.parser.{
   parseWithPositions,
   Positions,
@@ -267,29 +273,144 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- Splice interior comments into the rendered decl string by output-line index.
 -- Returns (newDeclStr, consumedComments) — consumed ones are removed from the
 -- pending stream; any whose index fell out of range are NOT consumed.
+--
+-- #829: a naive `commentLine - startLine == idx` mapping assumes every SOURCE
+-- line has a 1:1 OUTPUT line. That is true of a TRAILING comment (one sharing
+-- its source line with the code it follows — the code already owns an output
+-- line, the comment adds none) but false of a STANDALONE comment on its own
+-- source line: it consumes a line but — being spliced in rather than
+-- rendered on its own output line — produces none, so every comment/field
+-- after the first standalone one in a block is off by the count of
+-- standalone lines already eaten.
+--
+-- The two kinds are told apart by `commentCol` against `fieldIndent` (the
+-- column every field line itself starts at): a trailing comment's `--`
+-- starts well past that column (code precedes it on the line); a standalone
+-- comment's `--` starts AT it (only whitespace precedes it — it opens its
+-- own line). Only standalone comments shift the count; a trailing comment
+-- always renders inline on its own field's line, and a run of standalone
+-- comments immediately preceding a field renders as its own lines ABOVE
+-- that field, in source order — instead of being torn across two different
+-- fields' trailing positions (the reported defect) or, worse, collapsed
+-- together with an unrelated trailing comment (the PerRun-shaped case:
+-- trailing and standalone comments interleaved in the same record).
 spliceInterior : String -> Int -> List Comment -> (String, List Comment)
 spliceInterior declStr startLine interior =
   let outLines = splitNl declStr
-  let n = listLen outLines
-  match attachInterior outLines startLine 0 n interior []
-    (newLines, consumed) => (joinNl newLines, reverseL consumed)
+  let fieldIndent = fieldIndentOf outLines
+  let classified = classifyIdxs startLine fieldIndent 0 interior
+  let groups = groupRuns classified
+  match attachInterior outLines groups 0
+    (newLines, consumed) => (joinNl newLines, consumed)
 
--- Walk the output lines, prepending each comment's inline text onto the line at
--- its index.  `idx` is the current output-line index; `consumed` accumulates
--- (reversed) the comments actually attached.
-attachInterior : List String -> Int -> Int -> Int -> List Comment -> List Comment -> (List String, List Comment)
-attachInterior [] _ _ _ _ consumed = ([], consumed)
-attachInterior (ln::rest) startLine idx n interior consumed = match attachOnLine ln startLine idx interior consumed
-  (ln1, consumed1) => match attachInterior rest startLine (idx + 1) n interior consumed1
-    (rest1, consumed2) => (ln1::rest1, consumed2)
+-- The indent every field line renders at (leading-space count of the first
+-- output line after the opening `Decl = Ctor {` line, or 0 if there is none).
+fieldIndentOf : List String -> Int
+fieldIndentOf [] = 0
+fieldIndentOf [_] = 0
+fieldIndentOf (_::ln::_) = leadingSpaceCount ln
 
--- Attach every interior comment whose output-line index == idx onto `ln`.
-attachOnLine : String -> Int -> Int -> List Comment -> List Comment -> (String, List Comment)
-attachOnLine ln _ _ [] consumed = (ln, consumed)
-attachOnLine ln startLine idx (c::cs) consumed =
-  if commentLine c - startLine == idx then match attachOnLine ln startLine idx cs consumed
-    (ln1, consumed1) => ("\{ln1}  \{commentText c}", c::consumed1)
-  else attachOnLine ln startLine idx cs consumed
+data CKind = CTrailing | CStandalone
+
+classifyKind : Int -> Comment -> CKind
+classifyKind fieldIndent c =
+  if commentCol c <= fieldIndent then
+    CStandalone
+  else
+    CTrailing
+
+-- Map each interior comment to its OUTPUT-line index and its kind,
+-- accounting for the source lines already eaten by earlier STANDALONE
+-- comments in this same list (a trailing comment eats nothing — its line is
+-- already accounted for by the field it trails).
+classifyIdxs : Int -> Int -> Int -> List Comment -> List (Comment, Int, CKind)
+classifyIdxs _ _ _ [] = []
+classifyIdxs startLine fieldIndent eaten (c::cs) =
+  let k = classifyKind fieldIndent c
+  let idx = commentLine c - startLine - eaten
+  let eaten1 = match k
+    CStandalone => eaten + 1
+    CTrailing => eaten
+  (c, idx, k) :: classifyIdxs startLine fieldIndent eaten1 cs
+
+-- Group consecutive (source-order) comments sharing the same computed index
+-- into runs.  Relies on `classifyIdxs` producing a non-decreasing index
+-- sequence (true for well-formed sequential source).
+groupRuns : List (Comment, Int, CKind) -> List (Int, List (Comment, CKind))
+groupRuns [] = []
+groupRuns ((c, i, k)::rest) = match spanSameIdx i rest
+  (same, rest2) => (i, (c, k) :: map dropIdx same) :: groupRuns rest2
+
+dropIdx : (Comment, Int, CKind) -> (Comment, CKind)
+dropIdx (c, _, k) = (c, k)
+
+spanSameIdx : Int -> List (Comment, Int, CKind) -> (List (Comment, Int, CKind), List (Comment, Int, CKind))
+spanSameIdx _ [] = ([], [])
+spanSameIdx i ((c, j, k)::rest) =
+  if i == j then match spanSameIdx i rest
+    (same, rest2) => ((c, j, k)::same, rest2)
+  else ([], (c, j, k)::rest)
+
+-- Walk the output lines against the (already ordered, by index) comment
+-- groups.  Within a group: every STANDALONE comment renders as its own
+-- indented line immediately ABOVE the target line (source order preserved);
+-- every TRAILING comment renders appended inline onto the target line.
+attachInterior : List String -> List (Int, List (Comment, CKind)) -> Int -> (List String, List Comment)
+attachInterior [] _ _ = ([], [])
+attachInterior (ln::rest) groups idx = match takeGroupFor idx groups
+  (mine, groupsRest) => match attachInterior rest groupsRest (idx + 1)
+    (restLines, consumed1) => match mine
+      [] => (ln::restLines, consumed1)
+      _ =>
+        let standalone = filterList (p => isStandaloneP p) mine
+        let trailing = filterList (p => not (isStandaloneP p)) mine
+        let ln1 = appendTrailingP ln trailing
+        let above = standaloneLinesFor ln (map fst standalone)
+        (above ++ (ln1::restLines), map fst mine ++ consumed1)
+
+isStandaloneP : (Comment, CKind) -> Bool
+isStandaloneP (_, CStandalone) = True
+isStandaloneP (_, CTrailing) = False
+
+appendTrailingP : String -> List (Comment, CKind) -> String
+appendTrailingP ln [] = ln
+appendTrailingP ln ((c, _)::rest) =
+  appendTrailingP "\{ln}  \{commentText c}" rest
+
+-- Pop the group at the head of `groups` if its index is `idx` (groups are in
+-- non-decreasing index order, so the target group — if any remains — is
+-- always at the head by the time the walk reaches its index).
+takeGroupFor : Int -> List (Int, List (Comment, CKind)) -> (List (Comment, CKind), List (Int, List (Comment, CKind)))
+takeGroupFor _ [] = ([], [])
+takeGroupFor idx ((i, cs)::rest) =
+  if i == idx then
+    (cs, rest)
+  else
+    ([], (i, cs)::rest)
+
+-- Render each comment in `cs` as its own line, indented to match `ln`'s own
+-- leading whitespace (so a comment above a field lines up with that field).
+standaloneLinesFor : String -> List Comment -> List String
+standaloneLinesFor ln cs =
+  let ind = leadingSpaces ln
+  map (c => ind ++ commentText c) cs
+
+leadingSpaceCount : String -> Int
+leadingSpaceCount s = leadingSpaceCountGo (stringToChars s) 0 (stringLength s)
+
+leadingSpaceCountGo : Array Char -> Int -> Int -> Int
+leadingSpaceCountGo src i n
+  | i >= n = i
+  | charAt src i == ' ' = leadingSpaceCountGo src (i + 1) n
+  | otherwise = i
+
+leadingSpaces : String -> String
+leadingSpaces s = spacesN (leadingSpaceCount s)
+
+spacesN : Int -> String
+spacesN n
+  | n <= 0 = ""
+  | otherwise = " " ++ spacesN (n - 1)
 
 -- Drop the consumed comments from the pending stream (order-preserving), by
 -- source line — interior comment lines are unique per output line.
@@ -528,7 +649,7 @@ formatSource src = match parseWithPositions src
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "printDeclChainCommented" false) (mem "declChainLen" false) (mem "printDeclBlockCommented" false) (mem "declBlockLen" false) (mem "Doc" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "collectComments" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false) (mem "allList" false))))
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool")))) ())
@@ -588,13 +709,47 @@ formatSource src = match parseWithPositions src
 (DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
 (DTypeSig false "spliceInterior" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))
-(DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "outLines"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "startLine")) (ELit (LInt 0))) (EVar "n")) (EVar "interior")) (EListLit)) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EApp (EVar "reverseL") (EVar "consumed"))))))))
-(DTypeSig false "attachInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment"))))))))))
-(DFunDef false "attachInterior" ((PList) PWild PWild PWild PWild (PVar "consumed")) (ETuple (EListLit) (EVar "consumed")))
-(DFunDef false "attachInterior" ((PCons (PVar "ln") (PVar "rest")) (PVar "startLine") (PVar "idx") (PVar "n") (PVar "interior") (PVar "consumed")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "interior")) (EVar "consumed")) (arm (PTuple (PVar "ln1") (PVar "consumed1")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "attachInterior") (EVar "rest")) (EVar "startLine")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "n")) (EVar "interior")) (EVar "consumed1")) (arm (PTuple (PVar "rest1") (PVar "consumed2")) () (ETuple (EBinOp "::" (EVar "ln1") (EVar "rest1")) (EVar "consumed2")))))))
-(DTypeSig false "attachOnLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))))
-(DFunDef false "attachOnLine" ((PVar "ln") PWild PWild (PList) (PVar "consumed")) (ETuple (EVar "ln") (EVar "consumed")))
-(DFunDef false "attachOnLine" ((PVar "ln") (PVar "startLine") (PVar "idx") (PCons (PVar "c") (PVar "cs")) (PVar "consumed")) (EIf (EBinOp "==" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "idx")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "cs")) (EVar "consumed")) (arm (PTuple (PVar "ln1") (PVar "consumed1")) () (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ln1"))) (ELit (LString "  "))) (EApp (EVar "display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString ""))) (EBinOp "::" (EVar "c") (EVar "consumed1"))))) (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "cs")) (EVar "consumed"))))
+(DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "fieldIndent") (EApp (EVar "fieldIndentOf") (EVar "outLines"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))
+(DTypeSig false "fieldIndentOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "fieldIndentOf" ((PList)) (ELit (LInt 0)))
+(DFunDef false "fieldIndentOf" ((PList PWild)) (ELit (LInt 0)))
+(DFunDef false "fieldIndentOf" ((PCons PWild (PCons (PVar "ln") PWild))) (EApp (EVar "leadingSpaceCount") (EVar "ln")))
+(DData Private "CKind" () ((variant "CTrailing" (ConPos)) (variant "CStandalone" (ConPos))) ())
+(DTypeSig false "classifyKind" (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "CKind"))))
+(DFunDef false "classifyKind" ((PVar "fieldIndent") (PVar "c")) (EIf (EBinOp "<=" (EApp (EVar "commentCol") (EVar "c")) (EVar "fieldIndent")) (EVar "CStandalone") (EVar "CTrailing")))
+(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
+(DFunDef false "classifyIdxs" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "classifyIdxs" ((PVar "startLine") (PVar "fieldIndent") (PVar "eaten") (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "classifyKind") (EVar "fieldIndent")) (EVar "c"))) (DoLet false false (PVar "idx") (EBinOp "-" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "eaten"))) (DoLet false false (PVar "eaten1") (EMatch (EVar "k") (arm (PCon "CStandalone") () (EBinOp "+" (EVar "eaten") (ELit (LInt 1)))) (arm (PCon "CTrailing") () (EVar "eaten")))) (DoExpr (EBinOp "::" (ETuple (EVar "c") (EVar "idx") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (EVar "eaten1")) (EVar "cs"))))))
+(DTypeSig false "groupRuns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))
+(DFunDef false "groupRuns" ((PList)) (EListLit))
+(DFunDef false "groupRuns" ((PCons (PTuple (PVar "c") (PVar "i") (PVar "k")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "spanSameIdx") (EVar "i")) (EVar "rest")) (arm (PTuple (PVar "same") (PVar "rest2")) () (EBinOp "::" (ETuple (EVar "i") (EBinOp "::" (ETuple (EVar "c") (EVar "k")) (EApp (EApp (EVar "map") (EVar "dropIdx")) (EVar "same")))) (EApp (EVar "groupRuns") (EVar "rest2"))))))
+(DTypeSig false "dropIdx" (TyFun (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind")) (TyTuple (TyCon "Comment") (TyCon "CKind"))))
+(DFunDef false "dropIdx" ((PTuple (PVar "c") PWild (PVar "k"))) (ETuple (EVar "c") (EVar "k")))
+(DTypeSig false "spanSameIdx" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind")))))))
+(DFunDef false "spanSameIdx" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanSameIdx" ((PVar "i") (PCons (PTuple (PVar "c") (PVar "j") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "j")) (EMatch (EApp (EApp (EVar "spanSameIdx") (EVar "i")) (EVar "rest")) (arm (PTuple (PVar "same") (PVar "rest2")) () (ETuple (EBinOp "::" (ETuple (EVar "c") (EVar "j") (EVar "k")) (EVar "same")) (EVar "rest2")))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "c") (EVar "j") (EVar "k")) (EVar "rest")))))
+(DTypeSig false "attachInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))))) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")))))))
+(DFunDef false "attachInterior" ((PList) PWild PWild) (ETuple (EListLit) (EListLit)))
+(DFunDef false "attachInterior" ((PCons (PVar "ln") (PVar "rest")) (PVar "groups") (PVar "idx")) (EMatch (EApp (EApp (EVar "takeGroupFor") (EVar "idx")) (EVar "groups")) (arm (PTuple (PVar "mine") (PVar "groupsRest")) () (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "rest")) (EVar "groupsRest")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (arm (PTuple (PVar "restLines") (PVar "consumed1")) () (EMatch (EVar "mine") (arm (PList) () (ETuple (EBinOp "::" (EVar "ln") (EVar "restLines")) (EVar "consumed1"))) (arm PWild () (EBlock (DoLet false false (PVar "standalone") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "isStandaloneP") (EVar "p")))) (EVar "mine"))) (DoLet false false (PVar "trailing") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isStandaloneP") (EVar "p"))))) (EVar "mine"))) (DoLet false false (PVar "ln1") (EApp (EApp (EVar "appendTrailingP") (EVar "ln")) (EVar "trailing"))) (DoLet false false (PVar "above") (EApp (EApp (EVar "standaloneLinesFor") (EVar "ln")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "standalone")))) (DoExpr (ETuple (EBinOp "++" (EVar "above") (EBinOp "::" (EVar "ln1") (EVar "restLines"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mine")) (EVar "consumed1"))))))))))))
+(DTypeSig false "isStandaloneP" (TyFun (TyTuple (TyCon "Comment") (TyCon "CKind")) (TyCon "Bool")))
+(DFunDef false "isStandaloneP" ((PTuple PWild (PCon "CStandalone"))) (EVar "True"))
+(DFunDef false "isStandaloneP" ((PTuple PWild (PCon "CTrailing"))) (EVar "False"))
+(DTypeSig false "appendTrailingP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))) (TyCon "String"))))
+(DFunDef false "appendTrailingP" ((PVar "ln") (PList)) (EVar "ln"))
+(DFunDef false "appendTrailingP" ((PVar "ln") (PCons (PTuple (PVar "c") PWild) (PVar "rest"))) (EApp (EApp (EVar "appendTrailingP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ln"))) (ELit (LString "  "))) (EApp (EVar "display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString "")))) (EVar "rest")))
+(DTypeSig false "takeGroupFor" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))))
+(DFunDef false "takeGroupFor" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "takeGroupFor" ((PVar "idx") (PCons (PTuple (PVar "i") (PVar "cs")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "idx")) (ETuple (EVar "cs") (EVar "rest")) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "i") (EVar "cs")) (EVar "rest")))))
+(DTypeSig false "standaloneLinesFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "standaloneLinesFor" ((PVar "ln") (PVar "cs")) (EBlock (DoLet false false (PVar "ind") (EApp (EVar "leadingSpaces") (EVar "ln"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EBinOp "++" (EVar "ind") (EApp (EVar "commentText") (EVar "c"))))) (EVar "cs")))))
+(DTypeSig false "leadingSpaceCount" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "leadingSpaceCount" ((PVar "s")) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
+(DTypeSig false "leadingSpaceCountGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "leadingSpaceCountGo" ((PVar "src") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "src")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EVar "src")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "leadingSpaces" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EVar "spacesN") (EApp (EVar "leadingSpaceCount") (EVar "s"))))
+(DTypeSig false "spacesN" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "spacesN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spacesN") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropConsumed" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment")))))
 (DFunDef false "dropConsumed" ((PVar "cs") (PVar "consumed")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyLineEq") (EApp (EVar "commentLine") (EVar "c"))) (EVar "consumed"))))) (EVar "cs")))
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))
@@ -641,7 +796,7 @@ formatSource src = match parseWithPositions src
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "printDeclChainCommented" false) (mem "declChainLen" false) (mem "printDeclBlockCommented" false) (mem "declBlockLen" false) (mem "Doc" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "collectComments" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "positionsChainLines" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false) (mem "allList" false))))
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool")))) ())
@@ -701,13 +856,47 @@ formatSource src = match parseWithPositions src
 (DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
 (DTypeSig false "spliceInterior" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))
-(DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "outLines"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "startLine")) (ELit (LInt 0))) (EVar "n")) (EVar "interior")) (EListLit)) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EApp (EVar "reverseL") (EVar "consumed"))))))))
-(DTypeSig false "attachInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment"))))))))))
-(DFunDef false "attachInterior" ((PList) PWild PWild PWild PWild (PVar "consumed")) (ETuple (EListLit) (EVar "consumed")))
-(DFunDef false "attachInterior" ((PCons (PVar "ln") (PVar "rest")) (PVar "startLine") (PVar "idx") (PVar "n") (PVar "interior") (PVar "consumed")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "interior")) (EVar "consumed")) (arm (PTuple (PVar "ln1") (PVar "consumed1")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "attachInterior") (EVar "rest")) (EVar "startLine")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "n")) (EVar "interior")) (EVar "consumed1")) (arm (PTuple (PVar "rest1") (PVar "consumed2")) () (ETuple (EBinOp "::" (EVar "ln1") (EVar "rest1")) (EVar "consumed2")))))))
-(DTypeSig false "attachOnLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))))
-(DFunDef false "attachOnLine" ((PVar "ln") PWild PWild (PList) (PVar "consumed")) (ETuple (EVar "ln") (EVar "consumed")))
-(DFunDef false "attachOnLine" ((PVar "ln") (PVar "startLine") (PVar "idx") (PCons (PVar "c") (PVar "cs")) (PVar "consumed")) (EIf (EBinOp "==" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "idx")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "cs")) (EVar "consumed")) (arm (PTuple (PVar "ln1") (PVar "consumed1")) () (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ln1"))) (ELit (LString "  "))) (EApp (EMethodRef "display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString ""))) (EBinOp "::" (EVar "c") (EVar "consumed1"))))) (EApp (EApp (EApp (EApp (EApp (EVar "attachOnLine") (EVar "ln")) (EVar "startLine")) (EVar "idx")) (EVar "cs")) (EVar "consumed"))))
+(DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "fieldIndent") (EApp (EVar "fieldIndentOf") (EVar "outLines"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))
+(DTypeSig false "fieldIndentOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "fieldIndentOf" ((PList)) (ELit (LInt 0)))
+(DFunDef false "fieldIndentOf" ((PList PWild)) (ELit (LInt 0)))
+(DFunDef false "fieldIndentOf" ((PCons PWild (PCons (PVar "ln") PWild))) (EApp (EVar "leadingSpaceCount") (EVar "ln")))
+(DData Private "CKind" () ((variant "CTrailing" (ConPos)) (variant "CStandalone" (ConPos))) ())
+(DTypeSig false "classifyKind" (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "CKind"))))
+(DFunDef false "classifyKind" ((PVar "fieldIndent") (PVar "c")) (EIf (EBinOp "<=" (EApp (EVar "commentCol") (EVar "c")) (EVar "fieldIndent")) (EVar "CStandalone") (EVar "CTrailing")))
+(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
+(DFunDef false "classifyIdxs" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "classifyIdxs" ((PVar "startLine") (PVar "fieldIndent") (PVar "eaten") (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "classifyKind") (EVar "fieldIndent")) (EVar "c"))) (DoLet false false (PVar "idx") (EBinOp "-" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "eaten"))) (DoLet false false (PVar "eaten1") (EMatch (EVar "k") (arm (PCon "CStandalone") () (EBinOp "+" (EVar "eaten") (ELit (LInt 1)))) (arm (PCon "CTrailing") () (EVar "eaten")))) (DoExpr (EBinOp "::" (ETuple (EVar "c") (EVar "idx") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (EVar "eaten1")) (EVar "cs"))))))
+(DTypeSig false "groupRuns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))
+(DFunDef false "groupRuns" ((PList)) (EListLit))
+(DFunDef false "groupRuns" ((PCons (PTuple (PVar "c") (PVar "i") (PVar "k")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "spanSameIdx") (EVar "i")) (EVar "rest")) (arm (PTuple (PVar "same") (PVar "rest2")) () (EBinOp "::" (ETuple (EVar "i") (EBinOp "::" (ETuple (EVar "c") (EVar "k")) (EApp (EApp (EMethodRef "map") (EVar "dropIdx")) (EVar "same")))) (EApp (EVar "groupRuns") (EVar "rest2"))))))
+(DTypeSig false "dropIdx" (TyFun (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind")) (TyTuple (TyCon "Comment") (TyCon "CKind"))))
+(DFunDef false "dropIdx" ((PTuple (PVar "c") PWild (PVar "k"))) (ETuple (EVar "c") (EVar "k")))
+(DTypeSig false "spanSameIdx" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind")))))))
+(DFunDef false "spanSameIdx" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanSameIdx" ((PVar "i") (PCons (PTuple (PVar "c") (PVar "j") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "j")) (EMatch (EApp (EApp (EVar "spanSameIdx") (EVar "i")) (EVar "rest")) (arm (PTuple (PVar "same") (PVar "rest2")) () (ETuple (EBinOp "::" (ETuple (EVar "c") (EVar "j") (EVar "k")) (EVar "same")) (EVar "rest2")))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "c") (EVar "j") (EVar "k")) (EVar "rest")))))
+(DTypeSig false "attachInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))))) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")))))))
+(DFunDef false "attachInterior" ((PList) PWild PWild) (ETuple (EListLit) (EListLit)))
+(DFunDef false "attachInterior" ((PCons (PVar "ln") (PVar "rest")) (PVar "groups") (PVar "idx")) (EMatch (EApp (EApp (EVar "takeGroupFor") (EVar "idx")) (EVar "groups")) (arm (PTuple (PVar "mine") (PVar "groupsRest")) () (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "rest")) (EVar "groupsRest")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (arm (PTuple (PVar "restLines") (PVar "consumed1")) () (EMatch (EVar "mine") (arm (PList) () (ETuple (EBinOp "::" (EVar "ln") (EVar "restLines")) (EVar "consumed1"))) (arm PWild () (EBlock (DoLet false false (PVar "standalone") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "isStandaloneP") (EVar "p")))) (EVar "mine"))) (DoLet false false (PVar "trailing") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isStandaloneP") (EVar "p"))))) (EVar "mine"))) (DoLet false false (PVar "ln1") (EApp (EApp (EVar "appendTrailingP") (EVar "ln")) (EVar "trailing"))) (DoLet false false (PVar "above") (EApp (EApp (EVar "standaloneLinesFor") (EVar "ln")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "standalone")))) (DoExpr (ETuple (EBinOp "++" (EVar "above") (EBinOp "::" (EVar "ln1") (EVar "restLines"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mine")) (EVar "consumed1"))))))))))))
+(DTypeSig false "isStandaloneP" (TyFun (TyTuple (TyCon "Comment") (TyCon "CKind")) (TyCon "Bool")))
+(DFunDef false "isStandaloneP" ((PTuple PWild (PCon "CStandalone"))) (EVar "True"))
+(DFunDef false "isStandaloneP" ((PTuple PWild (PCon "CTrailing"))) (EVar "False"))
+(DTypeSig false "appendTrailingP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))) (TyCon "String"))))
+(DFunDef false "appendTrailingP" ((PVar "ln") (PList)) (EVar "ln"))
+(DFunDef false "appendTrailingP" ((PVar "ln") (PCons (PTuple (PVar "c") PWild) (PVar "rest"))) (EApp (EApp (EVar "appendTrailingP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ln"))) (ELit (LString "  "))) (EApp (EMethodRef "display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString "")))) (EVar "rest")))
+(DTypeSig false "takeGroupFor" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))))
+(DFunDef false "takeGroupFor" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "takeGroupFor" ((PVar "idx") (PCons (PTuple (PVar "i") (PVar "cs")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "idx")) (ETuple (EVar "cs") (EVar "rest")) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "i") (EVar "cs")) (EVar "rest")))))
+(DTypeSig false "standaloneLinesFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "standaloneLinesFor" ((PVar "ln") (PVar "cs")) (EBlock (DoLet false false (PVar "ind") (EApp (EVar "leadingSpaces") (EVar "ln"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EBinOp "++" (EVar "ind") (EApp (EVar "commentText") (EVar "c"))))) (EVar "cs")))))
+(DTypeSig false "leadingSpaceCount" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "leadingSpaceCount" ((PVar "s")) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))))
+(DTypeSig false "leadingSpaceCountGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "leadingSpaceCountGo" ((PVar "src") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "src")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EVar "src")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "leadingSpaces" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EVar "spacesN") (EApp (EVar "leadingSpaceCount") (EVar "s"))))
+(DTypeSig false "spacesN" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "spacesN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spacesN") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dropConsumed" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment")))))
 (DFunDef false "dropConsumed" ((PVar "cs") (PVar "consumed")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyLineEq") (EApp (EVar "commentLine") (EVar "c"))) (EVar "consumed"))))) (EVar "cs")))
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))

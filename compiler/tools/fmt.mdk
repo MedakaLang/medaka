@@ -36,7 +36,13 @@ import tools.printer.{
   declBlockLen,
   Doc,
 }
-import frontend.lexer.{Comment, commentLine, commentText, collectComments}
+import frontend.lexer.{
+  Comment,
+  commentLine,
+  commentCol,
+  commentText,
+  collectComments,
+}
 import frontend.parser.{
   parseWithPositions,
   Positions,
@@ -263,29 +269,144 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- Splice interior comments into the rendered decl string by output-line index.
 -- Returns (newDeclStr, consumedComments) — consumed ones are removed from the
 -- pending stream; any whose index fell out of range are NOT consumed.
+--
+-- #829: a naive `commentLine - startLine == idx` mapping assumes every SOURCE
+-- line has a 1:1 OUTPUT line. That is true of a TRAILING comment (one sharing
+-- its source line with the code it follows — the code already owns an output
+-- line, the comment adds none) but false of a STANDALONE comment on its own
+-- source line: it consumes a line but — being spliced in rather than
+-- rendered on its own output line — produces none, so every comment/field
+-- after the first standalone one in a block is off by the count of
+-- standalone lines already eaten.
+--
+-- The two kinds are told apart by `commentCol` against `fieldIndent` (the
+-- column every field line itself starts at): a trailing comment's `--`
+-- starts well past that column (code precedes it on the line); a standalone
+-- comment's `--` starts AT it (only whitespace precedes it — it opens its
+-- own line). Only standalone comments shift the count; a trailing comment
+-- always renders inline on its own field's line, and a run of standalone
+-- comments immediately preceding a field renders as its own lines ABOVE
+-- that field, in source order — instead of being torn across two different
+-- fields' trailing positions (the reported defect) or, worse, collapsed
+-- together with an unrelated trailing comment (the PerRun-shaped case:
+-- trailing and standalone comments interleaved in the same record).
 spliceInterior : String -> Int -> List Comment -> (String, List Comment)
 spliceInterior declStr startLine interior =
   let outLines = splitNl declStr
-  let n = listLen outLines
-  match attachInterior outLines startLine 0 n interior []
-    (newLines, consumed) => (joinNl newLines, reverseL consumed)
+  let fieldIndent = fieldIndentOf outLines
+  let classified = classifyIdxs startLine fieldIndent 0 interior
+  let groups = groupRuns classified
+  match attachInterior outLines groups 0
+    (newLines, consumed) => (joinNl newLines, consumed)
 
--- Walk the output lines, prepending each comment's inline text onto the line at
--- its index.  `idx` is the current output-line index; `consumed` accumulates
--- (reversed) the comments actually attached.
-attachInterior : List String -> Int -> Int -> Int -> List Comment -> List Comment -> (List String, List Comment)
-attachInterior [] _ _ _ _ consumed = ([], consumed)
-attachInterior (ln::rest) startLine idx n interior consumed = match attachOnLine ln startLine idx interior consumed
-  (ln1, consumed1) => match attachInterior rest startLine (idx + 1) n interior consumed1
-    (rest1, consumed2) => (ln1::rest1, consumed2)
+-- The indent every field line renders at (leading-space count of the first
+-- output line after the opening `Decl = Ctor {` line, or 0 if there is none).
+fieldIndentOf : List String -> Int
+fieldIndentOf [] = 0
+fieldIndentOf [_] = 0
+fieldIndentOf (_::ln::_) = leadingSpaceCount ln
 
--- Attach every interior comment whose output-line index == idx onto `ln`.
-attachOnLine : String -> Int -> Int -> List Comment -> List Comment -> (String, List Comment)
-attachOnLine ln _ _ [] consumed = (ln, consumed)
-attachOnLine ln startLine idx (c::cs) consumed =
-  if commentLine c - startLine == idx then match attachOnLine ln startLine idx cs consumed
-    (ln1, consumed1) => ("\{ln1}  \{commentText c}", c::consumed1)
-  else attachOnLine ln startLine idx cs consumed
+data CKind = CTrailing | CStandalone
+
+classifyKind : Int -> Comment -> CKind
+classifyKind fieldIndent c =
+  if commentCol c <= fieldIndent then
+    CStandalone
+  else
+    CTrailing
+
+-- Map each interior comment to its OUTPUT-line index and its kind,
+-- accounting for the source lines already eaten by earlier STANDALONE
+-- comments in this same list (a trailing comment eats nothing — its line is
+-- already accounted for by the field it trails).
+classifyIdxs : Int -> Int -> Int -> List Comment -> List (Comment, Int, CKind)
+classifyIdxs _ _ _ [] = []
+classifyIdxs startLine fieldIndent eaten (c::cs) =
+  let k = classifyKind fieldIndent c
+  let idx = commentLine c - startLine - eaten
+  let eaten1 = match k
+    CStandalone => eaten + 1
+    CTrailing => eaten
+  (c, idx, k) :: classifyIdxs startLine fieldIndent eaten1 cs
+
+-- Group consecutive (source-order) comments sharing the same computed index
+-- into runs.  Relies on `classifyIdxs` producing a non-decreasing index
+-- sequence (true for well-formed sequential source).
+groupRuns : List (Comment, Int, CKind) -> List (Int, List (Comment, CKind))
+groupRuns [] = []
+groupRuns ((c, i, k)::rest) = match spanSameIdx i rest
+  (same, rest2) => (i, (c, k) :: map dropIdx same) :: groupRuns rest2
+
+dropIdx : (Comment, Int, CKind) -> (Comment, CKind)
+dropIdx (c, _, k) = (c, k)
+
+spanSameIdx : Int -> List (Comment, Int, CKind) -> (List (Comment, Int, CKind), List (Comment, Int, CKind))
+spanSameIdx _ [] = ([], [])
+spanSameIdx i ((c, j, k)::rest) =
+  if i == j then match spanSameIdx i rest
+    (same, rest2) => ((c, j, k)::same, rest2)
+  else ([], (c, j, k)::rest)
+
+-- Walk the output lines against the (already ordered, by index) comment
+-- groups.  Within a group: every STANDALONE comment renders as its own
+-- indented line immediately ABOVE the target line (source order preserved);
+-- every TRAILING comment renders appended inline onto the target line.
+attachInterior : List String -> List (Int, List (Comment, CKind)) -> Int -> (List String, List Comment)
+attachInterior [] _ _ = ([], [])
+attachInterior (ln::rest) groups idx = match takeGroupFor idx groups
+  (mine, groupsRest) => match attachInterior rest groupsRest (idx + 1)
+    (restLines, consumed1) => match mine
+      [] => (ln::restLines, consumed1)
+      _ =>
+        let standalone = filterList (p => isStandaloneP p) mine
+        let trailing = filterList (p => not (isStandaloneP p)) mine
+        let ln1 = appendTrailingP ln trailing
+        let above = standaloneLinesFor ln (map fst standalone)
+        (above ++ (ln1::restLines), map fst mine ++ consumed1)
+
+isStandaloneP : (Comment, CKind) -> Bool
+isStandaloneP (_, CStandalone) = True
+isStandaloneP (_, CTrailing) = False
+
+appendTrailingP : String -> List (Comment, CKind) -> String
+appendTrailingP ln [] = ln
+appendTrailingP ln ((c, _)::rest) =
+  appendTrailingP "\{ln}  \{commentText c}" rest
+
+-- Pop the group at the head of `groups` if its index is `idx` (groups are in
+-- non-decreasing index order, so the target group — if any remains — is
+-- always at the head by the time the walk reaches its index).
+takeGroupFor : Int -> List (Int, List (Comment, CKind)) -> (List (Comment, CKind), List (Int, List (Comment, CKind)))
+takeGroupFor _ [] = ([], [])
+takeGroupFor idx ((i, cs)::rest) =
+  if i == idx then
+    (cs, rest)
+  else
+    ([], (i, cs)::rest)
+
+-- Render each comment in `cs` as its own line, indented to match `ln`'s own
+-- leading whitespace (so a comment above a field lines up with that field).
+standaloneLinesFor : String -> List Comment -> List String
+standaloneLinesFor ln cs =
+  let ind = leadingSpaces ln
+  map (c => ind ++ commentText c) cs
+
+leadingSpaceCount : String -> Int
+leadingSpaceCount s = leadingSpaceCountGo (stringToChars s) 0 (stringLength s)
+
+leadingSpaceCountGo : Array Char -> Int -> Int -> Int
+leadingSpaceCountGo src i n
+  | i >= n = i
+  | charAt src i == ' ' = leadingSpaceCountGo src (i + 1) n
+  | otherwise = i
+
+leadingSpaces : String -> String
+leadingSpaces s = spacesN (leadingSpaceCount s)
+
+spacesN : Int -> String
+spacesN n
+  | n <= 0 = ""
+  | otherwise = " " ++ spacesN (n - 1)
 
 -- Drop the consumed comments from the pending stream (order-preserving), by
 -- source line — interior comment lines are unique per output line.

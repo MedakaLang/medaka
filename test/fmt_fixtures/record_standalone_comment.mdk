@@ -1,0 +1,14 @@
+-- #829: a standalone comment block between two record fields must stay on
+-- its own lines ABOVE the field it precedes — not be torn apart into
+-- trailing comments on the WRONG (unrelated) fields. Mixes trailing
+-- (same-line) comments with a 2-line standalone block to also cover the
+-- "PerRun" shape (compiler/types/typecheck.mdk) of interleaved trailing +
+-- standalone comments in the same record.
+data Cfg = Cfg {
+    alpha : Int,  -- comment about alpha
+    beta : Int,
+    -- a standalone comment block describing the NEXT field,
+    -- spanning two lines.
+    gamma : Int,
+    delta : Int  -- comment about delta
+  }

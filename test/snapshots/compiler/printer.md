@@ -1,5 +1,5 @@
 # META
-source_lines=1858
+source_lines=1952
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -251,6 +251,40 @@ go col ((Item _ _ (LineComment s))::z) =
 
 export render : Doc -> String
 render doc = stringConcat (go 0 [Item 0 Break doc])
+
+-- Render a Doc UNCONDITIONALLY flat — every Group/FlatGroup/Line/Softline
+-- takes its flat form regardless of width, ignoring `fits` entirely.  Used
+-- for a `match`/`case` SCRUTINEE (see `matchScrutineeDoc` below): the
+-- layout pass's `opener` flag (LAYOUT-BRACKETS §6.1, `compiler/frontend/
+-- lexer.mdk`) stays armed from the `match` keyword through any bracket the
+-- scrutinee itself opens, so the FIRST newline a wrapped scrutinee would
+-- emit — e.g. inside a wrapped tuple `match (a,\n  b, ...)` — is misread as
+-- arming match's own ARMS block rather than staying a free-form bracket
+-- continuation.  The parser then rejects the very next `,` it sees
+-- ("unexpected `,`; expected a dedent") — fmt emitting output its own
+-- parser can't read back (#932).  A wrapped scrutinee is layout-UNSAFE in
+-- general (any bracket-interior newline can trip it), so scrutinees are
+-- kept flat unconditionally rather than narrowly patching the tuple case.
+goFlat : List Doc -> List String
+goFlat [] = []
+goFlat (Nil::z) = goFlat z
+goFlat ((Text s)::z) = s :: goFlat z
+goFlat (Line::z) = " " :: goFlat z
+goFlat (Softline::z) = goFlat z
+goFlat (Hardline::z) = " " :: goFlat z
+goFlat ((Cat a b)::z) = goFlat (a :: b::z)
+goFlat ((Nest _ d)::z) = goFlat (d::z)
+goFlat ((Group d)::z) = goFlat (d::z)
+goFlat ((FlatGroup d)::z) = goFlat (d::z)
+goFlat ((FlatAlt _ b)::z) = goFlat (b::z)
+goFlat ((LineComment s)::z) = "  " ++ s :: goFlat z
+
+renderFlat : Doc -> String
+renderFlat d = stringConcat (goFlat [d])
+
+-- A match/case scrutinee Doc, forced flat for the layout-safety reason above.
+matchScrutineeDoc : Doc -> Doc
+matchScrutineeDoc d = text (renderFlat d)
 
 -- ── Literals ──────────────────────────────────────
 
@@ -661,7 +695,7 @@ printExprRaw (EVarId n _) = text n
 printExprRaw (EMethodRef n) = text n
 printExprRaw (EDictApp n) = text n
 printExprRaw (EApp f x) =
-  Cat (printExpr precApp f) (Cat (text " ") (printExpr precPostfix x))
+  Cat (printExpr precApp f) (Cat (text " ") (appArgDoc f x))
 printExprRaw (ELam pats body) =
   Cat
     (sepBy (text " ") (map printPatAtom pats))
@@ -724,7 +758,9 @@ printExprRaw (EIndex e i _) =
     (printExpr precPostfix e)
     (Cat (text "[") (Cat (printExpr precTop i) (text "]")))
 printExprRaw (EMatch sc arms) =
-  Cat (text "match ") (Cat (printExpr precTop sc) (printMatchArms arms))
+  Cat
+    (text "match ")
+    (Cat (matchScrutineeDoc (printExpr precTop sc)) (printMatchArms arms))
 printExprRaw (EGuards arms) = printGuardArms arms
 printExprRaw (ESection (SecBare op)) = Cat (text "(") (Cat (text op) (text ")"))
 printExprRaw (ESection (SecRight op e)) =
@@ -782,6 +818,51 @@ printExprRaw (EDictAt n _) = text n
 -- ELoc is transparent: print the wrapped expr (mirror of lib/printer.ml:502
 -- `ELoc(_,e) -> print_expr_raw e`).
 printExprRaw (ELoc _ e) = printExprRaw e
+
+-- An application argument: normally atom-parenthesized by precedence
+-- (`printExpr precPostfix`), EXCEPT a TIGHT negative numeric literal
+-- (`f -1`) when the whole application's HEAD is non-numeric — printed bare,
+-- not parenthesized (#142).  Mirrors the parser's Rule C exactly
+-- (`appArg`/`negLitArg`/`headIsNumeric`, `compiler/frontend/parser.mdk`):
+-- with a non-numeric head, `f -1` parses AS an application to the literal
+-- `-1`.  `fmt` rendering it as `f (-1)` instead reparses through the general
+-- unary-minus atom path to a DIFFERENT node (`EUnOp "-" (ELit (LInt 1))`) —
+-- a formatter silently changing the parse.  Bare is what round-trips back
+-- to the SAME node the parser built the first time.
+appArgDoc : Expr -> Expr -> Doc
+appArgDoc f x =
+  if isTightNegLitArg x && not (headIsNumericHead (appSpineHead f)) then
+    printExprRaw (stripLocE x)
+  else
+    printExpr precPostfix x
+
+stripLocE : Expr -> Expr
+stripLocE (ELoc _ e) = stripLocE e
+stripLocE e = e
+
+isTightNegLitArg : Expr -> Bool
+isTightNegLitArg e = isTightNegLitArgS (stripLocE e)
+
+isTightNegLitArgS : Expr -> Bool
+isTightNegLitArgS (ELit l) = isNegLit l
+isTightNegLitArgS (ENumLit n _ _ _) = n < 0
+isTightNegLitArgS _ = False
+
+-- Walk down the (left-associated) application spine to its ultimate head,
+-- mirroring the parser's `headIsNumeric` check, which is decided ONCE from
+-- the outermost head and applies to every argument position in the spine.
+appSpineHead : Expr -> Expr
+appSpineHead e = appSpineHeadS (stripLocE e)
+
+appSpineHeadS : Expr -> Expr
+appSpineHeadS (EApp g _) = appSpineHead g
+appSpineHeadS e = e
+
+headIsNumericHead : Expr -> Bool
+headIsNumericHead (ENumLit _ _ _ _) = True
+headIsNumericHead (ELit (LInt _)) = True
+headIsNumericHead (ELit (LFloat _)) = True
+headIsNumericHead _ = False
 
 -- `let [isMut] f args = body in e2` — coalesce the lambda spine for `let f = …`.
 printELet : Bool -> Bool -> Pat -> Expr -> Expr -> Doc
@@ -1124,19 +1205,32 @@ printAppSpine e =
       if isBreakableArg arg then
         Cat (printExpr precApp head) (Cat (text " ") (breakableArg arg))
       else
-        group (Nest 2 (Cat (printExpr precApp head) (Cat Line (printExpr precPostfix arg))))
+        group (Nest 2 (Cat (printExpr precApp head) (Cat Line (appArgDocH head arg))))
     (head, args) =>
-      let tail = concatD (map (a => Cat Line (spineArg a)) args)
+      let tail = concatD (map (a => Cat Line (spineArg head a)) args)
       group (Nest 2 (Cat (printExpr precApp head) tail))
+
+-- Like `appArgDoc`, but `h` is already the ultimate spine head (as `collectApp`
+-- hands it to `printAppSpine`'s callers) rather than the immediate `f` of one
+-- EApp node — so no further `appSpineHead` walk is needed.  See `appArgDoc`'s
+-- comment on `printExprRaw (EApp f x)` for why this bare-vs-parenthesized
+-- choice exists (#142).
+appArgDocH : Expr -> Expr -> Doc
+appArgDocH h arg =
+  if isTightNegLitArg arg && not (headIsNumericHead (appSpineHead h)) then
+    printExprRaw (stripLocE arg)
+  else
+    printExpr precPostfix arg
 
 -- A multi-arg-spine argument: a NESTED application is parenthesized and rendered
 -- through printAppSpine so its own spine can break when over-width (otherwise a
 -- wide nested-call argument would overflow its single line).  Anything else
--- renders flat at postfix precedence, unchanged.
-spineArg : Expr -> Doc
-spineArg (ELoc _ e) = spineArg e
-spineArg (EApp f x) = Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
-spineArg e = printExpr precPostfix e
+-- renders flat at postfix precedence (via `appArgDocH`, #142), unchanged.
+spineArg : Expr -> Expr -> Doc
+spineArg h (ELoc _ e) = spineArg h e
+spineArg _ (EApp f x) =
+  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+spineArg h e = appArgDocH h e
 
 -- A single application argument worth keeping inline with its head: a lambda
 -- (whose body we can fold across lines) or a nested application (its own spine
@@ -1939,6 +2033,23 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "LineComment" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EApp (EVar "go") (EBinOp "+" (EBinOp "+" (EVar "col") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "s")))) (EVar "z"))))
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
 (DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
+(DTypeSig false "goFlat" (TyFun (TyApp (TyCon "List") (TyCon "Doc")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "goFlat" ((PList)) (EListLit))
+(DFunDef false "goFlat" ((PCons (PCon "Nil") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))
+(DFunDef false "goFlat" ((PCons (PCon "Text" (PVar "s")) (PVar "z"))) (EBinOp "::" (EVar "s") (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Line") (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Softline") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))
+(DFunDef false "goFlat" ((PCons (PCon "Hardline") (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Cat" (PVar "a") (PVar "b")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "z")))))
+(DFunDef false "goFlat" ((PCons (PCon "Nest" PWild (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Group" (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "FlatGroup" (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "FlatAlt" PWild (PVar "b")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "b") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "LineComment" (PVar "s")) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EVar "goFlat") (EVar "z"))))
+(DTypeSig false "renderFlat" (TyFun (TyCon "Doc") (TyCon "String")))
+(DFunDef false "renderFlat" ((PVar "d")) (EApp (EVar "stringConcat") (EApp (EVar "goFlat") (EListLit (EVar "d")))))
+(DTypeSig false "matchScrutineeDoc" (TyFun (TyCon "Doc") (TyCon "Doc")))
+(DFunDef false "matchScrutineeDoc" ((PVar "d")) (EApp (EVar "text") (EApp (EVar "renderFlat") (EVar "d"))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
@@ -2135,7 +2246,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EMethodRef" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EDictApp" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
-(DFunDef false "printExprRaw" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "x")))))
+(DFunDef false "printExprRaw" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "appArgDoc") (EVar "f")) (EVar "x")))))
 (DFunDef false "printExprRaw" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "map") (EVar "printPatAtom")) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body")))))
 (DFunDef false "printExprRaw" ((PCon "ELet" (PVar "isMut") (PVar "isf") (PVar "pat") (PVar "rhs") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "printELet") (EVar "isMut")) (EVar "isf")) (EVar "pat")) (EVar "rhs")) (EVar "e2")))
 (DFunDef false "printExprRaw" ((PCon "ELetGroup" (PVar "bindings") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "where")))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EVar "letGroupClauses") (EVar "bindings"))))))))
@@ -2152,7 +2263,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " { ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EApp (EVar "printExpr") (EVar "precTop"))) (EVar "es")))) (EApp (EVar "text") (ELit (LString " }")))))))
 (DFunDef false "printExprRaw" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EApp (EVar "delimited") (ELit (LString "("))) (ELit (LString ")"))) (EApp (EApp (EVar "map") (EApp (EVar "printExpr") (EVar "precTop"))) (EVar "es"))))
 (DFunDef false "printExprRaw" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
-(DFunDef false "printExprRaw" ((PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "match ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc"))) (EApp (EVar "printMatchArms") (EVar "arms")))))
+(DFunDef false "printExprRaw" ((PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "match ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "matchScrutineeDoc") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc")))) (EApp (EVar "printMatchArms") (EVar "arms")))))
 (DFunDef false "printExprRaw" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "printGuardArms") (EVar "arms")))
 (DFunDef false "printExprRaw" ((PCon "ESection" (PCon "SecBare" (PVar "op")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printExprRaw" ((PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "e")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (EApp (EVar "text") (ELit (LString ")"))))))))
@@ -2171,6 +2282,27 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "printExprRaw") (EVar "e")))
+(DTypeSig false "appArgDoc" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "appArgDoc" ((PVar "f") (PVar "x")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "x")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "f"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "x"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "x"))))
+(DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
+(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
+(DTypeSig false "isTightNegLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isTightNegLitArg" ((PVar "e")) (EApp (EVar "isTightNegLitArgS") (EApp (EVar "stripLocE") (EVar "e"))))
+(DTypeSig false "isTightNegLitArgS" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isTightNegLitArgS" ((PCon "ELit" (PVar "l"))) (EApp (EVar "isNegLit") (EVar "l")))
+(DFunDef false "isTightNegLitArgS" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
+(DFunDef false "isTightNegLitArgS" (PWild) (EVar "False"))
+(DTypeSig false "appSpineHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "appSpineHead" ((PVar "e")) (EApp (EVar "appSpineHeadS") (EApp (EVar "stripLocE") (EVar "e"))))
+(DTypeSig false "appSpineHeadS" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "appSpineHeadS" ((PCon "EApp" (PVar "g") PWild)) (EApp (EVar "appSpineHead") (EVar "g")))
+(DFunDef false "appSpineHeadS" ((PVar "e")) (EVar "e"))
+(DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
+(DFunDef false "headIsNumericHead" (PWild) (EVar "False"))
 (DTypeSig false "printELet" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))))
 (DFunDef false "printELet" ((PVar "isMut") (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "rhs") (PVar "e2")) (EBlock (DoLet false false (PVar "argsBody") (EApp (EApp (EVar "unwrapLams") (EListLit)) (EVar "rhs"))) (DoExpr (EMatch (EVar "argsBody") (arm (PTuple (PVar "args") (PVar "body")) () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "isMut") (ELit (LString "let mut ")) (ELit (LString "let "))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "args")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " in ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e2")))))))))))))
 (DFunDef false "printELet" ((PVar "isMut") PWild (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e1"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " in ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e2")))))))))
@@ -2289,11 +2421,13 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printDeclBlockCommented" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body")) (PVar "comments")) (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "header")) (EApp (EApp (EVar "printBlockCommentedRhs") (EVar "body")) (EVar "comments"))))))
 (DFunDef false "printDeclBlockCommented" ((PVar "d") PWild) (EApp (EVar "printDecl") (EVar "d")))
 (DTypeSig false "printAppSpine" (TyFun (TyCon "Expr") (TyCon "Doc")))
-(DFunDef false "printAppSpine" ((PVar "e")) (EBlock (DoLet false false (PVar "headArgs") (EApp (EApp (EVar "collectApp") (EListLit)) (EVar "e"))) (DoExpr (EMatch (EVar "headArgs") (arm (PTuple (PVar "head") (PList)) () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (arm (PTuple (PVar "head") (PList (PVar "arg"))) () (EIf (EApp (EVar "isBreakableArg") (EVar "arg")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "breakableArg") (EVar "arg")))) (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg")))))))) (arm (PTuple (PVar "head") (PVar "args")) () (EBlock (DoLet false false (PVar "tail") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "spineArg") (EVar "a"))))) (EVar "args")))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EVar "tail")))))))))))
-(DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyCon "Doc")))
-(DFunDef false "spineArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "spineArg") (EVar "e")))
-(DFunDef false "spineArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
-(DFunDef false "spineArg" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e")))
+(DFunDef false "printAppSpine" ((PVar "e")) (EBlock (DoLet false false (PVar "headArgs") (EApp (EApp (EVar "collectApp") (EListLit)) (EVar "e"))) (DoExpr (EMatch (EVar "headArgs") (arm (PTuple (PVar "head") (PList)) () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (arm (PTuple (PVar "head") (PList (PVar "arg"))) () (EIf (EApp (EVar "isBreakableArg") (EVar "arg")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "breakableArg") (EVar "arg")))) (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "appArgDocH") (EVar "head")) (EVar "arg")))))))) (arm (PTuple (PVar "head") (PVar "args")) () (EBlock (DoLet false false (PVar "tail") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "spineArg") (EVar "head")) (EVar "a"))))) (EVar "args")))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EVar "tail")))))))))))
+(DTypeSig false "appArgDocH" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "appArgDocH" ((PVar "h") (PVar "arg")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "arg")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "h"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "arg"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg"))))
+(DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "spineArg" ((PVar "h") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "spineArg") (EVar "h")) (EVar "e")))
+(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "spineArg" ((PVar "h") (PVar "e")) (EApp (EApp (EVar "appArgDocH") (EVar "h")) (EVar "e")))
 (DTypeSig false "isBreakableArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBreakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isBreakableArg") (EVar "e")))
 (DFunDef false "isBreakableArg" ((PCon "ELam" PWild PWild)) (EVar "True"))
@@ -2604,6 +2738,23 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "go" ((PVar "col") (PCons (PCon "Item" PWild PWild (PCon "LineComment" (PVar "s"))) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EApp (EVar "go") (EBinOp "+" (EBinOp "+" (EVar "col") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "s")))) (EVar "z"))))
 (DTypeSig true "render" (TyFun (TyCon "Doc") (TyCon "String")))
 (DFunDef false "render" ((PVar "doc")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "go") (ELit (LInt 0))) (EListLit (EApp (EApp (EApp (EVar "Item") (ELit (LInt 0))) (EVar "Break")) (EVar "doc"))))))
+(DTypeSig false "goFlat" (TyFun (TyApp (TyCon "List") (TyCon "Doc")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "goFlat" ((PList)) (EListLit))
+(DFunDef false "goFlat" ((PCons (PCon "Nil") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))
+(DFunDef false "goFlat" ((PCons (PCon "Text" (PVar "s")) (PVar "z"))) (EBinOp "::" (EVar "s") (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Line") (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Softline") (PVar "z"))) (EApp (EVar "goFlat") (EVar "z")))
+(DFunDef false "goFlat" ((PCons (PCon "Hardline") (PVar "z"))) (EBinOp "::" (ELit (LString " ")) (EApp (EVar "goFlat") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Cat" (PVar "a") (PVar "b")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "a") (EBinOp "::" (EVar "b") (EVar "z")))))
+(DFunDef false "goFlat" ((PCons (PCon "Nest" PWild (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "Group" (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "FlatGroup" (PVar "d")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "d") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "FlatAlt" PWild (PVar "b")) (PVar "z"))) (EApp (EVar "goFlat") (EBinOp "::" (EVar "b") (EVar "z"))))
+(DFunDef false "goFlat" ((PCons (PCon "LineComment" (PVar "s")) (PVar "z"))) (EBinOp "::" (EBinOp "++" (ELit (LString "  ")) (EVar "s")) (EApp (EVar "goFlat") (EVar "z"))))
+(DTypeSig false "renderFlat" (TyFun (TyCon "Doc") (TyCon "String")))
+(DFunDef false "renderFlat" ((PVar "d")) (EApp (EVar "stringConcat") (EApp (EVar "goFlat") (EListLit (EVar "d")))))
+(DTypeSig false "matchScrutineeDoc" (TyFun (TyCon "Doc") (TyCon "Doc")))
+(DFunDef false "matchScrutineeDoc" ((PVar "d")) (EApp (EVar "text") (EApp (EVar "renderFlat") (EVar "d"))))
 (DTypeSig false "escapeCharLit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeCharLit" ((PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "'"))) (ELit (LString "\\'")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\\"))) (ELit (LString "\\\\")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\n"))) (ELit (LString "\\n")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\t"))) (ELit (LString "\\t")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\r"))) (ELit (LString "\\r")) (EIf (EBinOp "==" (EVar "c") (ELit (LString "\0"))) (ELit (LString "\\0")) (EIf (EVar "otherwise") (EVar "c") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "escStringLit" (TyFun (TyCon "String") (TyCon "String")))
@@ -2800,7 +2951,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EMethodRef" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EDictApp" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
-(DFunDef false "printExprRaw" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "x")))))
+(DFunDef false "printExprRaw" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "appArgDoc") (EVar "f")) (EVar "x")))))
 (DFunDef false "printExprRaw" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EMethodRef "map") (EVar "printPatAtom")) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " => ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body")))))
 (DFunDef false "printExprRaw" ((PCon "ELet" (PVar "isMut") (PVar "isf") (PVar "pat") (PVar "rhs") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "printELet") (EVar "isMut")) (EVar "isf")) (EVar "pat")) (EVar "rhs")) (EVar "e2")))
 (DFunDef false "printExprRaw" ((PCon "ELetGroup" (PVar "bindings") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body"))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "where")))) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EVar "letGroupClauses") (EVar "bindings"))))))))
@@ -2817,7 +2968,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " { ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "printExpr") (EVar "precTop"))) (EVar "es")))) (EApp (EVar "text") (ELit (LString " }")))))))
 (DFunDef false "printExprRaw" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EApp (EVar "delimited") (ELit (LString "("))) (ELit (LString ")"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "printExpr") (EVar "precTop"))) (EVar "es"))))
 (DFunDef false "printExprRaw" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
-(DFunDef false "printExprRaw" ((PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "match ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc"))) (EApp (EVar "printMatchArms") (EVar "arms")))))
+(DFunDef false "printExprRaw" ((PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "match ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "matchScrutineeDoc") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc")))) (EApp (EVar "printMatchArms") (EVar "arms")))))
 (DFunDef false "printExprRaw" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "printGuardArms") (EVar "arms")))
 (DFunDef false "printExprRaw" ((PCon "ESection" (PCon "SecBare" (PVar "op")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DFunDef false "printExprRaw" ((PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "e")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (EApp (EVar "text") (ELit (LString ")"))))))))
@@ -2836,6 +2987,27 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printExprRaw" ((PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "printExprRaw") (EVar "e")))
+(DTypeSig false "appArgDoc" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "appArgDoc" ((PVar "f") (PVar "x")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "x")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "f"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "x"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "x"))))
+(DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
+(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
+(DTypeSig false "isTightNegLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isTightNegLitArg" ((PVar "e")) (EApp (EVar "isTightNegLitArgS") (EApp (EVar "stripLocE") (EVar "e"))))
+(DTypeSig false "isTightNegLitArgS" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isTightNegLitArgS" ((PCon "ELit" (PVar "l"))) (EApp (EVar "isNegLit") (EVar "l")))
+(DFunDef false "isTightNegLitArgS" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EBinOp "<" (EVar "n") (ELit (LInt 0))))
+(DFunDef false "isTightNegLitArgS" (PWild) (EVar "False"))
+(DTypeSig false "appSpineHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "appSpineHead" ((PVar "e")) (EApp (EVar "appSpineHeadS") (EApp (EVar "stripLocE") (EVar "e"))))
+(DTypeSig false "appSpineHeadS" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "appSpineHeadS" ((PCon "EApp" (PVar "g") PWild)) (EApp (EVar "appSpineHead") (EVar "g")))
+(DFunDef false "appSpineHeadS" ((PVar "e")) (EVar "e"))
+(DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
+(DFunDef false "headIsNumericHead" (PWild) (EVar "False"))
 (DTypeSig false "printELet" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc")))))))
 (DFunDef false "printELet" ((PVar "isMut") (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "rhs") (PVar "e2")) (EBlock (DoLet false false (PVar "argsBody") (EApp (EApp (EVar "unwrapLams") (EListLit)) (EVar "rhs"))) (DoExpr (EMatch (EVar "argsBody") (arm (PTuple (PVar "args") (PVar "body")) () (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "isMut") (ELit (LString "let mut ")) (ELit (LString "let "))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "f"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "args")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " in ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e2")))))))))))))
 (DFunDef false "printELet" ((PVar "isMut") PWild (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e1"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " in ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e2")))))))))
@@ -2954,11 +3126,13 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "printDeclBlockCommented" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body")) (PVar "comments")) (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "header")) (EApp (EApp (EVar "printBlockCommentedRhs") (EVar "body")) (EVar "comments"))))))
 (DFunDef false "printDeclBlockCommented" ((PVar "d") PWild) (EApp (EVar "printDecl") (EVar "d")))
 (DTypeSig false "printAppSpine" (TyFun (TyCon "Expr") (TyCon "Doc")))
-(DFunDef false "printAppSpine" ((PVar "e")) (EBlock (DoLet false false (PVar "headArgs") (EApp (EApp (EVar "collectApp") (EListLit)) (EVar "e"))) (DoExpr (EMatch (EVar "headArgs") (arm (PTuple (PVar "head") (PList)) () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (arm (PTuple (PVar "head") (PList (PVar "arg"))) () (EIf (EApp (EVar "isBreakableArg") (EVar "arg")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "breakableArg") (EVar "arg")))) (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg")))))))) (arm (PTuple (PVar "head") (PVar "args")) () (EBlock (DoLet false false (PVar "tail") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "spineArg") (EVar "a"))))) (EVar "args")))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EVar "tail")))))))))))
-(DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyCon "Doc")))
-(DFunDef false "spineArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "spineArg") (EVar "e")))
-(DFunDef false "spineArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
-(DFunDef false "spineArg" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e")))
+(DFunDef false "printAppSpine" ((PVar "e")) (EBlock (DoLet false false (PVar "headArgs") (EApp (EApp (EVar "collectApp") (EListLit)) (EVar "e"))) (DoExpr (EMatch (EVar "headArgs") (arm (PTuple (PVar "head") (PList)) () (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))) (arm (PTuple (PVar "head") (PList (PVar "arg"))) () (EIf (EApp (EVar "isBreakableArg") (EVar "arg")) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "breakableArg") (EVar "arg")))) (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "appArgDocH") (EVar "head")) (EVar "arg")))))))) (arm (PTuple (PVar "head") (PVar "args")) () (EBlock (DoLet false false (PVar "tail") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EApp (EVar "spineArg") (EVar "head")) (EVar "a"))))) (EVar "args")))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precApp")) (EVar "head"))) (EVar "tail")))))))))))
+(DTypeSig false "appArgDocH" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "appArgDocH" ((PVar "h") (PVar "arg")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "arg")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "h"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "arg"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg"))))
+(DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
+(DFunDef false "spineArg" ((PVar "h") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "spineArg") (EVar "h")) (EVar "e")))
+(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "spineArg" ((PVar "h") (PVar "e")) (EApp (EApp (EVar "appArgDocH") (EVar "h")) (EVar "e")))
 (DTypeSig false "isBreakableArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBreakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isBreakableArg") (EVar "e")))
 (DFunDef false "isBreakableArg" ((PCon "ELam" PWild PWild)) (EVar "True"))
