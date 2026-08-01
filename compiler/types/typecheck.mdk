@@ -19517,24 +19517,29 @@ modInScope : String -> OrdMap Unit -> Bool
 modInScope mid scopeMods = mid == "" || omHasKey mid scopeMods
 
 -- attribute each fn DEFINED in [prog] that carries a funConstraintsRef entry to [mid].
--- Body is generic over the entry's payload — shared by `attributeModuleArrIfaces`
--- below (#602: was an in-file structural duplicate at the arity/ifaces
--- instantiations; now one generic definition).
-attributeModuleGeneric : String -> List Decl -> List (String, List a) -> List ((String, String), List a)
-attributeModuleGeneric mid prog entries =
+attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
+-- Structural duplicate of `attributeModuleArrIfaces` below (same body, two
+-- payload instantiations); NOT de-duplicated here because this is a
+-- tooling-scoped PR and this is language internals — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
+attributeModuleArities mid prog entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
   map
     (e => ((mid, fst e), snd e))
     (filterList (e => omHasKey (fst e) progNames) entries)
 
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArities = attributeModuleGeneric
-
 -- WS-2/D2: ifaces analog of attributeModuleArities — attribute each fn DEFINED in [prog]
 -- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
 -- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
-attributeModuleArrIfaces = attributeModuleGeneric
+-- Structural duplicate of `attributeModuleArities` above; deferred
+-- de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
+attributeModuleArrIfaces mid prog entries =
+  let progNames = namesToSet (declTopFnNames prog) omEmpty
+  map
+    (e => ((mid, fst e), snd e))
+    (filterList (e => omHasKey (fst e) progNames) entries)
 
 -- WS-2/D2 method analog: attribute each method whose INTERFACE is declared in [prog]
 -- (carrying a methodConstraintsRef entry) to [mid].  Keyed by the interface's module —

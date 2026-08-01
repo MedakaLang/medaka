@@ -1,5 +1,5 @@
 # META
-source_lines=19788
+source_lines=19793
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -19521,24 +19521,29 @@ modInScope : String -> OrdMap Unit -> Bool
 modInScope mid scopeMods = mid == "" || omHasKey mid scopeMods
 
 -- attribute each fn DEFINED in [prog] that carries a funConstraintsRef entry to [mid].
--- Body is generic over the entry's payload — shared by `attributeModuleArrIfaces`
--- below (#602: was an in-file structural duplicate at the arity/ifaces
--- instantiations; now one generic definition).
-attributeModuleGeneric : String -> List Decl -> List (String, List a) -> List ((String, String), List a)
-attributeModuleGeneric mid prog entries =
+attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
+-- Structural duplicate of `attributeModuleArrIfaces` below (same body, two
+-- payload instantiations); NOT de-duplicated here because this is a
+-- tooling-scoped PR and this is language internals — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
+attributeModuleArities mid prog entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
   map
     (e => ((mid, fst e), snd e))
     (filterList (e => omHasKey (fst e) progNames) entries)
 
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArities = attributeModuleGeneric
-
 -- WS-2/D2: ifaces analog of attributeModuleArities — attribute each fn DEFINED in [prog]
 -- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
 -- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
-attributeModuleArrIfaces = attributeModuleGeneric
+-- Structural duplicate of `attributeModuleArities` above; deferred
+-- de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
+attributeModuleArrIfaces mid prog entries =
+  let progNames = namesToSet (declTopFnNames prog) omEmpty
+  map
+    (e => ((mid, fst e), snd e))
+    (filterList (e => omHasKey (fst e) progNames) entries)
 
 -- WS-2/D2 method analog: attribute each method whose INTERFACE is declared in [prog]
 -- (carrying a methodConstraintsRef entry) to [mid].  Keyed by the interface's module —
@@ -23946,12 +23951,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "scopeMethodArities" ((PVar "promotedMQ") (PVar "scopeMods")) (EBlock (DoLet false false (PVar "resolvedNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")))) (EVar "promotedMQ")))) (EVar "omEmpty"))) (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "||" (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "resolvedNames")))))) (EVar "promotedMQ"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EVar "kept")))))
 (DTypeSig false "modInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
 (DFunDef false "modInScope" ((PVar "mid") (PVar "scopeMods")) (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "scopeMods"))))
-(DTypeSig false "attributeModuleGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a"))))))))
-(DFunDef false "attributeModuleGeneric" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeModuleArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))))
-(DFunDef false "attributeModuleArities" () (EVar "attributeModuleGeneric"))
+(DFunDef false "attributeModuleArities" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeModuleArrIfaces" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "attributeModuleArrIfaces" () (EVar "attributeModuleGeneric"))
+(DFunDef false "attributeModuleArrIfaces" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeMethodModuleArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))))
 (DFunDef false "attributeMethodModuleArities" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progMethods") (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progMethods")))) (EVar "entries"))))))
 (DTypeSig false "declTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -28159,12 +28162,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "scopeMethodArities" ((PVar "promotedMQ") (PVar "scopeMods")) (EBlock (DoLet false false (PVar "resolvedNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")))) (EVar "promotedMQ")))) (EVar "omEmpty"))) (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "||" (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "resolvedNames")))))) (EVar "promotedMQ"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EVar "kept")))))
 (DTypeSig false "modInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
 (DFunDef false "modInScope" ((PVar "mid") (PVar "scopeMods")) (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EVar "scopeMods"))))
-(DTypeSig false "attributeModuleGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a"))))))))
-(DFunDef false "attributeModuleGeneric" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeModuleArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))))
-(DFunDef false "attributeModuleArities" () (EVar "attributeModuleGeneric"))
+(DFunDef false "attributeModuleArities" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeModuleArrIfaces" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "attributeModuleArrIfaces" () (EVar "attributeModuleGeneric"))
+(DFunDef false "attributeModuleArrIfaces" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progNames")))) (EVar "entries"))))))
 (DTypeSig false "attributeMethodModuleArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))))
 (DFunDef false "attributeMethodModuleArities" ((PVar "mid") (PVar "prog") (PVar "entries")) (EBlock (DoLet false false (PVar "progMethods") (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (ETuple (EVar "mid") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "progMethods")))) (EVar "entries"))))))
 (DTypeSig false "declTopFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))

@@ -104,7 +104,6 @@ attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
-attributeModuleGeneric : String -> List Decl -> List (String, List a) -> List ((String, String), List a)
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 axisSub : List (String, Param) -> (String, Param) -> Bool
 axisUnion : List (String, Param) -> List (String, Param) -> List String

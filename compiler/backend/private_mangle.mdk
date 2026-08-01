@@ -416,6 +416,9 @@ coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
   None => []
 
 coreEntry : (String, String) -> List (String, String)
+-- Structural duplicate of `originEntryPair` below; NOT de-duplicated here because
+-- this is a tooling-scoped PR and this is the emitter — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
 coreEntry (n, definer)
   | isExcludedName n = []
   | otherwise = [(n, mangledName definer n)]
@@ -474,12 +477,13 @@ originEntryAs exports origin local
     Some definer => [(local, mangledName definer origin)]
     None => []
 
--- a wildcard import iterates the (name, definer) pairs directly.  Same body as
--- `coreEntry` (#602: an in-file structural duplicate) — kept as its own named
--- binding since the two are reached from different call sites with different
--- documented contracts (core-export enumeration vs. per-pair mapping).
+-- a wildcard import iterates the (name, definer) pairs directly.
 originEntryPair : (String, String) -> List (String, String)
-originEntryPair = coreEntry
+-- Structural duplicate of `coreEntry` above; deferred de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
+originEntryPair (n, definer)
+  | isExcludedName n = []
+  | otherwise = [(n, mangledName definer n)]
 
 -- a module alias iterates the same pairs, keying each under `A.<name>`.
 aliasEntryPair : String -> (String, String) -> List (String, String)
