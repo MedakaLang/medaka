@@ -22,7 +22,7 @@ main = println (c (Pair 1 2))
 -- ⚠️ THIS NOTE IS DELIBERATELY AT THE BOTTOM.  The golden above pins the
 -- T-CONFLICTING-IMPL RANGE by absolute line number, so a note added to the header
 -- would shift it and conflate "the caret moved" with the change that actually
--- happened here.  (test/AGENTS.md's fixture-line-count trap, paid for on 2026-07-31.)
+-- happened here.  (AGENTS.md's fixture-line-count trap, paid for on 2026-07-31.)
 --
 -- Since #1155 (F-3c) this file emits TWO diagnostics and the golden carries both.
 -- The second one is the pre-existing T-CONFLICTING-IMPL this fixture is about; the
