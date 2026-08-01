@@ -504,6 +504,22 @@ on purpose). Re-install after a fresh clone:
   snapshot-check` first**; to bless a moved snapshot, `sh test/diff_compiler_snapshot_frontend.sh
   --bless <file.mdk>` then re-stage `test/snapshots/` and read the diff (that diff is the real
   review gate).
+  ⚠️ **This check reads the WORKING TREE, not the index** — a `--bless` you forgot to
+  `git add` used to be invisible to it (it "passed" because the disk looked current, while the
+  commit about to be made still carried the OLD golden — a SILENT version of the exact hazard
+  "bless in the same commit" exists to prevent). Fixed (#1179): an unstaged snapshot diff now
+  fails check 4 outright, unconditionally, before the suite runs — `git add` it and re-commit.
+  ⚠️ **"bless in the same commit" and "goldens are re-cut in their own terminal commit" are
+  only in tension for a source-only commit whose golden isn't blessed yet** — that legitimately
+  fails check 4, since the golden for the staged source is by construction not staged. That's
+  correct: the property check 4 protects (main never observes a moved source with a stale
+  golden) is a **per-push**, not per-commit, property — the merge queue tests the PR's merged
+  result, not each intermediate commit (§ merge queue above) — so a source commit followed by a
+  separate terminal golden-recut commit *within the same PR* already satisfies it.
+  **`PRECOMMIT_SNAPSHOT_DEFER=1 git commit ...`** opts that one commit alone out of check 4 (fmt/
+  lint/lextok stay live — unlike `--no-verify`, which drops all four) for exactly that shape;
+  CI's snapshot shard still enforces the real gate against the merged tree, so a forgotten golden
+  still reds the PR. Do not reach for `--no-verify` for this case anymore.
 - **Lextok** — OPPORTUNISTIC: only runs when `test/bin/lex_main` already exists (this hook
   never builds an oracle), scoped to staged `.mdk` files that already have a sibling
   `.lextok.golden`. Gates on `test/diff_compiler_lex_files.sh`. Remedy for a stale golden:
@@ -689,10 +705,14 @@ narrative lives at the link.
   `ci.yml`) live in the `wasm/` subdir, **not** beside the other gates; assuming the flat path cost
   an agent two failed invocations on 2026-07-16.
 - ⚠️ **The compiler's own sources are IN the snapshot corpus, so a source change MOVES ITS
-  OWN GOLDEN. Bless it in the SAME commit.** Push the source without the golden and `main`
-  goes red, and the hook then forces the *next* agent to bless a file they never touched —
-  the exact "rubber-stamp someone else's regression" hazard blessing exists to prevent. Bless
-  by NAMING the path; `--bless` refuses to rubber-stamp a whole corpus.
+  OWN GOLDEN. Land the golden in the SAME PR, before the merge queue runs — same commit is
+  the default, but a separate terminal golden-recut commit is also fine** (that's the
+  `PRECOMMIT_SNAPSHOT_DEFER=1` shape, #1179 — see the pre-commit hook section below). What
+  must never happen is `main` observing a moved source with no golden at all: push the
+  source with no golden anywhere in the PR and `main` goes red, and the hook then forces the
+  *next* agent to bless a file they never touched — the exact "rubber-stamp someone else's
+  regression" hazard blessing exists to prevent. Bless by NAMING the path; `--bless` refuses
+  to rubber-stamp a whole corpus.
   ⚠️ **Bless via the GATE, not the CLI:** `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>`
   (e.g. `…_frontend.sh`, `…_eval.sh`, `…_types.sh`). **`medaka snapshot --bless <compiler source>`
   is a dead end** — it looks for the `.md` next to the source and fails with *"no snapshot …

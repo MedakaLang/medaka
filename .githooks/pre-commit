@@ -75,6 +75,12 @@
 #
 # Note: this checks the WORKING-TREE copy of each staged file (the normal
 # full-staging case). Partially-staged files are checked as they exist on disk.
+#
+# #1179: check 4 specifically also verifies staging state directly (an unstaged
+# snapshot diff fails outright, before the suite even runs — see check 4 below), because
+# for that one check "current on disk" is not the same claim as "part of this commit".
+# PRECOMMIT_SNAPSHOT_DEFER=1 skips check 4 alone for a commit that intentionally defers
+# its golden to a later commit in the same PR; fmt/lint/lextok stay live either way.
 set -u
 
 # Lint rules that BLOCK a commit. The whole tree is at 0 lint findings, so every
@@ -195,6 +201,46 @@ fi
 # a compiler change you have not rebuilt, this checks the OLD compiler's behaviour — it
 # still catches the common case it is here for (a fixture/source edit that moved a
 # `# SOURCE` section), and `make medaka` before committing makes it exact.
+#
+# #1179: `--bless` writes to the WORKING TREE, and the gate below reads the working
+# tree too (see the "Note" in the file header) — NOT the index. That means a bless you
+# forgot to `git add` is invisible to this check: it passes because the golden looks
+# current on disk, even though the commit about to be made does not contain it. That is
+# a SILENT version of exactly the hazard AGENTS.md's "bless in the same commit" rule
+# exists to prevent (main observing a moved source with a stale committed golden), so it
+# is closed unconditionally, before the (expensive) suite even runs: any snapshot file
+# with an UNSTAGED working-tree diff is refused outright — "blessed but not staged".
+snap_unstaged="$(git diff --name-only -- 'test/snapshots/*.md' 2>/dev/null)"
+if [ -n "$snap_unstaged" ] && [ -n "$snapfiles" ]; then
+  echo "" >&2
+  echo "✗ pre-commit: snapshot(s) blessed on disk but NOT staged — this commit would land" >&2
+  echo "  the moved source with the OLD golden still committed:" >&2
+  echo "" >&2
+  printf '%s\n' "$snap_unstaged" | sed 's/^/      /' >&2
+  echo "" >&2
+  echo "  git add $(printf '%s' "$snap_unstaged" | tr '\n' ' ')  and read the diff, then re-commit." >&2
+  echo "" >&2
+  exit 1
+fi
+
+# #1179: a source-only commit (golden intentionally deferred to a LATER commit in the
+# SAME PR — the "goldens are re-cut in their own terminal commit" convention) legitimately
+# fails check 4, because the golden for the staged source is, by construction, not staged
+# yet. That is real and correct — check 4 enforces a per-push property (main must never
+# observe a moved source without its golden) at per-commit granularity, and the merge
+# queue only tests the MERGED result of the whole PR (see AGENTS.md), so the property
+# still holds as long as the golden lands before the PR is enqueued. PRECOMMIT_SNAPSHOT_DEFER=1
+# opts THIS commit alone out of check 4 (fmt/lint/lextok stay live — unlike --no-verify,
+# which drops all four) for exactly that case. It is not a rubber stamp: CI's own
+# snapshot-suite shard re-runs the real gate against the merged tree regardless, so a
+# forgotten golden still reds the PR — this only defers WHEN it's checked, not WHETHER.
+if [ -n "$snapfiles" ] && [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then
+  echo "pre-commit: PRECOMMIT_SNAPSHOT_DEFER=1 — skipping check 4 (snapshot) for this commit." >&2
+  echo "pre-commit:   reminder: the golden MUST land in this PR before you enqueue the merge —" >&2
+  echo "pre-commit:   CI's snapshot shard still enforces it against the merged tree. (#1179)" >&2
+  snapfiles=""
+fi
+
 if [ -n "$snapfiles" ]; then
   snapgate="$ROOT/test/diff_compiler_snapshot_frontend.sh"
   if [ -f "$snapgate" ]; then
@@ -213,7 +259,10 @@ if [ -n "$snapfiles" ]; then
       echo "  (There is no whole-suite bless. A diagnostic-bearing section will refuse to" >&2
       echo "   bless at all: read the new message, then rm the .md and re-cut it with --new.)" >&2
       echo "" >&2
-      echo "  Bypass once:  git commit --no-verify" >&2
+      echo "  OR, if you intend the golden to land in a LATER commit in this same PR:" >&2
+      echo "      PRECOMMIT_SNAPSHOT_DEFER=1 git commit ...   (keeps fmt/lint/lextok live)" >&2
+      echo "" >&2
+      echo "  Bypass once (drops fmt/lint/lextok too):  git commit --no-verify" >&2
       echo "" >&2
       exit 1
     fi
@@ -264,8 +313,9 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint, snapshots"
+checked="fmt, lint"
 notchecked=""
+if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi
 notchecked="$notchecked .test.golden selfproc-goldens native_cli-check-goldens"
 echo "" >&2
