@@ -30,13 +30,13 @@ classify n = match n
   -5..=-1 => "lowneg"
   _ => "other"
 main =
-  let a = g (-1)
-  let b = f 10 (-1) 5
+  let a = g -1
+  let b = f 10 -1 5
   let c = 5 - 1
   let d = if True then -1 else 0
   let e = [-1, -2]
-  let k = Err (-2)
-  let m = classify (-3)
+  let k = Err -2
+  let m = classify -3
   println (a + b + c + d + sum e)
 # DESUGAR
 (DFunDef false "g" ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 100))))

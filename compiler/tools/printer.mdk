@@ -248,6 +248,40 @@ go col ((Item _ _ (LineComment s))::z) =
 export render : Doc -> String
 render doc = stringConcat (go 0 [Item 0 Break doc])
 
+-- Render a Doc UNCONDITIONALLY flat — every Group/FlatGroup/Line/Softline
+-- takes its flat form regardless of width, ignoring `fits` entirely.  Used
+-- for a `match`/`case` SCRUTINEE (see `matchScrutineeDoc` below): the
+-- layout pass's `opener` flag (LAYOUT-BRACKETS §6.1, `compiler/frontend/
+-- lexer.mdk`) stays armed from the `match` keyword through any bracket the
+-- scrutinee itself opens, so the FIRST newline a wrapped scrutinee would
+-- emit — e.g. inside a wrapped tuple `match (a,\n  b, ...)` — is misread as
+-- arming match's own ARMS block rather than staying a free-form bracket
+-- continuation.  The parser then rejects the very next `,` it sees
+-- ("unexpected `,`; expected a dedent") — fmt emitting output its own
+-- parser can't read back (#932).  A wrapped scrutinee is layout-UNSAFE in
+-- general (any bracket-interior newline can trip it), so scrutinees are
+-- kept flat unconditionally rather than narrowly patching the tuple case.
+goFlat : List Doc -> List String
+goFlat [] = []
+goFlat (Nil::z) = goFlat z
+goFlat ((Text s)::z) = s :: goFlat z
+goFlat (Line::z) = " " :: goFlat z
+goFlat (Softline::z) = goFlat z
+goFlat (Hardline::z) = " " :: goFlat z
+goFlat ((Cat a b)::z) = goFlat (a :: b::z)
+goFlat ((Nest _ d)::z) = goFlat (d::z)
+goFlat ((Group d)::z) = goFlat (d::z)
+goFlat ((FlatGroup d)::z) = goFlat (d::z)
+goFlat ((FlatAlt _ b)::z) = goFlat (b::z)
+goFlat ((LineComment s)::z) = "  " ++ s :: goFlat z
+
+renderFlat : Doc -> String
+renderFlat d = stringConcat (goFlat [d])
+
+-- A match/case scrutinee Doc, forced flat for the layout-safety reason above.
+matchScrutineeDoc : Doc -> Doc
+matchScrutineeDoc d = text (renderFlat d)
+
 -- ── Literals ──────────────────────────────────────
 
 escapeCharLit : String -> String
@@ -657,7 +691,7 @@ printExprRaw (EVarId n _) = text n
 printExprRaw (EMethodRef n) = text n
 printExprRaw (EDictApp n) = text n
 printExprRaw (EApp f x) =
-  Cat (printExpr precApp f) (Cat (text " ") (printExpr precPostfix x))
+  Cat (printExpr precApp f) (Cat (text " ") (appArgDoc f x))
 printExprRaw (ELam pats body) =
   Cat
     (sepBy (text " ") (map printPatAtom pats))
@@ -720,7 +754,9 @@ printExprRaw (EIndex e i _) =
     (printExpr precPostfix e)
     (Cat (text "[") (Cat (printExpr precTop i) (text "]")))
 printExprRaw (EMatch sc arms) =
-  Cat (text "match ") (Cat (printExpr precTop sc) (printMatchArms arms))
+  Cat
+    (text "match ")
+    (Cat (matchScrutineeDoc (printExpr precTop sc)) (printMatchArms arms))
 printExprRaw (EGuards arms) = printGuardArms arms
 printExprRaw (ESection (SecBare op)) = Cat (text "(") (Cat (text op) (text ")"))
 printExprRaw (ESection (SecRight op e)) =
@@ -778,6 +814,51 @@ printExprRaw (EDictAt n _) = text n
 -- ELoc is transparent: print the wrapped expr (mirror of lib/printer.ml:502
 -- `ELoc(_,e) -> print_expr_raw e`).
 printExprRaw (ELoc _ e) = printExprRaw e
+
+-- An application argument: normally atom-parenthesized by precedence
+-- (`printExpr precPostfix`), EXCEPT a TIGHT negative numeric literal
+-- (`f -1`) when the whole application's HEAD is non-numeric — printed bare,
+-- not parenthesized (#142).  Mirrors the parser's Rule C exactly
+-- (`appArg`/`negLitArg`/`headIsNumeric`, `compiler/frontend/parser.mdk`):
+-- with a non-numeric head, `f -1` parses AS an application to the literal
+-- `-1`.  `fmt` rendering it as `f (-1)` instead reparses through the general
+-- unary-minus atom path to a DIFFERENT node (`EUnOp "-" (ELit (LInt 1))`) —
+-- a formatter silently changing the parse.  Bare is what round-trips back
+-- to the SAME node the parser built the first time.
+appArgDoc : Expr -> Expr -> Doc
+appArgDoc f x =
+  if isTightNegLitArg x && not (headIsNumericHead (appSpineHead f)) then
+    printExprRaw (stripLocE x)
+  else
+    printExpr precPostfix x
+
+stripLocE : Expr -> Expr
+stripLocE (ELoc _ e) = stripLocE e
+stripLocE e = e
+
+isTightNegLitArg : Expr -> Bool
+isTightNegLitArg e = isTightNegLitArgS (stripLocE e)
+
+isTightNegLitArgS : Expr -> Bool
+isTightNegLitArgS (ELit l) = isNegLit l
+isTightNegLitArgS (ENumLit n _ _ _) = n < 0
+isTightNegLitArgS _ = False
+
+-- Walk down the (left-associated) application spine to its ultimate head,
+-- mirroring the parser's `headIsNumeric` check, which is decided ONCE from
+-- the outermost head and applies to every argument position in the spine.
+appSpineHead : Expr -> Expr
+appSpineHead e = appSpineHeadS (stripLocE e)
+
+appSpineHeadS : Expr -> Expr
+appSpineHeadS (EApp g _) = appSpineHead g
+appSpineHeadS e = e
+
+headIsNumericHead : Expr -> Bool
+headIsNumericHead (ENumLit _ _ _ _) = True
+headIsNumericHead (ELit (LInt _)) = True
+headIsNumericHead (ELit (LFloat _)) = True
+headIsNumericHead _ = False
 
 -- `let [isMut] f args = body in e2` — coalesce the lambda spine for `let f = …`.
 printELet : Bool -> Bool -> Pat -> Expr -> Expr -> Doc
@@ -1120,19 +1201,32 @@ printAppSpine e =
       if isBreakableArg arg then
         Cat (printExpr precApp head) (Cat (text " ") (breakableArg arg))
       else
-        group (Nest 2 (Cat (printExpr precApp head) (Cat Line (printExpr precPostfix arg))))
+        group (Nest 2 (Cat (printExpr precApp head) (Cat Line (appArgDocH head arg))))
     (head, args) =>
-      let tail = concatD (map (a => Cat Line (spineArg a)) args)
+      let tail = concatD (map (a => Cat Line (spineArg head a)) args)
       group (Nest 2 (Cat (printExpr precApp head) tail))
+
+-- Like `appArgDoc`, but `h` is already the ultimate spine head (as `collectApp`
+-- hands it to `printAppSpine`'s callers) rather than the immediate `f` of one
+-- EApp node — so no further `appSpineHead` walk is needed.  See `appArgDoc`'s
+-- comment on `printExprRaw (EApp f x)` for why this bare-vs-parenthesized
+-- choice exists (#142).
+appArgDocH : Expr -> Expr -> Doc
+appArgDocH h arg =
+  if isTightNegLitArg arg && not (headIsNumericHead (appSpineHead h)) then
+    printExprRaw (stripLocE arg)
+  else
+    printExpr precPostfix arg
 
 -- A multi-arg-spine argument: a NESTED application is parenthesized and rendered
 -- through printAppSpine so its own spine can break when over-width (otherwise a
 -- wide nested-call argument would overflow its single line).  Anything else
--- renders flat at postfix precedence, unchanged.
-spineArg : Expr -> Doc
-spineArg (ELoc _ e) = spineArg e
-spineArg (EApp f x) = Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
-spineArg e = printExpr precPostfix e
+-- renders flat at postfix precedence (via `appArgDocH`, #142), unchanged.
+spineArg : Expr -> Expr -> Doc
+spineArg h (ELoc _ e) = spineArg h e
+spineArg _ (EApp f x) =
+  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+spineArg h e = appArgDocH h e
 
 -- A single application argument worth keeping inline with its head: a lambda
 -- (whose body we can fold across lines) or a nested application (its own spine
