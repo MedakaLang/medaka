@@ -62,10 +62,15 @@ repo-wide (#1070), and for five of them per-table re-keying is *impossible*
 because the collapse already happened upstream in the `Mono` representation.
 The law therefore lands at the substrate: `TCon`/interface/method references
 carry identity, so a bare-name table becomes unwritable, not just inadvisable.
-(How identity is *represented* — interned ids vs encoded keys — is a real,
-perf-relevant decision owned by task A-1 in §6, decided in writing rather than
-by measurement (A-1a, filed for that measurement, is withdrawn — see §6); the
-law is about where identity is *acquired*, not its encoding.)
+(How identity is *represented* — interned ids vs encoded keys — is a real
+decision owned by task A-1 in §6, decided in writing rather than by
+measurement (A-1a, filed for that measurement, is withdrawn — see §6). It
+is driven primarily by **source safety** (an encoded qualified spelling
+written back into `TCon` risks `medaka fmt` corrupting source, §2) and by
+**this law's own enforceability** (whether a representation's *type*
+actually forbids a bare-spelling key, or merely discourages one, §2) —
+performance is a distant third factor, not the primary one. The law here
+is about where identity is *acquired*, not its encoding.)
 
 **L3 — Order is either specified or irrelevant.** Wherever the spec makes a
 result order-free (instance selection: *"never of search order, declaration
@@ -969,29 +974,45 @@ orders merges, and the plan does not pretend otherwise.
   (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
   `universeRecordByName`, `universeDataEnv`) — but #1070's own "precisely
   because those read sites only ever hold a bare head-tycon string" reasoning
-  is **wrong for one of the five**. `universeIfaceParamKinds` is not read off
-  a head tycon at all: its key is built by `ifaceSlotKey` from an interface
-  name and a slot index (`typecheck.mdk:8504-8505`), and its one read site,
-  `checkGradedImplTys`, is called as `checkGradedImplTys iface 0 tys` from
-  `checkGradedImplHeadDecl (DImpl { iface, tys, ... })`
-  (`typecheck.mdk:1332-1333`) — an **interface name** off a `DImpl`, not a
-  `TCon`. The code's own neighboring comment already says so: re-keying it
-  properly "would need a resolved module identity, and typecheck.mdk carries
-  none for an interface... That is #1047's territory, upstream of #822"
-  (`typecheck.mdk:1354-1356`).
+  is **wrong for at least two of the five**, not one, and both wrong ones
+  land outside `TCon`'s own identity space:
+  - `universeIfaceParamKinds` is not read off a head tycon at all: its key
+    is built by `ifaceSlotKey` from an interface name and a slot index
+    (`typecheck.mdk:8504-8505`), and its one read site, `checkGradedImplTys`,
+    is called as `checkGradedImplTys iface 0 tys` from
+    `checkGradedImplHeadDecl (DImpl { iface, tys, ... })`
+    (`typecheck.mdk:1332-1333`) — an **interface name** off a `DImpl`, not a
+    `TCon`. The code's own neighboring comment already says so: re-keying it
+    properly "would need a resolved module identity, and typecheck.mdk
+    carries none for an interface... That is #1047's territory, upstream of
+    #822" (`typecheck.mdk:1354-1356`).
+  - `universeDataEnv` is a `Ref TcEnv` (`typecheck.mdk:2549`), and `TcEnv`'s
+    own comment names its second field `ctors` (`typecheck.mdk:4558`):
+    `addVariants` inserts every constructor via `addCtor env cname (...)`
+    keyed on `cname`, the **variant's own constructor name**
+    (`typecheck.mdk:8634-8636`, `4592-4593`), and its one read site,
+    `inferPatCon`, is driven straight off a match pattern's written
+    constructor name (`inferPat env (PCon name pats) = inferPatCon env name
+    pats`, `typecheck.mdk:4615/4685-4686`) — never a head tycon, and never
+    `TCon` either. Constructor names are their own namespace, distinct from
+    type names: `data Cfg = MkCfg { … }` collides on `MkCfg`, not `Cfg`.
 
   That correction **bounds what this fold actually buys**: `TCon` identity
   is TYPE-name identity, so folding it into A-1 drains `universeAliasTable`,
   `universeRecordByName`, and `universeDataParamKinds` — hence #1069 and
   #1090 — but it does **not** address `universeIfaceParamKinds` (needs
-  interface-name identity, #1047's territory, not `TCon`'s) and does **not**
-  address the separate `methodIfaceParamsRef` collision (needs method-name
-  identity, #1092). Folding `TCon` re-typing into A-1 is necessary for A-2 to
-  close roughly half of #1070's cited Stage-A payload — not all of it; the
-  interface-name and method-name identity gaps are real and are **not**
-  resolved by this decision. Whether they land inside A-1/A-2's scope or a
-  later stage is itself part of what is owed to the scoping pass below, not
-  decided here.
+  interface-name identity, #1047's territory), does **not** address the
+  separate `methodIfaceParamsRef` collision (needs method-name identity,
+  #1092), and does **not** address `universeDataEnv` (needs
+  constructor-name identity — a third namespace again distinct from both;
+  #1070 itself names no standalone issue for this row beyond its own S1
+  writeup, so this gap is currently tracked only inside #1070). Folding
+  `TCon` re-typing into A-1 is necessary for A-2 to close **three of
+  #1070's five cited rows**, not all of it; the interface-name,
+  method-name, and constructor-name identity gaps are real and are
+  **not** resolved by this decision. Whether any of them land inside
+  A-1/A-2's scope or a later stage is itself part of what is owed to the
+  scoping pass below, not decided here.
 
   Landing identity at the AST decl layer alone would still leave A-2
   re-keying tables whose read sites collapse to bare-`TCon` collisions on
