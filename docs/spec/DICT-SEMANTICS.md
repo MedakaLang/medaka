@@ -81,6 +81,18 @@ preorder reading of (b) the document now fixes, at (a) ⇒ (b) under the antisym
 one, and either way **(a) ⇏ (c)** — so C1's rigid half may not be derived from (a).
 See §6 C1's ⚠️ and §11's C1 row.
 
+**Revision (2026-08-01): §8 gains I6 — the three heads I4 does not cover.** I4 says
+every *declaration* has a module-qualified identity; it says nothing about the heads
+this implementation builds with **no declaration behind them**. **I6** pins the three,
+each of which fails a mechanical reading of I4 in a different direction: a head
+fabricated from a **type-parameter name** (a rigid variable, which must carry *no*
+identity — I6.1), a **builtin** head such as a tuple constructor (one program-global
+identity, *not* the writing module's — I6.2), and the **empty module id** (neither an
+identity nor a wildcard; the absent case must be unrepresentable — I6.3). Each carries
+a §11 row. I6.2 and I6.3 hold in the tree today **only because the name-collapse I4
+rejects is still in place**, which is why the rows say "carried" rather than
+"enforced": the stage that implements I4 (A-1, see #1110) has to keep them on purpose.
+
 **Revision (2026-07-30): six rules that the implementation had been enforcing — or
 failing to enforce — with no governing clause are now written down** (#1107, Stage S
 of the typechecker target-architecture arc, epic #1122). They are **§4.1** (`gen` at a
@@ -1762,6 +1774,76 @@ module-qualified identity.
   hold only locally and coherence fails across module boundaries", which C4 forbids by
   name.
 
+- **I6 — Heads that no declaration produced, and the empty origin.** I4 assigns an
+  identity `(originModule, name)` to every *declaration*. Three heads this
+  implementation constructs have **no declaration behind them**, and I4 as written is
+  silent on all three. The silence is not harmless: it is precisely where the
+  mechanical reading of I4 — *"stamp every type-constructor head with the module being
+  elaborated"* — yields a wrong answer, and the three fail in three different
+  directions. I6 pins them so that an implementation of I4 does not have to guess.
+
+  1. **I6.1 — A head fabricated from a TYPE-PARAMETER name denotes a rigid type
+     variable and carries NO I4 identity.** Where a signature elaborator meets a
+     type-parameter spelling it cannot bind, this implementation reifies it as a
+     nullary type constructor. Normatively that head denotes a **rigid type
+     variable**, which is not a declaration: it MUST NOT be assigned an
+     `(originModule, name)`; it MUST NOT compare equal to the identity of any
+     declaration, including one whose surface spelling it happens to share; and it
+     MUST NOT be usable as a key in any table I4 requires to be identity-keyed.
+     Whether two such heads are the *same* variable is a question about **binders**,
+     not about modules — same binder ⇒ same variable, different binders ⇒ different —
+     and that is §4.1 **G1**'s local-binder identity, which I4 already declines to
+     give. ⚠️ **The failure this rules out is worse than the one I4 rules out.** I4's
+     *"a bare `String` name is not a key"* is about keying a declaration by a name
+     that two modules may share. Here there is **no declaration to be right about**:
+     a bare-spelling key promotes a type variable into a type constructor, so a
+     signature's `a` can collide with a `data` declaration, with a *reserved internal
+     tag*, or with an unrelated `a` in another signature entirely. An implementation
+     that cannot tell a fabricated head from a declared one has not implemented I4,
+     however carefully it qualifies the declared ones.
+
+  2. **I6.2 — A BUILTIN head has exactly ONE identity, shared by every module.** The
+     tuple type constructors are part of the language, not declarations of any
+     module: `(Int, Int)` written in two modules is **one type**, and
+     `impl Bimappable (,)` in the prelude applies to every module's tuples.
+     Normatively a builtin head's origin is a **reserved origin, distinct from every
+     module identity and unforgeable by any source file**, and in particular it is
+     *not* the module in which the occurrence is written. The representation of that
+     reserved origin is A-1's to choose; the property is not.
+     🚨 **This is the clause a mechanical I4 implementation breaks first, and it
+     breaks it silently.** Stamping every type-constructor head with the module under
+     elaboration makes two modules' `(Int, Int)` two distinct types, un-does the
+     prelude's tuple instances for every module but the prelude, and produces
+     no diagnostic that names tuples. Today the clause holds — for the very reason
+     I4 fails, namely that the head is a bare program-global string with no origin at
+     all. **It is therefore carried, not enforced**, and A-1 must preserve it
+     deliberately rather than expect to inherit it.
+
+  3. **I6.3 — The empty module id is NOT an identity, and must not become one.**
+     Every declaration's origin is a **non-empty** module id. There is no "belongs to
+     no module" case to encode: the prelude is a module (`SHADOW-SEMANTICS.md` S1,
+     *"the PRELUDE IS A MODULE"*), and **a single file is the 1-node graph containing
+     it** (§7.1 **U1**), so it has an origin like every other node. Where a
+     population's origin is genuinely undecided today — the extern catalogue is
+     parsed and threaded alongside the prelude rather than resolved as a named node —
+     that is a gap for I4's implementation to close by **giving** it an origin, not a
+     licence to leave the component empty. Consequently an identity whose module
+     component is empty is
+     **not well-formed**, and neither available reading of an empty component is
+     licensed:
+     - as an **identity**, `""` makes every declaration that carries it collide with
+       every other one — the exact last-write-wins loss I4 exists to forbid, now
+       concentrated on the builtin/prelude/single-file population;
+     - as a **wildcard** that compares equal to anything, it makes two distinct
+       declarations indistinguishable at a coherence or dispatch decision, which is a
+       C1/C2 break rather than a naming one.
+
+     Where an implementation writes `""` today it means *"origin not recorded"* — a
+     **sentinel, not a value** — and the two are not interchangeable. An
+     implementation of I4 must make the absent case **unrepresentable** (an
+     `Option`-shaped origin, or a real id supplied by U1), not encode it as an empty
+     string and then decide per call site which of the two readings applies.
+
 ---
 
 ## 9. Soundness statements (targets for a later proof/audit)
@@ -1915,6 +1997,13 @@ clauses were written *because* behaviour existed with no governing rule, so the 
 record where the behaviour and the rule now differ rather than pretending the clauses
 were already in force.
 
+The **§8 I6.1/I6.2/I6.3** rows were added with clause I6 (2026-08-01) and verified
+against source at `fa07eaa7`. Two of the three are marked 🟡 rather than ✅ on purpose:
+the property *is* true of the tree today, but it is true **because of the very
+name-collapse I4 rejects**, so an implementation of I4 that does not preserve it
+deliberately will break it silently. A row that reads "holds" without recording *what
+makes it hold* would retire exactly the question I6 exists to ask.
+
 ⚠️ **Where a row claims "no site exists", read the *derivation* in it, not the
 verdict.** Two such claims made here were **wrong on the first pass** and are
 corrected above (§5.1 **M2**; the record-field half of §8 **I4**). Both failed the
@@ -1967,8 +2056,11 @@ function rather than over the pass that was expected to call it.
 | §8 **I1** (evidence abstraction keyed by binding identity) | `dictArityOf:12662` (BARE-NAME, define-side only) vs. the cross-module qualified path `crossModuleFunConstraintsQualRef:2545`/`inferDictAtFound:4918` | dict-param count/order is part of the binding's identity, not its bare name | ⚠️ self-documented live hazard at lines 2415-2444: `dictArityOf`'s bare-name first-match "returns the WRONG module's arity" for two same-named fns of different `=>`-arity. The qualified table fixes the CALL-SITE (importer) leg; `dictArityOf` itself stays bare-name, safe only for the DEFINE-side prepend within the owning module — a residual sharp edge, not asserted as a currently-reproducing bug here |
 | §8 **I2** (global instance environment after import resolution) | `importFormSchemes:17309`/`aliasSchemes:17290`/`aliasConstraintEntries:17324` (`compiler/types/typecheck.mdk`) | import scoping affects visibility, never evidence identity | — |
 | §8 **I3** (evidence travels, not re-derived) | No INDEPENDENT site — but not because none was located; re-audited with I1's vocabulary (`inferDictAtFound`, `crossModuleFunConstraintsQualRef`) rather than I3's, and the same site applies: `inferDictAtFound:4918` (row I1 above) is exactly the mechanism that lets a cross-module CALLER supply the callee's dict args rather than the callee re-deriving anything | a cross-module call passes evidence as ordinary leading dict arguments (`var`, row above), sized by the callee's identity-keyed arity (I1) — there is nothing *for* the callee to re-resolve; it receives dicts as parameters like any other argument | this is a structural consequence of dict-PASSING itself (the callee is a function of its dict params, not a re-resolver), not a separately-checkable rule — same shape as C2's finding: the right conclusion is "enforced by the calling convention," not "unimplemented" |
-| §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ENFORCED for **values**: `checkVar:588` → `isAmbiguous:639`/`ambigMods:644` → `AmbiguousOccurrence`, code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1967`), set built by `ambiguousSet:2264`/`keepAmbiguous:2270`. ENFORCED for **data constructors** (#674): `checkPat:392` and `checkVar:602` → `isCtorAmbiguous:651` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5392` → `resolveFieldAmbiguous:5403`, which pushes `T-AMBIGUOUS-FIELD` (`:5406`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:338`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported`) with no ambiguity arm, and `checkConstraint:386` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4047` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3126` but *called* at `compiler/types/typecheck.mdk:12839`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. 🔴 **The type half is stronger than "a missing diagnostic", and this row understated it at first.** `fromAstTypeE:4047`'s `TyCon` arm bottoms out at `_ => TCon n` (`:4059`) — a **bare-name** `Mono`. Two modules that each `public export data Thing` therefore do not merely go undiagnosed at the use site: their types are *the same `Mono`* and are silently **identified**, so a function declared over one module's `Thing` accepts the other's constructor, typechecks green, and dies at run time on a pattern match that cannot see the foreign constructor. That is a type-identity collapse — the `Mono`-level half of #1070 that its own audit records as *"impossible to re-key per table, because the collapse already happened upstream"*, and #1047's family. I4 is what makes it unwritable; a use-site ambiguity diagnostic alone would not. `keepAmbiguous:2273` additionally exempts `core` and any same-module top-level, which is I4's qualification 1 (scoping resolves before ambiguity applies) already realized for values |
+| §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ⚠️ **Line numbers in this cell were RE-DERIVED at `fa07eaa7` (2026-08-01); the previous set was stale by 2–296 lines in `compiler/frontend/resolve.mdk`/`compiler/types/typecheck.mdk` and by 959 on one `compiler/types/typecheck.mdk` citation — re-derive with `grep -n '^<symbol>' <file>` rather than trusting these, exactly as this table's preamble and the C1 row instruct.** ENFORCED for **values**: `checkVar:590` → `isAmbiguous:641`/`ambigMods:646` → `AmbiguousOccurrence` (pushed `:600-601`), code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1924`, arm `:1947`), set built by `ambiguousSet:2244`/`keepAmbiguous:2250`. ENFORCED for **data constructors** (#674): `checkPat:393` (push `:398`) and `checkVar:604` → `isCtorAmbiguous:653` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5688` → `resolveFieldAmbiguous:5699`, which pushes `T-AMBIGUOUS-FIELD` (`:5702`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:340`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported \|\| isTupleCtorTyName n`) with no ambiguity arm, and `checkConstraint:388` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4266` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3106` but *called* at `compiler/types/typecheck.mdk:13798`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. 🔴 **The type half is stronger than "a missing diagnostic", and this row understated it at first.** `fromAstTypeE:4266`'s `TyCon` arm bottoms out at `_ => TCon n` (`:4278`) — a **bare-name** `Mono`. Two modules that each `public export data Thing` therefore do not merely go undiagnosed at the use site: their types are *the same `Mono`* and are silently **identified**, so a function declared over one module's `Thing` accepts the other's constructor, typechecks green, and dies at run time on a pattern match that cannot see the foreign constructor. That is a type-identity collapse — the `Mono`-level half of #1070 that its own audit records as *"impossible to re-key per table, because the collapse already happened upstream"*, and #1047's family. I4 is what makes it unwritable; a use-site ambiguity diagnostic alone would not. Two exemptions realize I4's qualification 1 (scoping resolves before ambiguity applies) for values, and they live in **two different functions** — this cell previously attributed both to one: `foldProvenance:2220` skips `core` outright (`mid == "core"`, `:2224`, so a prelude name never contributes a provenance at all), while `keepAmbiguous:2250` drops any name that has a same-module top-level definition (`not (contains n sameMod)`, `:2253`) |
 | §8 **I5** (instance candidacy is graph-global) | 🔴 **PARTIAL — cumulative, not global.** `foldModules:17745` threads `accAll ++ prog` and `appendUniverseAccums:16925` grows the persistent impl universe (`growImplUniverse` over `implDeclsWithReqs:14030`) one module at a time, in the loader's dependency-first topological order (`compiler/driver/loader.mdk:570`) | the candidate set a goal is resolved against | so a module's candidate set is *every impl of every module earlier in the topological order*, plus its own — which is **strictly more** than its transitive imports (an unrelated sibling subtree fully visited earlier is included) and **strictly less** than the graph (nothing later is). The first half is order-dependence of exactly #1072's kind; the second is what I5 removes. ✅ the visibility half of I5 already holds: `implDeclWithReqs:14033` matches `DImpl { iface, tys, reqs, … }` and **never reads its `pub` field** (`compiler/frontend/ast.mdk:437-443`), so an impl's declared visibility governs no candidacy today — and `SHADOW-SEMANTICS.md` S2 already asserts the universe is *"GLOBAL — local ∪ imported ∪ prelude"* for its own routing rule |
+| §8 **I6.1** (a head fabricated from a type-parameter name is a rigid VARIABLE, not a declaration) | 🔴 **OWED — no site exists, and the clause is DIVERGENT where behaviour exists.** Two elaborators reify an unbindable type-parameter spelling as a nullary constructor: `fromAstTypeE:4266`'s `TyVar` arm, `fromOption (TCon n) (lookupAssoc n tvs)` (`:4279`), and `paramMonoOf:10287`, `fromOption (TCon tp) (lookupAssoc tp subst)` (`:10288`) — both `compiler/types/typecheck.mdk`. The result is a `TCon String` byte-indistinguishable from one a `data` declaration produced, so **nothing downstream can apply this clause even in principle**; there is no predicate anywhere that separates the two populations. Implementing site is A-1 (see #1110) | — (nothing) | ⚠️ **the in-tree PROOF that the two are already indistinguishable is load-bearing, not hypothetical**: `candidateBucket:11986`'s `tag == noneHeadTag` guard exists because `paramMonoOf` can put `TCon "__none__"` at `goals[0]` from a user-written interface parameter, so `goalHeadCon` answers `Some "__none__"` — a **reserved internal tag** (`noneHeadTag`, `compiler/support/util.mdk:494`) reached from an ordinary type-variable spelling. Its own comment (`:11976-11985`) records that `data __none__ = N` is a parse error while `impl Q __none__` type-checks at exit 0. A fabricated head is therefore already colliding with a *reserved* name; under a bare-spelling key it collides with declared types too |
+| §8 **I6.2** (a builtin head has ONE program-global identity) | 🟡 **HOLDS — but CARRIED BY THE COLLAPSE, not enforced by a site.** `tupleMono:13666` builds `TCon (tupleHeadTagTc (listLen ts))` (`:13667`), `reqTyToMono:15072` the same (`:15079`), and `tupleSpine:13683` recognises a tuple by comparing that string (`:13684-13687`); `Mono`'s `TCon String` (`:116`) carries no origin at all, so every module's `(Int, Int)` is literally the same value. Resolve already treats the builtin as *not a declaration* — `checkType:340` accepts it via `isTupleCtorTyName` (`compiler/frontend/resolve.mdk:1262`) rather than by membership in `env.types` — and `tyConSurface` (`compiler/tools/printer.mdk:338`) is what keeps the internal spelling out of the user's source | that `(Int, Int)` written in two modules is one type, and the prelude's tuple instances apply everywhere | 🚨 **the keying assumption is the ABSENCE of a key**, which is precisely what I4 removes. A mechanical A-1 that stamps every `TCon` with the module under elaboration satisfies I4 and **breaks this row**, with no diagnostic that names tuples. Marked 🟡 rather than ✅ deliberately: the property is true today, and nothing in the tree would notice it becoming false |
+| §8 **I6.3** (`""` is not a module identity) | 🟡 **PARTIAL — the sentinel exists; no comparison mixes it TODAY.** `cohImplsOf:10716` is defined as `cohImplsOfMid "" d` (`:10717`) — the per-module coherence sweep records no origin — and the empty string is then read back by `cohIsCrossModule:11079` (`mid1 != "" && mid2 != "" && mid1 != mid2`, `:11080`) and `cohSoftInScope:11058` (whose first arm is `cohSoftInScope "" "" = True`, `:11059`) | which coherence sweep OWNS a ⊑-incomparable pair, and whether the message names both modules | ✅ **the mixed comparison is unreachable at present, and that was checked rather than assumed**: `cohScan` has exactly **two** call sites — `checkCoherence:11142` over `cohCollectImpls:11548` (every mid `""`) and `globalCoherenceConflict:11588` over `cohCollectModuleImpls:11564` (every mid real) — so a `("" , real)` pair never forms and the sentinel is uniform per sweep. ⚠️ **What the row records is therefore a MIGRATION hazard, not a live defect.** Today `""` reads as *"origin not recorded"*, and its only consumers are message wording (`cohHardMsg:11074`, `cohWhereSuffix:11094`) and sweep ownership (`cohClassify:11037`'s drop arm `:11042`, a de-duplication) — no acceptance decision. A-1 makes real origins available at both sweeps; the clause forbids promoting the sentinel to an identity at that moment rather than eliminating it. **OWED — #1110** for the elimination. The origins the clause says exist are already in the tree for the prelude (`coreExports:2494`'s `modId = "core"`, `compiler/frontend/resolve.mdk:2496`) |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
 **Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
