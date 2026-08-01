@@ -127,11 +127,14 @@ docs-index:
 ## agent-doc-symbols — agent-facing doc SYMBOL-claim rot gate. Pure text
 ##           analysis (no build, no toolchain, safe to run anywhere): checks
 ##           every backticked, symbol-shaped token in AGENTS.md,
-##           .claude/skills/*/SKILL.md, .claude/workstreams/*.md, and
-##           .claude/ORCHESTRATING.md against compiler/*.mdk, stdlib/*.mdk,
-##           and runtime/*.c. Ratcheted by test/AGENT-DOC-SYMBOL-EXCEPTIONS.txt
-##           — see that file and test/check_agent_doc_symbols.sh's header for
-##           the SYM/FILE format.
+##           .claude/skills/*/SKILL.md, .claude/workstreams/*.md,
+##           .claude/ORCHESTRATING.md (BROAD tier — every inline claim) and
+##           docs/spec/*.md (SCOPED tier — only a claim whose line also cites
+##           a compiler/stdlib/runtime path; see the script header for why)
+##           against compiler/*.mdk, stdlib/*.mdk, and runtime/*.c. Ratcheted
+##           by test/AGENT-DOC-SYMBOL-EXCEPTIONS.txt — see that file and
+##           test/check_agent_doc_symbols.sh's header for the SYM/FILE format.
+##           ⚠️ compiler/*.md is NOT yet in this corpus — see #1192.
 agent-doc-symbols:
 	sh test/check_agent_doc_symbols.sh
 
