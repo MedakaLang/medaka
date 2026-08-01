@@ -476,6 +476,14 @@ locatedProjectErrors target roots rsrc csrc =
 -- Warnings are grouped by THEIR OWN file, never the entry's — the #414 hazard
 -- `globalCoherenceConflict` documents, where a foreign span renders a caret at that
 -- line/col in the wrong file.
+--
+-- ⚠️ ONE TRIPLE PER FILE, EMPTIES INCLUDED, in dependency-first order (helper before
+-- entry) — do NOT filter the empties out here.  `checkRoute` identifies the ENTRY's
+-- triple POSITIONALLY, as the last one (`dropEntryTriple`), because the paths
+-- `analyzeProject` reports are loader-normalised (`./main.mdk`) and will not compare
+-- equal to the CLI's own `target` argument.  Pre-filtering would make "last" mean
+-- "the last module that happens to warn", so a clean entry would silently cost an
+-- imported module its warning.  Emptiness is filtered at the emit sites instead.
 locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag))
 locatedProjectDiags target roots rsrc csrc =
   let cacheRef = Ref []
@@ -484,7 +492,7 @@ locatedProjectDiags target roots rsrc csrc =
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
-    nonEmptyTriples (map cohWarnsOfTriple triples),
+    map cohWarnsOfTriple triples,
   )
 
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
@@ -584,12 +592,19 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
       -- mirrors — instead of runCheckModules's loc-free `TYPE ERROR: …` (which
       -- also dropped every imported-module error's location).  Clean ⇒ the schemes
       -- dump + main-shape warnings, unchanged.
-      match locatedProjectErrors target roots rsrc csrc
-        Some errText =>
+      -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
+      -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
+      match locatedProjectDiags target roots rsrc csrc
+        (Some errText, _) =>
           let _ = putStr errText
           exit 1
-        None =>
+        (None, projWarns) =>
           let _ = putStrLn (runCheckModules allowInternal trusted rtD coreD modsD)
+          -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
+          -- module's own file.  The line above reaches the ENTRY's diagnostics only,
+          -- which is why `dropEntryTriple` (not the whole list) is right here — see
+          -- its note for the four graph positions this was silent in.
+          let _ = emitWarningLines (flatMap renderTripleWarnings (dropEntryTriple projWarns))
           -- 0.1.0 main-shape warning (see below): runCheckModules/
           -- checkModulesHasErrors never call elaborateModules, so mainSchemeRef
           -- is never populated on this route either — mainShapeWarnings runs
@@ -848,6 +863,31 @@ cohWarnTriples src file diags = match filter isCoherenceWarn diags
 -- entry for a file that had nothing to say.
 nonEmptyTriples : List (String, String, List Diag) -> List (String, String, List Diag)
 nonEmptyTriples ts = filter tripleHasDiags ts
+
+-- Every module's coherence warnings EXCEPT the entry module's.
+--
+-- 🚨 WHY `check` NEEDS THIS AND `run`/`build` DO NOT.  `checkRoute`'s multi-module arm
+-- already surfaces the ENTRY's coherence warning — `runCheckModules` bundles it
+-- loc-free into the scheme dump it prints to stdout, and `globalCoherenceConflict`'s
+-- cross-module finding is attached to the entry module too — so re-emitting the whole
+-- list here would double-print exactly the shapes that already work.  What that stdout
+-- path CANNOT reach is an IMPORTED module's own ⊑-incomparable pair: `runCheckModules`
+-- reports the entry's diagnostics, not every module's.  Result, measured across the
+-- seven positions a pair can occupy in a module graph: `check` reported the pair for
+-- the entry (1) and the split-across-two-modules case (1) and **NOTHING AT ALL** when
+-- the pair sat in a directly-imported, transitively-imported, bare-imported or
+-- diamond-imported module — 0 occurrences on either channel, while `check --json`,
+-- `run` and `build` all correctly reported 1.  That is the same loud→silent transition
+-- F-3d exists to prevent, relocated from the VERB to the module POSITION.
+--
+-- ⚠️ POSITIONAL, and it must be: the entry is LAST in `locatedProjectDiags`' order
+-- (dependency-first, helper before entry — that function's own contract), while the
+-- PATHS it reports are loader-normalised (`./main.mdk`) and do not compare equal to
+-- the CLI's `target`.  See that function for why the list must reach here UNFILTERED.
+dropEntryTriple : List (String, String, List Diag) -> List (String, String, List Diag)
+dropEntryTriple [] = []
+dropEntryTriple [_] = []
+dropEntryTriple (t::rest) = t :: dropEntryTriple rest
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False

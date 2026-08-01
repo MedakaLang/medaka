@@ -13,3 +13,17 @@ impl C (Pair a Int) where
 -- Half of the CROSS-MODULE pair; the other half is in other.mdk.
 impl D (Pair Int a) where
   dname _ = 10
+
+-- ⚠️ DELIBERATELY NON-EXHAUSTIVE, and it is an ASSERTION, not sloppiness. This is an
+-- IMPORTED module carrying a NON-coherence warning, which is what makes section 5's
+-- multi-module rows able to fail: `check`/`run`/`build` must surface this module's
+-- ⊑-incomparable pair and must NOT surface this `W-NONEXHAUSTIVE`. Without it those
+-- rows could not tell "only the demoted code is surfaced" from "the whole
+-- matchWarnings channel is surfaced", because every other module in the corpus is
+-- clean. Never called from main, so it changes no value.
+export libHue : Colour -> Int
+libHue c = match c
+  LibRed => 1
+  LibGreen => 2
+
+public export data Colour = LibRed | LibGreen | LibBlue

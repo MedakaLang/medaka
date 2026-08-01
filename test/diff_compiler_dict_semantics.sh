@@ -1033,7 +1033,8 @@ done
 # permutation-sensitivity was checked and found absent -- see the empty-section
 # check at the bottom of this file, which fails the whole gate on that.
 
-# ── Section 5: the DEMOTED warning reaches every verb, and NOTHING ELSE does ──
+# ── Section 5: the DEMOTED warning reaches every verb AND every module POSITION,
+# ──            and NOTHING ELSE does ─────────────────────────────────────────────
 # F-3d (#614/#311) turned a hard `T-CONFLICTING-IMPL` into the
 # `W-INCOMPARABLE-IMPLS` warning. A warning that only `check` can see is a
 # loud->silent transition on `run` and `build`, which is the one thing this stage
@@ -1055,7 +1056,11 @@ done
 # instead of shipping as a usability regression nobody graded.
 #
 #   entry | label | verb | assertion
-#     verb in {run, build, run-json}   (`medaka build` has NO --json flag)
+#     verb in {check, run, build, run-json}  (`medaka build` has NO --json flag)
+#     ⚠️ `check` grades STDERR ONLY here, like the others. The ENTRY module's warnings
+#     go to `check`'s STDOUT (runCheckModules bundles them into the scheme dump), so a
+#     stderr row is specifically about an IMPORTED module's -- which is the half that
+#     was silent.
 #     assertion in:
 #       HAS:<ere>   stderr must match
 #       NOT:<ere>   stderr must NOT match
@@ -1073,6 +1078,10 @@ s6-2-t4-open-goal-deferred.mdk|...and human means human: `run` must NOT emit the
 s6-2-t4-open-goal-deferred.mdk|the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d|build|HAS:Overlapping impls of Sh
 s6-2-t4-open-goal-deferred.mdk|`run --json` stderr is a `Diag` JSON envelope (AGENTS.md) and must still PARSE -- human text there is worse than silence, and is what diff_compiler_eval_json caught|run-json|JSON:W-INCOMPARABLE-IMPLS
 s6-c1-duplicate-heads-rejected.mdk|the HARD class still rejects LOUDLY on run (it was never demoted)|run|HAS:Overlapping impls of Tag
+s6-1c-multimodule-overlap/main.mdk|🚨 THE REGRESSION `cohSoftInScope` TRADED FOR THE DE-DUPLICATION: human `check` reported the pair for the ENTRY and for the split-across-modules case but NOTHING AT ALL when it sat in an imported module -- 0 occurrences on either channel while --json/run/build all said 1. Measured across all seven graph positions a pair can occupy. `dropEntryTriple` closes it; this row is the only thing that grades `check` for a NON-ENTRY module|check|ONCE:lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C
+s6-1c-multimodule-overlap/main.mdk|...and ONLY the demoted code: lib.mdk also carries a deliberate W-NONEXHAUSTIVE, an IMPORTED module`s non-coherence warning, which `check` must NOT pull onto stderr. This is what makes the multi-module rows able to fail -- every other fixture in the corpus is clean, so an EMPTY row could not tell "one code" from "the whole channel"|check|NOT:non-exhaustive
+s6-1c-multimodule-overlap/main.mdk|...nor may `run` surface that imported W-NONEXHAUSTIVE|run|NOT:non-exhaustive
+s6-1c-multimodule-overlap/main.mdk|...nor `build`|build|NOT:non-exhaustive
 s6-1c-multimodule-overlap/main.mdk|SAME-MODULE pair inside an IMPORTED module: seen by lib`s own sweep AND the whole-graph one, so it printed TWICE on run before `cohSoftInScope`. EXACTLY ONCE, with lib`s own span|run|ONCE:lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C
 s6-1c-multimodule-overlap/main.mdk|CROSS-MODULE pair: no per-module sweep can see it (one `D` impl each), so `globalCoherenceConflict` alone reports it, naming both owners. The ONLY in-tree coverage of that path -- it had none|run|ONCE:Overlapping impls of D .defined in lib and other.
 s6-1c-multimodule-overlap/main.mdk|...and both reach `build` too|build|HAS:Overlapping impls of D .defined in lib and other.
@@ -1084,7 +1093,7 @@ s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: a clean 3-mod
 s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: ...nor build stderr|build|EMPTY'
 
 echo
-echo '=== 5. the demoted warning on EVERY VERB (run / build / run --json) ==='
+echo '=== 5. the demoted warning on EVERY VERB (check / run / build / run --json) ==='
 printf '%s\n' "$VERBS" | while IFS='|' read -r entry label verb assertion; do
   [ -z "$entry" ] && continue
   entrypath="$FIXDIR/$entry"
@@ -1097,6 +1106,7 @@ printf '%s\n' "$VERBS" | while IFS='|' read -r entry label verb assertion; do
   # STDERR ALONE, exactly as diff_compiler_eval_json captures it. stdout is the
   # program's own output and is graded by section 1.
   case "$verb" in
+    check)    bound "$MEDAKA" check "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
     run)      bound "$MEDAKA" run "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
     run-json) bound "$MEDAKA" run --json "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
     build)    bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.bin" >/dev/null 2>"$TMP/$base.err" ;;
