@@ -88,10 +88,14 @@ each of which fails a mechanical reading of I4 in a different direction: a head
 fabricated from a **type-parameter name** (a rigid variable, which must carry *no*
 identity — I6.1), a **builtin** head such as a tuple constructor (one program-global
 identity, *not* the writing module's — I6.2), and the **empty module id** (neither an
-identity nor a wildcard; the absent case must be unrepresentable — I6.3). Each carries
-a §11 row. I6.2 and I6.3 hold in the tree today **only because the name-collapse I4
-rejects is still in place**, which is why the rows say "carried" rather than
-"enforced": the stage that implements I4 (A-1, see #1110) has to keep them on purpose.
+identity nor a wildcard; the absent case must be unrepresentable — I6.3). I6.2 splits
+into two conjuncts — *one type* and *unforgeable* — and the second is the
+soundness-bearing one. I6.1 and I6.3 also carry a **joint corollary neither states
+alone**: a rigid variable cannot remain in the type-constructor node. Each conjunct
+carries its own §11 row. Most of I6 holds in the tree today **only because the
+name-collapse I4 rejects is still in place**, which is why those rows say "carried"
+rather than "enforced": the stage that implements I4 (A-1, see #1110) has to keep them
+on purpose.
 
 **Revision (2026-07-30): six rules that the implementation had been enforcing — or
 failing to enforce — with no governing clause are now written down** (#1107, Stage S
@@ -1793,31 +1797,58 @@ module-qualified identity.
      Whether two such heads are the *same* variable is a question about **binders**,
      not about modules — same binder ⇒ same variable, different binders ⇒ different —
      and that is §4.1 **G1**'s local-binder identity, which I4 already declines to
-     give. ⚠️ **The failure this rules out is worse than the one I4 rules out.** I4's
-     *"a bare `String` name is not a key"* is about keying a declaration by a name
-     that two modules may share. Here there is **no declaration to be right about**:
-     a bare-spelling key promotes a type variable into a type constructor, so a
-     signature's `a` can collide with a `data` declaration, with a *reserved internal
-     tag*, or with an unrelated `a` in another signature entirely. An implementation
-     that cannot tell a fabricated head from a declared one has not implemented I4,
-     however carefully it qualifies the declared ones.
+     give. ⚠️ **The failure this rules out is of a different kind from the one I4
+     rules out.** I4's *"a bare `String` name is not a key"* is about keying a
+     declaration by a name that two modules may share. Here there is **no declaration
+     to be right about**: a bare-spelling key promotes a type variable into a type
+     constructor. Two reachable collisions follow — with an unrelated variable of the
+     same spelling in another scope entirely, and with a **reserved internal tag**.
+     ⚠️ **Collision with a user-declared type is a third case and it is NOT claimed
+     here**: a type variable and a type constructor occupy disjoint surface
+     spellings, so the two populations cannot meet *by source spelling* — the same
+     input-side argument I6.2 (b) rests on. The clause is not weakened by that: the
+     first two collisions are enough, and an implementation that cannot tell a
+     fabricated head from a declared one has not implemented I4 however carefully it
+     qualifies the declared ones.
 
-  2. **I6.2 — A BUILTIN head has exactly ONE identity, shared by every module.** The
-     tuple type constructors are part of the language, not declarations of any
-     module: `(Int, Int)` written in two modules is **one type**, and
-     `impl Bimappable (,)` in the prelude applies to every module's tuples.
-     Normatively a builtin head's origin is a **reserved origin, distinct from every
-     module identity and unforgeable by any source file**, and in particular it is
-     *not* the module in which the occurrence is written. The representation of that
-     reserved origin is A-1's to choose; the property is not.
-     🚨 **This is the clause a mechanical I4 implementation breaks first, and it
+  2. **I6.2 — A BUILTIN head has exactly ONE identity, shared by every module.**
+     **Two conjuncts, checked in different places.** An implementation can satisfy
+     one and not the other, so no verdict on I6.2 is meaningful unless it says
+     *which*:
+     - **(a) One type.** The tuple type constructors are part of the language, not
+       declarations of any module: `(Int, Int)` written in two modules is **one
+       type**, and `impl Bimappable (,)` in the prelude applies to every module's
+       tuples. A builtin head's origin is a **reserved origin, distinct from every
+       module identity**, and in particular it is *not* the module in which the
+       occurrence is written.
+     - **(b) Unforgeable.** No source file may produce a head carrying that reserved
+       origin, other than through the surface syntax the language assigns to the
+       builtin. **(b) is the soundness-bearing conjunct**: (a) only says that two
+       writings of the builtin agree; (b) is what stops anything *else* joining
+       them. A reserved origin that user text can name is not reserved.
+
+     The representation of the reserved origin is A-1's to choose; the property is
+     not.
+
+     🚨 **(a) is the conjunct a mechanical I4 implementation breaks first, and it
      breaks it silently.** Stamping every type-constructor head with the module under
      elaboration makes two modules' `(Int, Int)` two distinct types, un-does the
      prelude's tuple instances for every module but the prelude, and produces
-     no diagnostic that names tuples. Today the clause holds — for the very reason
+     no diagnostic that names tuples. Today (a) holds — for the very reason
      I4 fails, namely that the head is a bare program-global string with no origin at
      all. **It is therefore carried, not enforced**, and A-1 must preserve it
      deliberately rather than expect to inherit it.
+
+     ⚠️ **A round-trip guard is a MITIGATION of (b)'s failure mode, never evidence
+     for (b).** The internal spelling has *two meanings depending on which side of
+     the pipeline it is on*: as a type-constructor payload it names the builtin;
+     written back into source it re-parses as a type **variable**. The tree records
+     the consequence itself — emitting the raw name would produce text that
+     *"re-parses as a type VARIABLE and corrupts the impl head"*
+     (`compiler/tools/printer.mdk:337`). One spelling, two meanings, and A-1 is
+     about to make that spelling load-bearing. Evidence for (b) has to come from
+     the **input** side (what a source file can construct), not from the output
+     side (what the printer declines to emit).
 
   3. **I6.3 — The empty module id is NOT an identity, and must not become one.**
      Every declaration's origin is a **non-empty** module id. There is no "belongs to
@@ -1828,9 +1859,8 @@ module-qualified identity.
      parsed and threaded alongside the prelude rather than resolved as a named node —
      that is a gap for I4's implementation to close by **giving** it an origin, not a
      licence to leave the component empty. Consequently an identity whose module
-     component is empty is
-     **not well-formed**, and neither available reading of an empty component is
-     licensed:
+     component is empty is **not well-formed**, and neither available reading of an
+     empty component is licensed:
      - as an **identity**, `""` makes every declaration that carries it collide with
        every other one — the exact last-write-wins loss I4 exists to forbid, now
        concentrated on the builtin/prelude/single-file population;
@@ -1840,9 +1870,35 @@ module-qualified identity.
 
      Where an implementation writes `""` today it means *"origin not recorded"* — a
      **sentinel, not a value** — and the two are not interchangeable. An
-     implementation of I4 must make the absent case **unrepresentable** (an
-     `Option`-shaped origin, or a real id supplied by U1), not encode it as an empty
-     string and then decide per call site which of the two readings applies.
+     implementation of I4 must make the absent case **unrepresentable**: a **total,
+     non-optional origin that every producer supplies**, which U1 says always
+     exists.
+
+     ⚠️ **An `Option`-shaped origin does NOT satisfy this, and must not be read into
+     it.** It makes the absent case *representable, as `None`* — typed and explicit,
+     which is a weaker and different property than absent — and it reinstates the
+     prohibited behaviour verbatim: a cross-module predicate over `Some a` and
+     `None` still has to decide, per call site, which of the two readings above
+     applies. `None` meaning "origin not recorded" is `""` with a nicer type. If a
+     producer cannot supply an origin, that is a **defect in the producer** — U1
+     says every declaration sits in a module — not a licence to widen the type.
+
+  **Corollary (I6.1 ∧ I6.3) — a rigid type variable must not be carried by the
+  type-CONSTRUCTOR node at all.** Neither clause states this on its own; together
+  they force it, and since it is a constraint on the *representation* rather than a
+  matter of taste, it is stated here rather than left for an implementer to collide
+  with. I6.1 says a fabricated head carries **no** identity. I6.3 says an identity's
+  origin may not be absent, and that the absent case must be unrepresentable. If a
+  rigid variable is still carried by the same node that carries a declared type
+  constructor, then it *is* a head whose origin is absent — exactly the state I6.3
+  forbids representing. The only resolution satisfying both is that a rigid variable
+  is **a distinct constructor**, so that "carries no identity" is a structural fact
+  about the node rather than an empty field on it. ⚠️ **This is the one place where
+  two I6 clauses jointly pin the representation harder than either does alone**, and
+  it lands on the first question A-1 has to answer. An implementation that keeps
+  rigid variables in the type-constructor node can satisfy I6.1 or I6.3 but not
+  both, and the conflict will surface as a per-call-site decision about an empty
+  origin — which is the defect I6.3 exists to forbid.
 
 ---
 
@@ -1997,12 +2053,23 @@ clauses were written *because* behaviour existed with no governing rule, so the 
 record where the behaviour and the rule now differ rather than pretending the clauses
 were already in force.
 
-The **§8 I6.1/I6.2/I6.3** rows were added with clause I6 (2026-08-01) and verified
-against source at `fa07eaa7`. Two of the three are marked 🟡 rather than ✅ on purpose:
-the property *is* true of the tree today, but it is true **because of the very
-name-collapse I4 rejects**, so an implementation of I4 that does not preserve it
-deliberately will break it silently. A row that reads "holds" without recording *what
-makes it hold* would retire exactly the question I6 exists to ask.
+The **§8 I6** rows were added with clause I6 (2026-08-01) and verified against source
+at `fa07eaa7`. Several are marked 🟡 rather than ✅ on purpose: the property *is* true
+of the tree today, but it is true **because of the very name-collapse I4 rejects**, so
+an implementation of I4 that does not preserve it deliberately will break it silently.
+A row that reads "holds" without recording *what makes it hold* would retire exactly
+the question I6 exists to ask.
+
+⚠️ **I6's rows are ONE PER CONJUNCT, and that is a deliberate departure from the
+one-row-per-clause shape above.** The first cut of these rows gave I6.2 a single
+🟡 HOLDS verdict, having checked only its conjunct (a) — a paraphrase naming one
+half, evidence for one half, one verdict apparently covering both. **(b) was the
+soundness-bearing half and was the unchecked one.** A multi-conjunct clause in a
+single cell hides exactly that: the cell is ~3 000 characters and renders as one
+unwrapped line in a diff, so the gap between "what the clause asserts" and "what the
+evidence reaches" is invisible to review. Where a clause below has more than one
+independently-checkable assertion, give each its own row and its own verdict —
+including the case where the honest verdict is UNVERIFIED.
 
 ⚠️ **Where a row claims "no site exists", read the *derivation* in it, not the
 verdict.** Two such claims made here were **wrong on the first pass** and are
@@ -2058,9 +2125,12 @@ function rather than over the pass that was expected to call it.
 | §8 **I3** (evidence travels, not re-derived) | No INDEPENDENT site — but not because none was located; re-audited with I1's vocabulary (`inferDictAtFound`, `crossModuleFunConstraintsQualRef`) rather than I3's, and the same site applies: `inferDictAtFound:4918` (row I1 above) is exactly the mechanism that lets a cross-module CALLER supply the callee's dict args rather than the callee re-deriving anything | a cross-module call passes evidence as ordinary leading dict arguments (`var`, row above), sized by the callee's identity-keyed arity (I1) — there is nothing *for* the callee to re-resolve; it receives dicts as parameters like any other argument | this is a structural consequence of dict-PASSING itself (the callee is a function of its dict params, not a re-resolver), not a separately-checkable rule — same shape as C2's finding: the right conclusion is "enforced by the calling convention," not "unimplemented" |
 | §8 **I4** (module-qualified identity in every namespace; use-site ambiguity) | 🔴 **PARTIAL — two of six namespaces.** ⚠️ **Line numbers in this cell were RE-DERIVED at `fa07eaa7` (2026-08-01); the previous set was stale by 2–296 lines in `compiler/frontend/resolve.mdk`/`compiler/types/typecheck.mdk` and by 959 on one `compiler/types/typecheck.mdk` citation — re-derive with `grep -n '^<symbol>' <file>` rather than trusting these, exactly as this table's preamble and the C1 row instruct.** ENFORCED for **values**: `checkVar:590` → `isAmbiguous:641`/`ambigMods:646` → `AmbiguousOccurrence` (pushed `:600-601`), code `R-AMBIGUOUS-OCCURRENCE` (`resErrorCode:1924`, arm `:1947`), set built by `ambiguousSet:2244`/`keepAmbiguous:2250`. ENFORCED for **data constructors** (#674): `checkPat:393` (push `:398`) and `checkVar:604` → `isCtorAmbiguous:653` → `R-AMBIGUOUS-CTOR`. ENFORCED for **record-field selection**, in *typecheck* rather than resolve and exactly in qualification 2's shape: `resolveFieldByOwners:5688` → `resolveFieldAmbiguous:5699`, which pushes `T-AMBIGUOUS-FIELD` (`:5702`) **only when the receiver is still an unbound var** (`TVar _`) — a receiver whose type is known picks its owner and never consults the name. **UNIMPLEMENTED for types, aliases, interfaces, and record *names***: `checkType:340`'s `TyCon` arm is a bare existence test (`omHasKey n env.types \|\| omHasKey n env.imported \|\| isTupleCtorTyName n`) with no ambiguity arm, and `checkConstraint:388` is `contains iface env.interfaces` — likewise existence-only (both `compiler/frontend/resolve.mdk`); a record name resolves through `recordByNameRef`, a last-write-wins map with no ambiguity diagnostic. Derivation for the negative half: the **only** four ambiguity codes in the tree are `R-AMBIGUOUS-OCCURRENCE`, `R-AMBIGUOUS-CTOR`, `T-AMBIGUOUS-FIELD`, `T-AMBIGUOUS-INSTANCE` (`grep -rn AMBIGUOUS compiler/ --include='*.mdk'`), and the last is instance selection, not naming. Interface *methods* are values, so they inherit the value rule; the interface *name* does not | a use site whose name yields no unique origin is rejected; the declarations are not | ⚠️ the implemented half is not identity-carrying either — it is a *diagnostic* over a name→module provenance map, not a resolution to an identity the AST carries. Type-name→origin resolution still happens **inside typecheck** (`fromAstTypeE:4266` reading `aliasTableRef`), and value binder ids are minted **inside** `checkBodyImpl` (`stampBindingIds`, declared at `compiler/frontend/resolve.mdk:3106` but *called* at `compiler/types/typecheck.mdk:13798`) and are per-run integers, not `(module, name)`. So no downstream table is identity-keyed today; the #1070 audit's bare-name tables are the consequence, and I4's *"a bare `String` key is not a key"* is the clause they fail. 🔴 **The type half is stronger than "a missing diagnostic", and this row understated it at first.** `fromAstTypeE:4266`'s `TyCon` arm bottoms out at `_ => TCon n` (`:4278`) — a **bare-name** `Mono`. Two modules that each `public export data Thing` therefore do not merely go undiagnosed at the use site: their types are *the same `Mono`* and are silently **identified**, so a function declared over one module's `Thing` accepts the other's constructor, typechecks green, and dies at run time on a pattern match that cannot see the foreign constructor. That is a type-identity collapse — the `Mono`-level half of #1070 that its own audit records as *"impossible to re-key per table, because the collapse already happened upstream"*, and #1047's family. I4 is what makes it unwritable; a use-site ambiguity diagnostic alone would not. Two exemptions realize I4's qualification 1 (scoping resolves before ambiguity applies) for values, and they live in **two different functions** — this cell previously attributed both to one: `foldProvenance:2220` skips `core` outright (`mid == "core"`, `:2224`, so a prelude name never contributes a provenance at all), while `keepAmbiguous:2250` drops any name that has a same-module top-level definition (`not (contains n sameMod)`, `:2253`) |
 | §8 **I5** (instance candidacy is graph-global) | 🔴 **PARTIAL — cumulative, not global.** `foldModules:17745` threads `accAll ++ prog` and `appendUniverseAccums:16925` grows the persistent impl universe (`growImplUniverse` over `implDeclsWithReqs:14030`) one module at a time, in the loader's dependency-first topological order (`compiler/driver/loader.mdk:570`) | the candidate set a goal is resolved against | so a module's candidate set is *every impl of every module earlier in the topological order*, plus its own — which is **strictly more** than its transitive imports (an unrelated sibling subtree fully visited earlier is included) and **strictly less** than the graph (nothing later is). The first half is order-dependence of exactly #1072's kind; the second is what I5 removes. ✅ the visibility half of I5 already holds: `implDeclWithReqs:14033` matches `DImpl { iface, tys, reqs, … }` and **never reads its `pub` field** (`compiler/frontend/ast.mdk:437-443`), so an impl's declared visibility governs no candidacy today — and `SHADOW-SEMANTICS.md` S2 already asserts the universe is *"GLOBAL — local ∪ imported ∪ prelude"* for its own routing rule |
-| §8 **I6.1** (a head fabricated from a type-parameter name is a rigid VARIABLE, not a declaration) | 🔴 **OWED — no site exists, and the clause is DIVERGENT where behaviour exists.** Two elaborators reify an unbindable type-parameter spelling as a nullary constructor: `fromAstTypeE:4266`'s `TyVar` arm, `fromOption (TCon n) (lookupAssoc n tvs)` (`:4279`), and `paramMonoOf:10287`, `fromOption (TCon tp) (lookupAssoc tp subst)` (`:10288`) — both `compiler/types/typecheck.mdk`. The result is a `TCon String` byte-indistinguishable from one a `data` declaration produced, so **nothing downstream can apply this clause even in principle**; there is no predicate anywhere that separates the two populations. Implementing site is A-1 (see #1110) | — (nothing) | ⚠️ **the in-tree PROOF that the two are already indistinguishable is load-bearing, not hypothetical**: `candidateBucket:11986`'s `tag == noneHeadTag` guard exists because `paramMonoOf` can put `TCon "__none__"` at `goals[0]` from a user-written interface parameter, so `goalHeadCon` answers `Some "__none__"` — a **reserved internal tag** (`noneHeadTag`, `compiler/support/util.mdk:494`) reached from an ordinary type-variable spelling. Its own comment (`:11976-11985`) records that `data __none__ = N` is a parse error while `impl Q __none__` type-checks at exit 0. A fabricated head is therefore already colliding with a *reserved* name; under a bare-spelling key it collides with declared types too |
-| §8 **I6.2** (a builtin head has ONE program-global identity) | 🟡 **HOLDS — but CARRIED BY THE COLLAPSE, not enforced by a site.** `tupleMono:13666` builds `TCon (tupleHeadTagTc (listLen ts))` (`:13667`), `reqTyToMono:15072` the same (`:15079`), and `tupleSpine:13683` recognises a tuple by comparing that string (`:13684-13687`); `Mono`'s `TCon String` (`:116`) carries no origin at all, so every module's `(Int, Int)` is literally the same value. Resolve already treats the builtin as *not a declaration* — `checkType:340` accepts it via `isTupleCtorTyName` (`compiler/frontend/resolve.mdk:1262`) rather than by membership in `env.types` — and `tyConSurface` (`compiler/tools/printer.mdk:338`) is what keeps the internal spelling out of the user's source | that `(Int, Int)` written in two modules is one type, and the prelude's tuple instances apply everywhere | 🚨 **the keying assumption is the ABSENCE of a key**, which is precisely what I4 removes. A mechanical A-1 that stamps every `TCon` with the module under elaboration satisfies I4 and **breaks this row**, with no diagnostic that names tuples. Marked 🟡 rather than ✅ deliberately: the property is true today, and nothing in the tree would notice it becoming false |
-| §8 **I6.3** (`""` is not a module identity) | 🟡 **PARTIAL — the sentinel exists; no comparison mixes it TODAY.** `cohImplsOf:10716` is defined as `cohImplsOfMid "" d` (`:10717`) — the per-module coherence sweep records no origin — and the empty string is then read back by `cohIsCrossModule:11079` (`mid1 != "" && mid2 != "" && mid1 != mid2`, `:11080`) and `cohSoftInScope:11058` (whose first arm is `cohSoftInScope "" "" = True`, `:11059`) | which coherence sweep OWNS a ⊑-incomparable pair, and whether the message names both modules | ✅ **the mixed comparison is unreachable at present, and that was checked rather than assumed**: `cohScan` has exactly **two** call sites — `checkCoherence:11142` over `cohCollectImpls:11548` (every mid `""`) and `globalCoherenceConflict:11588` over `cohCollectModuleImpls:11564` (every mid real) — so a `("" , real)` pair never forms and the sentinel is uniform per sweep. ⚠️ **What the row records is therefore a MIGRATION hazard, not a live defect.** Today `""` reads as *"origin not recorded"*, and its only consumers are message wording (`cohHardMsg:11074`, `cohWhereSuffix:11094`) and sweep ownership (`cohClassify:11037`'s drop arm `:11042`, a de-duplication) — no acceptance decision. A-1 makes real origins available at both sweeps; the clause forbids promoting the sentinel to an identity at that moment rather than eliminating it. **OWED — #1110** for the elimination. The origins the clause says exist are already in the tree for the prelude (`coreExports:2494`'s `modId = "core"`, `compiler/frontend/resolve.mdk:2496`) |
+| §8 **I6.1** (a head fabricated from a type-parameter name is a rigid VARIABLE, not a declaration) | 🔴 **OWED — #1110. DIVERGENT where behaviour exists.** Two elaborators reify an unbindable type-parameter spelling as a nullary constructor: `fromAstTypeE:4266`'s `TyVar` arm, `fromOption (TCon n) (lookupAssoc n tvs)` (`:4279`), and `paramMonoOf:10287`, `fromOption (TCon tp) (lookupAssoc tp subst)` (`:10288`) — both `compiler/types/typecheck.mdk`. The result is a `TCon String` byte-indistinguishable from one a `data` declaration produced | — (nothing at the `Mono` level) | ⚠️ **DERIVATION CORRECTED — read this, not the verdict.** An earlier revision of this row said *"there is no predicate anywhere that separates the two populations"*. **That is false in one grep**, and this table's own preamble is what makes the error expensive: `checkType:341-345` (`compiler/frontend/resolve.mdk`) tests a `TyCon` for existence — `omHasKey n env.types \|\| omHasKey n env.imported \|\| isTupleCtorTyName n` — while `checkType:346` is a different arm entirely, `checkType _ _ (TyVar _) = []`. **The `Ty` AST separates the populations and resolve already acts on the difference.** The true, narrower claim is the one A-1 acts on: the distinction **exists in resolve and is destroyed at `fromAstTypeE:4279`**, which maps a `TyVar` onto the same node a `TyCon` maps onto — after which no predicate over the resulting `Mono` can recover it, and no resolve→typecheck channel carries resolve's knowledge forward (#1110 §2 derives the absence of that channel). ⚠️ **The in-tree proof that the collapse is live, not hypothetical**: `candidateBucket:11986`'s `tag == noneHeadTag` guard exists because `paramMonoOf` can put `TCon "__none__"` at `goals[0]` from a user-written interface parameter, so `goalHeadCon` answers `Some "__none__"` — a **reserved internal tag** (`noneHeadTag`, `compiler/support/util.mdk:494`) reached from an ordinary type-variable spelling. Its own comment (`:11976-11985`) records that `data __none__ = N` is a parse error while `impl Q __none__` type-checks at exit 0 |
+| §8 **I6 corollary** (I6.1 ∧ I6.3 ⇒ a rigid variable must not be the type-CONSTRUCTOR node) | 🔴 **OWED — #1110. A REPRESENTATION constraint, so there is nothing to "enforce" until the representation changes.** `Mono`'s `TCon String` (`compiler/types/typecheck.mdk:116`) is one node carrying both populations, so the corollary is violated **by construction** today | that "carries no identity" is a structural fact about the node, not an empty field on it | derived from I6.1 ∧ I6.3, **neither of which states it alone** — which is why it gets a row: an implementer satisfying the two clauses separately can keep rigid variables in the constructor node and then discover, at every cross-module predicate, that it must decide what an absent origin means per call site. That decision is the thing I6.3 forbids. Recorded so A-1 meets the constraint at design time rather than at the first `cohIsCrossModule`-shaped site |
+| §8 **I6.2 (a)** — ONE type: the builtin head is the same in every module | 🟡 **HOLDS — but CARRIED BY THE COLLAPSE, not enforced by a site.** `tupleMono:13666` builds `TCon (tupleHeadTagTc (listLen ts))` (`:13667`), `reqTyToMono:15072` the same (`:15079`), and `tupleSpine:13683` recognises a tuple by comparing that string (`:13684-13687`); `Mono`'s `TCon String` (`:116`) carries no origin at all, so every module's `(Int, Int)` is literally the same value. Resolve already treats the builtin as *not a declaration* — `checkType:340` accepts it via `isTupleCtorTyName` (`compiler/frontend/resolve.mdk:1262`) rather than by membership in `env.types` | that `(Int, Int)` written in two modules is one type, and the prelude's tuple instances apply everywhere | 🚨 **the keying assumption is the ABSENCE of a key**, which is precisely what I4 removes. A mechanical A-1 that stamps every `TCon` with the module under elaboration satisfies I4 and **breaks this conjunct**, with no diagnostic that names tuples. Marked 🟡 rather than ✅ deliberately: the property is true today, and nothing in the tree would notice it becoming false |
+| §8 **I6.2 (b)** — UNFORGEABLE: no source file may produce a head carrying the reserved origin | ✅ **VERIFIED at the SURFACE/PARSE level.** `compiler/frontend/parser.mdk` has exactly **two** `TyCon`-constructing sites: `parseTyAtom:2026`'s `TUpper c` arm (`:2030-2034`), and `tupleCtorTyOfArity:2102` (`:2105`) — the `(,)`/`(,,)`/… sugar, which produces exactly `tupleCtorTyName:2109`. A `TIdent` becomes `TyVar` instead (`:2035`). `__tupleN__` begins with `_`, and `identStartLower:1637` is `isLower (at src p) \|\| at src p == '_'` (`compiler/frontend/lexer.mdk:1638`), so the spelling can never arrive as `TUpper`. The tree states the invariant itself: *"A `TyCon` can only start at a `TUpper` token (`parseTyAtom`)"* (`compiler/frontend/parser.mdk:3648`). ⚠️ **NOT ESTABLISHED at the `Mono` level — see the keying column** | that the reserved origin cannot be named by user text | ⚠️ **The tempting differential is an INVERSION — do not read it as a refutation.** `impl Q (,)` applied to `Int` rejects, while `impl Q __tuple2__` applied to `Int` accepts and prints. That is **not** forgery of the builtin: `__tuple2__` parsed as a type **variable**, so `headTyconTy _ = None` (`compiler/types/typecheck.mdk:12463`) filed the impl in the headless bucket — the author wrote a general `impl Q a` with an odd-looking variable name, and the accept is correct. The observation is evidence *for* (b), by a mechanism a `Mono`-level reading cannot see. 🔴 **The `Mono` level is UNVERIFIED and specifically SUSPECT via I6.1**: `paramMonoOf:10287` builds a `TCon` from an arbitrary type-parameter *spelling*, and `__tupleN__` is a legal type-variable spelling. The analogous forgery is **already documented as reachable for the other reserved tag** — `candidateBucket:11976-11985` on `__none__`. Whether the tuple tags are reachable by that route was **not tested** (structural reading, no binary run). **OWED — #1110**, and it is the sharpest reason the I6 corollary row above is not optional |
+| §8 **I6.3** (`""` is not a module identity) | 🟡 **PARTIAL — the sentinel exists and is READ AS ONE.** `cohImplsOf:10716` is defined as `cohImplsOfMid "" d` (`:10717`) — the per-module coherence sweep records no origin — and the empty string is then read back by `cohIsCrossModule:11079` (`mid1 != "" && mid2 != "" && mid1 != mid2`, `:11080`) and `cohSoftInScope:11058` (whose first arm is `cohSoftInScope "" "" = True`, `:11059`). **OWED — #1110** for the elimination | which coherence sweep OWNS a ⊑-incomparable pair, and whether the message names both modules | ⚠️ **A MIGRATION hazard, not a live defect** — the severity rests on the reachability row below, not on this one. Today `""` reads as *"origin not recorded"*, and its only consumers are message wording (`cohHardMsg:11074`, `cohWhereSuffix:11094`) and sweep ownership (`cohClassify:11037`'s drop arm `:11042`, a de-duplication) — **no acceptance decision**. A-1 makes real origins available at both sweeps; the clause forbids promoting the sentinel to an identity at that moment rather than eliminating it. The origins the clause says exist are already in the tree for the prelude (`coreExports:2494`'s `modId = "core"`, `compiler/frontend/resolve.mdk:2496`) |
+| §8 **I6.3 (reachability)** — no comparison mixes `""` with a real id today | ✅ **CHECKED, not assumed** — `cohScan` has exactly **two** call sites: `checkCoherence:11142` over `cohCollectImpls:11548` (every mid `""`) and `globalCoherenceConflict:11588` over `cohCollectModuleImpls:11564` (mids from the loader). Each collector is uniform, so a `("" , real)` pair never forms | the severity of the row above: a mixed pair would drop a soft finding, never accept anything wrong | 🔴 **the "every mid real" half is INHERITED FROM THE PRODUCER, NOT ENFORCED AT THE COLLECTOR — name the owner or this row rots the moment A-1 changes the producers.** `cohCollectModuleImpls:11564` pattern-matches `(mid, prog)` and passes `mid` through **without any non-emptiness test**; the guarantee lives entirely in `moduleIdOfPath:117` (`compiler/driver/loader.mdk`), which is `slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))` (`:119`) and would yield `""` for a path of exactly `<root>/.mdk`. Nothing asserts it: where that degenerate name is excluded at all it is excluded **incidentally**, by a dot-entry filter written for a different purpose (`enumerateMdkFiles`'s `dropDotEntries`, `compiler/tools/refindex.mdk:1412`) and on a different code path. **So the invariant has no owner.** Reachability of the degenerate path through the loader's own enumeration was **not** established here (structural reading; no binary run) — UNVERIFIED, and deliberately not claimed either way |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
 **Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
