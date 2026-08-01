@@ -252,15 +252,29 @@ circular — its bucket was exhaustive *because* tyvar-headed entries were dropp
 at construction — so "the buckets already collect the same entries" must not be
 read as evidence against this clause.
 
-⚠️ **Sequencing constraint (loud-over-quiet).** Completing the candidate set
-routes strictly *more* goals into `pickMostSpecificEntry`, which resolves a
-non-unique winner by **silently keeping the head of the list** — declaration
-order, no diagnostic (`compiler/types/typecheck.mdk`, its own comment: *"if no
-such unique entry exists … keep the head of the list"*). Landing completeness
-before the C1 per-goal-unique-minimum diagnostic would enlarge the population
-reaching a silent-wrong-answer path — a severity increase even though each
-individual fix is correct. **A-3/B-2's completeness change lands with, or after,
-F-3 (#311/#614).**
+⚠️ **Sequencing constraint (loud-over-quiet) — ✅ DISCHARGED by F-3c (2026-08-01,
+#1155).** It read: completing the candidate set routes strictly *more* goals into
+`pickMostSpecificEntry`, which resolves a non-unique winner by **silently keeping
+the head of the list** — declaration order, no diagnostic — so landing
+completeness before the C1 per-goal-unique-minimum diagnostic would enlarge the
+population reaching a silent-wrong-answer path, a severity increase even though
+each individual fix is correct. F-3c made that arm a located
+`T-AMBIGUOUS-INSTANCE` naming the goal and every competing impl head
+(`reportAmbiguousOverlap`), so the population it was worried about is now loud.
+⚠️ **Read the discharge narrowly: it holds for CLOSED goals only.** The reject is
+gated on §6.2 T3 closedness (`goalsClosed`) because T4 defers a goal still
+carrying an unbound metavariable rather than deciding it; at a non-closed goal
+the silent head-of-list pick survives. That residue is **reachable today and
+already pinned** — `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
+one-token sibling `…-t4-open-goal-deferred.mdk` — but it changes **no verdict**,
+because every program that reaches it is also rejected by coherence (a) at the
+declaration. ⚠️ An earlier revision of this paragraph said *"unreachable today"*,
+which is a different and false claim: a declaration-time rejection is **not** an
+early exit (errors accumulate), so the impls are still registered and the goal
+still reaches the selector. **F-3d** is what makes the residue load-bearing —
+relaxing (a) removes the coherence reject, and the open half becomes an ACCEPT an
+ungated arm would reject — so the sequencing constraint above transfers verbatim
+to F-3d rather than expiring with F-3c.
 
 ### I — Inference (kept structurally intact)
 

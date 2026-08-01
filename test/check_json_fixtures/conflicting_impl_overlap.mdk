@@ -18,3 +18,19 @@ impl C (Pair a Int) where
 
 main : <IO> Unit
 main = println (c (Pair 1 2))
+
+-- ⚠️ THIS NOTE IS DELIBERATELY AT THE BOTTOM.  The golden above pins the
+-- T-CONFLICTING-IMPL RANGE by absolute line number, so a note added to the header
+-- would shift it and conflate "the caret moved" with the change that actually
+-- happened here.  (AGENTS.md's fixture-line-count trap, paid for on 2026-07-31.)
+--
+-- Since #1155 (F-3c) this file emits TWO diagnostics and the golden carries both.
+-- The second one is the pre-existing T-CONFLICTING-IMPL this fixture is about; the
+-- FIRST is a goal-site T-AMBIGUOUS-INSTANCE at `c (Pair 1 2)` on the line above,
+-- because the ground goal `C (Pair Int Int)` matches `impl C (Pair Int b)` and
+-- `impl C (Pair a Int)`, which are ⊑-incomparable -- DICT-SEMANTICS §6 C1's
+-- "ambiguous overlap", now reported at the goal instead of silently taking the
+-- first-declared impl.  Both are correct and they are different rules at different
+-- sites (declaration-time condition (a) vs per-goal condition (c)); see
+-- `reportAmbiguousOverlap` in compiler/types/typecheck.mdk for why the goal-site one
+-- is NOT suppressed when the declaration-time one fires.

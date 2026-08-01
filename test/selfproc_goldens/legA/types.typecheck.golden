@@ -38,6 +38,7 @@ alphaCollectBinds : List LetBind -> List (String, Expr) -> List (String, Expr)
 alphaLeftPrefix : KP -> KP
 ambiguousFieldMsg : String -> List String -> String
 ambiguousImplMsg : String -> String
+ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 annotTooGeneralMsg : Ty -> String
 anyArgMentions : List String -> List Ty -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
@@ -138,6 +139,7 @@ callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mon
 callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
 candidateBucket : Map String (List KeyEntry) -> String -> List KeyEntry
+candsOneIface : List KeyEntry -> Option String
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
 censusSuperCloseVec : List Decl -> List (String, List Int) -> List (String, List Int)
@@ -373,7 +375,7 @@ depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (L
 depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derivableIface : String -> Bool
-dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono)) -> List (Int, String)
+dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (Int, String)
 dictArityOf : String -> Int
 dictForwardedPairs : Int -> Int -> List (Int, String)
 dictParamName : String -> Int -> String
@@ -563,6 +565,8 @@ generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : List (String, List Decl) -> Option String
 goalHeadCon : List Mono -> Option String
+goalSiteLoc : Ref (Option Loc)
+goalsClosed : List Mono -> Bool
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 groundNumVars : List (String, List String, Ty, Mono, Option Loc) -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -603,7 +607,7 @@ ifaceDictPassMethod : IfaceMethod -> IfaceMethod
 ifaceForConstraintId : Int -> String
 ifaceForConstraintIdGo : Int -> List (String, List String, Ty, Mono, Option Loc) -> String
 ifaceForInferredId : String -> Int -> String
-ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono)) -> String
+ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> String
 ifaceMethodName : String -> Bool
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodSchemes : List Decl -> List (String, Scheme)
@@ -636,6 +640,7 @@ implExistsForHead : Map String (List KeyEntry) -> String -> String -> Bool
 implExistsForHeadGo : List KeyEntry -> String -> String -> Bool
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
+implHeadLabel : String -> KeyEntry -> String
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
@@ -798,12 +803,14 @@ isSubTop : Param -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
 isUnboundTvar : Mono -> Bool
+joinAnd : List String -> String
 joinAxis : List (String, Param) -> List (String, Param) -> String -> (String, Param)
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepGroupNames : Map String Unit -> List String -> List String
 keptConstraintArgs : List (String, Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintIfaces : List (String, Mono) -> List String
 keyEntryIdx : KeyEntry -> Int
+keyEntryIface : KeyEntry -> String
 keyEntryOf : Decl -> List KeyEntry
 keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
 keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
@@ -943,6 +950,7 @@ noImplAdvice : String -> String -> String
 noImplFoundMsg : String -> List Mono -> String
 noImplFoundMsgHinted : String -> List Mono -> (String, Option String)
 noImplHint : String -> List Mono -> Option String
+noMinimumClause : Int -> String
 nonExhaustiveMatchWarning : String
 nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
 nonGuardedRows : List Arm -> List (List Pat)
@@ -960,7 +968,7 @@ nthTy : Int -> List Ty -> Option Ty
 numArithOp : Mono -> Mono -> Mono
 numCallObls : List (String, List Mono, Option Loc) -> List (String, List String, Ty, Mono, Option Loc)
 numConstrainedIds : List (String, List String, Ty, Mono, Option Loc) -> List Int
-numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono)) -> List (String, List String, Ty, Mono, Option Loc)
+numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (String, List String, Ty, Mono, Option Loc)
 numObligIds : (String, List String, Ty, Mono, Option Loc) -> List Int
 numUnimplementableHead : Mono -> Bool
 numlitCtxKind : Option Loc -> Option String
@@ -992,7 +1000,7 @@ performEffect : Ref EffRow -> EffRow -> Unit
 performLink : Ref Effvar -> Ref Effvar -> Unit
 phantomMethodMsg : String -> List String -> IfaceMethod -> List String
 phantomMethodMsgs : Decl -> List String
-pickMostSpecificEntry : List KeyEntry -> Option KeyEntry
+pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
@@ -1021,6 +1029,7 @@ ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> 
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
 ppMono : Mono -> String
 ppMonosShared : List Mono -> String
+ppPredArgsShared : List Mono -> String
 ppScheme : Scheme -> String
 ppSchemeCon : List (String, List Int) -> Scheme -> String
 ppSchemeNamed : String -> Scheme -> String
@@ -1058,7 +1067,7 @@ propParamNamesTc : List PropParam -> List String
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
 pureRow : EffRow
-pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono)) -> Unit
+pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushPendingObl : (String, List String, Ty, Mono, Option Loc) -> Unit
@@ -1166,6 +1175,7 @@ renderProductLit : List (String, Param) -> String
 reopenRow : Bool -> EffRow -> EffRow
 reopenRowN : Bool -> EffRow -> EffRow
 reportAmbiguousImpl : String -> Route
+reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, List Int) -> List (String, List Int) -> Unit
@@ -1180,7 +1190,7 @@ resolveArgStamp : Map String (List ImplEntry) -> Map String (List KeyEntry) -> S
 resolveArgStamps : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
-resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono, List String, List (List Mono)) -> Unit
+resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)

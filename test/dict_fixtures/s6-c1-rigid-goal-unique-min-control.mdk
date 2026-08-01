@@ -1,0 +1,32 @@
+-- CONTROL 1/3 for s6-c1-rigid-goal-no-minimum: the SAME rigid goal, with the user
+-- impl made strictly MORE SPECIFIC than the prelude's, so a unique ⊑-minimum
+-- exists.
+--
+-- SPEC ANSWER (hand-derived, NOT captured): the goal is still the rigid
+-- `Index (List (List a)) Int (List a)` and both instances still match, but now
+--
+--     σ(prelude `Index (List b) Int b`) = user `Index (List (List b')) Int (List b')`
+--         under σ = {b ↦ List b'}
+--
+-- so user ⊑ prelude, and no substitution takes the user head to the prelude head,
+-- so it is STRICT. min⊑(match) is the singleton {user}: §3 `inst` selects the USER
+-- impl and the program is ACCEPTED, printing the second row -- `[3]`.
+--
+-- WHY THIS CONTROL EXISTS. Without it, its sibling's rejection is consistent with
+-- three duller stories: that the goal is discharged by `assum` and never reaches
+-- `inst`; that a user impl at a prelude-occupied head is not registered at all; or
+-- that the prelude simply always wins. Each of those predicts `[1, 2]` here. Only
+-- "the goal reaches min⊑ and min⊑ decides it" predicts `[3]`.
+--
+-- ⚠️ Its body must NOT be `index _ _ = []`: `[]` is what a broken impl returning
+-- the empty list yields too, and it is what the prelude would print for an
+-- out-of-range index. The SECOND ROW is a value only this impl can produce.
+impl Index (List (List b)) Int (List b) where
+  index xss _ = match xss
+    _::y::_ => y
+    _ => []
+
+firstRow : List (List a) -> List a
+firstRow xss = index xss 0
+
+main = println (firstRow [[1, 2], [3]])

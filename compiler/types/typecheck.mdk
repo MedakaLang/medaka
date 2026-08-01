@@ -1692,8 +1692,16 @@ public export data SiteKind =
   | SKRLocal String Bool (List Mono) (List String)
 
 public export data PendingEntry =
-  -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind
-  | PendingEntry String (Ref Route) Mono String SiteKind
+  -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind,
+  -- and the site's own source span.
+  -- #1155 (F-3c): the 6th field is the `currentLoc` span snapshotted at the RECORD
+  -- site — during inference, while the ELoc context is live — exactly as `implObls`'
+  -- 5th element is (see `pushPendingObl`).  The resolvers run POST-HM, long after
+  -- inference left this expression, so the live `currentLoc` there names whatever
+  -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
+  -- Each resolver loop republishes this span into `goalSiteLoc` so the min⊑ selector's
+  -- ambiguity reject can point at the goal it was actually posed by.
+  | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc)
 
 -- return-position method sites discovered during inference: (method name, the
 -- EMethodAt route ref to fill, the EMethodAt impl-dicts ref to fill, the method's
@@ -2461,7 +2469,11 @@ callOblsWindow mark = map oblAsTuple (wWindow perRun.value.obls mark)
 -- ports `pendingDictApps` onto `Windowed` too (see `dictApps` below); mutated ONLY
 -- by `resetState` and `pushDictApp`.
 
-pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono)) -> Unit
+-- #1155 (F-3c): the 5th element is the `currentLoc` span snapshotted at the RECORD
+-- site, the same reason and the same shape as `PendingEntry`'s 6th field and
+-- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
+-- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
+pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 pushDictApp app = wPush perRun.value.dictApps app
 
 -- method-level-constraint dict-passing (the reference's res_method_dicts, Phase
@@ -2788,7 +2800,7 @@ recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordArgStamp name tagRef implRef idx mono
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
-    Some am => setRef perRun.value.pendingArgStamps (PendingEntry name tagRef am perRun.value.currentFn.value (SKArg implRef mono) :: perRun.value.pendingArgStamps.value)
+    Some am => setRef perRun.value.pendingArgStamps (PendingEntry name tagRef am perRun.value.currentFn.value (SKArg implRef mono) currentLoc.value :: perRun.value.pendingArgStamps.value)
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -2814,8 +2826,9 @@ recordArgSiteFn _ idx mono = match nthArgMono idx mono
 -- of the SAME parametric type → RDict forwarding the in-scope dict param).  A
 -- still-unsolved free type variable → left RNone (the emitter arg-tag-dispatches).
 resolveArgStamps : ImplBuckets -> KeyBuckets -> List PendingEntry -> Unit
-resolveArgStamps _ _ [] = ()
-resolveArgStamps implTable keyTable ((PendingEntry name tagRef am encl kind)::rest) =
+resolveArgStamps _ _ [] = setRef goalSiteLoc None
+resolveArgStamps implTable keyTable ((PendingEntry name tagRef am encl kind loc)::rest) =
+  let _ = setRef goalSiteLoc loc
   let _ = match kind
     SKArg implRef fullMono =>
       resolveArgStamp implTable keyTable name tagRef implRef am fullMono encl
@@ -3083,6 +3096,24 @@ pushTypeErrorHelpFixAt code loc msg help fix =
 currentLoc : Ref (Option Loc)
 currentLoc = Ref None
 
+-- #1155 (F-3c): the span of the dispatch SITE whose goal the post-HM resolvers are
+-- currently entailing — republished from the `Option Loc` each `PendingEntry` /
+-- `dictApps` entry snapshotted at its RECORD site.  `currentLoc` is useless in that
+-- window: inference has long since left the offending expression, so it names
+-- whichever ELoc happened to be entered last (observed on the #1155 rigid fixture:
+-- the body of an unrelated impl three lines away).  This is the same problem
+-- `pushTypeErrorOnceAt`'s `Option Loc` parameter exists for — a route-time reject
+-- just has no argument to pass it through, so the span travels in a ref instead.
+--
+-- ⚠️ SCOPED TO A RESOLVER DRAIN, deliberately.  Each of the five resolver loops sets
+-- it per entry and CLEARS it (`None`) in its own base case, so outside a drain the
+-- selector falls back to `currentLoc` — the pre-#1155 behaviour — rather than
+-- attributing a goal to some earlier site's span.  `concreteReqMatchByIface` (the
+-- obligation-check reader of the same selector) runs outside every drain and is
+-- exactly the caller that clearing protects.
+goalSiteLoc : Ref (Option Loc)
+goalSiteLoc = Ref None
+
 currentDoOrigin : Ref (Option Loc)
 currentDoOrigin = Ref None
 
@@ -3248,7 +3279,7 @@ data PerRun = PerRun {
     funConstraintIfacesRef : Ref (List (String, List String)),
     currentImportDefinersRef : Ref (List (String, String)),
     currentImportOriginsRef : Ref (List (String, String)),
-    dictApps : Windowed (Ref (List Route), List Mono, List String, List (List Mono)),  -- #841: pendingDictApps/N, ported onto Windowed
+    dictApps : Windowed (Ref (List Route), List Mono, List String, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
     obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
     absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
     schemeObligationsRef : Ref (List ((String, Int), List (String, List Int))),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
@@ -4882,7 +4913,7 @@ recordRLocalSite env name tagRef inst
         let dicts = shadowStandaloneDictSlotsAt (standaloneSchemeFor env name sym) (if sym == "" then name else sym) am
         setRef
           perRun.value.pendingRLocalSites
-          (PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) :: perRun.value.pendingRLocalSites.value)
+          (PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) currentLoc.value :: perRun.value.pendingRLocalSites.value)
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -4994,7 +5025,7 @@ countInSubst (id::rest) subst =
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordSite name tagRef implRef methodType =
   let stripped = stripArrows methodType
-  let _ = setRef perRun.value.pendingSites (PendingEntry name tagRef stripped perRun.value.currentFn.value (SKReturn implRef methodType) :: perRun.value.pendingSites.value)
+  let _ = setRef perRun.value.pendingSites (PendingEntry name tagRef stripped perRun.value.currentFn.value (SKReturn implRef methodType) currentLoc.value :: perRun.value.pendingSites.value)
   let _ = setRef perRun.value.methodSiteFns (consSiteFn perRun.value.currentFn.value stripped perRun.value.methodSiteFns.value)
   methodType
 
@@ -5131,7 +5162,7 @@ inferDictAtFound name routesRef inst =
     let ids = map snd expanded
     let monos = constraintMonosOf ids (snd inst)
     let ifaces = map fst expanded
-    let _ = pushDictApp (routesRef, monos, ifaces, callArgVecs (declaredConstraintArgs name) ids (snd inst))
+    let _ = pushDictApp (routesRef, monos, ifaces, callArgVecs (declaredConstraintArgs name) ids (snd inst), currentLoc.value)
     let _ = setRef perRun.value.dictAppFns (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
@@ -5882,7 +5913,7 @@ binopSpanLoc l r = match (exprLoc l, exprLoc r)
 -- in-impl-body sites (a top-level operand may collide with stale activeDictVars ids).
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite op dref m = match binopMethod op
-  Some method => setRef perRun.value.pendingBinopSites (PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) :: perRun.value.pendingBinopSites.value)
+  Some method => setRef perRun.value.pendingBinopSites (PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) currentLoc.value :: perRun.value.pendingBinopSites.value)
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -5926,7 +5957,7 @@ unopMethod _ = None
 -- (nothing for `!`).  Same currentImplBody/currentFn snapshot, same reason.
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 recordUnopSite op dref m = match unopMethod op
-  Some method => setRef perRun.value.pendingUnopSites (PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) :: perRun.value.pendingUnopSites.value)
+  Some method => setRef perRun.value.pendingUnopSites (PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) currentLoc.value :: perRun.value.pendingUnopSites.value)
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -6741,7 +6772,7 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (routeLocalSym r.value)
     tx
   let _ = setRef perRun.value.pendingRLocalSites
-    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym r.value) True (fst dicts) (snd dicts))
+    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym r.value) True (fst dicts) (snd dicts)) currentLoc.value
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
@@ -6877,7 +6908,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- (its head is already ground; RKey comes from resolveArgStamps on the emit path).
   let _ = if isDictVar then ()
     else setRef perRun.value.pendingRLocalSites
-      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym tagRef.value) (not dispatches) (fst dicts) (snd dicts))
+      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym tagRef.value) (not dispatches) (fst dicts) (snd dicts)) currentLoc.value
         ::perRun.value.pendingRLocalSites.value)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -6885,7 +6916,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
     -- standalone's own scheme, which is not an interface-method occurrence at all;
     -- pass the receiver mono `xt` so ifaceParamMonos fails its shape match and the
     -- selector falls back to the singleton goal, exactly as before #609.
-    Some _ => setRef perRun.value.pendingArgStamps (PendingEntry name tagRef xt perRun.value.currentFn.value (SKArg implRef (if dispatches then ft else xt))::perRun.value.pendingArgStamps.value)
+    Some _ => setRef perRun.value.pendingArgStamps (PendingEntry name tagRef xt perRun.value.currentFn.value (SKArg implRef (if dispatches then ft else xt)) currentLoc.value::perRun.value.pendingArgStamps.value)
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -8951,7 +8982,7 @@ methodConstrainedIds _ = flatMap
   perRun.value.pendingArgStamps.value
 
 argStampMono : PendingEntry -> Mono
-argStampMono (PendingEntry _ _ am _ _) = am
+argStampMono (PendingEntry _ _ am _ _ _) = am
 
 -- #866: the same ids methodConstrainedIds yields, paired with the INTERFACE of the
 -- method that discriminates on them, so a binding pinned by the METHOD channel gets the
@@ -8968,7 +8999,7 @@ methodConstrainedPairs _ =
 -- the explanation.  Dropping was the earlier behaviour and it is why a `where` helper
 -- pinned by this channel got a bare mismatch with no help at all.
 argStampPairs : PendingEntry -> List (Int, String)
-argStampPairs (PendingEntry name _ am _ _) =
+argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
@@ -9025,8 +9056,8 @@ dictForwardedPairs : Int -> Int -> List (Int, String)
 dictForwardedPairs callN0 dictN0 = flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
   ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
-dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono)) -> List (Int, String)
-dictAppMonoIds (_, monos, ifaces, _) =
+dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (Int, String)
+dictAppMonoIds (_, monos, ifaces, _, _) =
   flatMap monoIdsWithIface (zipL monos ifaces)
 
 callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
@@ -10190,8 +10221,9 @@ constraintNonParamVars typarams (Constraint _ args) =
   removeAllS typarams (flatMap tyVarNames args)
 
 resolveSites : ImplBuckets -> KeyBuckets -> List String -> List PendingEntry -> Unit
-resolveSites _ _ _ [] = ()
-resolveSites implTable keyTable rpNames ((PendingEntry name tagRef resultMono encl kind)::rest) =
+resolveSites _ _ _ [] = setRef goalSiteLoc None
+resolveSites implTable keyTable rpNames ((PendingEntry name tagRef resultMono encl kind loc)::rest) =
+  let _ = setRef goalSiteLoc loc
   let _ = match kind
     SKReturn implRef fullMono => resolveSite implTable keyTable rpNames name tagRef implRef resultMono fullMono encl
     _ => ()
@@ -10310,8 +10342,9 @@ implExistsForHeadGo ((KeyEntry methods tag2 _ _ _ _ _ _)::rest) name tag
 -- prelude, see the P0-19 d8 note — and answers the inference-time binding question, not which
 -- impl a route stamps.)
 resolveRLocalSites : List Decl -> ImplBuckets -> KeyBuckets -> List PendingEntry -> Unit
-resolveRLocalSites _ _ _ [] = ()
-resolveRLocalSites prog implTable keyTable ((PendingEntry name tagRef am _ kind)::rest) =
+resolveRLocalSites _ _ _ [] = setRef goalSiteLoc None
+resolveRLocalSites prog implTable keyTable ((PendingEntry name tagRef am _ kind loc)::rest) =
+  let _ = setRef goalSiteLoc loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces =>
       if forceLocal then
@@ -10486,8 +10519,9 @@ resolveArithSite dref m = match dref.value
 -- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : Bool -> ImplBuckets -> KeyBuckets -> List PendingEntry -> Unit
-resolveOpSites _ _ _ [] = ()
-resolveOpSites isBinop implTable keyTable ((PendingEntry method tagRef operandMono encl kind)::rest) =
+resolveOpSites _ _ _ [] = setRef goalSiteLoc None
+resolveOpSites isBinop implTable keyTable ((PendingEntry method tagRef operandMono encl kind loc)::rest) =
+  let _ = setRef goalSiteLoc loc
   let _ = match kind
     SKOp inImpl => resolveOpSite isBinop implTable keyTable method tagRef operandMono inImpl encl
     _ => ()
@@ -11662,13 +11696,15 @@ goalHeadCon [] = None
 -- SEVERAL entries' head patterns match (overlapping instances, e.g. `Def (List a)`
 -- and `Def (List Int)` both matching the ground result `List Int`), pick the
 -- MOST-SPECIFIC one — the entry that is strictly more specific than (or equal to)
--- every other matching entry (WS-3/D4 return-position most-specific-wins).  No
--- unique most-specific (equal heads or incomparable partial overlap) → keep the
--- FIRST match, behaviour unchanged.  Mirrors lib/typecheck.ml's
--- `strictly_more_specific` selection at a call site.
+-- every other matching entry (WS-3/D4 return-position most-specific-wins).  Equal
+-- heads cover each other, so they still resolve to the first of them.  Genuinely
+-- ⊑-INCOMPARABLE overlap has no minimum: since #1155 that is a hard
+-- `T-AMBIGUOUS-INSTANCE` at a closed goal (the first match is still returned, so the
+-- routes of the now-rejected program are unchanged — see `pickMostSpecificEntry`).
+-- Mirrors lib/typecheck.ml's `strictly_more_specific` selection at a call site.
 matchedEntry : KeyBuckets -> String -> List Mono -> Option KeyEntry
 matchedEntry table name goals =
-  pickMostSpecificEntry (matchingEntries table name goals)
+  pickMostSpecificEntry goals (matchingEntries table name goals)
 
 -- all entries defining [name] whose head pattern matches [resultMono], in
 -- declaration order.  #148: matchTyMono can only succeed when the entry's head
@@ -11739,11 +11775,15 @@ matchingEntries buckets name goals = match goalHeadCon goals
 --      when `pickMostSpecificEntry` has no unique min⊑ and falls back to
 --      head-of-list, and no such set containing a headless entry has been
 --      constructed (a bare-TyVar head subsumes every concrete head, so at a
---      single-param interface the minimum is always unique).  And F-3c (#1155)
---      turns that fallback arm into a HARD DIAGNOSTIC, which removes the only path
---      by which list order can decide an answer at all.  The exposure is therefore
---      self-limiting and CLOSES WITH F-3c.  If F-3c is descoped, this is the comment
---      to come back to.
+--      single-param interface the minimum is always unique).
+--      ⚠️ F-3c (#1155) HAS LANDED, and it closes this only PARTWAY — the earlier
+--      wording here ("removes the only path by which list order can decide an answer
+--      at all … CLOSES WITH F-3c") over-claimed.  The reject is gated on the goal
+--      being CLOSED, because §6.2 T4 defers a goal still carrying an unbound
+--      metavariable rather than deciding it.  At a NON-closed goal the fallback is
+--      still a silent head-of-list pick, so list order can still decide an answer
+--      there.  Closing that residue is T4's own work (defer to quiescence), not this
+--      selector's.  If it is ever fixed here instead, this is the comment to revisit.
 --
 -- 🚨 The `tag == noneHeadTag` guard is LOAD-BEARING, not defensive.  An earlier
 -- revision of this comment claimed `goalHeadCon` reads a MONO's spine head, "a real
@@ -11790,14 +11830,229 @@ matchingEntriesGo ((KeyEntry methodNames tag headTy key ifn itys reqs idx)::rest
   | contains name methodNames && entryHeadMatches headTy itys goals = KeyEntry methodNames tag headTy key ifn itys reqs idx :: matchingEntriesGo rest name goals
   | otherwise = matchingEntriesGo rest name goals
 
--- pick the entry strictly more specific than every OTHER matching entry; if no
--- such unique entry exists (≤1 match, equal heads, or incomparable overlap) keep
--- the head of the list (the pre-existing first-match behaviour).
-pickMostSpecificEntry : List KeyEntry -> Option KeyEntry
-pickMostSpecificEntry [] = None
-pickMostSpecificEntry (e::rest) = match findMostSpecificEntry (e::rest) (e::rest)
+-- §3 `inst` = `min⊑(match(IE, π))`: pick the entry strictly more specific than (or
+-- equal to) every OTHER matching entry.
+--
+-- ⚠️ WHAT REACHES THE `None` ARM, since the prose here was wrong about it until
+-- #1155 and the error is expensive in BOTH directions.  It said the arm covers "≤1
+-- match, equal heads, or incomparable overlap".  Two of those three never get here:
+-- `entryCovers` is `tyHeadEqV … || tyStrictlyMoreSpecificV …`, so a single match
+-- covers ITSELF and two EQUAL heads cover EACH OTHER — both make
+-- `entryCoversAllOthers` true and return `Some` (see `entryCoversAllOthers`' own
+-- comment, "Equal-head entries are covered trivially").  The description was
+-- outcome-equivalent while every arm produced a first-match result, and became
+-- load-bearing the moment one of them became a REJECT: keyed to the prose, this
+-- would hard-reject every duplicate-instance and user-overrides-prelude program.
+-- **Only ⊑-INCOMPARABLE OVERLAP lands here** (confirmed on
+-- test/typecheck_error_fixtures/overlapping_impls.mdk, whose equal heads stay silent).
+--
+-- #1155 (F-3c): that arm used to return `Some e` in silence, so DECLARATION ORDER
+-- decided the program's meaning — swap two `impl` blocks and the answer changes, at
+-- exit 0 on every engine (#1154, #1162).  It now also REPORTS, under the goal-site
+-- half of §6 C1: at most one ⊑-minimal matching instance, quantified over the goals
+-- `inst` decides rather than over ground goals.
+--
+-- The winner is still `Some e`, deliberately.  `recordTypeError` arms
+-- `typeErrorsSticky`, so `check` reports and `run`/`build` abort — the program is
+-- rejected either way — while every route this compile stamps stays byte-identical.
+-- Returning `None` instead would ALSO move every route on the rejected path (RKey →
+-- the caller's fallback), which changes emitted IR on a program nobody can run and
+-- buys nothing.
+pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
+pickMostSpecificEntry _ [] = None
+pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e::rest)
   Some best => Some best
-  None => Some e
+  None =>
+    let _ = reportAmbiguousOverlap goals (e::rest)
+    Some e
+
+-- #1155: the goal-site `T-AMBIGUOUS-INSTANCE`, with the two gates that keep it from
+-- over-rejecting.  [cands] is always ≥2 entries with no ⊑-minimum among them.
+--
+--  🚦 CLOSEDNESS (§6.2 T3/T4).  `inst` may commit only at a goal every variable of
+--     which is ground or rigid; a goal still carrying an unbound METAVARIABLE is
+--     DEFERRED, not decided (T4), and C1 explicitly declines to quantify over it —
+--     "a C1 quantified over commitment sites would reject it, while T4 and T6 say it
+--     is well-formed and that deferral is the whole point."  Committing there is a T3
+--     violation, and this compiler does commit there (§11's T3/T4 row records it).
+--     So rejecting there would convert a latent T3 violation into a USER-VISIBLE
+--     over-rejection of a legal program — the reject would be caused by our own early
+--     commitment.
+--
+--     🚨 THIS GATE FIRES.  It has NO USER-VISIBLE EFFECT today, which is a much
+--     weaker statement, and F-3c shipped the stronger one by mistake for one
+--     review round.  The false argument, recorded because it is seductive: for the
+--     arm to see a goal open at argument i EVERY candidate must carry a bare
+--     `TyVar` at i (`matchStep` MFails on a `TyCon`/`TyApp` pattern against an
+--     unbound var, and `matchOneSided`'s `cohEqR` re-check MFails once that var was
+--     bound to a structure); two USER impls meeting that condition necessarily have
+--     UNIFYING heads; coherence condition (a) rejects a ⊑-incomparable unifying
+--     pair AT THE DECLARATION.  Every step is true and the conclusion "so the goal
+--     never reaches the selector" DOES NOT FOLLOW — **a declaration-time rejection
+--     is not an early exit.**  Errors accumulate here by design (see
+--     `diagnostics.mdk`), so both impls are still registered in `KeyBuckets` and the
+--     goal still reaches this arm.  The counterexample was already sitting in this
+--     stage's own flip list: `check_json_fixtures/conflicting_impl_overlap.mdk`
+--     emits `T-CONFLICTING-IMPL` **and** this diagnostic on one file.
+--
+--     Pinned by `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
+--     one-token sibling `…/s6-2-t4-open-goal-deferred.mdk`: same two impls, same
+--     candidate set, same no-unique-minimum arm; the ground goal gets this
+--     diagnostic and the open goal must NOT.  Their verdict, exit code and stdout
+--     are IDENTICAL, so the gate is graded by a NEGATIVE code assertion — the only
+--     observable that separates them.
+--
+--     What IS true, and is all the sweep licenses: **no program in the tree exercises
+--     this gate, and every program that reaches it is already rejected by coherence
+--     (a) anyway**, so today it changes no verdict.  Measured: `check --json` AND
+--     `run` over all 2389 `.mdk`, each gate replaced by a probe diagnostic — zero
+--     firings.  "Not in the corpus" is not "unreachable"; promoting the first to the
+--     second is what went wrong above.  It matters from **F-3d (#614/#311)** on:
+--     relaxing (a) to per-goal (c) removes the coherence reject, at which point an
+--     ungated arm turns this pair's open half into a spec-violating over-rejection
+--     of a legal program.
+--
+--  🚦 ONE INTERFACE.  `matchingEntries` filters by METHOD NAME, not by interface, so
+--     two impls of two DIFFERENT interfaces that happen to share a method name can
+--     arrive together.  Their head vectors are ⊑-incomparable for a reason that has
+--     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
+--     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
+--     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
+--     it as ambiguity would be the wrong message.  (The iface-keyed caller
+--     `matchingEntriesByIface` cannot produce such a set, so the gate is a no-op
+--     there.)
+--
+--     🚨 THIS GATE IS NOT INERT — IT IS DECLINING TO REPORT A LIVE S0 (**#1182**),
+--     and an earlier revision of this comment claimed inertness "per the same
+--     sweep", which was wrong twice over: the sweep measured this branch's own
+--     corpus, and the shape is one no tree file happens to have.  Two interfaces
+--     each declaring `m`, with impls that could match one receiver: swapping the two
+--     `impl` BLOCKS and nothing else flips the answer between `1` and `2`, `check`
+--     clean, exit 0, on BOTH engines.  That is pre-existing (it reproduces on
+--     `main` without F-3c) and the scoping above is still right — it is a
+--     bare-name-keyed candidate set, whose fix is to SCOPE the set by interface
+--     (#1182 option 1), not to call it ambiguity.  But a gate that silently swallows
+--     a live silent order-dependence has to say which one, or the next reader
+--     re-derives it from scratch.  When #1182 lands, this gate becomes genuinely
+--     unreachable and can be deleted with its own fixture.
+--
+-- ⚠️ NOT SUPPRESSED when `T-CONFLICTING-IMPL` already fired for the same interface,
+-- and that was a considered call rather than an oversight.  The two in-tree fixtures
+-- this arm newly reports on — check_json_fixtures/conflicting_impl_overlap and
+-- dict_fixtures/s6-1c-incomparable-no-minimum-control — now carry BOTH codes.  They
+-- are two different RULES at two different SITES: `T-CONFLICTING-IMPL` is §6.1
+-- condition (a) at the `impl` declaration, and the corpus records it as an
+-- OVER-rejection (its sibling s6-1c-per-goal-unique-min-rejected is a program the
+-- spec's condition (c) accepts); this one is (c) at the goal.  The control fixture's
+-- own header says both conditions reject it, so reporting both is the checker saying
+-- what it actually did.  Suppressing would make this rule's extent depend on whether
+-- another rule fired first — the implementation-relative extent §6 C1 rejects for its
+-- own quantifier — and F-3d, which deletes (a), would have to un-suppress it on the
+-- one corpus where F-3c is demonstrably live.  (The suppression was recommended on
+-- the premise that `diff_compiler_dict_semantics.sh` §1 grades the FIRST code; it
+-- does not — `grep -q '"code":"$code"'`, presence anywhere.  Verified.)
+reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
+reportAmbiguousOverlap goals cands
+  | not (goalsClosed goals) = ()
+  | otherwise = match candsOneIface cands
+    None => ()
+    Some iface => pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" goalSiteLoc.value (ambiguousOverlapMsg iface goals cands)
+
+-- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
+-- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
+--
+-- 🚨 `isEmptyL (flatMap monoUnboundIds goals)` is the WRONG test and it silently costs
+-- #1155 its whole rigid half.  A rigid signature variable is NOT reified to a `TCon`
+-- here: `firstRow : List (List a) -> List a` still carries `a` as an UNBOUND `TVar`
+-- when the post-HM resolvers run (verified — under the unbound-ids test the #1155
+-- rigid fixture is classified non-closed and the reject never fires).  The
+-- rigid-vs-undetermined distinction is not visible in the `Mono` at all; it lives in
+-- whether some enclosing scheme QUANTIFIED that id, which is exactly what
+-- `deferrableVarIds` records (`schemeIds` at each generalized group close).  Same
+-- test `checkUndeterminedObligation`'s RULE 2 uses, for the same reason.
+--
+-- Conservative in the safe direction: a var recorded outside any generalized-group-
+-- close window is in NEITHER set (see checkCallObligations' #838 I4 note), so it reads
+-- as non-closed and this diagnostic stays silent rather than over-rejecting.
+--
+-- ⚠️ One deliberate imprecision, so nobody has to spot it twice: T3 says "quantified
+-- by the scheme JUST PRODUCED", whereas `deferrableVarIds` is a RUN-GLOBAL
+-- accumulation over every scheme closed so far in this module.  That is a strictly
+-- WIDER set than T3 names.  The two coincide in practice because tyvar ids are unique
+-- per run, so a var quantified by some other binding's scheme cannot also be free in
+-- this goal — but the coincidence is a property of id allocation, not of the test, and
+-- it would stop holding if ids were ever recycled.
+goalsClosed : List Mono -> Bool
+goalsClosed goals = allList
+  (i => containsI i perRun.value.deferrableVarIds.value)
+  (flatMap monoUnboundIds goals)
+
+-- the ONE interface all candidates implement, or None if they disagree (see the
+-- second gate on reportAmbiguousOverlap).
+candsOneIface : List KeyEntry -> Option String
+candsOneIface [] = None
+candsOneIface ((KeyEntry _ _ _ _ ifn _ _ _)::rest) =
+  if allList (e => keyEntryIface e == ifn) rest then
+    Some ifn
+  else
+    None
+
+keyEntryIface : KeyEntry -> String
+keyEntryIface (KeyEntry _ _ _ _ ifn _ _ _) = ifn
+
+-- #1155: names the GOAL and every competing impl head.  `ambiguousImplMsg` — the
+-- undetermined-VARIABLE reject, a different situation — names only the interface,
+-- which here would leave the reader no way to find the impls that collided
+-- (ERROR-QUALITY §1: "in the user's vocabulary", "actionable").  The goal's monos are
+-- rendered through ONE shared naming context so a variable occurring in two argument
+-- positions prints as the same letter, exactly as `cohOverlapMsg` does for the
+-- declaration-time conflict.
+--
+-- ⚠️ ARITY-NEUTRAL WORDING, and it was NOT at first.  THREE mutually ⊑-incomparable
+-- impls are constructible today (`C (T Int b c)` / `C (T a Int c)` / `C (T a b Int)`),
+-- and the original text — `joinWith " and "`, then "neither … the other", then "make
+-- these two disjoint" — rendered "matches A and B and C, and NEITHER is more specific
+-- than the other … make THESE TWO disjoint" on it.  Every count-bearing word here is
+-- now either derived from `listLen cands` or absent.
+--
+-- ⚠️ The last remedy clause exists because A COMPETING IMPL MAY NOT BE THE USER'S.
+-- The flagship #1155 fixture collides a user impl with `stdlib/core.mdk`'s
+-- `impl Index (List a) Int a`, where "make them disjoint" is not an action the reader
+-- can take.  The message cannot SAY which one is the prelude's — `KeyEntry` carries no
+-- module id and adding one re-signs the whole registry — so it names the one remedy
+-- that always works instead of implying the reader owns both.
+ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
+ambiguousOverlapMsg iface goals cands = "Ambiguous instance for `\{iface}`. The goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}. Overlapping impls are allowed only when one of them is more specific than every other match — make them disjoint, or add an impl more specific than all of them. If one of these is a prelude or imported impl you cannot edit, annotate this expression to a type only one of them matches"
+
+-- "neither is more specific than the other" reads better than the general form at the
+-- overwhelmingly common arity, and presupposes exactly two, so it is gated on two.
+noMinimumClause : Int -> String
+noMinimumClause n
+  | n == 2 = "neither is more specific than the other"
+  | otherwise = "none of them is more specific than all the others"
+
+-- "A", "A and B", "A, B and C" — `joinWith " and "` gives "A and B and C" at n>=3.
+joinAnd : List String -> String
+joinAnd [] = ""
+joinAnd [x] = x
+joinAnd [x, y] = "\{x} and \{y}"
+joinAnd (x::rest) = "\{x}, \{joinAnd rest}"
+
+implHeadLabel : String -> KeyEntry -> String
+implHeadLabel iface (KeyEntry _ _ _ _ _ itys _ _) =
+  "`impl \{iface} \{joinWith " " (map ppTyAtom itys)}`"
+
+-- render a PREDICATE's argument vector against one shared naming ctx, at ARGUMENT
+-- precedence — so `List a` in an argument slot prints as `(List a)`.
+-- ⚠️ NOT `ppMonosShared`, and not a candidate for merging with it: that one renders
+-- the dispatch monos at prec 2, where `wrapIf (prec > 2)` leaves an application
+-- BARE.  For a predicate whose arguments are themselves applications that is
+-- ambiguous — `Index List a Int a` reads as either a 3-argument or a 5-argument
+-- predicate — and the whole value of naming the goal is that the reader can match it
+-- against the impl heads printed beside it.  `cohPpEach` (prec 0) has the same
+-- problem.  Same shared-naming-context discipline as both, one precedence up.
+ppPredArgsShared : List Mono -> String
+ppPredArgsShared ms = joinWith " " (ppEach (Ref []) (Ref 0) 3 ms)
 
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
 findMostSpecificEntry [] _ = None
@@ -11931,13 +12186,14 @@ countHeadGo ((KeyEntry methodNames tag2 _ _ _ _ _ _)::rest) name tag
 -- KeyBuckets registry (every impl carries its iface + requires, unlike ImplBuckets
 -- which OMITS no-requires impls).  Returns the unique most-specific matching impl's
 -- KeyEntry — from which callers read the canonical key AND the impl's OWN requires
--- ([] for a no-requires specific impl).  No unique min⊑ (≤1 match, equal or
--- incomparable heads) → the FIRST match, byte-identical to the historical first-match
--- scans.  This is the ONE selector every resolution position (E/F/G/H) now funnels
+-- ([] for a no-requires specific impl).  ≤1 match or equal heads → the FIRST match,
+-- byte-identical to the historical first-match scans; ⊑-incomparable heads at a
+-- CLOSED goal → still the first match, but #1155 now also rejects the program there.
+-- This is the ONE selector every resolution position (E/F/G/H) now funnels
 -- through, discharging the §6 "uniform resolution" obligation.
 selectImplEntryByIface : KeyBuckets -> String -> List Mono -> Option KeyEntry
 selectImplEntryByIface buckets iface goals =
-  pickMostSpecificEntry (matchingEntriesByIface buckets iface goals)
+  pickMostSpecificEntry goals (matchingEntriesByIface buckets iface goals)
 
 -- all impls of [iface] whose head pattern matches [receiverMono], in declaration
 -- order.  Same bucket-by-head-tycon scan as matchingEntries, filtered on the impl's
@@ -12193,9 +12449,10 @@ findImplEntryGo ((ImplEntry tag2 ms hty reqs itys ifn)::rest) iface tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl -> ImplBuckets -> KeyBuckets -> List (Ref (List Route), List Mono, List String, List (List Mono)) -> Unit
-resolveDictApps _ _ _ [] = ()
-resolveDictApps prog implTable keyTable ((routesRef, monos, ifaces, argVecs)::rest) =
+resolveDictApps : List Decl -> ImplBuckets -> KeyBuckets -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+resolveDictApps _ _ _ [] = setRef goalSiteLoc None
+resolveDictApps prog implTable keyTable ((routesRef, monos, ifaces, argVecs, loc)::rest) =
+  let _ = setRef goalSiteLoc loc
   let routes = routesOfMonosTopV prog implTable keyTable monos ifaces argVecs
   let _ = setRef routesRef routes
   resolveDictApps prog implTable keyTable rest
@@ -14566,7 +14823,14 @@ monoIsFunction m = match normalize m
 -- (empty) requires and accepts, so `(5, "hi")` / `[1,2,3]` still build.
 checkNestedReqs : ImplUniverse -> String -> List Mono -> Option Loc -> Unit
 checkNestedReqs univ iface args loc =
-  checkReqObligations univ loc (reqObligationsFor univ iface args)
+  -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this is
+  -- the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE the
+  -- five resolver drains — publish the obligation's own snapshotted span so the
+  -- ambiguity reject lands on the use site rather than on `currentLoc`'s stale one.
+  -- Restored to None after, per `goalSiteLoc`'s scoping rule.
+  let _ = setRef goalSiteLoc loc
+  let _ = checkReqObligations univ loc (reqObligationsFor univ iface args)
+  setRef goalSiteLoc None
 
 -- Impl decls paired with their `requires` (implHeadsOf drops reqs; this keeps them).
 implDeclsWithReqs : List Decl -> List (String, List Ty, List Require)
@@ -16162,9 +16426,17 @@ numCallObls ((iface, monos, loc)::rest) = match (iface, monos)
   ("Num", [mono]) => ("Num", ["a"], TyVar "a", mono, loc) :: numCallObls rest
   _ => numCallObls rest
 
-numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono)) -> List (String, List String, Ty, Mono, Option Loc)
+numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (String, List String, Ty, Mono, Option Loc)
+-- #1155: the loc comes from the ENTRY's own snapshot, not from the ambient
+-- `currentLoc`.  This runs at a generalized group close, well after inference left
+-- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
+-- Behaviour-neutral by inspection rather than by hope: these synthetic entries feed
+-- ONLY the Num-defaulting search (`defaultGroupNum`/`defaultEachMember` →
+-- `numConstrainedIds`/`groundNumVars` → `numObligIds`/`liveNumVarGo`), and every one
+-- of those readers destructures the 5th element as `_`.  Nothing renders it today;
+-- the point is that the tuple stops carrying a span it knows to be wrong.
 numDictObls [] = []
-numDictObls ((_, monos, ifaces, _)::rest) = flatMap (p => if fst p == "Num" then [("Num", ["a"], TyVar "a", snd p, currentLoc.value)] else []) (zipL ifaces monos)
+numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num" then [("Num", ["a"], TyVar "a", snd p, loc)] else []) (zipL ifaces monos)
   ++ numDictObls rest
 
 -- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
@@ -17196,9 +17468,9 @@ lookupIfaceById id ((iface, oids)::rest)
   | otherwise = lookupIfaceById id rest
 
 -- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
-ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono)) -> String
+ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> String
 ifaceFromDictApps _ [] = ""
-ifaceFromDictApps id ((_, monos, ifaces, _)::rest) = match ifaceAtMonoId id monos ifaces
+ifaceFromDictApps id ((_, monos, ifaces, _, _)::rest) = match ifaceAtMonoId id monos ifaces
   Some s => s
   None => ifaceFromDictApps id rest
 
