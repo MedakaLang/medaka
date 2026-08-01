@@ -381,13 +381,24 @@ for f in $changed; do
     compiler/frontend/lexer.mdk)
       add 'diff_compiler_lex*'
       add 'diff_compiler_parse*'; add 'diff_compiler_snapshot*' ;;
+    # #1131: parser.mdk/ast.mdk are cited implementing sites in BOTH
+    # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
+    # enforcement table (`grep -oE 'compiler/[a-zA-Z_/]+\.mdk' docs/spec/*-SEMANTICS.md`),
+    # so both spec-conformance gates belong here too.
     compiler/frontend/parser.mdk|compiler/frontend/ast.mdk)
       add 'diff_compiler_parse*'
-      add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt' ;;
+      add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
+    # #1131: desugar.mdk is a cited DICT-SEMANTICS site.
     compiler/frontend/desugar.mdk)
-      add 'diff_compiler_snapshot*'; add 'diff_compiler_eval*' ;;
+      add 'diff_compiler_snapshot*'; add 'diff_compiler_eval*'
+      add 'diff_compiler_dict_semantics' ;;
+    # #1131: resolve.mdk is a cited DICT-SEMANTICS site (marker.mdk is cited in
+    # neither table — derived via the same grep, not assumed from the issue's
+    # "plausibly").
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
-      add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*' ;;
+      add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
+      add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
 
@@ -403,11 +414,17 @@ for f in $changed; do
     # compare against captured GOLDENS, which cannot see "eval and native now disagree
     # with each other" — only "output changed from what was recorded". Only
     # diff_compiler_engines asks the cross-engine question directly.
+    # #1131: typecheck.mdk is a cited implementing site in BOTH
+    # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
+    # enforcement table — the conformance gates for the class of defect this
+    # subsystem produces, and the ones a `check*`/`snapshot*`/goldens-only diff
+    # cannot see (they compare against captured output, not the spec).
     compiler/types/*)
       add 'diff_compiler_typecheck*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_check*'; add 'diff_compiler_exhaust'
       add 'diff_compiler_diagnostics'; add 'diff_compiler_eval_typed*'
-      add 'diff_compiler_engines' ;;
+      add 'diff_compiler_engines'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -444,14 +461,19 @@ for f in $changed; do
     # ── eval: also the in-language suite and the capability matrix ──
     # diff_compiler_snapshot* covers diff_compiler_snapshot_eval, whose `# EVAL`
     # section is produced by the eval pipeline — an eval.mdk change moves it.
+    # #1131: eval/eval.mdk is a cited site in BOTH semantics tables.
     compiler/eval/*|compiler/ir/core_ir_eval.mdk)
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_test'; add 'diff_compiler_capability_matrix'
-      add 'diff_compiler_engines' ;;
+      add 'diff_compiler_engines'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
 
+    # #1131: ir/core_ir_lower.mdk (SHADOW) and ir/core_ir.mdk (DICT) are both
+    # cited sites under compiler/ir/*.
     compiler/ir/*)
       add 'diff_compiler_core_ir*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
-      add 'diff_compiler_engines' ;;
+      add 'diff_compiler_engines'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
 
     # ── backend: the FIXPOINT is the decisive gate; do not defer it to CI ──
     #
@@ -459,22 +481,30 @@ for f in $changed; do
     # TMC the SAME functions, and the shared analysis it guards (backend/trmc_analysis.mdk)
     # plus both emitters that consume it all live under this arm. It self-provisions its
     # own emit probes, so it needs no oracle wiring here.
+    # #1131: llvm_emit.mdk/wasm_emit.mdk (both tables) and private_mangle.mdk
+    # (SHADOW) are all cited sites under compiler/backend/*.
     compiler/backend/*)
       add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
       need_fixpoint=1 ;;
 
+    # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
     compiler/driver/*)
-      add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build' ;;
+      add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
+      add 'diff_compiler_dict_semantics' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
     compiler/tools/snapshot.mdk)
                                    add 'diff_compiler_snapshot*' ;;
     compiler/tools/repl.mdk)       add 'diff_compiler_repl' ;;
+    # #1131: tools/test_cmd.mdk (matched by the `*test*` glob below) is a
+    # cited DICT-SEMANTICS site.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
-      add 'diff_compiler_test'; add 'diff_compiler_ported' ;;
+      add 'diff_compiler_test'; add 'diff_compiler_ported'
+      add 'diff_compiler_dict_semantics' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
     # ── the compiler's private mini-stdlib: used by every stage. ──
