@@ -32,10 +32,21 @@ why-stdout: `exit: 0` alone asserts nothing (the correct program also exits 0),
 why-stdout: so the whole discrimination lives in `stdout: 116`. 116 is exactly
 why-stdout: `impl Ix Int Bool`'s body plus `dbg2 5`, so the only thing that can
 why-stdout: move this string is a change to which instance the goal
-why-stdout: `Ix Int Char` selects -- which is the defect. The row drains in
-why-stdout: EITHER fix direction: routing the goal correctly makes stdout 227,
-why-stdout: and making the no-unique-minimum arm a hard diagnostic (#1155)
-why-stdout: makes the exit nonzero. Both fail the pin.
+why-stdout: `Ix Int Char` selects -- which is the defect.
+why-stdout: ⚠️ CORRECTED 2026-08-01 (F-3c). This field used to add: "The row
+why-stdout: drains in EITHER fix direction: routing the goal correctly makes
+why-stdout: stdout 227, and making the no-unique-minimum arm a hard diagnostic
+why-stdout: (#1155) makes the exit nonzero. Both fail the pin." THE SECOND
+why-stdout: DIRECTION IS FALSE and was never measured. F-3c shipped; measured on
+why-stdout: that binary this file is UNCHANGED -- check --json clean at exit 0,
+why-stdout: run 116 at exit 0 -- because the no-unique-minimum arm never fires
+why-stdout: on this program. There is exactly ONE drain direction: routing the
+why-stdout: goal correctly, which makes stdout 227.
+why-stdout: (The same false claim was carried by why-note below and is corrected
+why-stdout: there too. It was written in ONE place and read in ANOTHER: this
+why-stdout: field states the grading criterion, so it is the one a reader
+why-stdout: consults, and correcting only why-note left the file contradicting
+why-stdout: itself two paragraphs apart.)
 why-control: control.mdk flips exactly ONE dimension -- the order of the two
 why-control: `impl Ix` BLOCKS -- and the answer becomes the correct 227. That
 why-control: is the defect stated as an experiment: a reordering that changes

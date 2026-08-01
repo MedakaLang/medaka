@@ -11879,38 +11879,62 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 --     over-rejection of a legal program — the reject would be caused by our own early
 --     commitment.
 --
---     ⚠️ BOTH GATES ARE INERT ON TODAY'S TREE, and saying so is the point — a gate
---     whose inertness is undeclared reads as tested.  Measured on this branch:
---     `check --json` AND `run` over all 2389 `.mdk` in the tree, with each gate
---     replaced by a probe diagnostic instead of `()`: **zero** firings of either.
---     The closedness gate is unreachable today for a structural reason, derived
---     rather than observed: for the arm to see a goal open at position i, EVERY
---     candidate must carry a bare `TyVar` at i (`matchStep` MFails on a `TyCon`/
---     `TyApp` pattern against an unbound var, and `matchOneSided`'s consistency
---     re-check `cohEqR` MFails when the var was already bound to a structure).  Two
---     USER impls meeting that condition necessarily have unifying heads, so
---     coherence condition (a) rejects them AT THE DECLARATION — verified in both
---     directions, per-module (`Overlapping impls of T`) and cross-module
---     (`Conflicting impl T. Defined in ma and mb`).  And the prelude cannot supply
---     the other half: its only multi-param impls (`Index`/`IndexMut`) pin arg 1 to
---     `Int` and bind arg 2's var non-linearly from arg 0.
+--     🚨 THIS GATE FIRES.  It has NO USER-VISIBLE EFFECT today, which is a much
+--     weaker statement, and F-3c shipped the stronger one by mistake for one
+--     review round.  The false argument, recorded because it is seductive: for the
+--     arm to see a goal open at argument i EVERY candidate must carry a bare
+--     `TyVar` at i (`matchStep` MFails on a `TyCon`/`TyApp` pattern against an
+--     unbound var, and `matchOneSided`'s `cohEqR` re-check MFails once that var was
+--     bound to a structure); two USER impls meeting that condition necessarily have
+--     UNIFYING heads; coherence condition (a) rejects a ⊑-incomparable unifying
+--     pair AT THE DECLARATION.  Every step is true and the conclusion "so the goal
+--     never reaches the selector" DOES NOT FOLLOW — **a declaration-time rejection
+--     is not an early exit.**  Errors accumulate here by design (see
+--     `diagnostics.mdk`), so both impls are still registered in `KeyBuckets` and the
+--     goal still reaches this arm.  The counterexample was already sitting in this
+--     stage's own flip list: `check_json_fixtures/conflicting_impl_overlap.mdk`
+--     emits `T-CONFLICTING-IMPL` **and** this diagnostic on one file.
 --
---     It is shipped anyway because **F-3d (#614/#311) removes exactly that blocker.**
---     Relaxing (a) to per-goal (c) is what lets a ⊑-incomparable user pair reach this
---     arm, and on the day it does, an ungated arm becomes a spec-violating
---     over-rejection of a legal program — discovered under F-3d's own golden churn,
---     which is the worst possible place to discover it.  The gate is a prerequisite
---     for that stage, not a guess about today.
+--     Pinned by `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
+--     one-token sibling `…/s6-2-t4-open-goal-deferred.mdk`: same two impls, same
+--     candidate set, same no-unique-minimum arm; the ground goal gets this
+--     diagnostic and the open goal must NOT.  Their verdict, exit code and stdout
+--     are IDENTICAL, so the gate is graded by a NEGATIVE code assertion — the only
+--     observable that separates them.
+--
+--     What IS true, and is all the sweep licenses: **no program in the tree exercises
+--     this gate, and every program that reaches it is already rejected by coherence
+--     (a) anyway**, so today it changes no verdict.  Measured: `check --json` AND
+--     `run` over all 2389 `.mdk`, each gate replaced by a probe diagnostic — zero
+--     firings.  "Not in the corpus" is not "unreachable"; promoting the first to the
+--     second is what went wrong above.  It matters from **F-3d (#614/#311)** on:
+--     relaxing (a) to per-goal (c) removes the coherence reject, at which point an
+--     ungated arm turns this pair's open half into a spec-violating over-rejection
+--     of a legal program.
 --
 --  🚦 ONE INTERFACE.  `matchingEntries` filters by METHOD NAME, not by interface, so
 --     two impls of two DIFFERENT interfaces that happen to share a method name can
 --     arrive together.  Their head vectors are ⊑-incomparable for a reason that has
 --     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
---     deformation of the method-keyed path, not an ambiguous program, so it is not
---     this diagnostic's to report.  (The iface-keyed caller `matchingEntriesByIface`
---     cannot produce such a set, so the gate is a no-op there.)  Also inert today,
---     per the same sweep.
+--     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
+--     it as ambiguity would be the wrong message.  (The iface-keyed caller
+--     `matchingEntriesByIface` cannot produce such a set, so the gate is a no-op
+--     there.)
+--
+--     🚨 THIS GATE IS NOT INERT — IT IS DECLINING TO REPORT A LIVE S0 (**#1182**),
+--     and an earlier revision of this comment claimed inertness "per the same
+--     sweep", which was wrong twice over: the sweep measured this branch's own
+--     corpus, and the shape is one no tree file happens to have.  Two interfaces
+--     each declaring `m`, with impls that could match one receiver: swapping the two
+--     `impl` BLOCKS and nothing else flips the answer between `1` and `2`, `check`
+--     clean, exit 0, on BOTH engines.  That is pre-existing (it reproduces on
+--     `main` without F-3c) and the scoping above is still right — it is a
+--     bare-name-keyed candidate set, whose fix is to SCOPE the set by interface
+--     (#1182 option 1), not to call it ambiguity.  But a gate that silently swallows
+--     a live silent order-dependence has to say which one, or the next reader
+--     re-derives it from scratch.  When #1182 lands, this gate becomes genuinely
+--     unreachable and can be deleted with its own fixture.
 --
 -- ⚠️ NOT SUPPRESSED when `T-CONFLICTING-IMPL` already fired for the same interface,
 -- and that was a considered call rather than an oversight.  The two in-tree fixtures
@@ -11950,6 +11974,14 @@ reportAmbiguousOverlap goals cands
 -- Conservative in the safe direction: a var recorded outside any generalized-group-
 -- close window is in NEITHER set (see checkCallObligations' #838 I4 note), so it reads
 -- as non-closed and this diagnostic stays silent rather than over-rejecting.
+--
+-- ⚠️ One deliberate imprecision, so nobody has to spot it twice: T3 says "quantified
+-- by the scheme JUST PRODUCED", whereas `deferrableVarIds` is a RUN-GLOBAL
+-- accumulation over every scheme closed so far in this module.  That is a strictly
+-- WIDER set than T3 names.  The two coincide in practice because tyvar ids are unique
+-- per run, so a var quantified by some other binding's scheme cannot also be free in
+-- this goal — but the coincidence is a property of id allocation, not of the test, and
+-- it would stop holding if ids were ever recycled.
 goalsClosed : List Mono -> Bool
 goalsClosed goals = allList
   (i => containsI i perRun.value.deferrableVarIds.value)
@@ -11975,8 +12007,36 @@ keyEntryIface (KeyEntry _ _ _ _ ifn _ _ _) = ifn
 -- rendered through ONE shared naming context so a variable occurring in two argument
 -- positions prints as the same letter, exactly as `cohOverlapMsg` does for the
 -- declaration-time conflict.
+--
+-- ⚠️ ARITY-NEUTRAL WORDING, and it was NOT at first.  THREE mutually ⊑-incomparable
+-- impls are constructible today (`C (T Int b c)` / `C (T a Int c)` / `C (T a b Int)`),
+-- and the original text — `joinWith " and "`, then "neither … the other", then "make
+-- these two disjoint" — rendered "matches A and B and C, and NEITHER is more specific
+-- than the other … make THESE TWO disjoint" on it.  Every count-bearing word here is
+-- now either derived from `listLen cands` or absent.
+--
+-- ⚠️ The last remedy clause exists because A COMPETING IMPL MAY NOT BE THE USER'S.
+-- The flagship #1155 fixture collides a user impl with `stdlib/core.mdk`'s
+-- `impl Index (List a) Int a`, where "make them disjoint" is not an action the reader
+-- can take.  The message cannot SAY which one is the prelude's — `KeyEntry` carries no
+-- module id and adding one re-signs the whole registry — so it names the one remedy
+-- that always works instead of implying the reader owns both.
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
-ambiguousOverlapMsg iface goals cands = "Ambiguous instance for `\{iface}`. The goal `\{iface} \{ppPredArgsShared goals}` matches \{joinWith " and " (map (implHeadLabel iface) cands)}, and neither is more specific than the other. Overlapping impls are allowed only when one of them is more specific than every other match — make these two disjoint, add an impl more specific than both, or annotate this expression to a type only one of them matches"
+ambiguousOverlapMsg iface goals cands = "Ambiguous instance for `\{iface}`. The goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}. Overlapping impls are allowed only when one of them is more specific than every other match — make them disjoint, or add an impl more specific than all of them. If one of these is a prelude or imported impl you cannot edit, annotate this expression to a type only one of them matches"
+
+-- "neither is more specific than the other" reads better than the general form at the
+-- overwhelmingly common arity, and presupposes exactly two, so it is gated on two.
+noMinimumClause : Int -> String
+noMinimumClause n
+  | n == 2 = "neither is more specific than the other"
+  | otherwise = "none of them is more specific than all the others"
+
+-- "A", "A and B", "A, B and C" — `joinWith " and "` gives "A and B and C" at n>=3.
+joinAnd : List String -> String
+joinAnd [] = ""
+joinAnd [x] = x
+joinAnd [x, y] = "\{x} and \{y}"
+joinAnd (x::rest) = "\{x}, \{joinAnd rest}"
 
 implHeadLabel : String -> KeyEntry -> String
 implHeadLabel iface (KeyEntry _ _ _ _ _ itys _ _) =
@@ -16367,8 +16427,16 @@ numCallObls ((iface, monos, loc)::rest) = match (iface, monos)
   _ => numCallObls rest
 
 numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (String, List String, Ty, Mono, Option Loc)
+-- #1155: the loc comes from the ENTRY's own snapshot, not from the ambient
+-- `currentLoc`.  This runs at a generalized group close, well after inference left
+-- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
+-- Behaviour-neutral by inspection rather than by hope: these synthetic entries feed
+-- ONLY the Num-defaulting search (`defaultGroupNum`/`defaultEachMember` →
+-- `numConstrainedIds`/`groundNumVars` → `numObligIds`/`liveNumVarGo`), and every one
+-- of those readers destructures the 5th element as `_`.  Nothing renders it today;
+-- the point is that the tuple stops carrying a span it knows to be wrong.
 numDictObls [] = []
-numDictObls ((_, monos, ifaces, _, _)::rest) = flatMap (p => if fst p == "Num" then [("Num", ["a"], TyVar "a", snd p, currentLoc.value)] else []) (zipL ifaces monos)
+numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num" then [("Num", ["a"], TyVar "a", snd p, loc)] else []) (zipL ifaces monos)
   ++ numDictObls rest
 
 -- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not

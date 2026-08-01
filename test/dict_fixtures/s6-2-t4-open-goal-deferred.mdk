@@ -1,0 +1,45 @@
+-- §6.2 T4 — THE OPEN HALF, and the ONLY in-tree test of the #1155 (F-3c)
+-- closedness gate. Identical to s6-2-t3-closed-goal-reported.mdk except for ONE
+-- TOKEN on the last line: `[1]` becomes `[]`.
+--
+-- SPEC ANSWER (hand-derived, NOT captured): the goal is now
+-- `Sh (Q Int Bool (List ?e))` with `?e` an unbound metavariable that nothing in
+-- the program determines and no scheme quantifies (`main` is not generalized).
+-- Both impls still MATCH it -- each carries a bare variable at argument 2
+-- (`z`), and `matchStep`'s `TyVar` arm binds any mono including an open one --
+-- and they are still ⊑-incomparable, so the selector still reaches its
+-- no-unique-minimum arm with the SAME candidate set as the sibling.
+--
+-- But §6.2 **T4** says a goal not closed at the point `inst` is applied is
+-- DEFERRED, not decided, and §6 C1 declines to quantify over it in as many
+-- words: "a C1 quantified over commitment sites would reject it, while T4 and T6
+-- say it is well-formed and that deferral is the whole point." Committing there
+-- is a T3 violation on the implementation's part, not a C1 violation on the
+-- program's. So the goal-site reject MUST NOT fire here, and the row asserts
+-- `!T-AMBIGUOUS-INSTANCE`.
+--
+-- WHY THE NEGATIVE ASSERTION IS THE WHOLE ROW. This file exits 1 with the same
+-- coherence `T-CONFLICTING-IMPL` as its sibling, prints the same (nothing), and
+-- fails `build` the same way. Verdict, exit code and stdout are IDENTICAL across
+-- the pair. Delete the closedness gate and this file gains a second diagnostic
+-- and NOTHING ELSE CHANGES -- so a row pinning only what must be present would
+-- stay green through exactly the regression it was written for.
+--
+-- ⚠️ The gate has no user-visible effect TODAY: both halves are rejected anyway,
+-- by (a), at the declaration. That is why this is a positive-corpus row and not a
+-- must-fail one, and why test/MUST-FAIL-NOT-PINNABLE.txt records #1155's residual
+-- as unpinnable BY EXIT CODE while this pair pins it by diagnostic set. When F-3d
+-- relaxes (a), the coherence reject disappears from both files and this pair
+-- becomes an ACCEPT-vs-REJECT discriminator on its own.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+main = println (sh (Q 1 True []))

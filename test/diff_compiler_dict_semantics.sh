@@ -228,20 +228,30 @@
 #     fixture declares two α-equal heads with different contexts.
 #   * §6.1 condition (b) -- per-goal TOTAL order, the middle of the three. Only
 #     (a)-vs-(c) is separated.
-#   * §6.2 T3/T4 -- the NON-CLOSED half of C1's quantifier. F-3c's goal-site
-#     T-AMBIGUOUS-INSTANCE is gated on the goal being CLOSED (ground or rigid),
-#     because T4 defers a goal still carrying an unbound metavariable rather than
-#     deciding it; that gate is UNTESTED and, on today's tree, UNTESTABLE. For the
-#     min⊑ selector to see a goal open at argument i, every candidate must carry a
-#     bare type variable at i, and two USER impls meeting that condition
-#     necessarily have unifying heads -- so §6.1 condition (a) rejects them at the
-#     DECLARATION (verified per-module and cross-module), and the prelude cannot
-#     supply the other half (Index/IndexMut pin argument 1 to `Int`). Measured, not
-#     assumed: `check` and `run` over all 2389 `.mdk` in the tree with that gate
-#     replaced by a probe diagnostic fired ZERO times. ⚠️ F-3d (#614/#311) is what
-#     removes the blocker -- it relaxes (a) to per-goal (c) -- so the fixture that
-#     tests this gate should be written THERE, and the day it is, `s6-c1-rigid-goal-*`
-#     gains an open-goal sibling. Ledgered at test/MUST-FAIL-NOT-PINNABLE.txt (#1155).
+#   * §6.2 T3/T4's NON-CLOSED half is COVERED as of the s6-2-t3/s6-2-t4 pair; what
+#     is NOT covered is the same gate at a goal the program can still RUN. F-3c's
+#     goal-site T-AMBIGUOUS-INSTANCE is gated on the goal being CLOSED, because T4
+#     defers a goal carrying an unbound metavariable rather than deciding it. That
+#     gate IS exercised -- by a negative code assertion on the open half, since the
+#     pair's verdict, exit code and stdout are identical -- but only on a program
+#     coherence (a) rejects anyway, so no VERDICT depends on it today.
+#     ⚠️ AN EARLIER REVISION OF THIS BULLET SAID THE GATE WAS "UNTESTABLE" on the
+#     grounds that a ⊑-incomparable user pair is rejected at the declaration. That
+#     is true and it is not a reason: errors ACCUMULATE, a declaration-time reject
+#     is not an early exit, and both impls still reach the selector. The refutation
+#     was already in this file's own corpus (conflicting_impl_overlap carries both
+#     codes). F-3d (#614/#311) is what makes the gate load-bearing rather than what
+#     makes it testable: relaxing (a) removes the coherence reject, and the open
+#     half becomes an ACCEPT that an ungated arm would reject.
+#     Ledgered at test/MUST-FAIL-NOT-PINNABLE.txt (#1155) for the must-fail half.
+#   * 🚨 Section 4 permutes `impl` BLOCKS WITHIN ONE FILE, so it is STRUCTURALLY
+#     BLIND to the user-vs-PRELUDE overlap class -- exactly the class F-3c exists
+#     to catch. Each `s6-c1-rigid-goal-*` fixture has ONE user impl, because its
+#     competitor is `stdlib/core.mdk`'s; there is no second block to permute and
+#     the prelude's declaration index cannot be moved from a fixture at all. So
+#     section 4 reporting order-freedom says nothing about whether a PRELUDE impl's
+#     position decides the answer -- which is the shape #1162 and this stage's own
+#     flagship fixture are about. Covered here only by the verdict rows.
 #   * §7 -- the WASM engine. Every row drives check/run/build; wasm is a third
 #     refinement the single-evaluator law also binds.
 #   * §4 `gen` for a LOCAL (`let`/`where`) constrained binding, as opposed to a
@@ -299,9 +309,13 @@ trap 'rm -rf "$TMP"' EXIT
 #                    ALL_EXACT assumes agreement, and a NONE row here would
 #                    report `ACCEPT ACCEPT ACCEPT` over a shipped wrong value.
 #   value uses literal backslash-n for embedded newlines (expanded via printf %b).
-#   code = the diagnostic `code` that `check --json` must report, or empty for
-#     no code assertion. A REJECT row WITHOUT a code cannot tell "rejected for
-#     the specified reason" from "rejected because the fixture has a typo".
+#   code = the diagnostic code(s) `check --json` must report -- a COMMA-SEPARATED
+#     list, each entry optionally prefixed `!` to assert the code is ABSENT --
+#     or empty for no code assertion. A REJECT row WITHOUT a code cannot tell
+#     "rejected for the specified reason" from "rejected because the fixture has a
+#     typo". The `!` form exists because two fixtures can share a verdict, an exit
+#     code and a stdout and differ ONLY in a diagnostic one of them must not emit
+#     (the #1155 closedness pair); without it that pair is inert.
 TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
 s3-min-subsumes.mdk|§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|
@@ -336,6 +350,8 @@ s6-c1-rigid-goal-no-minimum.mdk|§6 C1 AT A RIGID-VARIABLE GOAL -- the #1155 (F-
 s6-c1-rigid-goal-unique-min-control.mdk|CONTROL 1/3 for the row above: user impl made STRICTLY MORE SPECIFIC (`Index (List (List b)) Int (List b)`), so min⊑(match) is the singleton {user} and §3 `inst` selects it -- ACCEPT, printing the second row `[3]`, a value ONLY that impl can produce. This is what rules out the three duller readings of its sibling`s reject (goal discharged by `assum` and never reaching `inst`; user impl not registered at a prelude-occupied head; prelude always wins) -- every one of those predicts `[1, 2]` here|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[3]|
 s6-c1-rigid-goal-no-user-impl-baseline.mdk|CONTROL 2/3: the same program with the user impl DELETED. The matching set is the SINGLETON {prelude}, trivially its own ⊑-minimum, so the rigid goal is well-formed and RESOLVES -- `[1, 2]`. Pins that the sibling`s reject is "this rigid goal has no ⊑-minimum", not "a rigid goal cannot be resolved". Also the exact value the buggy sibling printed, which is what made that S0 invisible|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[1, 2]|
 s6-c1-rigid-goal-no-call-discriminator.mdk|CONTROL 3/3, and the one that makes "rigid" an ASSERTION rather than a label: identical to s6-c1-rigid-goal-no-minimum except `main` NEVER CALLS `firstRow`, so the ONLY `Index` goal the program poses is the DEFINITION-SITE rigid one and there is no ground goal anywhere. A reject keyed to groundness would ACCEPT this file. It rejects identically, which is #1155 acceptance item 2 stated as an experiment|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE
+s6-2-t3-closed-goal-reported.mdk|§6.2 T3 CLOSED half of the #1155 closedness pair. Two ⊑-incomparable USER impls, so coherence (a) rejects at the declaration -- but errors ACCUMULATE, so both are still registered and the GROUND goal `Sh (Q Int Bool (List Int))` still reaches the min⊑ selector and gets the goal-site reject too. Carries BOTH codes|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL,T-AMBIGUOUS-INSTANCE
+s6-2-t4-open-goal-deferred.mdk|§6.2 T4 OPEN half, and the ONLY in-tree test of the closedness gate. ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm -- but T4 defers a non-closed goal rather than deciding it, so the goal-site reject MUST NOT fire. ⚠️ The `!` assertion IS the row: verdict, exit code and stdout are identical to the sibling, so deleting the gate would change NOTHING a positive-only pin can see. ⚠️ This pair also refutes F-3c`s own original claim that the gate was unreachable -- a declaration-time reject is not an early exit|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL,!T-AMBIGUOUS-INSTANCE
 s6-1-3-commit-at-elaboration-site.mdk|§6.1 choice-point 3: selection COMMITS AT THE ELABORATION SITE. A rigid-variable goal inside a signed binding takes the general instance (11) and is NOT retroactively re-resolved when the caller instantiates at Int, while the same ground predicate resolved directly gives 99. ⚠️ DO NOT "FIX" 11 TO 99|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|11\n99|
 s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER #1127 (OPEN, S0 SILENT WRONGNESS ON THE BUILD PATH): a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
 s6-1-4-direct-constraint-control.mdk|CONTROL for #1127: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
@@ -535,15 +551,39 @@ printf '%s\n' "$TABLE" | while IFS='|' read -r entry label exp_check exp_run exp
   # Diagnostic-code assertion. A REJECT row that does not pin its code cannot
   # distinguish "rejected for the reason the clause is about" from "rejected
   # because someone mistyped the fixture" -- and the second grades green.
+  #
+  # The field is a COMMA-SEPARATED list, and an entry may be prefixed `!` to assert
+  # the code is ABSENT. Both halves are needed by the #1155 closedness pair: its two
+  # files differ only in whether the goal is closed, and BOTH exit nonzero from the
+  # same coherence reject -- so verdict and stdout are identical and the ONLY
+  # observable difference is that the open one must NOT carry T-AMBIGUOUS-INSTANCE.
+  # ⚠️ Without a negative assertion that pair is INERT: it would grade green with the
+  # closedness gate deleted, which is the one thing it exists to detect.
   code_v='-'
   if [ -n "$code" ]; then
     bound "$MEDAKA" check --json "$entrypath" >"$TMP/$base.chk.json" 2>&1
-    if grep -q "\"code\":\"$code\"" "$TMP/$base.chk.json"; then
-      code_v="ok:$code"
-    else
-      code_v="MISSING:$code"
-      row_ok=0
-    fi
+    code_v=''
+    for c in $(printf '%s' "$code" | tr ',' ' '); do
+      case "$c" in
+        !*)
+          want="${c#!}"
+          if grep -q "\"code\":\"$want\"" "$TMP/$base.chk.json"; then
+            code_v="${code_v:+$code_v }PRESENT:$want"
+            row_ok=0
+          else
+            code_v="${code_v:+$code_v }ok:!$want"
+          fi
+          ;;
+        *)
+          if grep -q "\"code\":\"$c\"" "$TMP/$base.chk.json"; then
+            code_v="${code_v:+$code_v }ok:$c"
+          else
+            code_v="${code_v:+$code_v }MISSING:$c"
+            row_ok=0
+          fi
+          ;;
+      esac
+    done
   fi
 
   if [ "$row_ok" -eq 1 ]; then

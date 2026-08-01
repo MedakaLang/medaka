@@ -264,10 +264,17 @@ each individual fix is correct. F-3c made that arm a located
 ⚠️ **Read the discharge narrowly: it holds for CLOSED goals only.** The reject is
 gated on §6.2 T3 closedness (`goalsClosed`) because T4 defers a goal still
 carrying an unbound metavariable rather than deciding it; at a non-closed goal
-the silent head-of-list pick survives. That residue is unreachable today
-(derivation in `test/MUST-FAIL-NOT-PINNABLE.txt`, #1155) and becomes reachable
-exactly when **F-3d** relaxes coherence (a) — so the constraint above transfers
-verbatim to F-3d rather than expiring with F-3c.
+the silent head-of-list pick survives. That residue is **reachable today and
+already pinned** — `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
+one-token sibling `…-t4-open-goal-deferred.mdk` — but it changes **no verdict**,
+because every program that reaches it is also rejected by coherence (a) at the
+declaration. ⚠️ An earlier revision of this paragraph said *"unreachable today"*,
+which is a different and false claim: a declaration-time rejection is **not** an
+early exit (errors accumulate), so the impls are still registered and the goal
+still reaches the selector. **F-3d** is what makes the residue load-bearing —
+relaxing (a) removes the coherence reject, and the open half becomes an ACCEPT an
+ungated arm would reject — so the sequencing constraint above transfers verbatim
+to F-3d rather than expiring with F-3c.
 
 ### I — Inference (kept structurally intact)
 
