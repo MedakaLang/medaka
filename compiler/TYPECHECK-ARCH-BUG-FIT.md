@@ -75,7 +75,7 @@ no-unique-minimum case and would flip them. Nothing else moved.
 | #1121 contravariant Type parameter widens | DRAINED-BY **D-2** (#1119) | D |
 | #1125 eval loses a `requires` dict under overlap | DRAINED-BY **B-1 + B-2** (both required) — and it re-prices B-1's owed #323 scope decision | B |
 | #1127 superclass-projected dict picks the general instance | DRAINED-BY **B-1 + B-2** (hypothesis CONFIRMED) — **plus GAP G-5** (`activeDictVars` keying is in neither task's blast list) | B + G-5 |
-| #1128 `impl C a` beside a concrete parametric-head impl | **GAP (L1 fork)** — B-2 covers the route half; candidate collection is complete on the obligation path (`univHeadless`) and not on the route path. **NOT** engine-realization (hypothesis disproved) | A-3 + B-2; see G-6 |
+| #1128 `impl C a` beside a concrete parametric-head impl | **CLOSED by F-3b** (2026-08-01) — the classification below held: it was an L1 fork, not engine-realization. ⚠️ F-3b closed the *completeness* half by registering tyvar heads under `noneHeadTag` and unioning that bucket into both route-path selectors; it did **not** merge the two registries, so **G-6 stays OPEN** as the consolidation A-3 owes. It also did not retire `keyForSite`'s head-tag hedge — that is still B-2 | A-3 + B-2; see G-6 |
 | #1150 alias-qualified head defeats the value restriction | DRAINED-BY **A-1** (#1110) — A-2 (#1111) contributes the ratchet, not the fact — **with an owed consumer clause, GAP G-9** | A |
 | #1161 the `=>` leg shatters a multi-param predicate into per-tyvar slots | **GAP (L1 fork, Shape 1b; also an L5 non-conformance)** — no stage *repairs* "dict slot becomes a predicate"; three producers, none complete. §2 E's mandated arity fixture would **detect** it, which is why #1137 is blocked by this and not the reverse. **NOT** a member of G-8 (argued in the row) | none; see G-10 |
 | #1162 `checkCoherence` sees USER decls only; the key table is prelude ++ user | DRAINED-BY **F-3c** (#1155) for the symptom — belongs on its declared flip list, proved by a strictly-more-specific discriminator printing `42` — **plus GAP G-11** for the declaration-time input set, which A-3 must relocate onto K's `IE` and no task names. Its **equal-head** second symptom is drained by nothing (see the row) | F-3c + G-11 |
@@ -156,12 +156,25 @@ in the source as *"deliberately NOT done here"* and then never scheduled.
   (`:13666-13669`) doing the same, and the source stating the reason outright at
   `:13661-13662`: *"Headless impls carry no head tycon and so are absent from
   KeyBuckets — the headless bucket fallback (still over the ImplUniverse) covers
-  them."* The **route-stamping** path is not: `keyEntryOf` (`:11362`) emits no entry
-  when `headTyconTy` is `None` (`:11632`), so `matchingEntries` (`:11427`) never sees a
-  fully-general `impl C a`. **The fix is twelve hundred lines away in the same file.**
-  ⚠️ `matchingEntries`' own completeness argument (`:11421-11423`) is **circular** — its
-  bucket is exhaustive *because* tyvar-headed entries were dropped at construction — so
-  it must not be read as evidence that the two paths agree.
+  them."* The **route-stamping** path was not: `keyEntryOf` emitted no entry when
+  `headTyconTy` is `None`, so `matchingEntries` never saw a fully-general `impl C a`.
+  ⚠️ `matchingEntries`' own completeness argument was **circular** — its bucket was
+  exhaustive *because* tyvar-headed entries were dropped at construction — so it must
+  not be read as evidence that the two paths agree.
+
+  ✅ **F-3b (2026-08-01) closed the COMPLETENESS half, and only that half.**
+  `keyEntryOf` now registers a tyvar head under `noneHeadTag`, `candidateBucket`
+  unions that bucket into `matchingEntries` and `matchingEntriesByIface` (a stable
+  merge on a declaration index, not a `++`), and `keyForSite`/`keyForSiteByIface`
+  return the winner's own head tag instead of `None` so the selection survives to the
+  route. The two source excerpts above are stale in one word: the headless entries are
+  no longer *absent* from `KeyBuckets`, and the `findMatchingImplReqsU` comment quoted
+  here has been corrected in place.
+  **G-6 IS STILL OPEN.** The gap it names is the FORK — two registries answering one
+  judgment — and there are still two: `ImplUniverse` (obligation checking) and
+  `KeyBuckets` (route stamping), now both complete and still independently
+  maintained. A-3's job is to make K's `IE` the one environment both read. A second
+  implementation that happens to agree is exactly the state this gap describes.
 - **G-7 / #1020 (Shape 1b).** "What is this instance's method table?" is answered in four places:
   `fillImplDefaults` (same-module only, `desugar.mdk:851`), `eval.mdk`'s untagged
   `defaultEntry` (`:1888`), LLVM's `emitDefaultDispatchChain`, and wasm's absent peer.
@@ -606,7 +619,18 @@ not "#1125 and #323 are one bug".
 
 ---
 
-### #1128 — fully-general `impl C a` beside a concrete parametric-head impl · **GAP (G-6)**
+### #1128 — fully-general `impl C a` beside a concrete parametric-head impl · **CLOSED by F-3b** (G-6 still open)
+
+✅ **Fixed 2026-08-01 (F-3b).** Everything below is the diagnosis, and it held: the
+defect was candidate collection on the route path, not engine realization. What the
+fix actually needed, beyond the text of this row, was a **third** part — the route.
+Registering the tyvar head and unioning its bucket makes the general impl
+*selectable* and leaves it *unroutable*, because `keyForSite` upgraded the route key
+only on a head-tag collision and a headless winner sits alone in its bucket; it
+answered `None` and `entailInst`'s `fromOption tag (…)` fell back to the goal's head
+tycon. Two independent agents built registration+union and both probes were inert.
+**G-6 remains OPEN**: the two registries are still two, and consolidating them onto
+K's `IE` is A-3's.
 
 **The hypothesis handed to me was that this may be engine-realization. It is not.
 Disproved below.**
