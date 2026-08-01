@@ -1,0 +1,24 @@
+-- #1182: two DIFFERENT interfaces each declare a method named `m`. Which one runs is
+-- decided by the DECLARATION ORDER of the two `impl` blocks. Swapping them (control.mdk)
+-- changes no program meaning and changes the answer.
+--
+-- ⚠️ THIS FIXTURE DOES NOT ASSERT THAT 1 IS WRONG AND 2 IS RIGHT, OR THE REVERSE. Which
+-- value is correct is genuinely in dispute (see the issue: scoping the candidate set by
+-- interface vs. reporting the collision are both live options). The ASSERTABLE DEFECT is
+-- the ORDER DEPENDENCE: main.mdk and control.mdk differ only in the order of two `impl`
+-- blocks, and they must not disagree. Today they do, silently, at exit 0, on both engines.
+data Q a b c = Q a b c
+
+interface A1 a where
+  m : a -> Int
+
+interface A2 a where
+  m : a -> Int
+
+impl A1 (Q Int y z) where
+  m _ = 1
+
+impl A2 (Q x Bool z) where
+  m _ = 2
+
+main = println (m (Q 1 True 7))

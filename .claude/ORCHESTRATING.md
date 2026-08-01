@@ -1217,3 +1217,53 @@ rows), `adda533c` + the #1146 PR-2 pair, `08821074` (#1154 pinned). Filed #1145,
   which — *"ask what property the fix now RESTS ON"* — is precisely the check that would
   have caught prescription (1) above. It had been on disk for a week with nothing linking
   to it.
+
+---
+
+## Two ways the tooling manufactured a confident wrong reading, 2026-08-01 (F-3 lane, epic #1122)
+
+Both were caught by cross-checking rather than by any gate. Neither presents as a failure —
+that is what makes them expensive.
+
+- 🚨 **A PR's HEAD CAN SILENTLY LAG ITS BRANCH REF, AND IT PRESENTS AS GREEN AND READY.**
+  Measured on PR #1184. A push landed on the branch ref, but GitHub never fired the
+  synchronize event: for 20+ minutes the PR's headRefOid — via both the REST-ish JSON field
+  and GraphQL — reported the **previous** commit, the checks command said all pass (for that
+  previous commit), and mergeStateStatus read CLEAN. The tell nobody looks at: **no CI run had
+  ever started for the new SHA.**
+
+  The danger is specific. **The merge queue merges the PR's head.** Enqueueing there would
+  have merged the commit *without* the fix, while every signal on screen said the fix was
+  included and verified. This is worse than the gh write failures already recorded in this
+  file, which fail visibly on readback — this one presents as success.
+
+  **Before enqueueing, cross-check three sources and require agreement.** Two of them agreeing
+  is exactly the failure state:
+
+  ```sh
+  gh pr view <n> --json headRefOid --jq .headRefOid        # what the PR thinks
+  git ls-remote origin <branch> | cut -c1-40               # what the ref actually is
+  gh run list --branch <branch> --limit 3 --json headSha,status,conclusion \
+    --jq '.[]|"\(.headSha[0:8]) \(.status) \(.conclusion)"'   # a run must exist FOR THAT SHA
+  ```
+
+  Remedy when they disagree: closing and reopening the PR (`gh pr close <n>` then
+  `gh pr reopen <n>`) forces GitHub to re-sync the head and fires CI on the correct commit.
+  Comments and review state survive. Verified to work.
+
+  This is the same family as *"a tool reporting success while nothing happened"* under
+  Repo/infra, and the remedy is the same: **verify the resulting state, not the return code —
+  and here, not the PR's own idea of its state either.**
+
+- ⚠️ **TWO TIMING TRAPS THAT PRODUCE A CONFIDENT WRONG DIAGNOSIS.**
+  1. **Local clock vs GitHub UTC.** This box runs CEST (UTC+2) while GitHub timestamps are
+     UTC, so a merge_group run created 3 minutes ago looks 2 hours stale next to uptime.
+     Run `date -u` before comparing any GitHub timestamp to anything local. This nearly
+     produced a "the queue is jammed" diagnosis on a perfectly healthy run.
+  2. **Run logs are unavailable while the run is in progress** — the fetch refuses with
+     *"logs will be available when it is complete"* — **even for a job already reported as
+     failed.** So a red shard cannot be diagnosed until every *other* shard finishes.
+     Useful in the gap: **derive candidates at source instead of waiting idle.** For a
+     suspected stderr-capture golden move, sweep the shard's own scripts for `2>&1` and name
+     the candidates before the log arrives; the log then confirms or refutes in one read
+     rather than starting the investigation.

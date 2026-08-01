@@ -1,0 +1,9 @@
+-- #1185 — the entry module. It imports `Doc`'s constructor `Nil` and calls `total`.
+-- CORRECT ANSWER: no diagnostics at all. `total` is exhaustive over `List Int`; nothing
+-- in this graph is non-exhaustive.
+-- ⚠️ Needs `check --json` to surface: human multi-module `check` renders only the ENTRY
+-- module's warnings, and the false positive is raised in util.mdk.
+import doc.{Doc, Nil}
+import util.{total}
+
+main = println (total [1, 2, 3])

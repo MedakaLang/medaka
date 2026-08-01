@@ -1,0 +1,33 @@
+-- #1182 CONTROL — identical to main.mdk except the two `impl` blocks are SWAPPED.
+-- `impl A2 (Q x Bool z)` is declared first and `impl A1 (Q Int y z)` second. Nothing else
+-- changes: same data type, same two interfaces in the same order, same bodies, same call.
+--
+-- ⚠️ THE CONTROL IS THE OTHER HALF OF A REORDERING DIFFERENTIAL, not a claim that 2 is
+-- the right answer. It asserts that this ordering yields 2 while main.mdk's yields 1 —
+-- i.e. that the answer is decided by `impl` block order. It does NOT endorse either value.
+--
+-- Per #1144 this harness grades a control on its EXIT CODE ONLY, and a
+-- wrong-value-at-exit-0 bug cannot be discriminated by an exit code unless the program
+-- puts the value INTO the exit code. So `main` ASSERTS 2 and panics otherwise, rather
+-- than printing it — a control that merely printed would exit 0 either way and could
+-- never fail.
+data Q a b c = Q a b c
+
+interface A1 a where
+  m : a -> Int
+
+interface A2 a where
+  m : a -> Int
+
+impl A2 (Q x Bool z) where
+  m _ = 2
+
+impl A1 (Q Int y z) where
+  m _ = 1
+
+main =
+  let r = m (Q 1 True 7)
+  if r == 2 then
+    println "control-ok:2"
+  else
+    panic "control regressed: with the impl blocks swapped the answer is no longer 2"
