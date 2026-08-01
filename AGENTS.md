@@ -681,14 +681,23 @@ narrative lives at the link.
   line-count-neutral** (`git diff --numstat` should read `N N`), or re-derive the golden
   and say why it moved. The shared-corpus bullet below covers adding/moving/deleting a
   fixture; it does not cover editing one in place, which is the quieter hazard.
-- ⚠️ **In `PerRun` (`compiler/types/typecheck.mdk`) you CANNOT insert a standalone comment
-  line.** `medaka fmt` re-associates that record's trailing side comments as a column-wise
-  river; an interpolated `--` line makes it drag *pre-existing, unrelated* comments off
-  their own fields onto the closing brace and leaves a dangling fragment below the record.
-  **`fmt --check` passes on the damaged result**, so no gate catches it. Lengthen or shorten
-  an existing trailing comment instead. ⚠️ Note the consequence for reading: a long trailing
-  comment there **wraps onto the NEXT field's line**, so a comment beside a field may
-  describe the field above it — check before believing one.
+- ⚠️ **In `PerRun` (`compiler/types/typecheck.mdk`), a trailing side comment may describe
+  the field ABOVE it — check before believing one.** The record's side comments are a
+  column-wise prose *river*: a sentence starts beside one field and continues beside the
+  next several, so `effvarCounter`'s comment finishes a clause begun on `inRigidityBodyRef`.
+  This is a READING hazard baked into the committed source, not something `fmt` still does
+  to you.
+  **The WRITING hazard this bullet used to describe is FIXED (#829, PR #1202) — retired
+  2026-08-01 after re-verifying both halves on a post-#1202 binary.** It claimed you could
+  not insert a standalone `--` line into the record (fmt would drag unrelated comments onto
+  the closing brace and leave a dangling fragment, with `fmt --check` passing on the damage),
+  and that a long trailing comment would wrap onto the NEXT field's line. Neither reproduces:
+  the root cause was `spliceInterior` mapping source→output lines 1:1 — true for a *trailing*
+  comment, false for a *standalone* one (consumes a line, produces none), so everything after
+  the first standalone comment drifted. Re-measured: inserting a standalone comment line, and
+  separately lengthening a trailing one past the line budget, each produce a whole-file `fmt
+  --write` diff containing **only the edit itself** — no drift, no wrap, no dangling fragment.
+  So edit comments there normally; just don't trust which field a pre-existing one belongs to.
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**
