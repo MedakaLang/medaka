@@ -164,8 +164,11 @@ still break one of them.
 Two things that will make `main` go red if you forget them:
 
 - **The compiler's own sources are in the snapshot corpus**, so your source change
-  **moves its own golden**. Re-capture and bless it (by NAMING the path) in the
-  **same commit**.
+  **moves its own golden**. Re-capture and bless it (by NAMING the path). Same commit
+  is the default; a separate terminal golden-recut commit in the same PR also works —
+  use `PRECOMMIT_SNAPSHOT_DEFER=1 git commit ...` on the source-only commit (#1179, see
+  AGENTS.md's pre-commit hook section). What must never happen is the golden missing from
+  the PR entirely.
 - **A fixture directory is a shared corpus.** Adding a fixture enrolls you in gates
   you never named. Before touching one: `grep -rl '<fixture_dir>' test/`, then run
   every consumer.
