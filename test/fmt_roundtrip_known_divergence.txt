@@ -20,5 +20,3 @@
 #
 # Only a listed file that STILL diverges is tolerated; the gate prints the count
 # and the names on every run so the divergence is never invisible.
-
-test/parse_fixtures/neg_literal_arg.mdk    # #142 — fmt rewrites tight negative-literal arg `f -1` -> `f (-1)`; the paren form reparses as EUnOp "-" rather than Rule-C's bare ELit(LInt -n). Benign for Int (same value); tracked.

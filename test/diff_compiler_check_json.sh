@@ -165,6 +165,76 @@ else
   pass=$((pass+1)); printf 'ok   %s\n' "$name"
 fi
 
+# ── #1078: `medaka build --json` ─────────────────────────────────────────────
+# `build --json` reuses the SAME `checkJsonFile` pass `check --json` runs for
+# the front-end gate (`runBuildJsonCmd`, compiler/driver/medaka_cli.mdk), so on
+# a program that never reaches the emitter its output must be BYTE-IDENTICAL to
+# `check --json`'s (fixture path placeholdered the same way). This also locks
+# in the #1078 flag-consumption bug: before the fix, `--json` fell through
+# `parseBuildGo` untouched and was counted as a second positional, so
+# `build --json <fixture>` failed with "takes exactly one input file" instead
+# of ever reaching this comparison.
+name="1078/build-json-agrees-with-check-json"
+tmpout="$(mktemp)"
+perl -e 'alarm 60; exec @ARGV' "$NATIVE" build --json "$ROOT/test/check_json_fixtures/type_mismatch.mdk" > "$tmpout" 2>&1
+build_out="$(sed "s|$ROOT/test/check_json_fixtures/type_mismatch.mdk|<fixture>|g" "$tmpout")"
+rm -f "$tmpout"
+check_ref="$(cat "$FIXDIR/type_mismatch.check_json.golden")"
+cls="$(mdk_classify_diff "$build_out" "$check_ref")"
+case "$cls" in
+  MATCH) pass=$((pass+1)); printf 'ok   %s\n' "$name" ;;
+  STALE_ONLY) fail=$((fail+1)); mdk_stale_fail_line "$name" ;;
+  *)
+    fail=$((fail+1)); printf 'FAIL %s\n' "$name"
+    [ "$cls" = "STALE_PLUS_DIFF" ] && mdk_stale_note
+    printf '  build:  %s\n' "$build_out"
+    printf '  check:  %s\n' "$check_ref"
+    ;;
+esac
+
+# `--json` on a program that DOES reach the emitter (clean.mdk has `main`):
+# clean front end, real emit+clang, success is the clean-diagnostics envelope
+# (no separate "built X -> Y" prose on this channel) and exit 0.
+name="1078/build-json-clean-emits-and-succeeds"
+BUILDOUT="$(mktemp -d)"
+tmpout="$(mktemp)"
+perl -e 'alarm 60; exec @ARGV' "$NATIVE" build --json "$FIXDIR/clean.mdk" -o "$BUILDOUT/clean.bin" > "$tmpout" 2>&1
+clean_status=$?
+clean_out="$(cat "$tmpout")"
+rm -f "$tmpout"
+if [ "$clean_status" -ne 0 ]; then
+  fail=$((fail+1)); printf 'FAIL %s (expected exit 0, got %s)\n  out: %s\n' "$name" "$clean_status" "$clean_out"
+elif [ ! -x "$BUILDOUT/clean.bin" ]; then
+  fail=$((fail+1)); printf 'FAIL %s (no binary emitted)\n  out: %s\n' "$name" "$clean_out"
+elif ! printf '%s' "$clean_out" | grep -q '"diagnostics":\[\]'; then
+  fail=$((fail+1)); printf 'FAIL %s (expected empty-diagnostics envelope):\n  %s\n' "$name" "$clean_out"
+else
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+fi
+rm -rf "$BUILDOUT"
+
+# The pre-#1078 bug itself: `--json` used to be silently consumed as a SECOND
+# positional input file, so a bare `build --json` (no real input) reported a
+# misleading "takes exactly one input file" — an ARGUMENT-COUNT message for
+# what is actually an unrecognized-usage-shape problem. Now it must report
+# through the SAME `--json` envelope (`R-BUILD-FAILED`, the usage string as
+# `message`), not be swallowed as a file argument.
+name="1078/build-json-flag-not-consumed-as-input"
+tmpout="$(mktemp)"
+perl -e 'alarm 60; exec @ARGV' "$NATIVE" build --json > "$tmpout" 2>&1
+noinput_status=$?
+noinput_out="$(cat "$tmpout")"
+rm -f "$tmpout"
+if [ "$noinput_status" -ne 1 ]; then
+  fail=$((fail+1)); printf 'FAIL %s (expected exit 1, got %s)\n  out: %s\n' "$name" "$noinput_status" "$noinput_out"
+elif ! printf '%s' "$noinput_out" | grep -q 'R-BUILD-FAILED'; then
+  fail=$((fail+1)); printf 'FAIL %s (expected R-BUILD-FAILED envelope, got):\n  %s\n' "$name" "$noinput_out"
+elif printf '%s' "$noinput_out" | grep -q 'takes exactly one input file'; then
+  fail=$((fail+1)); printf 'FAIL %s (regressed: --json read as a second positional):\n  %s\n' "$name" "$noinput_out"
+else
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+fi
+
 echo ""
 printf '%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
