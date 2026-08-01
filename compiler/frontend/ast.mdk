@@ -621,8 +621,14 @@ public export data Decl =
 --     cannot import `tools/` at all (a frontend stage importing a tool would
 --     invert the layering and drag `parser`/`fmt` into every consumer's closure).
 --
--- ⚠️ Keep the `Expr` arms in lockstep with `Expr` itself: a new constructor makes
--- `mapTyInExpr` non-exhaustive, which is the intended loud failure.
+-- ⚠️ Keep the `Expr` arms in lockstep with `Expr` itself.  A new constructor makes
+-- `mapTyInExpr` non-exhaustive — but be precise about what that is worth, because
+-- the comment this replaces was wrong and the one it replaces in `mapTyInExpr`
+-- below was wrong in the same way: a non-exhaustive match here is a WARNING, exit
+-- 0.  Verified on this binary, not assumed: `non-exhaustive match of 'T'. Missing
+-- case: 'C'` prints, and the very next line is `ok (2 declaration(s) checked, 0
+-- errors)`.  So the walk does NOT fail the build on a missed node; it fails at
+-- RUNTIME, when a tree containing one reaches it.  Adding the arm is on you.
 
 -- `mapTyFull f t` applies `f` to EVERY Ty node in `t`, post-order (children
 -- first, then the rebuilt node), OR-folding the change flags.  Effect rows nest,
@@ -706,10 +712,19 @@ mapTyInDecl f (DTest pub n body) =
 mapTyInDecl f (DBench pub n body) =
   let (b2, c) = mapTyInExpr f body
   (DBench pub n b2, c)
-mapTyInDecl f (d@(DInterface { methods, ... })) =
+-- ⚠️ PARTIAL record patterns, NO `...` rest marker.  This file's own `TyCon`
+-- comment forbids it and #1217 is why: `desugarPat _ (PRec _ _ True) = PWild`
+-- collapses a `...` pattern to a CATCH-ALL, so with it these two arms made the
+-- whole `Decl` match trivially "exhaustive" and an unhandled constructor produced
+-- NO diagnostic at all.  Reproduced on this binary: `f (DA { da_x, ... })` is
+-- silent where `g (DA { da_x })` correctly reports `Missing case: 'DB _'`.  These
+-- arrived here with the `...` in the move from `tools/codemod.mdk` and are fixed
+-- in place; a partial pattern already tolerates fields added later, so the marker
+-- bought nothing.
+mapTyInDecl f (d@(DInterface { methods })) =
   let (ms2, c) = mapIfaceMethodsB f methods
   (DInterface { d | methods = ms2 }, c)
-mapTyInDecl f (d@(DImpl { tys, reqs, methods, ... })) =
+mapTyInDecl f (d@(DImpl { tys, reqs, methods })) =
   let (tys2, c1) = mapTyListB f tys
   let (reqs2, c2) = mapRequiresB f reqs
   let (ms2, c3) = mapImplMethodsB f methods
@@ -804,7 +819,8 @@ mapFunClausesB f ((FunClause ps e)::rest) =
 -- Ty appears in an Expr ONLY at `EAnnot`/`EHeadAnnot`, but every Expr-carrying
 -- constructor must be walked to REACH them.  This mirrors desugar.mdk's `mapKids`
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
--- there makes THIS match non-exhaustive, a loud build error), but threads the
+-- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
+-- header above; NOT a build error), but threads the
 -- change flag purely.  Ref-typed fields (EBinOp/EUnOp/EFieldAccess/ESlice/EIndex
 -- /ERecordUpdate/EMethodAt/EDictAt/ENumLit) are carried through unchanged.
 export mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)

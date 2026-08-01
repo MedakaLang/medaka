@@ -1,5 +1,5 @@
 # META
-source_lines=1026
+source_lines=1042
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -625,8 +625,14 @@ public export data Decl =
 --     cannot import `tools/` at all (a frontend stage importing a tool would
 --     invert the layering and drag `parser`/`fmt` into every consumer's closure).
 --
--- ⚠️ Keep the `Expr` arms in lockstep with `Expr` itself: a new constructor makes
--- `mapTyInExpr` non-exhaustive, which is the intended loud failure.
+-- ⚠️ Keep the `Expr` arms in lockstep with `Expr` itself.  A new constructor makes
+-- `mapTyInExpr` non-exhaustive — but be precise about what that is worth, because
+-- the comment this replaces was wrong and the one it replaces in `mapTyInExpr`
+-- below was wrong in the same way: a non-exhaustive match here is a WARNING, exit
+-- 0.  Verified on this binary, not assumed: `non-exhaustive match of 'T'. Missing
+-- case: 'C'` prints, and the very next line is `ok (2 declaration(s) checked, 0
+-- errors)`.  So the walk does NOT fail the build on a missed node; it fails at
+-- RUNTIME, when a tree containing one reaches it.  Adding the arm is on you.
 
 -- `mapTyFull f t` applies `f` to EVERY Ty node in `t`, post-order (children
 -- first, then the rebuilt node), OR-folding the change flags.  Effect rows nest,
@@ -710,10 +716,19 @@ mapTyInDecl f (DTest pub n body) =
 mapTyInDecl f (DBench pub n body) =
   let (b2, c) = mapTyInExpr f body
   (DBench pub n b2, c)
-mapTyInDecl f (d@(DInterface { methods, ... })) =
+-- ⚠️ PARTIAL record patterns, NO `...` rest marker.  This file's own `TyCon`
+-- comment forbids it and #1217 is why: `desugarPat _ (PRec _ _ True) = PWild`
+-- collapses a `...` pattern to a CATCH-ALL, so with it these two arms made the
+-- whole `Decl` match trivially "exhaustive" and an unhandled constructor produced
+-- NO diagnostic at all.  Reproduced on this binary: `f (DA { da_x, ... })` is
+-- silent where `g (DA { da_x })` correctly reports `Missing case: 'DB _'`.  These
+-- arrived here with the `...` in the move from `tools/codemod.mdk` and are fixed
+-- in place; a partial pattern already tolerates fields added later, so the marker
+-- bought nothing.
+mapTyInDecl f (d@(DInterface { methods })) =
   let (ms2, c) = mapIfaceMethodsB f methods
   (DInterface { d | methods = ms2 }, c)
-mapTyInDecl f (d@(DImpl { tys, reqs, methods, ... })) =
+mapTyInDecl f (d@(DImpl { tys, reqs, methods })) =
   let (tys2, c1) = mapTyListB f tys
   let (reqs2, c2) = mapRequiresB f reqs
   let (ms2, c3) = mapImplMethodsB f methods
@@ -808,7 +823,8 @@ mapFunClausesB f ((FunClause ps e)::rest) =
 -- Ty appears in an Expr ONLY at `EAnnot`/`EHeadAnnot`, but every Expr-carrying
 -- constructor must be walked to REACH them.  This mirrors desugar.mdk's `mapKids`
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
--- there makes THIS match non-exhaustive, a loud build error), but threads the
+-- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
+-- header above; NOT a build error), but threads the
 -- change flag purely.  Ref-typed fields (EBinOp/EUnOp/EFieldAccess/ESlice/EIndex
 -- /ERecordUpdate/EMethodAt/EDictAt/ENumLit) are carried through unchanged.
 export mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
@@ -1120,8 +1136,8 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) true))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeAlias" (PVar "pub") (PVar "n") (PVar "tps") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeAlias") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DNewtype" (PVar "pub") (PVar "n") (PVar "tps") (PVar "cn") (PVar "t") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "cn")) (EVar "t2")) (EVar "ders")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoExpr (ETuple (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "bs2")) (EVar "c")))))
@@ -1324,8 +1340,8 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) true))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeAlias" (PVar "pub") (PVar "n") (PVar "tps") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeAlias") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DNewtype" (PVar "pub") (PVar "n") (PVar "tps") (PVar "cn") (PVar "t") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "cn")) (EVar "t2")) (EVar "ders")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoExpr (ETuple (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "bs2")) (EVar "c")))))

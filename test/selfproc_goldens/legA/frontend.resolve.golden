@@ -114,6 +114,7 @@ findExports : String -> Map String ModuleExports -> Option ModuleExports
 firstExprLoc : Expr -> Option Loc
 firstLocList : List Expr -> Option Loc
 firstOr : String -> List String -> String
+flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
@@ -263,7 +264,7 @@ stampDecl : Map String Int -> Decl -> Decl
 stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
 stampExpr : List BScope -> Expr -> Expr
 stampFieldAssign : List BScope -> FieldAssign -> FieldAssign
-stampFlatTyOrigins : String -> List Decl -> List Decl -> List Decl
+stampFlatTyOrigins : List Decl -> List Decl -> List Decl
 stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGuardArm : List BScope -> GuardArm -> GuardArm
 stampGuards : List BScope -> List Guard -> (List Guard, List BScope)

@@ -13779,21 +13779,29 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 -- for the bug this closes.  [coreProg] = [] ⇒ prelude-free program ⇒ scoping is inert and
 -- this is byte-for-byte the old checkProgramSeeded (that is the multi-module discovery,
 -- elaborateDict, and probe-entry path).
--- #1110: the FLAT half of the resolve→typecheck channel.  `checkModulesPreamble`
--- and `elaborateModules` cover every graph driver; this is the one remaining seam
--- a program can reach typecheck through without a module graph (`medaka check` on
--- a no-import file routes here via checkToLinesWithRuntime).  `"__user__"` is the
--- flat program's module id, matching what `entry_support`/`test_cmd` name the same
--- single module — §8 I6.3 forbids `""`, so it may not be left blank.  Stamping is
--- idempotent (only an `OriginUnresolved` head is filled in), so the callers that
--- reach here with an already-stamped tree are unaffected.
+-- #1110 flat-identity: the FLAT half of the resolve→typecheck channel.
+-- `checkModulesPreamble` and `elaborateModules` cover every graph driver; this is
+-- the one remaining seam a program reaches typecheck through without a module graph
+-- (`medaka check` on a no-import file arrives via checkToLinesWithRuntime).
+--
+-- 🚨 Both halves are stamped with the SAME loader-less scope, and it deliberately
+-- contains NO entry for the user program's own declarations — `stampFlatTyOrigins`
+-- has the full argument.  The short version: this driver has no module id (its
+-- callers hold SOURCE TEXT, an editor buffer, or a repl line), an invented one is
+-- made permanent by `stampTyHead`'s immunity rule, and `medaka run` on a no-import
+-- file reaches this arm AND the loader-backed `elaborateModules` arm in ONE process
+-- — so an id invented here directly contradicts the real one.
+--
+-- `coreProg0` is passed as the scope source for BOTH calls on purpose: it is the
+-- prelude-boundary this "Split" entry exists to carry, so the prelude's types get
+-- `core` while the user's stay unstamped.  When it is `[]` the boundary is unknown
+-- (the internal `checkProgramSeeded` passes flatten the prelude into `prog`), and
+-- then nothing is claimed at all — which is why the prelude can no longer be
+-- attributed to the user's module.
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit seed coreProg0 userProg0 =
-  let coreProg = stampFlatTyOrigins "core" coreProg0 coreProg0
-  checkBodyImpl
-    seed
-    (Flat coreProg)
-    (stampFlatTyOrigins "__user__" coreProg0 userProg0)
+  let coreProg = stampFlatTyOrigins coreProg0 coreProg0
+  checkBodyImpl seed (Flat coreProg) (stampFlatTyOrigins coreProg0 userProg0)
 
 -- #80: the SINGLE whole-program typecheck body, shared by the flat/single-file path
 -- (checkProgramSeededSplit, `Flat coreProg`) and the per-module path

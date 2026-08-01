@@ -1,5 +1,5 @@
 # META
-source_lines=3318
+source_lines=3405
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3144,20 +3144,57 @@ stampBindingIds decls =
 -- #1070, #1090, #1092, #1208, #1209) and emitting use-site ambiguity diagnostics
 -- are the NEXT A-1 PRs — they change acceptance and need their own review.
 --
--- ⚠️ RESIDUAL INHABITANT (§8 I6.3 drain).  After this pass one case still carries
--- `OriginUnresolved`: a type name that is in NO scope at all.  There is no module
--- to attribute it to, and resolve has already reported it as `UnknownType`, so the
--- program is rejected either way — but it means "post-resolve origin is total" is
--- true only of programs that RESOLVE.  Draining that last inhabitant needs the
--- distinct pre-resolve type §8 I6.3 really asks for, which is A-1's option (1) and
--- is not reachable from a byte-identical PR.  See the PR body for the full drain
--- argument; the producer set is pinned by `test/check_removed_constructs.sh`.
+-- ⚠️ RESIDUAL INHABITANT (§8 I6.3 drain).  `OriginUnresolved` survives this pass,
+-- and it means exactly one thing: **NO IDENTITY WAS AVAILABLE HERE**.  Two ways to
+-- get there, and BOTH are honest absence — no head is ever left carrying a claim
+-- this pass could not justify:
+--
+--   1. the name is in no scope at all (`checkType` reports it as `UnknownType`;
+--      errors accumulate, so the tree still reaches typecheck);
+--   2. the driver had no module graph, so it had no module id to attribute the
+--      user's own declarations to — see `stampFlatTyOrigins`.
+--
+-- ⚠️ An earlier draft of this comment claimed `OriginUnresolved ⟺ the name is
+-- unbound`.  That was FALSE IN BOTH DIRECTIONS — case (2) is bound-but-unstamped,
+-- and the same draft's flat stamper attributed BOUND prelude names to the user's
+-- module, which is not absence but WRONGNESS.  The equivalence is not repaired
+-- here, it is RETIRED: do not reason from `OriginUnresolved` to "unbound".
+--
+-- The consumer rule that makes the residual safe is unchanged and is the only one:
+-- NO predicate may compare two `OriginUnresolved` heads equal, or treat one as
+-- matching anything.  Draining it entirely needs the distinct pre-resolve type §8
+-- I6.3 really asks for (A-1's option 1), which is not reachable from a
+-- byte-identical PR.  The producer set is pinned by
+-- `test/typecheck_compiler_source.sh` (the `soundness` job).
 
 -- Every type name in scope in module `mid`, mapped to the identity a `TyCon` head
 -- spelling it must carry.  Built lowest-precedence FIRST, because `omFromPairs`
--- inserts left to right and a later insert wins: builtins < prelude < imports <
--- this module's own declarations (a local `data Foo` shadows an imported `Foo`,
--- exactly as `buildEnv`'s membership map already orders them).
+-- inserts left to right and a later insert wins:
+--
+--     builtins < prelude < imports < this module's own declarations
+--
+-- ⚠️ That ORDER IS A NEW POLICY DECISION, made here, and it is what #1208 will be
+-- re-keyed against — so it is argued rather than inherited.  It is NOT read off
+-- `buildEnv`: that builds a presence SET (`OrdMap Unit`), which encodes no
+-- precedence at all and in fact lists own-declarations BEFORE imports.  An earlier
+-- draft of this comment claimed the order came from there; it does not.
+--
+-- The argument for it, innermost-wins, matching how every other scope in the
+-- language resolves a pun:
+--   * own declarations beat imports, because a module that declares `data Foo`
+--     and also imports one means its own — the same rule a local binding follows
+--     against a top-level one.  Resolve's use-time ambiguity machinery
+--     (`ambiguousSet`) only ever fires on ≥2 IMPORTED spellings for this reason:
+--     a local declaration is not a participant in the ambiguity, it settles it.
+--   * imports beat the prelude, because the prelude is implicit and an explicit
+--     `import m.{Result}` is a deliberate statement about which `Result` is meant.
+--   * the prelude beats builtins only vacuously (they are disjoint today); the
+--     order is stated so a future prelude `data List` would resolve to the prelude
+--     rather than silently keeping the builtin identity.
+-- ⚠️ Precedence here decides IDENTITY only.  It does NOT license a shadowing that
+-- resolve would reject: an occurrence resolve reports as ambiguous still gets a
+-- diagnostic, and this map merely says which declaration the head would name if it
+-- is legal.  Diagnosing the ambiguity is the NEXT PR's job, not this map's.
 tyOriginScope : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> OrdMap TyConOrigin
 tyOriginScope coreTypes known mid prog =
   omFromPairs
@@ -3261,8 +3298,14 @@ stampDeclTyOrigins : OrdMap TyConOrigin -> Decl -> Decl
 stampDeclTyOrigins scope d = fst (mapTyInDecl (stampTyHead scope) d)
 
 -- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
--- `TyConOrigin` inhabitant must make this non-exhaustive (a loud build error), not
--- fall silently into "already has an identity, leave it".
+-- `TyConOrigin` inhabitant should be MADE TO SHOW UP here rather than falling
+-- silently into "already has an identity, leave it".
+--
+-- ⚠️ But do not overstate what that buys, the way an earlier draft did: a
+-- non-exhaustive match in this language is a WARNING, exit 0 — verified, not
+-- assumed (`non-exhaustive match of 'T'. Missing case: 'C'` printed above `ok (2
+-- declaration(s) checked, 0 errors)`).  So this is a REVIEW aid, not a build gate:
+-- it puts the new inhabitant on the diff and in `check` output, and nothing more.
 stampTyHead : OrdMap TyConOrigin -> Ty -> (Ty, Bool)
 stampTyHead scope (t@(TyCon { tyConName = n, tyConOrigin = o })) = match o
   OriginUnresolved => stampHeadWith t (originOfTyName scope n)
@@ -3313,13 +3356,57 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
       (omInsert mid (typeOriginExports known mid prog) known)
       rest
 
--- The FLAT (single-file) analogue, for the `check`/`test` entries that typecheck a
--- program with no module graph.  `mid` is the program's own module id; §8 I6.3
--- forbids the empty string, so callers pass a real one.
-export stampFlatTyOrigins : String -> List Decl -> List Decl -> List Decl
-stampFlatTyOrigins mid coreDecls prog =
-  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
-  stampTyOrigins (tyOriginScope coreTypes omEmpty mid prog) prog
+-- The FLAT (loader-less) analogue, for the entries that typecheck a program with
+-- no module graph (`medaka check` on a no-import file, the LSP, `doc`,
+-- `check-policy`, the playground buffer, the repl).
+--
+-- 🚨 IT STAMPS ONLY WHAT A DRIVER WITH NO LOADER ACTUALLY KNOWS: builtin heads, and
+-- the PRELUDE's own types when the caller passed the prelude separately.  It does
+-- NOT stamp the user program's own declarations, and the omission is the whole
+-- point of the function.
+--
+-- A module id is a fact about a FILE IN A PROJECT, produced by the loader.  These
+-- drivers do not have one — `runCheck` receives SOURCE TEXT, the playground has a
+-- buffer, the repl has no file at all — so any id minted here would be invented.
+-- The first cut of this function invented `"__user__"`, and that is exactly the
+-- failure the design forbids: `stampTyHead`'s immunity rule (fill in only an
+-- `OriginUnresolved` head) is what makes re-stamping impossible, and it makes a
+-- WRONG FIRST STAMP PERMANENT.  `medaka run` on a no-import file reaches BOTH arms
+-- in ONE process — the flat arm for diagnostics (`analyzeLocatedG`) and the graph
+-- arm for elaboration (`elaborateModules`, module id from the loader) — so the two
+-- claims were about the same declarations, and only one of them could be true.
+--
+-- ⚠️ UNDER-supplying identity is correctable by a later graph pass; OVER-supplying a
+-- wrong one is not.  That asymmetry, not convenience, is why this claims less.
+--
+-- The absence costs nothing to a single-file program: module identity only
+-- disambiguates names that meet ACROSS modules, and a flat program has exactly one
+-- user module.  Its one genuine second module is the prelude, and that IS stamped
+-- (`core`) whenever its boundary is given.  ⚠️ When it is NOT given (`coreDecls =
+-- []` while the caller has flattened the prelude into `prog` — the internal
+-- `checkProgramSeeded` discovery passes), the boundary is unknown, so the prelude's
+-- types are left unstamped rather than being claimed by the user's module.  An
+-- earlier cut of this function got that wrong and attributed `Option`/`Result`/
+-- `Ordering` to the user module.
+--
+-- ⚠️ RESIDUAL, greppable as `#1110 flat-identity`: giving the flat path REAL
+-- identity needs a loader-derived module id threaded into the `check`/LSP/doc
+-- entries, or the single-file path routed through the 1-module graph driver
+-- (`checkModulesEntryFull`).  Both are DRIVER changes that move the `check` dump,
+-- so neither belongs in a byte-identical stamping PR.
+export stampFlatTyOrigins : List Decl -> List Decl -> List Decl
+stampFlatTyOrigins coreDecls prog =
+  stampTyOrigins (flatTyOriginScope coreDecls) prog
+
+-- Builtins, plus the prelude's own types when the caller told us where it is.  No
+-- `dataRecordNames prog` term: see `stampFlatTyOrigins`, that omission is the point.
+flatTyOriginScope : List Decl -> OrdMap TyConOrigin
+flatTyOriginScope coreDecls =
+  omFromPairs
+    (map
+      importedTyOrigin
+      (map (typeDeclaredIn "core") (dataRecordNames coreDecls)))
+    (omFromPairs builtinTyOrigins omEmpty)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -4412,8 +4499,10 @@ stampFlatTyOrigins mid coreDecls prog =
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
-(DTypeSig true "stampFlatTyOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "stampFlatTyOrigins" ((PVar "mid") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoExpr (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "mid")) (EVar "prog"))) (EVar "prog")))))
+(DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
+(DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -5506,5 +5595,7 @@ stampFlatTyOrigins mid coreDecls prog =
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
 (DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
-(DTypeSig true "stampFlatTyOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "stampFlatTyOrigins" ((PVar "mid") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoExpr (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "mid")) (EVar "prog"))) (EVar "prog")))))
+(DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
+(DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
