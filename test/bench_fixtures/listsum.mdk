@@ -6,15 +6,17 @@ build n acc = match n
   0 => acc
   n => build (n - 1) (n :: acc)
 
-sum : Int -> List Int -> Int
-sum acc xs = match xs
+-- WORKAROUND(#1191): renamed from 'sum' — collides with the prelude standalone
+-- on the zero-import path; revert when #1191 closes.
+mySum : Int -> List Int -> Int
+mySum acc xs = match xs
   [] => acc
-  (y :: rest) => sum (acc + y) rest
+  (y :: rest) => mySum (acc + y) rest
 
 loop : Int -> Int -> Int
 loop acc k = match k
   0 => acc
-  k => loop (acc + sum 0 (build 1000 [])) (k - 1)
+  k => loop (acc + mySum 0 (build 1000 [])) (k - 1)
 
 main : <IO> Unit
 main = putStrLn (intToString (loop 0 20000))
