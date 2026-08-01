@@ -403,7 +403,7 @@ runtimeTypeTag _ = None
 -- ── type-structure analysis (specificity + dispatch positions) ────────────
 countTyvars : Ty -> Int
 countTyvars (TyVar _) = 1
-countTyvars (TyCon { name = _ }) = 0
+countTyvars (TyCon { tyConName = _ }) = 0
 countTyvars (TyApp a b) = countTyvars a + countTyvars b
 countTyvars (TyFun a b) = countTyvars a + countTyvars b
 countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
@@ -432,7 +432,7 @@ implKeyOf iface typeArgs nm =
 -- prec-2 Ty pretty-printer (mirrors lib/ast.ml pp_ty_prec 2 / typecheck's
 -- ppTyAtom): wraps applications and arrows, leaves atoms bare.
 ppTyK : Ty -> String
-ppTyK (TyCon { name = n }) = n
+ppTyK (TyCon { tyConName = n }) = n
 ppTyK (TyVar n) = n
 ppTyK (TyApp a b) = "\{ppTyK a} \{ppTyAtomK b}"
 ppTyK (TyFun a b) = "\{ppTyFunArgK a} -> \{ppTyK b}"
@@ -488,7 +488,7 @@ export tupleHeadTag : Int -> String
 tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 
 headTycon : Ty -> Option String
-headTycon (TyCon { name = n }) = Some n
+headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
@@ -513,7 +513,7 @@ filterMentions i (t::ts) params
 
 tyMentions : Ty -> List String -> Bool
 tyMentions (TyVar n) params = contains n params
-tyMentions (TyCon { name = _ }) _ = False
+tyMentions (TyCon { tyConName = _ }) _ = False
 tyMentions (TyApp a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts
@@ -3674,7 +3674,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" (PWild) (EVar "None"))
 (DTypeSig false "countTyvars" (TyFun (TyCon "Ty") (TyCon "Int")))
 (DFunDef false "countTyvars" ((PCon "TyVar" PWild)) (ELit (LInt 1)))
-(DFunDef false "countTyvars" ((PRec "TyCon" ((rf "name" PWild)) false)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PRec "TyCon" ((rf "tyConName" PWild)) false)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "countTyvars") (EVar "a")) (EApp (EVar "countTyvars") (EVar "b"))))
 (DFunDef false "countTyvars" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "countTyvars") (EVar "a")) (EApp (EVar "countTyvars") (EVar "b"))))
 (DFunDef false "countTyvars" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "sumInts") (EApp (EApp (EVar "map") (EVar "countTyvars")) (EVar "ts"))))
@@ -3689,7 +3689,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "implKeyOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "implKeyOf" ((PVar "iface") (PVar "typeArgs") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtomK")) (EVar "typeArgs"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig false "ppTyK" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ppTyK" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "ppTyK" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "ppTyK" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "ppTyK" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppTyK") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "ppTyAtomK") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "ppTyK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppTyFunArgK") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "ppTyK") (EVar "b")))) (ELit (LString ""))))
@@ -3714,7 +3714,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "tupleHeadTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleHeadTag" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "headTycon" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "headTycon" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
@@ -3732,7 +3732,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "filterMentions" ((PVar "i") (PCons (PVar "t") (PVar "ts")) (PVar "params")) (EIf (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tyMentions" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentions" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
-(DFunDef false "tyMentions" ((PRec "TyCon" ((rf "name" PWild)) false) PWild) (EVar "False"))
+(DFunDef false "tyMentions" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentions" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentions") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentions" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentions") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
@@ -5090,7 +5090,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "runtimeTypeTag" (PWild) (EVar "None"))
 (DTypeSig false "countTyvars" (TyFun (TyCon "Ty") (TyCon "Int")))
 (DFunDef false "countTyvars" ((PCon "TyVar" PWild)) (ELit (LInt 1)))
-(DFunDef false "countTyvars" ((PRec "TyCon" ((rf "name" PWild)) false)) (ELit (LInt 0)))
+(DFunDef false "countTyvars" ((PRec "TyCon" ((rf "tyConName" PWild)) false)) (ELit (LInt 0)))
 (DFunDef false "countTyvars" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "countTyvars") (EVar "a")) (EApp (EVar "countTyvars") (EVar "b"))))
 (DFunDef false "countTyvars" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "+" (EApp (EVar "countTyvars") (EVar "a")) (EApp (EVar "countTyvars") (EVar "b"))))
 (DFunDef false "countTyvars" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "sumInts") (EApp (EApp (EMethodRef "map") (EVar "countTyvars")) (EVar "ts"))))
@@ -5105,7 +5105,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "implKeyOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "implKeyOf" ((PVar "iface") (PVar "typeArgs") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtomK")) (EVar "typeArgs"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig false "ppTyK" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ppTyK" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EVar "n"))
+(DFunDef false "ppTyK" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "ppTyK" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "ppTyK" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppTyK") (EVar "a")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "ppTyAtomK") (EVar "b")))) (ELit (LString ""))))
 (DFunDef false "ppTyK" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppTyFunArgK") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "ppTyK") (EVar "b")))) (ELit (LString ""))))
@@ -5130,7 +5130,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "tupleHeadTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleHeadTag" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "headTycon" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "headTycon" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "headTycon" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "headTycon" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTycon") (EVar "a")))
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
@@ -5148,7 +5148,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "filterMentions" ((PVar "i") (PCons (PVar "t") (PVar "ts")) (PVar "params")) (EIf (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tyMentions" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentions" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
-(DFunDef false "tyMentions" ((PRec "TyCon" ((rf "name" PWild)) false) PWild) (EVar "False"))
+(DFunDef false "tyMentions" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentions" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentions") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentions" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentions") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))

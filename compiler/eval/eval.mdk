@@ -399,7 +399,7 @@ runtimeTypeTag _ = None
 -- ── type-structure analysis (specificity + dispatch positions) ────────────
 countTyvars : Ty -> Int
 countTyvars (TyVar _) = 1
-countTyvars (TyCon { name = _ }) = 0
+countTyvars (TyCon { tyConName = _ }) = 0
 countTyvars (TyApp a b) = countTyvars a + countTyvars b
 countTyvars (TyFun a b) = countTyvars a + countTyvars b
 countTyvars (TyTuple ts) = sumInts (map countTyvars ts)
@@ -428,7 +428,7 @@ implKeyOf iface typeArgs nm =
 -- prec-2 Ty pretty-printer (mirrors lib/ast.ml pp_ty_prec 2 / typecheck's
 -- ppTyAtom): wraps applications and arrows, leaves atoms bare.
 ppTyK : Ty -> String
-ppTyK (TyCon { name = n }) = n
+ppTyK (TyCon { tyConName = n }) = n
 ppTyK (TyVar n) = n
 ppTyK (TyApp a b) = "\{ppTyK a} \{ppTyAtomK b}"
 ppTyK (TyFun a b) = "\{ppTyFunArgK a} -> \{ppTyK b}"
@@ -484,7 +484,7 @@ export tupleHeadTag : Int -> String
 tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 
 headTycon : Ty -> Option String
-headTycon (TyCon { name = n }) = Some n
+headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
@@ -509,7 +509,7 @@ filterMentions i (t::ts) params
 
 tyMentions : Ty -> List String -> Bool
 tyMentions (TyVar n) params = contains n params
-tyMentions (TyCon { name = _ }) _ = False
+tyMentions (TyCon { tyConName = _ }) _ = False
 tyMentions (TyApp a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyFun a b) params = tyMentions a params || tyMentions b params
 tyMentions (TyTuple ts) params = anyList (t => tyMentions t params) ts

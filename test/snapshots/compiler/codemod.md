@@ -193,7 +193,7 @@ mapTyFull f ty =
   (ty2, c1 || c2)
 
 mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
-mapTyKids _ (t@(TyCon { name = _ })) = (t, False)
+mapTyKids _ (t@(TyCon { tyConName = _ })) = (t, False)
 mapTyKids _ (TyVar n) = (TyVar n, False)
 mapTyKids f (TyApp a b) =
   let (a2, ca) = mapTyFull f a
@@ -738,7 +738,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
-(DFunDef false "mapTyKids" (PWild (PAs "t" (PRec "TyCon" ((rf "name" PWild)) false))) (ETuple (EVar "t") (EVar "False")))
+(DFunDef false "mapTyKids" (PWild (PAs "t" (PRec "TyCon" ((rf "tyConName" PWild)) false))) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "mapTyKids" (PWild (PCon "TyVar" (PVar "n"))) (ETuple (EApp (EVar "TyVar") (EVar "n")) (EVar "False")))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyApp") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyFun") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
@@ -958,7 +958,7 @@ declEffectWarn _ _ = []
 (DTypeSig false "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
-(DFunDef false "mapTyKids" (PWild (PAs "t" (PRec "TyCon" ((rf "name" PWild)) false))) (ETuple (EVar "t") (EVar "False")))
+(DFunDef false "mapTyKids" (PWild (PAs "t" (PRec "TyCon" ((rf "tyConName" PWild)) false))) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "mapTyKids" (PWild (PCon "TyVar" (PVar "n"))) (ETuple (EApp (EVar "TyVar") (EVar "n")) (EVar "False")))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyApp") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))
 (DFunDef false "mapTyKids" ((PVar "f") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PTuple (PVar "a2") (PVar "ca")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "a"))) (DoLet false false (PTuple (PVar "b2") (PVar "cb")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "b"))) (DoExpr (ETuple (EApp (EApp (EVar "TyFun") (EVar "a2")) (EVar "b2")) (EBinOp "||" (EVar "ca") (EVar "cb"))))))

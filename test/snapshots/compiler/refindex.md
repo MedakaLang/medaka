@@ -684,7 +684,7 @@ walkClauses w scope curLoc ((FunClause pats body)::rest) =
 
 -- ── type walk (TyCon carries its OWN Option Loc — no curLoc threading needed) ─
 walkTy : W -> Loc -> Ty -> Unit
-walkTy w _ (TyCon { name, loc = mloc }) = match mloc
+walkTy w _ (TyCon { tyConName = name, tyConLoc = mloc }) = match mloc
   Some l => recordRef (ctxOf w) (resolveTy w name) (uriOf w) (locWithUriOf w l)
   None => ()
 walkTy _ _ (TyVar _) = ()
@@ -1831,7 +1831,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkClauses" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkClauses" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "FunClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "curLoc"))) (EVar "pats")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DTypeSig false "walkTy" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyCon "Ty") (TyCon "Unit")))))
-(DFunDef false "walkTy" ((PVar "w") PWild (PRec "TyCon" ((rf "name" None) (rf "loc" (PVar "mloc"))) false)) (EMatch (EVar "mloc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l")))) (arm (PCon "None") () (ELit LUnit))))
+(DFunDef false "walkTy" ((PVar "w") PWild (PRec "TyCon" ((rf "tyConName" (PVar "name")) (rf "tyConLoc" (PVar "mloc"))) false)) (EMatch (EVar "mloc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l")))) (arm (PCon "None") () (ELit LUnit))))
 (DFunDef false "walkTy" (PWild PWild (PCon "TyVar" PWild)) (ELit LUnit))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "b")))))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "b")))))
@@ -2331,7 +2331,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkClauses" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "walkClauses" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCons (PCon "FunClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "curLoc"))) (EVar "pats")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EBinOp "::" (EVar "frame") (EVar "scope"))) (EVar "curLoc")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "rest")))))
 (DTypeSig false "walkTy" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyCon "Ty") (TyCon "Unit")))))
-(DFunDef false "walkTy" ((PVar "w") PWild (PRec "TyCon" ((rf "name" None) (rf "loc" (PVar "mloc"))) false)) (EMatch (EVar "mloc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l")))) (arm (PCon "None") () (ELit LUnit))))
+(DFunDef false "walkTy" ((PVar "w") PWild (PRec "TyCon" ((rf "tyConName" (PVar "name")) (rf "tyConLoc" (PVar "mloc"))) false)) (EMatch (EVar "mloc") (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveTy") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EApp (EApp (EVar "locWithUriOf") (EVar "w")) (EVar "l")))) (arm (PCon "None") () (ELit LUnit))))
 (DFunDef false "walkTy" (PWild PWild (PCon "TyVar" PWild)) (ELit LUnit))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "b")))))
 (DFunDef false "walkTy" ((PVar "w") (PVar "curLoc") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "b")))))

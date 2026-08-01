@@ -1231,7 +1231,7 @@ singleNamedType [t] = tyHeadName t
 singleNamedType _ = None
 
 tyHeadName : Ty -> Option String
-tyHeadName (TyCon { name = n }) = Some n
+tyHeadName (TyCon { tyConName = n }) = Some n
 tyHeadName (TyApp f _) = tyHeadName f
 tyHeadName _ = None
 
@@ -4490,7 +4490,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "stdlibNames" (TyApp (TyCon "List") (TyCon "String")))
@@ -5919,7 +5919,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "stdlibNames" (TyApp (TyCon "List") (TyCon "String")))

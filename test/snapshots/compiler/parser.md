@@ -1804,7 +1804,7 @@ extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
   Some (iface, args) => [Constraint iface args]
   None => []
-extractConstraints (TyCon { name = iface }) = [Constraint iface []]
+extractConstraints (TyCon { tyConName = iface }) = [Constraint iface []]
 extractConstraints (TyTuple cs) = concatMapC cs
 extractConstraints _ = []
 
@@ -1821,7 +1821,7 @@ tyAppSpine t = tyAppSpineAcc t []
 -- descends the spine outermost-first, prepending each argument, so the accumulator
 -- arrives in source order at the TyCon head (`Ix a i` -> ("Ix", [a, i])).
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
-tyAppSpineAcc (TyCon { name = iface }) acc = Some (iface, acc)
+tyAppSpineAcc (TyCon { tyConName = iface }) acc = Some (iface, acc)
 tyAppSpineAcc (TyApp f a) acc = tyAppSpineAcc f (a::acc)
 tyAppSpineAcc _ _ = None
 
@@ -5429,13 +5429,13 @@ parseResultWith src tokList offList =
 (DFunDef false "constraintTail" ((PVar "lhs")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseTy")) (ELam ((PVar "rhs")) (EApp (EVar "pure") (EApp (EApp (EVar "TyConstrained") (EApp (EVar "extractConstraints") (EVar "lhs"))) (EVar "rhs"))))))))
 (DTypeSig false "extractConstraints" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Constraint"))))
 (DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "name" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
+(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
 (DFunDef false "extractConstraints" ((PCon "TyTuple" (PVar "cs"))) (EApp (EVar "concatMapC") (EVar "cs")))
 (DFunDef false "extractConstraints" (PWild) (EListLit))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
 (DFunDef false "tyAppSpine" ((PVar "t")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "t")) (EListLit)))
 (DTypeSig false "tyAppSpineAcc" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))))
-(DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "name" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
+(DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" ((PCon "TyApp" (PVar "f") (PVar "a")) (PVar "acc")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" (PWild PWild) (EVar "None"))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Constraint"))))
@@ -6926,13 +6926,13 @@ parseResultWith src tokList offList =
 (DFunDef false "constraintTail" ((PVar "lhs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseTy")) (ELam ((PVar "rhs")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "TyConstrained") (EApp (EVar "extractConstraints") (EVar "lhs"))) (EVar "rhs"))))))))
 (DTypeSig false "extractConstraints" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Constraint"))))
 (DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "name" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
+(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
 (DFunDef false "extractConstraints" ((PCon "TyTuple" (PVar "cs"))) (EApp (EVar "concatMapC") (EVar "cs")))
 (DFunDef false "extractConstraints" (PWild) (EListLit))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
 (DFunDef false "tyAppSpine" ((PVar "t")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "t")) (EListLit)))
 (DTypeSig false "tyAppSpineAcc" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))))
-(DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "name" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
+(DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" ((PCon "TyApp" (PVar "f") (PVar "a")) (PVar "acc")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" (PWild PWild) (EVar "None"))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Constraint"))))

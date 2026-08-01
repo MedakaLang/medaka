@@ -1800,7 +1800,7 @@ extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
   Some (iface, args) => [Constraint iface args]
   None => []
-extractConstraints (TyCon { name = iface }) = [Constraint iface []]
+extractConstraints (TyCon { tyConName = iface }) = [Constraint iface []]
 extractConstraints (TyTuple cs) = concatMapC cs
 extractConstraints _ = []
 
@@ -1817,7 +1817,7 @@ tyAppSpine t = tyAppSpineAcc t []
 -- descends the spine outermost-first, prepending each argument, so the accumulator
 -- arrives in source order at the TyCon head (`Ix a i` -> ("Ix", [a, i])).
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
-tyAppSpineAcc (TyCon { name = iface }) acc = Some (iface, acc)
+tyAppSpineAcc (TyCon { tyConName = iface }) acc = Some (iface, acc)
 tyAppSpineAcc (TyApp f a) acc = tyAppSpineAcc f (a::acc)
 tyAppSpineAcc _ _ = None
 
