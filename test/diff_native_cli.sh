@@ -95,6 +95,48 @@ done
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# ── check (terse success line, #916) ────────────────────────────────────────
+# Bare `medaka check <clean file>` (no `--types`) used to give no unambiguous
+# success signal — the check/*.golden subtest above never exercises this: it
+# always passes `--types`, which is the byte-identical historical full-dump
+# escape hatch and is deliberately NOT where #916's terse line appears. No
+# existing golden anywhere in the tree captures bare `check`'s stdout on a
+# clean file (confirmed: only `check/*.golden`, always run with `--types`) —
+# this closes that coverage hole, which is also why the #916 fix moved only
+# ONE snapshot (medaka_cli.mdk's own).
+#
+# Inline fixtures, not test/diff_fixtures/* (avoids enrolling in that shared
+# corpus's other consumers, and lets the expected declaration COUNT be known
+# by construction rather than derived from a fixture nobody wrote for this).
+mkdir -p "$TMP/terse"
+cat > "$TMP/terse/two_decls.mdk" <<'EOF'
+export addOne x = x + 1
+export double x = x * 2
+EOF
+cat > "$TMP/terse/main_only.mdk" <<'EOF'
+main = println "hi"
+EOF
+
+name="check_terse/two_decls"
+got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/terse/two_decls.mdk" 2>/dev/null | strip_unit)"
+got_last="$(printf '%s\n' "$got" | tail -1)"
+want_line="-- $TMP/terse/two_decls.mdk: ok (2 declaration(s) checked, 0 errors)"
+if [ "$got_last" = "$want_line" ]; then
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+else
+  fail=$((fail+1)); printf 'FAIL %s\n  want last line: %s\n  got:\n%s\n' "$name" "$want_line" "$got"
+fi
+
+name="check_terse/main_only"
+got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/terse/main_only.mdk" 2>/dev/null | strip_unit)"
+got_last="$(printf '%s\n' "$got" | tail -1)"
+want_line="-- $TMP/terse/main_only.mdk: ok (1 declaration(s) checked, 0 errors)"
+if [ "$got_last" = "$want_line" ]; then
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+else
+  fail=$((fail+1)); printf 'FAIL %s\n  want last line: %s\n  got:\n%s\n' "$name" "$want_line" "$got"
+fi
+
 # ── new ───────────────────────────────────────────────────────────────────────
 mkdir -p "$TMP/nat"
 ( cd "$TMP/nat" && MEDAKA_ROOT="$ROOT" bound "$MEDAKA" new proj >/dev/null 2>&1 )
