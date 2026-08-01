@@ -1,0 +1,8 @@
+-- #1027: DEffect declarations and `<Eff>` mentions are absent from the reference
+-- index entirely — neither a def nor a use is recorded for an effect label.
+effect KV
+
+peek : Int -> <KV> Int
+peek n = n
+
+main = println 1

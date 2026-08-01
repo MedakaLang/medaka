@@ -15,7 +15,6 @@
 -- grep stdout to distinguish a clean refusal from a silent short index.
 
 -- Demos are intentionally self-contained; row/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.writer.{
   TableSchema,

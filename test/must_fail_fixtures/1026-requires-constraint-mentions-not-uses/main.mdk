@@ -1,0 +1,20 @@
+-- #1026: interface `requires` supers and `C a =>` constraint mentions are not
+-- recorded as uses in the reference index (beyond #1014's plain `impl` case).
+interface Base a where
+  base : a -> Int
+
+interface Derived a requires Base a where
+  derived : a -> Int
+
+constrained : Base a => a -> Int
+constrained x = base x
+
+data D = D Int
+
+impl Base D where
+  base (D n) = n
+
+impl Derived D where
+  derived (D n) = n + 1
+
+main = println (constrained (D 3) + derived (D 3))

@@ -124,9 +124,21 @@ moduleIdOfPath roots path =
 -- the PROJECT dir, not the edited file's immediate directory — e.g. a file
 -- `compiler/frontend/parser.mdk` importing `frontend.ast` resolves only when the
 -- root is `compiler/` (where `medaka.toml` lives), not `compiler/frontend/`.
--- Falls back to `startDir` when no `medaka.toml` is found up to the top.
-export findProjectRoot : String -> <IO> String
-findProjectRoot startDir = findRootGo startDir startDir
+-- `None` when no `medaka.toml` is found walking up to the top — distinct from
+-- "found a root", so a caller cannot mistake "gave up" for "found" (#220).
+export findProjectRoot : String -> <IO> Option String
+findProjectRoot startDir = findRootGo startDir
+
+-- Convenience wrapper for the (common) callers that want the old
+-- fallback-to-`startDir` behaviour outright — module-resolution roots, where
+-- "no project" and "resolve against the start dir" are the same thing.  Callers
+-- that need to tell "found" from "gave up" (e.g. the internal-extern trust
+-- boundary, or a `medaka lint` with no target args) must match on
+-- `findProjectRoot` directly instead of reaching for this.
+export findProjectRootOrSelf : String -> <IO> String
+findProjectRootOrSelf startDir = match findProjectRoot startDir
+  Some root => root
+  None => startDir
 
 -- The module-resolution roots for a single entry file: the entry's OWN
 -- directory first, then the project root found by walking up from there
@@ -147,15 +159,15 @@ findProjectRoot startDir = findRootGo startDir startDir
 -- was found, in which case `findProjectRoot` falls back to `entryDir` itself).
 export entrySearchRoots : String -> <IO> List String
 entrySearchRoots entryDir =
-  let projRoot = findProjectRoot entryDir
+  let projRoot = findProjectRootOrSelf entryDir
   if projRoot == entryDir then [projRoot] else [entryDir, projRoot]
 
-findRootGo : String -> String -> <IO> String
-findRootGo cur fallback =
-  if fileExists (stringConcat [cur, "/medaka.toml"]) then cur
+findRootGo : String -> <IO> Option String
+findRootGo cur =
+  if fileExists (stringConcat [cur, "/medaka.toml"]) then Some cur
   else
     let p = parentDir cur
-    if p == cur || stringLength p == 0 then fallback else findRootGo p fallback
+    if p == cur || stringLength p == 0 then None else findRootGo p
 
 -- parent directory: strip the last `/`-component (mirrors the loader's dir logic).
 parentDir : String -> String
@@ -631,10 +643,9 @@ childDeps deps owningRoot roots =
 --
 -- The modIds among `mods` that are TRUSTED to reference internal-only externs
 -- (arrayGetUnsafe, …).  `stdlibRoot` (where core.mdk/runtime.mdk live) is ALWAYS
--- trusted.  Additionally, when the entry belongs to a REAL PROJECT — i.e. a
--- `medaka.toml` exists at `findProjectRoot (parentDir entry)`, which
--- distinguishes it from `findProjectRoot`'s no-manifest fallback of returning the
--- entry's own dir — every module owned by one of the entry's OWN search `roots`
+-- trusted.  Additionally, when the entry belongs to a REAL PROJECT — i.e.
+-- `findProjectRoot (parentDir entry)` returns `Some`, distinct from `None`
+-- ("no medaka.toml found, gave up") — every module owned by one of the entry's OWN search `roots`
 -- (the entry dir + that project root, per `entrySearchRoots`) is trusted: it is
 -- part of the entry project.  A DECLARED DEPENDENCY resolves to a root OUTSIDE
 -- `roots` (via `resolveDepFile`/`childRoots`, added only after we cross into the
@@ -659,15 +670,12 @@ childDeps deps owningRoot roots =
 -- one physical dir" problem — `owningRoot` may be a RELATIVE `roots` entry while
 -- the physical dir is absolute) so the comparison is spelling-independent.
 export projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
-projectTrustedMods entry roots stdlibRoot mods =
-  let projectRoot = findProjectRoot (parentDir entry)
-  let deps = readDeps projectRoot
-  let hasProject = fileExists (stringConcat [projectRoot, "/medaka.toml"])
-  let trustedRoots = if hasProject then
-    map canonicalizePath (stdlibRoot::roots)
-  else
-    [canonicalizePath stdlibRoot]
-  trustedModsGo deps roots trustedRoots (map fst mods)
+projectTrustedMods entry roots stdlibRoot mods = match findProjectRoot (parentDir entry)
+  Some projectRoot =>
+    let deps = readDeps projectRoot
+    let trustedRoots = map canonicalizePath (stdlibRoot::roots)
+    trustedModsGo deps roots trustedRoots (map fst mods)
+  None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
 
 trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
 trustedModsGo _ _ _ [] = []
@@ -741,7 +749,7 @@ visitModsF parseFn read deps roots stack visited acc (d::ds) = match visitModF p
 -- Uses placeholder-loc `parseResult`.
 export loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesE read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF
@@ -760,7 +768,7 @@ loadProgramFilesE read entry roots =
 -- `analyzeLocated`.
 export loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF
@@ -834,7 +842,7 @@ loadProgramFilesLocatedCached parseCacheRef read entry roots =
 
 export loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF

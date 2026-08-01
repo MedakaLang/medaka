@@ -7,7 +7,6 @@
 --   medaka build sqlite/query_demo.mdk -o /tmp/qdemo && /tmp/qdemo <db-path>
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlite.{Db, openDb}
 import lib.query.{scanTable, fetchAll}
@@ -20,6 +19,8 @@ mkUser : (Int, String, Option Int) -> Result String User
 mkUser (i, n, a) = Ok User { id = i, name = n, age = a }
 
 userRow : RowType User
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 userRow = tCustom mkUser (t3 tInt tText (tOption tInt))
 
 showUser : User -> String

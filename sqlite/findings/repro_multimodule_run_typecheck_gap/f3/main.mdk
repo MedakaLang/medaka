@@ -1,5 +1,6 @@
--- lint-disable-file rule-duplicate-body
 import lib.t.{Foo}
 
 main : <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 main = println "\{Foo 1}"

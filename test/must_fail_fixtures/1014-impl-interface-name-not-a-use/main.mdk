@@ -1,0 +1,11 @@
+-- #1014: an `impl`'s reference to the INTERFACE NAME is not recorded as a use in
+-- refindex.mdk, so `medaka references` on an interface misses every impl of it.
+interface Sized a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sized Box where
+  size (Box n) = n
+
+main = println (size (Box 3))

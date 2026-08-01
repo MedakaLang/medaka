@@ -29,6 +29,15 @@ ROOT/test/lint_crossfile_fixtures/nested/deep.mdk:23:1: [rule-dead-code] private
   |
 23 | uniqueOne n =
   |  ^
+ROOT/test/lint_crossfile_fixtures/samefile_dup.mdk:
+ROOT/test/lint_crossfile_fixtures/samefile_dup.mdk:9:1: [rule-duplicate-body] function 'widthOne' has a body structurally identical to 'widthTwo' in this same file — consolidate into one function
+  |
+9 | widthOne n =
+  |  ^
+ROOT/test/lint_crossfile_fixtures/samefile_dup.mdk:20:1: [rule-duplicate-body] function 'widthTwo' has a body structurally identical to 'widthOne' in this same file — consolidate into one function
+  |
+20 | widthTwo n =
+  |  ^
 ROOT/test/lint_crossfile_fixtures/supp_file_level.mdk:
 ROOT/test/lint_crossfile_fixtures/supp_file_level.mdk:8:1: [rule-dead-code] private top-level 'gradeA' is unreachable from exports/main/doctests — remove it (dead code)
   |

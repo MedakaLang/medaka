@@ -6,7 +6,6 @@
 -- multi-leaf interior-page layout.
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{writeDatabase}
 import lib.recordfmt.{Cell, CInt, CText}
@@ -20,6 +19,8 @@ createSql : String
 createSql = "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)"
 
 mkRow : Int -> List Cell
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 mkRow i = [CInt i, CText "item_\{intToString i}"]
 
 mkRows : Int -> Int -> List (List Cell) -> List (List Cell)

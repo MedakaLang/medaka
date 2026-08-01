@@ -1,5 +1,5 @@
 # META
-source_lines=1952
+source_lines=1956
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -1228,9 +1228,14 @@ appArgDocH h arg =
 -- renders flat at postfix precedence (via `appArgDocH`, #142), unchanged.
 spineArg : Expr -> Expr -> Doc
 spineArg h (ELoc _ e) = spineArg h e
-spineArg _ (EApp f x) =
-  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+spineArg _ (EApp f x) = parenSpine (EApp f x)
 spineArg h e = appArgDocH h e
+
+-- parenthesize a nested-application spine, letting it break on its own.
+-- Shared by `spineArg`'s and `breakableArg`'s `EApp` clause (#602: an in-file
+-- structural duplicate).
+parenSpine : Expr -> Doc
+parenSpine e = Cat (text "(") (Cat (printAppSpine e) (text ")"))
 
 -- A single application argument worth keeping inline with its head: a lambda
 -- (whose body we can fold across lines) or a nested application (its own spine
@@ -1261,8 +1266,7 @@ breakableArg (ELam pats body) =
         (Cat (nest (Cat Line (printExprBody body))) (text ")")))))
 -- A nested application: parenthesize and let printAppSpine break its own spine
 -- so over-width nested calls wrap rather than overflowing a single arg line.
-breakableArg (EApp f x) =
-  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+breakableArg (EApp f x) = parenSpine (EApp f x)
 breakableArg e = printExpr precPostfix e
 
 collectApp : List Expr -> Expr -> (Expr, List Expr)
@@ -2426,8 +2430,10 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "appArgDocH" ((PVar "h") (PVar "arg")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "arg")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "h"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "arg"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg"))))
 (DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "spineArg" ((PVar "h") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "spineArg") (EVar "h")) (EVar "e")))
-(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "parenSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "spineArg" ((PVar "h") (PVar "e")) (EApp (EApp (EVar "appArgDocH") (EVar "h")) (EVar "e")))
+(DTypeSig false "parenSpine" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "parenSpine" ((PVar "e")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EVar "e"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "isBreakableArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBreakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isBreakableArg") (EVar "e")))
 (DFunDef false "isBreakableArg" ((PCon "ELam" PWild PWild)) (EVar "True"))
@@ -2436,7 +2442,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "breakableArg" (TyFun (TyCon "Expr") (TyCon "Doc")))
 (DFunDef false "breakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "breakableArg") (EVar "e")))
 (DFunDef false "breakableArg" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EVar "map") (EVar "printPatAtom")) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =>")))) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printExprBody") (EVar "body"))))) (EApp (EVar "text") (ELit (LString ")")))))))))
-(DFunDef false "breakableArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "breakableArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "parenSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "breakableArg" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e")))
 (DTypeSig false "collectApp" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "collectApp" ((PVar "acc") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "collectApp") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "f")))
@@ -3131,8 +3137,10 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "appArgDocH" ((PVar "h") (PVar "arg")) (EIf (EBinOp "&&" (EApp (EVar "isTightNegLitArg") (EVar "arg")) (EApp (EVar "not") (EApp (EVar "headIsNumericHead") (EApp (EVar "appSpineHead") (EVar "h"))))) (EApp (EVar "printExprRaw") (EApp (EVar "stripLocE") (EVar "arg"))) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "arg"))))
 (DTypeSig false "spineArg" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "spineArg" ((PVar "h") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "spineArg") (EVar "h")) (EVar "e")))
-(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "spineArg" (PWild (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "parenSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "spineArg" ((PVar "h") (PVar "e")) (EApp (EApp (EVar "appArgDocH") (EVar "h")) (EVar "e")))
+(DTypeSig false "parenSpine" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "parenSpine" ((PVar "e")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EVar "e"))) (EApp (EVar "text") (ELit (LString ")"))))))
 (DTypeSig false "isBreakableArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBreakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isBreakableArg") (EVar "e")))
 (DFunDef false "isBreakableArg" ((PCon "ELam" PWild PWild)) (EVar "True"))
@@ -3141,7 +3149,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "breakableArg" (TyFun (TyCon "Expr") (TyCon "Doc")))
 (DFunDef false "breakableArg" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "breakableArg") (EVar "e")))
 (DFunDef false "breakableArg" ((PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EMethodRef "map") (EVar "printPatAtom")) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =>")))) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printExprBody") (EVar "body"))))) (EApp (EVar "text") (ELit (LString ")")))))))))
-(DFunDef false "breakableArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "printAppSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x")))) (EApp (EVar "text") (ELit (LString ")"))))))
+(DFunDef false "breakableArg" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "parenSpine") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "breakableArg" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e")))
 (DTypeSig false "collectApp" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "collectApp" ((PVar "acc") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "collectApp") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "f")))

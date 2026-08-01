@@ -20,7 +20,6 @@
 -- `precCompare` vs its `shapeCompare`) is NOT consolidatable: each closes over a
 -- file-local parser/comparator.  The genuinely shared reporters (`bullet`,
 -- `verdict`) DID move to demo_support.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlparse.{parseSqlExpr, renderSqlExpr, dumpExpr}
 import lib.select.{SqlExpr}
@@ -132,6 +131,8 @@ roundTripCompare src e1 e2 s2 =
 
 rtFailures : List String -> List String
 rtFailures [] = []
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 rtFailures (s::rest) = match roundTrip s
   RtOk => rtFailures rest
   RtFail m => m :: rtFailures rest
@@ -191,6 +192,8 @@ precFailures ((src, want)::rest) = match parseSqlExpr src
   Ok tree => precCompare src want (dumpExpr tree) (precFailures rest)
 
 precCompare : String -> String -> String -> List String -> List String
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 precCompare src want got rest =
   if want == got then
     rest

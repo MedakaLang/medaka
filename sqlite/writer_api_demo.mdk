@@ -9,7 +9,6 @@
 --   reals   <out.db>   — table with a REAL column (floats)
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.writer.{
   ColType,

@@ -11,7 +11,6 @@
 -- builds it for both targets and diffs stdout.
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabase}
 import lib.sqlite.{Db, fromBytes}
@@ -61,6 +60,8 @@ showSI : (String, Int) -> String
 showSI (s, i) = "\{s}|\{i}"
 
 runIS : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runIS db label sel =
   let _ = println label
   match query db sel rowIS
@@ -68,6 +69,8 @@ runIS db label sel =
     Ok rows => printLines showIS rows
 
 runSI : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runSI db label sel =
   let _ = println label
   match query db sel rowSI

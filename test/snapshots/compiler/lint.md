@@ -1,5 +1,5 @@
 # META
-source_lines=3941
+source_lines=4133
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -412,6 +412,7 @@ allRules = [
   deadCodeRule,
   concatToInterpRule,
   selfShadowExternRule,
+  duplicateBodySameFileRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -3776,6 +3777,93 @@ countOpenParens cs n i acc
   | arrayGetUnsafe i cs == '(' = countOpenParens cs n (i + 1) (acc + 1)
   | otherwise = countOpenParens cs n (i + 1) acc
 
+-- ── over-fire narrowing (#893): "pure data" bodies never fire ──────────────────
+-- A body built ENTIRELY out of literals, variable references, tuples/lists/
+-- records/maps/sets of those, and data-CONSTRUCTOR application (an `EApp` whose
+-- ultimate head is an upper-case `EVar` — Medaka's ctor-naming convention) is
+-- DATA, not logic: it calls no function, branches on nothing.  Two files that
+-- coincidentally wire up parallel fixture literals with the same shape (e.g. a
+-- `specs : List (String, String, Option Int, List (List Cell))` table built from
+-- differently-named-but-identically-shaped rows) are not a copy-paste hazard —
+-- there is no *behavior* to diverge, only data, and the fields plainly differ
+-- file-to-file even when the structural skeleton matches.  A body containing
+-- ANY call to a lower-case function (a real combinator, a `println`, string
+-- interpolation invoking a formatter, …) or any control flow (`if`/`match`/
+-- `do`) is NOT pure data and remains fully eligible — that is where actual
+-- logic can silently diverge, which is the defect this rule exists to catch.
+isPureDataExpr : Expr -> Bool
+isPureDataExpr e =
+  let e2 = unwrapLoc e
+  match e2
+    ELit _ => True
+    ENumLit _ _ _ _ => True
+    EVar _ => True
+    ETuple es => allList isPureDataExpr es
+    EListLit es => allList isPureDataExpr es
+    EArrayLit es => allList isPureDataExpr es
+    ERecordCreate _ fields => allList isPureDataField fields
+    EMapLit _ kvs => allList isPureDataKv kvs
+    ESetLit _ es => allList isPureDataExpr es
+    EAnnot inner _ => isPureDataExpr inner
+    EUnOp _ inner _ => isPureDataExpr inner
+    EApp _ _ if appHeadIsCtor e2 => allList isPureDataExpr (appArgs e2)
+    _ => False
+
+isPureDataField : FieldAssign -> Bool
+isPureDataField (FieldAssign _ e) = isPureDataExpr e
+
+isPureDataKv : (Expr, Expr) -> Bool
+isPureDataKv (k, v) = isPureDataExpr k && isPureDataExpr v
+
+-- the ultimate callee of an `EApp` spine is an upper-case `EVar` (a data ctor,
+-- by Medaka's naming convention — see `isUpperFirst`), not an ordinary function.
+appHeadIsCtor : Expr -> Bool
+appHeadIsCtor e = match unwrapLoc e
+  EVar name => isUpperFirst name
+  EApp f _ => appHeadIsCtor f
+  _ => False
+
+-- an `EApp` spine's arguments, left-to-right (innermost-first application
+-- unwound into a flat list).
+appArgs : Expr -> List Expr
+appArgs e = reverseL (appArgsRev e)
+
+appArgsRev : Expr -> List Expr
+appArgsRev e = match unwrapLoc e
+  EApp f a => a :: appArgsRev f
+  _ => []
+
+isUpperFirst : String -> Bool
+isUpperFirst s =
+  if stringLength s == 0 then
+    False
+  else
+    isUpper (arrayGetUnsafe 0 (stringToChars s))
+
+-- combined eligibility: big enough AND not pure data.
+dupEligible : Expr -> Bool
+dupEligible body = bodyComplexity body >= dupComplexityThreshold
+  && not (isPureDataExpr body)
+
+-- Same-file eligibility uses a HIGHER complexity floor than the cross-file
+-- rule.  This is not tuning-to-the-corpus: it is a structural consequence of
+-- how the two comparisons scale.  Cross-file compares bodies across a small
+-- number of DISTINCT files, so a coincidental small-body match is rare — the
+-- collision space is O(files).  Same-file compares every top-level body in ONE
+-- file against every OTHER body in that same file, so the collision space is
+-- O(bindings²) — and a file the size of `typecheck.mdk` has thousands of small
+-- one-line helpers (`ppTyAtom (TyFun a b) = "(" ++ ppTy (TyFun a b) ++ ")"`-
+-- shaped wrappers, single-arm forwarding accessors) whose bodies coincide by
+-- sheer combinatorics, not because anyone copy-pasted anything.  The genuine
+-- hazard this rule exists to catch (#602's `parseBracketBlock`/`indentedBody`)
+-- is a multi-statement `do`-block, comfortably above this floor.
+dupSameFileComplexityThreshold : Int
+dupSameFileComplexityThreshold = 20
+
+dupEligibleSameFile : Expr -> Bool
+dupEligibleSameFile body = bodyComplexity body >= dupSameFileComplexityThreshold
+  && not (isPureDataExpr body)
+
 ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
 ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
 
@@ -3879,7 +3967,7 @@ fileDupOccs (path, pos, decls) =
 dupOccOfDecl : String -> (Decl, Option Loc) -> List (String, Int, String, String)
 dupOccOfDecl path (d, loc) = match d
   DFunDef _ name pats body =>
-    if bodyComplexity body >= dupComplexityThreshold then
+    if dupEligible body then
       [(path, locLineOf loc, name, structuralKey pats body)]
     else
       []
@@ -3943,6 +4031,110 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
   Lt => True
   Gt => False
   Eq => occLine a <= occLine b
+
+-- ── per-file rule: duplicate-body, SAME FILE (#602) ─────────────────────────────
+-- `ruleDuplicateBody` above is cross-file-only by construction (its `check`
+-- takes every target file at once and requires ≥2 DISTINCT files per group) —
+-- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
+-- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This
+-- is the in-file counterpart: same structural key (`structuralKey`), same
+-- eligibility gate (`dupEligible` — size threshold + not-pure-data), but grouped
+-- within ONE file's own decls instead of across the whole project.  Registered
+-- under the SAME rule name (`ruleNameDuplicateBody`) so `--disable`/`--only`/
+-- `-- lint-disable-*` all address both halves of the rule with one name.
+sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
+sameFileOccOfDecl (d, loc) = match d
+  DFunDef _ name pats body =>
+    if dupEligibleSameFile body then
+      [(name, locLineOf loc, structuralKey pats body)]
+    else
+      []
+  DAttrib _ inner => sameFileOccOfDecl (inner, loc)
+  _ => []
+
+ruleDuplicateBodySameFile : String -> String -> Positions -> List Decl -> List Finding
+ruleDuplicateBodySameFile _ _ pos decls =
+  let occs = flatMap sameFileOccOfDecl (declLocList pos decls)
+  let groups = sameFileGroupByKey occs
+  let live = filterList (k => listLen (findWithDefault [] k groups) >= 2) (sameFileDistinctKeys occs)
+  flatMap
+    (k => emitSameFileGroup (reverseL (findWithDefault [] k groups)))
+    (sortUniqS live)
+
+sameFileGroupByKey : List (String, Int, String) -> HashMap String (List (String, Int, String))
+sameFileGroupByKey occs =
+  let m = new ()
+  let _ = sameFileGroupGo m occs
+  m
+
+sameFileGroupGo : HashMap String (List (String, Int, String)) -> List (String, Int, String) -> Unit
+sameFileGroupGo _ [] = ()
+sameFileGroupGo m (o::rest) =
+  let _ = set (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
+  sameFileGroupGo m rest
+
+sameFileDistinctKeys : List (String, Int, String) -> List String
+sameFileDistinctKeys occs =
+  let seen = new ()
+  sameFileDistinctGo seen occs
+
+sameFileDistinctGo : HashMap String Unit -> List (String, Int, String) -> List String
+sameFileDistinctGo _ [] = []
+sameFileDistinctGo seen (o::rest)
+  | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
+  | otherwise =
+    let _ = set (sameFileOccKey o) () seen
+    sameFileOccKey o :: sameFileDistinctGo seen rest
+
+sameFileOccName : (String, Int, String) -> String
+sameFileOccName (n, _, _) = n
+
+sameFileOccLine : (String, Int, String) -> Int
+sameFileOccLine (_, l, _) = l
+
+sameFileOccKey : (String, Int, String) -> String
+sameFileOccKey (_, _, k) = k
+
+-- emit findings for one same-file structural-key group (≥2 occurrences,
+-- guaranteed by the `live` pre-filter above; the ≥2 check is re-asserted here
+-- too, for the same "must not depend on the caller having filtered" reason
+-- `emitDupGroup` states above).
+emitSameFileGroup : List (String, Int, String) -> List Finding
+emitSameFileGroup grp =
+  if listLen grp < 2 then
+    []
+  else
+    map (sameFileFinding grp) (sortSameFileOccs grp)
+
+sameFileFinding : List (String, Int, String) -> (String, Int, String) -> Finding
+sameFileFinding grp occ =
+  let others = filterList (o => sameFileOccName o != sameFileOccName occ) grp
+  Finding {
+    rule = ruleNameDuplicateBody,
+    message = "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
+    severity = SevWarning,
+    loc = Some (Loc "" (sameFileOccLine occ) 1 (sameFileOccLine occ) 1),
+  }
+
+sortSameFileOccs : List (String, Int, String) -> List (String, Int, String)
+sortSameFileOccs [] = []
+sortSameFileOccs (x::xs) = sameFileInsert x (sortSameFileOccs xs)
+
+sameFileInsert : (String, Int, String) -> List (String, Int, String) -> List (String, Int, String)
+sameFileInsert x [] = [x]
+sameFileInsert x (y::ys)
+  | sameFileOccLine x <= sameFileOccLine y = x :: y::ys
+  | otherwise = y :: sameFileInsert x ys
+
+duplicateBodySameFileRule : Rule
+duplicateBodySameFileRule = Rule {
+  name = ruleNameDuplicateBody,
+  descr = "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleDuplicateBodySameFile,
+  fix = None,
+}
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -4040,7 +4232,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "selfShadowExternRule" (TyCon "Rule"))
 (DFunDef false "selfShadowExternRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "descr" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleSelfShadowExtern")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -5277,6 +5469,26 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "bodyComplexity" ((PVar "body")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EApp (EVar "exprSexp") (EVar "body")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DTypeSig false "countOpenParens" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "countOpenParens" ((PVar "cs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "isPureDataExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
+(DTypeSig false "isPureDataField" (TyFun (TyCon "FieldAssign") (TyCon "Bool")))
+(DFunDef false "isPureDataField" ((PCon "FieldAssign" PWild (PVar "e"))) (EApp (EVar "isPureDataExpr") (EVar "e")))
+(DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "isPureDataKv" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "&&" (EApp (EVar "isPureDataExpr") (EVar "k")) (EApp (EVar "isPureDataExpr") (EVar "v"))))
+(DTypeSig false "appHeadIsCtor" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isUpperFirst") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
+(DTypeSig false "appArgs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgs" ((PVar "e")) (EApp (EVar "reverseL") (EApp (EVar "appArgsRev") (EVar "e"))))
+(DTypeSig false "appArgsRev" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsRev" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EBinOp "::" (EVar "a") (EApp (EVar "appArgsRev") (EVar "f")))) (arm PWild () (EListLit))))
+(DTypeSig false "isUpperFirst" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
+(DTypeSig false "dupEligible" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "dupEligible" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
+(DTypeSig false "dupSameFileComplexityThreshold" (TyCon "Int"))
+(DFunDef false "dupSameFileComplexityThreshold" () (ELit (LInt 20)))
+(DTypeSig false "dupEligibleSameFile" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "dupEligibleSameFile" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EVar "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
@@ -5296,7 +5508,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccOfDecl") (EVar "path"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))
 (DTypeSig false "dupOccOfDecl" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "dupOccOfDecl" ((PVar "path") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupComplexityThreshold")) (EListLit (ETuple (EVar "path") (EApp (EVar "locLineOf") (EVar "loc")) (EVar "name") (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EApp (EVar "dupOccOfDecl") (EVar "path")) (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
+(DFunDef false "dupOccOfDecl" ((PVar "path") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EApp (EVar "dupEligible") (EVar "body")) (EListLit (ETuple (EVar "path") (EApp (EVar "locLineOf") (EVar "loc")) (EVar "name") (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EApp (EVar "dupOccOfDecl") (EVar "path")) (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "locLineOf" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Int")))
 (DFunDef false "locLineOf" ((PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild))) (EVar "l"))
 (DFunDef false "locLineOf" ((PCon "None")) (ELit (LInt 1)))
@@ -5320,6 +5532,38 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dupInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "dupOccLe") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "dupInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupOccLe" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "dupOccLe" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "occFile") (EVar "a"))) (EApp (EVar "occFile") (EVar "b"))) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "<=" (EApp (EVar "occLine") (EVar "a")) (EApp (EVar "occLine") (EVar "b"))))))
+(DTypeSig false "sameFileOccOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sameFileOccOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EApp (EVar "dupEligibleSameFile") (EVar "body")) (EListLit (ETuple (EVar "name") (EApp (EVar "locLineOf") (EVar "loc")) (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "sameFileOccOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
+(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "pos") (PVar "decls")) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EVar "flatMap") (EVar "sameFileOccOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
+(DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
+(DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
+(DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "sameFileOccLine" ((PTuple PWild (PVar "l") PWild)) (EVar "l"))
+(DTypeSig false "sameFileOccKey" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
+(DFunDef false "sameFileOccKey" ((PTuple PWild PWild (PVar "k"))) (EVar "k"))
+(DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EVar "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
+(DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "!=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EVar "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
+(DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
+(DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))
+(DTypeSig false "sameFileInsert" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "sameFileInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
+(DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -5417,7 +5661,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "selfShadowExternRule" (TyCon "Rule"))
 (DFunDef false "selfShadowExternRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "descr" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleSelfShadowExtern")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -6654,6 +6898,26 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "bodyComplexity" ((PVar "body")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EApp (EVar "exprSexp") (EVar "body")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DTypeSig false "countOpenParens" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "countOpenParens" ((PVar "cs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "isPureDataExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
+(DTypeSig false "isPureDataField" (TyFun (TyCon "FieldAssign") (TyCon "Bool")))
+(DFunDef false "isPureDataField" ((PCon "FieldAssign" PWild (PVar "e"))) (EApp (EVar "isPureDataExpr") (EVar "e")))
+(DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "isPureDataKv" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "&&" (EApp (EVar "isPureDataExpr") (EVar "k")) (EApp (EVar "isPureDataExpr") (EVar "v"))))
+(DTypeSig false "appHeadIsCtor" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "appHeadIsCtor" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "name")) () (EApp (EVar "isUpperFirst") (EVar "name"))) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHeadIsCtor") (EVar "f"))) (arm PWild () (EVar "False"))))
+(DTypeSig false "appArgs" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgs" ((PVar "e")) (EApp (EVar "reverseL") (EApp (EVar "appArgsRev") (EVar "e"))))
+(DTypeSig false "appArgsRev" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
+(DFunDef false "appArgsRev" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EBinOp "::" (EVar "a") (EApp (EVar "appArgsRev") (EVar "f")))) (arm PWild () (EListLit))))
+(DTypeSig false "isUpperFirst" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
+(DTypeSig false "dupEligible" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "dupEligible" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
+(DTypeSig false "dupSameFileComplexityThreshold" (TyCon "Int"))
+(DFunDef false "dupSameFileComplexityThreshold" () (ELit (LInt 20)))
+(DTypeSig false "dupEligibleSameFile" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "dupEligibleSameFile" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EDictApp "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
@@ -6673,7 +6937,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccOfDecl") (EVar "path"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))
 (DTypeSig false "dupOccOfDecl" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
-(DFunDef false "dupOccOfDecl" ((PVar "path") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupComplexityThreshold")) (EListLit (ETuple (EVar "path") (EApp (EVar "locLineOf") (EVar "loc")) (EVar "name") (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EApp (EVar "dupOccOfDecl") (EVar "path")) (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
+(DFunDef false "dupOccOfDecl" ((PVar "path") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EApp (EVar "dupEligible") (EVar "body")) (EListLit (ETuple (EVar "path") (EApp (EVar "locLineOf") (EVar "loc")) (EVar "name") (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EApp (EVar "dupOccOfDecl") (EVar "path")) (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "locLineOf" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Int")))
 (DFunDef false "locLineOf" ((PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild))) (EVar "l"))
 (DFunDef false "locLineOf" ((PCon "None")) (ELit (LInt 1)))
@@ -6697,3 +6961,35 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "dupInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "dupOccLe") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "dupInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupOccLe" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "dupOccLe" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "occFile") (EVar "a"))) (EApp (EVar "occFile") (EVar "b"))) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "<=" (EApp (EVar "occLine") (EVar "a")) (EApp (EVar "occLine") (EVar "b"))))))
+(DTypeSig false "sameFileOccOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sameFileOccOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body")) () (EIf (EApp (EVar "dupEligibleSameFile") (EVar "body")) (EListLit (ETuple (EVar "name") (EApp (EVar "locLineOf") (EVar "loc")) (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "sameFileOccOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
+(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "pos") (PVar "decls")) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EDictApp "flatMap") (EVar "sameFileOccOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
+(DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
+(DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
+(DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
+(DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "sameFileOccLine" ((PTuple PWild (PVar "l") PWild)) (EVar "l"))
+(DTypeSig false "sameFileOccKey" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
+(DFunDef false "sameFileOccKey" ((PTuple PWild PWild (PVar "k"))) (EVar "k"))
+(DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EMethodRef "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
+(DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "!=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EMethodRef "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
+(DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
+(DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))
+(DTypeSig false "sameFileInsert" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "sameFileInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
+(DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))

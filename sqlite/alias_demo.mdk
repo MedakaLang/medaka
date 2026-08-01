@@ -11,7 +11,6 @@
 
 -- The in-memory `specs` fixture is deliberately the same shape every sqlite probe
 -- builds; sharing it across probes would couple unrelated demos.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
