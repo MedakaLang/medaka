@@ -275,6 +275,7 @@ cohScan : List CohImpl -> CohScan
 cohScanDone : CohScan -> Bool
 cohScanInner : CohImpl -> List CohImpl -> CohScan -> CohScan
 cohScanOuter : List CohImpl -> CohScan -> CohScan
+cohSoftInScope : String -> String -> Bool
 cohStep : Mono -> Mono -> MStep Int Mono Mono
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
 cohSubsumes : List Mono -> List Mono -> Bool
