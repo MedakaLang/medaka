@@ -1,0 +1,116 @@
+issue: 1185
+what: In a multi-module project the exhaustiveness checker builds its
+what: constructor oracle from a SUPERSET that includes constructors of
+what: UNRELATED types declared in other modules. `total : List Int -> Int`
+what: covers `[]` and `(x :: xs)` -- the only two constructors of `List` --
+what: and is therefore exhaustive; it is nonetheless reported
+what: W-NONEXHAUSTIVE-CLAUSES, demanding a case for `Text`, a constructor of
+what: `Doc`, a different type in a different module that `total` never
+what: mentions.
+what: THE CORRECT ANSWER IS NO DIAGNOSTIC AT ALL. Nothing in this three-file
+what: graph is non-exhaustive. That is established from the language, not
+what: from the tool: `List` has exactly two constructors and both are
+what: covered, and `Text`'s type never appears in `total`'s signature or
+what: body. control.mdk in this directory is the same `total` in the same
+what: non-entry position with the unrelated module removed, and it is
+what: diagnostic-free -- so the clean result is reachable on this binary.
+what: The suggested remedy is IMPOSSIBLE TO FOLLOW: adding a `Text _` clause
+what: to a `List Int` function does not typecheck, so the only way to silence
+what: it is a `_` catch-all, which defeats the exhaustiveness checking the
+what: user wanted. That is why this is S2 misleading and not mere noise.
+what: Measured FIRST-HAND on a cold build of this branch (base d1ac79a2):
+what:   `medaka check --json main.mdk` -> exit 0, ONE diagnostic, on
+what:     ./util.mdk: W-NONEXHAUSTIVE-CLAUSES, "non-exhaustive clauses of
+what:     'total'. Missing case: 'Text _'; add a 'Text _' clause, or a '_'
+what:     catch-all clause." (message recorded as EVIDENCE, not pinned -- see
+what:     why-diag-code)
+what:   `medaka check main.mdk` (human) -> exit 0, prints only `main : Unit`
+what:     -- THE WARNING IS INVISIBLE, which is why this went unnoticed
+what:   `medaka run main.mdk` -> exit 0
+what: SCALE (from the issue, not re-measured here): on the compiler's own
+what: source, 1256 of 1304 diagnostic headers are W-NONEXHAUSTIVE-CLAUSES and
+what: 1249 of those -- about 96% -- demand a `Text _` case. Modules including
+what: stdlib/map.mdk and stdlib/list.mdk are warning-free when checked
+what: STANDALONE, which is what identifies the oracle superset as the
+what: mechanism rather than the functions themselves.
+what: WHERE TO LOOK: `checkGuardExhaustivenessWith` builds the constructor
+what: oracle from the module graph's declared constructors rather than from
+what: the SCRUTINEE'S OWN head type constructor. Same shape as the
+what: no-scope-in-the-key class recorded on #1128 and #1182.
+cmd: check-json main.mdk
+exit: 0
+diag-code: W-NONEXHAUSTIVE-CLAUSES 7:11-7:12
+control: check-json control.mdk
+why-verb: `check-json` is FORCED, not preferred. Human `medaka check` renders
+why-verb: only the ENTRY module's own warnings, and this false positive is
+why-verb: raised in util.mdk -- a non-entry module -- so plain `check` prints
+why-verb: `main : Unit` and nothing else at exit 0. There is no observable for
+why-verb: the `check` verb to grade. `run` and `build` are likewise useless
+why-verb: here: the program is correct and runs correctly (exit 0), and this
+why-verb: is a DIAGNOSTIC defect, not a wrong answer. `check-json` is the only
+why-verb: verb in this harness that can see a non-entry module's diagnostics.
+why-diag-code: `diag-code:` (code + range) rather than `diag:` (code + range +
+why-diag-code: FULL MESSAGE), even though the message is the most vivid
+why-diag-code: evidence -- and this is the deliberate choice the suite's header
+why-diag-code: asks for, made against the false-drain test rather than against
+why-diag-code: vividness. `diag:` would pin the prose "Missing case: 'Text _';
+why-diag-code: add a 'Text _' clause, or a '_' catch-all clause.", and a
+why-diag-code: REWORD of the W-NONEXHAUSTIVE-CLAUSES template -- an active
+why-diag-code: workstream in this repo (compiler/ERROR-QUALITY.md) with no
+why-diag-code: connection whatsoever to #1185 -- would flip this row to
+why-diag-code: DRAINED and invite someone to close a live bug. That is the
+why-diag-code: exact failure the header calls worse than no fixture.
+why-diag-code: `diag-code:` loses nothing that matters, because `total` IS
+why-diag-code: exhaustive: ANY W-NONEXHAUSTIVE-CLAUSES at that range is the
+why-diag-code: defect, whichever constructor it happens to name. The row
+why-diag-code: drains exactly when the warning stops firing, which is the fix.
+why-diag-code: This follows docs/ops/TESTING-DESIGN.md §4.5's default and the
+why-diag-code: #333 precedent (whose message embeds a set that moves for
+why-diag-code: unrelated reasons). The message is recorded above under `what:`
+why-diag-code: as EVIDENCE so nothing is lost -- prose, not an assertion.
+why-diag-code: ⚠️ THE RANGE IS LINE-SENSITIVE AND THE COMMENT HEADERS ARE
+why-diag-code: LOAD-BEARING. `7:11-7:12` is 0-based, i.e. util.mdk line 8
+why-diag-code: (`total [] = 0`), column 12. Adding or removing a comment line
+why-diag-code: in util.mdk MOVES THIS PIN with no code change. This was
+why-diag-code: observed while building the fixture: the same warning renders
+why-diag-code: at `3:11-3:12` in a copy with a shorter header. Keep util.mdk's
+why-diag-code: edits line-count-neutral, or re-derive the pin and say why.
+why-diag-code: The diag list is asserted WHOLE and IN ORDER across all three
+why-diag-code: files, so a new diagnostic on doc.mdk or main.mdk also fails
+why-diag-code: this row rather than passing unnoticed.
+why-control: control.mdk flips exactly ONE dimension -- the module declaring
+why-control: the unrelated type `Doc` is absent from the graph. `total` in
+why-control: cutil.mdk is byte-identical to util.mdk's and sits in the same
+why-control: non-entry position, so the control holds constant everything
+why-control: else the bug could be blamed on: the function, its clauses, its
+why-control: being outside the entry module, and multi-module checking as
+why-control: such. `medaka check --json control.mdk` -> exit 0, zero
+why-control: diagnostics on both files. This harness additionally requires a
+why-control: `check-json` control to be diagnostic-free, so a stray warning
+why-control: anywhere in the control graph reads as CONTROL-BROKE, never as a
+why-control: fix of #1185.
+why-control: ⚠️ doc.mdk SITS IN THIS SAME DIRECTORY and the control still does
+why-control: not see it. That is not luck: `medaka check` loads only what the
+why-control: entry transitively imports (same property #1047's fixture relies
+why-control: on), and control.mdk imports cutil.mdk alone.
+why-control: PROVEN ABLE TO FAIL ON THIS TREE, and this is the load-bearing
+why-control: half -- a control that is diagnostic-free for the WRONG reason
+why-control: (say, because the harness silently checked nothing) would look
+why-control: identical. Adding `import doc.{Doc}` to a copy of cutil.mdk and
+why-control: checking a copy of control.mdk against it reproduces the warning
+why-control: on that module verbatim. So the control's cleanliness is caused
+why-control: by the absence of the unrelated type and by nothing else.
+why-note: NOT a duplicate of #676 (non-exhaustive multi-clause functions
+why-note: emitting E-INDEX-OOB from `build`). That row is about what a
+why-note: GENUINELY non-exhaustive function does at runtime; `total` here is
+why-note: exhaustive and runs correctly. Opposite direction, different stage.
+why-note: WHY THIS ROW MATTERS BEYOND ITS OWN SEVERITY: it GATES any widening
+why-note: of warning visibility. The class is invisible today only because
+why-note: multi-module `check` renders the entry module alone. Stage F-3d of
+why-note: epic #1122 routed whole-graph warnings to `run` and `build` and
+why-note: turned a 3-module toy project into 20 lines of stderr, every line a
+why-note: false positive of exactly this shape. Until the oracle is keyed on
+why-note: the scrutinee's head type constructor, surfacing more of this
+why-note: channel makes the compiler noisier and less trustworthy, not more
+why-note: informative -- so this pin should be read as a PRECONDITION on that
+why-note: work, not merely as a logged annoyance.

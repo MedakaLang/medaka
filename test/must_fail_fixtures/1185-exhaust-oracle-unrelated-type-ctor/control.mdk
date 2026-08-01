@@ -1,0 +1,11 @@
+-- #1185 CONTROL — the SAME multi-module shape as main.mdk with exactly ONE dimension
+-- flipped: the module declaring the unrelated type `Doc` is gone from the graph.
+-- `medaka run`/`check` load only what the entry transitively imports, so this entry
+-- pulls cutil.mdk alone and never sees doc.mdk sitting beside it in this directory.
+-- `total` is the same exhaustive function over `List Int`, still in a non-entry module,
+-- and here it draws NO diagnostic. That isolates the unrelated type's presence in the
+-- graph as the thing that produces the false positive — not `total`, not the
+-- non-entry position, not multi-module checking as such.
+import cutil.{total}
+
+main = println (total [1, 2, 3])

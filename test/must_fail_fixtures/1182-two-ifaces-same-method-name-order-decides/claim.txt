@@ -1,0 +1,103 @@
+issue: 1182
+what: Two DIFFERENT interfaces each declare a method named `m`. When both have
+what: impls that could match one receiver, THE DECLARATION ORDER OF THE TWO
+what: `impl` BLOCKS decides which one runs -- silently, at exit 0, identically
+what: on both engines.
+what: ⚠️ THIS ROW DOES NOT ASSERT THAT 1 IS CORRECT. Which interface the
+what: occurrence of `m` belongs to is a NAME-RESOLUTION question and the right
+what: answer is genuinely in dispute -- the issue names two viable fixes
+what: (scope the candidate set by interface; or report the collision), which
+what: disagree about the value. What IS assertable, and what this row pins, is
+what: the ORDER DEPENDENCE: main.mdk and control.mdk differ ONLY in the order
+what: of two `impl` blocks -- a change that cannot alter program meaning --
+what: and they must not disagree. Today main.mdk answers 1 and control.mdk
+what: answers 2. So exactly one of them is wrong in each file, and no
+what: diagnostic is emitted for either.
+what: Measured FIRST-HAND on a cold build of this branch (base d1ac79a2):
+what:   `medaka check --json main.mdk` -> {"diagnostics":[]}, exit 0 (silent)
+what:   `medaka run main.mdk`          -> 1, exit 0
+what:   `medaka build main.mdk` + exec -> 1, exit 0 (native AGREES)
+what:   `medaka run control.mdk` (blocks swapped) -> 2 -> control-ok:2, exit 0
+what: MECHANISM (read from source, then confirmed by experiment).
+what: `matchingEntries` selects candidates by METHOD-NAME MEMBERSHIP
+what: (`contains name methodNames`), not by interface, so impls of DIFFERENT
+what: interfaces that happen to share a method name land in ONE candidate set
+what: and are ranked against each other by `pickMostSpecificEntry`. This is
+what: the bare-name-keyed-table shape: a key with no interface component lets
+what: entries from unrelated declarations collide (cf. #1128, #1069, #1092).
+cmd: run main.mdk
+exit: 0
+stdout: 1
+control: run control.mdk
+why-verb: `run` rather than `build-run`: the defect is in the SHARED FRONT END
+why-verb: (`matchingEntries` / `pickMostSpecificEntry`), which `medaka run` and
+why-verb: `medaka build` both go through, so the two engines are NOT two
+why-verb: independent observations here and `run` is the cheaper (no clang).
+why-verb: The native arm was confirmed BY HAND anyway -- `medaka build
+why-verb: main.mdk` exits 0 and the binary prints the same 1 at exit 0.
+why-verb: `check` cannot be the verb: check is CLEAN and exit 0 on BOTH files
+why-verb: -- the silence is precisely the S0.
+why-stdout: the observable is a WRONG VALUE AT EXIT 0, not a wrong exit code.
+why-stdout: `exit: 0` alone asserts nothing (a correct program also exits 0),
+why-stdout: so the discrimination lives in `stdout: 1` PAIRED WITH the
+why-stdout: control's assertion of 2 -- see why-control. 1 is exactly
+why-stdout: `impl A1 (Q Int y z)`'s body, so the only thing that can move this
+why-stdout: string is a change to which candidate the selector picks, which is
+why-stdout: the defect.
+why-control: control.mdk flips exactly ONE dimension -- the ORDER of the two
+why-control: `impl` blocks. The data type, both interfaces (in the same order),
+why-control: both bodies and the call are otherwise identical. It asserts 2.
+why-control: THE PAIR IS THE ASSERTION, not either file alone: together they
+why-control: pin (order A -> 1) AND (order B -> 2), which IS the statement
+why-control: "the order decides". This is the reordering-differential shape
+why-control: that test/MUST-FAIL-NOT-PINNABLE.txt's #1183 entry argues a
+why-control: SINGLE must-fail row cannot express -- and the argument is right
+why-control: about a single row. It is answered here by spending the CONTROL
+why-control: SLOT on the second ordering rather than on an unrelated
+why-control: near-miss, so both orderings are graded.
+why-control: ⚠️ READ THIS BEFORE ACTING ON A RED. The two fix directions do NOT
+why-control: produce the same verdict, and one of them produces a MISLEADING
+why-control: message:
+why-control:   * converge on 2, or reject either file -> main.mdk's pin moves
+why-control:     -> DRAINED, with the correct "close #1182" instructions.
+why-control:   * converge on 1 -> main.mdk still matches but the CONTROL panics
+why-control:     -> CONTROL-BROKE, whose message says "the ENVIRONMENT moved,
+why-control:     not the bug" and "do not close #1182". THAT MESSAGE IS WRONG
+why-control:     IN THIS ONE CASE: a CONTROL-BROKE on THIS fixture where the
+why-control:     control's panic text is `control regressed: with the impl
+why-control:     blocks swapped the answer is no longer 2` is the two orderings
+why-control:     CONVERGING, which is #1182 being FIXED. Check the panic text
+why-control:     before believing the verdict; if it is that one, treat it as a
+why-control:     drain and close the issue.
+why-control: Per #1144 this harness grades a control on its EXIT CODE ONLY, so
+why-control: the control ASSERTS 2 and panics otherwise rather than printing
+why-control: it. PROVEN ABLE TO FAIL ON THIS TREE: mutating the comparand to a
+why-control: value the program cannot produce (`r == 999`) makes `medaka run`
+why-control: exit 1 with `runtime error [E-PANIC]: control regressed: ...`.
+why-note: A THIRD file ships here, `specificity-probe.mdk`, NOT run by this
+why-note: gate. It settles the mechanism, which neither of the graded files
+why-note: can: it declares the fully-general `impl A2 (Q x y z)` FIRST and the
+why-note: strictly more specific `impl A1 (Q Int Bool Int)` SECOND, and the
+why-note: answer is 1 -- the more specific impl, from the OTHER interface,
+why-note: declared second. Plain declaration order would have given 2, so only
+why-note: cross-interface min⊑ ranking explains it. Measured 2026-08-01;
+why-note: that file carries the one command that re-derives it.
+why-note: NOT #1047 and NOT #1183, and neither pin subsumes this one.
+why-note:   * #1047 is two modules declaring interfaces with the same
+why-note:     INTERFACE name; here there is one file and two DISTINCT
+why-note:     interfaces sharing a METHOD name.
+why-note:   * #1183 is `impl`-order deciding WITHIN ONE interface under a
+why-note:     W-INCOMPARABLE-IMPLS warning, and is covered by
+why-note:     test/diff_compiler_dict_semantics.sh §4's KNOWNBAD_PERM rows.
+why-note:     Here there is NO warning at all and the candidate set spans TWO
+why-note:     interfaces, which is a candidate-set DEFORMATION rather than an
+why-note:     ambiguous program -- §4 permutes `impl` blocks within a fixture
+why-note:     whose impls belong to one class, so nothing there can reach this
+why-note:     shape.
+why-note: `diff_compiler_engines` is structurally blind to this -- both
+why-note: engines agree on 1 -- which is why the must-fail corpus is where it
+why-note: lives. Stage F-3c adds a gate beside its new ambiguity diagnostic
+why-note: that declines to report when the candidate set spans more than one
+why-note: interface; that gate is correctly scoped (DICT-SEMANTICS §6 C1 is a
+why-note: condition on ONE class), but it makes the deformation UNREPORTED
+why-note: rather than impossible, so this row is the residual.

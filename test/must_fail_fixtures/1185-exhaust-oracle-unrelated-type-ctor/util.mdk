@@ -1,0 +1,9 @@
+-- #1185 — `total : List Int -> Int` is FULLY EXHAUSTIVE: `[]` and `(x::xs)` are the only
+-- two constructors of `List`. It never mentions `Doc` and never mentions `Text`.
+-- The exhaustiveness checker nonetheless reports W-NONEXHAUSTIVE-CLAUSES here, demanding
+-- a `Text _` clause — a constructor of `Doc`, a different type in a different module.
+import doc.{Doc}
+
+export total : List Int -> Int
+total [] = 0
+total (x :: xs) = x + total xs

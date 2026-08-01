@@ -1,0 +1,29 @@
+-- #1182 SPECIFICITY PROBE — the discriminator that identifies the MECHANISM.
+--
+-- ⚠️ This file is NOT run by the must-fail gate. It is shipped because it answers the one
+-- question main.mdk + control.mdk cannot: is the winner picked by DECLARATION ORDER, or
+-- by the most-specific-wins (min⊑) selector ranking impls of two DIFFERENT interfaces
+-- against each other in one candidate set?
+--
+-- Here `impl A2 (Q x y z)` is fully general and declared FIRST; `impl A1 (Q Int Bool Int)`
+-- is strictly more specific and declared SECOND. If declaration order decided, the answer
+-- would be 2. It is 1 — the more specific impl, from the OTHER interface. Only
+-- cross-interface min⊑ ranking explains that.
+--
+-- Re-derive in one command (measured 2026-08-01) rather than trusting this note:
+--   medaka run specificity-probe.mdk   -> 1, exit 0
+data Q a b c = Q a b c
+
+interface A1 a where
+  m : a -> Int
+
+interface A2 a where
+  m : a -> Int
+
+impl A2 (Q x y z) where
+  m _ = 2
+
+impl A1 (Q Int Bool Int) where
+  m _ = 1
+
+main = println (m (Q 1 True 7))

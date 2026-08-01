@@ -1,0 +1,4 @@
+-- #1185 — an ordinary sum type in its own module. `Text` is one of ITS constructors and
+-- belongs to no other type. Nothing here is wrong; this module exists only so that a
+-- constructor of an unrelated type is present in the module graph.
+public export data Doc = Nil | Text String | Cat Doc Doc

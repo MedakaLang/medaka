@@ -1,0 +1,8 @@
+-- #1185 CONTROL support — `total` is BYTE-IDENTICAL to util.mdk's, and it lives in a
+-- non-entry module exactly as util.mdk's does. The ONLY difference is that this module
+-- does not import `doc`, so no unrelated type reaches the graph.
+-- (four header comment lines, same as util.mdk — the fixture's line counts are graded)
+
+export total : List Int -> Int
+total [] = 0
+total (x :: xs) = x + total xs
