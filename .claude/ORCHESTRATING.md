@@ -22,6 +22,38 @@ gh pr create --fill
 gh pr merge --auto --merge       # enqueues; the merge queue does the rest
 ```
 
+> ### 🚨 ONCE A PR IS ENQUEUED, TREAT ITS BRANCH AS FROZEN — a later push can miss its own merge.
+>
+> The queue merges the branch **as it stood when it was enqueued**. A commit pushed after that is
+> not necessarily included; it is simply left behind on the branch, and the PR merges without it.
+> Measured 2026-08-01 (#1213): PR #1203 went green and enqueued, review found its new `check`
+> success line had **no test coverage at all**, an agent pushed the probe — and #1203 merged
+> WITHOUT it. The fix reached `main`; the test proving it works did not. It took a second PR.
+>
+> **The agent DID verify its push, and still got it wrong** — it checked the commit was on the
+> BRANCH (`git log origin/main..origin/<branch>`), which was true and irrelevant. The check that
+> discriminates is ancestry against **main**:
+>
+> ```sh
+> git merge-base --is-ancestor <sha> origin/main && echo "on main" || echo "NOT on main"
+> ```
+>
+> If a change is needed after enqueue: dequeue first, or land it as a follow-up PR. And note the
+> sibling trap — **a STALE check-run is indistinguishable from a fresh one** in
+> `statusCheckRollup`. A red `gates (frontend)` on #1200 was two hours old, from before a rebase,
+> and read exactly like a current failure. Compare the check's `started_at` against your push:
+> ```sh
+> gh api "repos/MedakaLang/medaka/commits/$SHA/check-runs" --jq '.check_runs[]|"\(.name) \(.conclusion) \(.started_at)"'
+> ```
+>
+> **`gh` WRITES CAN SILENTLY NO-OP — read the state back, never the return code** (#1212).
+> Three distinct instances in one session: `gh pr edit --body-file` no-ops on a Projects-classic
+> GraphQL error; `gh api -X PATCH -f body=@file` writes the **literal string** `@file` (`-f` does
+> not expand `@` — use `-F`), which is the workaround for the first bug, so routing around one
+> lands you in the other; and `gh pr merge --auto` returns 0 or 1 with no relation to success.
+> This generalizes past `gh`: the recurring failure is **a tool reporting success while nothing
+> happened**, and the uniform defense is to re-derive the resulting state.
+
 **Ten required checks:** the **seven** `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`. Zero
 approvals — the *checks* are the gate, not a human, so an agent can self-merge on green.
 
@@ -468,6 +500,24 @@ Each is a failure actually watched happen this session:
    re-invoked it and it said *"I'll wait for the batches"* **forever**. Nested forks also fail with a
    *misleading success signal* (`Fork is not available inside a forked worker`, while one still
    reports success and produces nothing). **Remedy: `TaskStop <agentId>` FIRST**, or it respawns.
+
+   ⚠️ **CONFIRMED AT SCALE 2026-08-01, and it is worse than "some agents do this": ~10 of ~14 agents
+   in one session stalled reporting they were "waiting for a notification"** while their backgrounded
+   `make preflight` / `make medaka` was running perfectly. **Task notifications do not reach
+   subagents reliably.** Three agents then formed a *delegation loop* — each reporting "I resumed the
+   original agent, it is working in the background" — with nobody executing; it cost ~3 idle cycles
+   before I killed the chain and re-dispatched one agent with an explicit *"YOU are the implementer,
+   there is no other agent"* framing.
+
+   **Two lines that fix it, in every prompt that runs a long build:**
+   - *"Run it BACKGROUNDED and POLL for the PID to exit: `until ! kill -0 <pid> 2>/dev/null; do sleep 10; done`.
+     Do NOT await a notification."*
+   - *"You are the implementer. Do not delegate, do not spawn a sub-agent, do not 'resume' another agent."*
+
+   **Orchestrator-side remedy that actually unblocked them:** don't nudge blindly — `ps aux | grep -E
+   'preflight|make medaka'`, wait on the PID yourself, READ the log, and hand the agent the *result*.
+   Also verify a `timeout`-wrapped build **succeeded** rather than being killed at the limit; a
+   timed-out build leaves a stale binary and every measurement after it is meaningless.
 2. **"APPEND each result to disk as you finish it. Never buffer for a final write."** If it dies
    halfway you want half a census on disk, not zero.
 3. **"NEVER end your turn with anything still running"** + **"Do NOT build."** A docs/audit agent has
