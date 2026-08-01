@@ -1,5 +1,5 @@
 # META
-source_lines=888
+source_lines=893
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -420,6 +420,9 @@ coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
   None => []
 
 coreEntry : (String, String) -> List (String, String)
+-- Structural duplicate of `originEntryPair` below; NOT de-duplicated here because
+-- this is a tooling-scoped PR and this is the emitter — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
 coreEntry (n, definer)
   | isExcludedName n = []
   | otherwise = [(n, mangledName definer n)]
@@ -480,6 +483,8 @@ originEntryAs exports origin local
 
 -- a wildcard import iterates the (name, definer) pairs directly.
 originEntryPair : (String, String) -> List (String, String)
+-- Structural duplicate of `coreEntry` above; deferred de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
 originEntryPair (n, definer)
   | isExcludedName n = []
   | otherwise = [(n, mangledName definer n)]

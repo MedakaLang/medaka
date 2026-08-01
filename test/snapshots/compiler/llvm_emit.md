@@ -1,5 +1,5 @@
 # META
-source_lines=11128
+source_lines=11134
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -3033,6 +3033,9 @@ isArithOp op = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
 -- the optimization (falls to the boxing path); it can never miscompile.
 staticIsFloat : List (String, (String, LTy)) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
+-- Shares this `CVar` clause verbatim with `bodyFloatRet` below; NOT de-duplicated
+-- here because this is a tooling-scoped PR and this is the emitter — see #1201.
+-- lint-disable-next-line rule-duplicate-body
 staticIsFloat env (CVar x _) = match lookupAssoc x env
   Some (_, LTFloat) => True
   Some (_, LTFloatU) => True
@@ -3048,6 +3051,9 @@ staticIsFloat env _ = False
 -- makes it True, so it never false-positives a non-float body.
 bodyFloatRet : List (String, (String, LTy)) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
+-- Shares this `CVar` clause verbatim with `staticIsFloat` above; deferred
+-- de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
 bodyFloatRet env (CVar x _) = match lookupAssoc x env
   Some (_, LTFloat) => True
   Some (_, LTFloatU) => True

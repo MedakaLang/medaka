@@ -1,5 +1,5 @@
 # META
-source_lines=19786
+source_lines=19793
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -19522,6 +19522,10 @@ modInScope mid scopeMods = mid == "" || omHasKey mid scopeMods
 
 -- attribute each fn DEFINED in [prog] that carries a funConstraintsRef entry to [mid].
 attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
+-- Structural duplicate of `attributeModuleArrIfaces` below (same body, two
+-- payload instantiations); NOT de-duplicated here because this is a
+-- tooling-scoped PR and this is language internals — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
 attributeModuleArities mid prog entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
   map
@@ -19532,6 +19536,9 @@ attributeModuleArities mid prog entries =
 -- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
 -- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
+-- Structural duplicate of `attributeModuleArities` above; deferred
+-- de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
 attributeModuleArrIfaces mid prog entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
   map

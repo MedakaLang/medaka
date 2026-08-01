@@ -1224,9 +1224,14 @@ appArgDocH h arg =
 -- renders flat at postfix precedence (via `appArgDocH`, #142), unchanged.
 spineArg : Expr -> Expr -> Doc
 spineArg h (ELoc _ e) = spineArg h e
-spineArg _ (EApp f x) =
-  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+spineArg _ (EApp f x) = parenSpine (EApp f x)
 spineArg h e = appArgDocH h e
+
+-- parenthesize a nested-application spine, letting it break on its own.
+-- Shared by `spineArg`'s and `breakableArg`'s `EApp` clause (#602: an in-file
+-- structural duplicate).
+parenSpine : Expr -> Doc
+parenSpine e = Cat (text "(") (Cat (printAppSpine e) (text ")"))
 
 -- A single application argument worth keeping inline with its head: a lambda
 -- (whose body we can fold across lines) or a nested application (its own spine
@@ -1257,8 +1262,7 @@ breakableArg (ELam pats body) =
         (Cat (nest (Cat Line (printExprBody body))) (text ")")))))
 -- A nested application: parenthesize and let printAppSpine break its own spine
 -- so over-width nested calls wrap rather than overflowing a single arg line.
-breakableArg (EApp f x) =
-  Cat (text "(") (Cat (printAppSpine (EApp f x)) (text ")"))
+breakableArg (EApp f x) = parenSpine (EApp f x)
 breakableArg e = printExpr precPostfix e
 
 collectApp : List Expr -> Expr -> (Expr, List Expr)

@@ -1,0 +1,9 @@
+-- #893 pin, sibling of data_literal_a.mdk: same structural shape, different
+-- data.  The pair must produce NO rule-duplicate-body finding.
+export rows : List (Int, String, Option Int)
+rows = [
+  (7, "eve", Some 41),
+  (8, "fay", None),
+  (9, "gus", Some 19),
+  (10, "hal", Some 41),
+]

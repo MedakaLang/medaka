@@ -1,0 +1,14 @@
+-- #893 pin (the OVER-FIRE half): a parallel fixture-DATA literal, structurally
+-- identical to `rows` in data_literal_b.mdk and comfortably above the
+-- complexity threshold, must NOT trip rule-duplicate-body.  A body built only
+-- from literals / tuples / lists / data-constructor application is DATA, not
+-- logic: there is no behavior for the two copies to silently diverge on, which
+-- is the entire defect the rule exists to catch.  Before the fix this pair
+-- fired, which is why ~30 sqlite probes carried a blanket lint-disable-file.
+export rows : List (Int, String, Option Int)
+rows = [
+  (1, "ada", Some 30),
+  (2, "bob", None),
+  (3, "cyd", Some 24),
+  (4, "dee", Some 30),
+]

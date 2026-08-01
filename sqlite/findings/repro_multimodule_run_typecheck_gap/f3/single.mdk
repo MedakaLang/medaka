@@ -1,7 +1,8 @@
--- lint-disable-file rule-duplicate-body
 -- The single-file CONTROL: deliberately the same program as main.mdk, to prove
 -- the gap is loader-specific. The duplication IS the point.
 data Foo = Foo Int
 
 main : <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 main = println "\{Foo 1}"

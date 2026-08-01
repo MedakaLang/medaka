@@ -1,5 +1,5 @@
 # META
-source_lines=3529
+source_lines=3534
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1970,12 +1970,17 @@ prim2 : (Value e -> Value e -> <e> Value e) -> Value e
 prim2 f = VPrim (a => VPrim (b => f a b))
 
 prim3 : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
+-- Structural duplicate of `prim3M` below; NOT de-duplicated here because this is
+-- a tooling-scoped PR and this is language internals — tracked in #1201.
+-- lint-disable-next-line rule-duplicate-body
 prim3 f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
 
 prim2M : (Value e -> Value e -> <e> Value e) -> Value e
 prim2M f = VPrim (a => VPrim (b => f a b))
 
 prim3M : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
+-- Structural duplicate of `prim3` above; deferred de-duplication — see #1201.
+-- lint-disable-next-line rule-duplicate-body
 prim3M f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
 
 prim5M : (Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e) -> Value e

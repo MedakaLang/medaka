@@ -22,7 +22,6 @@
 -- the key broken by rowid).
 
 -- Demos are intentionally self-contained; row/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.writer.{
   TableSchema,

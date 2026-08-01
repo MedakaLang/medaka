@@ -19,7 +19,6 @@
 -- the exported `buildDatabase` — no lib change.)
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabase}
 import lib.sqlite.{Db, fromBytes, scanTableRows}

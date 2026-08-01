@@ -9,7 +9,6 @@
 -- `test/wasm/diff_sqlite.sh` builds it for both targets and diffs stdout.
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabase}
 import lib.sqlite.{Db, fromBytes}
@@ -64,11 +63,15 @@ showUser (User { id = i, name = n, age = a, bal = b }) = "\{i}|\{n}|\{a}|\{b}"
 
 printRows : List User -> <IO> Unit
 printRows [] = ()
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 printRows (u::rest) =
   let _ = println (showUser u)
   printRows rest
 
 runQ : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runQ db label sel =
   let _ = println label
   match query db sel userRow
@@ -93,6 +96,8 @@ runAll db =
         (selectFrom "users")))
 
 main : <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 main =
   let _ = println "-- CREATE users (in-memory) --"
   match buildDatabase "users" usersSql 4 ipk usersRows

@@ -13,7 +13,6 @@
 -- join table's columns (orders.oid, orders.uid, orders.amount).
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
@@ -61,10 +60,14 @@ mkUO : ((Int, String), Option (Int, Int, Int)) -> Result String UO
 mkUO ((i, n), orow) = Ok UO { uid = i, uname = n, orow = orow }
 
 uoRow : RowType UO
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (tOption (t3 tInt tInt tInt)))
 
 showUO : UO -> String
 showUO (UO { uid = i, uname = n, orow = None }) = "\{i}|\{n}|NULL|NULL|NULL"
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 showUO (UO { uid = i, uname = n, orow = (Some (o, u, a)) }) =
   "\{i}|\{n}|\{o}|\{u}|\{a}"
 
@@ -73,6 +76,8 @@ printUO [] = ()
 printUO (r::rest) = let _ = println (showUO r) in printUO rest
 
 runUO : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runUO db label sel =
   let _ = println label
   match query db sel uoRow
@@ -102,6 +107,8 @@ specs = [
 ]
 
 main : <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 main =
   let _ = println "-- CREATE users+orders (in-memory) --"
   match buildDatabaseMulti specs

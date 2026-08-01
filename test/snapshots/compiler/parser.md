@@ -1,5 +1,5 @@
 # META
-source_lines=4781
+source_lines=4791
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -743,10 +743,15 @@ bracketIndexRest _ _ TDotDot =
   failP "bare slice `a[i..j]` is not yet supported — use `a.[i..j]`"
 bracketIndexRest _ _ TDotDotEq =
   failP "bare slice `a[i..=j]` is not yet supported — use `a.[i..=j]`"
-bracketIndexRest e lo TRBracket = do
+bracketIndexRest e lo TRBracket = finishBracketIndex e lo
+bracketIndexRest _ _ _ = failP "expected ']' in index expression"
+
+-- shared by `bracketIndexRest`/`indexOrSliceRest`'s closing-`]` clause (#602):
+-- both readers land here once the index expression is complete.
+finishBracketIndex : Expr -> Expr -> Parser Expr
+finishBracketIndex e lo = do
   advance
   postfixTail (EIndex e lo (Ref "Array"))
-bracketIndexRest _ _ _ = failP "expected ']' in index expression"
 
 -- after a `.`: a field access `.field`, an index `.[i]`, or a slice `.[lo..hi]`
 dotTail : Expr -> Parser Expr
@@ -771,9 +776,7 @@ indexOrSlice e = do
 indexOrSliceRest : Expr -> Expr -> Token -> Parser Expr
 indexOrSliceRest e lo TDotDot = sliceHi e lo False
 indexOrSliceRest e lo TDotDotEq = sliceHi e lo True
-indexOrSliceRest e lo TRBracket = do
-  advance
-  postfixTail (EIndex e lo (Ref "Array"))
+indexOrSliceRest e lo TRBracket = finishBracketIndex e lo
 indexOrSliceRest _ _ _ = failP "expected .. ..= or ] in index/slice"
 
 sliceHi : Expr -> Expr -> Bool -> Parser Expr
@@ -1161,18 +1164,22 @@ listRest first TComma = do
   advance
   t <- peekP
   listAfterComma first t
-listRest first TRBracket = do
+listRest first TRBracket = finishSingletonList first
+listRest _ _ = failP "expected , .. ..= or ]"
+
+-- shared by `listRest`/`listAfterComma`'s closing-`]` clause (#602): both a
+-- bare single-element list (`[x]`) and a single-element list with a trailing
+-- comma (`[x,]`) land here once the closing bracket is seen.
+finishSingletonList : Expr -> Parser Expr
+finishSingletonList first = do
   advance
   pure (EListLit [first])
-listRest _ _ = failP "expected , .. ..= or ]"
 
 -- after the first element and a comma: a `]` here is a trailing comma on a
 -- single-element list (`[x,]`); otherwise parse the remaining elements (and
 -- accept a trailing comma after them too).
 listAfterComma : Expr -> Token -> Parser Expr
-listAfterComma first TRBracket = do
-  advance
-  pure (EListLit [first])
+listAfterComma first TRBracket = finishSingletonList first
 listAfterComma first _ = do
   rest <- sepBy1 parseBracketElem (expectTok TComma)
   optTrailingComma
@@ -1208,16 +1215,20 @@ arrayRest first TComma = do
   advance
   t <- peekP
   arrayAfterComma first t
-arrayRest first TRArray = do
+arrayRest first TRArray = finishSingletonArray first
+arrayRest _ _ = failP "expected , .. ..= or |]"
+
+-- shared by `arrayRest`/`arrayAfterComma`'s closing-`|]` clause (#602): both a
+-- bare single-element array (`[|x|]`) and one with a trailing comma
+-- (`[|x,|]`) land here once the closing delimiter is seen.
+finishSingletonArray : Expr -> Parser Expr
+finishSingletonArray first = do
   advance
   pure (EArrayLit [first])
-arrayRest _ _ = failP "expected , .. ..= or |]"
 
 -- single-element trailing comma `[|x,|]`: a `|]` after the comma closes it.
 arrayAfterComma : Expr -> Token -> Parser Expr
-arrayAfterComma first TRArray = do
-  advance
-  pure (EArrayLit [first])
+arrayAfterComma first TRArray = finishSingletonArray first
 arrayAfterComma first _ = do
   rest <- sepBy1 parseBracketElem (expectTok TComma)
   optTrailingComma
@@ -1276,12 +1287,9 @@ elsePresent = do
 parseBranch : Parser Expr
 parseBranch = orElse branchBlock parseExpr
 
+-- Same offside-block production as `parseBracketBlock`/`indentedBody` (#602).
 branchBlock : Parser Expr
-branchBlock = do
-  expectTok TIndent
-  stmts <- parseStmts
-  expectTok TDedent
-  pure (blockOrExpr stmts)
+branchBlock = parseBracketBlock
 
 -- expression-level `let`: `let [mut] pat = e in e2`, function-let
 -- `let f a… = e in e2`, annotated `let [mut] x : ty = e in e2`, and
@@ -3213,12 +3221,14 @@ coalesceStep name acc n ps b rest
   | otherwise =
     LetBind name (reverseL acc) :: coalesceGo n [FunClause ps b] rest
 
+-- Same offside-block production as `parseBracketBlock` (#602: the two used to
+-- be independently-maintained byte-identical copies — one backing decl bodies,
+-- the other let/where RHS and lambda bodies — which is exactly the class of
+-- silent-divergence hazard `rule-duplicate-body` exists to catch). Consolidated
+-- to a single definition; both call sites keep their own name since each is
+-- reached from a different grammar context.
 indentedBody : Parser Expr
-indentedBody = do
-  expectTok TIndent
-  stmts <- parseStmts
-  expectTok TDedent
-  pure (blockOrExpr stmts)
+indentedBody = parseBracketBlock
 
 blockOrExpr : List DoStmt -> Expr
 blockOrExpr [DoExpr e] = e
@@ -5037,8 +5047,10 @@ parseResultWith src tokList offList =
 (DTypeSig false "bracketIndexRest" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "bracketIndexRest" (PWild PWild (PCon "TDotDot")) (EApp (EVar "failP") (ELit (LString "bare slice `a[i..j]` is not yet supported — use `a.[i..j]`"))))
 (DFunDef false "bracketIndexRest" (PWild PWild (PCon "TDotDotEq")) (EApp (EVar "failP") (ELit (LString "bare slice `a[i..=j]` is not yet supported — use `a.[i..=j]`"))))
-(DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "bracketIndexRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected ']' in index expression"))))
+(DTypeSig false "finishBracketIndex" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr")))))
+(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
 (DTypeSig false "dotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "dotTail" ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDot"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "dotFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "dotFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
@@ -5049,7 +5061,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "indexOrSliceRest" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TDotDot")) (EApp (EApp (EApp (EVar "sliceHi") (EVar "e")) (EVar "lo")) (EVar "False")))
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TDotDotEq")) (EApp (EApp (EApp (EVar "sliceHi") (EVar "e")) (EVar "lo")) (EVar "True")))
-(DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected .. ..= or ] in index/slice"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
@@ -5201,10 +5213,12 @@ parseResultWith src tokList offList =
 (DFunDef false "listRest" ((PVar "first") (PCon "TDotDot")) (EApp (EApp (EVar "rangeAfter") (EVar "first")) (EVar "False")))
 (DFunDef false "listRest" ((PVar "first") (PCon "TDotDotEq")) (EApp (EApp (EVar "rangeAfter") (EVar "first")) (EVar "True")))
 (DFunDef false "listRest" ((PVar "first") (PCon "TComma")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "listAfterComma") (EVar "first")) (EVar "t")))))))
-(DFunDef false "listRest" ((PVar "first") (PCon "TRBracket")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
+(DFunDef false "listRest" ((PVar "first") (PCon "TRBracket")) (EApp (EVar "finishSingletonList") (EVar "first")))
 (DFunDef false "listRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected , .. ..= or ]"))))
+(DTypeSig false "finishSingletonList" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "finishSingletonList" ((PVar "first")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
 (DTypeSig false "listAfterComma" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "listAfterComma" ((PVar "first") (PCon "TRBracket")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
+(DFunDef false "listAfterComma" ((PVar "first") (PCon "TRBracket")) (EApp (EVar "finishSingletonList") (EVar "first")))
 (DFunDef false "listAfterComma" ((PVar "first") PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "sepBy1") (EVar "parseBracketElem")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "rest")) (EApp (EApp (EVar "andThen") (EVar "optTrailingComma")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EListLit") (EBinOp "::" (EVar "first") (EVar "rest")))))))))))
 (DTypeSig false "rangeAfter" (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "rangeAfter" ((PVar "lo") (PVar "incl")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ERangeList") (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
@@ -5217,10 +5231,12 @@ parseResultWith src tokList offList =
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TDotDot")) (EApp (EApp (EVar "arrayRangeAfter") (EVar "first")) (EVar "False")))
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TDotDotEq")) (EApp (EApp (EVar "arrayRangeAfter") (EVar "first")) (EVar "True")))
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TComma")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "arrayAfterComma") (EVar "first")) (EVar "t")))))))
-(DFunDef false "arrayRest" ((PVar "first") (PCon "TRArray")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
+(DFunDef false "arrayRest" ((PVar "first") (PCon "TRArray")) (EApp (EVar "finishSingletonArray") (EVar "first")))
 (DFunDef false "arrayRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected , .. ..= or |]"))))
+(DTypeSig false "finishSingletonArray" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "finishSingletonArray" ((PVar "first")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
 (DTypeSig false "arrayAfterComma" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "arrayAfterComma" ((PVar "first") (PCon "TRArray")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
+(DFunDef false "arrayAfterComma" ((PVar "first") (PCon "TRArray")) (EApp (EVar "finishSingletonArray") (EVar "first")))
 (DFunDef false "arrayAfterComma" ((PVar "first") PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "sepBy1") (EVar "parseBracketElem")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "rest")) (EApp (EApp (EVar "andThen") (EVar "optTrailingComma")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRArray"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "EArrayLit") (EBinOp "::" (EVar "first") (EVar "rest")))))))))))
 (DTypeSig false "arrayRangeAfter" (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "arrayRangeAfter" ((PVar "lo") (PVar "incl")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRArray"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ERangeArray") (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
@@ -5240,7 +5256,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseBranch" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBranch" () (EApp (EApp (EVar "orElse") (EVar "branchBlock")) (EVar "parseExpr")))
 (DTypeSig false "branchBlock" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "branchBlock" () (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))
+(DFunDef false "branchBlock" () (EVar "parseBracketBlock"))
 (DTypeSig false "parseLet" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseLet" () (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TLet"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "letExprKind") (EVar "t")))))))
 (DTypeSig false "letExprKind" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -5846,7 +5862,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "coalesceStep" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "LetBind")))))))))
 (DFunDef false "coalesceStep" ((PVar "name") (PVar "acc") (PVar "n") (PVar "ps") (PVar "b") (PVar "rest")) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EApp (EVar "coalesceGo") (EVar "name")) (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "b")) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "LetBind") (EVar "name")) (EApp (EVar "reverseL") (EVar "acc"))) (EApp (EApp (EApp (EVar "coalesceGo") (EVar "n")) (EListLit (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "b")))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "indentedBody" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "indentedBody" () (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))
+(DFunDef false "indentedBody" () (EVar "parseBracketBlock"))
 (DTypeSig false "blockOrExpr" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
 (DFunDef false "blockOrExpr" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
 (DFunDef false "blockOrExpr" ((PVar "stmts")) (EApp (EVar "EBlock") (EVar "stmts")))
@@ -6528,8 +6544,10 @@ parseResultWith src tokList offList =
 (DTypeSig false "bracketIndexRest" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "bracketIndexRest" (PWild PWild (PCon "TDotDot")) (EApp (EVar "failP") (ELit (LString "bare slice `a[i..j]` is not yet supported — use `a.[i..j]`"))))
 (DFunDef false "bracketIndexRest" (PWild PWild (PCon "TDotDotEq")) (EApp (EVar "failP") (ELit (LString "bare slice `a[i..=j]` is not yet supported — use `a.[i..=j]`"))))
-(DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "bracketIndexRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected ']' in index expression"))))
+(DTypeSig false "finishBracketIndex" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr")))))
+(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
 (DTypeSig false "dotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "dotTail" ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDot"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "dotFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "dotFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
@@ -6540,7 +6558,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "indexOrSliceRest" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TDotDot")) (EApp (EApp (EApp (EVar "sliceHi") (EVar "e")) (EVar "lo")) (EVar "False")))
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TDotDotEq")) (EApp (EApp (EApp (EVar "sliceHi") (EVar "e")) (EVar "lo")) (EVar "True")))
-(DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected .. ..= or ] in index/slice"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
@@ -6692,10 +6710,12 @@ parseResultWith src tokList offList =
 (DFunDef false "listRest" ((PVar "first") (PCon "TDotDot")) (EApp (EApp (EVar "rangeAfter") (EVar "first")) (EVar "False")))
 (DFunDef false "listRest" ((PVar "first") (PCon "TDotDotEq")) (EApp (EApp (EVar "rangeAfter") (EVar "first")) (EVar "True")))
 (DFunDef false "listRest" ((PVar "first") (PCon "TComma")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "listAfterComma") (EVar "first")) (EVar "t")))))))
-(DFunDef false "listRest" ((PVar "first") (PCon "TRBracket")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
+(DFunDef false "listRest" ((PVar "first") (PCon "TRBracket")) (EApp (EVar "finishSingletonList") (EVar "first")))
 (DFunDef false "listRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected , .. ..= or ]"))))
+(DTypeSig false "finishSingletonList" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "finishSingletonList" ((PVar "first")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
 (DTypeSig false "listAfterComma" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "listAfterComma" ((PVar "first") (PCon "TRBracket")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EListLit") (EListLit (EVar "first")))))))
+(DFunDef false "listAfterComma" ((PVar "first") (PCon "TRBracket")) (EApp (EVar "finishSingletonList") (EVar "first")))
 (DFunDef false "listAfterComma" ((PVar "first") PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "sepBy1") (EVar "parseBracketElem")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "andThen") (EVar "optTrailingComma")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EListLit") (EBinOp "::" (EVar "first") (EVar "rest")))))))))))
 (DTypeSig false "rangeAfter" (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "rangeAfter" ((PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ERangeList") (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
@@ -6708,10 +6728,12 @@ parseResultWith src tokList offList =
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TDotDot")) (EApp (EApp (EVar "arrayRangeAfter") (EVar "first")) (EVar "False")))
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TDotDotEq")) (EApp (EApp (EVar "arrayRangeAfter") (EVar "first")) (EVar "True")))
 (DFunDef false "arrayRest" ((PVar "first") (PCon "TComma")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "arrayAfterComma") (EVar "first")) (EVar "t")))))))
-(DFunDef false "arrayRest" ((PVar "first") (PCon "TRArray")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
+(DFunDef false "arrayRest" ((PVar "first") (PCon "TRArray")) (EApp (EVar "finishSingletonArray") (EVar "first")))
 (DFunDef false "arrayRest" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected , .. ..= or |]"))))
+(DTypeSig false "finishSingletonArray" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "finishSingletonArray" ((PVar "first")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
 (DTypeSig false "arrayAfterComma" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "arrayAfterComma" ((PVar "first") (PCon "TRArray")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EArrayLit") (EListLit (EVar "first")))))))
+(DFunDef false "arrayAfterComma" ((PVar "first") (PCon "TRArray")) (EApp (EVar "finishSingletonArray") (EVar "first")))
 (DFunDef false "arrayAfterComma" ((PVar "first") PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "sepBy1") (EVar "parseBracketElem")) (EApp (EVar "expectTok") (EVar "TComma")))) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "andThen") (EVar "optTrailingComma")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRArray"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "EArrayLit") (EBinOp "::" (EVar "first") (EVar "rest")))))))))))
 (DTypeSig false "arrayRangeAfter" (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "arrayRangeAfter" ((PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRArray"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ERangeArray") (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
@@ -6731,7 +6753,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseBranch" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseBranch" () (EApp (EApp (EVar "orElse#shadow") (EVar "branchBlock")) (EVar "parseExpr")))
 (DTypeSig false "branchBlock" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "branchBlock" () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))
+(DFunDef false "branchBlock" () (EVar "parseBracketBlock"))
 (DTypeSig false "parseLet" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseLet" () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TLet"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "letExprKind") (EVar "t")))))))
 (DTypeSig false "letExprKind" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -7337,7 +7359,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "coalesceStep" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "LetBind")))))))))
 (DFunDef false "coalesceStep" ((PVar "name") (PVar "acc") (PVar "n") (PVar "ps") (PVar "b") (PVar "rest")) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EApp (EVar "coalesceGo") (EVar "name")) (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "b")) (EVar "acc"))) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "LetBind") (EVar "name")) (EApp (EVar "reverseL") (EVar "acc"))) (EApp (EApp (EApp (EVar "coalesceGo") (EVar "n")) (EListLit (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "b")))) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "indentedBody" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "indentedBody" () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TIndent"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseStmts")) (ELam ((PVar "stmts")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EVar "blockOrExpr") (EVar "stmts"))))))))))
+(DFunDef false "indentedBody" () (EVar "parseBracketBlock"))
 (DTypeSig false "blockOrExpr" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
 (DFunDef false "blockOrExpr" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
 (DFunDef false "blockOrExpr" ((PVar "stmts")) (EApp (EVar "EBlock") (EVar "stmts")))

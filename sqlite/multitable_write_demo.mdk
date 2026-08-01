@@ -15,7 +15,6 @@
 -- range, mixing single-leaf and multi-page tables in one file.
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.writer.{TableSchema, Column, ColType, TInteger, TText, writeTables}
 import lib.recordfmt.{Cell, CInt, CText}
@@ -57,6 +56,8 @@ kvRows : List (List Cell)
 kvRows = [[CText "one", CInt 1], [CText "two", CInt 2], [CText "three", CInt 3]]
 
 bigRow : Int -> List Cell
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 bigRow i = [CInt i, CText "item_\{intToString i}"]
 
 bigRows : Int -> Int -> List (List Cell) -> List (List Cell)

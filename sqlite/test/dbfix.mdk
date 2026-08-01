@@ -4,7 +4,6 @@
 --
 -- The `specs` table list is structurally identical to the demo probes' own
 -- specs by design (a table list is a table list); not worth a shared module.
--- lint-disable-file rule-duplicate-body
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
 import lib.recordfmt.{Cell, CNull, CInt, CText}

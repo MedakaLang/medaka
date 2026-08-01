@@ -11,7 +11,6 @@
 -- Usage: medaka build sqlite/join_demo.mdk -o /tmp/jdemo && /tmp/jdemo <db>
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlite.{Db, openDb}
 import lib.select.{
@@ -40,9 +39,13 @@ mkUO ((i, n), (o, u, a)) =
   Ok UO { uid = i, uname = n, oid = o, oUser = u, amount = a }
 
 uoRow : RowType UO
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 uoRow = tCustom mkUO (t2 (t2 tInt tText) (t3 tInt tInt tInt))
 
 showUO : UO -> String
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 showUO (UO { uid = i, uname = n, oid = o, oUser = u, amount = a }) =
   "\{i}|\{n}|\{o}|\{u}|\{a}"
 
@@ -51,6 +54,8 @@ printUO [] = ()
 printUO (r::rest) = let _ = println (showUO r) in printUO rest
 
 runUO : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runUO db label sel =
   let _ = println label
   match query db sel uoRow
@@ -81,6 +86,8 @@ printABC [] = ()
 printABC (r::rest) = let _ = println (showABC r) in printABC rest
 
 runABC : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runABC db label sel =
   let _ = println label
   match query db sel abcRow
