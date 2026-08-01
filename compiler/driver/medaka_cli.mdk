@@ -568,8 +568,19 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter isDiagWarn diags
       let dump = stripWarningLines (runCheck rsrc csrc tsrc)
-      let report = if typesMode then dump else userSchemeLines decls dump
+      let filtered = userSchemeLines decls dump
+      let report = if typesMode then dump else filtered
       let _ = putStrLn report
+      -- #916: a clean single-file check gave no unambiguous success signal —
+      -- "no error lines among the interface dump" was the only tell, and on a
+      -- file whose filtered dump is EMPTY (no top-level bindings the dump
+      -- names, e.g. a `main`-only script) there was no output at all. Print
+      -- one terse trailing line naming the file and how many of ITS OWN
+      -- declarations were checked, ADDITIVE to the (still byte-identical)
+      -- scheme dump above so `--types`/`--json`/dict_semantics's exact-line
+      -- scheme assertions are unaffected. `--types` keeps the historical
+      -- unadorned full dump (still the byte-identical escape hatch).
+      let _ = if typesMode then () else putStrLn (checkOkLine target filtered)
       -- 0.1.0 beginner-footgun warning (main-shape, see below): reuse the same
       -- elaborateModules the multi-module route calls just for mainSchemeRef —
       -- runCheck's own single-file path never populates it.
@@ -764,6 +775,59 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir = match readFile target
     let _ = println json
     if hasErr then exit 1 else ()
 
+-- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
+-- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
+-- unchanged) has already passed. Same `{"files":[...]}` shape as every other
+-- `--json` path (`cjAllToJson`), one span-less `Diag` carrying the emitter's
+-- own message verbatim, so a caller keying off `code` (AGENTS.md) can
+-- distinguish this from a front-end R-*/T-* diagnostic. Registered in
+-- compiler/DIAGNOSTIC-CODES-DESIGN.md.
+cjBuildFailedJson : String -> String -> String
+cjBuildFailedJson target msg = cjAllToJson
+  [(target, "", [Diag SevError "R-BUILD-FAILED" msg None None None])]
+
+-- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
+-- structured diagnostics to `check --json` on the same file — same code, same
+-- envelope), then, only if clean, the real emit+clang build. A build-stage
+-- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
+-- plain rendered `BuildErr` text; a clean build prints the (empty-diagnostics)
+-- gate JSON as its success marker, mirroring `check --json`'s clean output —
+-- no separate "built X -> Y" prose on this channel, so a machine consumer sees
+-- exactly one shape regardless of outcome.
+runBuildJsonCmd : List String -> Bool -> String -> String -> String -> Option String -> BuildTarget -> <IO> Unit
+runBuildJsonCmd argv allowInternal root stdlibDir input outOpt target = match readFile input
+  Err e =>
+    let _ = println (cjFileNotFoundJson input e)
+    exit 1
+  Ok _ =>
+    let rtPath = root ++ "/stdlib/runtime.mdk"
+    let corePath = root ++ "/stdlib/core.mdk"
+    match readPreludeFile rtPath
+      Err msg =>
+        let _ = println (cjBuildFailedJson input msg)
+        exit 1
+      Ok rsrc => match readPreludeFile corePath
+        Err msg =>
+          let _ = println (cjBuildFailedJson input msg)
+          exit 1
+        Ok csrc =>
+          let (json, hasErr) = checkJsonFile allowInternal rsrc csrc input stdlibDir
+          if hasErr then
+            let _ = println json
+            exit 1
+          else
+            let medaka = envOr "MEDAKA" "medaka"
+            let cc = envOr "CC" "clang"
+            let keepIrCli = hasFlag "--keep-ir" argv
+            let outPath = match outOpt
+              Some o => o
+              None => defaultOutPath target input
+            match runBuild root medaka cc target input outPath keepIrCli
+              BuildOk _ => println json
+              BuildErr msg =>
+                let _ = println (cjBuildFailedJson input msg)
+                exit 1
+
 -- The `{"files":[...]}` envelope for a target that could not be read at all —
 -- a file-not-found/unreadable-path diagnostic, unlocated (no source to point
 -- into), carrying its own stable code so a caller keying off `code` (per
@@ -848,6 +912,16 @@ userSchemeLines : List Decl -> String -> String
 userSchemeLines decls report =
   let names = omFromNames (topLevelNames decls) omEmpty
   joinNl (filter (namesUserBinding names) (splitNl report))
+
+-- #916: the terse "clean check" success line. `filtered` is the ALREADY
+-- user-scheme-filtered dump (empty string when a file names no bindings the
+-- dump would show, e.g. a `main`-only script) — count its non-empty lines
+-- rather than re-deriving from `decls`, so the number always matches what
+-- the reader can see printed just above it.
+checkOkLine : String -> String -> String
+checkOkLine target filtered =
+  let n = length (filter (!= "") (splitNl filtered))
+  "-- \{target}: ok (\{intToString n} declaration(s) checked, 0 errors)"
 
 namesUserBinding : OrdMap Unit -> String -> Bool
 namesUserBinding names l = match schemeLineName l
@@ -1248,38 +1322,68 @@ runBuildCmd argv =
           BuildErr msg =>
             let _ = ePutStrLn msg
             exit 1
-      None => match parseBuildArgs argv
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
-        Ok (input, outOpt, target) => if not (fileExists input) then
-          let _ = ePutStrLn ("error: no such file: " ++ input)
-          exit 1
-        else
-          let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-          let medaka = envOr "MEDAKA" "medaka"
-          let cc = envOr "CC" "clang"
-          let inputAbs = input
-          let allowInternal = hasFlag "--allow-internal" argv
-          let keepIrCli = hasFlag "--keep-ir" argv
-          let outPath = match outOpt
-            Some o => o
-            None => defaultOutPath target input
-          match typecheckGate allowInternal root inputAbs
-            TGErr msg =>
-              let _ = ePutStrLn msg
-              exit 1
-            -- Warnings BEFORE the emitter runs, so they precede clang's own output
-            -- and any `built <in> -> <out>` line — the same order `check` uses and
-            -- the order a reader scanning a build log expects.  They never change
-            -- the exit code.
-            TGOk gateWarns =>
-              let _ = emitWarningLines gateWarns
-              match runBuild root medaka cc target inputAbs outPath keepIrCli
-                BuildOk msg => println msg
-                BuildErr msg =>
-                  let _ = ePutStrLn msg
-                  exit 1
+      -- #1078: `--json` is now a recognized flag (stripped by parseBuildGo,
+      -- above) rather than a phantom second positional. Dispatch to a
+      -- dedicated function per mode rather than inlining the branch here —
+      -- `runBuildJsonCmd` reuses `checkJsonFile` (the SAME structured pass
+      -- `check --json` runs) for the front-end gate and wraps a genuine
+      -- emit/clang failure in the same `{"files":[...]}` `Diag` envelope, so
+      -- one JSON shape covers every failure mode, front-end or backend; the
+      -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
+      None => if hasFlag "--json" argv then runBuildJsonEntry argv else runBuildPlainCmd argv
+
+-- The pre-#1078 plain-text `medaka build` body (parse args → typecheck gate →
+-- emit+clang), split out of `runBuildCmd` so the `--json` dispatch above
+-- doesn't have to interleave two argument-parsing arms at one indent level.
+runBuildPlainCmd : List String -> <IO> Unit
+runBuildPlainCmd argv = match parseBuildArgs argv
+  Err msg =>
+    let _ = ePutStrLn msg
+    exit 1
+  Ok (input, outOpt, target) => if not (fileExists input) then
+    let _ = ePutStrLn ("error: no such file: " ++ input)
+    exit 1
+  else
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let medaka = envOr "MEDAKA" "medaka"
+    let cc = envOr "CC" "clang"
+    let inputAbs = input
+    let allowInternal = hasFlag "--allow-internal" argv
+    let keepIrCli = hasFlag "--keep-ir" argv
+    let outPath = match outOpt
+      Some o => o
+      None => defaultOutPath target input
+    match typecheckGate allowInternal root inputAbs
+      TGErr msg =>
+        let _ = ePutStrLn msg
+        exit 1
+      -- Warnings BEFORE the emitter runs, so they precede clang's own output
+      -- and any `built <in> -> <out>` line — the same order `check` uses and
+      -- the order a reader scanning a build log expects.  They never change
+      -- the exit code.
+      TGOk gateWarns =>
+        let _ = emitWarningLines gateWarns
+        match runBuild root medaka cc target inputAbs outPath keepIrCli
+          BuildOk msg => println msg
+          BuildErr msg =>
+            let _ = ePutStrLn msg
+            exit 1
+
+-- `medaka build --json`'s own argument-parsing arm: a flag error still goes
+-- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
+-- (`cjBuildFailedJson`, target "" — genuinely span-less, no input file was
+-- even identified) rather than plain text, so a `--json` caller never has to
+-- fall back to scraping stderr prose for THIS failure mode either.
+runBuildJsonEntry : List String -> <IO> Unit
+runBuildJsonEntry argv = match parseBuildArgs argv
+  Err msg =>
+    let _ = println (cjBuildFailedJson "" msg)
+    exit 1
+  Ok (input, outOpt, target) =>
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let stdlibDir = root ++ "/stdlib"
+    let allowInternal = hasFlag "--allow-internal" argv
+    runBuildJsonCmd argv allowInternal root stdlibDir input outOpt target
 
 -- `medaka build --help` / `-h`: a subcommand-local usage, since the global
 -- `usage()` (only matched when --help/-h is argv[0]) never sees this — dispatch
@@ -1289,10 +1393,13 @@ runBuildCmd argv =
 buildUsage : Unit -> <IO> Unit
 buildUsage _ = putStrLn (stringConcat
   [
-    "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal]\n",
+    "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal] [--json]\n",
     "\n",
     "  -o <out>          output path for the binary (default: <file> with its extension dropped)\n",
     "  --target <t>      backend: native (LLVM + clang, default) or wasm (WasmGC + wasm-tools)\n",
+    "  --json            emit the {\"files\":[...]} structured-diagnostics envelope (same\n",
+    "                    schema as `medaka check --json`) instead of human text; a genuine\n",
+    "                    build-stage (emitter/clang) failure carries code R-BUILD-FAILED\n",
     "  --keep-ir         keep the emitted IR (.ll for native, .wat for wasm) at <out>.ll/.wat\n",
     "                    instead of discarding it with the build's scratch directory; the\n",
     "                    kept path is printed. Env var MEDAKA_KEEP_IR=1 does the same for a\n",
@@ -1329,15 +1436,18 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- diagnostic `build` used to print became a silent accept.  The lines are rendered
 -- by the gate (which knows each module's own source) and emitted by the caller.
 --
--- ⚠️ RENDERED `String`s HERE, TRIPLES ON THE `run` PATH, and the asymmetry is a FACT
--- ABOUT THE CLI rather than an oversight: **`medaka build` has no `--json` flag.**
--- `parseBuildGo` recognizes `-o` / `--target` / `--allow-internal` / `--keep-ir` /
--- `--emit-rt-obj` and nothing else, so `medaka build --json f.mdk` is rejected as a
--- second positional ("takes exactly one input file") — verified on the binary, not
--- assumed.  There is no machine-readable stream on this path to corrupt, so
--- committing to the human rendering at the gate is correct here.  If `build --json`
--- is ever added, this payload must become triples and follow `finishRunEval`'s
--- `pendingRunDiags` discipline, or it reproduces the bug that fix exists for.
+-- ⚠️ RENDERED `String`s HERE, TRIPLES ON THE `run` PATH — an asymmetry that is a
+-- FACT ABOUT THIS PLAIN-TEXT CODE PATH, not the whole CLI. #1078 gave `medaka
+-- build` a `--json` flag, but it does NOT flow through `typecheckGate`/`TGOk`
+-- at all: `runBuildCmd` branches on `jsonMode` BEFORE reaching this function and
+-- routes to `runBuildJsonCmd` instead, which reuses `checkJsonFile` (the same
+-- structured pass `check --json` runs) for the front-end gate and wraps a
+-- build-stage failure in `cjBuildFailedJson`. So this comment's original
+-- warning still holds for THIS (human-text) path specifically: `typecheckGate`
+-- itself was never changed to carry structure, and if some future caller starts
+-- routing `--json` through it, that payload must become triples and follow
+-- `finishRunEval`'s `pendingRunDiags` discipline, or it reproduces the bug that
+-- fix exists for.
 data TypecheckGate = TGOk (List String) | TGErr String
 
 -- Load the entry + transitive imports and run the SAME front-end `medaka check`
@@ -1467,6 +1577,11 @@ parseBuildGo ("--allow-internal"::rest) acc out target =
 -- finishBuildArgs and get mistaken for the input file.
 parseBuildGo ("--keep-ir"::rest) acc out target =
   parseBuildGo rest acc out target
+-- #1078: `--json` used to fall through to `finishBuildArgs` and get counted as
+-- a second positional ("takes exactly one input file") — a flag error read as
+-- an argument-count error. Strip it here, same convention as --allow-internal/
+-- --keep-ir above; `runBuildCmd` reads it separately via `hasFlag`.
+parseBuildGo ("--json"::rest) acc out target = parseBuildGo rest acc out target
 parseBuildGo (x::rest) acc out target = parseBuildGo rest (x::acc) out target
 
 parseTarget : String -> Result String BuildTarget
