@@ -23,7 +23,22 @@
 # Quiet-machine discipline (see PERF-SCOPE §2b): run single-threaded, close other
 # apps, warm the file cache (the harness warms once before timing).
 #
+# Timing arms (probed once, in preference order, by the inline detection
+# block right after the prerequisite checks below — no separate function):
+#   macos    /usr/bin/time -l   (BSD time: "real" in seconds, RSS in BYTES)
+#   gnu      /usr/bin/time -v, or PATH `time -v` (GNU time: "Elapsed (wall clock)
+#            time" as [h:]m:ss[.ss], RSS in KILOBYTES — NOT bytes; do not reuse
+#            the macOS divisor here, it would under-report RSS by 1024x)
+#   fallback `date +%s.%N` around the child process. No external time binary
+#            needed for wall-clock (GNU coreutils `date` gives sub-second
+#            resolution for free); RSS is not obtainable this way and is
+#            reported as `rss=n/a` rather than guessed at or skipped.
+# The selected arm is printed in the header so a reader always knows the
+# provenance of the numbers below it.
+#
 # Exit: 0 ok; 2 if prerequisites are missing (binary not built, no clang/libgc).
+# Platform is NOT a prerequisite-missing reason — every platform gets at least
+# the fallback arm, so this script no longer skips on Linux.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,29 +68,98 @@ command -v clang >/dev/null 2>&1 || { echo "no clang on PATH — skipping"; exit
 
 cd "$ROOT" || exit 2
 
-# macOS /usr/bin/time -l prints "real" and "maximum resident set size"; GNU time
-# differs. Detect once.
-TIMEL="/usr/bin/time -l"
-$TIMEL true >/dev/null 2>&1 || { echo "/usr/bin/time -l unavailable (macOS only) — skipping"; exit 2; }
+# ── detect the best available timing mechanism (once) ───────────────────────
+# Preference: macOS BSD `time -l` > GNU `time -v` (either at /usr/bin/time or
+# found on PATH, e.g. after `apt install time`) > no-external-binary fallback.
+# Each candidate is executed against `true` and its OUTPUT is inspected (not
+# just its exit code) before being trusted, because a wrong-flavor `time`
+# binary at the expected path can still exit 0 while printing nothing useful,
+# or exit nonzero for an unsupported flag (both observed while writing this).
+TIME_ARM=""
+TIME_BIN=""
+_probe="/tmp/_bench_probe.$$"
 
-# run CMD N times, print "  min=<s>s  rss=<MB>MB" using the min real over runs.
+if /usr/bin/time -l true >"$_probe" 2>&1 && grep -q 'maximum resident set size' "$_probe"; then
+  TIME_ARM="macos"
+  TIME_BIN="/usr/bin/time -l"
+fi
+
+if [ -z "$TIME_ARM" ]; then
+  for _cand in /usr/bin/time "$(command -v time 2>/dev/null || true)"; do
+    [ -n "$_cand" ] && [ -x "$_cand" ] || continue
+    if "$_cand" -v true >"$_probe" 2>&1 && grep -q 'Elapsed (wall clock) time' "$_probe"; then
+      TIME_ARM="gnu"
+      TIME_BIN="$_cand -v"
+      break
+    fi
+  done
+fi
+
+rm -f "$_probe"
+
+if [ -z "$TIME_ARM" ]; then
+  TIME_ARM="fallback"
+  TIME_BIN=""
+fi
+
+# convert GNU time's "[h:]mm:ss[.ss]" elapsed string to plain seconds
+elapsed_to_secs() {
+  printf '%s' "$1" | awk -F: '{
+    n = NF
+    if (n == 3) { s = $1*3600 + $2*60 + $3 }
+    else if (n == 2) { s = $1*60 + $2 }
+    else { s = $1 }
+    printf "%s", s
+  }'
+}
+
+# run CMD N times, print "  min=<s>s  rss=<MB>MB" (or "rss=n/a") using the
+# min real/elapsed time over runs. Dispatches on TIME_ARM detected above.
 time_min() {
   _best=""; _rss=""
   i=0
   while [ "$i" -lt "$N" ]; do
-    $TIMEL "$@" >/dev/null 2>/tmp/_bench_t.$$
-    _r="$(awk '/real/{print $1}' /tmp/_bench_t.$$)"
-    _m="$(awk '/maximum resident/{print $1}' /tmp/_bench_t.$$)"
+    case "$TIME_ARM" in
+      macos)
+        $TIME_BIN "$@" >/dev/null 2>/tmp/_bench_t.$$
+        _r="$(awk '/real/{print $1}' /tmp/_bench_t.$$)"
+        _rss_bytes="$(awk '/maximum resident/{print $1}' /tmp/_bench_t.$$)"
+        _m="$((_rss_bytes / 1048576))" # bytes -> MB (macOS reports bytes)
+        ;;
+      gnu)
+        $TIME_BIN "$@" >/dev/null 2>/tmp/_bench_t.$$
+        _elapsed="$(awk -F': ' '/Elapsed \(wall clock\)/{print $2}' /tmp/_bench_t.$$)"
+        _r="$(elapsed_to_secs "$_elapsed")"
+        _rss_kb="$(awk -F': ' '/Maximum resident set size/{print $2}' /tmp/_bench_t.$$)"
+        _m="$((_rss_kb / 1024))" # KB -> MB (GNU time reports kilobytes, NOT bytes)
+        ;;
+      fallback)
+        _t0="$(date +%s.%N)"
+        "$@" >/dev/null 2>/tmp/_bench_t.$$
+        _t1="$(date +%s.%N)"
+        _r="$(awk "BEGIN{printf \"%.3f\", $_t1 - $_t0}")"
+        _m="n/a"
+        ;;
+    esac
     if [ -z "$_best" ] || awk "BEGIN{exit !($_r < $_best)}"; then _best="$_r"; _rss="$_m"; fi
     i=$((i + 1))
   done
   rm -f /tmp/_bench_t.$$
-  printf 'min=%ss  rss=%dMB' "$_best" "$((_rss / 1048576))"
+  if [ "$_rss" = "n/a" ]; then
+    printf 'min=%ss  rss=n/a' "$_best"
+  else
+    printf 'min=%ss  rss=%dMB' "$_best" "$_rss"
+  fi
 }
 
 echo "== Medaka native-backend benchmark =="
 echo "host: $(uname -m)  clang: $(clang --version | head -1 | sed 's/ (.*//')"
 echo "N=$N (min-of-$N), single-threaded recommended"
+case "$TIME_ARM" in
+  macos) echo "timer: macos (/usr/bin/time -l)" ;;
+  gnu) echo "timer: gnu ($TIME_BIN)" ;;
+  fallback) echo "timer: fallback (date +%s.%N; no external time binary — rss=n/a)" ;;
+esac
 echo
 
 # ── micro: fib (no alloc) ────────────────────────────────────────────────────
