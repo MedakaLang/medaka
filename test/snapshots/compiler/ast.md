@@ -1,5 +1,5 @@
 # META
-source_lines=497
+source_lines=598
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -29,8 +29,98 @@ deriving (Eq)
 -- and structural dumps are byte-identical to the un-wrapped tree.
 public export data Loc = Loc String Int Int Int Int
 
+-- ── Type-constructor identity (#1110, A-1 carrier) ────────────────────────
+-- WHERE a type-constructor head was declared.  `DICT-SEMANTICS.md` §8 I4 says
+-- a declaration's identity is `(originModule, name)` and that a bare `String`
+-- name is not a key; this is the `originModule` half, carried on the AST node
+-- so resolve can stamp it ONCE instead of every downstream table re-deriving
+-- it from a spelling (#1069, #1070, #1090, #1092, #1208, #1209).
+--
+-- THREE inhabitants, and the split is forced by spec, not taste:
+--
+--   * `OriginUnresolved` — the identity has not been ACQUIRED YET.  This is a
+--     PIPELINE-STAGE marker, not an identity and not a wildcard: it is what a
+--     parser-built node carries before resolve runs.  §8 I6.3 forbids an
+--     `Option`-shaped origin precisely because `None` would have to mean
+--     "absent" at every cross-module predicate, decided per call site; this
+--     constructor instead means "not stamped yet", and NO predicate may
+--     compare two of them equal or treat one as matching anything.  Draining
+--     it — so that after resolve every head carries `OriginModule` or
+--     `OriginBuiltin` — is the job of the LATER A-1 PRs.  It is deliberately
+--     greppable, as is its sole producer `tyConUnresolved` below.
+--   * `OriginBuiltin` — the reserved origin of a head the LANGUAGE provides
+--     rather than a module: the tuple constructors (`TyCon "__tupleN__"`) and
+--     any other builtin.  §8 I6.2 (a): `(Int, Int)` written in two modules is
+--     ONE type, so a builtin head's origin is NOT the module it is written
+--     in.  A mechanical "stamp every head with the module under elaboration"
+--     breaks that conjunct silently, which is why the case is named here at
+--     design time rather than discovered at the first tuple-instance failure.
+--   * `OriginModule mid` — declared by that module.  §8 I6.3: the module id
+--     is NON-EMPTY; `""` is not an identity and must never become one.
+--
+-- ⚠️ A rigid type VARIABLE deliberately has no inhabitant here.  §8's I6.1 ∧
+-- I6.3 corollary says a fabricated head must not be carried by the
+-- type-CONSTRUCTOR node at all — "carries no identity" has to be a structural
+-- fact about the node.  The surface AST already satisfies that: `TyVar` is a
+-- separate constructor.  The violation the corollary names is at the `Mono`
+-- level (`TCon String`, `types/typecheck.mdk`), which this PR does not touch.
+--
+-- ⚠️ NOT an encoded/qualified string, and never renderable.  The printer
+-- projects a type through `tyConSurface` straight back into the user's source
+-- (`tools/printer.mdk`), and an alias-qualified name in TYPE position is a
+-- parse error — so a qualified spelling stored here would make `medaka fmt` a
+-- source-destroying operation.  Same class as the `__tupleN__` round-trip
+-- `tyConSurface`'s own comment records.  Every renderer therefore STRIPS this
+-- field exactly the way `ELoc` is stripped.
+public export data TyConOrigin =
+  | OriginUnresolved
+  | OriginBuiltin
+  | OriginModule String
+
 public export data Ty =
-  | TyCon String (Option Loc)
+  -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
+  -- by every renderer, so structural dumps and printed source are byte-identical
+  -- to the pre-#1110 tree.
+  --
+  -- 🚨 The `tyCon` PREFIX on all three field names is LOAD-BEARING, not style.
+  -- Field names are a PROGRAM-GLOBAL namespace, and a record field whose name
+  -- another module's record also uses AT A DIFFERENT INDEX makes the native
+  -- emitter read the wrong slot — `medaka run` stays correct while the BUILT
+  -- binary aborts with `E-NONEXHAUSTIVE-MATCH`.  This is not hypothetical: the
+  -- first cut of this record named the fields `name`/`loc`/`origin`, and the
+  -- plain `loc` collided with `Finding`'s `loc` (`tools/lint.mdk`, index 3 vs
+  -- this record's index 1).  Nothing in `compiler/` referenced `Ty`'s fields at
+  -- all, yet `medaka lint --cache` — whose `encFinding` reads `f.loc` in
+  -- `tools/lint_cache.mdk` — crashed at runtime, and ONLY
+  -- `diff_compiler_lint_cache` caught it.  So: prefix every field on a widely
+  -- imported AST node, and never add a bare `name`/`loc`/`kind`/`id` field here.
+  --
+  -- ⚠️ THIS FILE DOES NOT YET FOLLOW THAT RULE, and the exception is
+  -- grandfathered, not a counter-argument.  `DImpl`'s `iface`@1 already collides
+  -- with `Predicate`'s `iface`@0 (`types/typecheck.mdk`), and `DInterface`'s
+  -- `name`@2 with `Rule`'s `name`@0 (`tools/lint.mdk`) — same shape as the
+  -- `loc` collision above, live in the tree today, latent only because no
+  -- reachable site accesses those fields on a receiver the emitter mis-resolves.
+  -- They predate #1110 and are tracked with the full field-table enumeration in
+  -- #1216; renaming them is that issue's business, not this carrier's.  Read
+  -- the rule as "do not ADD to the exposure", not as a description of the file.
+  --
+  -- 🚨 Match it as a PARTIAL record pattern naming only the fields you want —
+  -- `TyCon { tyConName = n }`, or `TyCon {}` to bind nothing.  A partial pattern
+  -- already tolerates fields added later (`desugarPat`/`lookupRecField`,
+  -- `frontend/exhaust.mdk`, fill every unmentioned field with `PWild`), so the
+  -- `...` rest marker buys NOTHING here and costs the exhaustiveness check:
+  -- `desugarPat _ (PRec _ _ True) = PWild` collapses a `...` pattern to a
+  -- CATCH-ALL, which would silently make every `Ty` match in the compiler
+  -- trivially "exhaustive" and turn a future missing-constructor error into a
+  -- runtime match failure.  Measured both ways on this change, and the
+  -- underlying `...`-lowering defect is #1217 — so this is a workaround with an
+  -- expiry, not a style rule: when #1217 lands, re-derive rather than assume.
+  | TyCon {
+      tyConName : String,
+      tyConLoc : Option Loc,
+      tyConOrigin : TyConOrigin,
+    }
   | TyVar String
   | TyApp Ty Ty
   | TyFun Ty Ty
@@ -46,6 +136,17 @@ public export data Ty =
   -- (a filler is print-ambiguous with a genuine wrapped type of the same
   -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
   | TyRow (List (String, Option String)) (Option String) (Option Loc)
+
+-- Build a `TyCon` whose module identity has NOT been acquired yet (#1110).
+-- This is the ONE producer of `OriginUnresolved`, and every construction site
+-- in the tree currently goes through it — so `grep -rw tyConUnresolved` is the
+-- exact worklist a later A-1 PR has to drain when resolve starts stamping
+-- identity.  Kept as a helper rather than inlining the record literal so that
+-- adding an identity field does not re-churn the construction sites the way a
+-- partial record pattern already spares the match sites.
+export tyConUnresolved : String -> Option Loc -> Ty
+tyConUnresolved n l =
+  TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginUnresolved }
 
 -- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
 public export data Constraint = Constraint String (List Ty)
@@ -81,7 +182,7 @@ orElseLoc None fallback = fallback
 -- variables yields `None`.  A `DTypeSig` has no `Loc` of its own — only its
 -- `Ty` payload does — so this is how a signature-level diagnostic is located.
 export firstTyLoc : Ty -> Option Loc
-firstTyLoc (TyCon _ l) = l
+firstTyLoc (TyCon { tyConLoc = loc }) = loc
 firstTyLoc (TyVar _) = None
 firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
 firstTyLoc (TyFun f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
@@ -503,13 +604,16 @@ public export data Decl =
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
-(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
+(DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
 (DTypeSig true "firstTyLoc" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "firstTyLoc" ((PCon "TyCon" PWild (PVar "l"))) (EVar "l"))
+(DFunDef false "firstTyLoc" ((PRec "TyCon" ((rf "tyConLoc" (PVar "loc"))) false)) (EVar "loc"))
 (DFunDef false "firstTyLoc" ((PCon "TyVar" PWild)) (EVar "None"))
 (DFunDef false "firstTyLoc" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
 (DFunDef false "firstTyLoc" ((PCon "TyFun" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
@@ -563,13 +667,16 @@ public export data Decl =
 (DData Public "Lit" () ((variant "LInt" (ConPos (TyCon "Int"))) (variant "LFloat" (ConPos (TyCon "Float"))) (variant "LString" (ConPos (TyCon "String"))) (variant "LChar" (ConPos (TyCon "String"))) (variant "LBool" (ConPos (TyCon "Bool"))) (variant "LUnit" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
-(DData Public "Ty" () ((variant "TyCon" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
+(DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
 (DTypeSig true "firstTyLoc" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "firstTyLoc" ((PCon "TyCon" PWild (PVar "l"))) (EVar "l"))
+(DFunDef false "firstTyLoc" ((PRec "TyCon" ((rf "tyConLoc" (PVar "loc"))) false)) (EVar "loc"))
 (DFunDef false "firstTyLoc" ((PCon "TyVar" PWild)) (EVar "None"))
 (DFunDef false "firstTyLoc" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))
 (DFunDef false "firstTyLoc" ((PCon "TyFun" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstTyLoc") (EVar "f"))) (EApp (EVar "firstTyLoc") (EVar "x"))))

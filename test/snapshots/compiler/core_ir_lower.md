@@ -1,5 +1,5 @@
 # META
-source_lines=1614
+source_lines=1615
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -138,7 +138,8 @@ lower (EBlock stmts) = CBlock (map lowerStmt stmts)
 -- `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell route does not survive to here, a
 -- node does).  Read the tag into CBinPrim's scalar field so the emitter picks the
 -- Float primitive.  Must precede the transparent `EAnnot e _` strip below.
-lower (EAnnot (EBinOp op l r _) (TyCon tag _)) = lowerBinop op l r tag
+lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
+  lowerBinop op l r tag
 lower (EAnnot e _) = lower e
 lower (EHeadAnnot e _) = lower e
 -- dispatch: read the typechecker-filled route out of the mutable cell, making it
@@ -1340,7 +1341,7 @@ methodResultTy t = t
 -- result-side twin of eval.mdk's non-exported `tyMentions`).
 tyMentionsParams : Ty -> List String -> Bool
 tyMentionsParams (TyVar n) params = contains n params
-tyMentionsParams (TyCon _ _) _ = False
+tyMentionsParams (TyCon { tyConName = _ }) _ = False
 tyMentionsParams (TyApp a b) params = tyMentionsParams a params
   || tyMentionsParams b params
 tyMentionsParams (TyFun a b) params = tyMentionsParams a params
@@ -1462,7 +1463,7 @@ constraintArgsMentionNonParam typarams args =
 
 tyMentionsNonParam : Ty -> List String -> Bool
 tyMentionsNonParam (TyVar n) params = not (contains n params)
-tyMentionsNonParam (TyCon _ _) _ = False
+tyMentionsNonParam (TyCon { tyConName = _ }) _ = False
 tyMentionsNonParam (TyApp a b) params = tyMentionsNonParam a params
   || tyMentionsNonParam b params
 tyMentionsNonParam (TyFun a b) params = tyMentionsNonParam a params
@@ -1509,7 +1510,7 @@ fieldTyHeadName (Field _ ty) = tyHeadName ty
 -- the head type-CONSTRUCTOR name of a field type, or "" if it has no simple head
 -- (TyVar / TyFun / TyTuple / applied types) — the emitter treats "" as "unknown".
 tyHeadName : Ty -> String
-tyHeadName (TyCon n _) = n
+tyHeadName (TyCon { tyConName = n }) = n
 -- G3: a type VARIABLE head (`a` in `Num a => a -> a`) yields its var name, so the
 -- emitter's declSig table can recognise a polymorphic Num param (isTypeVarName) and
 -- route its arithmetic through the runtime tag-dispatched @mdk_num_* helpers.
@@ -1653,7 +1654,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EFieldAccess (EVar "r") "value")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EVar "lowerStmt")) (EVar "stmts"))))
-(DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PCon "TyCon" (PVar "tag") PWild))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
+(DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EFieldAccess (EVar "routeRef") "value")) (EFieldAccess (EVar "implRef") "value")) (EFieldAccess (EVar "methodRef") "value")))
@@ -2122,7 +2123,7 @@ nodeTag _ = "?"
 (DFunDef false "methodResultTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyMentionsParams" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyCon" PWild PWild) PWild) (EVar "False"))
+(DFunDef false "tyMentionsParams" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
@@ -2168,7 +2169,7 @@ nodeTag _ = "?"
 (DFunDef false "constraintArgsMentionNonParam" ((PVar "typarams") (PVar "args")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "typarams")))) (EVar "args")))
 (DTypeSig false "tyMentionsNonParam" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params"))))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyCon" PWild PWild) PWild) (EVar "False"))
+(DFunDef false "tyMentionsNonParam" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
@@ -2187,7 +2188,7 @@ nodeTag _ = "?"
 (DTypeSig false "fieldTyHeadName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldTyHeadName" ((PCon "Field" PWild (PVar "ty"))) (EApp (EVar "tyHeadName") (EVar "ty")))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "tyHeadName" ((PCon "TyCon" (PVar "n") PWild)) (EVar "n"))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "tyHeadName" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "tyHeadName") (EVar "a")))
 (DFunDef false "tyHeadName" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
@@ -2283,7 +2284,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EFieldAccess (EVar "r") "value")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EVar "lowerStmt")) (EVar "stmts"))))
-(DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PCon "TyCon" (PVar "tag") PWild))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
+(DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EFieldAccess (EVar "routeRef") "value")) (EFieldAccess (EVar "implRef") "value")) (EFieldAccess (EVar "methodRef") "value")))
@@ -2752,7 +2753,7 @@ nodeTag _ = "?"
 (DFunDef false "methodResultTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyMentionsParams" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyCon" PWild PWild) PWild) (EVar "False"))
+(DFunDef false "tyMentionsParams" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentionsParams" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
@@ -2798,7 +2799,7 @@ nodeTag _ = "?"
 (DFunDef false "constraintArgsMentionNonParam" ((PVar "typarams") (PVar "args")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "typarams")))) (EVar "args")))
 (DTypeSig false "tyMentionsNonParam" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyVar" (PVar "n")) (PVar "params")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "params"))))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyCon" PWild PWild) PWild) (EVar "False"))
+(DFunDef false "tyMentionsNonParam" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "False"))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
@@ -2817,7 +2818,7 @@ nodeTag _ = "?"
 (DTypeSig false "fieldTyHeadName" (TyFun (TyCon "Field") (TyCon "String")))
 (DFunDef false "fieldTyHeadName" ((PCon "Field" PWild (PVar "ty"))) (EApp (EVar "tyHeadName") (EVar "ty")))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "tyHeadName" ((PCon "TyCon" (PVar "n") PWild)) (EVar "n"))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EVar "n"))
 (DFunDef false "tyHeadName" ((PCon "TyVar" (PVar "n"))) (EVar "n"))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "tyHeadName") (EVar "a")))
 (DFunDef false "tyHeadName" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))

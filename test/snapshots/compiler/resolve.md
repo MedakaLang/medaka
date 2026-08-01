@@ -342,7 +342,7 @@ patGroupDupErrors loc kind ps =
 -- `cur` (Stage B) is the enclosing `ELoc` span threaded from the expr walk (or
 -- `None` at decl level), mirroring lib/resolve.ml's `!current_loc`.
 checkType : Option Loc -> Env -> Ty -> List ResError
-checkType cur env (TyCon n loc) =
+checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
     []
   else
@@ -3181,7 +3181,7 @@ stampBindingIds decls =
 (DTypeSig false "patGroupDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "patGroupDupErrors" ((PVar "loc") (PVar "kind") (PVar "ps")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (EVar "kind")) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EListLit)) (EApp (EVar "patsBindings") (EVar "ps")))))
 (DTypeSig false "checkType" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyCon" (PVar "n") (PVar "loc"))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
+(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
 (DFunDef false "checkType" (PWild PWild (PCon "TyVar" PWild)) (EListLit))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "b"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "b"))))
@@ -4227,7 +4227,7 @@ stampBindingIds decls =
 (DTypeSig false "patGroupDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "patGroupDupErrors" ((PVar "loc") (PVar "kind") (PVar "ps")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "DuplicateBinder") (EVar "kind")) (EVar "n")) (EVar "loc")))) (EApp (EApp (EVar "findDups") (EListLit)) (EApp (EVar "patsBindings") (EVar "ps")))))
 (DTypeSig false "checkType" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyCon" (PVar "n") (PVar "loc"))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
+(DFunDef false "checkType" ((PVar "cur") (PVar "env") (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc"))) false)) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "types")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))) (EApp (EVar "isTupleCtorTyName") (EVar "n"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "UnknownType") (EVar "n")) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "cur"))) (EApp (EApp (EVar "suggestType") (EVar "env")) (EVar "n"))))))
 (DFunDef false "checkType" (PWild PWild (PCon "TyVar" PWild)) (EListLit))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "b"))))
 (DFunDef false "checkType" ((PVar "cur") (PVar "env") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "b"))))

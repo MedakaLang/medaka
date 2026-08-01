@@ -61,7 +61,7 @@ dsub a b s = stringSlice a b s
 -- here directly, precedence-passing.
 
 ppTyP : Int -> Ty -> String
-ppTyP _ (TyCon s _) = s
+ppTyP _ (TyCon { tyConName = s }) = s
 ppTyP _ (TyVar s) = s
 ppTyP _ (TyTuple ts) = "(" ++ joinWith ", " (map (ppTyP 0) ts) ++ ")"
 ppTyP p (TyApp f x) =
@@ -410,7 +410,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DTypeSig false "dsub" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "dsub" ((PVar "a") (PVar "b") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "a")) (EVar "b")) (EVar "s")))
 (DTypeSig false "ppTyP" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "String"))))
-(DFunDef false "ppTyP" (PWild (PCon "TyCon" (PVar "s") PWild)) (EVar "s"))
+(DFunDef false "ppTyP" (PWild (PRec "TyCon" ((rf "tyConName" (PVar "s"))) false)) (EVar "s"))
 (DFunDef false "ppTyP" (PWild (PCon "TyVar" (PVar "s"))) (EVar "s"))
 (DFunDef false "ppTyP" (PWild (PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 0)))) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTyP" ((PVar "p") (PCon "TyApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ppTyP") (ELit (LInt 1))) (EVar "f")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "ppTyP") (ELit (LInt 2))) (EVar "x")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))
@@ -528,7 +528,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DTypeSig false "dsub" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "dsub" ((PVar "a") (PVar "b") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "a")) (EVar "b")) (EVar "s")))
 (DTypeSig false "ppTyP" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "String"))))
-(DFunDef false "ppTyP" (PWild (PCon "TyCon" (PVar "s") PWild)) (EVar "s"))
+(DFunDef false "ppTyP" (PWild (PRec "TyCon" ((rf "tyConName" (PVar "s"))) false)) (EVar "s"))
 (DFunDef false "ppTyP" (PWild (PCon "TyVar" (PVar "s"))) (EVar "s"))
 (DFunDef false "ppTyP" (PWild (PCon "TyTuple" (PVar "ts"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 0)))) (EVar "ts")))) (ELit (LString ")"))))
 (DFunDef false "ppTyP" ((PVar "p") (PCon "TyApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyP") (ELit (LInt 1))) (EVar "f")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "ppTyP") (ELit (LInt 2))) (EVar "x")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))))

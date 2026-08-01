@@ -680,7 +680,7 @@ walkClauses w scope curLoc ((FunClause pats body)::rest) =
 
 -- ── type walk (TyCon carries its OWN Option Loc — no curLoc threading needed) ─
 walkTy : W -> Loc -> Ty -> Unit
-walkTy w _ (TyCon name mloc) = match mloc
+walkTy w _ (TyCon { tyConName = name, tyConLoc = mloc }) = match mloc
   Some l => recordRef (ctxOf w) (resolveTy w name) (uriOf w) (locWithUriOf w l)
   None => ()
 walkTy _ _ (TyVar _) = ()

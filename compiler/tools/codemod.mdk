@@ -189,7 +189,7 @@ mapTyFull f ty =
   (ty2, c1 || c2)
 
 mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
-mapTyKids _ (TyCon n l) = (TyCon n l, False)
+mapTyKids _ (t@(TyCon { tyConName = _ })) = (t, False)
 mapTyKids _ (TyVar n) = (TyVar n, False)
 mapTyKids f (TyApp a b) =
   let (a2, ca) = mapTyFull f a
