@@ -1,0 +1,9 @@
+-- Shared declarations for s6-1c-multimodule-overlap. See main.mdk for what the
+-- fixture pins.
+public export data Pair a b = MkPair a b
+
+export interface C a where
+  cname : a -> Int
+
+export interface D a where
+  dname : a -> Int

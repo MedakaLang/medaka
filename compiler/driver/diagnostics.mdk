@@ -193,7 +193,22 @@ fixOfLocRepl (l, r) = Fix l r
 -- whether the last pass pushed ANY warning, and `compiler/tools/snapshot.mdk` reads
 -- it to decide whether a rendered `# TYPES` section is `--bless`-able.  So adding a
 -- warning that fires on existing corpus code can make snapshots that bless today
--- stop blessing.  Nothing here pushes a new warning, so nothing changes now.
+-- stop blessing.
+--
+-- ⚠️ THE FIRST DEMOTION HAS LANDED: F-3d (#614/#311) pushes `W-INCOMPARABLE-IMPLS`
+-- here, so the sentence that stood here — "Nothing here pushes a new warning, so
+-- nothing changes now" — is retired.  Measured over all 2395 in-tree `.mdk`: it
+-- fires on 5 fixture files, none of them in a snapshot corpus, and every compiler
+-- module already had `hadMatchWarnings` True, so no snapshot's blessability moved.
+-- ⚠️ AND THE SECOND HALF OF THE HAZARD IS NOT THE SNAPSHOT ONE.  A warning here is
+-- rendered by whatever surface each CLI verb happens to have, and they were NOT
+-- equal: `medaka run` passed only its own main-shape warnings to
+-- `emitLocatedWarnings` and `medaka build` had no warning surface at all, so a
+-- diagnostic demoted onto this channel became INVISIBLE on both — turning a
+-- formerly-loud reject into a silent accept on exactly the two verbs that execute
+-- code.  F-3d threads them (`finishRunEval`'s `tcWarns`, `TGOk`'s payload,
+-- `compiler/driver/medaka_cli.mdk`).  A future demotion should re-check that all
+-- three verbs still surface it rather than assume this stays fixed.
 diagOfTypeWarning : TcDiag -> Diag
 diagOfTypeWarning (TcDiag code _ loc w help _) =
   Diag SevWarning code (stripWarnPrefix w) loc help None

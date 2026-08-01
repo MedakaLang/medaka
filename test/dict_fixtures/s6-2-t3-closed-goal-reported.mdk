@@ -1,11 +1,14 @@
 -- §6.2 T3/T4 — THE CLOSED HALF of the #1155 (F-3c) closedness gate. Pairs with
 -- s6-2-t4-open-goal-deferred.mdk, which is this file with ONE TOKEN changed.
 --
--- Two ⊑-incomparable user impls (`Q Int y z` vs `Q x Bool z`), so coherence
--- condition (a) rejects them at the SECOND DECLARATION. That reject does not end
--- the compile -- errors ACCUMULATE (AGENTS.md: "phases push into diagnostics.mdk
--- rather than raising on the first error") -- so both impls are still registered
--- in KeyBuckets and the goal still reaches the min⊑ selector.
+-- Two ⊑-incomparable user impls (`Q Int y z` vs `Q x Bool z`). Since F-3d
+-- (#614/#311) coherence condition (a) only WARNS about that pair
+-- (`W-INCOMPARABLE-IMPLS` at the second declaration), so the goal-site reject below
+-- is the whole of this file's verdict -- and its sibling, whose goal is not closed,
+-- ACCEPTS. Before F-3d (a) rejected at the declaration too; that did not end the
+-- compile either, because errors ACCUMULATE (AGENTS.md: "phases push into
+-- diagnostics.mdk rather than raising on the first error"), so both impls were
+-- registered in KeyBuckets and the goal reached the min⊑ selector regardless.
 --
 -- SPEC ANSWER (hand-derived from §3 `match`, §3 ⊑, §6 C1 and §6.2 T3):
 --   The goal is `Sh (Q Int Bool (List Int))`. Every argument is GROUND, so it is
@@ -14,20 +17,21 @@
 --   other (`Int` cannot be an instance of `x`... in the direction that matters:
 --   no substitution on either head's variables produces the other, since each
 --   pins a DIFFERENT argument to a constructor). No ⊑-minimum ⇒ ambiguous
---   overlap ⇒ the goal-site reject fires, ALONGSIDE the declaration-time one.
+--   overlap ⇒ the goal-site reject fires, ALONGSIDE the declaration-time warning.
 --
--- So this file carries BOTH codes, and its sibling carries only the first. That
--- DIFFERENCE is the whole assertion: verdict, exit code and stdout are identical
--- across the pair, so nothing else can grade it.
+-- So this file carries `T-AMBIGUOUS-INSTANCE` and its sibling must not. That
+-- DIFFERENCE was the whole assertion until F-3d, when the pair also began to
+-- differ on VERDICT (this REJECTs, the sibling ACCEPTs). The code assertion stays:
+-- it is what says the reject came from the min⊑ arm rather than from anything else.
 --
 -- ⚠️ THIS PAIR REFUTES A CLAIM F-3C ORIGINALLY SHIPPED. Its first version argued
 -- the closedness gate was UNREACHABLE, on the grounds that a ⊑-incomparable user
 -- pair with a shared bare-variable argument always has unifying heads and so is
 -- "rejected at the declaration". The premise is true and the conclusion does not
 -- follow: a declaration-time rejection is not an early exit. The gate is
--- reachable; what is true is only that it has no USER-VISIBLE effect today,
--- because every program reaching it is already rejected by coherence (a). When
--- F-3d relaxes (a), this pair starts discriminating an ACCEPT from a REJECT.
+-- reachable; what was true is only that it had no USER-VISIBLE effect while every
+-- program reaching it was already rejected by coherence (a). F-3d demoted (a), and
+-- this pair now discriminates an ACCEPT from a REJECT.
 data Q a b c = Q a b c
 
 interface Sh a where

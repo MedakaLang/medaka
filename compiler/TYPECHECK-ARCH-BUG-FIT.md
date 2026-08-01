@@ -1566,6 +1566,29 @@ discriminator (`impl Index (List Int) Int Int`) keeps printing `42` on `run` and
 and the equal-head shape (`impl Eq Int`) keeps `check` exit 0. ⚠️ **Not executable today** —
 F-3c (#1155) is unmerged.
 
+⚠️ **CONTROL 1 HAS SINCE MOVED, and by F-3d rather than F-3c — re-read it before
+using it.** F-3d (#614/#311, 2026-08-01) demotes DICT §6.1 condition **(a)** to a
+`W-INCOMPARABLE-IMPLS` warning, so a ⊑-incomparable **user-vs-user** pair no longer
+carries a declaration-time `T-CONFLICTING-IMPL`; at a closed goal it is rejected by
+the goal-site `T-AMBIGUOUS-INSTANCE` alone, and at a non-closed goal it now COMPILES
+(#1183). The control as written — *"keeps its existing `T-CONFLICTING-IMPL` rejection
+at the declaration (not silently relocated to the goal site)"* — was a correct
+statement about F-3c and is a false one about the tree today; the relocation it
+guards against is exactly what F-3d did, deliberately.
+
+Control 3 — *"the equal-head shape (`impl Eq Int`) keeps `check` exit 0"* — is
+**unchanged**, and it is worth being exact about *why*, because the obvious gloss is
+false in a direction that would hide a live S0. F-3d keeps a **mutually-⊑
+(α-equal)** pair a hard `T-CONFLICTING-IMPL` — but only where `checkCoherence` can
+see the pair, and its input is **user decls only**. Control 3's pair is
+**prelude-vs-user**, so coherence never compares it: `impl Eq Int` beside the
+prelude's still checks clean, exit 0, verified on the F-3d branch against
+`test/lint_fixtures/derivable_needs_datadecl.mdk` (`{"diagnostics":[]}`). That is
+**#1162's equal-head second symptom**, which this document elsewhere records as
+drained by nothing, and F-3d neither fixes nor worsens it. So: the hard arm's
+coverage is **user-vs-user only**; do not read "α-equal heads still hard-reject" as
+covering the prelude case.
+
 **A-3 alone must NOT close this**: if it is claimed drained after A-3, re-run the repro —
 K's declaration-time diagnostic is advisory by its own text, so an advisory warning plus
 exit 0 is not a drain. **Without the G-11 clause below, the prediction for the

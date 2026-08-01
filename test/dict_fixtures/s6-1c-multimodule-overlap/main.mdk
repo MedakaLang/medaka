@@ -1,0 +1,33 @@
+-- THE ONLY IN-TREE COVERAGE OF THE CROSS-MODULE COHERENCE-WARNING PATH (F-3d,
+-- #614/#311), and the pin for the DE-DUPLICATION that path needed.
+--
+-- Two ⊑-incomparable pairs, deliberately placed differently:
+--   * `C` -- BOTH impls in lib.mdk. That module's own `checkCoherence` sees them
+--     (real span) and so does the whole-graph `globalCoherenceConflict` sweep
+--     (span-less, #414). Recording BOTH made `run`/`build` print it TWICE where
+--     `check` prints it once; `cohSoftInScope` gives the pair to the per-module
+--     sweep, which is the one with the span.
+--   * `D` -- one impl in lib.mdk, one in other.mdk. NO per-module sweep can see
+--     this pair (each module declares a single `D` impl), so it is reported by
+--     `globalCoherenceConflict` ALONE, span-less, naming both owning modules.
+--     Before this fixture that whole code path -- the soft half of
+--     `globalCoherenceConflict`, `attachEntryWarnOpt`, `prependDiagOpt` -- had zero
+--     in-tree coverage; it was verified only by hand probes that left no trace.
+--
+-- SPEC ANSWER (hand-derived from §3 `match` and §3 ⊑, not captured). Both goals are
+-- `… (Pair Int Bool)`:
+--   `match(IE, C (Pair Int Bool))` = {`Pair Int a`} alone -- `Pair a Int` does NOT
+--   match, since no substitution on `a` makes `Pair a Int` into `Pair Int Bool`
+--   (`Int` /= `Bool` at argument 1). A singleton matching set is trivially its own
+--   ⊑-minimum, so `inst` selects it: `cname` = 1. Identically for `D`: `dname` = 10.
+--   So the program is ACCEPTED under condition (c) and prints 11 -- the declared
+--   overlap is real but NO GOAL HERE MATCHES BOTH, which is exactly what "acceptance
+--   is per-goal" (§6.1.2) means. The (a) warnings still fire, at the declarations.
+--
+-- OBSERVED: check/run/build all ACCEPT and print 11, carrying `W-INCOMPARABLE-IMPLS`.
+-- Section 5 asserts each message appears EXACTLY ONCE on `run`'s stderr.
+import base.{Pair, MkPair, C, cname, D, dname}
+import lib
+import other
+
+main = println (cname (MkPair 1 True) + dname (MkPair 1 True))

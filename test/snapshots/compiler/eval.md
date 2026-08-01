@@ -1,5 +1,5 @@
 # META
-source_lines=3506
+source_lines=3529
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -2027,6 +2027,25 @@ evalDepthLimit = 25000
 export runJsonMode : Ref Bool
 runJsonMode = Ref False
 
+-- Diagnostics the DRIVER produced BEFORE eval started (typecheck-stage warnings,
+-- the main-shape warning), staged here so that `run --json` emits **exactly one**
+-- JSON envelope on stderr.
+--
+-- 🚨 WHY A REF AND NOT JUST "print them first".  Printing them first is what the
+-- non-JSON path does and it is right there — but on `--json` it produces TWO
+-- top-level documents on one stream (the warning envelope, then `runtimePanic`'s),
+-- and `{…}\n{…}` is not JSON.  The gate that grades this channel
+-- (`test/diff_compiler_eval_json.sh`) captures stderr ALONE and AGENTS.md states the
+-- contract as *"`medaka run --json` … emit[s] the SAME `Diag` JSON envelope"* —
+-- singular.  So the driver stages them here instead: if the program panics,
+-- `runtimePanic` merges them into its own envelope; if it does not, the driver
+-- flushes them after `runProgramOutput` returns.  Either way stderr holds one
+-- document.  Triples, not a flat `List Diag`, because `cjAllToJson`'s unit is
+-- (path, src, diags) and a multi-module run's warnings belong to different files.
+-- Inert (default []) on every non-`--json` path.
+export pendingRunDiags : Ref (List (String, String, List Diag))
+pendingRunDiags = Ref []
+
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -2058,7 +2077,11 @@ runtimePanic code msg = match currentEvalLoc.value
     -- rather than re-wrapping it in its native-user-panic `[E-PANIC]` banner.
     if runJsonMode.value then
       let diag = Diag SevError code msg (Some (Loc ff sl sc el ec)) None None
-      panic "\{fmtSentinel}\{cjAllToJson [(ff, "", [diag])]}"
+      -- `pendingRunDiags` FIRST, so the driver's pre-eval warnings and this runtime
+      -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
+      -- not stage anything, which makes this byte-identical to the old single-triple
+      -- call for every fixture that has no warning.
+      panic "\{fmtSentinel}\{cjAllToJson (pendingRunDiags.value ++ [(ff, "", [diag])])}"
     else panic "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
@@ -4359,10 +4382,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalDepthLimit" () (ELit (LInt 25000)))
 (DTypeSig true "runJsonMode" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "runJsonMode" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig true "pendingRunDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "pendingRunDiags" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "updateEvalLoc" (TyFun (TyCon "Loc") (TyCon "Unit")))
 (DFunDef false "updateEvalLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EVar "currentEvalLoc")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "runtimePanic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))))
-(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EFieldAccess (EVar "currentEvalLoc") "value") (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EFieldAccess (EVar "currentEvalFile") "value") (EVar "f"))) (DoExpr (EIf (EFieldAccess (EVar "runJsonMode") "value") (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag"))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EVar "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))))))))
+(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EFieldAccess (EVar "currentEvalLoc") "value") (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EFieldAccess (EVar "currentEvalFile") "value") (EVar "f"))) (DoExpr (EIf (EFieldAccess (EVar "runJsonMode") "value") (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "cjAllToJson") (EBinOp "++" (EFieldAccess (EVar "pendingRunDiags") "value") (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EVar "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))))))))
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -5773,10 +5798,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalDepthLimit" () (ELit (LInt 25000)))
 (DTypeSig true "runJsonMode" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "runJsonMode" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig true "pendingRunDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "pendingRunDiags" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "updateEvalLoc" (TyFun (TyCon "Loc") (TyCon "Unit")))
 (DFunDef false "updateEvalLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EVar "currentEvalLoc")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "runtimePanic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))))
-(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EFieldAccess (EVar "currentEvalLoc") "value") (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EFieldAccess (EVar "currentEvalFile") "value") (EVar "f"))) (DoExpr (EIf (EFieldAccess (EVar "runJsonMode") "value") (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag"))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))))))))
+(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EFieldAccess (EVar "currentEvalLoc") "value") (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EFieldAccess (EVar "currentEvalFile") "value") (EVar "f"))) (DoExpr (EIf (EFieldAccess (EVar "runJsonMode") "value") (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "cjAllToJson") (EBinOp "++" (EFieldAccess (EVar "pendingRunDiags") "value") (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))))))))
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))

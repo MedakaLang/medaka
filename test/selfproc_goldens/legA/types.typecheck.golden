@@ -98,6 +98,9 @@ atomsNormGo : List Atom -> List Atom -> List Atom
 atomsOfWritten : List (String, Option String) -> List Atom
 atomsUnion : List Atom -> List Atom -> List Atom
 attachEntryDiag : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+attachEntryWarn : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
@@ -240,31 +243,43 @@ cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> Lis
 cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List TcDiag, List TcDiag))
 cmEntryCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, Scheme), List TcDiag, List TcDiag)
 cmEntryWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
-cohAnonConflict : CohImpl -> List Mono -> List Mono -> String -> String -> List CohImpl -> Option (String, Option Loc)
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
+cohClassify : CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
 cohCollectImpls : List Decl -> List CohImpl
 cohCollectModuleImpls : List (String, List Decl) -> List CohImpl
-cohConflictWith : CohImpl -> List CohImpl -> Option (String, Option Loc)
 cohCrossModuleMsg : String -> String -> String -> String
 cohEqMono : Mono -> Mono -> Bool
 cohEqR : Mono -> Mono -> Bool
-cohFirstConflict : List CohImpl -> Option (String, Option Loc)
 cohFreshTys : List Ty -> List Mono
 cohGo : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
 cohGoR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohImplIface : CohImpl -> String
 cohImplLoc : CohImpl -> Option Loc
 cohImplsOf : Decl -> List CohImpl
 cohImplsOfMid : String -> Decl -> List CohImpl
+cohIncomparableHelp : String
+cohIncomparableMsg : String -> List Mono -> List Mono -> String -> String -> String
+cohIsCrossModule : String -> String -> Bool
+cohKeepFirst : Option a -> Option a -> Option a
+cohMutuallySubsumes : List Mono -> List Mono -> Bool
 cohOverlap : List Mono -> List Mono -> Bool
 cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
 cohOverlapMsg : String -> List Mono -> List Mono -> String
 cohPpEach : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 cohPpPair : List Mono -> List Mono -> (String, String)
+cohPushHard : Option (String, Option Loc) -> Unit
+cohPushSoft : Option (String, Option Loc) -> Unit
 cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
+cohScan : List CohImpl -> CohScan
+cohScanDone : CohScan -> Bool
+cohScanInner : CohImpl -> List CohImpl -> CohScan -> CohScan
+cohScanOuter : List CohImpl -> CohScan -> CohScan
+cohSoftInScope : String -> String -> Bool
 cohStep : Mono -> Mono -> MStep Int Mono Mono
 cohStrictlyMoreSpecific : List Mono -> List Mono -> Bool
 cohSubsumes : List Mono -> List Mono -> Bool
+cohWhereSuffix : String -> String -> String
 collapsesEffvarsMsg : String -> Ty -> String
 collapsesTyvarsMsg : String -> Ty -> String
 collectAbstractRecordTypes : List Decl -> List String
@@ -563,7 +578,7 @@ funDomain : Mono -> Mono
 genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
-globalCoherenceConflict : List (String, List Decl) -> Option String
+globalCoherenceConflict : List (String, List Decl) -> (Option String, Option String)
 goalHeadCon : List Mono -> Option String
 goalSiteLoc : Ref (Option Loc)
 goalsClosed : List Mono -> Bool
@@ -1052,6 +1067,7 @@ prefixPatternErrMsg : String -> String -> String
 prefixPatternOk : String -> Bool
 preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
+prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
 prependDictClause : String -> Int -> FunClause -> FunClause
 prependImplDictIfUser : Int -> List String -> ImplMethod -> ImplMethod
 preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List (String, Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
@@ -1067,6 +1083,7 @@ propParamNamesTc : List PropParam -> List String
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
 pureRow : EffRow
+pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit

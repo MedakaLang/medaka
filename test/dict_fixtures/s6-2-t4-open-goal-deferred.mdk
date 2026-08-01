@@ -18,19 +18,29 @@
 -- program's. So the goal-site reject MUST NOT fire here, and the row asserts
 -- `!T-AMBIGUOUS-INSTANCE`.
 --
--- WHY THE NEGATIVE ASSERTION IS THE WHOLE ROW. This file exits 1 with the same
--- coherence `T-CONFLICTING-IMPL` as its sibling, prints the same (nothing), and
--- fails `build` the same way. Verdict, exit code and stdout are IDENTICAL across
--- the pair. Delete the closedness gate and this file gains a second diagnostic
--- and NOTHING ELSE CHANGES -- so a row pinning only what must be present would
--- stay green through exactly the regression it was written for.
+-- ✅ SINCE F-3d (#614/#311) THE GATE DECIDES THIS FILE'S VERDICT. Condition (a) is
+-- demoted to a `W-INCOMPARABLE-IMPLS` WARNING, so the declaration no longer rejects
+-- anything here: this file now ACCEPTS (exit 0) while its one-token sibling still
+-- REJECTS with T-AMBIGUOUS-INSTANCE. The pair discriminates on VERDICT.
 --
--- ⚠️ The gate has no user-visible effect TODAY: both halves are rejected anyway,
--- by (a), at the declaration. That is why this is a positive-corpus row and not a
--- must-fail one, and why test/MUST-FAIL-NOT-PINNABLE.txt records #1155's residual
--- as unpinnable BY EXIT CODE while this pair pins it by diagnostic set. When F-3d
--- relaxes (a), the coherence reject disappears from both files and this pair
--- becomes an ACCEPT-vs-REJECT discriminator on its own.
+-- ⚠️ THE NEGATIVE ASSERTION IS STILL LOAD-BEARING AND MUST STAY. Verdict alone is a
+-- WEAKER test than the code assertion, not a replacement for it: delete the
+-- closedness gate and this file starts REJECTING, which a verdict pin catches -- but
+-- ANY new reject on this file catches that too, so verdict alone cannot say the
+-- reject came from the min⊑ arm. `!T-AMBIGUOUS-INSTANCE` names the exact diagnostic
+-- the gate suppresses, which is the only assertion that distinguishes "the closedness
+-- gate was removed" from "something else started rejecting". Making this row
+-- positive-only would make it inert against the regression it exists for.
+--
+-- ⚠️ THE VALUE THIS FILE NOW PRINTS IS DECIDED BY DECLARATION ORDER -- see #1183,
+-- and do NOT read `1` as a correct answer. The two impls are ⊑-incomparable, so
+-- `pickMostSpecificEntry` has no minimum and commits to the HEAD of the candidate
+-- list; swap the two `impl` blocks and this prints `2`, at exit 0, on both engines.
+-- §6.2 T4's actual answer is to DEFER a non-closed goal to quiescence and decide it
+-- there, which this compiler has no pass for (§11's T3/T4 row records the
+-- divergence). F-3d makes that pre-existing residue USER-REACHABLE and warns on it
+-- rather than silently accepting it -- the explicit trade in #311's owner decision.
+-- Section 4 of the gate carries it as a KNOWN-BAD permutation row.
 data Q a b c = Q a b c
 
 interface Sh a where

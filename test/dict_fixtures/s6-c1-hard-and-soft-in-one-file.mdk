@@ -1,0 +1,67 @@
+-- THE ONLY FIXTURE THAT EXERCISES `cohScan`'s TWO-SLOT RETURN (F-3d, #614/#311).
+-- Without it that design decision has ZERO coverage: revert `cohScan` to a single
+-- classified verdict and every other gate in this tree stays green while a program
+-- of exactly this shape silently loses its hard error.
+--
+-- THE SHAPE: one file carrying BOTH coherence classes, with the SOFT pair reached
+-- FIRST by the scan.
+--   * `Tag Bool` twice -- MUTUALLY ⊑ (α-equal heads). A §6 C1 violation: two
+--     ⊑-minimal elements, so no minimum at any goal matching them. HARD, and it
+--     has no second line of defence -- `entryCovers` is
+--     `tyHeadEqV || tyStrictlyMoreSpecificV`, so equal heads cover each other and
+--     the goal-site min⊑ reject structurally cannot see this class.
+--   * `Tag (Pair Int a)` / `Tag (Pair a Int)` -- ⊑-INCOMPARABLE. A §6.1 condition
+--     (a) violation ALONE, which §6.1.2 licenses as at most a declaration-time
+--     warning. SOFT.
+--
+-- WHY THE DECLARATION ORDER IS LOAD-BEARING (do not reorder these four blocks).
+-- `checkCoherence` scans `reverseL (cohCollectImpls …)`, i.e. LATEST-DECLARED
+-- FIRST, and takes each element against the rest. With the duplicates declared
+-- FIRST and the incomparable pair LAST, the outer element is `Tag (Pair a Int)`
+-- and its very first comparison is the SOFT one; the HARD pair is not reached
+-- until two outer steps later.
+--
+-- SPEC ANSWER (hand-derived from §6 C1 and §6.1.2, not captured): the program is
+-- REJECTED, because of the duplicate `Tag Bool` heads -- C1 is not relaxed by
+-- F-3d and never was (α-equal heads SATISFY condition (a), so they were never
+-- (a)'s to demote; §6.1.2's ⚠️ records the ladder breaking exactly there,
+-- (a) ⇏ (c)). The incomparable pair is reported too, as a warning, because
+-- acceptance under (c) is per-goal and no goal here matches both.
+--
+-- OBSERVED: check/run/build all REJECT, carrying BOTH `T-CONFLICTING-IMPL` and
+-- `W-INCOMPARABLE-IMPLS`. On the PRE-F-3d compiler this file reported ONE
+-- diagnostic -- the incomparable pair, as an error -- and NEVER the duplicate,
+-- because `cohFirstConflict` returned the first conflict and stopped. So this
+-- fixture also records a real (if academic) improvement: the duplicate that the
+-- old first-conflict scan hid is now named.
+--
+-- ⚠️ WHAT MAKES IT A DISCRIMINATOR RATHER THAN A DEMONSTRATION: a one-slot
+-- classified `cohScan` -- soft found first, scan stops, nothing else reported --
+-- would ACCEPT this file at exit 0 with only a warning, its `main` answering
+-- `tag True` by declaration order. The row therefore asserts the ERROR is present,
+-- not merely that some diagnostic is.
+--
+-- ⚠️ `!T-AMBIGUOUS-INSTANCE` is asserted too, and it is not decoration: `main`'s
+-- goal `Tag Bool` matches BOTH duplicate impls, so a reader might expect the
+-- goal-site reject to fire. It must not -- `entryCovers`' `tyHeadEqV` makes the
+-- two cover each other and `findMostSpecificEntry` returns `Some`. That negative
+-- is the in-tree pin for "the goal-site arm cannot substitute for the hard
+-- declaration-time class", which is the whole reason that class stays an error.
+data Pair a b = MkPair a b
+
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Bool where
+  tag _ = 1
+
+impl Tag Bool where
+  tag _ = 2
+
+impl Tag (Pair Int a) where
+  tag _ = 3
+
+impl Tag (Pair a Int) where
+  tag _ = 4
+
+main = println (tag True)

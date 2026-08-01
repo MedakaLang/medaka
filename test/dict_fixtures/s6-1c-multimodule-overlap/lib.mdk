@@ -1,0 +1,29 @@
+-- The SAME-MODULE ⊑-incomparable pair: both `C` impls live here. Seen by this
+-- module's own `checkCoherence` (with a real span) AND by the whole-graph
+-- `globalCoherenceConflict` sweep (span-less) -- `cohSoftInScope` is what stops the
+-- second one claiming it, so `run`/`build` print it ONCE, as `check` does.
+import base.{Pair, MkPair, C, cname, D, dname}
+
+impl C (Pair Int a) where
+  cname _ = 1
+
+impl C (Pair a Int) where
+  cname _ = 2
+
+-- Half of the CROSS-MODULE pair; the other half is in other.mdk.
+impl D (Pair Int a) where
+  dname _ = 10
+
+-- ⚠️ DELIBERATELY NON-EXHAUSTIVE, and it is an ASSERTION, not sloppiness. This is an
+-- IMPORTED module carrying a NON-coherence warning, which is what makes section 5's
+-- multi-module rows able to fail: `check`/`run`/`build` must surface this module's
+-- ⊑-incomparable pair and must NOT surface this `W-NONEXHAUSTIVE`. Without it those
+-- rows could not tell "only the demoted code is surfaced" from "the whole
+-- matchWarnings channel is surfaced", because every other module in the corpus is
+-- clean. Never called from main, so it changes no value.
+export libHue : Colour -> Int
+libHue c = match c
+  LibRed => 1
+  LibGreen => 2
+
+public export data Colour = LibRed | LibGreen | LibBlue

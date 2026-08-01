@@ -264,17 +264,26 @@ each individual fix is correct. F-3c made that arm a located
 ⚠️ **Read the discharge narrowly: it holds for CLOSED goals only.** The reject is
 gated on §6.2 T3 closedness (`goalsClosed`) because T4 defers a goal still
 carrying an unbound metavariable rather than deciding it; at a non-closed goal
-the silent head-of-list pick survives. That residue is **reachable today and
-already pinned** — `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
-one-token sibling `…-t4-open-goal-deferred.mdk` — but it changes **no verdict**,
-because every program that reaches it is also rejected by coherence (a) at the
-declaration. ⚠️ An earlier revision of this paragraph said *"unreachable today"*,
-which is a different and false claim: a declaration-time rejection is **not** an
-early exit (errors accumulate), so the impls are still registered and the goal
-still reaches the selector. **F-3d** is what makes the residue load-bearing —
-relaxing (a) removes the coherence reject, and the open half becomes an ACCEPT an
-ungated arm would reject — so the sequencing constraint above transfers verbatim
-to F-3d rather than expiring with F-3c.
+the silent head-of-list pick survives. That residue is **reachable and pinned** —
+`test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its one-token sibling
+`…-t4-open-goal-deferred.mdk`. ⚠️ An earlier revision of this paragraph said
+*"unreachable today"*, which is a different and false claim: a declaration-time
+rejection is **not** an early exit (errors accumulate), so the impls are still
+registered and the goal still reaches the selector.
+
+✅ **F-3d landed 2026-08-01 and the residue is now USER-VISIBLE, which is the
+sequencing constraint above cashing out.** Two corrections to what this paragraph
+predicted:
+1. F-3d did **not** "remove the coherence reject" — the 2026-08-01 owner decision on
+   #311 **demoted (a) to a warning** (`W-INCOMPARABLE-IMPLS`) and kept the
+   mutually-`⊑` class a hard error, because α-equal heads satisfy (a) while failing
+   C1 and nothing downstream catches them.
+2. The open half is now an **ACCEPT that runs**, and its value is decided by
+   `impl`-block order at exit 0 (`1`, or `2` with the blocks swapped). The warning is
+   what keeps that from being a loud→silent transition; it does not make the answer
+   order-free. Tracked at **#1183**, pinned as a KNOWN-BAD permutation row in
+   `test/diff_compiler_dict_semantics.sh` §4. **Closing it is §6.2 T4's own work — a
+   quiescence post-pass — which T4 forbids landing before I5.**
 
 ### I — Inference (kept structurally intact)
 
@@ -987,7 +996,15 @@ orders merges, and the plan does not pretend otherwise.
   re-mint discipline.
 - **F-2. Extract D (error-path machinery)** — pure extraction, byte-identical;
   #480's loc-helper dedupe rides in this diff.
-- **F-3 ⊕ (#311/#614). Coherence (a)→(c).**
+- **F-3 ⊕ (#311/#614). Coherence (a)→(c). ✅ COMPLETE 2026-08-01** — landed as four
+  ordered PRs, not one: **F-3a** (thread the full goal vector, #1154/#1161),
+  **F-3b** (union headless impls into every bucket, #1128), **F-3c** (the
+  no-unique-minimum arm becomes a hard `T-AMBIGUOUS-INSTANCE`, #1155 — a
+  NARROWING), **F-3d** (`cohClassify` demotes the `⊑`-incomparable half of the
+  declaration-time sweep to `W-INCOMPARABLE-IMPLS` — a WIDENING). ⚠️ The "single-PR
+  sized" claim below is the sizing error this stage is the record of: c and d move
+  acceptance in **opposite** directions, so bundling them makes CI unable to say
+  which half moved a golden. Residue: **#1183**.
 - **F-4. Hygiene residuals**: #176 (ref-growth probe, after A-3 changes the ref
   population).
 

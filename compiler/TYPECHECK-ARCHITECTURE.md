@@ -295,7 +295,7 @@ the impl, and writes a `Route` back into the AST's `Ref Route` cells.
 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
-| Coherence | `cohFirstConflict` → `cohConflictWith` | 18 / 167 / **0** | DICT §6 C1–C4 |
+| Coherence | `cohScan` → `cohScanInner` → `cohClassify` | 18 / 167 / **0** | DICT §6 C1–C4 |
 | Final-check driver | `runFinalChecks` | 22 / 231 / **0** | — |
 | Signature-constraint soundness | `checkSigConstraintCoverage` → `checkSigConstraintOne` | 25 / 218 / 3 | — |
 | Signature-too-general | `checkSigTooGeneral` | ~98 lines | — |
@@ -529,7 +529,7 @@ best-*cited* layer in §4 — the deficit is structural form, not absence.
   self-drains five S0/S1s** — which is what #1070 itself recommends.
 
 **4. Four subsystems are already pure, and the safest extractions are the error-path clusters.**
-`prePassDictArg`, `runFinalChecks`, `foldModules` **and coherence** (`cohFirstConflict`, 18
+`prePassDictArg`, `runFinalChecks`, `foldModules` **and coherence** (`cohScan`, 18
 functions / 167 lines) touch **zero** state cells — coherence only looks stateful if you
 miscount its `coh*` helper signatures as cells (§0 trap 4).
 
