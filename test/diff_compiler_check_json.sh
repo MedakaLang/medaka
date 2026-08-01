@@ -141,6 +141,30 @@ if [ -d "$PROJDIR" ]; then
   done
 fi
 
+# ── #333 regression: a NONEXISTENT path must report file-not-found, not ────
+# R-MODULE-LOAD. There is deliberately no fixture file here — the missing path
+# IS the input — so this is an inline assertion rather than a golden diff.
+# Before the fix, `checkJsonFile` swallowed the read failure via
+# `readFileSafe` and fell into the import loader, which misreported the path
+# as an unknown STDLIB MODULE (`R-MODULE-LOAD`, embedding the entire module
+# list). Assert the code (not the full message — a real message-diff belongs
+# to a golden, and this is deliberately not one) and the exit code.
+name="333/nonexistent-path"
+tmpout="$(mktemp)"
+perl -e 'alarm 60; exec @ARGV' "$NATIVE" check --json "$ROOT/no-such-file-here-333.mdk" > "$tmpout" 2>&1
+noexist_status=$?
+noexist_out="$(cat "$tmpout")"
+rm -f "$tmpout"
+if [ "$noexist_status" -ne 1 ]; then
+  fail=$((fail+1)); printf 'FAIL %s (expected exit 1, got %s)\n  out: %s\n' "$name" "$noexist_status" "$noexist_out"
+elif ! printf '%s' "$noexist_out" | grep -q 'R-FILE-NOT-FOUND'; then
+  fail=$((fail+1)); printf 'FAIL %s (expected R-FILE-NOT-FOUND, got):\n  %s\n' "$name" "$noexist_out"
+elif printf '%s' "$noexist_out" | grep -q 'R-MODULE-LOAD'; then
+  fail=$((fail+1)); printf 'FAIL %s (regressed to R-MODULE-LOAD):\n  %s\n' "$name" "$noexist_out"
+else
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+fi
+
 echo ""
 printf '%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

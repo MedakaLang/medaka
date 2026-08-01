@@ -36,8 +36,8 @@ fi
 golden="$(cat "$GOLDEN")"
 self="$(run_lint)"
 if [ "$self" = "$golden" ]; then
-  printf 'ok   lint multi-directory-target (two dir args, cross-file dup)\n\n1 ok, 0 failing\n'
-  exit 0
+  printf 'ok   lint multi-directory-target (two dir args, cross-file dup)\n'
+  multi_dir_ok=0
 else
   printf 'FAIL lint multi-directory-target (two dir args, cross-file dup)\n'
   gtmp="$(mktemp)"; stmp="$(mktemp)"
@@ -45,6 +45,46 @@ else
   printf '%s\n' "$self" > "$stmp"
   diff "$gtmp" "$stmp" || true
   rm -f "$gtmp" "$stmp"
-  printf '\n0 ok, 1 failing\n'
-  exit 1
+  multi_dir_ok=1
 fi
+
+# ── #1173 regressions: resolveLintTargets / flag parsing must fail LOUDLY ───
+# rather than silently report clean. Same file since both bugs live in the
+# argv-to-target path this gate already exercises directly against the CLI.
+pass=0; fail=0
+
+name="1173/nonexistent-path"
+out="$("$MEDAKA" lint --json "$FIXDIR/does-not-exist-1173.mdk" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] && printf '%s' "$out" | grep -q 'do not exist'; then
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+else
+  fail=$((fail+1)); printf 'FAIL %s (expected exit 1 + "do not exist", got exit=%s out=%s)\n' "$name" "$status" "$out"
+fi
+
+name="1173/deny-space-form-rejected"
+probe="$FIXDIR/dirA"
+out="$("$MEDAKA" lint --json --deny rule-match-on-param "$probe" 2>&1)"; status=$?
+if [ "$status" -eq 1 ] && printf '%s' "$out" | grep -q -- '--deny'; then
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+else
+  fail=$((fail+1)); printf 'FAIL %s (expected exit 1 rejecting bare --deny, got exit=%s out=%s)\n' "$name" "$status" "$out"
+fi
+
+name="1173/deny-equals-form-still-works"
+out="$("$MEDAKA" lint --json --deny=rule-match-on-param "$probe" 2>&1)"; status=$?
+if [ "$status" -eq 0 ] || [ "$status" -eq 1 ]; then
+  # exit code depends on whether the rule fires; what matters is it did NOT hit
+  # the "require a value" rejection and did NOT treat the rule name as a path.
+  if printf '%s' "$out" | grep -q 'require a value'; then
+    fail=$((fail+1)); printf 'FAIL %s (equals form wrongly rejected): %s\n' "$name" "$out"
+  elif printf '%s' "$out" | grep -q 'rule-match-on-param.*diagnostics'; then
+    fail=$((fail+1)); printf 'FAIL %s (rule name treated as a file target): %s\n' "$name" "$out"
+  else
+    pass=$((pass+1)); printf 'ok   %s\n' "$name"
+  fi
+else
+  fail=$((fail+1)); printf 'FAIL %s (unexpected exit %s): %s\n' "$name" "$status" "$out"
+fi
+
+printf '\n%d ok, %d failing (plus multi-dir: %s)\n' "$pass" "$fail" "$([ "$multi_dir_ok" -eq 0 ] && echo ok || echo FAIL)"
+[ "$fail" -eq 0 ] && [ "$multi_dir_ok" -eq 0 ]

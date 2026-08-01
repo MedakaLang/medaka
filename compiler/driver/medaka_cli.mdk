@@ -114,7 +114,17 @@ import driver.diagnostics.{
   readFileSafe,
   diagIsError,
 }
-import json.{Json, JInt, JString, JArray, JObject, jObject, jArray, stringify}
+import json.{
+  Json,
+  JInt,
+  JString,
+  JArray,
+  JObject,
+  JNull,
+  jObject,
+  jArray,
+  stringify,
+}
 import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
@@ -306,7 +316,6 @@ usage _ = putStrLn (stringConcat
     "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
     "  medaka check [--json] <file.mdk>    Type-check without running\n",
     "  medaka test [file.mdk]    Run doctests + prop tests\n",
-    "  medaka bench [file.mdk]   Run bench declarations\n",
     "  medaka doc [file.mdk]     Generate Markdown documentation\n",
     "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n",
     "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n",
@@ -737,11 +746,42 @@ hasFlag flag (x::rest)
 -- in `checkJsonFile` (driver.diagnostics), shared with the `medaka mcp`
 -- medaka_check tool.  This driver just prints the JSON and gates the exit code —
 -- stdout is byte-identical to the old inline body (diff_native_cli golden).
+-- #333: `target` is `readFile`'d FIRST (mirrors `medaka_check`'s MCP handler,
+-- `runCheckTool` in tools/mcp.mdk) so a nonexistent/unreadable path reports a
+-- file-not-found diagnostic instead of falling into `checkJsonFile`'s import
+-- loader, which otherwise misreports it as an unknown-module R-MODULE-LOAD
+-- diagnostic (`checkJsonFile` reads the path itself via `readFileSafe`, which
+-- swallows the error as `""`). This guard only validates readability; the
+-- content it reads is discarded and `checkJsonFile` re-reads `target` for the
+-- real run with full import resolution.
 runCheckJsonCmd : Bool -> String -> String -> String -> String -> <IO> Unit
-runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
-  let (json, hasErr) = checkJsonFile allowInternal rsrc csrc target stdlibDir
-  let _ = println json
-  if hasErr then exit 1 else ()
+runCheckJsonCmd allowInternal rsrc csrc target stdlibDir = match readFile target
+  Err e =>
+    let _ = println (cjFileNotFoundJson target e)
+    exit 1
+  Ok _ =>
+    let (json, hasErr) = checkJsonFile allowInternal rsrc csrc target stdlibDir
+    let _ = println json
+    if hasErr then exit 1 else ()
+
+-- The `{"files":[...]}` envelope for a target that could not be read at all —
+-- a file-not-found/unreadable-path diagnostic, unlocated (no source to point
+-- into), carrying its own stable code so a caller keying off `code` (per
+-- AGENTS.md) can distinguish "the file doesn't exist" from "the module
+-- doesn't exist" (R-MODULE-LOAD).
+cjFileNotFoundJson : String -> String -> String
+cjFileNotFoundJson target err =
+  let msg = "cannot read file '\{target}': \{err}"
+  let diagJson = jObject [
+    ("code", JString "R-FILE-NOT-FOUND"),
+    ("kind", JString "resolve"),
+    ("message", JString msg),
+    ("range", JNull),
+    ("severity", JInt 1),
+    ("source", JString "medaka"),
+  ]
+  let filesJson = jObject [("file", JString target), ("diagnostics", jArray [diagJson])]
+  stringify (jObject [("files", jArray [filesJson])])
 
 isDiagError : Diag -> Bool
 isDiagError (Diag SevError _ _ _ _ _) = True
@@ -1888,12 +1928,14 @@ runManifestCmd argv = match parseManifestArgs argv
 -- Exit 0 unless a SevError finding exists (only via --deny in v1 report mode).
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv =
+  let _ = assertLintFlagsHaveValues argv
   let disableNames = parseLintFlagList "--disable=" argv
   let onlyNames = parseLintFlagList "--only=" argv
   let denyNames = parseLintFlagList "--deny=" argv
   let fixMode = hasFlag "--fix" argv
   let jsonMode = hasFlag "--json" argv
   let fileArgs = lintTargets argv
+  let _ = assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
   if jsonMode then runLintJsonCmd disableNames onlyNames denyNames files
   else
@@ -2060,6 +2102,54 @@ parsedToTriple (path, _, pos, decls) = (path, pos, decls)
 
 parsedToSrc : (String, String, Positions, List Decl) -> (String, String)
 parsedToSrc (path, src, _, _) = (path, src)
+
+-- #1173: `--disable`/`--only`/`--deny` only accept the `--flag=v1,v2,...` form
+-- (`parseLintFlagList`, `--flag=` prefix, matches the usage banner and the
+-- pre-commit hook's own `--only="$X" --deny="$X"` usage). The space form
+-- (`--deny rule-name`) is a plausible first guess and used to be accepted
+-- silently: `lintTargets` skips any `--`-prefixed token but never consumes a
+-- following value, so the rule name fell through as an ordinary positional
+-- TARGET — the flag applied to nothing, and no diagnostic said so. Rejecting
+-- the bare flag outright (rather than teaching `lintTargets` to consume a
+-- value it would then have to validate as a rule list, not a path) keeps one
+-- supported spelling instead of two silently-divergent ones.
+lintValueFlags : List String
+lintValueFlags = ["--disable", "--only", "--deny"]
+
+assertLintFlagsHaveValues : List String -> <IO> Unit
+assertLintFlagsHaveValues argv =
+  let bad = filter (f => contains f argv) lintValueFlags
+  if bad == [] then ()
+  else
+    let _ = ePutStrLn (stringConcat [
+      "medaka lint: ",
+      joinWith ", " bad,
+      " require a value in the form --flag=<rule1,rule2,...> (a bare '",
+      "--flag <rule>' space-separated form is not supported and would be silently",
+      " ignored, so it is rejected instead)",
+    ])
+    exit 1
+
+-- #1173: a lint target that is neither a listable directory nor a readable
+-- file used to fall through `expandLintTarget`'s `Err _ => [target]` arm as a
+-- literal path, which `lintFileDiagTriple` then reads via `readFileSafe` — the
+-- same "" -on-error helper `checkJsonFile` uses — so a nonexistent path parsed
+-- as EMPTY SOURCE and reported a clean 0-diagnostic result at exit 0. Fail
+-- loudly up front instead (mirrors `assertSnapshotTargetsExist` above).
+lintTargetExists : String -> <IO> Bool
+lintTargetExists t = match listDir t
+  Ok _ => True
+  Err _ => fileExists t
+
+assertLintTargetsExist : List String -> <IO> Unit
+assertLintTargetsExist [] = ()
+assertLintTargetsExist targets =
+  let missing = filter (t => not (lintTargetExists t)) targets
+  if missing == [] then ()
+  else
+    let _ = ePutStrLn "medaka lint: these targets do not exist:"
+    let _ = ePutStrLn (joinNl (map (m => "  \{m}") missing))
+    exit 1
 
 -- Resolve file args to a concrete list of .mdk paths.
 -- Empty args → project root mode (find medaka.toml, list top-level .mdk files).
