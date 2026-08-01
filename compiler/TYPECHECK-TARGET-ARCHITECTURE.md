@@ -974,8 +974,8 @@ orders merges, and the plan does not pretend otherwise.
   (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
   `universeRecordByName`, `universeDataEnv`) — but #1070's own "precisely
   because those read sites only ever hold a bare head-tycon string" reasoning
-  is **wrong for at least two of the five**, not one, and both wrong ones
-  land outside `TCon`'s own identity space:
+  is **wrong for at least three of the five**, not one, and all three wrong
+  ones land outside `TCon`'s own identity space:
   - `universeIfaceParamKinds` is not read off a head tycon at all: its key
     is built by `ifaceSlotKey` from an interface name and a slot index
     (`typecheck.mdk:8504-8505`), and its one read site, `checkGradedImplTys`,
@@ -996,32 +996,50 @@ orders merges, and the plan does not pretend otherwise.
     pats`, `typecheck.mdk:4615/4685-4686`) — never a head tycon, and never
     `TCon` either. Constructor names are their own namespace, distinct from
     type names: `data Cfg = MkCfg { … }` collides on `MkCfg`, not `Cfg`.
+  - `universeRecordByName` is likewise not read off a head tycon in
+    general: `registerRecordInfoKeyed`'s own comment says "for a record
+    [key and type name] coincide, but a named-field data variant is keyed
+    by its constructor" (`typecheck.mdk:8332-8334`), and its sole call
+    site passes the **constructor** name as the key —
+    `registerRecordInfoKeyed cname tyName params fields`
+    (`typecheck.mdk:8614`, via `registerNamedFieldVariants`). Its read
+    sites are driven by a written constructor name too: `inferPatRec`
+    (`typecheck.mdk:4634`), `inferRecordCreate` (`typecheck.mdk:5528`),
+    `inferVariantUpdate` (`typecheck.mdk:5839`). The one shape where key
+    and type name coincide is the record short form (`data X = { … }`),
+    where the parser mints the variant's constructor as the type's own
+    name (`Variant tyName (ConNamed fields True)`, `parser.mdk:3029`) — so
+    `TCon` identity drains this row only for that shape, not in general.
 
   That correction **bounds what this fold actually buys**: `TCon` identity
-  is TYPE-name identity, so folding it into A-1 drains `universeAliasTable`,
-  `universeRecordByName`, and `universeDataParamKinds` — hence #1069 and
-  #1090 — but it does **not** address `universeIfaceParamKinds` (needs
-  interface-name identity, #1047's territory), does **not** address the
-  separate `methodIfaceParamsRef` collision (needs method-name identity,
-  #1092), and does **not** address `universeDataEnv` (needs
-  constructor-name identity — a third namespace again distinct from both;
-  #1070 itself names no standalone issue for this row beyond its own S1
-  writeup, so this gap is currently tracked only inside #1070). Folding
-  `TCon` re-typing into A-1 is necessary for A-2 to close **three of
-  #1070's five cited rows**, not all of it; the interface-name,
-  method-name, and constructor-name identity gaps are real and are
-  **not** resolved by this decision. Whether any of them land inside
-  A-1/A-2's scope or a later stage is itself part of what is owed to the
-  scoping pass below, not decided here.
+  is TYPE-name identity, so folding it into A-1 drains `universeAliasTable`
+  and `universeDataParamKinds` outright, plus `universeRecordByName` only
+  for the record short form (where its constructor-keyed entries coincide
+  with the type name) — hence #1069 and #1090 — but it does **not** address
+  `universeIfaceParamKinds` (needs interface-name identity, #1047's
+  territory), does **not** address the separate `methodIfaceParamsRef`
+  collision (needs method-name identity, #1092), and does **not** address
+  `universeDataEnv` or the non-short-form entries of `universeRecordByName`
+  (both need constructor-name identity — a third namespace again distinct
+  from both interface-name and method-name; #1070 itself names no
+  standalone issue for either row beyond its own S1 writeup, so this gap is
+  currently tracked only inside #1070). Folding `TCon` re-typing into A-1
+  is necessary for A-2 to close **two of #1070's five cited rows outright,
+  plus the record short form of a third**, not all of it; the
+  interface-name, method-name, and constructor-name identity gaps are real
+  and are **not** resolved by this decision. Whether any of them land
+  inside A-1/A-2's scope or a later stage is itself part of what is owed to
+  the scoping pass below, not decided here.
 
   Landing identity at the AST decl layer alone would still leave A-2
   re-keying tables whose read sites collapse to bare-`TCon` collisions on
-  the type-name rows, which is not a fix for those three. **This bullet
-  records the decision to fold `TCon` re-typing into A-1's scope, not a
-  mechanism or a PR staging** — a scoping pass on exactly that question is
-  running in parallel and has not concluded; the mechanism and how it splits
-  across A-1's PR series (and whether it also covers the interface-name /
-  method-name gaps) are owed to that pass.
+  the type-name rows, which is not a fix for those two (nor, beyond the
+  record short form, the third). **This bullet records the decision to
+  fold `TCon` re-typing into A-1's scope, not a mechanism or a PR
+  staging** — a scoping pass on exactly that question is running in
+  parallel and has not concluded; the mechanism and how it splits across
+  A-1's PR series (and whether it also covers the interface-name /
+  method-name / constructor-name gaps) are owed to that pass.
   *Collision surface: parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp,
   every golden family; the single biggest golden move of the arc.*
 - **A-2. Identity-keyed environments + registry ratchet.** Re-key the surviving
