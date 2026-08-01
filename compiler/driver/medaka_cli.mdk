@@ -450,18 +450,47 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) = match unknownModuleIdOf
 -- Dependency-first file order (helper before entry), same as the loader/JSON.
 locatedProjectErrors : String -> List String -> String -> String -> <IO> Option String
 locatedProjectErrors target roots rsrc csrc =
+  fst (locatedProjectDiags target roots rsrc csrc)
+
+-- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
+-- errors (as `locatedProjectErrors`) AND the rendered WARNINGS.
+--
+-- Why both, and why one pass.  `run`/`build`'s multi-module arms already call
+-- `locatedProjectErrors` as their check-strength gate and then THREW THE WARNINGS
+-- AWAY — so a warning-only project compiled and ran with nothing on any channel.
+-- That was harmless while the only warnings on the typecheck channel were
+-- non-exhaustive-match ones, and stopped being harmless the moment a diagnostic
+-- was DEMOTED onto it (F-3d's `W-INCOMPARABLE-IMPLS`): a formerly-loud reject that
+-- `run`/`build` both surfaced became a rendering gap on exactly those two verbs.
+-- Splitting the results here rather than adding a second `locatedProjectWarnings`
+-- entry point keeps it at one `analyzeProject` per invocation — that pass is the
+-- whole front end over the whole graph, and it is the dominant cost of the gate.
+--
+-- Each warning is rendered against ITS OWN file's source (`renderTripleWarnings`),
+-- never the entry's — the #414 hazard `globalCoherenceConflict` documents, where a
+-- foreign span renders a caret at that line/col in the wrong file.
+locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List String)
+locatedProjectDiags target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
   let results = analyzeProject cacheRef parseCacheRef (_ => None) target roots rsrc csrc
   let triples = map readDiagSrc results
-  let rendered = flatMap renderTripleErrors triples
-  match rendered
-    [] => None
-    _ => Some (joinNl rendered)
+  (
+    joinedOrNone (flatMap renderTripleErrors triples),
+    flatMap renderTripleWarnings triples,
+  )
+
+joinedOrNone : List String -> Option String
+joinedOrNone [] = None
+joinedOrNone ls = Some (joinNl ls)
 
 renderTripleErrors : (String, String, List Diag) -> List String
 renderTripleErrors (path, src, diags) =
   map (ppDiagCliSrc src path) (filter isDiagError diags)
+
+renderTripleWarnings : (String, String, List Diag) -> List String
+renderTripleWarnings (path, src, diags) =
+  map (ppDiagCliSrc src path) (filter isDiagWarn diags)
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
 -- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
@@ -748,6 +777,20 @@ emitLocatedWarnings : String -> String -> List Diag -> <IO> Unit
 emitLocatedWarnings _ _ [] = ()
 emitLocatedWarnings src file ws =
   ePutStrLn (joinNl (map (ppDiagCliSrc src file) ws))
+
+-- Emit warning lines that are ALREADY rendered.  `run`/`build`'s multi-module arms
+-- must render each warning against its OWN file (see `renderTripleWarnings`), which
+-- `emitLocatedWarnings` cannot do — it takes one src/file pair for the whole list.
+-- Pre-rendered `String` is therefore the common currency between the two arms.
+emitWarningLines : List String -> <IO> Unit
+emitWarningLines [] = ()
+emitWarningLines ls = ePutStrLn (joinNl ls)
+
+-- The rendered typecheck-stage WARNINGS of a SINGLE-file analysis, against that
+-- file's own source.  The single-module twin of `renderTripleWarnings`.
+renderDiagWarnings : String -> String -> List Diag -> List String
+renderDiagWarnings src file diags =
+  map (ppDiagCliSrc src file) (filter isDiagWarn diags)
 
 -- Mirrors lib/fmt.ml's single-file dispatch: default --write (in place),
 -- --stdout prints, --check reports.  A single literal-file target keeps the
@@ -1085,11 +1128,17 @@ runBuildCmd argv =
             TGErr msg =>
               let _ = ePutStrLn msg
               exit 1
-            TGOk => match runBuild root medaka cc target inputAbs outPath keepIrCli
-              BuildOk msg => println msg
-              BuildErr msg =>
-                let _ = ePutStrLn msg
-                exit 1
+            -- Warnings BEFORE the emitter runs, so they precede clang's own output
+            -- and any `built <in> -> <out>` line — the same order `check` uses and
+            -- the order a reader scanning a build log expects.  They never change
+            -- the exit code.
+            TGOk gateWarns =>
+              let _ = emitWarningLines gateWarns
+              match runBuild root medaka cc target inputAbs outPath keepIrCli
+                BuildOk msg => println msg
+                BuildErr msg =>
+                  let _ = ePutStrLn msg
+                  exit 1
 
 -- `medaka build --help` / `-h`: a subcommand-local usage, since the global
 -- `usage()` (only matched when --help/-h is argv[0]) never sees this — dispatch
@@ -1130,7 +1179,15 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 
 -- G1 typecheck gate result: clean / a diagnostic (resolve or type error, or a
 -- pre-typecheck read/load failure) whose message we surface verbatim.
-data TypecheckGate = TGOk | TGErr String
+-- ⚠️ `TGOk` CARRIES THE WARNINGS, and that is the whole reason it has a payload.
+-- `build`'s gate used to be a bare Bool-shaped verdict, so every warning the check
+-- it runs produced was computed and dropped — `medaka build` had NO warning surface
+-- at all, for any warning class.  That was invisible while the typecheck channel
+-- carried only non-exhaustive-match warnings (which `check` still showed); F-3d
+-- demoted a formerly-loud coherence reject onto the same channel, at which point a
+-- diagnostic `build` used to print became a silent accept.  The lines are rendered
+-- by the gate (which knows each module's own source) and emitted by the caller.
+data TypecheckGate = TGOk (List String) | TGErr String
 
 -- Load the entry + transitive imports and run the SAME front-end `medaka check`
 -- runs, reporting whether any error fired AND rendering it exactly as `check`
@@ -1208,7 +1265,7 @@ typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
   let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
   let errs = filter isDiagError diags
   match errs
-    [] => TGOk
+    [] => TGOk (renderDiagWarnings tsrc target diags)
     _ => TGErr (joinNl (map (ppDiagCliSrc tsrc target) errs))
 typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
@@ -1216,16 +1273,16 @@ typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
   let modsD = map desugarPair mods
   let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
   match resDiags
-    "" => match locatedProjectErrors target roots rsrc csrc
+    "" => match locatedProjectDiags target roots rsrc csrc
       -- CHECK-STRENGTH gate: the located per-module diagnostics, identical to what
       -- `medaka check` prints and to what `--json` reports.
-      Some errText => TGErr errText
-      None =>
+      (Some errText, _) => TGErr errText
+      (None, projWarns) =>
         let _ = resetTypeErrorsSticky ()
         let _ = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
           True => TGErr (locatedOrGeneric target roots rsrc csrc)
-          False => TGOk
+          False => TGOk projWarns
     _ => TGErr resDiags
 
 -- Parse `[-o <out>] [--target <native|wasm>]`; first remaining positional is the
@@ -1289,8 +1346,24 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- check-strength gate below (single-file: analyzeLocatedG; multi-module:
 -- resolve + hadTypeErrors), so a genuinely ill-typed program never reaches
 -- evalModulesOutput (G1 soundness invariant).
-finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> <IO> Unit
-finishRunEval target jsonMode elaborated mods =
+-- [tcWarns] are the TYPECHECK-stage warnings the caller's own gate already
+-- computed, ALREADY RENDERED against the file each belongs to.  ⚠️ They are a
+-- parameter rather than something recomputed here because the two call sites derive
+-- them differently (single-file: `analyzeLocatedG`'s diags; multi-module:
+-- `locatedProjectDiags`' per-module triples) and recomputing would mean a second
+-- whole-graph front-end pass.
+--
+-- 🚨 THIS PARAMETER EXISTS BECAUSE `run` WAS SILENT ON THEM.  `finishRunEval` has
+-- always called `emitLocatedWarnings`, but only over the main-shape warnings it
+-- builds locally — `checkRoute` passes `filter isDiagWarn diags` too, `run` never
+-- received them.  Harmless while the channel carried only non-exhaustive-match
+-- warnings; not harmless once F-3d DEMOTED a formerly-loud coherence reject onto
+-- it, because a diagnostic `run`/`build` used to surface became invisible there.
+-- The rendering gap is older than F-3d; routing a demoted error onto it is what
+-- turned the gap into a silent-wrongness path.
+finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> List String -> <IO> Unit
+finishRunEval target jsonMode elaborated mods tcWarns =
+  let _ = emitWarningLines tcWarns
   -- 0.1.0 main-shape warning: elaborateModules already ran over the WHOLE graph,
   -- so mainSchemeRef is already populated — no extra typecheck pass needed.
   let mainWarns = match lastModPair mods
@@ -1385,7 +1458,7 @@ runRunCmd argv =
                       [] =>
                         let _ = resetTypeErrorsSticky ()
                         let elaborated = elaborateModules rtD coreD modsD
-                        finishRunEval target jsonMode elaborated mods
+                        finishRunEval target jsonMode elaborated mods (renderDiagWarnings tsrc target diags)
                       _ =>
                         let _ = ePutStrLn (joinNl (map (ppDiagCliSrc tsrc target) errs))
                         exit 1
@@ -1405,11 +1478,14 @@ runRunCmd argv =
                     -- for why this is not an over-rejection.
                     let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
                     match resDiags
-                      "" => match locatedProjectErrors target roots rsrc csrc
-                        Some errText =>
+                      -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
+                      -- single `analyzeProject` pass, but keeping the WARNINGS the
+                      -- errors-only accessor discarded (see its own note).
+                      "" => match locatedProjectDiags target roots rsrc csrc
+                        (Some errText, _) =>
                           let _ = ePutStrLn errText
                           exit 1
-                        None =>
+                        (None, projWarns) =>
                           let _ = resetTypeErrorsSticky ()
                           let elaborated = elaborateModules rtD coreD modsD
                           match hadTypeErrors ()
@@ -1418,7 +1494,7 @@ runRunCmd argv =
                               -- elaboration can see still aborts before eval.
                               let _ = ePutStrLn (locatedOrGeneric target roots rsrc csrc)
                               exit 1
-                            False => finishRunEval target jsonMode elaborated mods
+                            False => finishRunEval target jsonMode elaborated mods projWarns
                       _ =>
                         let _ = ePutStrLn resDiags
                         exit 1

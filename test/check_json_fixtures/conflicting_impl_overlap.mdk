@@ -39,10 +39,14 @@ main = println (c (Pair 1 2))
 -- (severity 2, kind "warning", carrying a `help`), not `T-CONFLICTING-IMPL`.  The
 -- FIXTURE'S OWN SUBJECT IS UNCHANGED: #414 is about the RANGE, and this file still
 -- pins that the coherence finding spans the head tycon of the later-declared impl.
--- What moved is its code and severity.  That also improves the pairing F-3c
--- accepted as an ERROR-QUALITY dim X/R cost: the two diagnostics no longer read as
--- two same-severity errors with the same primary remedy printed out of source
--- order, but as one error plus one advisory note about the declarations.
+-- What moved is its code and severity.  That improves the pairing F-3c accepted as
+-- an ERROR-QUALITY dim X/R cost -- but ONLY ON THIS `--json` SURFACE, which is why
+-- the claim lives in this fixture: the two diagnostics no longer read as two
+-- same-severity errors with the same primary remedy printed out of source order, but
+-- as one error plus one advisory note.  ⚠️ A HUMAN `medaka check` on this file sees
+-- neither improvement nor the warning: the CLI's error arm prints only
+-- `filter isDiagError diags`, so warnings are dropped whenever any error fired.
+-- Pre-existing, not caused or repaired here.
 -- ⚠️ The program is still REJECTED (exit 1) -- by the goal-site error, at the
 -- CLOSED goal.  Its sibling with an OPEN goal now compiles; see
 -- test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk and #1183.

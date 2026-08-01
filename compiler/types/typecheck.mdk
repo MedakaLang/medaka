@@ -11006,6 +11006,34 @@ cohScanInner (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _)::rest) acc
 -- (cohSubsumes a b)`, so if neither direction is strict then `cohSubsumes` holds
 -- BOTH ways (mutual ⇒ HARD) or NEITHER way (incomparable ⇒ SOFT).
 -- Keep-first per class mirrors the old "first conflict wins" reporting.
+--
+-- ⚠️ WHY THE HARD ARM CANNOT SIMPLY MOVE TO THE GOAL SITE, stated because "then fix
+-- it there" is the obvious review question and the answer is not "we didn't try".
+-- The root is one level up from `entryCovers`: `entryCoversAllOthers` /
+-- `findMostSpecificEntry` test for a ⊑-MINIMUM, where §6 C1 requires **at most one
+-- ⊑-MINIMAL element**.  In a preorder that is not antisymmetric those two coincide
+-- everywhere EXCEPT at α-equal heads — precisely this arm's class.  (`entryCovers`
+-- itself is fine: with `S = tySubsumesV`, `tyHeadEqV a b || S b a` is exactly ⊑;
+-- it does not conflate ⊒ with =.)  Tightening `entryCoversAllOthers` to demand
+-- STRICT specificity was built and measured: it finds 6 true positives and then
+-- breaks `stdlib/core.mdk`, which stops typechecking with "the goal `Num Int`
+-- matches `impl Num Int` and `impl Num Int`" — checking core as a user program
+-- registers the same instance twice, and deduping needs INSTANCE IDENTITY this tree
+-- does not have (`bucketKeyEntriesFrom` restarts its numbering at 0 per module, so
+-- two distinct impls in different modules share an index).  That is L2 / A-3 / B-2
+-- work.  Until it exists, the declaration site is the only place this class is
+-- caught at all.
+--
+-- 🚨 CARRY-FORWARD FOR A-3 (#1112), and it is a NARROWING nobody currently owns.
+-- `checkCoherence`'s input is USER DECLS ONLY, so the HARD arm's reach is
+-- user-vs-user: a user `impl Eq Int` shadowing the PRELUDE's is α-equal and is NOT
+-- rejected today (`test/lint_fixtures/derivable_needs_datadecl.mdk` checks clean at
+-- exit 0 — #1162's equal-head second symptom, which F-3d neither fixes nor worsens).
+-- When A-3 widens coherence's input to the global `IE`, this arm will start
+-- rejecting every such program, INCLUDING that in-tree fixture.  §5 R2 does not
+-- license a narrowing, and G-11's disposition is written about (a)-violations and
+-- does not cover a C1 hard arm.  Revisit this arm as part of that widening rather
+-- than discovering it from a red gate.
 cohClassify : CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
 cohClassify e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
@@ -11054,8 +11082,15 @@ cohWhereSuffix mid1 mid2
 -- crammed into the message.  Both remedies are real and the FIRST one is the spec's
 -- (§6.1's separating case): a third impl at the pair's common instance is ⊑ both, so
 -- every goal matching both has a unique ⊑-minimum again.
+-- ⚠️ The second clause is CONDITIONED on closedness, and that is not pedantry: the
+-- first draft read "without one, a goal that matches both is rejected as ambiguous",
+-- which is FALSE on exactly the shape this warning newly permits.  At a goal still
+-- carrying an undetermined type the goal-site reject is gated off (§6.2 T3/T4) and
+-- the selector COMMITS to the first-declared impl — `s6-2-t4-open-goal-deferred.mdk`
+-- matches both and prints `1` at exit 0.  A reader told "is rejected" draws exactly
+-- the wrong inference about the program in front of them.
 cohIncomparableHelp : String
-cohIncomparableHelp = "add an impl at the two heads' common instance so it is more specific than both, or make the two heads disjoint; without one, a goal that matches both is rejected as ambiguous"
+cohIncomparableHelp = "add an impl at the two heads' common instance so it is more specific than both, or make the two heads disjoint; without one, a goal matching both is rejected as ambiguous once its type is fully determined, and until then silently takes the first-declared impl (see issue 1183)"
 
 -- cross-module conflict wording: names the interface and BOTH owning modules.
 cohCrossModuleMsg : String -> String -> String -> String
@@ -12100,11 +12135,15 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 -- here predicted it wrongly: it said F-3d "deletes (a)", so un-suppression would be
 -- forced.  (a) was DEMOTED, not deleted — the companion diagnostic on both fixtures is
 -- now a `W-INCOMPARABLE-IMPLS` WARNING, not `T-CONFLICTING-IMPL`.  The
--- non-suppression argument is unchanged and the pairing got strictly better: the two
--- diagnostics now differ in SEVERITY, so a reader sees one error plus one advisory
--- note about the declarations rather than two same-severity errors with the same
--- primary remedy printed out of source order (the ERROR-QUALITY dim X/R cost F-3c
--- accepted knowingly).
+-- non-suppression argument is unchanged, and the pairing improves ON THE `--json`
+-- SURFACE ONLY: the two diagnostics now differ in SEVERITY, so a machine consumer
+-- sees one error plus one advisory note about the declarations rather than two
+-- same-severity errors with the same primary remedy printed out of source order (the
+-- ERROR-QUALITY dim X/R cost F-3c accepted knowingly).  ⚠️ A HUMAN `medaka check` user
+-- sees NO improvement, because they never saw the second diagnostic at all: the CLI's
+-- error arm prints `filter isDiagError diags` and returns, so on any file with an
+-- error the warnings are dropped — a pre-existing suppression this change neither
+-- causes nor repairs.  Do not restate the improvement as general.
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportAmbiguousOverlap goals cands
   | not (goalsClosed goals) = ()
