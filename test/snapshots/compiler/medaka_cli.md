@@ -1,5 +1,5 @@
 # META
-source_lines=2555
+source_lines=2595
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -480,6 +480,14 @@ locatedProjectErrors target roots rsrc csrc =
 -- Warnings are grouped by THEIR OWN file, never the entry's — the #414 hazard
 -- `globalCoherenceConflict` documents, where a foreign span renders a caret at that
 -- line/col in the wrong file.
+--
+-- ⚠️ ONE TRIPLE PER FILE, EMPTIES INCLUDED, in dependency-first order (helper before
+-- entry) — do NOT filter the empties out here.  `checkRoute` identifies the ENTRY's
+-- triple POSITIONALLY, as the last one (`dropEntryTriple`), because the paths
+-- `analyzeProject` reports are loader-normalised (`./main.mdk`) and will not compare
+-- equal to the CLI's own `target` argument.  Pre-filtering would make "last" mean
+-- "the last module that happens to warn", so a clean entry would silently cost an
+-- imported module its warning.  Emptiness is filtered at the emit sites instead.
 locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag))
 locatedProjectDiags target roots rsrc csrc =
   let cacheRef = Ref []
@@ -488,7 +496,7 @@ locatedProjectDiags target roots rsrc csrc =
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
-    nonEmptyTriples (map cohWarnsOfTriple triples),
+    map cohWarnsOfTriple triples,
   )
 
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
@@ -588,12 +596,19 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
       -- mirrors — instead of runCheckModules's loc-free `TYPE ERROR: …` (which
       -- also dropped every imported-module error's location).  Clean ⇒ the schemes
       -- dump + main-shape warnings, unchanged.
-      match locatedProjectErrors target roots rsrc csrc
-        Some errText =>
+      -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
+      -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
+      match locatedProjectDiags target roots rsrc csrc
+        (Some errText, _) =>
           let _ = putStr errText
           exit 1
-        None =>
+        (None, projWarns) =>
           let _ = putStrLn (runCheckModules allowInternal trusted rtD coreD modsD)
+          -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
+          -- module's own file.  The line above reaches the ENTRY's diagnostics only,
+          -- which is why `dropEntryTriple` (not the whole list) is right here — see
+          -- its note for the four graph positions this was silent in.
+          let _ = emitWarningLines (flatMap renderTripleWarnings (dropEntryTriple projWarns))
           -- 0.1.0 main-shape warning (see below): runCheckModules/
           -- checkModulesHasErrors never call elaborateModules, so mainSchemeRef
           -- is never populated on this route either — mainShapeWarnings runs
@@ -852,6 +867,31 @@ cohWarnTriples src file diags = match filter isCoherenceWarn diags
 -- entry for a file that had nothing to say.
 nonEmptyTriples : List (String, String, List Diag) -> List (String, String, List Diag)
 nonEmptyTriples ts = filter tripleHasDiags ts
+
+-- Every module's coherence warnings EXCEPT the entry module's.
+--
+-- 🚨 WHY `check` NEEDS THIS AND `run`/`build` DO NOT.  `checkRoute`'s multi-module arm
+-- already surfaces the ENTRY's coherence warning — `runCheckModules` bundles it
+-- loc-free into the scheme dump it prints to stdout, and `globalCoherenceConflict`'s
+-- cross-module finding is attached to the entry module too — so re-emitting the whole
+-- list here would double-print exactly the shapes that already work.  What that stdout
+-- path CANNOT reach is an IMPORTED module's own ⊑-incomparable pair: `runCheckModules`
+-- reports the entry's diagnostics, not every module's.  Result, measured across the
+-- seven positions a pair can occupy in a module graph: `check` reported the pair for
+-- the entry (1) and the split-across-two-modules case (1) and **NOTHING AT ALL** when
+-- the pair sat in a directly-imported, transitively-imported, bare-imported or
+-- diamond-imported module — 0 occurrences on either channel, while `check --json`,
+-- `run` and `build` all correctly reported 1.  That is the same loud→silent transition
+-- F-3d exists to prevent, relocated from the VERB to the module POSITION.
+--
+-- ⚠️ POSITIONAL, and it must be: the entry is LAST in `locatedProjectDiags`' order
+-- (dependency-first, helper before entry — that function's own contract), while the
+-- PATHS it reports are loader-normalised (`./main.mdk`) and do not compare equal to
+-- the CLI's `target`.  See that function for why the list must reach here UNFILTERED.
+dropEntryTriple : List (String, String, List Diag) -> List (String, String, List Diag)
+dropEntryTriple [] = []
+dropEntryTriple [_] = []
+dropEntryTriple (t::rest) = t :: dropEntryTriple rest
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
@@ -2612,7 +2652,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "locatedProjectErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "locatedProjectErrors" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))))
 (DTypeSig false "locatedProjectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
-(DFunDef false "locatedProjectDiags" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EVar "nonEmptyTriples") (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples")))))))
+(DFunDef false "locatedProjectDiags" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EVar "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EVar "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))))
 (DTypeSig false "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
 (DTypeSig false "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2626,7 +2666,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "locatedOrGeneric" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ". Run `medaka check` for details"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
 (DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc"))) (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "warns") (EApp (EApp (EVar "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoLet false false (PVar "dump") (EApp (EVar "stripWarningLines") (EApp (EApp (EApp (EVar "runCheck") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoLet false false (PVar "report") (EIf (EVar "typesMode") (EVar "dump") (EApp (EApp (EVar "userSchemeLines") (EVar "decls")) (EVar "dump")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "report"))) (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (EListLit (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "decls"))))) (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EBinOp "++" (EVar "warns") (EVar "mainWarns")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target"))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
-(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToHumaneByPath") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
+(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToHumaneByPath") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EVar "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "dropEntryTriple") (EVar "projWarns"))))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
 (DTypeSig false "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -2698,6 +2738,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "cohWarnTriples" ((PVar "src") (PVar "file") (PVar "diags")) (EMatch (EApp (EApp (EVar "filter") (EVar "isCoherenceWarn")) (EVar "diags")) (arm (PList) () (EListLit)) (arm (PVar "ws") () (EListLit (ETuple (EVar "file") (EVar "src") (EVar "ws"))))))
 (DTypeSig false "nonEmptyTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "nonEmptyTriples" ((PVar "ts")) (EApp (EApp (EVar "filter") (EVar "tripleHasDiags")) (EVar "ts")))
+(DTypeSig false "dropEntryTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "dropEntryTriple" ((PList)) (EListLit))
+(DFunDef false "dropEntryTriple" ((PList PWild)) (EListLit))
+(DFunDef false "dropEntryTriple" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dropEntryTriple") (EVar "rest"))))
 (DTypeSig false "tripleHasDiags" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "tripleHasDiags" ((PTuple PWild PWild (PList))) (EVar "False"))
 (DFunDef false "tripleHasDiags" (PWild) (EVar "True"))
@@ -2983,7 +3027,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "locatedProjectErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "locatedProjectErrors" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))))
 (DTypeSig false "locatedProjectDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
-(DFunDef false "locatedProjectDiags" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EVar "nonEmptyTriples") (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples")))))))
+(DFunDef false "locatedProjectDiags" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EBlock (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoExpr (ETuple (EApp (EVar "joinedOrNone") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleErrors")) (EVar "triples"))) (EApp (EApp (EMethodRef "map") (EVar "cohWarnsOfTriple")) (EVar "triples"))))))
 (DTypeSig false "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
 (DTypeSig false "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2997,7 +3041,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "locatedOrGeneric" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ". Run `medaka check` for details"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
 (DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") PWild PWild (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc"))) (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "warns") (EApp (EApp (EMethodRef "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoLet false false (PVar "dump") (EApp (EVar "stripWarningLines") (EApp (EApp (EApp (EVar "runCheck") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")))) (DoLet false false (PVar "report") (EIf (EVar "typesMode") (EVar "dump") (EApp (EApp (EVar "userSchemeLines") (EVar "decls")) (EVar "dump")))) (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "report"))) (DoLet false false (PVar "mainWarns") (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (EListLit (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "decls"))))) (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EBinOp "++" (EVar "warns") (EVar "mainWarns")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target"))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
-(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToHumaneByPath") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
+(DFunDef false "checkRoute" ((PVar "typesMode") (PVar "allowInternal") (PVar "trusted") (PVar "pathMap") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "target") (PVar "mods")) (EBlock (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoLet false false (PVar "resDiags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesToHumaneByPath") (EVar "pathMap")) (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EVar "locatedProjectDiags") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PTuple (PCon "Some" (PVar "errText")) PWild) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "errText"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PTuple (PCon "None") (PVar "projWarns")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EApp (EApp (EApp (EApp (EVar "runCheckModules") (EVar "allowInternal")) (EVar "trusted")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoLet false false PWild (EApp (EVar "emitWarningLines") (EApp (EApp (EDictApp "flatMap") (EVar "renderTripleWarnings")) (EApp (EVar "dropEntryTriple") (EVar "projWarns"))))) (DoLet false false (PVar "mainWarns") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "emid") (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "edecls"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EApp (EVar "emitLocatedWarnings") (EVar "tsrc")) (EVar "target")) (EVar "mainWarns"))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
 (DTypeSig false "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -3069,6 +3113,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "cohWarnTriples" ((PVar "src") (PVar "file") (PVar "diags")) (EMatch (EApp (EApp (EMethodRef "filter") (EVar "isCoherenceWarn")) (EVar "diags")) (arm (PList) () (EListLit)) (arm (PVar "ws") () (EListLit (ETuple (EVar "file") (EVar "src") (EVar "ws"))))))
 (DTypeSig false "nonEmptyTriples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "nonEmptyTriples" ((PVar "ts")) (EApp (EApp (EMethodRef "filter") (EVar "tripleHasDiags")) (EVar "ts")))
+(DTypeSig false "dropEntryTriple" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
+(DFunDef false "dropEntryTriple" ((PList)) (EListLit))
+(DFunDef false "dropEntryTriple" ((PList PWild)) (EListLit))
+(DFunDef false "dropEntryTriple" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dropEntryTriple") (EVar "rest"))))
 (DTypeSig false "tripleHasDiags" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "tripleHasDiags" ((PTuple PWild PWild (PList))) (EVar "False"))
 (DFunDef false "tripleHasDiags" (PWild) (EVar "True"))
