@@ -803,6 +803,7 @@ isSubTop : Param -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
 isUnboundTvar : Mono -> Bool
+joinAnd : List String -> String
 joinAxis : List (String, Param) -> List (String, Param) -> String -> (String, Param)
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepGroupNames : Map String Unit -> List String -> List String
@@ -949,6 +950,7 @@ noImplAdvice : String -> String -> String
 noImplFoundMsg : String -> List Mono -> String
 noImplFoundMsgHinted : String -> List Mono -> (String, Option String)
 noImplHint : String -> List Mono -> Option String
+noMinimumClause : Int -> String
 nonExhaustiveMatchWarning : String
 nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
 nonGuardedRows : List Arm -> List (List Pat)
