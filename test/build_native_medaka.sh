@@ -55,6 +55,15 @@ FORCE_EMITTER_REBUILD="${FORCE_EMITTER_REBUILD:-0}"
 
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping (opt-in)"; exit 2; }
 
+# Best-effort sweep of orphaned per-PID staging files (issue #1141): each of
+# $EMITTER/$OUT/$SRC_STAMP is built under a PID-suffixed name beside the final path
+# and promoted with an atomic `mv`, so a build killed mid-compile (SIGTERM/SIGKILL —
+# neither trappable the way EXIT is) can leave a `*.new.<pid>` behind. These never
+# collide with a live build (the PID makes each name unique) and are NOT a lock —
+# there is nothing here for a killed agent to get permanently stuck behind — so this
+# is pure hygiene, not correctness; failures are silently ignored (`|| true`).
+find "$ROOT" -maxdepth 1 \( -name 'medaka.new.*' -o -name 'medaka_emitter.new.*' -o -name '.medaka_emitter.srcstamp.new.*' \) -mtime +1 -delete 2>/dev/null || true
+
 # ---- COLD START: no native emitter yet -> bootstrap emitter_v0 from the seed ----
 # Tolerant: a lagging committed seed must NOT abort the build (it builds a working
 # emitter_v0 from the current-source re-emission, which then compiles current source).
@@ -228,12 +237,21 @@ else
   fi
   trim_unit "$EMIT_LL"
   [ -s "$EMIT_LL" ] || { echo "FAIL: empty IR for the emitter graph"; cat "$WORK/emitA.err"; exit 1; }
-  EMIT_NEW="$WORK/medaka_emitter.new"
+  # Staged NEXT TO the final target ($EMITTER's own directory), not under $WORK:
+  # $WORK comes from mktemp -d, which (absent a same-filesystem TMPDIR) can land on
+  # a different device than $ROOT (e.g. tmpfs /tmp vs the repo's real filesystem) —
+  # a cross-device `mv` is NOT atomic (rename(2) EXDEV forces a copy). Staging
+  # beside $EMITTER guarantees the final `mv` is a same-filesystem rename, so a
+  # concurrent `make medaka` in this worktree (issue #1141) can race for LAST
+  # WRITE but never observes a partially-written binary at the final path.
+  EMIT_NEW="$EMITTER.new.$$"
+  rm -f "$EMIT_NEW"
   # Build the emitter — the compiler's WORKHORSE binary — at -O2. It is reused for
   # every emit downstream (oracle build's 53 entries, every `medaka build`, make
   # medaka's own stage B), so clang -O2 (~+3s once vs -O0) buys ~30% faster emit
   # each time (self-compile 5.4s→3.7s; oracle build 55s→48s). EMITTER_OPT overrides.
   if ! "$CC" -pthread "${EMITTER_OPT:--O2}" $GC_SECTION_CFLAGS $GC_CFLAGS "$EMIT_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$EMIT_NEW" 2>"$WORK/emitA-cc.err"; then
+    rm -f "$EMIT_NEW"
     echo "FAIL (clang fresh emitter): $(cat "$WORK/emitA-cc.err")"; exit 1
   fi
   mv "$EMIT_NEW" "$EMITTER"
@@ -269,16 +287,30 @@ echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
 # compiler-only.  FP_FULL (which folds in runtime/*.c for the emitter-rebuild trigger,
 # issue #182) is written to .medaka_emitter.srcstamp below, a DIFFERENT consumer.
 # Empty on paths that never set it (returns "" → the check silently skips).
-if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT" 2>"$WORK/cc.err"; then
+# $OUT.new.$$ is staged NEXT TO $OUT (never under $WORK — see the stage-A EMIT_NEW
+# comment above for why: cross-device mv is not atomic) so two concurrent `make
+# medaka` invocations in this worktree (issue #1141) each build a private, complete
+# binary and only the final `mv` (a same-filesystem rename, atomic) touches the
+# shared path — neither process can ever observe (or leave behind) a
+# partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
+OUT_NEW="$OUT.new.$$"
+rm -f "$OUT_NEW"
+if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+  rm -f "$OUT_NEW"
   echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
 fi
+mv "$OUT_NEW" "$OUT"
 
 # Record WHICH SOURCE this emitter was built from — FP_FULL (compiler + runtime), so
 # a later medaka_rt.c change re-triggers stage A (issue #182). Correct on every path
 # that got here: stage A rebuilt it, or its stamp already matched, or emit_graph's
 # reseed rebuilt it from the current-source re-emission. Written last, so a failed
 # build never leaves a stamp claiming a provenance the binary does not have.
-printf '%s\n' "$FP_FULL" > "$SRC_STAMP"
+# Staged + renamed the same way as $EMITTER/$OUT above: two concurrent builds must
+# not be able to interleave partial writes into $SRC_STAMP either.
+STAMP_NEW="$SRC_STAMP.new.$$"
+printf '%s\n' "$FP_FULL" > "$STAMP_NEW"
+mv "$STAMP_NEW" "$SRC_STAMP"
 
 echo
 echo "BUILT $OUT — native, OCaml-free."
