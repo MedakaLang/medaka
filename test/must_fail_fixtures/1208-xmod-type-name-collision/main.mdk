@@ -1,0 +1,9 @@
+-- issue #1208: main.mdk never imports pa.T -- it declares its OWN `data T`, with a
+-- DIFFERENT constructor name (MkB, not MkA) so the already-fixed R-AMBIGUOUS-CTOR
+-- path (#674/#732, constructor-name collision) does not fire and mask this defect.
+-- `f` expects pa.T; `mkT` is main's own T. check should reject this -- it does not.
+import pa.{f}
+public export data T = MkB String
+mkT : T
+mkT = MkB "wrong"
+main = println (f mkT)

@@ -1,0 +1,16 @@
+-- CONTROL: main.mdk with the local colliding `data Box` REMOVED, and `impl Wrap Int`
+-- genuinely returning amod's Box via amod's own constructor -- the one variable this
+-- isolates. The issue's own control (rename the local type only, Box -> Boxx,
+-- otherwise unchanged) lands on the "correctly rejects" cell -- exit 1, `Type
+-- mismatch: Box vs Boxx` -- which this harness cannot express as a green control
+-- (`control:` always requires exit 0; same constraint documented in
+-- test/must_fail_fixtures/1092-methodifaceparamsref-bare-name-collision/claim.txt).
+-- So this control instead removes the collision outright and exercises the SAME call
+-- shape (`unBoxA (wrap 7)`) honestly. It must stay green and print 7. If it breaks,
+-- interface dispatch / cross-module type resolution broke, not #1209.
+import amod.{Wrap(..), wrap, unBoxA, Box, MkBoxA}
+
+export impl Wrap Int where
+  wrap n = MkBoxA n
+
+main = println (unBoxA (wrap 7))

@@ -1,0 +1,7 @@
+-- issue #1209: amod's own `Box`, one constructor `MkBoxA`. Wrap.wrap's declared
+-- return type is amod's Box.
+public export data Box = MkBoxA Int
+export interface Wrap a where
+  wrap : a -> Box
+export unBoxA : Box -> Int
+unBoxA (MkBoxA n) = n
