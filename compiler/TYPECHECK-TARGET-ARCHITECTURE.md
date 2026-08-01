@@ -62,9 +62,15 @@ repo-wide (#1070), and for five of them per-table re-keying is *impossible*
 because the collapse already happened upstream in the `Mono` representation.
 The law therefore lands at the substrate: `TCon`/interface/method references
 carry identity, so a bare-name table becomes unwritable, not just inadvisable.
-(How identity is *represented* — interned ids vs encoded keys — is a real,
-perf-sensitive decision owned by task A-1a in §6; the law is about where identity
-is *acquired*, not its encoding.)
+(How identity is *represented* — interned ids vs encoded keys — is a real
+decision owned by task A-1 in §6, decided in writing rather than by
+measurement (A-1a, filed for that measurement, is withdrawn — see §6). It
+is driven primarily by **source safety** (an encoded qualified spelling
+written back into `TCon` risks `medaka fmt` corrupting source, §2) and by
+**this law's own enforceability** (whether a representation's *type*
+actually forbids a bare-spelling key, or merely discourages one, §2) —
+performance is a distant third factor, not the primary one. The law here
+is about where identity is *acquired*, not its encoding.)
 
 **L3 — Order is either specified or irrelevant.** Wherever the spec makes a
 result order-free (instance selection: *"never of search order, declaration
@@ -570,15 +576,49 @@ reset bundle are unchanged (settled).
   the emit side is covered via `private_mangle` rendering). A bare-`String`
   key fails the check — the ratchet that prevents "registry #16 next month",
   which lint cannot see (a dataflow property, per #1070's own analysis).
-- **Identity representation is a named decision, not an afterthought (A-1a).**
+- **Identity representation is a named decision, not an afterthought.**
   No interning mechanism exists in the tree today, and every hot map is
-  `Map String` (`OrdMap a = Map String a`; `TcEnv`); a composite identity key
-  means dict-passed comparisons in the hottest lookups — the measured +56%
-  hazard. The two candidate representations (a global intern table yielding
-  monomorphic int-keyed maps — itself a registry that must obey the ratchet —
-  vs `String`-encoded qualified keys, workable but weakening L2's
-  "unwritable" to "inadvisable") get decided by measurement in A-1a before
-  A-1 lands at scale.
+  `Map String` (`OrdMap a = Map String a`; `TcEnv`) — but the lookups on that
+  map are **already dict-passed today**: `stdlib/map.mdk`'s
+  `get : Ord k => k -> Map k v -> Option v` is constrained on `Ord k`, and
+  `compiler/support/ordmap.mdk`'s `omLookup` is a monomorphic wrapper over
+  that same constrained `get`, with no specialization pass in between. A
+  composite (module, name) key does not newly introduce a dict-passed
+  comparison — it is already there. The measured **+56% self-compile figure
+  was a different mechanism**: routing hot monomorphic helpers
+  (`elem`/`any`/`all`/`length`) through prelude `Foldable` folds instead,
+  which loses `||`/`&&` short-circuiting (`.claude/workstreams/PERF.md`).
+  Comparison cost is a **distant third** consideration; the two that
+  actually discriminate between candidates are, in priority order:
+
+  1. **Source safety.** `compiler/tools/printer.mdk` renders a `TCon`
+     verbatim: `printType (TyCon n _) = text (tyConSurface n)`, and
+     `tyConSurface`'s own comment records the exact failure class this can
+     produce — it exists *because* `TyCon "__tupleN__"` once round-tripped
+     through `medaka fmt` as a raw internal spelling that re-parsed as a type
+     *variable* and corrupted the impl head. If `TCon`'s payload becomes a
+     directly-qualified spelling (e.g. `"amod.T"`), `medaka fmt` writes that
+     spelling into the user's source verbatim — and a qualified name in type
+     position is a parse error, so the file becomes unparseable on the next
+     read. That is source destruction, this project's worst severity class,
+     from the printer alone; it disqualifies encoding a qualified spelling
+     directly into `TCon`'s `String` regardless of anything else.
+  2. **L2 enforceability.** A representation earns L2's "unwritable" (not
+     merely "inadvisable") only if its *type* forbids constructing a key
+     from a bare spelling — an intern table yielding an opaque id does
+     this; a `String` does not, whether it is one qualified string or a
+     `(String, String)` pair (see the third candidate, §6 A-1a) — nothing
+     stops a future call site from building either shape by hand from a
+     bare name, which is exactly the "inadvisable, not unwritable"
+     weakening L2 warns about.
+  3. **Allocation.** The real, in-tree-documented hazard for a *built* key
+     is allocation on the GC-bound `check` stage, not comparison cost:
+     `compiler/support/util.mdk`'s discussion of a built vs. reused key
+     measures ~9x more bytes at n=3 and ~15x at n=400, with no crossover in
+     that range, and invisible to both CI perf arms.
+
+  Identity representation is still a named decision (§6 A-1, decided in
+  writing — see below) — it is just weighed on the right axes.
 - **Fused lockstep tables (#994).** Slot-parallel pairs
   (`funConstraints`+`Ifaces`, `methodConstraints`+`Positions`, the bare/Qual
   mirror pairs — the latter dissolve entirely under L2) become single
@@ -763,9 +803,10 @@ once) is the architecture, the file boundary is not.
 task is a mergeable PR series with `main` green throughout. ⊕ marks tasks
 *already filed* and adopted (re-scoped where noted) rather than duplicated;
 tasks filed by this arc carry their numbers inline (S-2 #1107 · S-3 #1108 ·
-A-1a #1109 · A-1 #1110 · A-2 #1111 · A-3 #1112 · B-2 #1113 · B-3-ext #1114 ·
-E-1 #1115 · E-2 #1116 · E-4 #1117 · D-1 #1118 · D-2 #1119 · F-2 #1120; the
-review-found contravariant-row S0 is #1121). Verification bars per task follow §7's doctrine; compiler-source
+A-1a #1109 WITHDRAWN, folded into A-1 · A-1 #1110 · A-2 #1111 · A-3 #1112 ·
+B-2 #1113 · B-3-ext #1114 · E-1 #1115 · E-2 #1116 · E-4 #1117 · D-1 #1118 ·
+D-2 #1119 · F-2 #1120; the review-found contravariant-row S0 is #1121).
+Verification bars per task follow §7's doctrine; compiler-source
 tasks all carry the standing bar (snapshot + selfproc-legA blessing, fixpoint
 C3a/C3b, `typecheck_compiler_source`).
 
@@ -854,11 +895,69 @@ orders merges, and the plan does not pretend otherwise.
 
 **Stage A — Identity substrate (family A) — the widest-blast, highest-value stage**
 
-- **A-1a. Identity representation decision.** Measure intern-table-plus-
-  monomorphic-int-keys vs `String`-encoded qualified keys on the self-compile
-  (interleaved A/B, wall-clock — the alloc gate is blind to constant factors).
-  The intern table, if chosen, obeys the registry ratchet itself. Small,
-  decision-producing, blocks A-1 at scale.
+- **A-1a. WITHDRAWN — #1109 closed by this change.** The task as filed
+  proposed deciding the identity-representation question ("intern table" vs
+  `String`-encoded qualified keys) by an interleaved-A/B wall-clock
+  measurement on the self-compile. A read-only scoping pass found the
+  measurement rests on a factual error, independently re-verified: the
+  premise that a composite key newly introduces dict-passed comparison in
+  the hottest lookups is false — `stdlib/map.mdk`'s `get` is already
+  constrained on `Ord k`, and `compiler/support/ordmap.mdk`'s `omLookup` is
+  a monomorphic wrapper over that same constrained `get` with no
+  specialization pass in between (see the corrected §2 bullet above). Two
+  more facts sink the measurement rather than merely delaying it: its
+  harness (`test/bench.sh`) is macOS-only and exits 2 without measuring
+  anything on this project's Linux dev box (#1187), and the workload is far
+  too small for a constant-factor comparison-cost effect to clear noise
+  inside a GC-bound stage even where the harness runs. **A probe whose two
+  arms cannot differ in the dimension it claims to measure reads exactly
+  like a real measurement** — that is why this is a withdrawal, not a
+  re-schedule.
+
+  The representation is instead **decided in writing, inside A-1**, on L2
+  (identity resolved once, never re-derived from spelling) grounds, plus
+  registry-ratchet enforceability (§2's "Registry discipline" bullet),
+  rather than by measurement. (L4 — evidence uniformity at every binder,
+  the local-`let`/`where` dict-abstraction gap, #1082's bug class — is a
+  real law in this document but not a relevant one here: it is about
+  *whether* a binder abstracts a dictionary parameter, not about how an
+  identity key is represented, so it is dropped from this decision's
+  grounds rather than stretched to cover it.) A-1's own PR answers the
+  standing five questions in `.claude/workstreams/TYPECHECK.md` as part of
+  making that decision, weighing the §2 bullet's three considerations —
+  source safety, then L2 enforceability, then allocation — in that order.
+
+  The tree already ships a **third candidate this document did not list**:
+  `compiler/types/typecheck.mdk`'s cross-module qualified tables
+  (`crossModuleFunConstraintsQualRef` and siblings) are keyed by
+  `(String, String)` — module and name — and read by `lookupQualArity`, a
+  hand-written monomorphic comparator with no dict at all. This is exactly
+  the `(module, name)` keying #1070's own remedy prescribes, and it is
+  already load-bearing in-tree. Its one caveat: a **tuple** key does pick up
+  a nested dict-passed comparison via `stdlib/core.mdk`'s
+  `impl Ord (a, b) requires Ord a, Ord b` — the one place the withdrawn
+  bullet's "composite key means dict-passed comparisons" claim was true, and
+  it is true of the candidate the doc never named, not of either candidate
+  it did. **It does not restore L2's `"unwritable"` guarantee either** — a
+  `(String, String)` pair is exactly as forgeable by hand as one encoded
+  `String`; the type system stops neither. What it does avoid, *as
+  currently shipped*, is the §2 printer/source-safety disqualifier: those
+  tuples key cross-module constraint TABLES, not `TCon`'s own payload, so
+  they are never rendered by `printType`. That distinction would not survive
+  reusing the same string-pair encoding to represent `TCon` identity itself
+  — an open question this bullet deliberately does not resolve (see A-1's
+  TCon-fold note below).
+
+  The interleaved wall-clock A/B is **retained as the intended landing bar**
+  on A-1 and A-2 (§7/§8 already assign this bar to those stages; see below)
+  — but it is **currently blocked on a working instrument**: the only
+  harness for it, `test/bench.sh`, is the same one this withdrawal already
+  established does not run on this project's Linux dev box (#1187). A bar
+  whose instrument does not run is not a bar yet; A-1/A-2 cannot claim to
+  have cleared it until #1187 lands a working harness, and any future use of
+  it here must additionally carry a stated positive control and a stated
+  minimum detectable effect, per the general rule that an A/B whose arms
+  cannot disagree is not evidence.
 - **A-1. Resolve-acquired qualified identity.** *Creating* resolve-phase
   namespace resolution (not extending — resolve only existence-checks type
   names today) and relocating identity minting out of mid-typecheck
@@ -868,6 +967,61 @@ orders merges, and the plan does not pretend otherwise.
   byte-identical; use-site ambiguity diagnostics (R-series codes). The
   selfproc-legA "additive-only" recapture rule is explicitly waived per-PR
   with justification where existing bindings' rendered schemes change.
+  **Folded in from the withdrawn A-1a: identity must reach `Mono`/`TCon`,
+  not stop at the AST decl layer.** `compiler/types/typecheck.mdk`'s `Mono`
+  declares a bare `TCon String` arm, and #1070's own remedy states a shared
+  `(module, name)` keying helper is insufficient for five of its seven rows
+  (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
+  `universeRecordByName`, `universeDataEnv`) — but #1070's own "precisely
+  because those read sites only ever hold a bare head-tycon string" reasoning
+  is **wrong for at least two of the five**, not one, and both wrong ones
+  land outside `TCon`'s own identity space:
+  - `universeIfaceParamKinds` is not read off a head tycon at all: its key
+    is built by `ifaceSlotKey` from an interface name and a slot index
+    (`typecheck.mdk:8504-8505`), and its one read site, `checkGradedImplTys`,
+    is called as `checkGradedImplTys iface 0 tys` from
+    `checkGradedImplHeadDecl (DImpl { iface, tys, ... })`
+    (`typecheck.mdk:1332-1333`) — an **interface name** off a `DImpl`, not a
+    `TCon`. The code's own neighboring comment already says so: re-keying it
+    properly "would need a resolved module identity, and typecheck.mdk
+    carries none for an interface... That is #1047's territory, upstream of
+    #822" (`typecheck.mdk:1354-1356`).
+  - `universeDataEnv` is a `Ref TcEnv` (`typecheck.mdk:2549`), and `TcEnv`'s
+    own comment names its second field `ctors` (`typecheck.mdk:4558`):
+    `addVariants` inserts every constructor via `addCtor env cname (...)`
+    keyed on `cname`, the **variant's own constructor name**
+    (`typecheck.mdk:8634-8636`, `4592-4593`), and its one read site,
+    `inferPatCon`, is driven straight off a match pattern's written
+    constructor name (`inferPat env (PCon name pats) = inferPatCon env name
+    pats`, `typecheck.mdk:4615/4685-4686`) — never a head tycon, and never
+    `TCon` either. Constructor names are their own namespace, distinct from
+    type names: `data Cfg = MkCfg { … }` collides on `MkCfg`, not `Cfg`.
+
+  That correction **bounds what this fold actually buys**: `TCon` identity
+  is TYPE-name identity, so folding it into A-1 drains `universeAliasTable`,
+  `universeRecordByName`, and `universeDataParamKinds` — hence #1069 and
+  #1090 — but it does **not** address `universeIfaceParamKinds` (needs
+  interface-name identity, #1047's territory), does **not** address the
+  separate `methodIfaceParamsRef` collision (needs method-name identity,
+  #1092), and does **not** address `universeDataEnv` (needs
+  constructor-name identity — a third namespace again distinct from both;
+  #1070 itself names no standalone issue for this row beyond its own S1
+  writeup, so this gap is currently tracked only inside #1070). Folding
+  `TCon` re-typing into A-1 is necessary for A-2 to close **three of
+  #1070's five cited rows**, not all of it; the interface-name,
+  method-name, and constructor-name identity gaps are real and are
+  **not** resolved by this decision. Whether any of them land inside
+  A-1/A-2's scope or a later stage is itself part of what is owed to the
+  scoping pass below, not decided here.
+
+  Landing identity at the AST decl layer alone would still leave A-2
+  re-keying tables whose read sites collapse to bare-`TCon` collisions on
+  the type-name rows, which is not a fix for those three. **This bullet
+  records the decision to fold `TCon` re-typing into A-1's scope, not a
+  mechanism or a PR staging** — a scoping pass on exactly that question is
+  running in parallel and has not concluded; the mechanism and how it splits
+  across A-1's PR series (and whether it also covers the interface-name /
+  method-name gaps) are owed to that pass.
   *Collision surface: parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp,
   every golden family; the single biggest golden move of the arc.*
 - **A-2. Identity-keyed environments + registry ratchet.** Re-key the surviving
@@ -1008,7 +1162,8 @@ orders merges, and the plan does not pretend otherwise.
 - **F-4. Hygiene residuals**: #176 (ref-growth probe, after A-3 changes the ref
   population).
 
-**Dependency spine:** S ⟶ A-1a ⟶ A-1 ⟶ A-2 ⟶ A-3 ⟶ {B-2, E-1} ;
+**Dependency spine:** S ⟶ A-1 ⟶ A-2 ⟶ A-3 ⟶ {B-2, E-1} ; (A-1a withdrawn —
+its decision is made in writing inside A-1, not as a separate node) ;
 B-1 ∥ C ∥ D (dependency-independent of A after S; landing interleaved) ;
 E-1 ⟶ E-2 ⟶ E-3 ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
 S-2(f) ; F-2/F-3 anytime after S. The graded arc (#822→#823→#824) runs as a
@@ -1064,10 +1219,16 @@ whole arc.
   Mitigation is structural (E-1/E-2 first; E-3's rule in force; S-2(b) written
   before E-4 starts; full adversarial bar).
 - **Perf.** Identity keys and whole-graph environments must not regress the
-  self-compile: A-1a decides the representation by measurement before A-1
-  scales; hot lookups stay monomorphic (the +56% lesson); the perf-scaling
-  gate's alloc arm is blind to constant factors, so stages A and B-2 carry an
-  interleaved wall-clock A/B on the self-compile as their own bar.
+  self-compile: the representation is decided in writing inside A-1 (A-1a,
+  which would have decided it by measurement, is withdrawn — §6); hot lookups
+  stay monomorphic (the +56% lesson); the perf-scaling gate's alloc arm is
+  blind to constant factors, so stages A and B-2 are meant to carry an
+  interleaved wall-clock A/B on the self-compile as their own landing bar,
+  with a stated positive control and minimum detectable effect. **That bar
+  has no working instrument today** — its only harness, `test/bench.sh`, is
+  macOS-only and exits 2 without measuring on this project's Linux dev box
+  (#1187) — so A-1/A-2 cannot claim to have cleared it until #1187 lands a
+  working harness; treat the bar as blocked, not satisfied by omission.
 - **Graded-arc coordination.** A-3 and #822 both rewrite the kind-check
   machinery; D-3 and #823 both touch coverage rules. Whichever lands second
   rebases on the first — named up front so neither arc discovers the other in
