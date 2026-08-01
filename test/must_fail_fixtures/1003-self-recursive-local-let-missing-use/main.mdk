@@ -1,0 +1,9 @@
+-- #1003: a self-recursive LOCAL `let` binding's own recursive call site is not
+-- recorded as a use of itself in the reference index (distinct from #951's
+-- top-level `let rec` disjoint-key case — this is a *local* binding where the
+-- recursive occurrence is recorded under NO key at all).
+outer n =
+  let go k = if k <= 0 then 0 else go (k - 1)
+  go n
+
+main = println (outer 5)

@@ -81,6 +81,7 @@ import driver.loader.{
   loadProgramE,
   loadProgramFilesLocatedE,
   findProjectRoot,
+  findProjectRootOrSelf,
   entrySearchRoots,
   projectTrustedMods,
   unknownModuleIdOf,
@@ -2105,7 +2106,7 @@ lintCacheCtx True True = None
 lintCacheCtx True False
   | not crossFileCacheSound = None
   | otherwise =
-    let root = findProjectRoot (canonicalizePath ".")
+    let root = findProjectRootOrSelf (canonicalizePath ".")
     let stamp = ruleSetStamp ()
     -- An empty stamp means the binary could not be read, so the rule set cannot
     -- be identified — the one input that makes a hit meaningful is missing.
@@ -2275,12 +2276,12 @@ assertLintTargetsExist targets =
 resolveLintTargets : List String -> <IO> List String
 resolveLintTargets [] =
   let cwd = canonicalizePath "."
-  let root = findProjectRoot cwd
-  if not (fileExists (root ++ "/medaka.toml")) then
-    let _ = ePutStrLn "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
-    let _ = exit 1
-    []
-  else collectMdkFiles root
+  match findProjectRoot cwd
+    None =>
+      let _ = ePutStrLn "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
+      let _ = exit 1
+      []
+    Some root => collectMdkFiles root
 resolveLintTargets targets = flatMap expandLintTarget targets
 
 -- One target: a listable path is a directory (recursively collect its .mdk

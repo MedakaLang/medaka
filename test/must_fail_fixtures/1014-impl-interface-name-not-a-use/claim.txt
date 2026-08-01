@@ -1,0 +1,19 @@
+issue: 1014
+what: an `impl`'s reference to the INTERFACE NAME is not recorded as a use in the
+what: cross-file reference index (refindex.mdk) — `medaka_references` clicked on the
+what: interface's own declaration finds only the declaration itself, never any `impl`
+what: header that names it. `references` on an interface therefore misses every impl
+what: of it, which is arguably the single most useful query about an interface.
+cmd: mcp-call request.jsonl
+exit: 0
+stdout: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
+stdout: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[{\"uri\":\"file://test/must_fail_fixtures/1014-impl-interface-name-not-a-use/main.mdk\",\"range\":{\"start\":{\"line\":2,\"character\":10},\"end\":{\"line\":2,\"character\":15}}}]"}],"isError":false}}
+control: check-json main.mdk
+why-control: the program itself must check diagnostic-free at exit 0 — the defect is
+why-control: purely in the reference INDEX, never in typechecking, so a broken control
+why-control: means the ENVIRONMENT moved, not that #1014 drained.
+why-stdout: the FIX is additive (the impl-header `Sized` token gains a use entry), so the
+why-stdout: pinned response text CHANGES SHAPE (a second `{"uri":...}` element appears in
+why-stdout: the array) the day #1014 is fixed — this cannot false-drain by an unrelated
+why-stdout: edit moving something else in the response, because nothing else in this
+why-stdout: fixture's tiny, self-contained program can move that JSON string.

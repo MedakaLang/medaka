@@ -1,5 +1,5 @@
 # META
-source_lines=848
+source_lines=856
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -128,9 +128,21 @@ moduleIdOfPath roots path =
 -- the PROJECT dir, not the edited file's immediate directory — e.g. a file
 -- `compiler/frontend/parser.mdk` importing `frontend.ast` resolves only when the
 -- root is `compiler/` (where `medaka.toml` lives), not `compiler/frontend/`.
--- Falls back to `startDir` when no `medaka.toml` is found up to the top.
-export findProjectRoot : String -> <IO> String
-findProjectRoot startDir = findRootGo startDir startDir
+-- `None` when no `medaka.toml` is found walking up to the top — distinct from
+-- "found a root", so a caller cannot mistake "gave up" for "found" (#220).
+export findProjectRoot : String -> <IO> Option String
+findProjectRoot startDir = findRootGo startDir
+
+-- Convenience wrapper for the (common) callers that want the old
+-- fallback-to-`startDir` behaviour outright — module-resolution roots, where
+-- "no project" and "resolve against the start dir" are the same thing.  Callers
+-- that need to tell "found" from "gave up" (e.g. the internal-extern trust
+-- boundary, or a `medaka lint` with no target args) must match on
+-- `findProjectRoot` directly instead of reaching for this.
+export findProjectRootOrSelf : String -> <IO> String
+findProjectRootOrSelf startDir = match findProjectRoot startDir
+  Some root => root
+  None => startDir
 
 -- The module-resolution roots for a single entry file: the entry's OWN
 -- directory first, then the project root found by walking up from there
@@ -151,15 +163,15 @@ findProjectRoot startDir = findRootGo startDir startDir
 -- was found, in which case `findProjectRoot` falls back to `entryDir` itself).
 export entrySearchRoots : String -> <IO> List String
 entrySearchRoots entryDir =
-  let projRoot = findProjectRoot entryDir
+  let projRoot = findProjectRootOrSelf entryDir
   if projRoot == entryDir then [projRoot] else [entryDir, projRoot]
 
-findRootGo : String -> String -> <IO> String
-findRootGo cur fallback =
-  if fileExists (stringConcat [cur, "/medaka.toml"]) then cur
+findRootGo : String -> <IO> Option String
+findRootGo cur =
+  if fileExists (stringConcat [cur, "/medaka.toml"]) then Some cur
   else
     let p = parentDir cur
-    if p == cur || stringLength p == 0 then fallback else findRootGo p fallback
+    if p == cur || stringLength p == 0 then None else findRootGo p
 
 -- parent directory: strip the last `/`-component (mirrors the loader's dir logic).
 parentDir : String -> String
@@ -635,10 +647,9 @@ childDeps deps owningRoot roots =
 --
 -- The modIds among `mods` that are TRUSTED to reference internal-only externs
 -- (arrayGetUnsafe, …).  `stdlibRoot` (where core.mdk/runtime.mdk live) is ALWAYS
--- trusted.  Additionally, when the entry belongs to a REAL PROJECT — i.e. a
--- `medaka.toml` exists at `findProjectRoot (parentDir entry)`, which
--- distinguishes it from `findProjectRoot`'s no-manifest fallback of returning the
--- entry's own dir — every module owned by one of the entry's OWN search `roots`
+-- trusted.  Additionally, when the entry belongs to a REAL PROJECT — i.e.
+-- `findProjectRoot (parentDir entry)` returns `Some`, distinct from `None`
+-- ("no medaka.toml found, gave up") — every module owned by one of the entry's OWN search `roots`
 -- (the entry dir + that project root, per `entrySearchRoots`) is trusted: it is
 -- part of the entry project.  A DECLARED DEPENDENCY resolves to a root OUTSIDE
 -- `roots` (via `resolveDepFile`/`childRoots`, added only after we cross into the
@@ -663,15 +674,12 @@ childDeps deps owningRoot roots =
 -- one physical dir" problem — `owningRoot` may be a RELATIVE `roots` entry while
 -- the physical dir is absolute) so the comparison is spelling-independent.
 export projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
-projectTrustedMods entry roots stdlibRoot mods =
-  let projectRoot = findProjectRoot (parentDir entry)
-  let deps = readDeps projectRoot
-  let hasProject = fileExists (stringConcat [projectRoot, "/medaka.toml"])
-  let trustedRoots = if hasProject then
-    map canonicalizePath (stdlibRoot::roots)
-  else
-    [canonicalizePath stdlibRoot]
-  trustedModsGo deps roots trustedRoots (map fst mods)
+projectTrustedMods entry roots stdlibRoot mods = match findProjectRoot (parentDir entry)
+  Some projectRoot =>
+    let deps = readDeps projectRoot
+    let trustedRoots = map canonicalizePath (stdlibRoot::roots)
+    trustedModsGo deps roots trustedRoots (map fst mods)
+  None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
 
 trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
 trustedModsGo _ _ _ [] = []
@@ -745,7 +753,7 @@ visitModsF parseFn read deps roots stack visited acc (d::ds) = match visitModF p
 -- Uses placeholder-loc `parseResult`.
 export loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesE read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF
@@ -764,7 +772,7 @@ loadProgramFilesE read entry roots =
 -- `analyzeLocated`.
 export loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF
@@ -838,7 +846,7 @@ loadProgramFilesLocatedCached parseCacheRef read entry roots =
 
 export loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
-  let deps = readDeps (findProjectRoot (parentDir entry))
+  let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
     (visitModF
@@ -879,12 +887,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "relUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EApp (EVar "stringConcat") (EListLit (EVar "r") (ELit (LString "/"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EVar "dropPrefix") (EApp (EVar "stringLength") (EVar "pre"))) (EVar "path")) (EApp (EApp (EVar "relUnderRoots") (EVar "rs")) (EVar "path"))))))
 (DTypeSig true "moduleIdOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "moduleIdOfPath" ((PVar "roots") (PVar "path")) (EApp (EVar "slashToDot") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString ".mdk"))) (EApp (EApp (EVar "relUnderRoots") (EVar "roots")) (EVar "path")))))
-(DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EApp (EVar "findRootGo") (EVar "startDir")) (EVar "startDir")))
+(DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
+(DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EMatch (EApp (EVar "findProjectRoot") (EVar "startDir")) (arm (PCon "Some" (PVar "root")) () (EVar "root")) (arm (PCon "None") () (EVar "startDir"))))
 (DTypeSig true "entrySearchRoots" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRoot") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
-(DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "findRootGo" ((PVar "cur") (PVar "fallback")) (EIf (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "cur") (ELit (LString "/medaka.toml"))))) (EVar "cur") (EBlock (DoLet false false (PVar "p") (EApp (EVar "parentDir") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "cur")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 0)))) (EVar "fallback") (EApp (EApp (EVar "findRootGo") (EVar "p")) (EVar "fallback")))))))
+(DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRootOrSelf") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
+(DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "findRootGo" ((PVar "cur")) (EIf (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "cur") (ELit (LString "/medaka.toml"))))) (EApp (EVar "Some") (EVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "parentDir") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "cur")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 0)))) (EVar "None") (EApp (EVar "findRootGo") (EVar "p")))))))
 (DTypeSig false "parentDir" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parentDir" ((PVar "path")) (EApp (EApp (EVar "parentGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "parentGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -985,7 +995,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "projectRoot") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry")))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "hasProject") (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "projectRoot") (ELit (LString "/medaka.toml")))))) (DoLet false false (PVar "trustedRoots") (EIf (EVar "hasProject") (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
@@ -1001,9 +1011,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "visitModsF" (PWild PWild PWild PWild PWild (PVar "visited") (PVar "acc") (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))))
 (DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "v2")) (EVar "a2")) (EVar "ds")))))
 (DTypeSig true "loadProgramFilesE" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "loadProgramFilesE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig true "loadProgramFilesLocatedE" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -1017,7 +1027,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig true "loadProgramFilesLocatedCached" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "loadProgramFilesLocatedCached" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EApp (EApp (EVar "mapErr") (EVar "loadErrorMessage")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots"))))
 (DTypeSig true "loadProgramFilesLocatedCachedE" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "loadProgramFilesLocatedCachedE" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (ELam ((PVar "s")) (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "s")))) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesLocatedCachedE" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (ELam ((PVar "s")) (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "s")))) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false) (mem "DAttrib" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
@@ -1047,12 +1057,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "relUnderRoots" ((PCons (PVar "r") (PVar "rs")) (PVar "path")) (EBlock (DoLet false false (PVar "pre") (EApp (EVar "stringConcat") (EListLit (EVar "r") (ELit (LString "/"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "path")) (EApp (EApp (EVar "dropPrefix") (EApp (EVar "stringLength") (EVar "pre"))) (EVar "path")) (EApp (EApp (EVar "relUnderRoots") (EVar "rs")) (EVar "path"))))))
 (DTypeSig true "moduleIdOfPath" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "moduleIdOfPath" ((PVar "roots") (PVar "path")) (EApp (EVar "slashToDot") (EApp (EApp (EVar "stripSuffixStr") (ELit (LString ".mdk"))) (EApp (EApp (EVar "relUnderRoots") (EVar "roots")) (EVar "path")))))
-(DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EApp (EVar "findRootGo") (EVar "startDir")) (EVar "startDir")))
+(DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "findProjectRoot" ((PVar "startDir")) (EApp (EVar "findRootGo") (EVar "startDir")))
+(DTypeSig true "findProjectRootOrSelf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "findProjectRootOrSelf" ((PVar "startDir")) (EMatch (EApp (EVar "findProjectRoot") (EVar "startDir")) (arm (PCon "Some" (PVar "root")) () (EVar "root")) (arm (PCon "None") () (EVar "startDir"))))
 (DTypeSig true "entrySearchRoots" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRoot") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
-(DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "findRootGo" ((PVar "cur") (PVar "fallback")) (EIf (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "cur") (ELit (LString "/medaka.toml"))))) (EVar "cur") (EBlock (DoLet false false (PVar "p") (EApp (EVar "parentDir") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "cur")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 0)))) (EVar "fallback") (EApp (EApp (EVar "findRootGo") (EVar "p")) (EVar "fallback")))))))
+(DFunDef false "entrySearchRoots" ((PVar "entryDir")) (EBlock (DoLet false false (PVar "projRoot") (EApp (EVar "findProjectRootOrSelf") (EVar "entryDir"))) (DoExpr (EIf (EBinOp "==" (EVar "projRoot") (EVar "entryDir")) (EListLit (EVar "projRoot")) (EListLit (EVar "entryDir") (EVar "projRoot"))))))
+(DTypeSig false "findRootGo" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "findRootGo" ((PVar "cur")) (EIf (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "cur") (ELit (LString "/medaka.toml"))))) (EApp (EVar "Some") (EVar "cur")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "parentDir") (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "cur")) (EBinOp "==" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 0)))) (EVar "None") (EApp (EVar "findRootGo") (EVar "p")))))))
 (DTypeSig false "parentDir" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parentDir" ((PVar "path")) (EApp (EApp (EVar "parentGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
 (DTypeSig false "parentGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -1153,7 +1165,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "projectRoot") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry")))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "hasProject") (EApp (EVar "fileExists") (EApp (EVar "stringConcat") (EListLit (EVar "projectRoot") (ELit (LString "/medaka.toml")))))) (DoLet false false (PVar "trustedRoots") (EIf (EVar "hasProject") (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
@@ -1169,9 +1181,9 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "visitModsF" (PWild PWild PWild PWild PWild (PVar "visited") (PVar "acc") (PList)) (EApp (EVar "Ok") (ETuple (EVar "visited") (EVar "acc"))))
 (DFunDef false "visitModsF" ((PVar "parseFn") (PVar "read") (PVar "deps") (PVar "roots") (PVar "stack") (PVar "visited") (PVar "acc") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "visited")) (EVar "acc")) (EVar "d")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "v2") (PVar "a2"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModsF") (EVar "parseFn")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EVar "stack")) (EVar "v2")) (EVar "a2")) (EVar "ds")))))
 (DTypeSig true "loadProgramFilesE" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "loadProgramFilesE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig true "loadProgramFilesLocatedE" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -1185,4 +1197,4 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig true "loadProgramFilesLocatedCached" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "loadProgramFilesLocatedCached" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EApp (EApp (EVar "mapErr") (EVar "loadErrorMessage")) (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots"))))
 (DTypeSig true "loadProgramFilesLocatedCachedE" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
-(DFunDef false "loadProgramFilesLocatedCachedE" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (ELam ((PVar "s")) (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "s")))) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
+(DFunDef false "loadProgramFilesLocatedCachedE" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (ELam ((PVar "s")) (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "s")))) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
