@@ -63,8 +63,9 @@ because the collapse already happened upstream in the `Mono` representation.
 The law therefore lands at the substrate: `TCon`/interface/method references
 carry identity, so a bare-name table becomes unwritable, not just inadvisable.
 (How identity is *represented* — interned ids vs encoded keys — is a real,
-perf-sensitive decision owned by task A-1a in §6; the law is about where identity
-is *acquired*, not its encoding.)
+perf-relevant decision owned by task A-1 in §6, decided in writing rather than
+by measurement (A-1a, filed for that measurement, is withdrawn — see §6); the
+law is about where identity is *acquired*, not its encoding.)
 
 **L3 — Order is either specified or irrelevant.** Wherever the spec makes a
 result order-free (instance selection: *"never of search order, declaration
@@ -570,15 +571,26 @@ reset bundle are unchanged (settled).
   the emit side is covered via `private_mangle` rendering). A bare-`String`
   key fails the check — the ratchet that prevents "registry #16 next month",
   which lint cannot see (a dataflow property, per #1070's own analysis).
-- **Identity representation is a named decision, not an afterthought (A-1a).**
+- **Identity representation is a named decision, not an afterthought.**
   No interning mechanism exists in the tree today, and every hot map is
-  `Map String` (`OrdMap a = Map String a`; `TcEnv`); a composite identity key
-  means dict-passed comparisons in the hottest lookups — the measured +56%
-  hazard. The two candidate representations (a global intern table yielding
-  monomorphic int-keyed maps — itself a registry that must obey the ratchet —
-  vs `String`-encoded qualified keys, workable but weakening L2's
-  "unwritable" to "inadvisable") get decided by measurement in A-1a before
-  A-1 lands at scale.
+  `Map String` (`OrdMap a = Map String a`; `TcEnv`) — but the lookups on that
+  map are **already dict-passed today**: `stdlib/map.mdk`'s
+  `get : Ord k => k -> Map k v -> Option v` is constrained on `Ord k`, and
+  `compiler/support/ordmap.mdk`'s `omLookup` is a monomorphic wrapper over
+  that same constrained `get`, with no specialization pass in between. A
+  composite (module, name) key does not newly introduce a dict-passed
+  comparison — it is already there. The measured **+56% self-compile figure
+  was a different mechanism**: routing hot monomorphic helpers
+  (`elem`/`any`/`all`/`length`) through prelude `Foldable` folds instead,
+  which loses `||`/`&&` short-circuiting (`.claude/workstreams/PERF.md`). The
+  real, in-tree-documented hazard for an encoded key is **allocation on the
+  GC-bound `check` stage**: building a key (as opposed to reusing an existing
+  field like `identity`/`fst`) adds allocation to buy comparisons — measured
+  at ~9x more bytes at n=3 and ~15x at n=400, with no crossover in that range,
+  and invisible to both CI perf arms (`compiler/support/util.mdk`'s discussion
+  of a built vs. reused key). Identity representation is still a named
+  decision (§6 A-1, decided in writing — see below) — it is just grounded in
+  the correct mechanism.
 - **Fused lockstep tables (#994).** Slot-parallel pairs
   (`funConstraints`+`Ifaces`, `methodConstraints`+`Positions`, the bare/Qual
   mirror pairs — the latter dissolve entirely under L2) become single
@@ -763,9 +775,10 @@ once) is the architecture, the file boundary is not.
 task is a mergeable PR series with `main` green throughout. ⊕ marks tasks
 *already filed* and adopted (re-scoped where noted) rather than duplicated;
 tasks filed by this arc carry their numbers inline (S-2 #1107 · S-3 #1108 ·
-A-1a #1109 · A-1 #1110 · A-2 #1111 · A-3 #1112 · B-2 #1113 · B-3-ext #1114 ·
-E-1 #1115 · E-2 #1116 · E-4 #1117 · D-1 #1118 · D-2 #1119 · F-2 #1120; the
-review-found contravariant-row S0 is #1121). Verification bars per task follow §7's doctrine; compiler-source
+A-1a #1109 WITHDRAWN, folded into A-1 · A-1 #1110 · A-2 #1111 · A-3 #1112 ·
+B-2 #1113 · B-3-ext #1114 · E-1 #1115 · E-2 #1116 · E-4 #1117 · D-1 #1118 ·
+D-2 #1119 · F-2 #1120; the review-found contravariant-row S0 is #1121).
+Verification bars per task follow §7's doctrine; compiler-source
 tasks all carry the standing bar (snapshot + selfproc-legA blessing, fixpoint
 C3a/C3b, `typecheck_compiler_source`).
 
@@ -854,11 +867,52 @@ orders merges, and the plan does not pretend otherwise.
 
 **Stage A — Identity substrate (family A) — the widest-blast, highest-value stage**
 
-- **A-1a. Identity representation decision.** Measure intern-table-plus-
-  monomorphic-int-keys vs `String`-encoded qualified keys on the self-compile
-  (interleaved A/B, wall-clock — the alloc gate is blind to constant factors).
-  The intern table, if chosen, obeys the registry ratchet itself. Small,
-  decision-producing, blocks A-1 at scale.
+- **A-1a. WITHDRAWN — #1109 closed by this change.** The task as filed
+  proposed deciding the identity-representation question ("intern table" vs
+  `String`-encoded qualified keys) by an interleaved-A/B wall-clock
+  measurement on the self-compile. A read-only scoping pass found the
+  measurement rests on a factual error, independently re-verified: the
+  premise that a composite key newly introduces dict-passed comparison in
+  the hottest lookups is false — `stdlib/map.mdk`'s `get` is already
+  constrained on `Ord k`, and `compiler/support/ordmap.mdk`'s `omLookup` is
+  a monomorphic wrapper over that same constrained `get` with no
+  specialization pass in between (see the corrected §2 bullet above). Two
+  more facts sink the measurement rather than merely delaying it: its
+  harness (`test/bench.sh`) is macOS-only and exits 2 without measuring
+  anything on this project's Linux dev box (#1187), and the workload is far
+  too small for a constant-factor comparison-cost effect to clear noise
+  inside a GC-bound stage even where the harness runs. **A probe whose two
+  arms cannot differ in the dimension it claims to measure reads exactly
+  like a real measurement** — that is why this is a withdrawal, not a
+  re-schedule.
+
+  The representation is instead **decided in writing, inside A-1**, on L2
+  (identity resolved once, never re-derived from spelling) and L4 (evidence
+  — including a dict-passed comparison — is structured and uniform at every
+  binder) grounds, plus registry-ratchet enforceability (§2's "Registry
+  discipline" bullet), rather than by measurement. A-1's own PR answers the
+  standing five questions in `.claude/workstreams/TYPECHECK.md` as part of
+  making that decision.
+
+  The tree already ships a **third candidate this document did not list**:
+  `compiler/types/typecheck.mdk`'s cross-module qualified tables
+  (`crossModuleFunConstraintsQualRef` and siblings) are keyed by
+  `(String, String)` — module and name — and read by `lookupQualArity`, a
+  hand-written monomorphic comparator with no dict at all. This is exactly
+  the `(module, name)` keying #1070's own remedy prescribes, and it is
+  already load-bearing in-tree. Its one caveat: a **tuple** key does pick up
+  a nested dict-passed comparison via `stdlib/core.mdk`'s
+  `impl Ord (a, b) requires Ord a, Ord b` — the one place the withdrawn
+  bullet's "composite key means dict-passed comparisons" claim was true, and
+  it is true of the candidate the doc never named, not of either candidate
+  it did.
+
+  The interleaved wall-clock A/B is **retained**, not discarded — it moves
+  from a stage-defining measurement to a **landing bar on A-1 and A-2**
+  (§7/§8 already assign this bar to stages A and B-2; see below), and any
+  future use of it here must carry a stated positive control and a stated
+  minimum detectable effect, per the general rule that an A/B whose arms
+  cannot disagree is not evidence.
 - **A-1. Resolve-acquired qualified identity.** *Creating* resolve-phase
   namespace resolution (not extending — resolve only existence-checks type
   names today) and relocating identity minting out of mid-typecheck
@@ -868,6 +922,20 @@ orders merges, and the plan does not pretend otherwise.
   byte-identical; use-site ambiguity diagnostics (R-series codes). The
   selfproc-legA "additive-only" recapture rule is explicitly waived per-PR
   with justification where existing bindings' rendered schemes change.
+  **Folded in from the withdrawn A-1a: identity must reach `Mono`/`TCon`,
+  not stop at the AST decl layer.** `compiler/types/typecheck.mdk`'s `Mono`
+  declares a bare `TCon String` arm, and #1070's own remedy states a shared
+  `(module, name)` keying helper is insufficient for five of its seven rows
+  (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
+  `universeRecordByName`, `universeDataEnv`) precisely because those read
+  sites only ever hold a bare head-tycon string — re-keying the table
+  without also re-keying `TCon` itself does not fix them. Landing identity
+  at the AST decl layer alone would leave A-2 re-keying tables whose read
+  sites still collapse to bare-`TCon` collisions, which is not a fix.
+  **This bullet records the decision to fold `TCon` re-typing into A-1's
+  scope, not a mechanism or a PR staging** — a scoping pass on exactly that
+  question is running in parallel and has not concluded; the mechanism and
+  how it splits across A-1's PR series are owed to that pass.
   *Collision surface: parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp,
   every golden family; the single biggest golden move of the arc.*
 - **A-2. Identity-keyed environments + registry ratchet.** Re-key the surviving
@@ -1008,7 +1076,8 @@ orders merges, and the plan does not pretend otherwise.
 - **F-4. Hygiene residuals**: #176 (ref-growth probe, after A-3 changes the ref
   population).
 
-**Dependency spine:** S ⟶ A-1a ⟶ A-1 ⟶ A-2 ⟶ A-3 ⟶ {B-2, E-1} ;
+**Dependency spine:** S ⟶ A-1 ⟶ A-2 ⟶ A-3 ⟶ {B-2, E-1} ; (A-1a withdrawn —
+its decision is made in writing inside A-1, not as a separate node) ;
 B-1 ∥ C ∥ D (dependency-independent of A after S; landing interleaved) ;
 E-1 ⟶ E-2 ⟶ E-3 ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
 S-2(f) ; F-2/F-3 anytime after S. The graded arc (#822→#823→#824) runs as a
@@ -1064,10 +1133,12 @@ whole arc.
   Mitigation is structural (E-1/E-2 first; E-3's rule in force; S-2(b) written
   before E-4 starts; full adversarial bar).
 - **Perf.** Identity keys and whole-graph environments must not regress the
-  self-compile: A-1a decides the representation by measurement before A-1
-  scales; hot lookups stay monomorphic (the +56% lesson); the perf-scaling
-  gate's alloc arm is blind to constant factors, so stages A and B-2 carry an
-  interleaved wall-clock A/B on the self-compile as their own bar.
+  self-compile: the representation is decided in writing inside A-1 (A-1a,
+  which would have decided it by measurement, is withdrawn — §6); hot lookups
+  stay monomorphic (the +56% lesson); the perf-scaling gate's alloc arm is
+  blind to constant factors, so stages A and B-2 carry an interleaved
+  wall-clock A/B on the self-compile as their own landing bar, with a stated
+  positive control and minimum detectable effect.
 - **Graded-arc coordination.** A-3 and #822 both rewrite the kind-check
   machinery; D-3 and #823 both touch coverage rules. Whichever lands second
   rebases on the first — named up front so neither arc discovers the other in
