@@ -23,7 +23,8 @@
 # Quiet-machine discipline (see PERF-SCOPE §2b): run single-threaded, close other
 # apps, warm the file cache (the harness warms once before timing).
 #
-# Timing arms (probed once, in preference order — see `detect_timer` below):
+# Timing arms (probed once, in preference order, by the inline detection
+# block right after the prerequisite checks below — no separate function):
 #   macos    /usr/bin/time -l   (BSD time: "real" in seconds, RSS in BYTES)
 #   gnu      /usr/bin/time -v, or PATH `time -v` (GNU time: "Elapsed (wall clock)
 #            time" as [h:]m:ss[.ss], RSS in KILOBYTES — NOT bytes; do not reuse
