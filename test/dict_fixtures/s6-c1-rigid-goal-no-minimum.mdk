@@ -1,0 +1,48 @@
+-- §6 C1 AT A RIGID-VARIABLE GOAL -- the goal-site half of C1's requantification,
+-- and the shape #1155 acceptance item 2 exists for. This is 1 of 4; the other
+-- three are the controls named at the bottom.
+--
+-- SPEC ANSWER (hand-derived from §3 `match`, §3 `⊑` and §6 C1 -- NOT captured):
+--
+--   `firstRow` declares no context, so §4 `gen-sig` does not abstract the residual
+--   predicate into a dict parameter (C1's exit (ii) does not apply) and §3's
+--   precedence leaves it to `inst`: there is no `Index` dict in scope over `a`, so
+--   `assum` is silent. The goal `inst` is handed is
+--
+--       Index (List (List a)) Int (List a)      with `a` RIGID
+--
+--   -- CLOSED under §6.2 T3 ("every variable of which is either quantified by the
+--   scheme just produced or already ground"), so C1 applies. This is exactly the
+--   class the old "for any ground `C τ̄`" wording left out.
+--
+--   match(IE, that goal) = two instances:
+--     * prelude `impl Index (List b) Int b`      φ = {b ↦ List a}
+--     * user    `impl Index (List (List b)) k c` φ = {b ↦ a, k ↦ Int, c ↦ List a}
+--   (`Index (Array b) Int b` and `Index String Int Char` head elsewhere.)
+--
+--   ⊑ is one-sided matching head-to-head, so NEITHER is an instance of the other:
+--     * prelude ⊑ user would need σ(`List (List b)`) = `List b'` -- impossible.
+--     * user ⊑ prelude would need σ(`Int`) = `k` -- impossible, `Int` is a
+--       constructor and the specific side's `k` is rigid.
+--
+--   Two ⊑-incomparable matching instances with nothing ⊑-below both: §6 C1's
+--   "ambiguous overlap", so THE PROGRAM IS REJECTED. Coherence cannot reach this
+--   -- its input is USER decls only, and there is one user impl.
+--
+-- BEFORE #1155 this printed `[1, 2]` at exit 0 on both engines: the prelude won
+-- on declaration index, in silence. The competing impls are named in the message.
+--
+-- CONTROLS: s6-c1-rigid-goal-unique-min-control (adding the ⊑-minimum makes it
+-- ACCEPT and the USER impl win -- so the goal really does reach min⊑ rather than
+-- being answered by `assum` or by "prelude always wins");
+-- s6-c1-rigid-goal-no-user-impl-baseline (the singleton matching set, `[1, 2]`);
+-- s6-c1-rigid-goal-no-call-discriminator (`main` never calls `firstRow`, so the
+-- ONLY goal posed is the definition-site RIGID one -- which is what makes the word
+-- "rigid" in this file an assertion rather than a label).
+impl Index (List (List b)) k c where
+  index _ _ = panic "user Index fired"
+
+firstRow : List (List a) -> List a
+firstRow xss = index xss 0
+
+main = println (firstRow [[1, 2], [3]])

@@ -1,0 +1,17 @@
+-- CONTROL 2/3 for s6-c1-rigid-goal-no-minimum: the SAME program with the user
+-- impl DELETED.
+--
+-- SPEC ANSWER (hand-derived, NOT captured): match(IE, `Index (List (List a)) Int
+-- (List a)`) is now the SINGLETON {prelude `impl Index (List b) Int b`}, which is
+-- trivially its own ⊑-minimum. §6 C1 is satisfied, `inst` commits, and the program
+-- prints element 0 of `[[1, 2], [3]]` -- `[1, 2]`.
+--
+-- WHY THIS CONTROL EXISTS: it pins that the rigid goal is well-formed and RESOLVES
+-- on its own. Without it, the sibling's reject could be read as "a rigid goal
+-- cannot be resolved at all" rather than "this rigid goal has no ⊑-minimum" -- and
+-- the fix for those two readings is not the same fix. It is also the exact value
+-- the buggy sibling printed before #1155, which is what made that bug invisible.
+firstRow : List (List a) -> List a
+firstRow xss = index xss 0
+
+main = println (firstRow [[1, 2], [3]])

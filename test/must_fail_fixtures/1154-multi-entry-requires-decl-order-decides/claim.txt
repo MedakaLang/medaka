@@ -46,20 +46,26 @@ why-control: it -- a control that merely printed would exit 0 either way and
 why-control: could never fail. Proven able to fail on this tree: changing the
 why-control: comparand to a value the program cannot produce makes
 why-control: `medaka run control.mdk` exit 1 with `runtime error [E-PANIC]`.
-why-note: THIS ROW ALSO CARRIES #1155, deliberately, exactly as the drained
-why-note: `1154-no-unique-min-decl-order-decides` did (its claim.txt said so in
-why-note: as many words: "#1155 is the FIX issue for this bug, not a second
-why-note: bug: it must not get its own fixture -- one fixture per issue, and
-why-note: pinning the shape here covers both"). #1155 is
-why-note: `pickMostSpecificEntry`'s no-unique-minimum arm silently returning
-why-note: the FIRST-DECLARED entry; this program is a live instance of exactly
-why-note: that arm firing, so making the arm a hard T-AMBIGUOUS-INSTANCE
-why-note: diagnostic flips this row's exit code and drains it. Without this
-why-note: fixture, #1155 -- still OPEN, verified, S0 -- would have NO pin at
-why-note: all after the original drained. That is the reason this pin is owed
-why-note: even if the residual is later split off from #1154 as its own issue:
-why-note: whatever it is renamed to, it must keep covering #1155 or #1155 needs
-why-note: its own fixture on the same day.
+why-note: CORRECTED 2026-08-01 (#1155 / F-3c). This row's earlier why-note
+why-note: claimed "THIS ROW ALSO CARRIES #1155 ... this program is a live
+why-note: instance of exactly that arm firing, so making the arm a hard
+why-note: T-AMBIGUOUS-INSTANCE diagnostic flips this row's exit code and drains
+why-note: it." THAT IS FALSE, and it was a mechanism inherited from a DIFFERENT
+why-note: fixture rather than measured on this one -- the claim conceded as much
+why-note: two paragraphs down ("MECHANISM NOT ESTABLISHED"), which is precisely
+why-note: the state in which it should not have asserted which fix drains it.
+why-note: F-3c landed and made `pickMostSpecificEntry`'s no-unique-minimum arm a
+why-note: hard reject. Measured on the F-3c binary:
+why-note:   `medaka check --json main.mdk` -> {"diagnostics":[]}, exit 0
+why-note:   `medaka run main.mdk`          -> 116, exit 0  (UNCHANGED)
+why-note:   `medaka run control.mdk`       -> control-ok:227, exit 0 (UNCHANGED)
+why-note: The arm does not fire on this program at all. So this row is a pin on
+why-note: #1154 ALONE, and #1155 does NOT drain through it. The safeguard the
+why-note: old note described had silently lapsed; do not restore it.
+why-note: (For where #1155's evidence lives instead, see
+why-note: test/dict_fixtures/s6-c1-rigid-goal-*.mdk -- four fixtures, one reject
+why-note: and three controls -- and the residual entry in
+why-note: test/MUST-FAIL-NOT-PINNABLE.txt.)
 why-note: NOT a duplicate of the drained
 why-note: `1154-no-unique-min-decl-order-decides`, and NOT covered by
 why-note: `test/dict_fixtures/s3-nary-requires-goal-vector.mdk`. That fixture
