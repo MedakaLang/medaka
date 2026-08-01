@@ -18,7 +18,6 @@
 -- amount (COUNT(*) still counts the row; SUM/AVG/MIN/MAX skip it).
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
@@ -84,6 +83,8 @@ showOptF None = ""
 showOptF (Some f) = floatToString f
 
 runQ : Db -> String -> Select -> RowType a -> (a -> String) -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runQ db label sel rt shw =
   let _ = println label
   match query db sel rt
@@ -91,6 +92,8 @@ runQ db label sel rt shw =
     Ok rows => printRows shw rows
 
 joined : Select
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 joined =
   innerJoin
     "orders"

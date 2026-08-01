@@ -35,7 +35,6 @@
 -- `shapeCompare` vs its `precCompare`) is NOT consolidatable: each closes over a
 -- file-local parser/comparator.  The genuinely shared reporters (`bullet`,
 -- `verdict`) live in demo_support.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlstmt.{parseSelect, renderSelect}
 import lib.select.{Select}
@@ -182,6 +181,8 @@ roundTripCompare src s1 s2 txt =
 
 rtFailures : List String -> List String
 rtFailures [] = []
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 rtFailures (s::rest) = match roundTrip s
   RtOk => rtFailures rest
   RtFail m => m :: rtFailures rest
@@ -308,6 +309,8 @@ shapeFailures ((src, want)::rest) = match parseSelect src
   Ok sel => shapeCompare src want (renderSelect sel) (shapeFailures rest)
 
 shapeCompare : String -> String -> String -> List String -> List String
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 shapeCompare src want got rest =
   if want == got then
     rest

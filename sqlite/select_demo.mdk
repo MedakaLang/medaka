@@ -8,7 +8,6 @@
 -- Usage: medaka build sqlite/select_demo.mdk -o /tmp/sdemo && /tmp/sdemo <db>
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlite.{Db, openDb}
 import lib.select.{
@@ -56,9 +55,13 @@ mkUser : (Int, String, Option Int) -> Result String User
 mkUser (i, n, a) = Ok User { id = i, name = n, age = a }
 
 userRow : RowType User
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 userRow = tCustom mkUser (t3 tInt tText (tOption tInt))
 
 showUser : User -> String
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 showUser (User { id = i, name = n, age = a }) = "\{i}|\{n}|\{showOpt a}"
 
 showOpt : Option Int -> String
@@ -67,11 +70,15 @@ showOpt (Some n) = intToString n
 
 printRows : List User -> <IO> Unit
 printRows [] = ()
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 printRows (u::rest) =
   let _ = println (showUser u)
   printRows rest
 
 runQ : Db -> String -> Select -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runQ db label sel =
   let _ = println label
   match query db sel userRow

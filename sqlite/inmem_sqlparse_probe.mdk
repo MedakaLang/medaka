@@ -24,7 +24,6 @@
 -- panic would be a trap, so this doubles as a "no trap on bad input" assertion.
 
 -- Probes are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
@@ -68,6 +67,8 @@ runSql db sql =
 
 runAll : Db -> List String -> <IO> Unit
 runAll _ [] = ()
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runAll db (sql::rest) =
   let _ = runSql db sql
   runAll db rest
@@ -160,6 +161,8 @@ specs = [
 ]
 
 main : <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 main =
   let _ = println "-- CREATE users + orders (in-memory) --"
   match buildDatabaseMulti specs

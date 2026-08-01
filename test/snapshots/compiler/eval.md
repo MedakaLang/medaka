@@ -1,5 +1,5 @@
 # META
-source_lines=3529
+source_lines=3530
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1975,8 +1975,9 @@ prim3 f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
 prim2M : (Value e -> Value e -> <e> Value e) -> Value e
 prim2M f = VPrim (a => VPrim (b => f a b))
 
+-- Same body as `prim3` (#602: an in-file structural duplicate).
 prim3M : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
-prim3M f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
+prim3M f = prim3 f
 
 prim5M : (Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e) -> Value e
 prim5M f =
@@ -4365,7 +4366,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "prim2M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim2M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "prim3M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "prim3M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))
+(DFunDef false "prim3M" ((PVar "f")) (EApp (EVar "prim3") (EVar "f")))
 (DTypeSig false "prim5M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))
@@ -5781,7 +5782,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "prim2M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim2M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "prim3M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyCon "Value") (TyVar "e"))))
-(DFunDef false "prim3M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")))))))))
+(DFunDef false "prim3M" ((PVar "f")) (EApp (EVar "prim3") (EVar "f")))
 (DTypeSig false "prim5M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))) (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "prim5M" ((PVar "f")) (EApp (EVar "VPrim") (ELam ((PVar "a")) (EApp (EVar "VPrim") (ELam ((PVar "b")) (EApp (EVar "VPrim") (ELam ((PVar "c")) (EApp (EVar "VPrim") (ELam ((PVar "d")) (EApp (EVar "VPrim") (ELam ((PVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "f") (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")) (EVar "x")))))))))))))
 (DTypeSig false "prim1M" (TyFun (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Value") (TyVar "e"))))

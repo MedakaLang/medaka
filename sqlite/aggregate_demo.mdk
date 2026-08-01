@@ -8,7 +8,6 @@
 -- Usage: medaka build sqlite/aggregate_demo.mdk -o /tmp/adem && /tmp/adem <db>
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.sqlite.{Db, openDb}
 import lib.select.{eEq, eGt, eColText, eLitT, eLitI}
@@ -42,6 +41,8 @@ showOptF (Some f) = floatToString f
 
 -- ── generic per-query runner ────────────────────────────────────────────────
 runQ : Db -> String -> AggQuery -> RowType a -> (a -> String) -> <IO> Unit
+-- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
+-- lint-disable-next-line rule-duplicate-body
 runQ db label q rt shw =
   let _ = println label
   match queryAgg db q rt

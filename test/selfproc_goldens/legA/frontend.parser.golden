@@ -144,6 +144,9 @@ fieldNameIdxsIn : Array Token -> Int -> Int -> List Int
 fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 fieldPathExtend : Option (String, List String) -> String -> Option (String, List String)
 findWhereIdx : Array Token -> Int -> Int -> Option Int
+finishBracketIndex : Expr -> Expr -> Parser Expr
+finishSingletonArray : Expr -> Parser Expr
+finishSingletonList : Expr -> Parser Expr
 firstBacktickIdx : Array Token -> Int -> Int
 firstBlockCommentIdx : Array Token -> Int -> Int
 firstBraceBlockIdx : Array Token -> Int -> Int

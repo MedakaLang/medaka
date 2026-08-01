@@ -723,54 +723,10 @@ runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
 -- that line — #849).  `file`/`line` are required; `col`/`symbol` are each
 -- optional in the schema (JSON Schema can't express "exactly one of"), so
 -- the handler enforces that.
+-- Same schema as `medakaTypeAtSchema` (#602: an in-file structural duplicate —
+-- both tools take the identical file/line + col-or-symbol input contract).
 medakaDefinitionSchema : Json
-medakaDefinitionSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            ("description", JString "Path to the .mdk file to query."),
-          ],
-        ),
-        (
-          "line",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based line of the position (LSP-style, first line is 0).",
-            ),
-          ],
-        ),
-        (
-          "col",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based column (LSP-style). Alternative to 'symbol' — provide exactly one.",
-            ),
-          ],
-        ),
-        (
-          "symbol",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Name to locate on 'line' instead of counting columns — resolved server-side against the line's own text. Alternative to 'col' — provide exactly one.",
-            ),
-          ],
-        ),
-      ],
-    ),
-    ("required", jArray [JString "file", JString "line"]),
-  ]
+medakaDefinitionSchema = medakaTypeAtSchema
 
 -- Synthesize a `{ position: { line, character } }` params Json — the shape
 -- `tools.lsp.definitionResult` expects (it reads position.line/character via

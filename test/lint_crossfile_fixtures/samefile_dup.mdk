@@ -1,0 +1,28 @@
+-- #602 pin (the BLIND-SPOT half): two top-level bodies that are structurally
+-- identical WITHIN ONE FILE.  The rule used to be a CrossFileRule only — its
+-- group needed >=2 DISTINCT files — so a same-file pair like parser.mdk's
+-- `parseBracketBlock`/`indentedBody` was invisible to it by construction.  Both
+-- bindings below must now be flagged by rule-duplicate-body with the "in this
+-- same file" message.  The body shape is deliberately UNIQUE to this file, so
+-- the finding can only have come from the in-file tier.
+export widthOne : Int -> String
+widthOne n =
+  if n > 640 then
+    "wide"
+  else if n > 320 then
+    "narrow"
+  else if n > 80 then
+    "tiny"
+  else
+    "hidden"
+
+export widthTwo : Int -> String
+widthTwo n =
+  if n > 640 then
+    "wide"
+  else if n > 320 then
+    "narrow"
+  else if n > 80 then
+    "tiny"
+  else
+    "hidden"

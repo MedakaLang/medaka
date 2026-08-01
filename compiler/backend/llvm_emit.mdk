@@ -3029,12 +3029,17 @@ isArithOp op = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
 -- the optimization (falls to the boxing path); it can never miscompile.
 staticIsFloat : List (String, (String, LTy)) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
-staticIsFloat env (CVar x _) = match lookupAssoc x env
+staticIsFloat env (CVar x _) = varIsKnownFloat env x
+staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
+staticIsFloat env _ = False
+
+-- is `x` typed LTFloat/LTFloatU in `env`?  Shared by `staticIsFloat`'s and
+-- `bodyFloatRet`'s `CVar` clause (#602: an in-file structural duplicate).
+varIsKnownFloat : List (String, (String, LTy)) -> String -> Bool
+varIsKnownFloat env x = match lookupAssoc x env
   Some (_, LTFloat) => True
   Some (_, LTFloatU) => True
   _ => False
-staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
-staticIsFloat env _ = False
 
 -- CONSERVATIVE "does this expression evidently evaluate to a Float?" check, used to
 -- record a lambda's return type.  Unlike staticIsFloat (which checks only the LEFT
@@ -3044,10 +3049,7 @@ staticIsFloat env _ = False
 -- makes it True, so it never false-positives a non-float body.
 bodyFloatRet : List (String, (String, LTy)) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
-bodyFloatRet env (CVar x _) = match lookupAssoc x env
-  Some (_, LTFloat) => True
-  Some (_, LTFloatU) => True
-  _ => False
+bodyFloatRet env (CVar x _) = varIsKnownFloat env x
 bodyFloatRet env (CBinPrim op l r _) = isArithOp op
   && (bodyFloatRet env l || bodyFloatRet env r)
 bodyFloatRet env (CIf _ t f) = bodyFloatRet env t || bodyFloatRet env f

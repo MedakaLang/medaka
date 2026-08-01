@@ -1971,8 +1971,9 @@ prim3 f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
 prim2M : (Value e -> Value e -> <e> Value e) -> Value e
 prim2M f = VPrim (a => VPrim (b => f a b))
 
+-- Same body as `prim3` (#602: an in-file structural duplicate).
 prim3M : (Value e -> Value e -> Value e -> <e> Value e) -> Value e
-prim3M f = VPrim (a => VPrim (b => VPrim (c => f a b c)))
+prim3M f = prim3 f
 
 prim5M : (Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e) -> Value e
 prim5M f =

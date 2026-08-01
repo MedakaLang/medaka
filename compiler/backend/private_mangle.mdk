@@ -474,11 +474,12 @@ originEntryAs exports origin local
     Some definer => [(local, mangledName definer origin)]
     None => []
 
--- a wildcard import iterates the (name, definer) pairs directly.
+-- a wildcard import iterates the (name, definer) pairs directly.  Same body as
+-- `coreEntry` (#602: an in-file structural duplicate) — kept as its own named
+-- binding since the two are reached from different call sites with different
+-- documented contracts (core-export enumeration vs. per-pair mapping).
 originEntryPair : (String, String) -> List (String, String)
-originEntryPair (n, definer)
-  | isExcludedName n = []
-  | otherwise = [(n, mangledName definer n)]
+originEntryPair = coreEntry
 
 -- a module alias iterates the same pairs, keying each under `A.<name>`.
 aliasEntryPair : String -> (String, String) -> List (String, String)

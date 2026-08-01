@@ -17,7 +17,6 @@
 --   CREATE INDEX idx_b ON mixed (b)   -- BLOB-keyed  (BINARY / memcmp order)
 
 -- Demos are intentionally self-contained; row/helper bodies duplicate by design.
--- lint-disable-file rule-duplicate-body
 
 import lib.writer.{
   TableSchema,
