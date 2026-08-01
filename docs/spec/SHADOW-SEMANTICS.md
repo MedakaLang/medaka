@@ -55,7 +55,7 @@ enforcement table. Where the binary disagrees with a clause, the matrix row says
 > be expected to know them and `check` could not tell them. Silently discarding a
 > declared, signatured top-level function because a **prelude** impl exists for the
 > argument's type is not a tie-break — it is erasure. The stdlib's own fallback
-> pattern (`map.mdk`'s `toList` beating `Foldable.toList`) is not a special case of
+> pattern (`map.mdk`'s `toList` beating the `Foldable` method of the same name) is not a special case of
 > the old rule; it is the **general case** of the new one.
 >
 > **Two deliberate limits** (both decided by the language owner, both load-bearing):
@@ -238,8 +238,8 @@ the module said `size` means `Int -> Int`, so a `Box` does not fit.
 **The rule now.** *A name written at top level in a module is that module's name.*
 A module's own top-level binding is an **inner** scope relative to the implicit
 prelude and therefore **shadows** it; an `import` is a **sibling** scope and does
-not. The stdlib's `map.mdk`-`toList`-beats-`Foldable.toList` pattern is not a
-special case of the old rule — it is the **general case** of the new one.
+not. The stdlib's pattern of `map.mdk`'s `toList` beating the `Foldable` method of the same
+name is not a special case of the old rule — it is the **general case** of the new one.
 
 *Standalone-in-value-position = standalone* (S4) still holds for the original
 reason: dispatch needs a receiver at the call and a method value carries no
@@ -428,7 +428,7 @@ Line numbers at `cfc4fa5a`.
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
 | S1 detect (run/check, definer) | `compiler/types/typecheck.mdk:11451` `buildDefinerShadows`; single-file seed `:8979`; per-module seed `checkModuleFullImpl:11199-11201` → `definerShadowNamesRef`/`standaloneValuesRef` | this module's funDefs that name a method | **bare-name intersection**: funDefs(`prog`) × `allIfaceMethodNames(accData ++ implDecls ++ prog)` — sees imported *interfaces* only via `accData` (public decls); see row-14 BUG |
-| S1 detect (run/check, importer) | `typecheck.mdk:11422` `buildStandaloneShadows` (seeded `:11191`) | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
+| S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
 | S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded) |
 | (enabler of the S1 build split) | `compiler/backend/private_mangle.mdk`: `mangleUnits:117`, `buildUnitRenameMap:372`, `renameDecl` DFunDef `~578` + `renameScoped` EVar `~651` rename the standalone def + refs to `<mid>__N`; `renameIfaceMethod:626`/`renameImplMethod:636` leave the method **NAME bare** (header `:34-46`: dispatch is by bare name cross-module) | collision-free private symbols | **the asymmetry**: standalone side mangled, method side bare — which is exactly what defeated name-intersection detection (bug `0b4a7882`); driver order `compiler/entries/entry_support.mdk:133-134` (`runEmitWith`) and `:145-146` (`emitModulesWith`): mangle STRICTLY before mark |
@@ -443,7 +443,7 @@ Line numbers at `cfc4fa5a`.
 | emit (WasmGC) | `compiler/backend/wasm_emit.mdk:3076` `emitMethodRef … (RLocal sym)` (peer arm, header `:3071`) | same split, second backend | same two-name split |
 | eval | `compiler/eval/eval.mdk` `evalMethodAt … (RLocal sym dicts)` → standalone via env lookup, **then `applyDicts … dicts`** (S9); other routes → arg-tag/dict dispatch (`methodAtNarrow` treats RLocal as not-a-dispatch; `dictOfRoute (RLocal _ _)` is the no-op dict — RLocal's dicts are the call's leading dict ARGS, not a witness FOR the route) | S2 + S9 on the interpreter | run path is UN-mangled: `sym` is `""` and the bare name resolves to the standalone lexically |
 | S9 dicts (typecheck) | `shadowStandaloneDicts` / `shadowStandaloneDictSlotsAt` (slot monos, expanded-supers, from the SIGNATURE's id space) → carried on `pendingRLocalSites` (an `RLocalSite` record) → resolved **inside** `resolveRLocalSites` via `routesOfMonosTop` | the standalone's own `=>` dicts, stamped by the SAME single writer as the route | ⚠️ resolve them **inside the stamp** — `resolveRLocalSites` runs BEFORE `resolveDictApps` in `elabModuleStamp`, so routing them through `pendingDictApps` reads `[]` and reproduces the bug with more code |
-| S9 reject direction | `recordStandaloneSigObligations` → `pushCallObl` → `checkCallObligations` | `size "hi"` ⇒ located `No impl of Num for String` | ⚠️ obligations must come from the **signature**, not `schemeObligationsRef`: for a signatured binding those are **different id spaces** (generalization vs `sigToSchemeTvs`), so the id lookup silently finds nothing |
+| S9 reject direction | `recordStandaloneSigObligations` → `recordCallObligations` → `checkCallObligations` | `size "hi"` ⇒ located `No impl of Num for String` | ⚠️ obligations must come from the **signature**, not `schemeObligationsRef`: for a signatured binding those are **different id spaces** (generalization vs `sigToSchemeTvs`), so the id lookup silently finds nothing |
 
 ## 4. The gate (`test/diff_compiler_shadow_semantics.sh`)
 

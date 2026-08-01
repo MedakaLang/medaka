@@ -141,8 +141,43 @@ command -v awk >/dev/null 2>&1 || { echo "FAIL: awk not found"; exit 2; }
 command -v grep >/dev/null 2>&1 || { echo "FAIL: grep not found"; exit 2; }
 
 # ── 1. Enumerate the agent-facing doc corpus. ───────────────────────────────
+# Two tiers (#1135 / #1097):
+#   - BROAD:  AGENTS.md, skills, workstreams, ORCHESTRATING.md — every inline
+#             symbol-shaped backtick span is a claim (unchanged since this
+#             gate's introduction).
+#   - SCOPED: docs/spec/*.md — this tier legitimately names spec-level
+#             metavariables (`Q_sig`, `DL_a`), illustrative example types
+#             (`Box`, `Pair`), other-language references (`GADTs`,
+#             `ByteString`), and deliberately-not-yet-implemented names
+#             (`DeferredThenable`) that are NOT source-code claims at all — a
+#             naive broad extraction over this tier produced 81 dead findings,
+#             almost all false positives (#1097). So for this tier ONLY, a
+#             backtick span is a claim just when the SAME LINE also cites a
+#             source path (`*.mdk` or `*.c`) — precisely the shape of an
+#             implementation-map row ("this concept lives at THAT path"),
+#             which is the only shape where the doc is asserting a fact about
+#             code rather than naming a concept. Measured on 3a6d7eaf. See
+#             #1097 for the full precision/recall discussion.
+#             ⚠️ `compiler/*.md` (#1135's other half) is DELIBERATELY NOT
+#             here yet: the identical scoped rule over that corpus produces
+#             173 dead findings (vs. docs/spec/*.md's 7) — mostly HISTORICAL
+#             design docs (WS2-REKEY-DIAGNOSIS.md, STAGE2-DESIGN.md, …) citing
+#             renamed/removed symbols by design, which needs a doc-by-doc
+#             triage this change did not have room for. Tracked separately —
+#             see #1192, which tracks it.
 git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' '.claude/ORCHESTRATING.md' \
-  > "$WORK/doc_files.txt"
+  > "$WORK/doc_files_broad.txt"
+git ls-files 'docs/spec/*.md' > "$WORK/doc_files_scoped.txt"
+
+# Basenames of the SAME three directories the resolution corpus (step 3)
+# reads from — used below so a bare `typecheck.mdk:11422` cite (no directory
+# prefix; the common table-row shorthand once a row above it already gave the
+# full path) counts as citing a source path too, while a same-shaped
+# `test/*_fixtures/*.mdk` basename does NOT, because it is never a basename
+# of a REAL compiler/stdlib/runtime file.
+git ls-files 'compiler/*.mdk' 'stdlib/*.mdk' 'runtime/*.c' \
+  | awk -F/ '{ print $NF }' | sort -u > "$WORK/src_basenames.txt"
+cat "$WORK/doc_files_broad.txt" "$WORK/doc_files_scoped.txt" > "$WORK/doc_files.txt"
 
 if [ ! -s "$WORK/doc_files.txt" ]; then
   echo "FAIL: found NO agent-facing docs (harness bug — wrong cwd, or the corpus moved)"
@@ -155,7 +190,7 @@ TOTAL_FILES="$(wc -l < "$WORK/doc_files.txt" | tr -d ' ')"
 # for why: a filename containing a space would word-split as an ARGV entry).
 # Fenced ``` code blocks are skipped by toggling on any line whose trimmed
 # content starts with ``` (see file header for why fences are out of scope).
-awk -v LISTFILE="$WORK/doc_files.txt" '
+awk -v LISTFILE="$WORK/doc_files.txt" -v SCOPEDLIST="$WORK/doc_files_scoped.txt" -v BASENAMES="$WORK/src_basenames.txt" '
 function emit(fname, lineno, tok) { printf "%s\t%d\t%s\n", fname, lineno, tok }
 
 function isSymbolShaped(tok,    i, c, hasLower, hasUpper) {
@@ -192,7 +227,35 @@ function countTicks(s,    n, i) {
   return n
 }
 
-function processLine(fname, lineno, line,    work, mstart, mlen, tok) {
+# A SCOPED-tier line asserting an implementation-map fact cites a source path
+# alongside the symbol. Two shapes both count, and both are checked against
+# the basenames of the SAME three directories the resolution corpus (step 3)
+# reads from (`compiler/*.mdk`, `stdlib/*.mdk`, `runtime/*.c`):
+#   - a full ROOTED path (`compiler/types/typecheck.mdk:11451`)
+#   - a bare `<basename>.mdk:NNN` / `<basename>.c:NNN` cite — the common
+#     table-row shorthand once a row above it already gave the full path
+#     (`typecheck.mdk:11422`)
+# Checking basenames against the known set (rather than accepting any
+# `*.mdk`/`*.c`-shaped span) is what keeps a same-shaped
+# `test/*_fixtures/*.mdk` cite OFF the scoped claim list — e.g. "gandThen is
+# spelled in test/engine_fixtures/graded_iface_async.mdk" is a claim about a
+# FIXTURE, not an implementation site, and no fixture basename is ever also a
+# real compiler/stdlib/runtime basename.
+function citesSourcePath(line,    work, mstart, mlen, tok, bn, n, parts) {
+  work = line
+  while (match(work, /[A-Za-z0-9_][A-Za-z0-9_.\/-]*\.(mdk|c)/)) {
+    mstart = RSTART; mlen = RLENGTH
+    tok = substr(work, mstart, mlen)
+    work = substr(work, mstart + mlen)
+    n = split(tok, parts, "/")
+    bn = parts[n]
+    if (bn in srcBasenames) return 1
+  }
+  return 0
+}
+
+function processLine(fname, lineno, line, restricted,    work, mstart, mlen, tok) {
+  if (restricted && !citesSourcePath(line)) return
   work = line
   while (match(work, /`[^`]+`/)) {
     mstart = RSTART; mlen = RLENGTH
@@ -208,7 +271,12 @@ function processLine(fname, lineno, line,    work, mstart, mlen, tok) {
 }
 
 BEGIN {
+  while ((getline sfname < SCOPEDLIST) > 0) scoped[sfname] = 1
+  close(SCOPEDLIST)
+  while ((getline bn < BASENAMES) > 0) srcBasenames[bn] = 1
+  close(BASENAMES)
   while ((getline fname < LISTFILE) > 0) {
+    isRestricted = (fname in scoped)
     lineno = 0
     infence = 0
     pending = ""; pendlno = 0
@@ -238,10 +306,10 @@ BEGIN {
       else               { lineno_use = lineno }
       if (countTicks(line) % 2 == 1) { pending = line; pendlno = lineno_use; continue }
       pending = ""; pendlno = 0
-      processLine(fname, lineno_use, line)
+      processLine(fname, lineno_use, line, isRestricted)
     }
     # An unterminated span at EOF: process what we have rather than dropping it.
-    if (pending != "") processLine(fname, pendlno, pending)
+    if (pending != "") processLine(fname, pendlno, pending, isRestricted)
     close(fname)
   }
 }
