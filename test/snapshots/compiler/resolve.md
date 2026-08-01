@@ -1,5 +1,5 @@
 # META
-source_lines=3109
+source_lines=3318
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -21,6 +21,8 @@ import frontend.ast.{
   orElseLoc,
   Lit(..),
   Ty(..),
+  TyConOrigin(..),
+  mapTyInDecl,
   firstTyLoc,
   Constraint(..),
   Addr(..),
@@ -1264,8 +1266,13 @@ checkMethodMember iface known (ImplMethod mname _ _) =
 
 -- ── Primitives (hardcoded, mirror lib/resolve.ml) ────────────────────────
 isTupleCtorTyName : String -> Bool
-isTupleCtorTyName n =
-  contains n ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
+isTupleCtorTyName n = contains n tupleCtorTyNames
+
+-- Kept in sync with the parser's `tupleCtorTyName` and typecheck's
+-- `tupleHeadTagTc`.  Shared with `builtinTyOrigins` (#1110), which needs the same
+-- set to give every tuple head the reserved BUILTIN origin.
+tupleCtorTyNames : List String
+tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 
 primitiveTypes : List String
 primitiveTypes =
@@ -3111,8 +3118,210 @@ export stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampBindingIds decls =
   let top = numberFrom 1 (dedup (topBinderNames decls))
   (map (stampDecl (omFromPairs top omEmpty)) decls, top)
+
+-- ── #1110: type-constructor ORIGIN acquisition ──────────────────────────────
+-- `ast.mdk`'s `TyCon.tyConOrigin` (the A-1 carrier, PR #1211) says WHERE a
+-- type-constructor head was declared.  This section is what fills it in, and it
+-- is resolve's job for the same reason name binding is: resolve is the phase that
+-- knows, for a given module's source text, which declaration a spelling refers to.
+--
+-- ⚠️ IDENTITY IS ACQUIRED ONCE, AT THE SITE THAT WROTE THE NAME, AND TRAVELS WITH
+-- THE TREE.  It is NOT a map a later phase consults at the point of use.  That
+-- design was proposed and refuted: the `Ty` trees that need identity CROSS MODULE
+-- BOUNDARIES and are elaborated under a DIFFERENT module's state.  An interface
+-- method's declared type is stored raw and elaborated under the IMPLEMENTING
+-- module's context; a type alias's RHS belongs to the DEFINING module and is
+-- expanded in the CONSUMER's.  A map consulted at the point of use is the
+-- consumer's map, so it resolves a foreign name against local scope and stamps a
+-- CONFIDENTLY WRONG origin — strictly worse than the honest collision it replaces.
+-- `stampTyHead` below enforces the discipline structurally: it only ever fills in
+-- a head that is still `OriginUnresolved`, so a tree that already carries identity
+-- is immune to re-stamping under any scope, on any path, however often a driver
+-- re-runs the pass.
+--
+-- ⚠️ NOTHING READS `tyConOrigin` YET.  This PR is deliberately byte-identical: it
+-- makes the fact AVAILABLE.  Re-keying the bare-name-keyed tables onto it (#1069,
+-- #1070, #1090, #1092, #1208, #1209) and emitting use-site ambiguity diagnostics
+-- are the NEXT A-1 PRs — they change acceptance and need their own review.
+--
+-- ⚠️ RESIDUAL INHABITANT (§8 I6.3 drain).  After this pass one case still carries
+-- `OriginUnresolved`: a type name that is in NO scope at all.  There is no module
+-- to attribute it to, and resolve has already reported it as `UnknownType`, so the
+-- program is rejected either way — but it means "post-resolve origin is total" is
+-- true only of programs that RESOLVE.  Draining that last inhabitant needs the
+-- distinct pre-resolve type §8 I6.3 really asks for, which is A-1's option (1) and
+-- is not reachable from a byte-identical PR.  See the PR body for the full drain
+-- argument; the producer set is pinned by `test/check_removed_constructs.sh`.
+
+-- Every type name in scope in module `mid`, mapped to the identity a `TyCon` head
+-- spelling it must carry.  Built lowest-precedence FIRST, because `omFromPairs`
+-- inserts left to right and a later insert wins: builtins < prelude < imports <
+-- this module's own declarations (a local `data Foo` shadows an imported `Foo`,
+-- exactly as `buildEnv`'s membership map already orders them).
+tyOriginScope : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> OrdMap TyConOrigin
+tyOriginScope coreTypes known mid prog =
+  omFromPairs
+    (map (ownTyOrigin mid) (dataRecordNames prog))
+    (omFromPairs
+      (map
+        importedTyOrigin
+        (flatMap (importedTypeOrigins known) (usePathsOf prog)))
+      (omFromPairs
+        (map importedTyOrigin coreTypes)
+        (omFromPairs builtinTyOrigins omEmpty)))
+
+-- `dataRecordNames` is the ALL-declarations extractor (`expTypesDirect` is the
+-- public subset) — a module's own private type is in its own scope.
+ownTyOrigin : String -> String -> (String, TyConOrigin)
+ownTyOrigin mid n = (n, OriginModule mid)
+
+importedTyOrigin : (String, String) -> (String, TyConOrigin)
+importedTyOrigin (n, definer) = (n, OriginModule definer)
+
+-- §8 I6.2 (a): a head the LANGUAGE provides has ONE program-global identity, not
+-- the identity of whichever module writes it, or two modules' `(Int, Int)` stop
+-- being the same type — silently.  The tuple heads are listed for completeness;
+-- the parser already builds them with `tyConBuiltin`, so they never reach here
+-- unresolved.
+builtinTyOrigins : List (String, TyConOrigin)
+builtinTyOrigins = map builtinTyOrigin (primitiveTypes ++ tupleCtorTyNames)
+
+builtinTyOrigin : String -> (String, TyConOrigin)
+builtinTyOrigin n = (n, OriginBuiltin)
+
+-- The TYPE peer of `valueProvenance` / `ctorProvenance` (#674): which type names a
+-- module exports, and which module DECLARED each.
+--
+-- ⚠️ This is the half `ModuleExports.expTypes` structurally CANNOT answer, and the
+-- reason it gets its own carrier rather than a read of that field.  `expTypes` is
+-- `expTypesDirect prog ++ reExpTypes …` — the module's own public types
+-- CONCATENATED with the ones it re-exports — so by the time any consumer reads it
+-- the definer is already gone, and no amount of care at the read site recovers it.
+-- Here a re-export carries the ORIGINAL definer through, so a chain of
+-- `export import` never re-attributes a type to its last re-exporter.
+typeOriginExports : OrdMap (List (String, String)) -> String -> List Decl -> List (String, String)
+typeOriginExports known mid prog = map (typeDeclaredIn mid) (expTypesDirect prog)
+  ++ flatMap (importedTypeOrigins known) (pubUsePaths prog)
+
+typeDeclaredIn : String -> String -> (String, String)
+typeDeclaredIn mid n = (n, mid)
+
+-- The (localName, definerModId) pairs one use path brings into TYPE scope.
+-- `core` is skipped: the prelude is prepended to every module rather than
+-- imported, so its types are seeded directly by `tyOriginScope`.
+importedTypeOrigins : OrdMap (List (String, String)) -> UsePath -> List (String, String)
+importedTypeOrigins known path =
+  if useModId path == "core" then []
+  else match omLookup (useModId path) known
+    None => []
+    Some src => importedTypeOriginsFrom path src
+
+importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
+importedTypeOriginsFrom (UseName ns) src =
+  if listLen ns > 1 then
+    keepTypeOrigins src [(lastOf ns, lastOf ns)]
+  else
+    []
+importedTypeOriginsFrom (UseGroup _ members) src =
+  keepTypeOrigins src (map useMemberBinding members)
+importedTypeOriginsFrom (UseWild _) src = src
+-- `import m as A` binds m's exported VALUES as `A.name` and nothing else — an
+-- alias-qualified name in TYPE position is a parse error — so it contributes no
+-- type identity at all.
+importedTypeOriginsFrom (UseAlias _ _) _ = []
+
+-- (ORIGIN, LOCAL), exactly as `expandMemberNames` splits them.  Only a VALUE member
+-- can carry an alias (parser-enforced), so for a type the two coincide; going
+-- through `useMemberLocal` anyway keeps this walk from depending on that rule.
+useMemberBinding : UseMember -> (String, String)
+useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
+
+-- Keep the bindings whose ORIGIN name is a type the source module exports, and
+-- attribute each to the module that DECLARED it — never to the re-exporter.
+keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
+keepTypeOrigins src bindings =
+  let definers = omFromPairs src omEmpty
+  flatMap (bindTypeOrigin definers) bindings
+
+bindTypeOrigin : OrdMap String -> (String, String) -> List (String, String)
+bindTypeOrigin definers (origin, local) = match omLookup origin definers
+  Some definer => [(local, definer)]
+  None => []
+
+-- ── the stamping walk ───────────────────────────────────────────────────────
+-- `mapTyInDecl` (frontend/ast.mdk) is the total Ty-position rewrite; this supplies
+-- the per-head decision.  Every Ty position of every decl is covered — signatures,
+-- externs, `data` payloads, interface method sigs and defaults, impl heads and
+-- `requires`, aliases, newtypes, prop params, and the `EAnnot`/`EHeadAnnot`
+-- annotations inside bodies.
+export stampTyOrigins : OrdMap TyConOrigin -> List Decl -> List Decl
+stampTyOrigins scope decls = map (stampDeclTyOrigins scope) decls
+
+stampDeclTyOrigins : OrdMap TyConOrigin -> Decl -> Decl
+stampDeclTyOrigins scope d = fst (mapTyInDecl (stampTyHead scope) d)
+
+-- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
+-- `TyConOrigin` inhabitant must make this non-exhaustive (a loud build error), not
+-- fall silently into "already has an identity, leave it".
+stampTyHead : OrdMap TyConOrigin -> Ty -> (Ty, Bool)
+stampTyHead scope (t@(TyCon { tyConName = n, tyConOrigin = o })) = match o
+  OriginUnresolved => stampHeadWith t (originOfTyName scope n)
+  OriginBuiltin => (t, False)
+  OriginModule _ => (t, False)
+stampTyHead _ t = (t, False)
+
+-- An UNKNOWN type name keeps `OriginUnresolved` — there is no module to attribute
+-- it to, and `checkType` has already reported it as `UnknownType`.
+originOfTyName : OrdMap TyConOrigin -> String -> TyConOrigin
+originOfTyName scope n = fromOption OriginUnresolved (omLookup n scope)
+
+stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
+stampHeadWith t OriginUnresolved = (t, False)
+stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
+
+-- ── the resolve → typecheck channel ─────────────────────────────────────────
+-- Resolve's other entries return `List ResError` and nothing else, so the drivers
+-- have always typechecked the ORIGINAL tree; there was no channel for resolve to
+-- hand anything BACK.  These two are it: a pure `decls -> decls` transform the
+-- typecheck module drivers call in their preamble, exactly as `stampBindingIds`
+-- (#837, above) is called from `checkBodyImpl`.
+--
+-- ⚠️ Why a CALL-THROUGH and not decls threaded through the drivers: `medaka build`
+-- shells out to a separate `medaka_emitter` process whose pipeline
+-- (`driveModules → runEmitWith → mangleUnits → elaborateModules`) never runs
+-- resolve at all — resolve's resolution pass is DCE'd out of that binary.  Data
+-- threaded from a `check`-path driver cannot reach it, so identity acquired that
+-- way would exist on `check` and not on `build`: a new instance of the #1070
+-- check≠build divergence class.  Calling from the driver preamble puts the
+-- acquisition INSIDE the seam both paths already share.
+
+-- Acquire identity for a whole module GRAPH, dependency-first, threading each
+-- module's exported type origins forward the way `resolveModulesErrorsG` threads
+-- `ModuleExports`.  Returns the stamped prelude and the stamped modules.
+export stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphTyOrigins coreDecls modules =
+  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
+  let coreS = stampTyOrigins (tyOriginScope coreTypes omEmpty "core" coreDecls) coreDecls
+  (coreS, stampModulesGo coreTypes omEmpty modules)
+
+stampModulesGo : List (String, String) -> OrdMap (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
+stampModulesGo _ _ [] = []
+stampModulesGo coreTypes known ((mid, prog)::rest) =
+  (mid, stampTyOrigins (tyOriginScope coreTypes known mid prog) prog) ::
+    stampModulesGo
+      coreTypes
+      (omInsert mid (typeOriginExports known mid prog) known)
+      rest
+
+-- The FLAT (single-file) analogue, for the `check`/`test` entries that typecheck a
+-- program with no module graph.  `mid` is the program's own module id; §8 I6.3
+-- forbids the empty string, so callers pass a real one.
+export stampFlatTyOrigins : String -> List Decl -> List Decl -> List Decl
+stampFlatTyOrigins mid coreDecls prog =
+  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
+  stampTyOrigins (tyOriginScope coreTypes omEmpty mid prog) prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false))))
@@ -3476,7 +3685,9 @@ stampBindingIds decls =
 (DTypeSig false "checkMethodMember" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EVar "None")))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__")))))
+(DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
+(DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
 (DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
@@ -4157,8 +4368,54 @@ stampBindingIds decls =
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EBinOp "++" (EApp (EVar "paramZeroFrames") (EVar "pats")) (EListLit (EApp (EVar "STop") (EVar "top"))))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
+(DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
+(DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
+(DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "importedTyOrigin" ((PTuple (PVar "n") (PVar "definer"))) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "definer"))))
+(DTypeSig false "builtinTyOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinTyOrigins" () (EApp (EApp (EVar "map") (EVar "builtinTyOrigin")) (EBinOp "++" (EVar "primitiveTypes") (EVar "tupleCtorTyNames"))))
+(DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
+(DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
+(DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importedTypeOrigins" ((PVar "known") (PVar "path")) (EIf (EBinOp "==" (EApp (EVar "useModId") (EVar "path")) (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "known")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "importedTypeOriginsFrom") (EVar "path")) (EVar "src"))))))
+(DTypeSig false "importedTypeOriginsFrom" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseName" (PVar "ns")) (PVar "src")) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EApp (EVar "keepTypeOrigins") (EVar "src")) (EListLit (ETuple (EApp (EVar "lastOf") (EVar "ns")) (EApp (EVar "lastOf") (EVar "ns"))))) (EListLit)))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseGroup" PWild (PVar "members")) (PVar "src")) (EApp (EApp (EVar "keepTypeOrigins") (EVar "src")) (EApp (EApp (EVar "map") (EVar "useMemberBinding")) (EVar "members"))))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseWild" PWild) (PVar "src")) (EVar "src"))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseAlias" PWild PWild) PWild) (EListLit))
+(DTypeSig false "useMemberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "useMemberBinding" ((PAs "m" (PCon "UseMember" (PVar "name") PWild PWild PWild))) (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m"))))
+(DTypeSig false "keepTypeOrigins" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "keepTypeOrigins" ((PVar "src") (PVar "bindings")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EVar "omFromPairs") (EVar "src")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "bindTypeOrigin") (EVar "definers"))) (EVar "bindings")))))
+(DTypeSig false "bindTypeOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig true "stampTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampTyOrigins" ((PVar "scope") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "stampDeclTyOrigins") (EVar "scope"))) (EVar "decls")))
+(DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EVar "d"))))
+(DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
+(DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
+(DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
+(DTypeSig false "originOfTyName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
+(DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
+(DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
+(DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
+(DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
+(DTypeSig true "stampFlatTyOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "stampFlatTyOrigins" ((PVar "mid") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoExpr (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "mid")) (EVar "prog"))) (EVar "prog")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false))))
@@ -4522,7 +4779,9 @@ stampBindingIds decls =
 (DTypeSig false "checkMethodMember" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkMethodMember" ((PVar "iface") (PVar "known") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "known")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "MethodNotInInterface") (EVar "mname")) (EVar "iface")) (EVar "None")))))
 (DTypeSig false "isTupleCtorTyName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__")))))
+(DFunDef false "isTupleCtorTyName" ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "tupleCtorTyNames")))
+(DTypeSig false "tupleCtorTyNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "tupleCtorTyNames" () (EListLit (ELit (LString "__tuple2__")) (ELit (LString "__tuple3__")) (ELit (LString "__tuple4__")) (ELit (LString "__tuple5__"))))
 (DTypeSig false "primitiveTypes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "primitiveTypes" () (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Char")) (ELit (LString "Bool")) (ELit (LString "Unit")) (ELit (LString "List")) (ELit (LString "Ref")) (ELit (LString "Array"))))
 (DTypeSig false "primitiveConstructors" (TyApp (TyCon "List") (TyCon "String")))
@@ -5203,3 +5462,49 @@ stampBindingIds decls =
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EBinOp "++" (EApp (EVar "paramZeroFrames") (EVar "pats")) (EListLit (EApp (EVar "STop") (EVar "top"))))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
+(DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
+(DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
+(DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "importedTyOrigin" ((PTuple (PVar "n") (PVar "definer"))) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "definer"))))
+(DTypeSig false "builtinTyOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinTyOrigins" () (EApp (EApp (EMethodRef "map") (EVar "builtinTyOrigin")) (EBinOp "++" (EVar "primitiveTypes") (EVar "tupleCtorTyNames"))))
+(DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
+(DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
+(DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importedTypeOrigins" ((PVar "known") (PVar "path")) (EIf (EBinOp "==" (EApp (EVar "useModId") (EVar "path")) (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "known")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "importedTypeOriginsFrom") (EVar "path")) (EVar "src"))))))
+(DTypeSig false "importedTypeOriginsFrom" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseName" (PVar "ns")) (PVar "src")) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EApp (EApp (EVar "keepTypeOrigins") (EVar "src")) (EListLit (ETuple (EApp (EVar "lastOf") (EVar "ns")) (EApp (EVar "lastOf") (EVar "ns"))))) (EListLit)))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseGroup" PWild (PVar "members")) (PVar "src")) (EApp (EApp (EVar "keepTypeOrigins") (EVar "src")) (EApp (EApp (EMethodRef "map") (EVar "useMemberBinding")) (EVar "members"))))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseWild" PWild) (PVar "src")) (EVar "src"))
+(DFunDef false "importedTypeOriginsFrom" ((PCon "UseAlias" PWild PWild) PWild) (EListLit))
+(DTypeSig false "useMemberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "useMemberBinding" ((PAs "m" (PCon "UseMember" (PVar "name") PWild PWild PWild))) (ETuple (EVar "name") (EApp (EVar "useMemberLocal") (EVar "m"))))
+(DTypeSig false "keepTypeOrigins" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "keepTypeOrigins" ((PVar "src") (PVar "bindings")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EVar "omFromPairs") (EVar "src")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindTypeOrigin") (EVar "definers"))) (EVar "bindings")))))
+(DTypeSig false "bindTypeOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig true "stampTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampTyOrigins" ((PVar "scope") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDeclTyOrigins") (EVar "scope"))) (EVar "decls")))
+(DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EVar "d"))))
+(DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
+(DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
+(DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
+(DTypeSig false "originOfTyName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyCon "TyConOrigin"))))
+(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
+(DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
+(DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
+(DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
+(DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
+(DTypeSig true "stampFlatTyOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "stampFlatTyOrigins" ((PVar "mid") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoExpr (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "mid")) (EVar "prog"))) (EVar "prog")))))

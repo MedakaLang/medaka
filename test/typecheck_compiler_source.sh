@@ -175,5 +175,53 @@ if [ "$fail_count" -ne 0 ]; then
   exit 1
 fi
 
+# ── #1110 §8 I6.3 producer ratchet ─────────────────────────────────────────
+# `OriginUnresolved` (frontend/ast.mdk) is the PRE-RESOLVE inhabitant of
+# `TyConOrigin`, and DICT-SEMANTICS.md §8 I6.3 forbids a sentinel origin whose
+# meaning is decided per call site. Resolve now stamps identity onto every head
+# it can (`stampGraphTyOrigins` / `stampFlatTyOrigins`), so after resolve the
+# ONLY head still carrying `OriginUnresolved` is one whose type name is in no
+# scope at all — which resolve has already reported as `UnknownType`.
+#
+# That characterisation holds only while every producer of the sentinel is
+# PRE-RESOLVE. A new producer added downstream (the shape that bit the carrier
+# PR twice: typecheck's `RScalar` synthesis and `substTyVars`, both since moved
+# to `tyConBuiltin` / node-preserving) would silently reintroduce a post-resolve
+# sentinel with no gate to notice. This pins the producer set.
+#
+# ⚠️ It lives HERE, in a gate the `soundness` job runs on every PR, rather than
+# in the topically-better `test/check_removed_constructs.sh` — that one is
+# NIGHTLY-only, so a ratchet in it cannot block the PR that breaks it.
+#
+# ⚠️ This is a PRODUCER ratchet, not the runtime drain #1110 asks for. It cannot
+# see whether a driver forgot to stamp; nothing reads `tyConOrigin` yet, so no
+# differential gate can distinguish a stamped tree from an unstamped one. The
+# executable runtime drain is owed by the PR that adds the first READER.
+echo "checking #1110 OriginUnresolved producer set ..."
+tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
+compiler/frontend/ast.mdk
+compiler/frontend/desugar.mdk
+compiler/frontend/parser.mdk"
+tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      # a file counts only if it mentions the producer OUTSIDE a comment line
+      if grep -w 'tyConUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
+  echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
+  echo "  allowed (PRE-RESOLVE construction only):"
+  printf '    %s\n' $tyconun_allowed
+  echo "  actual:"
+  printf '    %s\n' $tyconun_actual
+  echo "  A POST-RESOLVE producer reintroduces the \`OriginUnresolved\` sentinel"
+  echo "  DICT-SEMANTICS.md §8 I6.3 forbids. Use \`tyConBuiltin\` for a language-"
+  echo "  provided head, or preserve the node you are rebuilding. If the new site"
+  echo "  really is pre-resolve, add it to the list above and say why in the PR."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$tyconun_actual" | grep -c .) pre-resolve producer file(s)"
+
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0

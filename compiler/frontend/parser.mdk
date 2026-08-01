@@ -38,6 +38,7 @@ import frontend.ast.{
   useMemberOrigin,
   useMemberAlias,
   tyConUnresolved,
+  tyConBuiltin,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -2108,16 +2109,18 @@ tupleCtorTailFor commas TRParen = do
   tupleCtorTyOfArity (commas + 1)
 tupleCtorTailFor _ _ = failP "expected , or ) in tuple type constructor"
 
--- ⚠️ #1110 residual: this head is a BUILTIN, so `DICT-SEMANTICS.md` §8 I6.2 (a)
--- says its identity is the reserved `OriginBuiltin`, NOT the module the tuple
--- was written in.  It carries `OriginUnresolved` here only because the carrier
--- PR populates nothing; the A-1 PR that starts stamping identity must special-
--- case this site FIRST, or every module's `(Int, Int)` becomes a distinct type
--- and the prelude's `impl Bimappable (,)` stops applying — silently.
+-- #1110 (was a residual, DRAINED by the stamping PR): this head is a BUILTIN, so
+-- `DICT-SEMANTICS.md` §8 I6.2 (a) says its identity is the reserved
+-- `OriginBuiltin`, NOT the module the tuple was written in.  Stamping it with the
+-- module under elaboration would make every module's `(Int, Int)` a distinct type
+-- and the prelude's `impl Bimappable (,)` stop applying — silently.  `tyConBuiltin`
+-- is what keeps resolve's stamper off it: the stamper only ever fills in an
+-- `OriginUnresolved` head, so this node is immune by construction rather than by
+-- a special case the stamper has to remember.
 tupleCtorTyOfArity : Int -> Parser Ty
 tupleCtorTyOfArity n =
   if n >= 2 && n <= 5 then
-    pure (tyConUnresolved (tupleCtorTyName n) None)
+    pure (tyConBuiltin (tupleCtorTyName n) None)
   else
     failP "tuple type constructor arity must be 2..5"
 
