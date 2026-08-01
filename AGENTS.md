@@ -472,6 +472,18 @@ produced a **stable-looking WRONG binary** (19/20 iterations). Anything that "ke
 file on something distinctive" is a trap; only a per-process temp dir is correct. Still run
 a newly-parallelized gate several times — a temp-collision flake shows ~1 in N.
 
+⚠️ **That guarantee is about `medaka build`. It does NOT cover two full `make medaka`
+invocations in the SAME worktree (#1141)** — `test/build_native_medaka.sh` used to write
+`./medaka_emitter` and `./medaka` directly to their final paths with no lock, so a reader
+could reasonably (and wrongly) generalize the scratch-path safety above to the whole build
+path. Fixed the same way the codebase already fixed `EMITTER` in stage A: every output
+(`$EMITTER`, `$OUT`, `.medaka_emitter.srcstamp`) is now built under a `*.new.$$` name
+**beside its own final path** (not under `$WORK`/`mktemp -d`, which can be a different
+filesystem — e.g. tmpfs `/tmp` vs the repo's real disk — making `mv` a non-atomic EXDEV copy)
+and promoted with a same-filesystem `mv`. Two concurrent `make medaka` runs now race only for
+*last write wins on a complete artifact*; neither can observe or leave behind a
+partially-written binary. No lock, so no stale-lock case to strand a killed agent behind.
+
 ### Pre-commit hook (ACTIVE) — fmt + lint + snapshot + lextok
 
 `.githooks/pre-commit` runs FOUR checks (fmt + lint always; snapshot + lextok gated on what's
