@@ -1,0 +1,18 @@
+-- #1046 regression pin, SIBLING module — the interface must live in a DIFFERENT
+-- module from the impls.  Same-module is not the bug: desugar's `fillImplDefaults`
+-- specializes a same-module impl's inherited defaults into real clauses, so such an
+-- impl produces a `CImplEntry` and never goes missing.  Cross-module it does not, so
+-- a method-less impl reaches the Core IR as literally nothing.
+export interface Speak a where
+  speak : a -> String
+  speak _ = "woof"
+
+-- `score`'s default is deliberately NOT a constant.  It dispatches a SIBLING method
+-- of the same interface (`base`, which every impl does define) and does arithmetic on
+-- the result.  A constant-string default cannot tell "the emitter synthesized the
+-- right body" apart from "the emitter returned something" — and the whole failure
+-- mode here is a path that used to return NOTHING for these receivers.
+export interface Score a where
+  base : a -> Int
+  score : a -> Int
+  score x = base x * 10 + 7

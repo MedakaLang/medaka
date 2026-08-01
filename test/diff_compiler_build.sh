@@ -86,6 +86,7 @@ PROGRAMS="$(cd "$FIX" && ls -- *.mdk 2>/dev/null | sed 's/\.mdk$//' | sort)"
   printf '%s\t%s\n' "bimappable_constrained_sibling" "$FIX/bimappable_constrained_sibling/main.mdk"
   printf '%s\t%s\n' "bimappable_tuple_sibling"       "$FIX/bimappable_tuple_sibling/main.mdk"
   printf '%s\t%s\n' "traverse_parametric_sibling"    "$FIX/traverse_parametric_sibling/main.mdk"
+  printf '%s\t%s\n' "argtag_methodless_sibling"      "$FIX/argtag_methodless_sibling/main.mdk"
 } > "$WORK/worklist.tsv"
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
