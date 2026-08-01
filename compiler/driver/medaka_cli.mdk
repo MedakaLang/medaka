@@ -127,6 +127,7 @@ import eval.eval.{
   evalModulesOutputAsync,
   currentEvalFile,
   runJsonMode,
+  pendingRunDiags,
   progArgsRef,
 }
 import tools.test_cmd.{runTest}
@@ -453,23 +454,29 @@ locatedProjectErrors target roots rsrc csrc =
   fst (locatedProjectDiags target roots rsrc csrc)
 
 -- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
--- errors (as `locatedProjectErrors`) AND the rendered WARNINGS.
+-- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
 --
--- Why both, and why one pass.  `run`/`build`'s multi-module arms already call
--- `locatedProjectErrors` as their check-strength gate and then THREW THE WARNINGS
--- AWAY — so a warning-only project compiled and ran with nothing on any channel.
--- That was harmless while the only warnings on the typecheck channel were
--- non-exhaustive-match ones, and stopped being harmless the moment a diagnostic
--- was DEMOTED onto it (F-3d's `W-INCOMPARABLE-IMPLS`): a formerly-loud reject that
--- `run`/`build` both surfaced became a rendering gap on exactly those two verbs.
--- Splitting the results here rather than adding a second `locatedProjectWarnings`
--- entry point keeps it at one `analyzeProject` per invocation — that pass is the
--- whole front end over the whole graph, and it is the dominant cost of the gate.
+-- Why one pass.  `run`/`build`'s multi-module arms already call this analysis as
+-- their check-strength gate and then THREW THE WARNINGS AWAY — so after F-3d demoted
+-- the coherence reject onto the warning channel, a program those verbs used to
+-- reject compiled and ran with nothing on any channel.  A second entry point would
+-- mean a second whole-front-end pass over the whole graph, which is the dominant
+-- cost of the gate; splitting one pass's result costs a list filter.
 --
--- Each warning is rendered against ITS OWN file's source (`renderTripleWarnings`),
--- never the entry's — the #414 hazard `globalCoherenceConflict` documents, where a
--- foreign span renders a caret at that line/col in the wrong file.
-locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List String)
+-- 🚨 THE SECOND COMPONENT IS UNRENDERED, AND THAT IS LOAD-BEARING, NOT STYLE.
+-- Medaka is STRICT, so `fst`-only callers — every `medaka check` of a multi-module
+-- project — evaluate it too.  An earlier revision returned RENDERED warning lines
+-- for the whole channel here, and multi-module `check` went 16.0–17.1 s → 38.9–40.6 s
+-- with byte-identical stdout: `ppDiagCliSrc` → `nthLine` → `stringToChars`
+-- materialises the file per warning, thousands of times, for output nobody reads.
+-- Now it is a `filter isCoherenceWarn` over already-materialised `Diag`s (no source
+-- text touched), and rendering happens at the emit site — which also lets that site
+-- choose human text or `--json`.  KEEP IT UNRENDERED.
+--
+-- Warnings are grouped by THEIR OWN file, never the entry's — the #414 hazard
+-- `globalCoherenceConflict` documents, where a foreign span renders a caret at that
+-- line/col in the wrong file.
+locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag))
 locatedProjectDiags target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
@@ -477,8 +484,11 @@ locatedProjectDiags target roots rsrc csrc =
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
-    flatMap renderTripleWarnings triples,
+    nonEmptyTriples (map cohWarnsOfTriple triples),
   )
+
+cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
+cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
 
 joinedOrNone : List String -> Option String
 joinedOrNone [] = None
@@ -725,6 +735,39 @@ isDiagError _ = False
 isDiagWarn : Diag -> Bool
 isDiagWarn d = not (isDiagError d)
 
+-- ── the ONE typecheck warning `run`/`build` surface (F-3d, #614/#311) ───────
+-- 🚨 READ THIS BEFORE WIDENING IT TO `isDiagWarn`.  That was tried, on the reasoning
+-- that `run`/`build` "should show the same warnings `check` does", and it is wrong on
+-- three counts, each measured:
+--
+--  (1) IT IS NOT THE ACCEPTANCE CRITERION.  F-3d's criterion is "nothing that was
+--      LOUD goes silent".  The only diagnostic that was loud on `run`/`build` before
+--      F-3d is the coherence reject F-3d demoted.  Every other warning on the
+--      `matchWarnings` channel was ALREADY invisible on those verbs and stays exactly
+--      as it was — not a regression, and not this change's to fix.
+--  (2) SPEW, ~96% FALSE.  The channel is populated over the WHOLE MODULE GRAPH, and
+--      `checkGuardExhaustivenessWith` draws its constructor oracle from the graph
+--      rather than from the scrutinee's own type — so a fully exhaustive
+--      `List`-matching function is reported "Missing case: `Text _`", `Text` being a
+--      constructor of an unrelated type in another module (issue 1185, PRE-EXISTING).
+--      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
+--      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
+--      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
+--  (3) PERF.  Surfacing the channel means RENDERING it, and `ppDiagCliSrc` →
+--      `nthLine` → `stringToChars` materialises the whole file per warning.
+--      Interleaved A/B on a quiet box: multi-module `check` 16.0–17.1 s → 38.9–40.6 s
+--      with byte-identical stdout.  Narrowing to one code removes the render, which
+--      fixes that at its cause rather than optimising around it.
+--
+-- So: exactly the demoted code, nothing else.  Widening this predicate is a decision
+-- about which verb is the diagnostic one, not a cleanup.
+coherenceWarnCode : String
+coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
+
+isCoherenceWarn : Diag -> Bool
+isCoherenceWarn (Diag SevWarning c _ _ _ _) = c == coherenceWarnCode
+isCoherenceWarn _ = False
+
 -- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
 -- the located re-render (emitLocatedWarnings) is the single warning surface —
 -- otherwise the CLI would print each warning twice (loc-free + located).  Scheme
@@ -781,16 +824,34 @@ emitLocatedWarnings src file ws =
 -- Emit warning lines that are ALREADY rendered.  `run`/`build`'s multi-module arms
 -- must render each warning against its OWN file (see `renderTripleWarnings`), which
 -- `emitLocatedWarnings` cannot do — it takes one src/file pair for the whole list.
--- Pre-rendered `String` is therefore the common currency between the two arms.
 emitWarningLines : List String -> <IO> Unit
 emitWarningLines [] = ()
 emitWarningLines ls = ePutStrLn (joinNl ls)
 
--- The rendered typecheck-stage WARNINGS of a SINGLE-file analysis, against that
--- file's own source.  The single-module twin of `renderTripleWarnings`.
-renderDiagWarnings : String -> String -> List Diag -> List String
-renderDiagWarnings src file diags =
-  map (ppDiagCliSrc src file) (filter isDiagWarn diags)
+-- The (path, src, coherence-warnings) triple of a SINGLE-file analysis.  The
+-- single-module twin of what `locatedProjectDiags` returns, so both `run` arms hand
+-- `finishRunEval` the SAME shape.
+--
+-- ⚠️ TRIPLES, NOT PRE-RENDERED STRINGS, and the reason is `--json`.  An earlier
+-- revision passed `List String` rendered by `ppDiagCliSrc` at the call site — human
+-- caret text, committed before the renderer knew whether it was writing to a human
+-- or to a machine.  On `medaka run --json` that put caret art on a stream whose
+-- documented contract is a `Diag` JSON envelope, and `diff_compiler_eval_json`
+-- (which captures stderr ALONE) caught it.  Deferring the rendering to the emit
+-- site is what lets one carrier serve both.
+cohWarnTriples : String -> String -> List Diag -> List (String, String, List Diag)
+cohWarnTriples src file diags = match filter isCoherenceWarn diags
+  [] => []
+  ws => [(file, src, ws)]
+
+-- Drop triples with no warnings, so `cjAllToJson` never emits a `"diagnostics":[]`
+-- entry for a file that had nothing to say.
+nonEmptyTriples : List (String, String, List Diag) -> List (String, String, List Diag)
+nonEmptyTriples ts = filter tripleHasDiags ts
+
+tripleHasDiags : (String, String, List Diag) -> Bool
+tripleHasDiags (_, _, []) = False
+tripleHasDiags _ = True
 
 -- Mirrors lib/fmt.ml's single-file dispatch: default --write (in place),
 -- --stdout prints, --check reports.  A single literal-file target keeps the
@@ -1187,6 +1248,16 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- demoted a formerly-loud coherence reject onto the same channel, at which point a
 -- diagnostic `build` used to print became a silent accept.  The lines are rendered
 -- by the gate (which knows each module's own source) and emitted by the caller.
+--
+-- ⚠️ RENDERED `String`s HERE, TRIPLES ON THE `run` PATH, and the asymmetry is a FACT
+-- ABOUT THE CLI rather than an oversight: **`medaka build` has no `--json` flag.**
+-- `parseBuildGo` recognizes `-o` / `--target` / `--allow-internal` / `--keep-ir` /
+-- `--emit-rt-obj` and nothing else, so `medaka build --json f.mdk` is rejected as a
+-- second positional ("takes exactly one input file") — verified on the binary, not
+-- assumed.  There is no machine-readable stream on this path to corrupt, so
+-- committing to the human rendering at the gate is correct here.  If `build --json`
+-- is ever added, this payload must become triples and follow `finishRunEval`'s
+-- `pendingRunDiags` discipline, or it reproduces the bug that fix exists for.
 data TypecheckGate = TGOk (List String) | TGErr String
 
 -- Load the entry + transitive imports and run the SAME front-end `medaka check`
@@ -1265,7 +1336,7 @@ typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
   let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
   let errs = filter isDiagError diags
   match errs
-    [] => TGOk (renderDiagWarnings tsrc target diags)
+    [] => TGOk (flatMap renderTripleWarnings (cohWarnTriples tsrc target diags))
     _ => TGErr (joinNl (map (ppDiagCliSrc tsrc target) errs))
 typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
@@ -1274,15 +1345,23 @@ typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
   let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
   match resDiags
     "" => match locatedProjectDiags target roots rsrc csrc
-      -- CHECK-STRENGTH gate: the located per-module diagnostics, identical to what
-      -- `medaka check` prints and to what `--json` reports.
+      -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
+      -- what `medaka check` prints and to what `--json` reports.
+      -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
+      -- earlier wording did not say so.  Human `medaka check` prints the ENTRY
+      -- module's warnings; this gate's `TGOk` payload carries EVERY module's
+      -- coherence warnings, so a `build` of a graph whose IMPORTED module has an
+      -- incomparable overlap warns where `check` of the entry does not.  That is the
+      -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
+      -- not identity, and reading it as identity is how the next reader "restores"
+      -- the entry-only scoping and re-silences the imported case.
       (Some errText, _) => TGErr errText
       (None, projWarns) =>
         let _ = resetTypeErrorsSticky ()
         let _ = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
           True => TGErr (locatedOrGeneric target roots rsrc csrc)
-          False => TGOk projWarns
+          False => TGOk (flatMap renderTripleWarnings projWarns)
     _ => TGErr resDiags
 
 -- Parse `[-o <out>] [--target <native|wasm>]`; first remaining positional is the
@@ -1346,24 +1425,48 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- check-strength gate below (single-file: analyzeLocatedG; multi-module:
 -- resolve + hadTypeErrors), so a genuinely ill-typed program never reaches
 -- evalModulesOutput (G1 soundness invariant).
--- [tcWarns] are the TYPECHECK-stage warnings the caller's own gate already
--- computed, ALREADY RENDERED against the file each belongs to.  ⚠️ They are a
--- parameter rather than something recomputed here because the two call sites derive
--- them differently (single-file: `analyzeLocatedG`'s diags; multi-module:
--- `locatedProjectDiags`' per-module triples) and recomputing would mean a second
--- whole-graph front-end pass.
+-- [cohWarns] are the COHERENCE warnings (`W-INCOMPARABLE-IMPLS`, and ONLY those —
+-- see `isCoherenceWarn` for why not the whole channel) that the caller's own gate
+-- already computed, as (path, src, diags) triples.  ⚠️ A parameter rather than
+-- something recomputed here because the two call sites derive them differently
+-- (single-file: `analyzeLocatedG`'s diags; multi-module: `locatedProjectDiags`'
+-- per-module triples) and recomputing would mean a second whole-graph front-end pass.
 --
--- 🚨 THIS PARAMETER EXISTS BECAUSE `run` WAS SILENT ON THEM.  `finishRunEval` has
--- always called `emitLocatedWarnings`, but only over the main-shape warnings it
--- builds locally — `checkRoute` passes `filter isDiagWarn diags` too, `run` never
--- received them.  Harmless while the channel carried only non-exhaustive-match
--- warnings; not harmless once F-3d DEMOTED a formerly-loud coherence reject onto
--- it, because a diagnostic `run`/`build` used to surface became invisible there.
--- The rendering gap is older than F-3d; routing a demoted error onto it is what
--- turned the gap into a silent-wrongness path.
-finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> List String -> <IO> Unit
-finishRunEval target jsonMode elaborated mods tcWarns =
-  let _ = emitWarningLines tcWarns
+-- 🚨 THIS PARAMETER EXISTS BECAUSE `run` WAS SILENT ON THE ONE DIAGNOSTIC F-3d
+-- DEMOTED.  `finishRunEval` has always called `emitLocatedWarnings`, but only over
+-- the main-shape warnings it builds locally, so nothing from the typecheck channel
+-- reached this verb.  That gap is OLDER than F-3d and is not a regression on its own
+-- — every other warning on the channel was invisible here before and still is.  What
+-- F-3d changed is that a diagnostic `run`/`build` DID surface (as a hard error) was
+-- routed onto the silent channel, which is a loud→silent transition.  Restoring that
+-- one is the whole job.
+--
+-- 🚨 AND `--json` IS A DIFFERENT CHANNEL, NOT A DIFFERENT FORMATTING PREFERENCE.
+-- `medaka run --json`'s STDERR is a `Diag` JSON envelope (AGENTS.md; the serializer
+-- is `cjAllToJson`, the same one `check --json` uses), and `diff_compiler_eval_json`
+-- grades that stream ALONE (`2>&1 1>/dev/null`).  Emitting human caret text there
+-- does not merely look wrong — it makes the stream unparseable, which is strictly
+-- worse than the silence this parameter exists to fix.  So on `--json` the warnings
+-- are STAGED into `pendingRunDiags` and merged into the ONE envelope that stream
+-- carries: `runtimePanic` prepends them if the program dies, and the flush below
+-- emits them if it does not.  ⚠️ The ORDER differs between the two modes on purpose
+-- — human: warnings BEFORE the program's output, matching `check`; JSON: after,
+-- because "one document" wins and the document cannot be written until it is known
+-- whether a runtime error joins it.
+--
+-- ⚠️ THE MAIN-SHAPE WARNING BELOW IS *NOT* ROUTED THROUGH ANY OF THIS, DELIBERATELY.
+-- It is emitted human-rendered even under `--json`, which is already an impurity on
+-- that stream — `test/error_quality_fixtures/eval/main_not_value.mdk` is a
+-- `run --json` fixture whose committed golden is CARET ART, not JSON.  That is
+-- PRE-EXISTING and blessed, it is not a diagnostic F-3d demoted, and folding it in
+-- would move a golden for a behaviour this change is not about.  Left exactly as it
+-- was; if the `--json` stream is ever made strictly pure, this is the second site.
+finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
+finishRunEval target jsonMode elaborated mods cohWarns =
+  -- The demoted coherence warning first, matching `checkRoute`'s `warns ++ mainWarns`
+  -- order.  On `--json` it is staged instead of printed (see above).
+  let _ = if jsonMode then setRef pendingRunDiags (nonEmptyTriples cohWarns)
+    else emitWarningLines (flatMap renderTripleWarnings cohWarns)
   -- 0.1.0 main-shape warning: elaborateModules already ran over the WHOLE graph,
   -- so mainSchemeRef is already populated — no extra typecheck pass needed.
   let mainWarns = match lastModPair mods
@@ -1376,7 +1479,17 @@ finishRunEval target jsonMode elaborated mods tcWarns =
   let _ = emitLocatedWarnings (readFileSafe target) target mainWarns
   let _ = setRef currentEvalFile target
   let _ = setRef runJsonMode jsonMode
-  putStr (runProgramOutput (fst elaborated) (snd elaborated))
+  let _ = putStr (runProgramOutput (fst elaborated) (snd elaborated))
+  -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
+  -- this and `runtimePanic`'s merge are mutually exclusive — the envelope is emitted
+  -- exactly once, never twice and never zero times.
+  flushPendingRunDiags jsonMode
+
+flushPendingRunDiags : Bool -> <IO> Unit
+flushPendingRunDiags False = ()
+flushPendingRunDiags True = match pendingRunDiags.value
+  [] => ()
+  ts => ePutStrLn (cjAllToJson ts)
 
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
@@ -1458,7 +1571,7 @@ runRunCmd argv =
                       [] =>
                         let _ = resetTypeErrorsSticky ()
                         let elaborated = elaborateModules rtD coreD modsD
-                        finishRunEval target jsonMode elaborated mods (renderDiagWarnings tsrc target diags)
+                        finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags)
                       _ =>
                         let _ = ePutStrLn (joinNl (map (ppDiagCliSrc tsrc target) errs))
                         exit 1

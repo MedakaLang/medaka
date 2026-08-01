@@ -310,7 +310,7 @@ bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-: >"$TMP/v0"; : >"$TMP/v1"; : >"$TMP/v2"; : >"$TMP/v3"; : >"$TMP/v4"
+: >"$TMP/v0"; : >"$TMP/v1"; : >"$TMP/v2"; : >"$TMP/v3"; : >"$TMP/v4"; : >"$TMP/v5"
 
 # ── Section 1 table ───────────────────────────────────────────────────────────
 # entry (relative to FIXDIR) | label | exp_check | exp_run | exp_build | mode | value | code
@@ -372,6 +372,8 @@ s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `
 s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER #1134 (OPEN, S3 OVER-REJECTION): inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ Drains on #1134 (BEHAVIOUR), never on #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
 s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break. ⚠️ THE ROW F-3d DELIBERATELY DID NOT WIDEN: α-equal heads SATISFY condition (a) (they are ⊑-comparable), so this was never (a)`s to demote -- it is a C1 violation, and F-3d demotes (a) alone. It also has no second line of defence: `entryCovers` makes equal heads cover each other, so the goal-site min⊑ reject never sees this shape|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-1c-multimodule-overlap/main.mdk|§6.1.2 "acceptance is per-goal" ACROSS MODULES, and the only in-tree coverage of the cross-module coherence-WARNING path (globalCoherenceConflict`s soft half / attachEntryWarnOpt / prependDiagOpt), which had none. TWO ⊑-incomparable pairs placed differently: `C` with both impls in lib.mdk (same-module -- seen by lib`s own sweep AND the whole-graph one, which is why `cohSoftInScope` exists) and `D` split across lib.mdk/other.mdk (no per-module sweep can see it). Both goals are `(Pair Int Bool)`, which matches ONLY the `Pair Int a` head of each pair -- a singleton matching set, trivially its own ⊑-minimum -- so the program is ACCEPTED and prints 1+10=11 while both declarations warn. Section 5 asserts each message appears EXACTLY ONCE on run|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|11|W-INCOMPARABLE-IMPLS
+s6-1c-unrelated-warning-not-surfaced.mdk|SECTION-5 DISCRIMINATING CONTROL: a program whose only warning is an UNRELATED `W-NONEXHAUSTIVE`. `check` MUST report it (asserted here) and section 5 asserts `run`/`build` must NOT -- the same diagnostic, present on one verb and absent on the others, which is what makes the pair separable. The earlier EMPTY controls (s3-min-subsumes, s8-i2) carry no channel warning at all and were INERT against a widened filter, proven by experiment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|W-NONEXHAUSTIVE,!W-INCOMPARABLE-IMPLS
 s6-c1-hard-and-soft-in-one-file.mdk|§6 C1 + §6.1.2 -- THE ONLY ROW THAT EXERCISES `cohScan`s TWO-SLOT RETURN. One file carrying BOTH coherence classes, with the SOFT pair reached FIRST by the reverse-declaration-order scan: `Tag Bool` twice (mutually ⊑ -- a C1 violation, HARD) plus `Tag (Pair Int a)`/`Tag (Pair a Int)` (⊑-incomparable -- condition (a) alone, SOFT). ⚠️ THE DISCRIMINATOR: a ONE-slot classified scan would stop at the soft pair and ACCEPT this file at exit 0 with only a warning, so the row asserts the ERROR is present, not merely that some diagnostic is. Pre-F-3d the whole file reported ONE diagnostic and never the duplicate, because the scan returned the first conflict and stopped. ⚠️ `!T-AMBIGUOUS-INSTANCE`: `main`s goal `Tag Bool` matches BOTH duplicates, and the goal-site arm must NOT fire -- `entryCovers` `tyHeadEqV` makes equal heads cover each other -- which is exactly why that class cannot be demoted|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL,W-INCOMPARABLE-IMPLS,!T-AMBIGUOUS-INSTANCE
 s6-1c-per-goal-unique-min-accepted.mdk|§6.1 choice-point 2 -- THE #614/#311 DRAIN (F-3d): the §6.1 SEPARATING CASE, now conformant. `Pair Int Int` is ⊑ both `Pair Int a` and `Pair a Int` and is the unique ⊑-minimum at the goal, so §3 `inst` selects it and both engines print 3. The value is the SPEC answer the fixture`s own header hand-derived while the row was still pinned to a REJECT, not a recapture. The declaration-time (a) sweep still fires as the `W-INCOMPARABLE-IMPLS` WARNING §6.1 licenses -- asserted here, since a positive-only pin could not tell the demotion from (a) having been deleted|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|W-INCOMPARABLE-IMPLS,!T-CONFLICTING-IMPL
 s6-1c-incomparable-no-minimum-control.mdk|CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject. Since #1155 (F-3c) the reject is the goal-site T-AMBIGUOUS-INSTANCE; since F-3d the declaration-time (a) finding beside it is a WARNING. ⚠️ The pair`s ARGUMENT INVERTED at F-3d and that is why both rows survive: it used to show adding the ⊑-minimum changes NOTHING (condition (a) by construction); it now shows adding it flips the sibling to ACCEPT-with-3, i.e. acceptance really is per-goal. A single accepting row could not establish that -- an implementation that simply stopped checking would accept both|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE,W-INCOMPARABLE-IMPLS
@@ -1031,6 +1033,126 @@ done
 # permutation-sensitivity was checked and found absent -- see the empty-section
 # check at the bottom of this file, which fails the whole gate on that.
 
+# ── Section 5: the DEMOTED warning reaches every verb, and NOTHING ELSE does ──
+# F-3d (#614/#311) turned a hard `T-CONFLICTING-IMPL` into the
+# `W-INCOMPARABLE-IMPLS` warning. A warning that only `check` can see is a
+# loud->silent transition on `run` and `build`, which is the one thing this stage
+# was gated on not doing -- and NOTHING in the suite could see it: sections 1-4
+# above grade stdout, exit codes and diagnostic CODES from `check --json` only;
+# `diff_native_cli` discards stderr on every relevant subtest;
+# `diff_compiler_run_check_agreement` greps run/build stderr for `E-PANIC` alone.
+# The feature could have been reverted wholesale and the suite stayed green.
+#
+# ⚠️ THE `EMPTY` ROWS ARE HALF THE SECTION, and the more easily lost half. The
+# first fix for the silence surfaced the WHOLE `matchWarnings` channel on
+# run/build, which is ~96% false positives: that channel is populated over the
+# module GRAPH, and `checkGuardExhaustivenessWith` takes its constructor oracle
+# from the graph rather than from the scrutinee's own type, so an exhaustive
+# `List` match is told to add a `Text _` case (issue 1185, PRE-EXISTING).
+# Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 -> 4896 stderr
+# lines. The `EMPTY` rows below pin that a program with no coherence overlap gets
+# NOTHING on run/build stderr -- so re-widening the filter reds this section
+# instead of shipping as a usability regression nobody graded.
+#
+#   entry | label | verb | assertion
+#     verb in {run, build, run-json}   (`medaka build` has NO --json flag)
+#     assertion in:
+#       HAS:<ere>   stderr must match
+#       NOT:<ere>   stderr must NOT match
+#       EMPTY       stderr must be entirely empty
+#       JSON:<code> stderr must PARSE as one JSON document (a real parser, not a
+#                   regex -- the bug this catches is `{...}` preceded by caret art,
+#                   which every substring check passes) AND carry that code
+#       ONCE:<ere>  stderr must match EXACTLY ONCE. `HAS` cannot express this, and
+#                   the difference is a real defect: a same-module overlap inside an
+#                   IMPORTED module is seen by that module's own coherence sweep AND
+#                   by the whole-graph one, so it printed TWICE on run/build where
+#                   `check` printed it once (`cohSoftInScope`)
+VERBS='s6-2-t4-open-goal-deferred.mdk|the demoted warning is VISIBLE on `run`, located, in human caret form|run|HAS:Overlapping impls of Sh
+s6-2-t4-open-goal-deferred.mdk|...and human means human: `run` must NOT emit the JSON envelope|run|NOT:^\{"files"
+s6-2-t4-open-goal-deferred.mdk|the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d|build|HAS:Overlapping impls of Sh
+s6-2-t4-open-goal-deferred.mdk|`run --json` stderr is a `Diag` JSON envelope (AGENTS.md) and must still PARSE -- human text there is worse than silence, and is what diff_compiler_eval_json caught|run-json|JSON:W-INCOMPARABLE-IMPLS
+s6-c1-duplicate-heads-rejected.mdk|the HARD class still rejects LOUDLY on run (it was never demoted)|run|HAS:Overlapping impls of Tag
+s6-1c-multimodule-overlap/main.mdk|SAME-MODULE pair inside an IMPORTED module: seen by lib`s own sweep AND the whole-graph one, so it printed TWICE on run before `cohSoftInScope`. EXACTLY ONCE, with lib`s own span|run|ONCE:lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C
+s6-1c-multimodule-overlap/main.mdk|CROSS-MODULE pair: no per-module sweep can see it (one `D` impl each), so `globalCoherenceConflict` alone reports it, naming both owners. The ONLY in-tree coverage of that path -- it had none|run|ONCE:Overlapping impls of D .defined in lib and other.
+s6-1c-multimodule-overlap/main.mdk|...and both reach `build` too|build|HAS:Overlapping impls of D .defined in lib and other.
+s6-1c-unrelated-warning-not-surfaced.mdk|🚨 THE DISCRIMINATING NEGATIVE CONTROL: its `W-NONEXHAUSTIVE` IS reported by `check` (section 1 asserts that) and must NOT reach `run`. Widen the filter back to the whole matchWarnings channel and THIS row reds -- the two EMPTY rows below do not, because their programs carry no channel warning at all (verified by experiment)|run|EMPTY
+s6-1c-unrelated-warning-not-surfaced.mdk|...and the same on `build`, the verb the spew measurement blew up on (0 -> 4896 lines)|build|EMPTY
+s3-min-subsumes.mdk|NEGATIVE CONTROL, single-file: a ranked overlap warns about NOTHING on run. ⚠️ WEAK BY CONSTRUCTION -- this program has no channel warning to withhold, so it cannot detect a widened filter; kept only as a total-silence floor|run|EMPTY
+s3-min-subsumes.mdk|NEGATIVE CONTROL, single-file: ...nor on build|build|EMPTY
+s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: a clean 3-module graph must produce NO run stderr. ⚠️ Same weakness as the row above -- it is a floor, not the discriminator|run|EMPTY
+s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: ...nor build stderr|build|EMPTY'
+
+echo
+echo '=== 5. the demoted warning on EVERY VERB (run / build / run --json) ==='
+printf '%s\n' "$VERBS" | while IFS='|' read -r entry label verb assertion; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')__$verb"
+  if [ ! -f "$entrypath" ]; then
+    printf 'FAIL verb   %-44s MISSING FIXTURE FILE\n' "$entry"
+    echo "FAIL" >>"$TMP/v5"
+    continue
+  fi
+  # STDERR ALONE, exactly as diff_compiler_eval_json captures it. stdout is the
+  # program's own output and is graded by section 1.
+  case "$verb" in
+    run)      bound "$MEDAKA" run "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
+    run-json) bound "$MEDAKA" run --json "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
+    build)    bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.bin" >/dev/null 2>"$TMP/$base.err" ;;
+    *)        printf 'FAIL verb   %-44s unknown verb %s\n' "$entry" "$verb"; echo "FAIL" >>"$TMP/v5"; continue ;;
+  esac
+  ok=1; detail=''
+  case "$assertion" in
+    EMPTY)
+      if [ -s "$TMP/$base.err" ]; then
+        ok=0; detail="stderr NOT empty ($(wc -l <"$TMP/$base.err") lines): $(head -1 "$TMP/$base.err")"
+      fi
+      ;;
+    HAS:*)
+      pat="${assertion#HAS:}"
+      grep -qE "$pat" "$TMP/$base.err" || { ok=0; detail="stderr lacks /$pat/"; }
+      ;;
+    NOT:*)
+      pat="${assertion#NOT:}"
+      if grep -qE "$pat" "$TMP/$base.err"; then ok=0; detail="stderr matches /$pat/ but must not"; fi
+      ;;
+    ONCE:*)
+      pat="${assertion#ONCE:}"
+      # Grade grep's EXIT STATUS as well as its count, for the same reason section 3
+      # does: >=2 means a BROKEN pattern, which prints nothing and would otherwise
+      # read as "0 matches" -- a vacuous verdict either way.
+      n="$(grep -cE "$pat" "$TMP/$base.err" 2>"$TMP/$base.greperr")"; grc=$?
+      [ -n "$n" ] || n=0
+      if [ "$grc" -gt 1 ]; then
+        ok=0; detail="grep FAILED (exit $grc) on /$pat/: $(head -1 "$TMP/$base.greperr")"
+      elif [ "$n" -ne 1 ]; then
+        ok=0; detail="stderr matches /$pat/ $n time(s), want exactly 1"
+      fi
+      ;;
+    JSON:*)
+      code="${assertion#JSON:}"
+      if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$TMP/$base.err" 2>"$TMP/$base.jsonerr"; then
+        grep -q "\"code\":\"$code\"" "$TMP/$base.err" || { ok=0; detail="parsed, but no \"code\":\"$code\""; }
+      else
+        ok=0; detail="stderr is NOT valid JSON: $(head -1 "$TMP/$base.jsonerr")"
+      fi
+      ;;
+    *)
+      ok=0; detail="unknown assertion $assertion"
+      ;;
+  esac
+  rm -f "$TMP/$base.bin"
+  if [ "$ok" -eq 1 ]; then
+    printf 'ok   verb   %-44s [%-8s] %s\n' "$entry" "$verb" "$assertion"
+    echo "PASS" >>"$TMP/v5"
+  else
+    printf 'FAIL verb   %-44s [%-8s] %s -- %s\n' "$entry" "$verb" "$assertion" "$detail"
+    printf '     %s\n' "$label" >>"$TMP/failnotes"
+    echo "FAIL" >>"$TMP/v5"
+  fi
+done
+
 # ── Tally ────────────────────────────────────────────────────────────────────
 # The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
 # permits it and dash does fork the last pipeline stage), so shell variables
@@ -1038,7 +1160,7 @@ done
 # FILE, which does, and the totals are derived from that -- never from a
 # variable, and never from an exit code.
 #
-# The verdicts are kept in FIVE files, one per section, because "did this gate
+# The verdicts are kept in SIX files, one per section, because "did this gate
 # run?" is a PER-SECTION question. A single global count cannot tell a gutted
 # section-3 table from a gate that never had one, and would report `checked 36,
 # 0 failed` over an IR section that made zero observations. Counting per section
@@ -1049,10 +1171,11 @@ p1="$(cnt v1 PASS)"; f1="$(cnt v1 FAIL)"
 p2="$(cnt v2 PASS)"; f2="$(cnt v2 FAIL)"
 p3="$(cnt v3 PASS)"; f3="$(cnt v3 FAIL)"
 p4="$(cnt v4 PASS)"; f4="$(cnt v4 FAIL)"
-n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4))
-pass=$((p0+p1+p2+p3+p4))
-fail=$((f0+f1+f2+f3+f4))
-asserts=$((n0+n1+n2+n3+n4))
+p5="$(cnt v5 PASS)"; f5="$(cnt v5 FAIL)"
+n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4)); n5=$((p5+f5))
+pass=$((p0+p1+p2+p3+p4+p5))
+fail=$((f0+f1+f2+f3+f4+f5))
+asserts=$((n0+n1+n2+n3+n4+n5))
 
 if [ -s "$TMP/failnotes" ]; then
   echo
@@ -1062,7 +1185,7 @@ fi
 
 echo
 printf '%s: checked %d assertions -- %d passed, %d failed\n' "$(basename "$0")" "$asserts" "$pass" "$fail"
-printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d | decl-order-perm %d\n' "$n0" "$n1" "$n2" "$n3" "$n4"
+printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d | decl-order-perm %d | per-verb-warning %d\n' "$n0" "$n1" "$n2" "$n3" "$n4" "$n5"
 
 # ⚠️ AN EMPTY SECTION IS A FAILURE, NOT A PASS. Three gates in this tree once
 # shelled out to a tool that was not installed, printed `skipping`, and exited 0
@@ -1080,6 +1203,7 @@ empty=0
 [ "$n2" -eq 0 ] && { echo "FAIL: section 2 (schemes) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n3" -eq 0 ] && { echo "FAIL: section 3 (emitted IR) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n4" -eq 0 ] && { echo "FAIL: section 4 (decl-order-perm) made ZERO assertions -- the derived qualifying set was empty." >&2; empty=1; }
+[ "$n5" -eq 0 ] && { echo "FAIL: section 5 (per-verb warning surface) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$empty" -eq 0 ] || exit 1
 
 [ "$fail" -eq 0 ]

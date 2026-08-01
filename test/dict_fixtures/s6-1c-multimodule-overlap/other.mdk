@@ -1,0 +1,7 @@
+-- The other half of the CROSS-MODULE ⊑-incomparable pair. NEITHER module's own
+-- `checkCoherence` can see this one -- each declares a single `D` impl -- so it is
+-- reported by `globalCoherenceConflict` alone, span-less, naming both modules.
+import base.{Pair, MkPair, D, dname}
+
+impl D (Pair a Int) where
+  dname _ = 20

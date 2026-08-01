@@ -2023,6 +2023,25 @@ evalDepthLimit = 25000
 export runJsonMode : Ref Bool
 runJsonMode = Ref False
 
+-- Diagnostics the DRIVER produced BEFORE eval started (typecheck-stage warnings,
+-- the main-shape warning), staged here so that `run --json` emits **exactly one**
+-- JSON envelope on stderr.
+--
+-- 🚨 WHY A REF AND NOT JUST "print them first".  Printing them first is what the
+-- non-JSON path does and it is right there — but on `--json` it produces TWO
+-- top-level documents on one stream (the warning envelope, then `runtimePanic`'s),
+-- and `{…}\n{…}` is not JSON.  The gate that grades this channel
+-- (`test/diff_compiler_eval_json.sh`) captures stderr ALONE and AGENTS.md states the
+-- contract as *"`medaka run --json` … emit[s] the SAME `Diag` JSON envelope"* —
+-- singular.  So the driver stages them here instead: if the program panics,
+-- `runtimePanic` merges them into its own envelope; if it does not, the driver
+-- flushes them after `runProgramOutput` returns.  Either way stderr holds one
+-- document.  Triples, not a flat `List Diag`, because `cjAllToJson`'s unit is
+-- (path, src, diags) and a multi-module run's warnings belong to different files.
+-- Inert (default []) on every non-`--json` path.
+export pendingRunDiags : Ref (List (String, String, List Diag))
+pendingRunDiags = Ref []
+
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
 -- non-located `parse` produces (every token collapses to the zero-width
 -- `Loc "" 1 0 1 0`).  The prelude (runtime.mdk/core.mdk) is parsed that way, so
@@ -2054,7 +2073,11 @@ runtimePanic code msg = match currentEvalLoc.value
     -- rather than re-wrapping it in its native-user-panic `[E-PANIC]` banner.
     if runJsonMode.value then
       let diag = Diag SevError code msg (Some (Loc ff sl sc el ec)) None None
-      panic "\{fmtSentinel}\{cjAllToJson [(ff, "", [diag])]}"
+      -- `pendingRunDiags` FIRST, so the driver's pre-eval warnings and this runtime
+      -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
+      -- not stage anything, which makes this byte-identical to the old single-triple
+      -- call for every fixture that has no warning.
+      panic "\{fmtSentinel}\{cjAllToJson (pendingRunDiags.value ++ [(ff, "", [diag])])}"
     else panic "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic

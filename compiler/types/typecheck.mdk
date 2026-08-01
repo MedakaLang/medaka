@@ -11039,7 +11039,25 @@ cohClassify e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
   | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  | not (cohSoftInScope mid1 mid2) = CohScan hard soft
   | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIface e1) xs ys mid1 mid2, cohImplLoc e1)))
+
+-- Which sweep OWNS a soft (⊑-incomparable) pair.  Two sweeps run over overlapping
+-- inputs: `checkCoherence` per module (mids are "", since `cohImplsOf` records none)
+-- and `globalCoherenceConflict` over every user module's impls (real mids).  A pair
+-- whose two impls live in the SAME module is seen by BOTH — the per-module one with a
+-- real span, the global one span-less (#414) — so recording it in both makes
+-- `run`/`build` print it TWICE where `check` prints it once.  The global sweep's
+-- unique contribution is the pair that SPANS two modules, which no per-module sweep
+-- can see; that is the only soft pair it should claim.
+--
+-- ⚠️ Scoped to the SOFT class deliberately.  The HARD class double-reports the same
+-- way, and that is PRE-EXISTING — it did so as a `T-CONFLICTING-IMPL` error before
+-- F-3d, on these same two paths — so narrowing it here would be an unrelated
+-- behaviour change riding this one, and one that moves error goldens.
+cohSoftInScope : String -> String -> Bool
+cohSoftInScope "" "" = True
+cohSoftInScope mid1 mid2 = cohIsCrossModule mid1 mid2
 
 -- each head matches the other, i.e. they are α-equal up to renaming (`cohSubsumes`
 -- is one-sided matching, so mutual matching means each is an instance of the other).

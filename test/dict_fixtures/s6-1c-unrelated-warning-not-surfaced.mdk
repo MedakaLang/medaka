@@ -1,0 +1,50 @@
+-- THE DISCRIMINATING NEGATIVE CONTROL for section 5 (F-3d, #614/#311): a program
+-- that carries a typecheck-stage warning which is NOT the demoted coherence one.
+--
+-- WHAT IT PINS. F-3d surfaces `W-INCOMPARABLE-IMPLS` on `run` and `build`, because
+-- that diagnostic was LOUD on those verbs before the demotion and would otherwise
+-- have gone silent. It must surface NOTHING ELSE. Every other warning on the
+-- `matchWarnings` channel was already invisible on `run`/`build` before F-3d and
+-- stays that way -- not a regression, and not F-3d's to change.
+--
+-- ⚠️ WHY THIS FIXTURE EXISTS RATHER THAN A CLEAN ONE. The first negative controls
+-- for this section were `s3-min-subsumes` and `s8-i2-global-instance-env`, which
+-- assert empty run/build stderr -- and they are INERT against the regression they
+-- were written for: neither program produces ANY channel warning, so they read
+-- `EMPTY` whether the filter is one code or the whole channel. Verified by
+-- experiment: with `isCoherenceWarn` widened to accept every warning and the
+-- compiler rebuilt, all nine section-5 rows still passed. THIS file is the one that
+-- can fail -- it has a real `W-NONEXHAUSTIVE` for `check` to report and for
+-- `run`/`build` to withhold, so the two verbs' behaviour is separable.
+--
+-- THE REGRESSION IT GUARDS, measured before the narrowing: surfacing the whole
+-- channel emitted ~96% false positives, because the channel is populated over the
+-- module GRAPH and `checkGuardExhaustivenessWith` takes its constructor oracle from
+-- the graph rather than from the scrutinee's own type -- so a fully exhaustive
+-- `List` match is told to add a `Text _` case (issue 1185, PRE-EXISTING and not
+-- F-3d's). `medaka build compiler/driver/medaka_cli.mdk` went from 0 to 4896 stderr
+-- lines, making `build` ~200x noisier than `check` and inverting which verb is the
+-- diagnostic one.
+--
+-- SPEC ANSWER (hand-derived): nothing in DICT-SEMANTICS is at issue here -- `hue`'s
+-- match is genuinely non-exhaustive (no `Blue` arm), which is a §-less exhaustiveness
+-- warning, and there is no overlap at all: `impl Sized Colour` is the only impl of
+-- its interface. The program is well-typed, `main` calls `hue Red` which IS covered,
+-- so it runs and prints 1.
+--
+-- OBSERVED: check ACCEPTS and reports `W-NONEXHAUSTIVE`; run and build ACCEPT,
+-- print 1, and say NOTHING on stderr.
+data Colour = Red | Green | Blue
+
+interface Sized a where
+  sized : a -> Int
+
+impl Sized Colour where
+  sized _ = 7
+
+hue : Colour -> Int
+hue c = match c
+  Red => 1
+  Green => 2
+
+main = println (hue Red)

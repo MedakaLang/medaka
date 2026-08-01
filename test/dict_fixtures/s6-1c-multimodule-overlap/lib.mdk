@@ -1,0 +1,15 @@
+-- The SAME-MODULE ⊑-incomparable pair: both `C` impls live here. Seen by this
+-- module's own `checkCoherence` (with a real span) AND by the whole-graph
+-- `globalCoherenceConflict` sweep (span-less) -- `cohSoftInScope` is what stops the
+-- second one claiming it, so `run`/`build` print it ONCE, as `check` does.
+import base.{Pair, MkPair, C, cname, D, dname}
+
+impl C (Pair Int a) where
+  cname _ = 1
+
+impl C (Pair a Int) where
+  cname _ = 2
+
+-- Half of the CROSS-MODULE pair; the other half is in other.mdk.
+impl D (Pair Int a) where
+  dname _ = 10
