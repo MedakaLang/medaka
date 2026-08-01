@@ -1,0 +1,21 @@
+-- module `nvdefs` — the #966 newName-VALIDATION corpus for the rename gate (the
+-- `newname.jsonl` transcript; `rename.jsonl` never touches this module).
+--
+-- Two parameter-less top-level values, one per #966 arm:
+--   `alpha`  — renamed to an UPPERCASE name (#966(a)). Uppercase is a
+--              constructor/type token, so the applied edit used to yield
+--              `Color = 1` and the parse error ``unexpected `Color` ``.
+--   `target` — renamed to a PRELUDE name (#966(b)). `seedPrelude` records
+--              prelude names as import ORIGINS with NO def entries, so the
+--              `allDefKeys` collision scan could not see `length` and the
+--              rename silently shadowed it.
+-- `bothSum` gives each of them a use site to click on (clicking a USE, not a
+-- def, is the shape both #913 S0s were about).
+export alpha : Int
+alpha = 1
+
+export target : Int
+target = 2
+
+export bothSum : Int
+bothSum = alpha + target

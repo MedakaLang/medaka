@@ -1,0 +1,40 @@
+-- module `pdefs` — the #963 RECORD-PUN corpus for the rename gate (`pun.jsonl`).
+-- A pun spells a FIELD name and a BINDER name with ONE token, so replacing that
+-- token outright renames the field too and the applied program stops compiling
+-- (`Unknown field: …`). `renameEmitVerified` (lsp.mdk) expands the pun instead:
+-- the edit's newText becomes `girth = <newName>`, which is what the sugar stands
+-- for in both pattern and expression position.
+--
+-- The two pun forms whose token `Loc` survives the parser are (a) and (b) below
+-- and they EXPAND; (c) is the negative control (a genuine `Set { … }` literal,
+-- whose bare elements are ordinary uses and must be replaced BARE); (d) is the
+-- F3(d) span-verification case (the parser builds a record-update pun's `EVar`
+-- unlocated, so the index points at the enclosing expression and rename must
+-- REFUSE).
+import set.{Set, size}
+
+data Blob = Blob { girth : Int, mark : Int }
+
+-- (a) PATTERN pun. `girth` inside the braces is the FIELD label and the binder
+--     of the local read on the right of `=>`.
+blobArea : Blob -> Int
+blobArea b = match b
+  Blob { girth, mark = m } => girth * m
+
+-- (b) EXPRESSION pun, in an all-bare brace (the only shape whose element `Loc`
+--     the parser keeps — a mixed `Blob { girth, mark = 2 }` folds to an
+--     ERecordCreate with the element `Loc` dropped).
+mkBlob : Int -> Int -> Blob
+mkBlob girth mark = Blob { girth, mark }
+
+-- (c) A GENUINE set literal: `Set` heads no `ConNamed` variant of this module,
+--     so `lo`/`hi` are plain uses, NOT punned fields.
+pairSize : Int -> Int -> Int
+pairSize lo hi = size (Set { lo, hi })
+
+-- (d) RECORD-UPDATE pun.
+reGirth : Blob -> Int -> Blob
+reGirth b girth = { b | girth }
+
+blobMain : Int
+blobMain = blobArea (mkBlob 3 4) + pairSize 1 2 + blobArea (reGirth (mkBlob 3 4) 9)

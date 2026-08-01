@@ -1,0 +1,5 @@
+-- module `reexp_mid` — RE-EXPORTS `sortBy` and nothing else.  It declares
+-- NOTHING, which is the whole point: `anyDeclDeclares` (the check the wildcard
+-- arm used to run) sees an empty module, while `import reexp_mid.*` really does
+-- put `sortBy` in the importer's scope.
+export import list.{sortBy}

@@ -1,0 +1,14 @@
+-- module `alias_other` — the NEGATIVE CONTROL for the #965(a) arm, sitting in
+-- the same cell as the failure: it exports a symbol spelled EXACTLY like
+-- `alias_lib`'s (`aliasBar`), and `alias_main` alias-imports THIS module too —
+-- but reaches only `otherFn` through the alias, never `aliasBar`.
+--
+-- So a detector keyed on "some file mentions `<alias>.aliasBar`", or on "this
+-- module is aliased somewhere", would refuse this rename. It must succeed: the
+-- arm is scoped to an alias that resolves to THIS symbol's own module AND is
+-- actually applied to THIS member.
+export aliasBar : Int
+aliasBar = 41
+
+export otherFn : Int -> Int
+otherFn n = n + 1

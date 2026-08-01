@@ -1,0 +1,58 @@
+-- module `scopes` — the AFFECTED-SCOPE corpus for the rename gate
+-- (`scopes.jsonl`).  ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK
+-- COORDINATES — keep this header exactly 22 lines.
+--
+-- Three F3 arms are proven here, each of which used to emit a WRONG EDIT:
+--   * a reserved word / `_` as the newName — every keyword is a lowercase
+--     identifier, so `plainVal` -> `match` sailed through the case check;
+--   * capture ACROSS namespaces — the collision scan compared namespace TAGS,
+--     so a `local` key could never match a `val` key and `capLocal` -> `capTop`
+--     was accepted, silently changing what the program prints;
+--   * capture by an IMPORTED name — the scan saw `allDefKeys` plus the prelude,
+--     never the names an import brings in, so `plainVal` -> `sortBy` shadowed
+--     the `import list.{sortBy}` clause.
+--
+-- THREE NEGATIVE CONTROLS sit beside them, each in the cell an over-refusing
+-- "fix" would land in:
+--   * `nested`   — locals shadowing locals must still rename;
+--   * `shdVal`   — a LOCAL shadowing a same-named TOP-LEVEL is ordinary code and
+--                  must still rename (the capture arm refuses renaming ONTO the
+--                  other one, never renaming EITHER of them);
+--   * `ScopeBox` — a record FIELD cannot capture a value reference, so
+--                  `plainVal` -> `boxWidth` must be ACCEPTED.
+import list.{sortBy}
+
+data ScopeBox = ScopeBox { boxWidth : Int }
+
+capTop : Int
+capTop = 100
+
+capFn : Int -> Int
+capFn n =
+  let capLocal = n + 1
+  capLocal + capTop
+
+nested : Int -> Int
+nested k =
+  let shOuter = k + 1
+  let shInner = q =>
+    let shOuter = q * 2
+    shOuter + 1
+  shOuter + shInner 3
+
+shdVal : Int
+shdVal = 10
+
+shdUse : Int -> Int
+shdUse n =
+  let shdVal = n * 2
+  shdVal + 1
+
+plainVal : Int
+plainVal = 7
+
+sortedPair : List Int
+sortedPair = sortBy compare [2, 1]
+
+scopesMain : Int
+scopesMain = capFn 1 + nested 5 + shdVal + shdUse 3 + plainVal + (ScopeBox { boxWidth = 4 }).boxWidth

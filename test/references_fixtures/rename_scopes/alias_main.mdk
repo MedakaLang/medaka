@@ -1,0 +1,21 @@
+-- module `alias_main` — #965(a): `walkFieldAccess` files an alias-qualified
+-- `D.aliasBar` reference at the ENCLOSING decl's `curLoc`.  Here the enclosing
+-- decl is a wrapper spelled `aliasBar` TOO, so that span really does spell the
+-- old name and F3(d) span verification waves it through — the emitted edit
+-- rewrote THIS module's own definition head and never touched `D.aliasBar`,
+-- leaving `Unbound variable: D.aliasBar`.  It corrupts an unrelated binder's
+-- definition, which is exactly what F3(d) exists to prevent.
+--
+-- `E` is the negative control's other half: `alias_other` is alias-imported HERE
+-- too, and only its `otherFn` is reached through the alias — so renaming
+-- `alias_other`'s own `aliasBar` must still succeed.  See alias_other.mdk.
+-- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
+-- header exactly 13 lines.
+import alias_lib as D
+import alias_other as E
+
+export aliasBar : Int -> Int
+aliasBar n = D.aliasBar n
+
+export aliasUse : Int
+aliasUse = aliasBar 1 + E.otherFn 2

@@ -53,6 +53,8 @@ import tools.lsp.{
   documentSymbols,
   definitionResult,
   referencesResult,
+  renameResult,
+  isRenameRefusal,
   emptyDocs,
   docsPut,
   uriOfPath,
@@ -325,6 +327,7 @@ mcpTools = [
   McpTool "medaka_symbols" "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list." medakaSymbolsSchema runSymbolsTool,
   McpTool "medaka_definition" "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result." medakaDefinitionSchema runDefinitionTool,
   McpTool "medaka_references" "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line`/`col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies." medakaReferencesSchema runReferencesTool,
+  McpTool "medaka_rename" "FIRST CHOICE for renaming a symbol project-wide instead of sed/grep-and-replace: resolves by BINDER IDENTITY, not spelling, so it distinguishes same-name-in-different-modules where grep cannot. Give `file` plus 0-based `line`/`col` and the `newName`; returns an LSP `WorkspaceEdit` `{\"changes\": {\"<uri>\": [{\"range\", \"newText\"}]}}` covering every use AND every declaration site. CONSERVATIVE-REFUSE rather than ever emit an edit set that breaks the program — an isError result always carries a `reason` naming what to do next, and the refusal set is open-ended (out-of-project symbols, an unusable `newName`, a name already visible in an affected scope, a binding shape whose index entry is known-incomplete, an unparseable file, and any span that does not spell the old name). A refusal is not a bug report: read the reason and act on it. NEVER writes to disk — apply the edits yourself." medakaRenameSchema runRenameTool,
   McpTool "medaka_fmt" "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)." medakaFmtSchema runFmtTool,
   McpTool "medaka_lint" "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`." medakaLintSchema runLintTool,
   McpTool "medaka_test" "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. ⚠️ RESULTS ARE UNDER THE INTERPRETER (eval), NOT the native backend — report as \"passes under eval\", never unqualified (#81). Bare `test \"…\"` decls are NOT run here." medakaTestSchema runTestTool,
@@ -974,6 +977,97 @@ runReferencesTool runtimeSrc coreSrc _stdlibDir args = match (fieldStr "file" ar
       let result = referencesResult runtimeSrc coreSrc uri src (referencesParams line col includeDecl) docs
       toolTextResult (stringify result) False
   _ => toolArgError "medaka_references: missing or invalid argument — require 'file' (string), 'line' (integer), and 'col' (integer)"
+
+-- ── medaka_rename tool ────────────────────────────────────────────────────────
+
+-- inputSchema: `file` (path) plus `line`/`col` (0-based LSP-style position) and
+-- `newName` (the replacement spelling), all required.
+medakaRenameSchema : Json
+medakaRenameSchema = jObject
+  [
+    ("type", JString "object"),
+    (
+      "properties",
+      jObject [
+        (
+          "file",
+          jObject [
+            ("type", JString "string"),
+            (
+              "description",
+              JString "Path to the .mdk file holding the symbol to rename.",
+            ),
+          ],
+        ),
+        (
+          "line",
+          jObject [
+            ("type", JString "integer"),
+            (
+              "description",
+              JString "0-based line of the position (LSP-style, first line is 0).",
+            ),
+          ],
+        ),
+        (
+          "col",
+          jObject [
+            ("type", JString "integer"),
+            (
+              "description",
+              JString "0-based column of the position (LSP-style, first column is 0).",
+            ),
+          ],
+        ),
+        (
+          "newName",
+          jObject [
+            ("type", JString "string"),
+            ("description", JString "The new name to rename the symbol to."),
+          ],
+        ),
+      ],
+    ),
+    (
+      "required",
+      jArray [JString "file", JString "line", JString "col", JString "newName"],
+    ),
+  ]
+
+-- Synthesize a `{ position, newName }` params Json — the shape
+-- `tools.lsp.renameResult` expects (`positionLine`/`positionChar` plus
+-- `renameNewName`'s top-level `newName`).
+renameParams : Int -> Int -> String -> Json
+renameParams line col newName = jObject
+  [
+    ("position", jObject [("line", JInt line), ("character", JInt col)]),
+    ("newName", JString newName),
+  ]
+
+-- medaka_rename handler: resolve the identifier at (line, col) to a project-wide
+-- edit set renaming it to `newName`, via the stateless harness
+-- `tools.lsp.renameResult` (the SAME code path the LSP `textDocument/rename`
+-- handler runs). Read-only — NEVER writes to disk: `file` is only ever `readFile`d
+-- and the computed edits are ECHOED for the caller to apply. A safety refusal
+-- (F3: out-of-project symbol, capture/collision, or off-identifier) comes back as
+-- a structured `{refused, reason}` object rendered as an isError result, never a
+-- crash and never a wrong/silent edit.
+-- The scrutinee is a 3-tuple (file/line/col) with `newName` matched separately —
+-- a 4-tuple `match` scrutinee is long enough that `medaka fmt` wraps it into a
+-- trailing-comma multi-line form the parser then rejects, so we keep it to three
+-- (exactly as `runReferencesTool` does) and extract `newName` in an inner match.
+runRenameTool : String -> String -> String -> Json -> <IO> Json
+runRenameTool runtimeSrc coreSrc _stdlibDir args = match (fieldStr "file" args, fieldInt "line" args, fieldInt "col" args)
+  (Some path, Some line, Some col) => match fieldStr "newName" args
+    None => toolArgError "medaka_rename: missing or invalid argument — require 'newName' (string)"
+    Some newName => match readFile path
+      Err e => toolArgError (stringConcat ["medaka_rename: cannot read file '", path, "': ", e])
+      Ok src =>
+        let uri = uriOfPath path
+        let docs = docsPut uri src emptyDocs
+        let result = renameResult runtimeSrc coreSrc uri src (renameParams line col newName) docs
+        toolTextResult (stringify result) (isRenameRefusal result)
+  _ => toolArgError "medaka_rename: missing or invalid argument — require 'file' (string), 'line' (integer), and 'col' (integer)"
 
 -- ── medaka_fmt tool ───────────────────────────────────────────────────────────
 

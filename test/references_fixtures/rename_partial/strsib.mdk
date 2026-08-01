@@ -1,0 +1,21 @@
+-- module `strsib` — DELIBERATELY UNPARSEABLE, and unparseable in the ONE way
+-- that also corrupts the LEXER's view: the string literal on the `tag` line is
+-- never closed, so every character after it is swallowed into that string and
+-- never becomes a `TIdent`.
+--
+-- ⚠️ THE OCCURRENCE MUST SIT *AFTER* THE OPEN QUOTE AND NOWHERE ELSE, or this
+-- fixture proves nothing. A first version also carried
+-- `import gooddefs.{strval}` ABOVE the `tag` line; the lexer reaches that line
+-- fine, so a token-based mention scan still found `strval` there and the
+-- discrimination check passed a build that was blind. The import is gone: the
+-- only occurrence is on the last line, past the point the lexer loses.
+--
+-- A token-based scan therefore answers "this file does not mention
+-- `strval`" and the F2 arm waves it through, silently dropping this occurrence.
+-- `srcMentionsName` is a character scan for exactly this cell. This file
+-- mentions `untouched` NOWHERE, so `partial.jsonl`'s positive control stays
+-- discriminating.
+tag = "unterminated
+
+export strOther : Int
+strOther = strval + 1

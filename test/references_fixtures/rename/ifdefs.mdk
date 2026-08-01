@@ -1,0 +1,26 @@
+-- module `ifdefs` — the INTERFACE-METHOD rename corpus for the rename gate
+-- (`ifacemethod.jsonl`).  ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK
+-- COORDINATES — keep this header exactly 11 lines.  This shape used to be the
+-- F3(d) span-verification case: `refindex.mdk`'s `defsOfDecl` recorded an
+-- interface's method declarations at the enclosing decl's name `Loc` — the
+-- INTERFACE name — so the edit landed on `Shp` and produced source that no
+-- longer parses; `renameEmitVerified` (lsp.mdk) refused it.  **#1013 fixed that
+-- Loc**, so the transcript now asserts the POSITIVE outcome: the interface's own
+-- method declaration, BOTH impl clause heads and both call sites, five edits, and
+-- the applied module still checks.  The corpus's F3(d) negative case moved to
+-- `pun.jsonl` (a record-update pun, whose element `Loc` the parser drops).
+interface Shp a where
+  zoneArea : a -> Int
+
+data Sqr = Sqr Int
+
+impl Shp Sqr where
+  zoneArea (Sqr s) = s * s
+
+data Rct = Rct Int Int
+
+impl Shp Rct where
+  zoneArea (Rct w h) = w * h
+
+zoneTotal : Int
+zoneTotal = zoneArea (Sqr 3) + zoneArea (Rct 2 5)

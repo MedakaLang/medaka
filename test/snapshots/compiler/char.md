@@ -1,5 +1,5 @@
 # META
-source_lines=51
+source_lines=58
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared ASCII Char -> Bool predicates for the self-hosted compiler stages.
@@ -53,6 +53,13 @@ isHexDigit c = isDigit c || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 -- lib/lsp_server.ml's is_ident_char.
 export isIdentChar : Char -> Bool
 isIdentChar c = isAlnum c
+
+-- Identifier-LEAD char (a-z A-Z _).  `isIdentChar` also admits digits and `'`,
+-- neither of which may START an identifier, so the two are NOT interchangeable:
+-- the lead class is what `lint`'s identifier tokenizer and `lsp`'s rename
+-- newName validation both need.
+export isIdentStart : Char -> Bool
+isIdentStart c = isLower c || isUpper c || c == '_'
 # DESUGAR
 (DTypeSig true "isSp" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isSp" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar " "))))
@@ -84,6 +91,8 @@ isIdentChar c = isAlnum c
 (DFunDef false "isHexDigit" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isDigit") (EVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "F"))))))
 (DTypeSig true "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "c")) (EApp (EVar "isAlnum") (EVar "c")))
+(DTypeSig true "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 # MARK
 (DTypeSig true "isSp" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isSp" ((PVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar " "))))
@@ -115,3 +124,5 @@ isIdentChar c = isAlnum c
 (DFunDef false "isHexDigit" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isDigit") (EVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "F"))))))
 (DTypeSig true "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "c")) (EApp (EVar "isAlnum") (EVar "c")))
+(DTypeSig true "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))

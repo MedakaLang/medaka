@@ -1,5 +1,5 @@
 # META
-source_lines=1920
+source_lines=3340
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -71,10 +71,11 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import support.char.{isIdentChar, isDigit}
-import support.util.{maxI, utf8Len, joinWith}
+import support.char.{isIdentChar, isDigit, isLower, isUpper, isIdentStart}
+import support.util.{maxI, utf8Len, joinWith, splitOnChar, endsWith}
+import support.path.{joinPath}
 import io.{stripCR}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, mapProg, mapExpr}
 import types.typecheck.{
   checkProgramSchemes,
   checkProgramSchemesWithRuntime,
@@ -84,7 +85,14 @@ import types.typecheck.{
   currentSeedSchemes,
 }
 import tools.fmt.{formatSource}
-import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
+import tools.refindex.{
+  RefIndex,
+  buildRefIndexProject,
+  binderAt,
+  usesOf,
+  defsOf,
+  allDefKeys,
+}
 import list.{sortBy}
 import frontend.ast.{
   Decl,
@@ -117,6 +125,36 @@ import frontend.ast.{
   UseGroup,
   UseWild,
   UseAlias,
+  -- F3(b) import-scope capture (arm 3): the name a selective-import member
+  -- binds LOCALLY is its alias when it has one, so `import m.{f as g}` must be
+  -- read as binding `g`, not `f`.
+  useMemberLocal,
+  -- #963 pun expansion (`punFieldsOfDecls` below) — the pattern side needs the
+  -- pattern constructors, the expression side the pattern-HOSTING expression
+  -- constructors.
+  Pat(..),
+  RecPatField(..),
+  Arm(..),
+  Guard(..),
+  GuardArm,
+  DoStmt(..),
+  FunClause(..),
+  MethodDefault(..),
+  Expr,
+  ELoc,
+  EDoOrigin,
+  EVar,
+  ELam,
+  ELet,
+  ELetGroup,
+  EMatch,
+  EBlock,
+  EDo,
+  EGuards,
+  ESetLit,
+  -- F3(f) #965a: pre-resolve, an alias-qualified `D.f` IS an `EFieldAccess` on
+  -- the alias var (resolve rewrites it to a plain `EVar "D.f"` later, ast.mdk).
+  EFieldAccess,
 }
 
 -- ── open-document store ─────────────────────────────────────────────────────
@@ -1124,6 +1162,18 @@ responseMsg : Json -> Json -> Json
 responseMsg idJson result =
   jObject [("jsonrpc", JString "2.0"), ("id", idJson), ("result", result)]
 
+-- A JSON-RPC error response: { jsonrpc, id, error: { code, message } }. Used by
+-- `textDocument/rename` to surface an F3 refusal as an error (so the client
+-- shows the reason and applies NO edit) rather than a malformed WorkspaceEdit.
+-- code -32803 = LSP `RequestFailed`.
+responseErr : Json -> String -> Json
+responseErr idJson message = jObject
+  [
+    ("jsonrpc", JString "2.0"),
+    ("id", idJson),
+    ("error", jObject [("code", JInt (-32803)), ("message", JString message)]),
+  ]
+
 -- A JSON-RPC notification envelope: { jsonrpc, method, params }.
 notificationMsg : String -> Json -> Json
 notificationMsg meth params = jObject
@@ -1417,6 +1467,7 @@ initializeResult = jObject
         ("definitionProvider", JBool True),
         ("documentHighlightProvider", JBool True),
         ("referencesProvider", JBool True),
+        ("renameProvider", JBool True),
         ("hoverProvider", JBool True),
         ("completionProvider", jObject []),
         ("inlayHintProvider", JBool True),
@@ -1761,6 +1812,1371 @@ includeDeclarationOf params = match lookup "context" params
     Some (JBool b) => b
     _ => True
 
+-- ── rename (#254 Stage 2) ────────────────────────────────────────────────────
+-- The SHARED rename substrate: MCP's `medaka_rename` and LSP's
+-- `textDocument/rename` both call this ONE function (the #254 "one code path"
+-- design). It reuses the Stage-1 reference index verbatim
+-- (`buildRefIndexProject`/`binderAt`/`usesOf`/`defsOf`) — rename is "references +
+-- an edit per site + safety checks", nothing more.
+--
+-- Returns EITHER an LSP `WorkspaceEdit { changes: { <uri>: [ {range, newText} ] } }`
+-- (F5) on success, OR a structured refusal `{ refused: true, reason }` — NEVER a
+-- crash and NEVER a wrong/silent edit (F3 conservative-refuse: a bad edit set the
+-- client applies BREAKS the program, so when in doubt we REFUSE with a reason).
+-- It NEVER writes to disk — the caller applies the returned edits (the #250 /
+-- `fmt --write` guardrail, exactly as `medaka_fmt`).
+--
+-- EVERY def site is in the edit set (F6 rename-includes-def) and they are sorted
+-- IN with the uses by (path, line, char) — the same deterministic order
+-- `referenceLocations` uses, so the emitted edit list is stable across
+-- runs/machines (the merge queue runs the full suite on a DIFFERENT runner; any
+-- enumeration/hash-order-dependent list BOUNCES it — #912 did exactly that).
+--
+-- F3 refusal cases (each SAFETY-CRITICAL):
+--   (a) out-of-project — `defsOf key` is `[]` (an external/`?ext`/prelude key
+--       carries no project def site), so the symbol is defined outside the
+--       project (stdlib/prelude): REFUSE. `buildRefIndexProject` only indexes
+--       files under the project root, so every `defsOf` uri is in-project.
+--   (b) capture/shadow — `newName` is already taken IN AN AFFECTED SCOPE:
+--       a same-namespace binder anywhere in the project (a coarse conservative
+--       scan of `allDefKeys`), a PRELUDE binder (#966(b) — the prelude is seeded
+--       into the index WITHOUT def entries, so `allDefKeys` alone never sees it
+--       and a rename onto `length` silently shadowed it), ANY-namespace binder
+--       defined in a file this rename edits (the namespace-tag scan alone let a
+--       local capture a top-level name and change the program's answer), or a
+--       name an affected file IMPORTS (`import list.{sortBy}`): REFUSE.
+--       Over-refusal is acceptable (conservative spirit); silent capture is NOT.
+--   (c) illegal newName — `newName`'s LEXICAL CLASS must match the binder's
+--       namespace (#966(a)): a value/local/method/field binder needs a
+--       lowercase-initial identifier, a type/constructor needs an
+--       uppercase-initial one. Renaming a value to `Color` used to be accepted
+--       and the applied edit then failed to parse (`unexpected \`Color\``) —
+--       a wrong edit, which this path exists to never emit. `newName` must also
+--       LEX as an identifier: every reserved word is a lowercase identifier, so
+--       `foo` → `match` sailed through the case check (`newNameReserved`).
+--   (d) span verification — an emitted span that does not spell the old name
+--       (`renameEmitVerified`).
+--   (f) known-incomplete shape — the clicked binding is a self-recursive local
+--       (#1003), a top-level `let rec` (#951), a name this module both declares
+--       and imports (#1056), or one reached through a module alias somewhere
+--       (#965a). Each is decided from the AST (`renameIndexIncomplete`), not
+--       from the index whose completeness is in question.
+--   F2  partial graph — a project file that does not parse and mentions the old
+--       name has contributed NO occurrences, so the edit set is silently
+--       truncated (`renameBrokenProjectFile`).
+export renameResult : String -> String -> String -> String -> Json -> Docs -> <IO> Json
+renameResult runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params, renameNewName params)
+  (Some line, Some col, Some newName) => match identifierAt src line col
+    None => renameRefusal "position is not on an identifier"
+    Some _ =>
+      let rootFile = pathOfUri uri
+      let projectDir = findProjectRoot (dirOfPath rootFile)
+      let read = path => docsGet (uriOfPath path) docs
+      let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
+      -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
+      -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
+      match binderAt idx rootFile (line + 1) col
+        None => renameNoBinderRefusal rootFile docs
+        Some key => renameEditFor idx runtimeSrc coreSrc projectDir key newName docs
+  _ => renameRefusal "rename requires a position and a newName"
+
+-- `binderAt` found nothing at a position that IS on an identifier.
+--
+-- ⚠️ THE COMMONEST REAL CAUSE IS NOT A MISSING SYMBOL — it is that the CLICKED
+-- BUFFER does not parse, i.e. the user is mid-edit. `refindex`'s `indexModule`
+-- no-ops an unparseable file, so there is nothing at ANY position in it, and
+-- "no renameable symbol at this position" then sends the user hunting for a
+-- cursor bug in the one situation where the cursor is fine. Same F2 truth as
+-- `renameBrokenProjectFile`, reached one step earlier.
+renameNoBinderRefusal : String -> Docs -> <IO> Json
+renameNoBinderRefusal p docs = match renameSrcOf p docs
+  None => renameRefusal "no renameable symbol at this position"
+  Some src =>
+    if srcFailsToParse src then
+      renameRefusal "this file does not parse, so nothing in it is indexed and no position in it can be renamed — fix the parse error first"
+    else
+      renameRefusal "no renameable symbol at this position"
+
+-- LSP `textDocument/rename` carries the target spelling in top-level
+-- `params.newName`; MCP synthesizes the same shape (`renameParams`, mcp.mdk).
+renameNewName : Json -> Option String
+renameNewName params = fieldStr "newName" params
+
+-- The refusal object surfaced to BOTH layers. MCP renders it as an isError text
+-- result; LSP maps it to a JSON-RPC error response (`isRenameRefusal`).
+renameRefusal : String -> Json
+renameRefusal reason =
+  jObject [("refused", JBool True), ("reason", JString reason)]
+
+-- True iff a `renameResult` Json is a refusal (vs a WorkspaceEdit). The MCP/LSP
+-- wrappers key their error rendering off this.
+export isRenameRefusal : Json -> Bool
+isRenameRefusal j = match lookup "refused" j
+  Some (JBool True) => True
+  _ => False
+
+-- Build the WorkspaceEdit for `key` → `newName`, or refuse (F3).
+--
+-- `defsOf` is PLURAL and every entry is edited (#964). A multi-clause top-level
+-- function is N `DFunDef` decls under ONE key, and an impl method contributes one
+-- clause head per impl (#1002): editing only one head left the others spelling the
+-- OLD name, which still COMPILES and silently changes runtime behaviour. That is
+-- the exact silent-wrongness this whole path exists to avoid.
+renameEditFor : RefIndex -> String -> String -> String -> String -> String -> Docs -> <IO> Json
+renameEditFor idx runtimeSrc coreSrc projectDir key newName docs =
+  if isExternalKey key then renameRefusal "cannot rename a symbol defined outside the project"
+  else match defsOf idx key
+    [] => renameRefusal "cannot rename a symbol defined outside the project"
+    defs => renameEditChecked idx runtimeSrc coreSrc projectDir key newName defs docs
+
+-- The symbol IS in-project and has def sites; now vet `newName` itself, then
+-- the SCOPES the edit lands in, then the INDEX those scopes were derived from,
+-- and only then emit. F3(c) (#966(a)) runs BEFORE the collision scan so an
+-- ill-formed or wrong-case name is reported as such rather than as an incidental
+-- collision.
+--
+-- The edit set is built ONCE, up front, because three of the four checks below
+-- are questions about the FILES it touches ("any affected scope", F3(b)) rather
+-- than about the request:
+--   F3(b) capture — `newName` already visible in an affected file
+--   F3(f) known-incomplete shape — the clicked binding is one of the four
+--         SYNTACTIC shapes whose index entry is provably missing occurrences
+--   F2    partial graph — some project file does not parse and mentions the old
+--         name, so its occurrences are missing from the index entirely
+renameEditChecked : RefIndex -> String -> String -> String -> String -> String -> List (String, Loc) -> Docs -> <IO> Json
+renameEditChecked idx runtimeSrc coreSrc projectDir key newName defs docs = match newNameIllegal key newName
+  Some reason => renameRefusal reason
+  None =>
+    -- F6: EVERY def site is included, sorted IN with the uses (never a
+    -- duplicate — `recordDef` never pushes into `refs`, and `pushDef` refuses
+    -- a (uri, span) it already holds, refindex.mdk).
+    let all = sortBy compareUseLoc (defs ++ usesOf idx key)
+    let files = affectedPaths all
+    if renameCollides idx runtimeSrc coreSrc projectDir key newName files docs then
+      renameRefusal (stringConcat ["renaming to `", newName, "` would collide with an existing binder"])
+    else match renameIndexIncomplete projectDir key defs docs
+      Some reason => renameRefusal reason
+      None => match renameBrokenProjectFile projectDir key docs
+        Some reason => renameRefusal reason
+        None => renameEmitVerified key newName all docs
+
+-- The DISTINCT files the edit set touches, in the sorted order `all` already
+-- carries — the "affected scope" of `REFERENCES-RENAME-DESIGN.md:368-370`,
+-- approximated at FILE granularity (the coarsest unit that is still sound:
+-- capture and shadowing are both intra-file phenomena once the importing file
+-- is itself in the set). `all` is sorted by path, so same-path entries are
+-- contiguous and `spanSamePath` yields each file exactly once.
+affectedPaths : List (String, Loc) -> List String
+affectedPaths [] = []
+affectedPaths ((p, _)::rest) = p :: affectedPaths (snd (spanSamePath p rest))
+
+pathIsIn : String -> List String -> Bool
+pathIsIn _ [] = False
+pathIsIn p (q::qs) = p == q || pathIsIn p qs
+
+-- F3(d) SPAN VERIFICATION — the last line of the "never a wrong edit" contract,
+-- and the only F3 arm that is not about the user's request at all: it audits the
+-- INDEX. Every one of F3(a)-(c) assumes the (uri, Loc) set really does point at
+-- occurrences of the symbol; if the index puts a def at a span that does NOT
+-- spell the old name, the emitted WorkspaceEdit silently overwrites *something
+-- else* and the caller applies it sight-unseen.
+--
+-- That is not hypothetical. Renaming an INTERFACE METHOD (`area` → `zarea` in
+-- `interface Shape a where / area : a -> Int`) used to emit an edit over the
+-- span `Shape` — `refindex.mdk`'s `defsOfDecl` recorded an interface's method
+-- decls at the enclosing DECL's name `Loc` (the interface name), not each
+-- method's own — so the applied edit produced `interface zarea a where` while
+-- leaving the method declaration untouched: a program that no longer parses.
+-- This arm caught it and refused. **#1013 has since fixed the Loc**, so that
+-- rename now emits a complete, correct edit set (interface decl + every impl
+-- head + every call site) and this arm no longer fires on it; the shapes that
+-- still reach it are the two puns whose element `Loc` the parser drops — see
+-- the F3(e) note below — which `pun.jsonl` pins.
+--
+-- Being a property of the EDIT SET rather than of one known bug, this also
+-- catches any future Loc regression in the same shape — the check is cheap
+-- (one `identifierAt` per edit) and its failure direction is refusal.
+renameEmitVerified : String -> String -> List (String, Loc) -> Docs -> <IO> Json
+renameEmitVerified key newName all docs = match keyNsName key
+  None => renameRefusal "cannot determine the kind of the symbol being renamed"
+  Some (_ns, oldName) =>
+    if allSpansSpell oldName all docs then
+      workspaceEditJson (punTablesFor all docs) newName all
+    else
+      renameRefusal (stringConcat [
+        "the reference index reports an occurrence of `",
+        oldName,
+        "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source",
+      ])
+
+allSpansSpell : String -> List (String, Loc) -> Docs -> <IO> Bool
+allSpansSpell _ [] _ = True
+allSpansSpell oldName ((p, loc)::rest) docs = spanSpells oldName p loc docs
+  && allSpansSpell oldName rest docs
+
+-- Does the edit span `loc` in file `p` currently hold exactly the identifier
+-- `oldName`? An occurrence is always a single name token, so a multi-line span
+-- or a width mismatch is already wrong; `identifierAt` then confirms the token
+-- starts where the span does and reads as the same name. An unreadable file
+-- yields False (refuse) — the index derived the span from SOME text, so failing
+-- to re-read it means we cannot vouch for the edit.
+spanSpells : String -> String -> Loc -> Docs -> <IO> Bool
+spanSpells oldName p (Loc _ sl sc el ec) docs =
+  if sl != el || ec - sc != stringLength oldName then False
+  else match renameSrcOf p docs
+    None => False
+    Some src => match identifierAt src (sl - 1) sc
+      Some got => got == oldName
+      None => False
+
+-- The current text of `p`: the open-document buffer if the client has one (an
+-- unsaved edit must be what we verify against), else the file on disk. Mirrors
+-- `refindex.mdk`'s `getSrc`, whose index we are auditing.
+renameSrcOf : String -> Docs -> <IO> Option String
+renameSrcOf p docs = match docsGet (uriOfPath p) docs
+  Some s => Some s
+  None => match readFile p
+    Ok s => Some s
+    Err _ => None
+
+-- ── F3(e) PUN EXPANSION (#963) ───────────────────────────────────────────────
+-- A record PUN spells a FIELD name and a BINDER name with ONE token:
+--
+--   pattern     `area s = match s / Circle { radius } => radius * 3`
+--   expression  `mk radius = Circle { radius }`
+--
+-- Both `{ radius }` tokens are indexed — correctly — as an occurrence of the
+-- LOCAL `radius` (refindex's `recFieldBinders` gives the pattern pun the field
+-- token's own `Loc`; `walkExpr`'s `ESetLit` arm walks the bare element as an
+-- ordinary use). So the span really does spell `radius` and F3(d) waves it
+-- through; replacing it outright with `rad` yields `Circle { rad }`, which names
+-- a field that does not exist — a LOUD `Unknown field: rad` (#963). Wrong edit,
+-- and the one class span verification structurally cannot see: the span is right,
+-- the REPLACEMENT is what is wrong.
+--
+-- The fix is not a fourth refusal but the expansion the sugar already stands
+-- for: emit `radius = rad` over the whole pun token, which is what
+-- `Circle { radius = rad }` means in both pattern and expression position. The
+-- field name is preserved, the binder moves, and the applied program compiles.
+--
+-- WHY IT IS SAFE TO REWRITE MORE THAN THE NAME. A pun span reaches an edit set
+-- ONLY as a val/local occurrence: refindex never records a field USE for a
+-- record-literal label (`walkFields` drops the label) and files every field DEF
+-- at the enclosing `data` decl's own name `Loc` (`fieldDef`) — so no `field`-key
+-- edit can ever land on a pun token, and the expansion cannot collide with a
+-- field rename.
+--
+-- WHY THE DETECTION IS COMPLETE, not a best-effort scan:
+--   * PATTERN puns are intrinsic to the AST — `RecPatField name loc None` IS the
+--     pun, `Some pat` is the explicit form. No inference, no ambiguity.
+--   * EXPRESSION puns are `ESetLit`s that desugar rewrites into `ERecordCreate`,
+--     and `punRecordSetLit` reproduces `rewriteRecordPun`'s guard EXACTLY
+--     (desugar.mdk: head is a `ConNamed` ctor OF THIS FILE, non-empty, every
+--     item a bare var). Anything that guard rejects is a genuine `Set { … }` /
+--     `Map { … }` literal, whose elements are plain uses that must be replaced
+--     by the bare name — which is what falls through to. ⚠️ The per-FILE ctor
+--     scope is not a shortcut: a cross-module pun does not compile
+--     (`desugarRecordPuns` collects record names from one module's decls), so
+--     widening it would expand a genuine set element.
+--   * REACHABILITY is `mapProg`'s, i.e. desugar's own: a pun the traversal
+--     cannot reach is a pun `desugarRecordPuns` never expanded either, so it is
+--     not a record pun in any program that compiles.
+--
+-- Two pun forms are NOT expanded here and do not need to be: a MIXED brace
+-- (`Circle { radius, tag = 1 }`, which the parser folds to `ERecordCreate` via
+-- `kvElemToField` and whose element `Loc` is dropped) and a record-update pun
+-- (`{ c | radius }`, whose `EVar` the parser builds unlocated). Both leave the
+-- index pointing at the enclosing expression's span, so F3(d) already refuses
+-- them — safe, and the residual belongs to those two dropped `Loc`s, not here.
+
+-- The punned-field spans of ONE file, as ((1-based line, 0-based char), field).
+-- `[]` for a file that does not parse — the caller then emits the bare name,
+-- exactly as before; a file that does not parse also has no index entries for
+-- the rename to have found in the first place.
+punFieldsOfSrc : String -> List ((Int, Int), String)
+punFieldsOfSrc src = match parseWithPositionsOpt src
+  None => []
+  Some (decls, _) => punFieldsOfDecls decls
+
+punFieldsOfDecls : List Decl -> List ((Int, Int), String)
+punFieldsOfDecls decls =
+  let acc = Ref []
+  let recNames = recordCtorNames decls
+  -- `mapProg` for the expression side (desugar's own traversal — see the
+  -- reachability note above) and, from each node it visits, the patterns that
+  -- node HOSTS; `declParamPuns` adds the clause params `mapDecl` steps over.
+  let _ = mapProg (punVisit acc recNames) decls
+  declParamPuns decls ++ acc.value
+
+-- `mapProg`'s callback is a REWRITER; this one rewrites nothing and only
+-- harvests, so the rebuilt tree it returns is discarded.
+punVisit : Ref (List ((Int, Int), String)) -> List String -> Expr -> Expr
+punVisit acc recNames e =
+  let _ = collectExprPuns acc recNames e
+  e
+
+-- Every constructor that can head a record brace, from THIS file's decls —
+-- the same set `desugarRecordPuns` computes (a `ConNamed` variant's ctor name).
+recordCtorNames : List Decl -> List String
+recordCtorNames decls = flatMapL recordCtorNamesOf decls
+
+recordCtorNamesOf : Decl -> List String
+recordCtorNamesOf d = match innerDecl d
+  DData _ _ _ vs _ => namedVariantCtors vs
+  _ => []
+
+namedVariantCtors : List Variant -> List String
+namedVariantCtors [] = []
+namedVariantCtors ((Variant n (ConNamed _ _))::vs) = n :: namedVariantCtors vs
+namedVariantCtors (_::vs) = namedVariantCtors vs
+
+-- Push this node's puns. The `ESetLit` arm is the expression pun; every other
+-- arm hands over the patterns the node holds directly (their sub-patterns are
+-- walked by `patPuns`), which is where a pattern pun can appear.
+collectExprPuns : Ref (List ((Int, Int), String)) -> List String -> Expr -> Unit
+collectExprPuns acc recNames (ESetLit name items) =
+  if punRecordSetLit recNames name items then
+    pushPuns acc (flatMapL punItemSpan items)
+  else
+    ()
+collectExprPuns acc _ (ELam ps _) = pushPuns acc (flatMapL patPuns ps)
+collectExprPuns acc _ (ELet _ _ p _ _) = pushPuns acc (patPuns p)
+collectExprPuns acc _ (EMatch _ arms) = pushPuns acc (flatMapL armPuns arms)
+collectExprPuns acc _ (EGuards arms) = pushPuns acc (flatMapL guardArmPuns arms)
+collectExprPuns acc _ (EBlock stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (EDo stmts) = pushPuns acc (flatMapL stmtPuns stmts)
+collectExprPuns acc _ (ELetGroup binds _) =
+  pushPuns acc (flatMapL letBindPuns binds)
+collectExprPuns _ _ _ = ()
+
+pushPuns : Ref (List ((Int, Int), String)) -> List ((Int, Int), String) -> Unit
+pushPuns acc [] = ()
+pushPuns acc found = acc := found ++ acc.value
+
+-- `rewriteRecordPun`'s guard, verbatim (desugar.mdk): a record-literal brace
+-- whose items are ALL bare vars. `Set { a, b }` fails the head test, `Map { … }`
+-- never reaches `ESetLit` at all, and `Circle { radius, tag = 1 }` is already an
+-- `ERecordCreate` — so this is true of pun braces and nothing else.
+punRecordSetLit : List String -> String -> List Expr -> Bool
+punRecordSetLit _ _ [] = False
+punRecordSetLit recNames name items = anyName recNames name && allBareVars items
+
+allBareVars : List Expr -> Bool
+allBareVars [] = True
+allBareVars (e::rest) = match punItemSpan e
+  [] => False
+  _ => allBareVars rest
+
+-- The (span, field) of one pun item — a located bare variable. `[]` for
+-- anything else, which is also how `allBareVars` rejects a non-pun brace.
+punItemSpan : Expr -> List ((Int, Int), String)
+punItemSpan (ELoc (Loc _ sl sc _ _) (EVar n)) = [((sl, sc), n)]
+punItemSpan (ELoc _ e) = punItemSpan e
+punItemSpan (EDoOrigin _ e) = punItemSpan e
+punItemSpan _ = []
+
+armPuns : Arm -> List ((Int, Int), String)
+armPuns (Arm p gs _) = patPuns p ++ flatMapL guardPuns gs
+
+guardArmPuns : GuardArm -> List ((Int, Int), String)
+guardArmPuns (GuardArm gs _) = flatMapL guardPuns gs
+
+guardPuns : Guard -> List ((Int, Int), String)
+guardPuns (GBind p _) = patPuns p
+guardPuns _ = []
+
+stmtPuns : DoStmt -> List ((Int, Int), String)
+stmtPuns (DoBind p _) = patPuns p
+stmtPuns (DoLet _ _ p _) = patPuns p
+stmtPuns _ = []
+
+letBindPuns : LetBind -> List ((Int, Int), String)
+letBindPuns (LetBind _ clauses) = flatMapL clausePuns clauses
+
+clausePuns : FunClause -> List ((Int, Int), String)
+clausePuns (FunClause ps _) = flatMapL patPuns ps
+
+-- Clause parameters: `mapDecl` maps only a decl's BODY, so a `PRec` parameter
+-- (`draw (Circle { radius }) = …`) is reachable from the decl alone.
+declParamPuns : List Decl -> List ((Int, Int), String)
+declParamPuns decls = flatMapL declParamPunsOf decls
+
+declParamPunsOf : Decl -> List ((Int, Int), String)
+declParamPunsOf d = match innerDecl d
+  DFunDef _ _ ps _ => flatMapL patPuns ps
+  DLetGroup _ binds => flatMapL letBindPuns binds
+  DImpl { methods = ms, ... } => flatMapL implMethodPuns ms
+  DInterface { methods = ms, ... } => flatMapL ifaceMethodPuns ms
+  _ => []
+
+implMethodPuns : ImplMethod -> List ((Int, Int), String)
+implMethodPuns (ImplMethod _ ps _) = flatMapL patPuns ps
+
+ifaceMethodPuns : IfaceMethod -> List ((Int, Int), String)
+ifaceMethodPuns (IfaceMethod _ _ (Some (MethodDefault ps _))) =
+  flatMapL patPuns ps
+ifaceMethodPuns _ = []
+
+-- A pattern's punned record fields: `RecPatField name loc None` IS the pun
+-- (`Some p` is the explicit `field = pat` form, whose sub-pattern is walked).
+patPuns : Pat -> List ((Int, Int), String)
+patPuns (PRec _ fields _) = flatMapL recFieldPuns fields
+patPuns (PCon _ ps) = flatMapL patPuns ps
+patPuns (PCons a b) = patPuns a ++ patPuns b
+patPuns (PTuple ps) = flatMapL patPuns ps
+patPuns (PList ps) = flatMapL patPuns ps
+patPuns (PAs _ _ p) = patPuns p
+patPuns _ = []
+
+recFieldPuns : RecPatField -> List ((Int, Int), String)
+recFieldPuns (RecPatField name (Loc _ sl sc _ _) None) = [((sl, sc), name)]
+recFieldPuns (RecPatField _ _ (Some p)) = patPuns p
+
+flatMapL : (a -> List b) -> List a -> List b
+flatMapL _ [] = []
+flatMapL f (x::xs) = f x ++ flatMapL f xs
+
+-- One pun table per DISTINCT file in the edit set. `all` is sorted by path
+-- (`compareUseLoc`), so same-path entries are contiguous and `spanSamePath`
+-- yields each file exactly once — one parse per affected file, never per edit.
+-- The enclosing request already built the whole-project index, so this is
+-- strictly cheaper than the work `renameResult` has already done.
+punTablesFor : List (String, Loc) -> Docs -> <IO> List (String, List ((Int, Int), String))
+punTablesFor [] _ = []
+punTablesFor ((p, _)::rest) docs =
+  let sameRest = spanSamePath p rest
+  let tbl = match renameSrcOf p docs
+    None => []
+    Some src => punFieldsOfSrc src
+  (p, tbl) :: punTablesFor (snd sameRest) docs
+
+punTableOf : String -> List (String, List ((Int, Int), String)) -> List ((Int, Int), String)
+punTableOf _ [] = []
+punTableOf p ((q, tbl)::rest) = if p == q then tbl else punTableOf p rest
+
+-- The replacement text for ONE edit: `field = newName` at a pun token, the bare
+-- `newName` everywhere else. Both lists are per-FILE and small (a file's puns ×
+-- that file's edits), and the request is already O(project) — see `punTablesFor`.
+punAwareText : List ((Int, Int), String) -> String -> Loc -> String
+punAwareText tbl newName (Loc _ sl sc _ _) = match punFieldAt tbl sl sc
+  Some field => stringConcat [field, " = ", newName]
+  None => newName
+
+punFieldAt : List ((Int, Int), String) -> Int -> Int -> Option String
+punFieldAt [] _ _ = None
+punFieldAt (((l, c), field)::rest) sl sc =
+  if l == sl && c == sc then
+    Some field
+  else
+    punFieldAt rest sl sc
+
+-- An external / prelude / out-of-project key: refindex mints these as
+-- `"?ext\t<ns>\t<name>"` (extKey, refindex.mdk). `defsOf` already returns `[]`
+-- for them, but the explicit prefix check documents the F3(a) intent.
+isExternalKey : String -> Bool
+isExternalKey key = match splitOnChar keyTab key
+  m::_ => m == "?ext"
+  _ => False
+
+-- The TAB separator refindex forms binder keys with (`sep`, refindex.mdk) —
+-- an identifier / module id / namespace tag can contain none, so a split on it
+-- recovers the key's fields injectively.
+keyTab : Char
+keyTab = '\t'
+
+-- (namespace, name) of a binder key — field 1 and field 2 of the
+-- TAB-separated `"<mod>\t<ns>\t<name>[\t<freshId>]"`. `None` if unparseable
+-- (treated as a collision → conservative refuse).
+keyNsName : String -> Option (String, String)
+keyNsName key = match splitOnChar keyTab key
+  _::ns::name::_ => Some (ns, name)
+  _ => None
+
+-- F3(b) coarse conservative capture check: is `newName` already taken — by a
+-- same-namespace binder anywhere in the project, by ANY binder the PRELUDE
+-- declares, by ANY binder (any namespace) defined in a file this rename edits,
+-- or by a name an affected file IMPORTS? Over-refusal is acceptable (F3 spirit);
+-- a silent capture is not. An unparseable key → refuse.
+--
+-- ⚠️ THE PRELUDE ARM IS NOT REDUNDANT (#966(b)). `allDefKeys idx` is
+-- `hmKeys idx.defs`, and `refindex.mdk`'s `seedPrelude` deliberately seeds the
+-- prelude's names as import ORIGINS ONLY — it records **no def entries** for them
+-- (F1: never descend into stdlib). So the project scan alone cannot see `length`,
+-- `map`, `Option`, … and a rename onto one of them was accepted, shadowing the
+-- prelude binding. The prelude's own SOURCE is the complete answer and both
+-- sources are already threaded here for the index build, so re-deriving the name
+-- set costs one extra parse of each prelude module per rename REQUEST — O(prelude),
+-- independent of project size, so it cannot perturb the references scaling gate.
+--
+-- The prelude arm is namespace-BLIND, and that is sound only because
+-- `newNameIllegal` has already pinned `newName`'s lexical class to the binder's
+-- namespace: a lowercase `newName` can only match a prelude value/method/field and
+-- an uppercase one only a prelude type/constructor. (The residual over-refusal —
+-- a value vs a record field of the same lowercase spelling — is the acceptable
+-- direction.)
+--
+-- ⚠️ THE SAME-NAMESPACE PROJECT SCAN IS NOT THE WHOLE CHECK EITHER (S0-1). It
+-- compares `ns2 == ns`, so a `local` key can never match a `val` key — the
+-- capture arm was blind in EXACTLY the direction capture happens. Renaming the
+-- local `x` of
+--
+--   top = 100
+--   f n = let x = n + 1
+--         x + top
+--
+-- to `top` was accepted, and the applied edit (`let top = n + 1` / `top + top`)
+-- still compiles and prints `4` instead of `102` — a silent wrong answer, the
+-- worst failure this path can produce. The design doc has always specified the
+-- right rule (`compiler/REFERENCES-RENAME-DESIGN.md:368-370`: refuse if
+-- `newName` would capture/shadow an existing binder **in any affected scope**);
+-- the `ns2 == ns` scan implemented a namespace tag instead of a scope.
+--
+-- The two arms below implement "visible in an affected scope", where the scope
+-- is approximated by the FILES the edit touches (`affectedPaths`):
+--   * `anyKeyNamedInFiles` — any binder the index has a def site for in an
+--     affected file, in every namespace that can CAPTURE a reference (i.e. all
+--     but `field` — see that function).
+--   * `anyImportBindsIn` — the names an affected file's IMPORTS bring into it.
+--     `allDefKeys` cannot see these for the same structural reason it could not
+--     see the prelude (an imported name has no def entry in the importing
+--     module), so `import list.{sortBy}` + rename-a-value-to-`sortBy` was
+--     accepted and shadowed the import: #966(b) unfixed one module over.
+renameCollides : RefIndex -> String -> String -> String -> String -> String -> List String -> Docs -> <IO> Bool
+renameCollides idx runtimeSrc coreSrc projectDir key newName files docs = match keyNsName key
+  None => True
+  Some (ns, _name) => anyDefKeyMatches (allDefKeys idx) ns newName
+    || preludeDeclares coreSrc newName
+    || preludeDeclares runtimeSrc newName
+    || anyKeyNamedInFiles idx (allDefKeys idx) newName files
+    || anyImportBindsIn newName projectDir files docs
+
+anyDefKeyMatches : List String -> String -> String -> Bool
+anyDefKeyMatches [] _ _ = False
+anyDefKeyMatches (k::ks) ns newName = match keyNsName k
+  Some (ns2, nm2) =>
+    if ns2 == ns && nm2 == newName then
+      True
+    else
+      anyDefKeyMatches ks ns newName
+  None => anyDefKeyMatches ks ns newName
+
+-- Any binder named `newName` that could CAPTURE a reference — every namespace
+-- EXCEPT `field` — with a def site in one of the files this rename edits.
+-- O(total def sites), the same order as the index build the request already
+-- paid for.
+--
+-- ⚠️ `field` IS EXCLUDED — a decision, not a footnote. A record field label is
+-- not an expression: `Box { width = 2 }` and `b.width` reach the field through
+-- the record's TYPE, never through the value scope, so a value named `width`
+-- can neither capture them nor be captured by them. Hand-applying `thing` →
+-- `width` next to `data Box = Box { width : Int }` compiles and runs unchanged,
+-- and `name`/`size`/`count`/`width` overlapping between a field and a value is
+-- ordinary code — refusing it was pure over-refusal. (What keeps a PUNNED
+-- `{ width }` correct is F3(e) expansion, which rewrites the edit to
+-- `width = <newName>` so the LABEL never moves.)
+anyKeyNamedInFiles : RefIndex -> List String -> String -> List String -> Bool
+anyKeyNamedInFiles _ [] _ _ = False
+anyKeyNamedInFiles idx (k::ks) newName files = keyCanCapture k newName && anyPathIn (defsOf idx k) files
+  || anyKeyNamedInFiles idx ks newName files
+
+keyCanCapture : String -> String -> Bool
+keyCanCapture k name = match keyNsName k
+  Some (ns, n) => n == name && ns != "field"
+  None => False
+
+anyPathIn : List (String, Loc) -> List String -> Bool
+anyPathIn [] _ = False
+anyPathIn ((p, _)::rest) files = pathIsIn p files || anyPathIn rest files
+
+-- Does any affected file's import list already bind `newName`? A selective
+-- member binds its ALIAS when it has one (`useMemberLocal`); a wildcard binds
+-- everything the imported module declares, which is answered by parsing that
+-- module exactly as the prelude arm parses `core`/`runtime`; a module ALIAS
+-- (`import m as D`) occupies the name `D`, so renaming onto it would shadow the
+-- qualifier. A BARE `import m` binds no names at all and is correctly ignored.
+anyImportBindsIn : String -> String -> List String -> Docs -> <IO> Bool
+anyImportBindsIn _ _ [] _ = False
+anyImportBindsIn newName projectDir (p::ps) docs = fileImportsBind newName projectDir p docs
+  || anyImportBindsIn newName projectDir ps docs
+
+fileImportsBind : String -> String -> String -> Docs -> <IO> Bool
+fileImportsBind newName projectDir p docs = match renameSrcOf p docs
+  None => False
+  Some src => match parseWithPositionsOpt src
+    None => False
+    Some (decls, _) => anyImportDeclBinds newName projectDir decls docs
+
+anyImportDeclBinds : String -> String -> List Decl -> Docs -> <IO> Bool
+anyImportDeclBinds _ _ [] _ = False
+anyImportDeclBinds newName projectDir (d::ds) docs = importDeclBinds newName projectDir (innerDecl d) docs
+  || anyImportDeclBinds newName projectDir ds docs
+
+importDeclBinds : String -> String -> Decl -> Docs -> <IO> Bool
+importDeclBinds newName projectDir (DUse _ path _) docs =
+  usePathBinds newName projectDir path docs
+importDeclBinds _ _ _ _ = False
+
+usePathBinds : String -> String -> UsePath -> Docs -> <IO> Bool
+usePathBinds newName _ (UseGroup _ members) _ =
+  anyName (map useMemberLocal members) newName
+usePathBinds newName projectDir (UseWild mods) docs =
+  moduleExportsName newName projectDir mods reExportFuel docs
+usePathBinds newName _ (UseAlias _ alias) _ = alias == newName
+usePathBinds _ _ (UseName _) _ = False
+
+-- Does module `mods` EXPORT `name` — either by DECLARING it, or by RE-EXPORTING
+-- it from somewhere else?
+--
+-- ⚠️ THE RE-EXPORT HOP IS THE WHOLE REASON THIS IS NOT `preludeDeclares`. A
+-- re-exported name is a `DUse`, not a declaration, so `anyDeclDeclares` cannot
+-- see it: with `mid.mdk` holding `export import list.{sortBy}` and `main.mdk`
+-- holding `import mid.*`, `sortBy` IS in `main`'s scope while `mid` declares
+-- nothing at all. A rename onto it was accepted and broke the program — #966(b)
+-- two module hops out. A DIRECT `import list.*` was already caught, which is
+-- exactly what made the gap invisible: the arm looked like it worked.
+moduleExportsName : String -> String -> List String -> Int -> Docs -> <IO> Bool
+moduleExportsName name projectDir mods fuel docs
+  | fuel <= 0 = False
+  | otherwise = match importedModuleSrc projectDir mods docs
+    None => False
+    Some src => match parseWithPositionsOpt src
+      None => False
+      Some (decls, _) => anyDeclDeclares decls name
+        || anyReExportBinds name projectDir decls (fuel - 1) docs
+
+anyReExportBinds : String -> String -> List Decl -> Int -> Docs -> <IO> Bool
+anyReExportBinds _ _ [] _ _ = False
+anyReExportBinds name projectDir (d::ds) fuel docs = reExportBinds name projectDir (innerDecl d) fuel docs
+  || anyReExportBinds name projectDir ds fuel docs
+
+-- `DUse True …` is the PUBLIC form — `export import …`, the one `refindex`'s
+-- `registerReExports` threads forward. A non-public import brings the name into
+-- THAT module only and does not put it in ours.
+reExportBinds : String -> String -> Decl -> Int -> Docs -> <IO> Bool
+reExportBinds name projectDir (DUse True path _) fuel docs =
+  reExportPathBinds name projectDir path fuel docs
+reExportBinds _ _ _ _ _ = False
+
+reExportPathBinds : String -> String -> UsePath -> Int -> Docs -> <IO> Bool
+reExportPathBinds name _ (UseGroup _ members) _ _ =
+  anyName (map useMemberLocal members) name
+reExportPathBinds name projectDir (UseWild mods) fuel docs =
+  moduleExportsName name projectDir mods fuel docs
+reExportPathBinds _ _ _ _ _ = False
+
+-- Depth cap on the re-export chain. A cycle is a loader error, reported there;
+-- this path must not hang on one, and eight hops is far past any real chain.
+reExportFuel : Int
+reExportFuel = 8
+
+-- The source of an imported module, looked up the two places a project's
+-- `import m.n` can resolve to: under the project root, then under `stdlib/`.
+-- Unreadable ⇒ `None`, which reads as "declares nothing" — best-effort in the
+-- F2 spirit, and the only direction available without duplicating the loader's
+-- `[dependencies]` multi-root resolution here.
+importedModuleSrc : String -> List String -> Docs -> <IO> Option String
+importedModuleSrc projectDir mods docs =
+  let rel = joinWith "/" mods ++ ".mdk"
+  match renameSrcOf (joinPath projectDir rel) docs
+    Some s => Some s
+    None => renameSrcOf (joinPath (lspMedakaRoot "." ++ "/stdlib") rel) docs
+
+-- ── F3(f) KNOWN-INCOMPLETE SHAPES ───────────────────────────────────────────
+-- F3(d) (`renameEmitVerified`) audits the spans the index DID produce. This arm
+-- audits the ones it MIGHT HAVE DROPPED — the failure mode F3(d) is structurally
+-- blind to, because a missing occurrence has no span to verify.
+--
+-- ⚠️ TWO PROXIES FOR "IS THE INDEX INCOMPLETE HERE?" HAVE ALREADY FAILED, in
+-- OPPOSITE directions. Both are recorded because the shape of the mistake is
+-- what matters, not either instance of it.
+--
+--   SPAN PROVENANCE ("refuse when an edit span was recorded at the enclosing
+--   decl's `curLoc` rather than at a name token"). Not implementable from
+--   outside `refindex.mdk` — a caller sees a `Loc`, never where it came from,
+--   and the only observable proxy ("this span equals a declaration's own name
+--   `Loc`") is EXACTLY what a legitimate top-level definition looks like. It
+--   also covers ONE of the four defects: dumping the index for all four
+--   (`test/bin/refindex_main --dump`) shows only #965(a) has a misplaced span,
+--   while #951/#1003/#1056 have a MISSING occurrence, which has nothing to
+--   verify.
+--
+--   NAMESAKE ("refuse when a second binder spells the old name in an affected
+--   file"). Blind in one direction and over-refusing in the other:
+--     * incompleteness does not require a namesake, and a namesake-based rule
+--       has to carve out `local`↔`local` to let ordinary nested shadowing
+--       through — which is precisely where #1003 also lives. Move #1003's outer
+--       namesake from top-level into an enclosing `let` and the rule vanishes
+--       while the bug does not: `10` became `104` with `check` rc=0. The
+--       corpus could not catch it either, because the fixture written to prove
+--       no-over-refusal (`local`↔`local`) sat inside the carve-out;
+--     * it refuses complete cases — ordinary `val`↔`local` shadowing, and any
+--       `newName` that merely exists as a record field.
+--   A proxy that both misses real incompleteness and refuses complete cases is
+--   not miscalibrated; it is measuring the wrong thing.
+--
+-- SO THIS ARM DOES NOT USE A PROXY. Each of the four defects is a SYNTACTIC
+-- property of the clicked binding, decidable from the AST alone — no namesake,
+-- no index, and nothing that moving a binder between scopes can dodge:
+--
+--   #1003 `selfRecursiveLetAt`   — does the `let` binding at this exact def
+--                                  `Loc` mention its own name in its own RHS?
+--   #951  `topLevelLetRecBinds`  — is the name bound by a top-level `let rec`
+--                                  (`DLetGroup`) declaration?
+--   #1056 `importShadowedOwner`  — does this module both DECLARE and IMPORT the
+--                                  name (or, for a method, its interface's name)?
+--   #965a `aliasQualifiedShape`  — does any project file reference this symbol
+--                                  as `<Alias>.<name>` through a module alias
+--                                  that resolves to this symbol's own module?
+--
+-- ⚠️ HONEST LIMIT: this is a CLOSED LIST of four KNOWN defects, so a fifth,
+-- undiscovered index defect gets no refusal here. That is a real cost of
+-- trading a proxy for precision, and it is the argument for fixing
+-- `refindex.mdk` rather than growing this list: a missing occurrence cannot be
+-- detected from outside the index without reimplementing resolution. F3(d)
+-- remains the generic backstop for the other half (a span that IS produced but
+-- points at the wrong text). Each arm names its issue, and
+-- `test/references_fixtures/rename/scopes.jsonl` pins its refusal — so when an
+-- index fix lands, that transcript's golden moves and says which arm to retire.
+--
+-- REJECTED, with evidence: "two distinct binder keys claim the same def span"
+-- looked like a proxy-free integrity invariant (it is #951's exact signature),
+-- but a `data` declaration legitimately files its type, its constructor AND
+-- every field at one `Loc` — `pdefs|ty|Blob`, `pdefs|ctor|Blob`,
+-- `pdefs|field|girth`, `pdefs|field|mark` all at 16:5 — so it fires on every
+-- record in the project.
+renameIndexIncomplete : String -> String -> List (String, Loc) -> Docs -> <IO> Option String
+renameIndexIncomplete projectDir key defs docs = match keyModNsName key
+  None => Some "cannot determine the kind of the symbol being renamed"
+  Some (mid, ns, name) => match firstLocalShape projectDir ns name defs docs
+    Some reason => Some reason
+    None => aliasQualifiedShape projectDir mid name docs
+
+-- (module, namespace, name) of a binder key — `"<mod>\t<ns>\t<name>[\t<fresh>]"`.
+keyModNsName : String -> Option (String, String, String)
+keyModNsName key = match splitOnChar keyTab key
+  mid::ns::name::_ => Some (mid, ns, name)
+  _ => None
+
+-- Shapes #1003 / #951 / #1056, each decidable inside ONE file: the file holding
+-- a def site. Iterated per DEF SITE, not per distinct file, because #1003 needs
+-- that site's own `Loc` to tell the self-recursive binding from a same-named
+-- sibling that is not.
+firstLocalShape : String -> String -> String -> List (String, Loc) -> Docs -> <IO> Option String
+firstLocalShape _ _ _ [] _ = None
+firstLocalShape projectDir ns name ((p, loc)::rest) docs = match shapeAtDef projectDir ns name p loc docs
+  Some reason => Some reason
+  None => firstLocalShape projectDir ns name rest docs
+
+shapeAtDef : String -> String -> String -> String -> Loc -> Docs -> <IO> Option String
+shapeAtDef projectDir ns name p loc docs = match renameDeclsOf p docs
+  None => None
+  Some decls =>
+    if selfRecursiveLetAt decls name loc then
+      Some (stringConcat [
+        "`",
+        name,
+        "` is a self-recursive local binding, and the reference index does not record the recursive call as one of its uses (#1003) — this rename would leave that call behind, silently rebinding it to whatever else is named `",
+        name,
+        "`; rename it by hand, or lift the binding to the top level first",
+      ])
+    else if topLevelLetRecBinds decls name then
+      Some (stringConcat [
+        "`",
+        name,
+        "` is bound by a top-level `let rec`, and the reference index splits its recursive call sites and its external call sites across two separate binder keys (#951) — a rename from either click edits only half of them; rename it by hand, or rewrite the binding as an ordinary top-level definition first",
+      ])
+    else
+      map (owner => stringConcat [
+        "`",
+        p,
+        "` both declares and imports `",
+        owner,
+        "`, and the reference index resolves the import ahead of the module's own declaration (#1056, the inverse of `resolve.mdk`) — occurrences keyed through it land under the wrong module and are dropped from this rename; drop the duplicate import, or rename it by hand",
+      ]) (importShadowedOwner projectDir decls ns name docs)
+
+renameDeclsOf : String -> Docs -> <IO> Option (List Decl)
+renameDeclsOf p docs = match renameSrcOf p docs
+  None => None
+  Some src => map fst (parseWithPositionsOpt src)
+
+-- #1003. `let f x = …` inside a body parses to `DoLet _ True (PVar "f" loc)
+-- (ELam …)`, and the binder `Loc` is the #913 substrate's — so the binding can
+-- be matched to THIS def site exactly, and a same-named sibling that is not
+-- self-recursive still renames. "Mentions its own name in its own RHS" is the
+-- whole condition: Medaka's `let` IS recursive (the review's reproducer prints
+-- 10, i.e. the recursive call binds to the local), and it is precisely that
+-- occurrence refindex does not file under the local's key.
+selfRecursiveLetAt : List Decl -> String -> Loc -> Bool
+selfRecursiveLetAt decls name loc =
+  let acc = Ref False
+  let _ = mapProg (selfRecVisit acc name loc) decls
+  acc.value
+
+-- `mapProg`'s callback is a REWRITER; this one rewrites nothing and only
+-- harvests, so the rebuilt tree it returns is discarded (same idiom as
+-- `punVisit`).
+selfRecVisit : Ref Bool -> String -> Loc -> Expr -> Expr
+selfRecVisit acc name loc e =
+  let _ = selfRecCheck acc name loc e
+  e
+
+selfRecCheck : Ref Bool -> String -> Loc -> Expr -> Unit
+selfRecCheck acc name loc (ELet _ _ p rhs _) = selfRecBind acc name loc p rhs
+selfRecCheck acc name loc (EBlock stmts) = selfRecStmts acc name loc stmts
+selfRecCheck acc name loc (EDo stmts) = selfRecStmts acc name loc stmts
+selfRecCheck _ _ _ _ = ()
+
+selfRecStmts : Ref Bool -> String -> Loc -> List DoStmt -> Unit
+selfRecStmts _ _ _ [] = ()
+selfRecStmts acc name loc (s::rest) =
+  let _ = selfRecStmt acc name loc s
+  selfRecStmts acc name loc rest
+
+selfRecStmt : Ref Bool -> String -> Loc -> DoStmt -> Unit
+selfRecStmt acc name loc (DoLet _ _ p rhs) = selfRecBind acc name loc p rhs
+selfRecStmt _ _ _ _ = ()
+
+selfRecBind : Ref Bool -> String -> Loc -> Pat -> Expr -> Unit
+selfRecBind acc name loc (PVar n bloc) rhs =
+  if n == name && sameLocStart bloc loc && exprMentionsVar name rhs then
+    acc := True
+  else
+    ()
+selfRecBind _ _ _ _ _ = ()
+
+sameLocStart : Loc -> Loc -> Bool
+sameLocStart (Loc _ al ac _ _) (Loc _ bl bc _ _) = al == bl && ac == bc
+
+-- Is `name` used as a variable anywhere inside `e`? `mapExpr` is desugar's own
+-- whole-expression traversal, so the reachability matches the one every other
+-- pass has. Shadowing inside the RHS would make this a false positive, which is
+-- the conservative direction.
+exprMentionsVar : String -> Expr -> Bool
+exprMentionsVar name e =
+  let acc = Ref False
+  let _ = mapExpr (varVisit acc name) e
+  acc.value
+
+varVisit : Ref Bool -> String -> Expr -> Expr
+varVisit acc name e =
+  let _ = varCheck acc name e
+  e
+
+varCheck : Ref Bool -> String -> Expr -> Unit
+varCheck acc name (EVar n) = if n == name then acc := True else ()
+varCheck _ _ _ = ()
+
+-- #951. A top-level `let` must be written `let rec` (the parser rejects the bare
+-- form), so EVERY top-level `DLetGroup` is the split-key shape.
+topLevelLetRecBinds : List Decl -> String -> Bool
+topLevelLetRecBinds [] _ = False
+topLevelLetRecBinds (d::ds) name = declIsLetRecFor (innerDecl d) name
+  || topLevelLetRecBinds ds name
+
+declIsLetRecFor : Decl -> String -> Bool
+declIsLetRecFor (DLetGroup _ binds) name = anyName (map letBindName binds) name
+declIsLetRecFor _ _ = False
+
+-- #1056. `refindex`'s `indexModule` runs `addOwnToEnv` BEFORE `processImports`,
+-- so an import last-write-wins over the module's own binder — the inverse of
+-- `resolve.mdk`, where the local declaration wins. The shape is therefore "this
+-- module both declares and imports this name", with one indirection: a METHOD is
+-- keyed through its INTERFACE, so for a method key the shadowed name to look for
+-- is the interface's, not the method's (#1056's own reproducer imports `Foo` and
+-- declares `Foo`; `mlocal` is never named in an import clause).
+importShadowedOwner : String -> List Decl -> String -> String -> Docs -> <IO> Option String
+importShadowedOwner projectDir decls ns name docs =
+  firstShadowedName
+    projectDir
+    decls
+    (name :: methodOwnerNames ns decls name)
+    docs
+
+firstShadowedName : String -> List Decl -> List String -> Docs -> <IO> Option String
+firstShadowedName _ _ [] _ = None
+firstShadowedName projectDir decls (c::cs) docs =
+  if declsDeclareOwn decls c && anyImportDeclBinds c projectDir decls docs then
+    Some c
+  else
+    firstShadowedName projectDir decls cs docs
+
+-- "Declares" here means a declaration that enters `refindex`'s OWN-env — the
+-- thing `addOwnToEnv` inserts and an import then overwrites.
+--
+-- ⚠️ AN `impl` CLAUSE HEAD IS NOT ONE, and counting it (as the general
+-- `anyDeclDeclares` does) refused ORDINARY CODE: a module that impls an
+-- IMPORTED interface's method both "declares" the method name (the head) and
+-- imports it, so EVERY such impl was refused. `ifshadow_ok.mdk` is the fixture
+-- for that cell — it imports the same interface from the same module and
+-- carries an impl head, and differs from the #1056 case in exactly one way: it
+-- does not declare its own `Shdw`.
+declsDeclareOwn : List Decl -> String -> Bool
+declsDeclareOwn [] _ = False
+declsDeclareOwn (d::ds) name = declDeclaresOwn (innerDecl d) name
+  || declsDeclareOwn ds name
+
+declDeclaresOwn : Decl -> String -> Bool
+declDeclaresOwn (DImpl { ... }) _ = False
+declDeclaresOwn d name = declOwnNameMatches d name
+  || anyName (declChildNames d) name
+
+methodOwnerNames : String -> List Decl -> String -> List String
+methodOwnerNames "method" decls name =
+  flatMapL (d => ifaceOwnerOf (innerDecl d) name) decls
+methodOwnerNames _ _ _ = []
+
+ifaceOwnerOf : Decl -> String -> List String
+ifaceOwnerOf (DInterface { name = n, methods = ms, ... }) name =
+  if anyName (map ifaceMethodName ms) name then
+    [n]
+  else
+    []
+ifaceOwnerOf (DImpl { iface = i, methods = ms, ... }) name =
+  if anyName (map implMethodName ms) name then
+    [i]
+  else
+    []
+ifaceOwnerOf _ _ = []
+
+-- #965a. `walkFieldAccess` files an alias-qualified reference at the enclosing
+-- decl's `curLoc` instead of the `D.name` token, so the occurrence is BOTH
+-- missing from its real position and (when the enclosing decl happens to spell
+-- the old name) mis-attributed onto an unrelated binder's definition head.
+--
+-- PROJECT-WIDE, not affected-files-only: when refindex files the reference under
+-- an `?ext` key instead, the file holding it never enters the edit set at all,
+-- so scanning only affected files would miss exactly the variant F3(d) also
+-- cannot see. Scoped by MODULE — an alias that resolves to some OTHER module's
+-- `name` is a reference to that module's binder, not to ours, and refusing on it
+-- would block renames in every project that uses `import m as D` anywhere. The
+-- lexical pre-filter means only files that mention the name are parsed.
+aliasQualifiedShape : String -> String -> String -> Docs -> <IO> Option String
+aliasQualifiedShape projectDir mid name docs = map
+  (p => stringConcat [
+    "`",
+    name,
+    "` is referenced through a module alias in `",
+    p,
+    "`, and the reference index files an alias-qualified reference at the enclosing declaration instead of at the `<alias>.",
+    name,
+    "` token (#965) — this rename would miss that reference and may overwrite the declaration it was filed under; switch that file to a selective import, or rename by hand",
+  ])
+  (firstAliasQualifiedFile mid name (projectMdkFiles projectDir) docs)
+
+firstAliasQualifiedFile : String -> String -> List String -> Docs -> <IO> Option String
+firstAliasQualifiedFile _ _ [] _ = None
+firstAliasQualifiedFile mid name (p::ps) docs =
+  if fileAliasQualifies mid name p docs then
+    Some p
+  else
+    firstAliasQualifiedFile mid name ps docs
+
+fileAliasQualifies : String -> String -> String -> Docs -> <IO> Bool
+fileAliasQualifies mid name p docs = match renameSrcOf p docs
+  None => False
+  Some src => srcMentionsName name src && declsAliasQualify mid name src
+
+declsAliasQualify : String -> String -> String -> Bool
+declsAliasQualify mid name src = match parseWithPositionsOpt src
+  None => False
+  Some (decls, _) => anyAliasQualifiedUse decls (aliasesOfModule decls mid) name
+
+-- The local names an `import <mid> as D` binds `mid` to in this file. The module
+-- id `refindex` mints is `moduleIdOfPath`'s, which for the `import a.b as D`
+-- surface path is the dotted join — the same string the binder key carries.
+aliasesOfModule : List Decl -> String -> List String
+aliasesOfModule decls mid = flatMapL (d => aliasOfDecl (innerDecl d) mid) decls
+
+aliasOfDecl : Decl -> String -> List String
+aliasOfDecl (DUse _ (UseAlias mods alias) _) mid =
+  if joinWith "." mods == mid then
+    [alias]
+  else
+    []
+aliasOfDecl _ _ = []
+
+-- Pre-resolve, `D.f` is an `EFieldAccess (EVar "D") "f"` (resolve later rewrites
+-- it to a plain `EVar "D.f"`, ast.mdk) — so this runs on exactly the shape the
+-- parser produced and the index mis-filed.
+anyAliasQualifiedUse : List Decl -> List String -> String -> Bool
+anyAliasQualifiedUse _ [] _ = False
+anyAliasQualifiedUse decls aliases name =
+  let acc = Ref False
+  let _ = mapProg (aliasVisit acc aliases name) decls
+  acc.value
+
+aliasVisit : Ref Bool -> List String -> String -> Expr -> Expr
+aliasVisit acc aliases name e =
+  let _ = aliasCheck acc aliases name e
+  e
+
+aliasCheck : Ref Bool -> List String -> String -> Expr -> Unit
+aliasCheck acc aliases name (EFieldAccess head f _) =
+  if f == name && aliasHeadIn aliases (stripExprLoc head) then
+    acc := True
+  else
+    ()
+aliasCheck _ _ _ _ = ()
+
+aliasHeadIn : List String -> Expr -> Bool
+aliasHeadIn aliases (EVar a) = anyName aliases a
+aliasHeadIn _ _ = False
+
+-- ⚠️ `ELoc` IS A TRANSPARENT WRAPPER AND THE ALIAS HEAD CARRIES ONE: `D.f`
+-- parses to `EFieldAccess (ELoc _ (EVar "D")) "f"`, never
+-- `EFieldAccess (EVar "D") "f"`. Desugar's own `rewriteAliasQual` strips it the
+-- same way before matching. The AST DUMPER HIDES `ELoc`, so a pattern written
+-- from a `parse_main --dump` reads as correct and matches nothing — this arm was
+-- written that way first, typechecked, and silently never fired.
+stripExprLoc : Expr -> Expr
+stripExprLoc (ELoc _ e) = stripExprLoc e
+stripExprLoc e = e
+
+-- ── F2 PARTIAL-GRAPH REFUSE ─────────────────────────────────────────────────
+-- `REFERENCES-RENAME-DESIGN.md:362-367`: "a rename computed over a partial graph
+-- can miss a use → silent corruption." `refindex`'s `indexModule` no-ops a file
+-- that fails to parse — correct for `references` (best-effort listing) and
+-- CORRUPTING for rename, which hands the caller an edit set it will apply
+-- wholesale. Measured: a sibling with a trailing `zzz = (` returned a clean,
+-- `isError:false`, 4-edit success with that file's THREE occurrences (its
+-- `import gdefs.{gval}` clause and both uses) silently dropped.
+--
+-- REFUSE rather than mark `partial: true`. `textDocument/rename` returns a
+-- `WorkspaceEdit` and every editor applies it wholesale — the protocol has no
+-- slot for "this is only most of the rename", so a partial marker would be
+-- ignored by exactly the client most likely to act on it. And a partial rename
+-- is not a partial success: it is a program that no longer compiles (or, with a
+-- namesake in scope, one that compiles and does something else). Naming the
+-- broken file is the actionable answer, and it is one the user can act on.
+--
+-- SCOPED TO FILES THAT MENTION THE OLD NAME IN CODE. A broken file with no
+-- identifier spelling `oldName` cannot be hiding an occurrence of it, so
+-- refusing on it would be pure over-refusal — one unrelated broken scratch file
+-- would block every rename in the project. See `srcMentionsName` for why that
+-- question cannot be asked of the token stream, and why comments do not count.
+-- The pre-filter also bounds the cost: a scan per project file, a parse only for
+-- the few that mention the name.
+renameBrokenProjectFile : String -> String -> Docs -> <IO> Option String
+renameBrokenProjectFile projectDir key docs = match keyNsName key
+  None => None
+  Some (_ns, name) => map (p => stringConcat [
+    "`",
+    p,
+    "` is under the project root, mentions `",
+    name,
+    "`, and does not parse — its occurrences are missing from the reference index, so this rename would silently skip them; fix that file's parse error first",
+  ]) (firstBrokenMentioning name (projectMdkFiles projectDir) docs)
+
+firstBrokenMentioning : String -> List String -> Docs -> <IO> Option String
+firstBrokenMentioning _ [] _ = None
+firstBrokenMentioning name (p::ps) docs =
+  if brokenAndMentions name p docs then
+    Some p
+  else
+    firstBrokenMentioning name ps docs
+
+brokenAndMentions : String -> String -> Docs -> <IO> Bool
+brokenAndMentions name p docs = match renameSrcOf p docs
+  None => False
+  Some src => srcMentionsName name src && srcFailsToParse src
+
+srcFailsToParse : String -> Bool
+srcFailsToParse src = match parseWithPositionsOpt src
+  None => True
+  Some _ => False
+
+-- Does `src` mention `name` as an identifier in CODE position?
+-- Identifier-delimited, so `gvalue` does not read as a mention of `gval`.
+--
+-- ⚠️ A CHARACTER SCAN, NOT THE TOKEN STREAM. This is asked about a file that
+-- DOES NOT PARSE, and the commonest way to break a file breaks the LEXER's view
+-- of it too: after an unterminated string literal every later character is
+-- swallowed into that string, so the token stream holds no `TIdent` for a
+-- mention that is plainly there in the text. A tokenizing version answered "no
+-- mention" for exactly that file and the F2 arm waved it through
+-- (`test/references_fixtures/rename_partial/strsib.mdk` is that cell).
+--
+-- ⚠️ AND NOT A NAIVE ONE EITHER — comments and string bodies are SKIPPED. A
+-- broken file whose only mention sits in a `--` comment is not hiding an
+-- occurrence, and refusing on it is pure over-refusal; a first cut without this
+-- failed `partial.jsonl`'s `untouched` control on a comment in a sibling's
+-- HEADER. The state is per-LINE (reset at every newline), which is what keeps it
+-- usable on a file the real lexer cannot get through: an unterminated string
+-- swallows the rest of ITS line and nothing beyond it.
+srcMentionsName : String -> String -> Bool
+srcMentionsName name src =
+  mentionScan (stringToChars src) (stringToChars name) 0 mentionCode
+
+-- Scan states: ordinary source, inside a `--` comment to end of line, inside a
+-- `"…"` body.
+mentionCode : Int
+mentionCode = 0
+
+mentionComment : Int
+mentionComment = 1
+
+mentionString : Int
+mentionString = 2
+
+mentionScan : Array Char -> Array Char -> Int -> Int -> Bool
+mentionScan src nm i mode
+  | i >= arrayLength src = False
+  | arrayGetUnsafe i src == '\n' = mentionScan src nm (i + 1) mentionCode
+  | mode == mentionComment = mentionScan src nm (i + 1) mentionComment
+  | mode == mentionString && arrayGetUnsafe i src == '\\' =
+    mentionScan src nm (i + 2) mentionString
+  | mode == mentionString && arrayGetUnsafe i src == '"' =
+    mentionScan src nm (i + 1) mentionCode
+  | mode == mentionString = mentionScan src nm (i + 1) mentionString
+  | arrayGetUnsafe i src == '"' = mentionScan src nm (i + 1) mentionString
+  | dashDashAt src i = mentionScan src nm (i + 1) mentionComment
+  | identDelimitedAt src nm i = True
+  | otherwise = mentionScan src nm (i + 1) mentionCode
+
+dashDashAt : Array Char -> Int -> Bool
+dashDashAt src i = arrayGetUnsafe i src == '-'
+  && i + 1 < arrayLength src
+  && arrayGetUnsafe (i + 1) src == '-'
+
+identDelimitedAt : Array Char -> Array Char -> Int -> Bool
+identDelimitedAt src nm i
+  | !(charRunMatches src nm i 0) = False
+  | i > 0 && isIdentChar (arrayGetUnsafe (i - 1) src) = False
+  | i + arrayLength nm >= arrayLength src = True
+  | otherwise = !(isIdentChar (arrayGetUnsafe (i + arrayLength nm) src))
+
+charRunMatches : Array Char -> Array Char -> Int -> Int -> Bool
+charRunMatches src nm i j
+  | j >= arrayLength nm = True
+  | arrayGetUnsafe (i + j) src != arrayGetUnsafe j nm = False
+  | otherwise = charRunMatches src nm i (j + 1)
+
+-- Every `.mdk` under the project root, sorted. Sorted because the refusal above
+-- names the FIRST broken file and `listDir` order is a filesystem detail that
+-- differs across machines (#912). Dot-entries are skipped (`.git`); an
+-- unlistable directory contributes nothing rather than aborting the walk.
+projectMdkFiles : String -> <IO> List String
+projectMdkFiles root =
+  let acc = Ref []
+  let _ = collectMdkUnder acc root
+  sortBy compare acc.value
+
+collectMdkUnder : Ref (List String) -> String -> <IO> Unit
+collectMdkUnder acc dir = match listDir dir
+  Err _ => ()
+  Ok entries => collectMdkEntries acc dir entries
+
+collectMdkEntries : Ref (List String) -> String -> List String -> <IO> Unit
+collectMdkEntries _ _ [] = ()
+collectMdkEntries acc dir (n::rest) =
+  let _ = collectMdkEntry acc dir n
+  collectMdkEntries acc dir rest
+
+collectMdkEntry : Ref (List String) -> String -> String -> <IO> Unit
+collectMdkEntry acc dir n
+  | startsWith "." n = ()
+  | otherwise = collectMdkPath acc (joinPath dir n) n
+
+-- `listDir` on an entry doubles as the dir/file discriminator: `Ok` = directory
+-- (recurse), `Err` = a file (or unreadable — either way, no recursion).
+collectMdkPath : Ref (List String) -> String -> String -> <IO> Unit
+collectMdkPath acc full n = match listDir full
+  Ok _ => collectMdkUnder acc full
+  Err _ => if endsWith ".mdk" n then acc := full::acc.value else ()
+
+-- Does prelude source `src` declare `name` at top level (own name or child name:
+-- variant ctor, record field, interface/impl method, let-bind)? Reuses the same
+-- `declOwnNameMatches`/`declChildNames` pair the document-symbol path uses, so a
+-- new declaration form is covered here the moment it is covered there. A prelude
+-- that fails to parse yields `False` — the project scan still applies, and a
+-- broken prelude is a louder failure elsewhere.
+preludeDeclares : String -> String -> Bool
+preludeDeclares src name = match parseWithPositionsOpt src
+  None => False
+  Some (decls, _) => anyDeclDeclares decls name
+
+anyDeclDeclares : List Decl -> String -> Bool
+anyDeclDeclares [] _ = False
+anyDeclDeclares (d::ds) name = declOwnNameMatches d name
+  || anyName (declChildNames d) name
+  || anyDeclDeclares ds name
+
+-- F3(c) (#966(a)): is `newName` unusable for a binder in `key`'s namespace?
+-- `Some reason` ⇒ REFUSE with that reason; `None` ⇒ lexically fine.
+--
+-- Three independent ways a newName breaks the applied edit:
+--   * it is not an identifier at all (empty, leading digit, embedded space/
+--     punctuation) — the edited file no longer lexes;
+--   * the LEXER does not read it as an identifier even though every character
+--     is an identifier character — i.e. it is a RESERVED WORD, or `_`. See
+--     `newNameReserved`;
+--   * its CASE contradicts the namespace. Medaka's lexical convention is load-
+--     bearing, not cosmetic: an uppercase leading letter IS a constructor/type
+--     token, so `alpha` → `Color` produced a value binding `Color = …` and the
+--     parse error `unexpected \`Color\``. The inverse (`Color` → `alpha`) is just
+--     as broken in type position.
+-- An unparseable key → refuse (same conservative default as `renameCollides`).
+newNameIllegal : String -> String -> Option String
+newNameIllegal key newName = match keyNsName key
+  None => Some "cannot determine the kind of the symbol being renamed"
+  Some (ns, _name) => match firstChar newName
+    None => Some "the new name is empty"
+    Some c =>
+      if !(isIdentStart c) || !(allIdentChars newName) then
+        Some (stringConcat ["`", newName, "` is not a legal Medaka identifier"])
+      else if newNameReserved newName then
+        Some (stringConcat [
+          "`",
+          newName,
+          "` is reserved by the language (a keyword, or `_`) and cannot name a ",
+          nsNoun ns,
+          " — choose a different name",
+        ])
+      else if uppercaseNs ns then
+        if isUpper c then None else Some (stringConcat [
+          "`",
+          newName,
+          "` cannot name a ",
+          nsNoun ns,
+          " — it must start with an uppercase letter",
+        ])
+      else if isUpper c then
+        Some (stringConcat [
+          "`",
+          newName,
+          "` cannot name a ",
+          nsNoun ns,
+          " — an uppercase name is a type/constructor, not a value",
+        ])
+      else
+        None
+
+-- The two namespaces refindex spells whose members are UPPERCASE-initial
+-- (`nsTy`/`nsCtor`, refindex.mdk); every other namespace it mints — `val`,
+-- `local`, `method`, `field` — is lowercase-initial.
+uppercaseNs : String -> Bool
+uppercaseNs ns = ns == "ty" || ns == "ctor"
+
+-- The refusal wording's noun for a namespace tag — the tags are refindex's
+-- (`nsVal`/`nsTy`/… , refindex.mdk); an unrecognized one degrades to "binding"
+-- rather than leaking the raw tag.
+nsNoun : String -> String
+nsNoun "val" = "value"
+nsNoun "local" = "local binding"
+nsNoun "method" = "method"
+nsNoun "field" = "record field"
+nsNoun "ty" = "type"
+nsNoun "ctor" = "constructor"
+nsNoun _ = "binding"
+
+allIdentChars : String -> Bool
+allIdentChars s = allIdentCharsGo (stringToChars s) 0
+
+allIdentCharsGo : Array Char -> Int -> Bool
+allIdentCharsGo arr i
+  | i >= arrayLength arr = True
+  | !(isIdentChar (arrayGetUnsafe i arr)) = False
+  | otherwise = allIdentCharsGo arr (i + 1)
+
+firstChar : String -> Option Char
+firstChar s =
+  let arr = stringToChars s
+  if arrayLength arr == 0 then None else Some (arrayGetUnsafe 0 arr)
+
+-- Is `newName` something the LEXER refuses to read as a plain identifier, even
+-- though every one of its characters is an identifier character? That is the
+-- reserved words (`match`, `where`, `let`, `data`, `True`, …) and `_`.
+--
+-- ⚠️ DERIVED FROM THE LEXER, NEVER A COPIED LIST. `#966(a)` fixed the INSTANCE
+-- "an uppercase name is illegal for a value"; the PROPERTY is "`newName` must be
+-- a legal identifier in that namespace", and every keyword in
+-- `frontend/lexer.mdk`'s `keywordOrIdent` table is a lowercase identifier that
+-- sailed straight through the `isIdentStart`/`allIdentChars`/case checks —
+-- `foo` → `match` was accepted and the applied edit produced ``unexpected
+-- `match` ``, character for character the failure #966(a) exists to prevent. A
+-- hand-copied keyword list would re-create the same instance-not-property error
+-- one dimension over AND rot the next time a keyword is added, so this asks the
+-- real tokenizer: a name is usable iff it lexes to exactly ONE identifier token
+-- spelling itself. `keywordOrIdent` is the lexer's own dispatcher and needs no
+-- export for this — running the tokenizer over the candidate consults it.
+newNameReserved : String -> Bool
+newNameReserved s = match significantToks s
+  [TIdent n] => n != s
+  [TUpper n] => n != s
+  _ => True
+
+-- The token stream minus the layout heralds the lexer wraps every source in.
+significantToks : String -> List Token
+significantToks s = dropLayoutToks (fst (tokenizeWithOffsetPairs s))
+
+dropLayoutToks : List Token -> List Token
+dropLayoutToks [] = []
+dropLayoutToks (t::ts)
+  | isLayoutTok t = dropLayoutToks ts
+  | otherwise = t :: dropLayoutToks ts
+
+isLayoutTok : Token -> Bool
+isLayoutTok TNewline = True
+isLayoutTok TIndent = True
+isLayoutTok TDedent = True
+isLayoutTok TEof = True
+isLayoutTok _ = False
+
+-- Group the sorted (path, Loc) edits by uri into a `WorkspaceEdit { changes }`.
+-- Sorted by path first (compareUseLoc), so same-path entries are contiguous —
+-- one group per file, no `List`-as-map accumulation.
+--
+-- `puns` is the per-file punned-field table (#963): an edit that lands on a
+-- `{ radius }` token becomes `radius = <newName>`, never a bare replacement.
+workspaceEditJson : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> Json
+workspaceEditJson puns newName sorted =
+  jObject [("changes", jObject (groupEdits puns newName sorted))]
+
+groupEdits : List (String, List ((Int, Int), String)) -> String -> List (String, Loc) -> List (String, Json)
+groupEdits _ _ [] = []
+groupEdits puns newName ((p, loc)::rest) =
+  let sameRest = spanSamePath p rest
+  let tbl = punTableOf p puns
+  let edits = map (textEditJson tbl newName) (loc :: map snd (fst sameRest))
+  (uriOfPath p, jArray edits) :: groupEdits puns newName (snd sameRest)
+
+-- (edits whose path == p from the front, then the remainder) — contiguous run.
+spanSamePath : String -> List (String, Loc) -> (List (String, Loc), List (String, Loc))
+spanSamePath _ [] = ([], [])
+spanSamePath p ((q, loc)::rest) =
+  if q == p then
+    let sr = spanSamePath p rest
+    ((q, loc) :: fst sr, snd sr)
+  else ([], (q, loc)::rest)
+
+textEditJson : List ((Int, Int), String) -> String -> Loc -> Json
+textEditJson tbl newName loc = jObject
+  [
+    ("range", jRangeOfLoc loc),
+    ("newText", JString (punAwareText tbl newName loc)),
+  ]
+
+-- textDocument/rename → WorkspaceEdit | error (#254 Stage 2). Shares
+-- `renameResult` with the `medaka_rename` MCP tool. A refusal (F3) becomes a
+-- JSON-RPC error response so the client SHOWS the reason and applies NOTHING —
+-- the correct LSP behavior for a rename that cannot be performed safely.
+handleRename : String -> String -> Json -> Json -> Docs -> <IO> Unit
+handleRename runtimeSrc coreSrc idJson params docs =
+  let msg = match requestUri params
+    None => renameRefusal "rename requires a document uri"
+    Some uri => match docsGet uri docs
+      None => renameRefusal "document is not open"
+      Some src => renameResult runtimeSrc coreSrc uri src params docs
+  if isRenameRefusal msg then
+    writeMessage (responseErr idJson (renameReasonOf msg))
+  else
+    writeMessage (responseMsg idJson msg)
+
+renameReasonOf : Json -> String
+renameReasonOf j = match lookup "reason" j
+  Some (JString s) => s
+  _ => "rename refused"
+
 -- textDocument/documentHighlight → DocumentHighlight[].
 handleHighlight : Json -> Json -> Docs -> <IO> Unit
 handleHighlight idJson params docs =
@@ -1878,7 +3294,11 @@ dispatch runtimeSrc coreSrc msg docs = match methodOf msg
                               if meth == "exit" then
                                 let _ = logLine "exit (clean shutdown)"
                                 Step docs False
-                              else Step docs True  -- unrecognized method — ignore
+                              else
+                                if meth == "textDocument/rename" then
+                                  let _ = handleRename runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
+                                  Step docs True
+                                else Step docs True  -- unrecognized method — ignore
 -- a response/unknown — ignore, keep going
 
 -- stop the loop
@@ -1928,15 +3348,16 @@ unit = ()
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
-(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
+(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "splitOnChar" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "mapProg" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkProgramSchemes" false) (mem "checkProgramSchemesWithRuntime" false) (mem "ppSchemeNamed" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
-(DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
+(DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false) (mem "allDefKeys" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "useMemberLocal" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" false) (mem "DoStmt" true) (mem "FunClause" true) (mem "MethodDefault" true) (mem "Expr" false) (mem "ELoc" false) (mem "EDoOrigin" false) (mem "EVar" false) (mem "ELam" false) (mem "ELet" false) (mem "ELetGroup" false) (mem "EMatch" false) (mem "EBlock" false) (mem "EDo" false) (mem "EGuards" false) (mem "ESetLit" false) (mem "EFieldAccess" false))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -2173,6 +3594,8 @@ unit = ()
 (DFunDef false "writeMessage" ((PVar "j")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "stringify") (EVar "j"))) (DoLet false false (PVar "n") (EApp (EVar "utf8Len") (EVar "body"))) (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "Content-Length: ")) (EApp (EVar "intToString") (EVar "n")) (ELit (LString "\r\n\r\n"))))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "header"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "body"))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "responseMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json"))))
 (DFunDef false "responseMsg" ((PVar "idJson") (PVar "result")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "result")) (EVar "result")))))
+(DTypeSig false "responseErr" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Json"))))
+(DFunDef false "responseErr" ((PVar "idJson") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EUnOp "-" (ELit (LInt 32803))))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
 (DTypeSig false "notificationMsg" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
 (DFunDef false "notificationMsg" ((PVar "meth") (PVar "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (EVar "meth"))) (ETuple (ELit (LString "params")) (EVar "params")))))
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
@@ -2278,7 +3701,7 @@ unit = ()
 (DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
 (DTypeSig false "initializeResult" (TyCon "Json"))
-(DFunDef false "initializeResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (ELit (LString "0.1.0"))))))))))
+(DFunDef false "initializeResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "renameProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (ELit (LString "0.1.0"))))))))))
 (DTypeSig false "publishDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "publishDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "diagnosticsFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diags")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params"))))))
 (DTypeSig false "projectCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2343,6 +3766,349 @@ unit = ()
 (DFunDef false "locationJson" ((PTuple (PVar "path") (PVar "loc"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
 (DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
+(DTypeSig true "renameResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
+(DFunDef false "renameResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (ETuple (EApp (EVar "positionLine") (EVar "params")) (EApp (EVar "positionChar") (EVar "params")) (EApp (EVar "renameNewName") (EVar "params"))) (arm (PTuple (PCon "Some" (PVar "line")) (PCon "Some" (PVar "col")) (PCon "Some" (PVar "newName"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "position is not on an identifier")))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRoot") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EVar "renameNoBinderRefusal") (EVar "rootFile")) (EVar "docs"))) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameEditFor") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "docs"))))))))) (arm PWild () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a position and a newName"))))))
+(DTypeSig false "renameNoBinderRefusal" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))
+(DFunDef false "renameNoBinderRefusal" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "no renameable symbol at this position")))) (arm (PCon "Some" (PVar "src")) () (EIf (EApp (EVar "srcFailsToParse") (EVar "src")) (EApp (EVar "renameRefusal") (ELit (LString "this file does not parse, so nothing in it is indexed and no position in it can be renamed — fix the parse error first"))) (EApp (EVar "renameRefusal") (ELit (LString "no renameable symbol at this position")))))))
+(DTypeSig false "renameNewName" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "renameNewName" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "newName"))) (EVar "params")))
+(DTypeSig false "renameRefusal" (TyFun (TyCon "String") (TyCon "Json")))
+(DFunDef false "renameRefusal" ((PVar "reason")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "refused")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EVar "reason"))))))
+(DTypeSig true "isRenameRefusal" (TyFun (TyCon "Json") (TyCon "Bool")))
+(DFunDef false "isRenameRefusal" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "refused"))) (EVar "j")) (arm (PCon "Some" (PCon "JBool" (PCon "True"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig false "renameEditFor" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json"))))))))))
+(DFunDef false "renameEditFor" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "docs")) (EIf (EApp (EVar "isExternalKey") (EVar "key")) (EApp (EVar "renameRefusal") (ELit (LString "cannot rename a symbol defined outside the project"))) (EMatch (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key")) (arm (PList) () (EApp (EVar "renameRefusal") (ELit (LString "cannot rename a symbol defined outside the project")))) (arm (PVar "defs") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameEditChecked") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "defs")) (EVar "docs"))))))
+(DTypeSig false "renameEditChecked" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))))
+(DFunDef false "renameEditChecked" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "defs") (PVar "docs")) (EMatch (EApp (EApp (EVar "newNameIllegal") (EVar "key")) (EVar "newName")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EBinOp "++" (EVar "defs") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key"))))) (DoLet false false (PVar "files") (EApp (EVar "affectedPaths") (EVar "all"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameCollides") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "files")) (EVar "docs")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "renaming to `")) (EVar "newName") (ELit (LString "` would collide with an existing binder"))))) (EMatch (EApp (EApp (EApp (EApp (EVar "renameIndexIncomplete") (EVar "projectDir")) (EVar "key")) (EVar "defs")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renameBrokenProjectFile") (EVar "projectDir")) (EVar "key")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "renameEmitVerified") (EVar "key")) (EVar "newName")) (EVar "all")) (EVar "docs"))))))))))))
+(DTypeSig false "affectedPaths" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "affectedPaths" ((PList)) (EListLit))
+(DFunDef false "affectedPaths" ((PCons (PTuple (PVar "p") PWild) (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "affectedPaths") (EApp (EVar "snd") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))))))
+(DTypeSig false "pathIsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "pathIsIn" (PWild (PList)) (EVar "False"))
+(DFunDef false "pathIsIn" ((PVar "p") (PCons (PVar "q") (PVar "qs"))) (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "q")) (EApp (EApp (EVar "pathIsIn") (EVar "p")) (EVar "qs"))))
+(DTypeSig false "renameEmitVerified" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))
+(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "all")) (EVar "docs")) (EApp (EApp (EApp (EVar "workspaceEditJson") (EApp (EApp (EVar "punTablesFor") (EVar "all")) (EVar "docs"))) (EVar "newName")) (EVar "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
+(DTypeSig false "allSpansSpell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "allSpansSpell" (PWild (PList) PWild) (EVar "True"))
+(DFunDef false "allSpansSpell" ((PVar "oldName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "spanSpells") (EVar "oldName")) (EVar "p")) (EVar "loc")) (EVar "docs")) (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "rest")) (EVar "docs"))))
+(DTypeSig false "spanSpells" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "spanSpells" ((PVar "oldName") (PVar "p") (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "docs")) (EIf (EBinOp "||" (EBinOp "!=" (EVar "sl") (EVar "el")) (EBinOp "!=" (EBinOp "-" (EVar "ec") (EVar "sc")) (EApp (EVar "stringLength") (EVar "oldName")))) (EVar "False") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (arm (PCon "Some" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "oldName"))) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig false "renameSrcOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "renameSrcOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "p"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "Err" PWild) () (EVar "None"))))))
+(DTypeSig false "punFieldsOfSrc" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfSrc" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "punFieldsOfDecls") (EVar "decls")))))
+(DTypeSig false "punFieldsOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfDecls" ((PVar "decls")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "recNames") (EApp (EVar "recordCtorNames") (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "punVisit") (EVar "acc")) (EVar "recNames"))) (EVar "decls"))) (DoExpr (EBinOp "++" (EApp (EVar "declParamPuns") (EVar "decls")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "punVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "punVisit" ((PVar "acc") (PVar "recNames") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExprPuns") (EVar "acc")) (EVar "recNames")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "recordCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNames" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "recordCtorNamesOf")) (EVar "decls")))
+(DTypeSig false "recordCtorNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNamesOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DData" PWild PWild PWild (PVar "vs") PWild) () (EApp (EVar "namedVariantCtors") (EVar "vs"))) (arm PWild () (EListLit))))
+(DTypeSig false "namedVariantCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "namedVariantCtors" ((PList)) (EListLit))
+(DFunDef false "namedVariantCtors" ((PCons (PCon "Variant" (PVar "n") (PCon "ConNamed" PWild PWild)) (PVar "vs"))) (EBinOp "::" (EVar "n") (EApp (EVar "namedVariantCtors") (EVar "vs"))))
+(DFunDef false "namedVariantCtors" ((PCons PWild (PVar "vs"))) (EApp (EVar "namedVariantCtors") (EVar "vs")))
+(DTypeSig false "collectExprPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "collectExprPuns" ((PVar "acc") (PVar "recNames") (PCon "ESetLit" (PVar "name") (PVar "items"))) (EIf (EApp (EApp (EApp (EVar "punRecordSetLit") (EVar "recNames")) (EVar "name")) (EVar "items")) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "punItemSpan")) (EVar "items"))) (ELit LUnit)))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELam" (PVar "ps") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELet" PWild PWild (PVar "p") PWild PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EVar "patPuns") (EVar "p"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "armPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "guardArmPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELetGroup" (PVar "binds") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))))
+(DFunDef false "collectExprPuns" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "pushPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "pushPuns" ((PVar "acc") (PList)) (ELit LUnit))
+(DFunDef false "pushPuns" ((PVar "acc") (PVar "found")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EVar "found") (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "punRecordSetLit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
+(DFunDef false "punRecordSetLit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "punRecordSetLit" ((PVar "recNames") (PVar "name") (PVar "items")) (EBinOp "&&" (EApp (EApp (EVar "anyName") (EVar "recNames")) (EVar "name")) (EApp (EVar "allBareVars") (EVar "items"))))
+(DTypeSig false "allBareVars" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "allBareVars" ((PList)) (EVar "True"))
+(DFunDef false "allBareVars" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "punItemSpan") (EVar "e")) (arm (PList) () (EVar "False")) (arm PWild () (EApp (EVar "allBareVars") (EVar "rest")))))
+(DTypeSig false "punItemSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "EVar" (PVar "n")))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "n"))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" (PWild) (EListLit))
+(DTypeSig false "armPuns" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "armPuns" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "++" (EApp (EVar "patPuns") (EVar "p")) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs"))))
+(DTypeSig false "guardArmPuns" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardArmPuns" ((PCon "GuardArm" (PVar "gs") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs")))
+(DTypeSig false "guardPuns" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardPuns" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "guardPuns" (PWild) (EListLit))
+(DTypeSig false "stmtPuns" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "stmtPuns" ((PCon "DoBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" ((PCon "DoLet" PWild PWild (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" (PWild) (EListLit))
+(DTypeSig false "letBindPuns" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "letBindPuns" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMapL") (EVar "clausePuns")) (EVar "clauses")))
+(DTypeSig false "clausePuns" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "clausePuns" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "declParamPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPuns" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "declParamPunsOf")) (EVar "decls")))
+(DTypeSig false "declParamPunsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPunsOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DFunDef" PWild PWild (PVar "ps") PWild) () (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "implMethodPuns")) (EVar "ms"))) (arm (PRec "DInterface" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "ifaceMethodPuns")) (EVar "ms"))) (arm PWild () (EListLit))))
+(DTypeSig false "implMethodPuns" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "implMethodPuns" ((PCon "ImplMethod" PWild (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "ifaceMethodPuns" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "ifaceMethodPuns" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") PWild)))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "ifaceMethodPuns" (PWild) (EListLit))
+(DTypeSig false "patPuns" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "patPuns" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "recFieldPuns")) (EVar "fields")))
+(DFunDef false "patPuns" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patPuns") (EVar "a")) (EApp (EVar "patPuns") (EVar "b"))))
+(DFunDef false "patPuns" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "patPuns" (PWild) (EListLit))
+(DTypeSig false "recFieldPuns" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" (PVar "name") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "None"))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "name"))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patPuns") (EVar "p")))
+(DTypeSig false "flatMapL" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
+(DFunDef false "flatMapL" (PWild (PList)) (EListLit))
+(DFunDef false "flatMapL" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "flatMapL") (EVar "f")) (EVar "xs"))))
+(DTypeSig false "punTablesFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))))))
+(DFunDef false "punTablesFor" ((PList) PWild) (EListLit))
+(DFunDef false "punTablesFor" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "docs")) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "punFieldsOfSrc") (EVar "src"))))) (DoExpr (EBinOp "::" (ETuple (EVar "p") (EVar "tbl")) (EApp (EApp (EVar "punTablesFor") (EApp (EVar "snd") (EVar "sameRest"))) (EVar "docs"))))))
+(DTypeSig false "punTableOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "punTableOf" (PWild (PList)) (EListLit))
+(DFunDef false "punTableOf" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "tbl")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "q")) (EVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "punAwareText" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "punAwareText" ((PVar "tbl") (PVar "newName") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "punFieldAt") (EVar "tbl")) (EVar "sl")) (EVar "sc")) (arm (PCon "Some" (PVar "field")) () (EApp (EVar "stringConcat") (EListLit (EVar "field") (ELit (LString " = ")) (EVar "newName")))) (arm (PCon "None") () (EVar "newName"))))
+(DTypeSig false "punFieldAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "punFieldAt" ((PList) PWild PWild) (EVar "None"))
+(DFunDef false "punFieldAt" ((PCons (PTuple (PTuple (PVar "l") (PVar "c")) (PVar "field")) (PVar "rest")) (PVar "sl") (PVar "sc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "sl")) (EBinOp "==" (EVar "c") (EVar "sc"))) (EApp (EVar "Some") (EVar "field")) (EApp (EApp (EApp (EVar "punFieldAt") (EVar "rest")) (EVar "sl")) (EVar "sc"))))
+(DTypeSig false "isExternalKey" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isExternalKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "m") PWild) () (EBinOp "==" (EVar "m") (ELit (LString "?ext")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "keyTab" (TyCon "Char"))
+(DFunDef false "keyTab" () (ELit (LChar "\t")))
+(DTypeSig false "keyNsName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "keyNsName" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons PWild (PCons (PVar "ns") (PCons (PVar "name") PWild))) () (EApp (EVar "Some") (ETuple (EVar "ns") (EVar "name")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "renameCollides" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "renameCollides" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "files") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "_name"))) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EApp (EVar "allDefKeys") (EVar "idx"))) (EVar "ns")) (EVar "newName")) (EApp (EApp (EVar "preludeDeclares") (EVar "coreSrc")) (EVar "newName"))) (EApp (EApp (EVar "preludeDeclares") (EVar "runtimeSrc")) (EVar "newName"))) (EApp (EApp (EApp (EApp (EVar "anyKeyNamedInFiles") (EVar "idx")) (EApp (EVar "allDefKeys") (EVar "idx"))) (EVar "newName")) (EVar "files"))) (EApp (EApp (EApp (EApp (EVar "anyImportBindsIn") (EVar "newName")) (EVar "projectDir")) (EVar "files")) (EVar "docs"))))))
+(DTypeSig false "anyDefKeyMatches" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "anyDefKeyMatches" ((PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyDefKeyMatches" ((PCons (PVar "k") (PVar "ks")) (PVar "ns") (PVar "newName")) (EMatch (EApp (EVar "keyNsName") (EVar "k")) (arm (PCon "Some" (PTuple (PVar "ns2") (PVar "nm2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "ns2") (EVar "ns")) (EBinOp "==" (EVar "nm2") (EVar "newName"))) (EVar "True") (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EVar "ks")) (EVar "ns")) (EVar "newName")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EVar "ks")) (EVar "ns")) (EVar "newName")))))
+(DTypeSig false "anyKeyNamedInFiles" (TyFun (TyCon "RefIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "anyKeyNamedInFiles" (PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyKeyNamedInFiles" ((PVar "idx") (PCons (PVar "k") (PVar "ks")) (PVar "newName") (PVar "files")) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EVar "keyCanCapture") (EVar "k")) (EVar "newName")) (EApp (EApp (EVar "anyPathIn") (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "k"))) (EVar "files"))) (EApp (EApp (EApp (EApp (EVar "anyKeyNamedInFiles") (EVar "idx")) (EVar "ks")) (EVar "newName")) (EVar "files"))))
+(DTypeSig false "keyCanCapture" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "keyCanCapture" ((PVar "k") (PVar "name")) (EMatch (EApp (EVar "keyNsName") (EVar "k")) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "n"))) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "!=" (EVar "ns") (ELit (LString "field"))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "anyPathIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyPathIn" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyPathIn" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "files")) (EBinOp "||" (EApp (EApp (EVar "pathIsIn") (EVar "p")) (EVar "files")) (EApp (EApp (EVar "anyPathIn") (EVar "rest")) (EVar "files"))))
+(DTypeSig false "anyImportBindsIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "anyImportBindsIn" (PWild PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyImportBindsIn" ((PVar "newName") (PVar "projectDir") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "fileImportsBind") (EVar "newName")) (EVar "projectDir")) (EVar "p")) (EVar "docs")) (EApp (EApp (EApp (EApp (EVar "anyImportBindsIn") (EVar "newName")) (EVar "projectDir")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "fileImportsBind" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "fileImportsBind" ((PVar "newName") (PVar "projectDir") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "newName")) (EVar "projectDir")) (EVar "decls")) (EVar "docs")))))))
+(DTypeSig false "anyImportDeclBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "anyImportDeclBinds" (PWild PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyImportDeclBinds" ((PVar "newName") (PVar "projectDir") (PCons (PVar "d") (PVar "ds")) (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "importDeclBinds") (EVar "newName")) (EVar "projectDir")) (EApp (EVar "innerDecl") (EVar "d"))) (EVar "docs")) (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "newName")) (EVar "projectDir")) (EVar "ds")) (EVar "docs"))))
+(DTypeSig false "importDeclBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "importDeclBinds" ((PVar "newName") (PVar "projectDir") (PCon "DUse" PWild (PVar "path") PWild) (PVar "docs")) (EApp (EApp (EApp (EApp (EVar "usePathBinds") (EVar "newName")) (EVar "projectDir")) (EVar "path")) (EVar "docs")))
+(DFunDef false "importDeclBinds" (PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "usePathBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "usePathBinds" ((PVar "newName") PWild (PCon "UseGroup" PWild (PVar "members")) PWild) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EVar "members"))) (EVar "newName")))
+(DFunDef false "usePathBinds" ((PVar "newName") (PVar "projectDir") (PCon "UseWild" (PVar "mods")) (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "moduleExportsName") (EVar "newName")) (EVar "projectDir")) (EVar "mods")) (EVar "reExportFuel")) (EVar "docs")))
+(DFunDef false "usePathBinds" ((PVar "newName") PWild (PCon "UseAlias" PWild (PVar "alias")) PWild) (EBinOp "==" (EVar "alias") (EVar "newName")))
+(DFunDef false "usePathBinds" (PWild PWild (PCon "UseName" PWild) PWild) (EVar "False"))
+(DTypeSig false "moduleExportsName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "moduleExportsName" ((PVar "name") (PVar "projectDir") (PVar "mods") (PVar "fuel") (PVar "docs")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "importedModuleSrc") (EVar "projectDir")) (EVar "mods")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBinOp "||" (EApp (EApp (EVar "anyDeclDeclares") (EVar "decls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "anyReExportBinds") (EVar "name")) (EVar "projectDir")) (EVar "decls")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "docs"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "anyReExportBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "anyReExportBinds" (PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyReExportBinds" ((PVar "name") (PVar "projectDir") (PCons (PVar "d") (PVar "ds")) (PVar "fuel") (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "reExportBinds") (EVar "name")) (EVar "projectDir")) (EApp (EVar "innerDecl") (EVar "d"))) (EVar "fuel")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "anyReExportBinds") (EVar "name")) (EVar "projectDir")) (EVar "ds")) (EVar "fuel")) (EVar "docs"))))
+(DTypeSig false "reExportBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "reExportBinds" ((PVar "name") (PVar "projectDir") (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "fuel") (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "reExportPathBinds") (EVar "name")) (EVar "projectDir")) (EVar "path")) (EVar "fuel")) (EVar "docs")))
+(DFunDef false "reExportBinds" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "reExportPathBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "reExportPathBinds" ((PVar "name") PWild (PCon "UseGroup" PWild (PVar "members")) PWild PWild) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EVar "members"))) (EVar "name")))
+(DFunDef false "reExportPathBinds" ((PVar "name") (PVar "projectDir") (PCon "UseWild" (PVar "mods")) (PVar "fuel") (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "moduleExportsName") (EVar "name")) (EVar "projectDir")) (EVar "mods")) (EVar "fuel")) (EVar "docs")))
+(DFunDef false "reExportPathBinds" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "reExportFuel" (TyCon "Int"))
+(DFunDef false "reExportFuel" () (ELit (LInt 8)))
+(DTypeSig false "importedModuleSrc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "importedModuleSrc" ((PVar "projectDir") (PVar "mods") (PVar "docs")) (EBlock (DoLet false false (PVar "rel") (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "mods")) (ELit (LString ".mdk")))) (DoExpr (EMatch (EApp (EApp (EVar "renameSrcOf") (EApp (EApp (EVar "joinPath") (EVar "projectDir")) (EVar "rel"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EApp (EVar "renameSrcOf") (EApp (EApp (EVar "joinPath") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (EVar "rel"))) (EVar "docs")))))))
+(DTypeSig false "renameIndexIncomplete" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "renameIndexIncomplete" ((PVar "projectDir") (PVar "key") (PVar "defs") (PVar "docs")) (EMatch (EApp (EVar "keyModNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "ns") (PVar "name"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "firstLocalShape") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "defs")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Some") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "aliasQualifiedShape") (EVar "projectDir")) (EVar "mid")) (EVar "name")) (EVar "docs")))))))
+(DTypeSig false "keyModNsName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
+(DFunDef false "keyModNsName" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "mid") (PCons (PVar "ns") (PCons (PVar "name") PWild))) () (EApp (EVar "Some") (ETuple (EVar "mid") (EVar "ns") (EVar "name")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "firstLocalShape" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "firstLocalShape" (PWild PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstLocalShape" ((PVar "projectDir") (PVar "ns") (PVar "name") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shapeAtDef") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "p")) (EVar "loc")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Some") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "firstLocalShape") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "rest")) (EVar "docs")))))
+(DTypeSig false "shapeAtDef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
+(DFunDef false "shapeAtDef" ((PVar "projectDir") (PVar "ns") (PVar "name") (PVar "p") (PVar "loc") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameDeclsOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "decls")) () (EIf (EApp (EApp (EApp (EVar "selfRecursiveLetAt") (EVar "decls")) (EVar "name")) (EVar "loc")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is a self-recursive local binding, and the reference index does not record the recursive call as one of its uses (#1003) — this rename would leave that call behind, silently rebinding it to whatever else is named `")) (EVar "name") (ELit (LString "`; rename it by hand, or lift the binding to the top level first"))))) (EIf (EApp (EApp (EVar "topLevelLetRecBinds") (EVar "decls")) (EVar "name")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is bound by a top-level `let rec`, and the reference index splits its recursive call sites and its external call sites across two separate binder keys (#951) — a rename from either click edits only half of them; rename it by hand, or rewrite the binding as an ordinary top-level definition first"))))) (EApp (EApp (EVar "map") (ELam ((PVar "owner")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "p") (ELit (LString "` both declares and imports `")) (EVar "owner") (ELit (LString "`, and the reference index resolves the import ahead of the module's own declaration (#1056, the inverse of `resolve.mdk`) — occurrences keyed through it land under the wrong module and are dropped from this rename; drop the duplicate import, or rename it by hand")))))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowedOwner") (EVar "projectDir")) (EVar "decls")) (EVar "ns")) (EVar "name")) (EVar "docs"))))))))
+(DTypeSig false "renameDeclsOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "renameDeclsOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "parseWithPositionsOpt") (EVar "src"))))))
+(DTypeSig false "selfRecursiveLetAt" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Bool")))))
+(DFunDef false "selfRecursiveLetAt" ((PVar "decls") (PVar "name") (PVar "loc")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "selfRecVisit") (EVar "acc")) (EVar "name")) (EVar "loc"))) (EVar "decls"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "selfRecVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "selfRecVisit" ((PVar "acc") (PVar "name") (PVar "loc") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "selfRecCheck") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "selfRecCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "ELet" PWild PWild (PVar "p") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "selfRecBind") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "p")) (EVar "rhs")))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "selfRecCheck" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "selfRecStmts" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Unit"))))))
+(DFunDef false "selfRecStmts" (PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "selfRecStmts" ((PVar "acc") (PVar "name") (PVar "loc") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "selfRecStmt") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "rest")))))
+(DTypeSig false "selfRecStmt" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "DoStmt") (TyCon "Unit"))))))
+(DFunDef false "selfRecStmt" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "DoLet" PWild PWild (PVar "p") (PVar "rhs"))) (EApp (EApp (EApp (EApp (EApp (EVar "selfRecBind") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "p")) (EVar "rhs")))
+(DFunDef false "selfRecStmt" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "selfRecBind" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Unit")))))))
+(DFunDef false "selfRecBind" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "PVar" (PVar "n") (PVar "bloc")) (PVar "rhs")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "sameLocStart") (EVar "bloc")) (EVar "loc"))) (EApp (EApp (EVar "exprMentionsVar") (EVar "name")) (EVar "rhs"))) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "selfRecBind" (PWild PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "sameLocStart" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
+(DFunDef false "sameLocStart" ((PCon "Loc" PWild (PVar "al") (PVar "ac") PWild PWild) (PCon "Loc" PWild (PVar "bl") (PVar "bc") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "al") (EVar "bl")) (EBinOp "==" (EVar "ac") (EVar "bc"))))
+(DTypeSig false "exprMentionsVar" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "exprMentionsVar" ((PVar "name") (PVar "e")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapExpr") (EApp (EApp (EVar "varVisit") (EVar "acc")) (EVar "name"))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "varVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "varVisit" ((PVar "acc") (PVar "name") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "varCheck") (EVar "acc")) (EVar "name")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "varCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "varCheck" ((PVar "acc") (PVar "name") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "varCheck" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "topLevelLetRecBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "topLevelLetRecBinds" ((PList) PWild) (EVar "False"))
+(DFunDef false "topLevelLetRecBinds" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declIsLetRecFor") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")) (EApp (EApp (EVar "topLevelLetRecBinds") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "declIsLetRecFor" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declIsLetRecFor" ((PCon "DLetGroup" PWild (PVar "binds")) (PVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (EVar "name")))
+(DFunDef false "declIsLetRecFor" (PWild PWild) (EVar "False"))
+(DTypeSig false "importShadowedOwner" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "importShadowedOwner" ((PVar "projectDir") (PVar "decls") (PVar "ns") (PVar "name") (PVar "docs")) (EApp (EApp (EApp (EApp (EVar "firstShadowedName") (EVar "projectDir")) (EVar "decls")) (EBinOp "::" (EVar "name") (EApp (EApp (EApp (EVar "methodOwnerNames") (EVar "ns")) (EVar "decls")) (EVar "name")))) (EVar "docs")))
+(DTypeSig false "firstShadowedName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstShadowedName" (PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstShadowedName" ((PVar "projectDir") (PVar "decls") (PCons (PVar "c") (PVar "cs")) (PVar "docs")) (EIf (EBinOp "&&" (EApp (EApp (EVar "declsDeclareOwn") (EVar "decls")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "c")) (EVar "projectDir")) (EVar "decls")) (EVar "docs"))) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EApp (EVar "firstShadowedName") (EVar "projectDir")) (EVar "decls")) (EVar "cs")) (EVar "docs"))))
+(DTypeSig false "declsDeclareOwn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declsDeclareOwn" ((PList) PWild) (EVar "False"))
+(DFunDef false "declsDeclareOwn" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declDeclaresOwn") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")) (EApp (EApp (EVar "declsDeclareOwn") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "declDeclaresOwn" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declDeclaresOwn" ((PRec "DImpl" () true) PWild) (EVar "False"))
+(DFunDef false "declDeclaresOwn" ((PVar "d") (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declOwnNameMatches") (EVar "d")) (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EVar "declChildNames") (EVar "d"))) (EVar "name"))))
+(DTypeSig false "methodOwnerNames" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "methodOwnerNames" ((PLit (LString "method")) (PVar "decls") (PVar "name")) (EApp (EApp (EVar "flatMapL") (ELam ((PVar "d")) (EApp (EApp (EVar "ifaceOwnerOf") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")))) (EVar "decls")))
+(DFunDef false "methodOwnerNames" (PWild PWild PWild) (EListLit))
+(DTypeSig false "ifaceOwnerOf" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceOwnerOf" ((PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) (PVar "name")) (EIf (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "ms"))) (EVar "name")) (EListLit (EVar "n")) (EListLit)))
+(DFunDef false "ifaceOwnerOf" ((PRec "DImpl" ((rf "iface" (PVar "i")) (rf "methods" (PVar "ms"))) true) (PVar "name")) (EIf (EApp (EApp (EVar "anyName") (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "ms"))) (EVar "name")) (EListLit (EVar "i")) (EListLit)))
+(DFunDef false "ifaceOwnerOf" (PWild PWild) (EListLit))
+(DTypeSig false "aliasQualifiedShape" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "aliasQualifiedShape" ((PVar "projectDir") (PVar "mid") (PVar "name") (PVar "docs")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is referenced through a module alias in `")) (EVar "p") (ELit (LString "`, and the reference index files an alias-qualified reference at the enclosing declaration instead of at the `<alias>.")) (EVar "name") (ELit (LString "` token (#965) — this rename would miss that reference and may overwrite the declaration it was filed under; switch that file to a selective import, or rename by hand")))))) (EApp (EApp (EApp (EApp (EVar "firstAliasQualifiedFile") (EVar "mid")) (EVar "name")) (EApp (EVar "projectMdkFiles") (EVar "projectDir"))) (EVar "docs"))))
+(DTypeSig false "firstAliasQualifiedFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstAliasQualifiedFile" (PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstAliasQualifiedFile" ((PVar "mid") (PVar "name") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EIf (EApp (EApp (EApp (EApp (EVar "fileAliasQualifies") (EVar "mid")) (EVar "name")) (EVar "p")) (EVar "docs")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "firstAliasQualifiedFile") (EVar "mid")) (EVar "name")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "fileAliasQualifies" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "fileAliasQualifies" ((PVar "mid") (PVar "name") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EBinOp "&&" (EApp (EApp (EVar "srcMentionsName") (EVar "name")) (EVar "src")) (EApp (EApp (EApp (EVar "declsAliasQualify") (EVar "mid")) (EVar "name")) (EVar "src"))))))
+(DTypeSig false "declsAliasQualify" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "declsAliasQualify" ((PVar "mid") (PVar "name") (PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EApp (EVar "anyAliasQualifiedUse") (EVar "decls")) (EApp (EApp (EVar "aliasesOfModule") (EVar "decls")) (EVar "mid"))) (EVar "name")))))
+(DTypeSig false "aliasesOfModule" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "aliasesOfModule" ((PVar "decls") (PVar "mid")) (EApp (EApp (EVar "flatMapL") (ELam ((PVar "d")) (EApp (EApp (EVar "aliasOfDecl") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "mid")))) (EVar "decls")))
+(DTypeSig false "aliasOfDecl" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "aliasOfDecl" ((PCon "DUse" PWild (PCon "UseAlias" (PVar "mods") (PVar "alias")) PWild) (PVar "mid")) (EIf (EBinOp "==" (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "mods")) (EVar "mid")) (EListLit (EVar "alias")) (EListLit)))
+(DFunDef false "aliasOfDecl" (PWild PWild) (EListLit))
+(DTypeSig false "anyAliasQualifiedUse" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "anyAliasQualifiedUse" (PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyAliasQualifiedUse" ((PVar "decls") (PVar "aliases") (PVar "name")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "aliasVisit") (EVar "acc")) (EVar "aliases")) (EVar "name"))) (EVar "decls"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "aliasVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "aliasVisit" ((PVar "acc") (PVar "aliases") (PVar "name") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "aliasCheck") (EVar "acc")) (EVar "aliases")) (EVar "name")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "aliasCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
+(DFunDef false "aliasCheck" ((PVar "acc") (PVar "aliases") (PVar "name") (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "f") (EVar "name")) (EApp (EApp (EVar "aliasHeadIn") (EVar "aliases")) (EApp (EVar "stripExprLoc") (EVar "head")))) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "aliasCheck" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "aliasHeadIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "aliasHeadIn" ((PVar "aliases") (PCon "EVar" (PVar "a"))) (EApp (EApp (EVar "anyName") (EVar "aliases")) (EVar "a")))
+(DFunDef false "aliasHeadIn" (PWild PWild) (EVar "False"))
+(DTypeSig false "stripExprLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripExprLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripExprLoc") (EVar "e")))
+(DFunDef false "stripExprLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig false "renameBrokenProjectFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "renameBrokenProjectFile" ((PVar "projectDir") (PVar "key") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "name"))) () (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "p") (ELit (LString "` is under the project root, mentions `")) (EVar "name") (ELit (LString "`, and does not parse — its occurrences are missing from the reference index, so this rename would silently skip them; fix that file's parse error first")))))) (EApp (EApp (EApp (EVar "firstBrokenMentioning") (EVar "name")) (EApp (EVar "projectMdkFiles") (EVar "projectDir"))) (EVar "docs"))))))
+(DTypeSig false "firstBrokenMentioning" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstBrokenMentioning" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstBrokenMentioning" ((PVar "name") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EIf (EApp (EApp (EApp (EVar "brokenAndMentions") (EVar "name")) (EVar "p")) (EVar "docs")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EVar "firstBrokenMentioning") (EVar "name")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "brokenAndMentions" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "brokenAndMentions" ((PVar "name") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EBinOp "&&" (EApp (EApp (EVar "srcMentionsName") (EVar "name")) (EVar "src")) (EApp (EVar "srcFailsToParse") (EVar "src"))))))
+(DTypeSig false "srcFailsToParse" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "srcFailsToParse" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" PWild) () (EVar "False"))))
+(DTypeSig false "srcMentionsName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "srcMentionsName" ((PVar "name") (PVar "src")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EApp (EVar "stringToChars") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 0))) (EVar "mentionCode")))
+(DTypeSig false "mentionCode" (TyCon "Int"))
+(DFunDef false "mentionCode" () (ELit (LInt 0)))
+(DTypeSig false "mentionComment" (TyCon "Int"))
+(DFunDef false "mentionComment" () (ELit (LInt 1)))
+(DTypeSig false "mentionString" (TyCon "Int"))
+(DFunDef false "mentionString" () (ELit (LInt 2)))
+(DTypeSig false "mentionScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "mentionScan" ((PVar "src") (PVar "nm") (PVar "i") (PVar "mode")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "src"))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EIf (EBinOp "==" (EVar "mode") (EVar "mentionComment")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionComment")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\\")))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "mentionString")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EIf (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionString")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionString")) (EIf (EApp (EApp (EVar "dashDashAt") (EVar "src")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionComment")) (EIf (EApp (EApp (EApp (EVar "identDelimitedAt") (EVar "src")) (EVar "nm")) (EVar "i")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
+(DTypeSig false "dashDashAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "dashDashAt" ((PVar "src") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "src")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "src")) (ELit (LChar "-")))))
+(DTypeSig false "identDelimitedAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "identDelimitedAt" ((PVar "src") (PVar "nm") (PVar "i")) (EIf (EUnOp "!" (EApp (EApp (EApp (EApp (EVar "charRunMatches") (EVar "src")) (EVar "nm")) (EVar "i")) (ELit (LInt 0)))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "src")))) (EVar "False") (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (EApp (EVar "arrayLength") (EVar "nm"))) (EApp (EVar "arrayLength") (EVar "src"))) (EVar "True") (EIf (EVar "otherwise") (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EApp (EVar "arrayLength") (EVar "nm")))) (EVar "src")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "charRunMatches" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "charRunMatches" ((PVar "src") (PVar "nm") (PVar "i") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "nm"))) (EVar "True") (EIf (EBinOp "!=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "src")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "nm"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charRunMatches") (EVar "src")) (EVar "nm")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "projectMdkFiles" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "projectMdkFiles" ((PVar "root")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "collectMdkUnder") (EVar "acc")) (EVar "root"))) (DoExpr (EApp (EApp (EVar "sortBy") (EVar "compare")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "collectMdkUnder" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "collectMdkUnder" ((PVar "acc") (PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "collectMdkEntries") (EVar "acc")) (EVar "dir")) (EVar "entries")))))
+(DTypeSig false "collectMdkEntries" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkEntries" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "collectMdkEntries" ((PVar "acc") (PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectMdkEntry") (EVar "acc")) (EVar "dir")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "collectMdkEntries") (EVar "acc")) (EVar "dir")) (EVar "rest")))))
+(DTypeSig false "collectMdkEntry" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkEntry" ((PVar "acc") (PVar "dir") (PVar "n")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collectMdkPath") (EVar "acc")) (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "n"))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "collectMdkPath" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkPath" ((PVar "acc") (PVar "full") (PVar "n")) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "collectMdkUnder") (EVar "acc")) (EVar "full"))) (arm (PCon "Err" PWild) () (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "n")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "::" (EVar "full") (EFieldAccess (EVar "acc") "value"))) (ELit LUnit)))))
+(DTypeSig false "preludeDeclares" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "preludeDeclares" ((PVar "src") (PVar "name")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "anyDeclDeclares") (EVar "decls")) (EVar "name")))))
+(DTypeSig false "anyDeclDeclares" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "anyDeclDeclares" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyDeclDeclares" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "declOwnNameMatches") (EVar "d")) (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EVar "declChildNames") (EVar "d"))) (EVar "name"))) (EApp (EApp (EVar "anyDeclDeclares") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "newNameIllegal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "newNameIllegal" ((PVar "key") (PVar "newName")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "_name"))) () (EMatch (EApp (EVar "firstChar") (EVar "newName")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "the new name is empty")))) (arm (PCon "Some" (PVar "c")) () (EIf (EBinOp "||" (EUnOp "!" (EApp (EVar "isIdentStart") (EVar "c"))) (EUnOp "!" (EApp (EVar "allIdentChars") (EVar "newName")))) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` is not a legal Medaka identifier"))))) (EIf (EApp (EVar "newNameReserved") (EVar "newName")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` is reserved by the language (a keyword, or `_`) and cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — choose a different name"))))) (EIf (EApp (EVar "uppercaseNs") (EVar "ns")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — it must start with an uppercase letter")))))) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — an uppercase name is a type/constructor, not a value"))))) (EVar "None"))))))))))
+(DTypeSig false "uppercaseNs" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "uppercaseNs" ((PVar "ns")) (EBinOp "||" (EBinOp "==" (EVar "ns") (ELit (LString "ty"))) (EBinOp "==" (EVar "ns") (ELit (LString "ctor")))))
+(DTypeSig false "nsNoun" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "nsNoun" ((PLit (LString "val"))) (ELit (LString "value")))
+(DFunDef false "nsNoun" ((PLit (LString "local"))) (ELit (LString "local binding")))
+(DFunDef false "nsNoun" ((PLit (LString "method"))) (ELit (LString "method")))
+(DFunDef false "nsNoun" ((PLit (LString "field"))) (ELit (LString "record field")))
+(DFunDef false "nsNoun" ((PLit (LString "ty"))) (ELit (LString "type")))
+(DFunDef false "nsNoun" ((PLit (LString "ctor"))) (ELit (LString "constructor")))
+(DFunDef false "nsNoun" (PWild) (ELit (LString "binding")))
+(DTypeSig false "allIdentChars" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "allIdentChars" ((PVar "s")) (EApp (EApp (EVar "allIdentCharsGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "allIdentCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allIdentCharsGo" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "True") (EIf (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "allIdentCharsGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "firstChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "firstChar" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "arr")))))))
+(DTypeSig false "newNameReserved" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "newNameReserved" ((PVar "s")) (EMatch (EApp (EVar "significantToks") (EVar "s")) (arm (PList (PCon "TIdent" (PVar "n"))) () (EBinOp "!=" (EVar "n") (EVar "s"))) (arm (PList (PCon "TUpper" (PVar "n"))) () (EBinOp "!=" (EVar "n") (EVar "s"))) (arm PWild () (EVar "True"))))
+(DTypeSig false "significantToks" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "significantToks" ((PVar "s")) (EApp (EVar "dropLayoutToks") (EApp (EVar "fst") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "s")))))
+(DTypeSig false "dropLayoutToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "dropLayoutToks" ((PList)) (EListLit))
+(DFunDef false "dropLayoutToks" ((PCons (PVar "t") (PVar "ts"))) (EIf (EApp (EVar "isLayoutTok") (EVar "t")) (EApp (EVar "dropLayoutToks") (EVar "ts")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EVar "dropLayoutToks") (EVar "ts"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DTypeSig false "workspaceEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json")))))
+(DFunDef false "workspaceEditJson" ((PVar "puns") (PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EVar "sorted")))))))
+(DTypeSig false "groupEdits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))))
+(DFunDef false "groupEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "groupEdits" ((PVar "puns") (PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "puns"))) (DoLet false false (PVar "edits") (EApp (EApp (EVar "map") (EApp (EApp (EVar "textEditJson") (EVar "tbl")) (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
+(DTypeSig false "spanSamePath" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))))
+(DFunDef false "spanSamePath" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanSamePath" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EApp (EVar "fst") (EVar "sr"))) (EApp (EVar "snd") (EVar "sr"))))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EVar "rest")))))
+(DTypeSig false "textEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json")))))
+(DFunDef false "textEditJson" ((PVar "tbl") (PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EApp (EApp (EApp (EVar "punAwareText") (EVar "tbl")) (EVar "newName")) (EVar "loc")))))))
+(DTypeSig false "handleRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
+(DFunDef false "handleRename" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "msg") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a document uri")))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "document is not open")))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EIf (EApp (EVar "isRenameRefusal") (EVar "msg")) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseErr") (EVar "idJson")) (EApp (EVar "renameReasonOf") (EVar "msg")))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "msg")))))))
+(DTypeSig false "renameReasonOf" (TyFun (TyCon "Json") (TyCon "String")))
+(DFunDef false "renameReasonOf" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "reason"))) (EVar "j")) (arm (PCon "Some" (PCon "JString" (PVar "s"))) () (EVar "s")) (arm PWild () (ELit (LString "rename refused")))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
@@ -2362,7 +4128,7 @@ unit = ()
 (DFunDef false "methodOf" ((PVar "msg")) (EApp (EApp (EVar "fieldStr") (ELit (LString "method"))) (EVar "msg")))
 (DData Public "Step" () ((variant "Step" (ConPos (TyCon "Docs") (TyCon "Bool")))) ())
 (DTypeSig false "dispatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Step")))))))
-(DFunDef false "dispatch" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "msg") (PVar "docs")) (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))) (arm (PCon "Some" (PVar "meth")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "initializeResult")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialized"))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didOpen"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidOpen") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didChange"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidChange") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/formatting"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleFormatting") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentSymbol"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDocumentSymbol") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/definition"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDefinition") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentHighlight"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleHighlight") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/references"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleReferences") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/hover"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleHover") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/completion"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleCompletion") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/inlayHint"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleInlayHint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/semanticTokens/full"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleSemanticTokens") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "JNull")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "exit"))) (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "exit (clean shutdown)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False")))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))))))))))))))))))))
+(DFunDef false "dispatch" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "msg") (PVar "docs")) (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))) (arm (PCon "Some" (PVar "meth")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "initializeResult")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialized"))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didOpen"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidOpen") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didChange"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidChange") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/formatting"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleFormatting") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentSymbol"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDocumentSymbol") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/definition"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDefinition") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentHighlight"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleHighlight") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/references"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleReferences") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/hover"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleHover") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/completion"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleCompletion") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/inlayHint"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleInlayHint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/semanticTokens/full"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleSemanticTokens") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "JNull")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "exit"))) (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "exit (clean shutdown)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/rename"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleRename") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))))))))))))))))))))
 (DTypeSig false "serveOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Step"))))))
 (DFunDef false "serveOnce" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "docs")) (EMatch (EApp (EVar "readHeaders") (ELit (LInt 0))) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False"))) (arm (PCon "Some" (PVar "len")) () (EMatch (EApp (EVar "readExactly") (EVar "len")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False"))) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false PWild (EApp (EVar "logLine") (EApp (EVar "stringConcat") (EListLit (ELit (LString "recv ")) (EVar "body"))))) (DoExpr (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "  parse-error: malformed JSON body (skipped)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))))) (arm (PCon "Ok" (PVar "msg")) () (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "dispatch") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "msg")) (EVar "docs"))) (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "  handled")))) (DoExpr (EVar "step"))))))))))))
 (DTypeSig false "serve" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -2377,15 +4143,16 @@ unit = ()
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRoot" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
-(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false) (mem "isLower" false) (mem "isUpper" false) (mem "isIdentStart" false))))
+(DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "splitOnChar" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "mapProg" false) (mem "mapExpr" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkProgramSchemes" false) (mem "checkProgramSchemesWithRuntime" false) (mem "ppSchemeNamed" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
-(DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
+(DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false) (mem "allDefKeys" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTypeSig" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DData" false) (mem "DUse" false) (mem "DEffect" false) (mem "DProp" false) (mem "DTest" false) (mem "DBench" false) (mem "DInterface" false) (mem "DImpl" false) (mem "DTypeAlias" false) (mem "DNewtype" false) (mem "DLetGroup" false) (mem "DAttrib" false) (mem "Ty" false) (mem "TyEffect" false) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "useMemberLocal" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" false) (mem "DoStmt" true) (mem "FunClause" true) (mem "MethodDefault" true) (mem "Expr" false) (mem "ELoc" false) (mem "EDoOrigin" false) (mem "EVar" false) (mem "ELam" false) (mem "ELet" false) (mem "ELetGroup" false) (mem "EMatch" false) (mem "EBlock" false) (mem "EDo" false) (mem "EGuards" false) (mem "ESetLit" false) (mem "EFieldAccess" false))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -2622,6 +4389,8 @@ unit = ()
 (DFunDef false "writeMessage" ((PVar "j")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "stringify") (EVar "j"))) (DoLet false false (PVar "n") (EApp (EVar "utf8Len") (EVar "body"))) (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "Content-Length: ")) (EApp (EVar "intToString") (EVar "n")) (ELit (LString "\r\n\r\n"))))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "header"))) (DoLet false false PWild (EApp (EVar "putStr") (EVar "body"))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "responseMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json"))))
 (DFunDef false "responseMsg" ((PVar "idJson") (PVar "result")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "result")) (EVar "result")))))
+(DTypeSig false "responseErr" (TyFun (TyCon "Json") (TyFun (TyCon "String") (TyCon "Json"))))
+(DFunDef false "responseErr" ((PVar "idJson") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EUnOp "-" (ELit (LInt 32803))))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
 (DTypeSig false "notificationMsg" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
 (DFunDef false "notificationMsg" ((PVar "meth") (PVar "params")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "method")) (EApp (EVar "JString") (EVar "meth"))) (ETuple (ELit (LString "params")) (EVar "params")))))
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
@@ -2727,7 +4496,7 @@ unit = ()
 (DTypeSig false "semanticTokensData" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "semanticTokensData" ((PVar "src")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoExpr (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "encodeSemToks") (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "semToksOf") (EVar "arr")) (EVar "toks")) (EVar "pairs")) (EApp (EApp (EApp (EVar "SemCtx") (ELit (LInt 0))) (EVar "True")) (EVar "MExpr")))))))))
 (DTypeSig false "initializeResult" (TyCon "Json"))
-(DFunDef false "initializeResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (ELit (LString "0.1.0"))))))))))
+(DFunDef false "initializeResult" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "capabilities")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "textDocumentSync")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "documentFormattingProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentSymbolProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "definitionProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "documentHighlightProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "referencesProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "renameProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "hoverProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "completionProvider")) (EApp (EVar "jObject") (EListLit))) (ETuple (ELit (LString "inlayHintProvider")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "semanticTokensProvider")) (EVar "semanticTokensOptions"))))) (ETuple (ELit (LString "serverInfo")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (ELit (LString "medaka-lsp")))) (ETuple (ELit (LString "version")) (EApp (EVar "JString") (ELit (LString "0.1.0"))))))))))
 (DTypeSig false "publishDiagnostics" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "publishDiagnostics" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EVar "diagnosticsFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diags")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params"))))))
 (DTypeSig false "projectCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2792,6 +4561,349 @@ unit = ()
 (DFunDef false "locationJson" ((PTuple (PVar "path") (PVar "loc"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
 (DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
+(DTypeSig true "renameResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))
+(DFunDef false "renameResult" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "params") (PVar "docs")) (EMatch (ETuple (EApp (EVar "positionLine") (EVar "params")) (EApp (EVar "positionChar") (EVar "params")) (EApp (EVar "renameNewName") (EVar "params"))) (arm (PTuple (PCon "Some" (PVar "line")) (PCon "Some" (PVar "col")) (PCon "Some" (PVar "newName"))) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "position is not on an identifier")))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rootFile") (EApp (EVar "pathOfUri") (EVar "uri"))) (DoLet false false (PVar "projectDir") (EApp (EVar "findProjectRoot") (EApp (EVar "dirOfPath") (EVar "rootFile")))) (DoLet false false (PVar "read") (ELam ((PVar "path")) (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "path"))) (EVar "docs")))) (DoLet false false (PVar "idx") (EApp (EApp (EApp (EApp (EVar "buildRefIndexProject") (EVar "read")) (EVar "projectDir")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "binderAt") (EVar "idx")) (EVar "rootFile")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EVar "col")) (arm (PCon "None") () (EApp (EApp (EVar "renameNoBinderRefusal") (EVar "rootFile")) (EVar "docs"))) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameEditFor") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "docs"))))))))) (arm PWild () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a position and a newName"))))))
+(DTypeSig false "renameNoBinderRefusal" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))
+(DFunDef false "renameNoBinderRefusal" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "no renameable symbol at this position")))) (arm (PCon "Some" (PVar "src")) () (EIf (EApp (EVar "srcFailsToParse") (EVar "src")) (EApp (EVar "renameRefusal") (ELit (LString "this file does not parse, so nothing in it is indexed and no position in it can be renamed — fix the parse error first"))) (EApp (EVar "renameRefusal") (ELit (LString "no renameable symbol at this position")))))))
+(DTypeSig false "renameNewName" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "renameNewName" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "newName"))) (EVar "params")))
+(DTypeSig false "renameRefusal" (TyFun (TyCon "String") (TyCon "Json")))
+(DFunDef false "renameRefusal" ((PVar "reason")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "refused")) (EApp (EVar "JBool") (EVar "True"))) (ETuple (ELit (LString "reason")) (EApp (EVar "JString") (EVar "reason"))))))
+(DTypeSig true "isRenameRefusal" (TyFun (TyCon "Json") (TyCon "Bool")))
+(DFunDef false "isRenameRefusal" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "refused"))) (EVar "j")) (arm (PCon "Some" (PCon "JBool" (PCon "True"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig false "renameEditFor" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json"))))))))))
+(DFunDef false "renameEditFor" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "docs")) (EIf (EApp (EVar "isExternalKey") (EVar "key")) (EApp (EVar "renameRefusal") (ELit (LString "cannot rename a symbol defined outside the project"))) (EMatch (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "key")) (arm (PList) () (EApp (EVar "renameRefusal") (ELit (LString "cannot rename a symbol defined outside the project")))) (arm (PVar "defs") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameEditChecked") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "defs")) (EVar "docs"))))))
+(DTypeSig false "renameEditChecked" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))))))
+(DFunDef false "renameEditChecked" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "defs") (PVar "docs")) (EMatch (EApp (EApp (EVar "newNameIllegal") (EVar "key")) (EVar "newName")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "all") (EApp (EApp (EVar "sortBy") (EVar "compareUseLoc")) (EBinOp "++" (EVar "defs") (EApp (EApp (EVar "usesOf") (EVar "idx")) (EVar "key"))))) (DoLet false false (PVar "files") (EApp (EVar "affectedPaths") (EDictApp "all"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameCollides") (EVar "idx")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "projectDir")) (EVar "key")) (EVar "newName")) (EVar "files")) (EVar "docs")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "renaming to `")) (EVar "newName") (ELit (LString "` would collide with an existing binder"))))) (EMatch (EApp (EApp (EApp (EApp (EVar "renameIndexIncomplete") (EVar "projectDir")) (EVar "key")) (EVar "defs")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renameBrokenProjectFile") (EVar "projectDir")) (EVar "key")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "renameRefusal") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "renameEmitVerified") (EVar "key")) (EVar "newName")) (EDictApp "all")) (EVar "docs"))))))))))))
+(DTypeSig false "affectedPaths" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "affectedPaths" ((PList)) (EListLit))
+(DFunDef false "affectedPaths" ((PCons (PTuple (PVar "p") PWild) (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "affectedPaths") (EApp (EVar "snd") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))))))
+(DTypeSig false "pathIsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "pathIsIn" (PWild (PList)) (EVar "False"))
+(DFunDef false "pathIsIn" ((PVar "p") (PCons (PVar "q") (PVar "qs"))) (EBinOp "||" (EBinOp "==" (EVar "p") (EVar "q")) (EApp (EApp (EVar "pathIsIn") (EVar "p")) (EVar "qs"))))
+(DTypeSig false "renameEmitVerified" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Json")))))))
+(DFunDef false "renameEmitVerified" ((PVar "key") (PVar "newName") (PVar "all") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "oldName"))) () (EIf (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EDictApp "all")) (EVar "docs")) (EApp (EApp (EApp (EVar "workspaceEditJson") (EApp (EApp (EVar "punTablesFor") (EDictApp "all")) (EVar "docs"))) (EVar "newName")) (EDictApp "all")) (EApp (EVar "renameRefusal") (EApp (EVar "stringConcat") (EListLit (ELit (LString "the reference index reports an occurrence of `")) (EVar "oldName") (ELit (LString "` at a span that does not spell it — refusing rather than emit an edit that would corrupt the source")))))))))
+(DTypeSig false "allSpansSpell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "allSpansSpell" (PWild (PList) PWild) (EVar "True"))
+(DFunDef false "allSpansSpell" ((PVar "oldName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "spanSpells") (EVar "oldName")) (EVar "p")) (EVar "loc")) (EVar "docs")) (EApp (EApp (EApp (EVar "allSpansSpell") (EVar "oldName")) (EVar "rest")) (EVar "docs"))))
+(DTypeSig false "spanSpells" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "spanSpells" ((PVar "oldName") (PVar "p") (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "docs")) (EIf (EBinOp "||" (EBinOp "!=" (EVar "sl") (EVar "el")) (EBinOp "!=" (EBinOp "-" (EVar "ec") (EVar "sc")) (EApp (EVar "stringLength") (EVar "oldName")))) (EVar "False") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EApp (EVar "identifierAt") (EVar "src")) (EBinOp "-" (EVar "sl") (ELit (LInt 1)))) (EVar "sc")) (arm (PCon "Some" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "oldName"))) (arm (PCon "None") () (EVar "False")))))))
+(DTypeSig false "renameSrcOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "renameSrcOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "docsGet") (EApp (EVar "uriOfPath") (EVar "p"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "Err" PWild) () (EVar "None"))))))
+(DTypeSig false "punFieldsOfSrc" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfSrc" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EVar "punFieldsOfDecls") (EVar "decls")))))
+(DTypeSig false "punFieldsOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punFieldsOfDecls" ((PVar "decls")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "recNames") (EApp (EVar "recordCtorNames") (EVar "decls"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "punVisit") (EVar "acc")) (EVar "recNames"))) (EVar "decls"))) (DoExpr (EBinOp "++" (EApp (EVar "declParamPuns") (EVar "decls")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "punVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "punVisit" ((PVar "acc") (PVar "recNames") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectExprPuns") (EVar "acc")) (EVar "recNames")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "recordCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNames" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "recordCtorNamesOf")) (EVar "decls")))
+(DTypeSig false "recordCtorNamesOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recordCtorNamesOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DData" PWild PWild PWild (PVar "vs") PWild) () (EApp (EVar "namedVariantCtors") (EVar "vs"))) (arm PWild () (EListLit))))
+(DTypeSig false "namedVariantCtors" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "namedVariantCtors" ((PList)) (EListLit))
+(DFunDef false "namedVariantCtors" ((PCons (PCon "Variant" (PVar "n") (PCon "ConNamed" PWild PWild)) (PVar "vs"))) (EBinOp "::" (EVar "n") (EApp (EVar "namedVariantCtors") (EVar "vs"))))
+(DFunDef false "namedVariantCtors" ((PCons PWild (PVar "vs"))) (EApp (EVar "namedVariantCtors") (EVar "vs")))
+(DTypeSig false "collectExprPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "collectExprPuns" ((PVar "acc") (PVar "recNames") (PCon "ESetLit" (PVar "name") (PVar "items"))) (EIf (EApp (EApp (EApp (EVar "punRecordSetLit") (EVar "recNames")) (EVar "name")) (EVar "items")) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "punItemSpan")) (EVar "items"))) (ELit LUnit)))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELam" (PVar "ps") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELet" PWild PWild (PVar "p") PWild PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EVar "patPuns") (EVar "p"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "armPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "guardArmPuns")) (EVar "arms"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "stmtPuns")) (EVar "stmts"))))
+(DFunDef false "collectExprPuns" ((PVar "acc") PWild (PCon "ELetGroup" (PVar "binds") PWild)) (EApp (EApp (EVar "pushPuns") (EVar "acc")) (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))))
+(DFunDef false "collectExprPuns" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "pushPuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyCon "Unit"))))
+(DFunDef false "pushPuns" ((PVar "acc") (PList)) (ELit LUnit))
+(DFunDef false "pushPuns" ((PVar "acc") (PVar "found")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EVar "found") (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "punRecordSetLit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))))
+(DFunDef false "punRecordSetLit" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "punRecordSetLit" ((PVar "recNames") (PVar "name") (PVar "items")) (EBinOp "&&" (EApp (EApp (EVar "anyName") (EVar "recNames")) (EVar "name")) (EApp (EVar "allBareVars") (EVar "items"))))
+(DTypeSig false "allBareVars" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
+(DFunDef false "allBareVars" ((PList)) (EVar "True"))
+(DFunDef false "allBareVars" ((PCons (PVar "e") (PVar "rest"))) (EMatch (EApp (EVar "punItemSpan") (EVar "e")) (arm (PList) () (EVar "False")) (arm PWild () (EApp (EVar "allBareVars") (EVar "rest")))))
+(DTypeSig false "punItemSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "EVar" (PVar "n")))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "n"))))
+(DFunDef false "punItemSpan" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "punItemSpan") (EVar "e")))
+(DFunDef false "punItemSpan" (PWild) (EListLit))
+(DTypeSig false "armPuns" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "armPuns" ((PCon "Arm" (PVar "p") (PVar "gs") PWild)) (EBinOp "++" (EApp (EVar "patPuns") (EVar "p")) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs"))))
+(DTypeSig false "guardArmPuns" (TyFun (TyCon "GuardArm") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardArmPuns" ((PCon "GuardArm" (PVar "gs") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "guardPuns")) (EVar "gs")))
+(DTypeSig false "guardPuns" (TyFun (TyCon "Guard") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "guardPuns" ((PCon "GBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "guardPuns" (PWild) (EListLit))
+(DTypeSig false "stmtPuns" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "stmtPuns" ((PCon "DoBind" (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" ((PCon "DoLet" PWild PWild (PVar "p") PWild)) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "stmtPuns" (PWild) (EListLit))
+(DTypeSig false "letBindPuns" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "letBindPuns" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMapL") (EVar "clausePuns")) (EVar "clauses")))
+(DTypeSig false "clausePuns" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "clausePuns" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "declParamPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPuns" ((PVar "decls")) (EApp (EApp (EVar "flatMapL") (EVar "declParamPunsOf")) (EVar "decls")))
+(DTypeSig false "declParamPunsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "declParamPunsOf" ((PVar "d")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DFunDef" PWild PWild (PVar "ps") PWild) () (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps"))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EApp (EApp (EVar "flatMapL") (EVar "letBindPuns")) (EVar "binds"))) (arm (PRec "DImpl" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "implMethodPuns")) (EVar "ms"))) (arm (PRec "DInterface" ((rf "methods" (PVar "ms"))) true) () (EApp (EApp (EVar "flatMapL") (EVar "ifaceMethodPuns")) (EVar "ms"))) (arm PWild () (EListLit))))
+(DTypeSig false "implMethodPuns" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "implMethodPuns" ((PCon "ImplMethod" PWild (PVar "ps") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DTypeSig false "ifaceMethodPuns" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "ifaceMethodPuns" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") PWild)))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "ifaceMethodPuns" (PWild) (EListLit))
+(DTypeSig false "patPuns" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "patPuns" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMapL") (EVar "recFieldPuns")) (EVar "fields")))
+(DFunDef false "patPuns" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patPuns") (EVar "a")) (EApp (EVar "patPuns") (EVar "b"))))
+(DFunDef false "patPuns" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMapL") (EVar "patPuns")) (EVar "ps")))
+(DFunDef false "patPuns" ((PCon "PAs" PWild PWild (PVar "p"))) (EApp (EVar "patPuns") (EVar "p")))
+(DFunDef false "patPuns" (PWild) (EListLit))
+(DTypeSig false "recFieldPuns" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" (PVar "name") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild) (PCon "None"))) (EListLit (ETuple (ETuple (EVar "sl") (EVar "sc")) (EVar "name"))))
+(DFunDef false "recFieldPuns" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patPuns") (EVar "p")))
+(DTypeSig false "flatMapL" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "b")))))
+(DFunDef false "flatMapL" (PWild (PList)) (EListLit))
+(DFunDef false "flatMapL" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "flatMapL") (EVar "f")) (EVar "xs"))))
+(DTypeSig false "punTablesFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String")))))))))
+(DFunDef false "punTablesFor" ((PList) PWild) (EListLit))
+(DFunDef false "punTablesFor" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "docs")) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "punFieldsOfSrc") (EVar "src"))))) (DoExpr (EBinOp "::" (ETuple (EVar "p") (EVar "tbl")) (EApp (EApp (EVar "punTablesFor") (EApp (EVar "snd") (EVar "sameRest"))) (EVar "docs"))))))
+(DTypeSig false "punTableOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))))
+(DFunDef false "punTableOf" (PWild (PList)) (EListLit))
+(DFunDef false "punTableOf" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "tbl")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "q")) (EVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "rest"))))
+(DTypeSig false "punAwareText" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "punAwareText" ((PVar "tbl") (PVar "newName") (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) (EMatch (EApp (EApp (EApp (EVar "punFieldAt") (EVar "tbl")) (EVar "sl")) (EVar "sc")) (arm (PCon "Some" (PVar "field")) () (EApp (EVar "stringConcat") (EListLit (EVar "field") (ELit (LString " = ")) (EVar "newName")))) (arm (PCon "None") () (EVar "newName"))))
+(DTypeSig false "punFieldAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "punFieldAt" ((PList) PWild PWild) (EVar "None"))
+(DFunDef false "punFieldAt" ((PCons (PTuple (PTuple (PVar "l") (PVar "c")) (PVar "field")) (PVar "rest")) (PVar "sl") (PVar "sc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "sl")) (EBinOp "==" (EVar "c") (EVar "sc"))) (EApp (EVar "Some") (EVar "field")) (EApp (EApp (EApp (EVar "punFieldAt") (EVar "rest")) (EVar "sl")) (EVar "sc"))))
+(DTypeSig false "isExternalKey" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isExternalKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "m") PWild) () (EBinOp "==" (EVar "m") (ELit (LString "?ext")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "keyTab" (TyCon "Char"))
+(DFunDef false "keyTab" () (ELit (LChar "\t")))
+(DTypeSig false "keyNsName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "keyNsName" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons PWild (PCons (PVar "ns") (PCons (PVar "name") PWild))) () (EApp (EVar "Some") (ETuple (EVar "ns") (EVar "name")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "renameCollides" (TyFun (TyCon "RefIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "renameCollides" ((PVar "idx") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "projectDir") (PVar "key") (PVar "newName") (PVar "files") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "_name"))) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EApp (EVar "allDefKeys") (EVar "idx"))) (EVar "ns")) (EVar "newName")) (EApp (EApp (EVar "preludeDeclares") (EVar "coreSrc")) (EVar "newName"))) (EApp (EApp (EVar "preludeDeclares") (EVar "runtimeSrc")) (EVar "newName"))) (EApp (EApp (EApp (EApp (EVar "anyKeyNamedInFiles") (EVar "idx")) (EApp (EVar "allDefKeys") (EVar "idx"))) (EVar "newName")) (EVar "files"))) (EApp (EApp (EApp (EApp (EVar "anyImportBindsIn") (EVar "newName")) (EVar "projectDir")) (EVar "files")) (EVar "docs"))))))
+(DTypeSig false "anyDefKeyMatches" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "anyDefKeyMatches" ((PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyDefKeyMatches" ((PCons (PVar "k") (PVar "ks")) (PVar "ns") (PVar "newName")) (EMatch (EApp (EVar "keyNsName") (EVar "k")) (arm (PCon "Some" (PTuple (PVar "ns2") (PVar "nm2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "ns2") (EVar "ns")) (EBinOp "==" (EVar "nm2") (EVar "newName"))) (EVar "True") (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EVar "ks")) (EVar "ns")) (EVar "newName")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "anyDefKeyMatches") (EVar "ks")) (EVar "ns")) (EVar "newName")))))
+(DTypeSig false "anyKeyNamedInFiles" (TyFun (TyCon "RefIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "anyKeyNamedInFiles" (PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyKeyNamedInFiles" ((PVar "idx") (PCons (PVar "k") (PVar "ks")) (PVar "newName") (PVar "files")) (EBinOp "||" (EBinOp "&&" (EApp (EApp (EVar "keyCanCapture") (EVar "k")) (EVar "newName")) (EApp (EApp (EVar "anyPathIn") (EApp (EApp (EVar "defsOf") (EVar "idx")) (EVar "k"))) (EVar "files"))) (EApp (EApp (EApp (EApp (EVar "anyKeyNamedInFiles") (EVar "idx")) (EVar "ks")) (EVar "newName")) (EVar "files"))))
+(DTypeSig false "keyCanCapture" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "keyCanCapture" ((PVar "k") (PVar "name")) (EMatch (EApp (EVar "keyNsName") (EVar "k")) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "n"))) () (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "!=" (EVar "ns") (ELit (LString "field"))))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "anyPathIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyPathIn" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyPathIn" ((PCons (PTuple (PVar "p") PWild) (PVar "rest")) (PVar "files")) (EBinOp "||" (EApp (EApp (EVar "pathIsIn") (EVar "p")) (EVar "files")) (EApp (EApp (EVar "anyPathIn") (EVar "rest")) (EVar "files"))))
+(DTypeSig false "anyImportBindsIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "anyImportBindsIn" (PWild PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyImportBindsIn" ((PVar "newName") (PVar "projectDir") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "fileImportsBind") (EVar "newName")) (EVar "projectDir")) (EVar "p")) (EVar "docs")) (EApp (EApp (EApp (EApp (EVar "anyImportBindsIn") (EVar "newName")) (EVar "projectDir")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "fileImportsBind" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "fileImportsBind" ((PVar "newName") (PVar "projectDir") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "newName")) (EVar "projectDir")) (EVar "decls")) (EVar "docs")))))))
+(DTypeSig false "anyImportDeclBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "anyImportDeclBinds" (PWild PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyImportDeclBinds" ((PVar "newName") (PVar "projectDir") (PCons (PVar "d") (PVar "ds")) (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "importDeclBinds") (EVar "newName")) (EVar "projectDir")) (EApp (EVar "innerDecl") (EVar "d"))) (EVar "docs")) (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "newName")) (EVar "projectDir")) (EVar "ds")) (EVar "docs"))))
+(DTypeSig false "importDeclBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "importDeclBinds" ((PVar "newName") (PVar "projectDir") (PCon "DUse" PWild (PVar "path") PWild) (PVar "docs")) (EApp (EApp (EApp (EApp (EVar "usePathBinds") (EVar "newName")) (EVar "projectDir")) (EVar "path")) (EVar "docs")))
+(DFunDef false "importDeclBinds" (PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "usePathBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "usePathBinds" ((PVar "newName") PWild (PCon "UseGroup" PWild (PVar "members")) PWild) (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EVar "members"))) (EVar "newName")))
+(DFunDef false "usePathBinds" ((PVar "newName") (PVar "projectDir") (PCon "UseWild" (PVar "mods")) (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "moduleExportsName") (EVar "newName")) (EVar "projectDir")) (EVar "mods")) (EVar "reExportFuel")) (EVar "docs")))
+(DFunDef false "usePathBinds" ((PVar "newName") PWild (PCon "UseAlias" PWild (PVar "alias")) PWild) (EBinOp "==" (EVar "alias") (EVar "newName")))
+(DFunDef false "usePathBinds" (PWild PWild (PCon "UseName" PWild) PWild) (EVar "False"))
+(DTypeSig false "moduleExportsName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "moduleExportsName" ((PVar "name") (PVar "projectDir") (PVar "mods") (PVar "fuel") (PVar "docs")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "importedModuleSrc") (EVar "projectDir")) (EVar "mods")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBinOp "||" (EApp (EApp (EVar "anyDeclDeclares") (EVar "decls")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "anyReExportBinds") (EVar "name")) (EVar "projectDir")) (EVar "decls")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "docs"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "anyReExportBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "anyReExportBinds" (PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyReExportBinds" ((PVar "name") (PVar "projectDir") (PCons (PVar "d") (PVar "ds")) (PVar "fuel") (PVar "docs")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "reExportBinds") (EVar "name")) (EVar "projectDir")) (EApp (EVar "innerDecl") (EVar "d"))) (EVar "fuel")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "anyReExportBinds") (EVar "name")) (EVar "projectDir")) (EVar "ds")) (EVar "fuel")) (EVar "docs"))))
+(DTypeSig false "reExportBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "reExportBinds" ((PVar "name") (PVar "projectDir") (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "fuel") (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "reExportPathBinds") (EVar "name")) (EVar "projectDir")) (EVar "path")) (EVar "fuel")) (EVar "docs")))
+(DFunDef false "reExportBinds" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "reExportPathBinds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyCon "Int") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))))
+(DFunDef false "reExportPathBinds" ((PVar "name") PWild (PCon "UseGroup" PWild (PVar "members")) PWild PWild) (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EVar "members"))) (EVar "name")))
+(DFunDef false "reExportPathBinds" ((PVar "name") (PVar "projectDir") (PCon "UseWild" (PVar "mods")) (PVar "fuel") (PVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "moduleExportsName") (EVar "name")) (EVar "projectDir")) (EVar "mods")) (EVar "fuel")) (EVar "docs")))
+(DFunDef false "reExportPathBinds" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "reExportFuel" (TyCon "Int"))
+(DFunDef false "reExportFuel" () (ELit (LInt 8)))
+(DTypeSig false "importedModuleSrc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "importedModuleSrc" ((PVar "projectDir") (PVar "mods") (PVar "docs")) (EBlock (DoLet false false (PVar "rel") (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "mods")) (ELit (LString ".mdk")))) (DoExpr (EMatch (EApp (EApp (EVar "renameSrcOf") (EApp (EApp (EVar "joinPath") (EVar "projectDir")) (EVar "rel"))) (EVar "docs")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Some") (EVar "s"))) (arm (PCon "None") () (EApp (EApp (EVar "renameSrcOf") (EApp (EApp (EVar "joinPath") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib")))) (EVar "rel"))) (EVar "docs")))))))
+(DTypeSig false "renameIndexIncomplete" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "renameIndexIncomplete" ((PVar "projectDir") (PVar "key") (PVar "defs") (PVar "docs")) (EMatch (EApp (EVar "keyModNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "mid") (PVar "ns") (PVar "name"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "firstLocalShape") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "defs")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Some") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "aliasQualifiedShape") (EVar "projectDir")) (EVar "mid")) (EVar "name")) (EVar "docs")))))))
+(DTypeSig false "keyModNsName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
+(DFunDef false "keyModNsName" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (EVar "keyTab")) (EVar "key")) (arm (PCons (PVar "mid") (PCons (PVar "ns") (PCons (PVar "name") PWild))) () (EApp (EVar "Some") (ETuple (EVar "mid") (EVar "ns") (EVar "name")))) (arm PWild () (EVar "None"))))
+(DTypeSig false "firstLocalShape" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "firstLocalShape" (PWild PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstLocalShape" ((PVar "projectDir") (PVar "ns") (PVar "name") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest")) (PVar "docs")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shapeAtDef") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "p")) (EVar "loc")) (EVar "docs")) (arm (PCon "Some" (PVar "reason")) () (EApp (EVar "Some") (EVar "reason"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "firstLocalShape") (EVar "projectDir")) (EVar "ns")) (EVar "name")) (EVar "rest")) (EVar "docs")))))
+(DTypeSig false "shapeAtDef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
+(DFunDef false "shapeAtDef" ((PVar "projectDir") (PVar "ns") (PVar "name") (PVar "p") (PVar "loc") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameDeclsOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "decls")) () (EIf (EApp (EApp (EApp (EVar "selfRecursiveLetAt") (EVar "decls")) (EVar "name")) (EVar "loc")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is a self-recursive local binding, and the reference index does not record the recursive call as one of its uses (#1003) — this rename would leave that call behind, silently rebinding it to whatever else is named `")) (EVar "name") (ELit (LString "`; rename it by hand, or lift the binding to the top level first"))))) (EIf (EApp (EApp (EVar "topLevelLetRecBinds") (EVar "decls")) (EVar "name")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is bound by a top-level `let rec`, and the reference index splits its recursive call sites and its external call sites across two separate binder keys (#951) — a rename from either click edits only half of them; rename it by hand, or rewrite the binding as an ordinary top-level definition first"))))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "owner")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "p") (ELit (LString "` both declares and imports `")) (EVar "owner") (ELit (LString "`, and the reference index resolves the import ahead of the module's own declaration (#1056, the inverse of `resolve.mdk`) — occurrences keyed through it land under the wrong module and are dropped from this rename; drop the duplicate import, or rename it by hand")))))) (EApp (EApp (EApp (EApp (EApp (EVar "importShadowedOwner") (EVar "projectDir")) (EVar "decls")) (EVar "ns")) (EVar "name")) (EVar "docs"))))))))
+(DTypeSig false "renameDeclsOf" (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "renameDeclsOf" ((PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "parseWithPositionsOpt") (EVar "src"))))))
+(DTypeSig false "selfRecursiveLetAt" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Bool")))))
+(DFunDef false "selfRecursiveLetAt" ((PVar "decls") (PVar "name") (PVar "loc")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "selfRecVisit") (EVar "acc")) (EVar "name")) (EVar "loc"))) (EVar "decls"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "selfRecVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "selfRecVisit" ((PVar "acc") (PVar "name") (PVar "loc") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "selfRecCheck") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "selfRecCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "ELet" PWild PWild (PVar "p") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "selfRecBind") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "p")) (EVar "rhs")))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "selfRecCheck" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "stmts")))
+(DFunDef false "selfRecCheck" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "selfRecStmts" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Unit"))))))
+(DFunDef false "selfRecStmts" (PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "selfRecStmts" ((PVar "acc") (PVar "name") (PVar "loc") (PCons (PVar "s") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "selfRecStmt") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "selfRecStmts") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "rest")))))
+(DTypeSig false "selfRecStmt" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "DoStmt") (TyCon "Unit"))))))
+(DFunDef false "selfRecStmt" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "DoLet" PWild PWild (PVar "p") (PVar "rhs"))) (EApp (EApp (EApp (EApp (EApp (EVar "selfRecBind") (EVar "acc")) (EVar "name")) (EVar "loc")) (EVar "p")) (EVar "rhs")))
+(DFunDef false "selfRecStmt" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "selfRecBind" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Unit")))))))
+(DFunDef false "selfRecBind" ((PVar "acc") (PVar "name") (PVar "loc") (PCon "PVar" (PVar "n") (PVar "bloc")) (PVar "rhs")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "sameLocStart") (EVar "bloc")) (EVar "loc"))) (EApp (EApp (EVar "exprMentionsVar") (EVar "name")) (EVar "rhs"))) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "selfRecBind" (PWild PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "sameLocStart" (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyCon "Bool"))))
+(DFunDef false "sameLocStart" ((PCon "Loc" PWild (PVar "al") (PVar "ac") PWild PWild) (PCon "Loc" PWild (PVar "bl") (PVar "bc") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "al") (EVar "bl")) (EBinOp "==" (EVar "ac") (EVar "bc"))))
+(DTypeSig false "exprMentionsVar" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "exprMentionsVar" ((PVar "name") (PVar "e")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapExpr") (EApp (EApp (EVar "varVisit") (EVar "acc")) (EVar "name"))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "varVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "varVisit" ((PVar "acc") (PVar "name") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "varCheck") (EVar "acc")) (EVar "name")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "varCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit")))))
+(DFunDef false "varCheck" ((PVar "acc") (PVar "name") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "varCheck" (PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "topLevelLetRecBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "topLevelLetRecBinds" ((PList) PWild) (EVar "False"))
+(DFunDef false "topLevelLetRecBinds" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declIsLetRecFor") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")) (EApp (EApp (EVar "topLevelLetRecBinds") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "declIsLetRecFor" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declIsLetRecFor" ((PCon "DLetGroup" PWild (PVar "binds")) (PVar "name")) (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (EVar "name")))
+(DFunDef false "declIsLetRecFor" (PWild PWild) (EVar "False"))
+(DTypeSig false "importShadowedOwner" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))))
+(DFunDef false "importShadowedOwner" ((PVar "projectDir") (PVar "decls") (PVar "ns") (PVar "name") (PVar "docs")) (EApp (EApp (EApp (EApp (EVar "firstShadowedName") (EVar "projectDir")) (EVar "decls")) (EBinOp "::" (EVar "name") (EApp (EApp (EApp (EVar "methodOwnerNames") (EVar "ns")) (EVar "decls")) (EVar "name")))) (EVar "docs")))
+(DTypeSig false "firstShadowedName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstShadowedName" (PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstShadowedName" ((PVar "projectDir") (PVar "decls") (PCons (PVar "c") (PVar "cs")) (PVar "docs")) (EIf (EBinOp "&&" (EApp (EApp (EVar "declsDeclareOwn") (EVar "decls")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyImportDeclBinds") (EVar "c")) (EVar "projectDir")) (EVar "decls")) (EVar "docs"))) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EApp (EVar "firstShadowedName") (EVar "projectDir")) (EVar "decls")) (EVar "cs")) (EVar "docs"))))
+(DTypeSig false "declsDeclareOwn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declsDeclareOwn" ((PList) PWild) (EVar "False"))
+(DFunDef false "declsDeclareOwn" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declDeclaresOwn") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")) (EApp (EApp (EVar "declsDeclareOwn") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "declDeclaresOwn" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "declDeclaresOwn" ((PRec "DImpl" () true) PWild) (EVar "False"))
+(DFunDef false "declDeclaresOwn" ((PVar "d") (PVar "name")) (EBinOp "||" (EApp (EApp (EVar "declOwnNameMatches") (EVar "d")) (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EVar "declChildNames") (EVar "d"))) (EVar "name"))))
+(DTypeSig false "methodOwnerNames" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "methodOwnerNames" ((PLit (LString "method")) (PVar "decls") (PVar "name")) (EApp (EApp (EVar "flatMapL") (ELam ((PVar "d")) (EApp (EApp (EVar "ifaceOwnerOf") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "name")))) (EVar "decls")))
+(DFunDef false "methodOwnerNames" (PWild PWild PWild) (EListLit))
+(DTypeSig false "ifaceOwnerOf" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceOwnerOf" ((PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) (PVar "name")) (EIf (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "ms"))) (EVar "name")) (EListLit (EVar "n")) (EListLit)))
+(DFunDef false "ifaceOwnerOf" ((PRec "DImpl" ((rf "iface" (PVar "i")) (rf "methods" (PVar "ms"))) true) (PVar "name")) (EIf (EApp (EApp (EVar "anyName") (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "ms"))) (EVar "name")) (EListLit (EVar "i")) (EListLit)))
+(DFunDef false "ifaceOwnerOf" (PWild PWild) (EListLit))
+(DTypeSig false "aliasQualifiedShape" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "aliasQualifiedShape" ((PVar "projectDir") (PVar "mid") (PVar "name") (PVar "docs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "name") (ELit (LString "` is referenced through a module alias in `")) (EVar "p") (ELit (LString "`, and the reference index files an alias-qualified reference at the enclosing declaration instead of at the `<alias>.")) (EVar "name") (ELit (LString "` token (#965) — this rename would miss that reference and may overwrite the declaration it was filed under; switch that file to a selective import, or rename by hand")))))) (EApp (EApp (EApp (EApp (EVar "firstAliasQualifiedFile") (EVar "mid")) (EVar "name")) (EApp (EVar "projectMdkFiles") (EVar "projectDir"))) (EVar "docs"))))
+(DTypeSig false "firstAliasQualifiedFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "firstAliasQualifiedFile" (PWild PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstAliasQualifiedFile" ((PVar "mid") (PVar "name") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EIf (EApp (EApp (EApp (EApp (EVar "fileAliasQualifies") (EVar "mid")) (EVar "name")) (EVar "p")) (EVar "docs")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EApp (EVar "firstAliasQualifiedFile") (EVar "mid")) (EVar "name")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "fileAliasQualifies" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "fileAliasQualifies" ((PVar "mid") (PVar "name") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EBinOp "&&" (EApp (EApp (EVar "srcMentionsName") (EVar "name")) (EVar "src")) (EApp (EApp (EApp (EVar "declsAliasQualify") (EVar "mid")) (EVar "name")) (EVar "src"))))))
+(DTypeSig false "declsAliasQualify" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "declsAliasQualify" ((PVar "mid") (PVar "name") (PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EApp (EVar "anyAliasQualifiedUse") (EVar "decls")) (EApp (EApp (EVar "aliasesOfModule") (EVar "decls")) (EVar "mid"))) (EVar "name")))))
+(DTypeSig false "aliasesOfModule" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "aliasesOfModule" ((PVar "decls") (PVar "mid")) (EApp (EApp (EVar "flatMapL") (ELam ((PVar "d")) (EApp (EApp (EVar "aliasOfDecl") (EApp (EVar "innerDecl") (EVar "d"))) (EVar "mid")))) (EVar "decls")))
+(DTypeSig false "aliasOfDecl" (TyFun (TyCon "Decl") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "aliasOfDecl" ((PCon "DUse" PWild (PCon "UseAlias" (PVar "mods") (PVar "alias")) PWild) (PVar "mid")) (EIf (EBinOp "==" (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "mods")) (EVar "mid")) (EListLit (EVar "alias")) (EListLit)))
+(DFunDef false "aliasOfDecl" (PWild PWild) (EListLit))
+(DTypeSig false "anyAliasQualifiedUse" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "anyAliasQualifiedUse" (PWild (PList) PWild) (EVar "False"))
+(DFunDef false "anyAliasQualifiedUse" ((PVar "decls") (PVar "aliases") (PVar "name")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "aliasVisit") (EVar "acc")) (EVar "aliases")) (EVar "name"))) (EVar "decls"))) (DoExpr (EFieldAccess (EVar "acc") "value"))))
+(DTypeSig false "aliasVisit" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "aliasVisit" ((PVar "acc") (PVar "aliases") (PVar "name") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "aliasCheck") (EVar "acc")) (EVar "aliases")) (EVar "name")) (EVar "e"))) (DoExpr (EVar "e"))))
+(DTypeSig false "aliasCheck" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "Unit"))))))
+(DFunDef false "aliasCheck" ((PVar "acc") (PVar "aliases") (PVar "name") (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "f") (EVar "name")) (EApp (EApp (EVar "aliasHeadIn") (EVar "aliases")) (EApp (EVar "stripExprLoc") (EVar "head")))) (EApp (EApp (EVar "setRef") (EVar "acc")) (EVar "True")) (ELit LUnit)))
+(DFunDef false "aliasCheck" (PWild PWild PWild PWild) (ELit LUnit))
+(DTypeSig false "aliasHeadIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "aliasHeadIn" ((PVar "aliases") (PCon "EVar" (PVar "a"))) (EApp (EApp (EVar "anyName") (EVar "aliases")) (EVar "a")))
+(DFunDef false "aliasHeadIn" (PWild PWild) (EVar "False"))
+(DTypeSig false "stripExprLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripExprLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripExprLoc") (EVar "e")))
+(DFunDef false "stripExprLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig false "renameBrokenProjectFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "renameBrokenProjectFile" ((PVar "projectDir") (PVar "key") (PVar "docs")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "_ns") (PVar "name"))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "p") (ELit (LString "` is under the project root, mentions `")) (EVar "name") (ELit (LString "`, and does not parse — its occurrences are missing from the reference index, so this rename would silently skip them; fix that file's parse error first")))))) (EApp (EApp (EApp (EVar "firstBrokenMentioning") (EVar "name")) (EApp (EVar "projectMdkFiles") (EVar "projectDir"))) (EVar "docs"))))))
+(DTypeSig false "firstBrokenMentioning" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstBrokenMentioning" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "firstBrokenMentioning" ((PVar "name") (PCons (PVar "p") (PVar "ps")) (PVar "docs")) (EIf (EApp (EApp (EApp (EVar "brokenAndMentions") (EVar "name")) (EVar "p")) (EVar "docs")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EVar "firstBrokenMentioning") (EVar "name")) (EVar "ps")) (EVar "docs"))))
+(DTypeSig false "brokenAndMentions" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "brokenAndMentions" ((PVar "name") (PVar "p") (PVar "docs")) (EMatch (EApp (EApp (EVar "renameSrcOf") (EVar "p")) (EVar "docs")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "src")) () (EBinOp "&&" (EApp (EApp (EVar "srcMentionsName") (EVar "name")) (EVar "src")) (EApp (EVar "srcFailsToParse") (EVar "src"))))))
+(DTypeSig false "srcFailsToParse" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "srcFailsToParse" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" PWild) () (EVar "False"))))
+(DTypeSig false "srcMentionsName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "srcMentionsName" ((PVar "name") (PVar "src")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EApp (EVar "stringToChars") (EVar "src"))) (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 0))) (EVar "mentionCode")))
+(DTypeSig false "mentionCode" (TyCon "Int"))
+(DFunDef false "mentionCode" () (ELit (LInt 0)))
+(DTypeSig false "mentionComment" (TyCon "Int"))
+(DFunDef false "mentionComment" () (ELit (LInt 1)))
+(DTypeSig false "mentionString" (TyCon "Int"))
+(DFunDef false "mentionString" () (ELit (LInt 2)))
+(DTypeSig false "mentionScan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "mentionScan" ((PVar "src") (PVar "nm") (PVar "i") (PVar "mode")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "src"))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EIf (EBinOp "==" (EVar "mode") (EVar "mentionComment")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionComment")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\\")))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "mentionString")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\"")))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EIf (EBinOp "==" (EVar "mode") (EVar "mentionString")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionString")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionString")) (EIf (EApp (EApp (EVar "dashDashAt") (EVar "src")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionComment")) (EIf (EApp (EApp (EApp (EVar "identDelimitedAt") (EVar "src")) (EVar "nm")) (EVar "i")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "mentionScan") (EVar "src")) (EVar "nm")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "mentionCode")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))
+(DTypeSig false "dashDashAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "dashDashAt" ((PVar "src") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")) (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "src")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "src")) (ELit (LChar "-")))))
+(DTypeSig false "identDelimitedAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "identDelimitedAt" ((PVar "src") (PVar "nm") (PVar "i")) (EIf (EUnOp "!" (EApp (EApp (EApp (EApp (EVar "charRunMatches") (EVar "src")) (EVar "nm")) (EVar "i")) (ELit (LInt 0)))) (EVar "False") (EIf (EBinOp "&&" (EBinOp ">" (EVar "i") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "src")))) (EVar "False") (EIf (EBinOp ">=" (EBinOp "+" (EVar "i") (EApp (EVar "arrayLength") (EVar "nm"))) (EApp (EVar "arrayLength") (EVar "src"))) (EVar "True") (EIf (EVar "otherwise") (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EApp (EVar "arrayLength") (EVar "nm")))) (EVar "src")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "charRunMatches" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "charRunMatches" ((PVar "src") (PVar "nm") (PVar "i") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "nm"))) (EVar "True") (EIf (EBinOp "!=" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "src")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "nm"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "charRunMatches") (EVar "src")) (EVar "nm")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "projectMdkFiles" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "projectMdkFiles" ((PVar "root")) (EBlock (DoLet false false (PVar "acc") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "collectMdkUnder") (EVar "acc")) (EVar "root"))) (DoExpr (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EFieldAccess (EVar "acc") "value")))))
+(DTypeSig false "collectMdkUnder" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "collectMdkUnder" ((PVar "acc") (PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EApp (EVar "collectMdkEntries") (EVar "acc")) (EVar "dir")) (EVar "entries")))))
+(DTypeSig false "collectMdkEntries" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkEntries" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "collectMdkEntries" ((PVar "acc") (PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectMdkEntry") (EVar "acc")) (EVar "dir")) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "collectMdkEntries") (EVar "acc")) (EVar "dir")) (EVar "rest")))))
+(DTypeSig false "collectMdkEntry" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkEntry" ((PVar "acc") (PVar "dir") (PVar "n")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "."))) (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collectMdkPath") (EVar "acc")) (EApp (EApp (EVar "joinPath") (EVar "dir")) (EVar "n"))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "collectMdkPath" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "collectMdkPath" ((PVar "acc") (PVar "full") (PVar "n")) (EMatch (EApp (EVar "listDir") (EVar "full")) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "collectMdkUnder") (EVar "acc")) (EVar "full"))) (arm (PCon "Err" PWild) () (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".mdk"))) (EVar "n")) (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "::" (EVar "full") (EFieldAccess (EVar "acc") "value"))) (ELit LUnit)))))
+(DTypeSig false "preludeDeclares" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "preludeDeclares" ((PVar "src") (PVar "name")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EApp (EApp (EVar "anyDeclDeclares") (EVar "decls")) (EVar "name")))))
+(DTypeSig false "anyDeclDeclares" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "anyDeclDeclares" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyDeclDeclares" ((PCons (PVar "d") (PVar "ds")) (PVar "name")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "declOwnNameMatches") (EVar "d")) (EVar "name")) (EApp (EApp (EVar "anyName") (EApp (EVar "declChildNames") (EVar "d"))) (EVar "name"))) (EApp (EApp (EVar "anyDeclDeclares") (EVar "ds")) (EVar "name"))))
+(DTypeSig false "newNameIllegal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "newNameIllegal" ((PVar "key") (PVar "newName")) (EMatch (EApp (EVar "keyNsName") (EVar "key")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "cannot determine the kind of the symbol being renamed")))) (arm (PCon "Some" (PTuple (PVar "ns") (PVar "_name"))) () (EMatch (EApp (EVar "firstChar") (EVar "newName")) (arm (PCon "None") () (EApp (EVar "Some") (ELit (LString "the new name is empty")))) (arm (PCon "Some" (PVar "c")) () (EIf (EBinOp "||" (EUnOp "!" (EApp (EVar "isIdentStart") (EVar "c"))) (EUnOp "!" (EApp (EVar "allIdentChars") (EVar "newName")))) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` is not a legal Medaka identifier"))))) (EIf (EApp (EVar "newNameReserved") (EVar "newName")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` is reserved by the language (a keyword, or `_`) and cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — choose a different name"))))) (EIf (EApp (EVar "uppercaseNs") (EVar "ns")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — it must start with an uppercase letter")))))) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (ELit (LString "`")) (EVar "newName") (ELit (LString "` cannot name a ")) (EApp (EVar "nsNoun") (EVar "ns")) (ELit (LString " — an uppercase name is a type/constructor, not a value"))))) (EVar "None"))))))))))
+(DTypeSig false "uppercaseNs" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "uppercaseNs" ((PVar "ns")) (EBinOp "||" (EBinOp "==" (EVar "ns") (ELit (LString "ty"))) (EBinOp "==" (EVar "ns") (ELit (LString "ctor")))))
+(DTypeSig false "nsNoun" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "nsNoun" ((PLit (LString "val"))) (ELit (LString "value")))
+(DFunDef false "nsNoun" ((PLit (LString "local"))) (ELit (LString "local binding")))
+(DFunDef false "nsNoun" ((PLit (LString "method"))) (ELit (LString "method")))
+(DFunDef false "nsNoun" ((PLit (LString "field"))) (ELit (LString "record field")))
+(DFunDef false "nsNoun" ((PLit (LString "ty"))) (ELit (LString "type")))
+(DFunDef false "nsNoun" ((PLit (LString "ctor"))) (ELit (LString "constructor")))
+(DFunDef false "nsNoun" (PWild) (ELit (LString "binding")))
+(DTypeSig false "allIdentChars" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "allIdentChars" ((PVar "s")) (EApp (EApp (EVar "allIdentCharsGo") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTypeSig false "allIdentCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "allIdentCharsGo" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "True") (EIf (EUnOp "!" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "allIdentCharsGo") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "firstChar" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "firstChar" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "arr")))))))
+(DTypeSig false "newNameReserved" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "newNameReserved" ((PVar "s")) (EMatch (EApp (EVar "significantToks") (EVar "s")) (arm (PList (PCon "TIdent" (PVar "n"))) () (EBinOp "!=" (EVar "n") (EVar "s"))) (arm (PList (PCon "TUpper" (PVar "n"))) () (EBinOp "!=" (EVar "n") (EVar "s"))) (arm PWild () (EVar "True"))))
+(DTypeSig false "significantToks" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "significantToks" ((PVar "s")) (EApp (EVar "dropLayoutToks") (EApp (EVar "fst") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "s")))))
+(DTypeSig false "dropLayoutToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "dropLayoutToks" ((PList)) (EListLit))
+(DFunDef false "dropLayoutToks" ((PCons (PVar "t") (PVar "ts"))) (EIf (EApp (EVar "isLayoutTok") (EVar "t")) (EApp (EVar "dropLayoutToks") (EVar "ts")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EVar "dropLayoutToks") (EVar "ts"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "isLayoutTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayoutTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayoutTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isLayoutTok" (PWild) (EVar "False"))
+(DTypeSig false "workspaceEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyCon "Json")))))
+(DFunDef false "workspaceEditJson" ((PVar "puns") (PVar "newName") (PVar "sorted")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "changes")) (EApp (EVar "jObject") (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EVar "sorted")))))))
+(DTypeSig false "groupEdits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))))
+(DFunDef false "groupEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "groupEdits" ((PVar "puns") (PVar "newName") (PCons (PTuple (PVar "p") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sameRest") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoLet false false (PVar "tbl") (EApp (EApp (EVar "punTableOf") (EVar "p")) (EVar "puns"))) (DoLet false false (PVar "edits") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "textEditJson") (EVar "tbl")) (EVar "newName"))) (EBinOp "::" (EVar "loc") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EVar "fst") (EVar "sameRest")))))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "uriOfPath") (EVar "p")) (EApp (EVar "jArray") (EVar "edits"))) (EApp (EApp (EApp (EVar "groupEdits") (EVar "puns")) (EVar "newName")) (EApp (EVar "snd") (EVar "sameRest")))))))
+(DTypeSig false "spanSamePath" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Loc")))))))
+(DFunDef false "spanSamePath" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanSamePath" ((PVar "p") (PCons (PTuple (PVar "q") (PVar "loc")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "q") (EVar "p")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EVar "spanSamePath") (EVar "p")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EApp (EVar "fst") (EVar "sr"))) (EApp (EVar "snd") (EVar "sr"))))) (ETuple (EListLit) (EBinOp "::" (ETuple (EVar "q") (EVar "loc")) (EVar "rest")))))
+(DTypeSig false "textEditJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Json")))))
+(DFunDef false "textEditJson" ((PVar "tbl") (PVar "newName") (PVar "loc")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EApp (EApp (EApp (EVar "punAwareText") (EVar "tbl")) (EVar "newName")) (EVar "loc")))))))
+(DTypeSig false "handleRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
+(DFunDef false "handleRename" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "msg") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "rename requires a document uri")))) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EApp (EVar "renameRefusal") (ELit (LString "document is not open")))) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renameResult") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "src")) (EVar "params")) (EVar "docs"))))))) (DoExpr (EIf (EApp (EVar "isRenameRefusal") (EVar "msg")) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseErr") (EVar "idJson")) (EApp (EVar "renameReasonOf") (EVar "msg")))) (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "msg")))))))
+(DTypeSig false "renameReasonOf" (TyFun (TyCon "Json") (TyCon "String")))
+(DFunDef false "renameReasonOf" ((PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "reason"))) (EVar "j")) (arm (PCon "Some" (PCon "JString" (PVar "s"))) () (EVar "s")) (arm PWild () (ELit (LString "rename refused")))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
@@ -2811,7 +4923,7 @@ unit = ()
 (DFunDef false "methodOf" ((PVar "msg")) (EApp (EApp (EVar "fieldStr") (ELit (LString "method"))) (EVar "msg")))
 (DData Public "Step" () ((variant "Step" (ConPos (TyCon "Docs") (TyCon "Bool")))) ())
 (DTypeSig false "dispatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Step")))))))
-(DFunDef false "dispatch" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "msg") (PVar "docs")) (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))) (arm (PCon "Some" (PVar "meth")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "initializeResult")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialized"))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didOpen"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidOpen") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didChange"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidChange") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/formatting"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleFormatting") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentSymbol"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDocumentSymbol") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/definition"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDefinition") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentHighlight"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleHighlight") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/references"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleReferences") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/hover"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleHover") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/completion"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleCompletion") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/inlayHint"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleInlayHint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/semanticTokens/full"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleSemanticTokens") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "JNull")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "exit"))) (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "exit (clean shutdown)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False")))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))))))))))))))))))))
+(DFunDef false "dispatch" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "msg") (PVar "docs")) (EMatch (EApp (EVar "methodOf") (EVar "msg")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))) (arm (PCon "Some" (PVar "meth")) () (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialize"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "initializeResult")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "initialized"))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didOpen"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidOpen") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/didChange"))) (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EApp (EVar "handleDidChange") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs2")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/formatting"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleFormatting") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentSymbol"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDocumentSymbol") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/definition"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleDefinition") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/documentHighlight"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleHighlight") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/references"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleReferences") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/hover"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleHover") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/completion"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleCompletion") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/inlayHint"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleInlayHint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/semanticTokens/full"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "handleSemanticTokens") (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "shutdown"))) (EBlock (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EApp (EVar "requestId") (EVar "msg"))) (EVar "JNull")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "exit"))) (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "exit (clean shutdown)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False")))) (EIf (EBinOp "==" (EVar "meth") (ELit (LString "textDocument/rename"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "handleRename") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "requestId") (EVar "msg"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (EVar "docs"))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))) (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True")))))))))))))))))))))
 (DTypeSig false "serveOnce" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Step"))))))
 (DFunDef false "serveOnce" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "docs")) (EMatch (EApp (EVar "readHeaders") (ELit (LInt 0))) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False"))) (arm (PCon "Some" (PVar "len")) () (EMatch (EApp (EVar "readExactly") (EVar "len")) (arm (PCon "None") () (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "False"))) (arm (PCon "Some" (PVar "body")) () (EBlock (DoLet false false PWild (EApp (EVar "logLine") (EApp (EVar "stringConcat") (EListLit (ELit (LString "recv ")) (EVar "body"))))) (DoExpr (EMatch (EApp (EVar "parse") (EVar "body")) (arm (PCon "Err" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "  parse-error: malformed JSON body (skipped)")))) (DoExpr (EApp (EApp (EVar "Step") (EVar "docs")) (EVar "True"))))) (arm (PCon "Ok" (PVar "msg")) () (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EApp (EVar "dispatch") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "msg")) (EVar "docs"))) (DoLet false false PWild (EApp (EVar "logLine") (ELit (LString "  handled")))) (DoExpr (EVar "step"))))))))))))
 (DTypeSig false "serve" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))

@@ -1,0 +1,6 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+{"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename/nvdefs.mdk", "line": 20, "col": 10, "newName": "Color"}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename/nvdefs.mdk", "line": 20, "col": 18, "newName": "length"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "medaka_rename", "arguments": {"file": "test/references_fixtures/rename/nvdefs.mdk", "line": 20, "col": 10, "newName": "renamedAlpha"}}}
+{"jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": {}}

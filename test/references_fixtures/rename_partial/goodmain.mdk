@@ -1,0 +1,8 @@
+-- module `goodmain` — the file the transcript clicks in.  It parses; the
+-- siblings `brokensib.mdk` and `strsib.mdk` do not.
+-- ⚠️ THE LINE NUMBERS BELOW ARE THE TRANSCRIPT'S CLICK COORDINATES — keep this
+-- header exactly 4 lines.
+import gooddefs.{gval, strval, untouched}
+
+export goodSum : Int
+goodSum = gval + strval + untouched

@@ -64,7 +64,7 @@ import support.util.{
 }
 import hash_map.{HashMap, new, set, has, findWithDefault}
 import tools.printer.{declToString, exprToString}
-import support.char.{isAlnum, isLower, isUpper}
+import support.char.{isAlnum, isLower, isUpper, isIdentStart}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
@@ -3636,9 +3636,6 @@ identTokGo s cs n i
     let j = identEnd cs n (i + 1)
     stringSlice i j s :: identTokGo s cs n j
   | otherwise = identTokGo s cs n (i + 1)
-
-isIdentStart : Char -> Bool
-isIdentStart c = isLower c || isUpper c || c == '_'
 
 identEnd : Array Char -> Int -> Int -> Int
 identEnd cs n i
