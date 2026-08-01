@@ -16,8 +16,9 @@ fileOfModuleId : String -> String -> String
 findImportLoc : String -> List Decl -> Option Loc
 findInRoots : List String -> String -> <IO> Option (String, String)
 findModuleFile : List (String, String) -> List String -> String -> <IO> Option (String, String)
-findProjectRoot : String -> <IO> String
-findRootGo : String -> String -> <IO> String
+findProjectRoot : String -> <IO> Option String
+findProjectRootOrSelf : String -> <IO> String
+findRootGo : String -> <IO> Option String
 importModId : UsePath -> String
 joinArrow : List String -> String
 joinComma : List String -> String

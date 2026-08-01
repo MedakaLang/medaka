@@ -122,6 +122,9 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 FIXDIR="$ROOT/test/must_fail_fixtures"
+# mcp-call spawns `medaka mcp`, which resolves its stdlib via MEDAKA_ROOT (default:
+# the running binary's own dir, which already equals $ROOT here — explicit for clarity).
+export MEDAKA_ROOT="$ROOT"
 
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -d "$FIXDIR" ] || { echo "missing fixture dir: $FIXDIR"; exit 2; }
@@ -203,6 +206,25 @@ claim_has() { grep -q "^$2:" "$1"; }
 #                                       run_verb returns 126 with an explanation, a HARD
 #                                       error, NEVER silently gradeable as a wrong-binary
 #                                       observation.
+#   mcp-call                          — (#1042) feeds a newline-delimited JSON-RPC request
+#                                       stream (the fixture's `<file>`, e.g. a
+#                                       `request.jsonl`) to `medaka mcp` on stdin and grades
+#                                       its stdout (one response line per request) — the
+#                                       ONLY verb that reaches the cross-file REFERENCE
+#                                       INDEX (`medaka_references`/`medaka_definition` via
+#                                       `refindex.mdk`), for defects that are invisible to
+#                                       every other verb because the program itself checks
+#                                       and runs perfectly clean and only the INDEX is wrong.
+#                                       Spawned with cwd = $ROOT (a subshell `cd`, not a
+#                                       persistent chdir) so a request's `file` argument can
+#                                       be a REPO-RELATIVE path — same path-stability idiom
+#                                       as test/diff_compiler_mcp.sh's own goldens — and a
+#                                       fixture's `.jsonl` must therefore reference itself as
+#                                       `test/must_fail_fixtures/<name>/<file>.mdk`, never an
+#                                       absolute path (that would bake this worktree's
+#                                       location into the pin). No `--project` mode is
+#                                       reachable this way; single-file `medaka_references`/
+#                                       `medaka_definition` calls only.
 #
 # build / build-run need clang; the guard above fails loudly (exit 2) if it is absent.
 # The binary goes to "$_out.bin" — "$_out" is "$TMP/<name>.out" (main) or "$TMP/<name>.ctl"
@@ -242,6 +264,8 @@ run_verb() {
       bound "$MEDAKA" fmt --write "$_work/$_file" >"$_out" 2>"$_out.err"; _rc=$?
       cp "$_work/$_file" "$_out.after"
       return $_rc ;;
+    mcp-call)
+      ( cd "$ROOT" && bound "$MEDAKA" mcp <"$_dir/$_file" >"$_out" 2>"$_out.err" ); return $? ;;
     *) echo "unknown verb: $_verb" >"$_out"; return 127 ;;
   esac
 }

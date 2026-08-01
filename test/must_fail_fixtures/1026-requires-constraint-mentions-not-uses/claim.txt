@@ -1,0 +1,20 @@
+issue: 1026
+what: interface `requires` supers (`interface Derived a requires Base a`) and `C a =>`
+what: constraint mentions (`constrained : Base a => a -> Int`) are not recorded as uses
+what: of the constraint's interface in the reference index — beyond #1014's plain
+what: `impl` case, this fixture's program never even has an `impl Base D` header, only
+what: a `requires` super and a `=>` constraint, and BOTH are dropped by `walkTy`'s
+what: `TyConstrained` arm. `medaka_references` on `Base`'s declaration finds only the
+what: declaration itself.
+cmd: mcp-call request.jsonl
+exit: 0
+stdout: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
+stdout: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[{\"uri\":\"file://test/must_fail_fixtures/1026-requires-constraint-mentions-not-uses/main.mdk\",\"range\":{\"start\":{\"line\":2,\"character\":10},\"end\":{\"line\":2,\"character\":14}}}]"}],"isError":false}}
+control: check-json main.mdk
+why-control: the program itself must check diagnostic-free at exit 0 (it also RUNS and
+why-control: prints 7 — verified by hand) — the defect is purely in the reference INDEX,
+why-control: not in typechecking or evaluation, so a broken control means the ENVIRONMENT
+why-control: moved, not that #1026 drained.
+why-stdout: the fix is additive (the `requires`/constraint mentions gain use entries), so
+why-stdout: the pinned response text changes SHAPE the day #1026 is fixed, and nothing
+why-stdout: else in this tiny self-contained program can move that JSON string.

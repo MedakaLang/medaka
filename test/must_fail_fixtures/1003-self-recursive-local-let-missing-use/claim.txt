@@ -1,0 +1,22 @@
+issue: 1003
+what: a self-recursive LOCAL `let` binding's own recursive call site is not recorded
+what: as a use of itself in the reference index. `medaka_references` clicked on the
+what: local `go`'s declaration finds the declaration and the OUTER `go n` call, but
+what: NOT the recursive `go (k - 1)` call inside its own body — that occurrence is
+what: recorded under no key at all. Layout matters here: a single-line `let ... in`
+what: form was hand-verified to already record all three sites correctly; this
+what: fixture uses the exact multi-line (no `in`) layout from the issue's own repro,
+what: which is the one that still drops the recursive site.
+cmd: mcp-call request.jsonl
+exit: 0
+stdout: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
+stdout: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[{\"uri\":\"file://test/must_fail_fixtures/1003-self-recursive-local-let-missing-use/main.mdk\",\"range\":{\"start\":{\"line\":5,\"character\":6},\"end\":{\"line\":5,\"character\":8}}},{\"uri\":\"file://test/must_fail_fixtures/1003-self-recursive-local-let-missing-use/main.mdk\",\"range\":{\"start\":{\"line\":6,\"character\":2},\"end\":{\"line\":6,\"character\":4}}}]"}],"isError":false}}
+control: check-json main.mdk
+why-control: the program itself must check diagnostic-free at exit 0 (it also RUNS and
+why-control: prints 0, correctly — verified by hand) — the defect is purely in the
+why-control: reference INDEX, never in typechecking or evaluation, so a broken control
+why-control: means the ENVIRONMENT moved, not that #1003 drained.
+why-stdout: the fix adds a THIRD element to the response array (the recursive call
+why-stdout: site), so the pinned 2-element response changes shape the day #1003 is
+why-stdout: fixed, and nothing else in this tiny self-contained program can move that
+why-stdout: JSON string.

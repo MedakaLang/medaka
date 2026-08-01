@@ -1,0 +1,18 @@
+issue: 1027
+what: `DEffect` declarations and `<Eff>` mentions are absent from the reference index
+what: entirely (neither a def nor a use) — `walkTy`'s `TyEffect` arm discards the effect
+what: label and `defsOfDecl` has no `DEffect` arm. `medaka_references` clicked on the
+what: `KV` token of `effect KV` finds NOTHING AT ALL — not even the declaration itself —
+what: even though the program typechecks and runs perfectly clean.
+cmd: mcp-call request.jsonl
+exit: 0
+stdout: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
+stdout: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
+control: check-json main.mdk
+why-control: the program itself must check diagnostic-free at exit 0 (it also RUNS and
+why-control: prints 1 — verified by hand) — the defect is purely a coverage gap in the
+why-control: reference index, not in typechecking or evaluation, so a broken control
+why-control: means the ENVIRONMENT moved, not that #1027 drained.
+why-stdout: the fix must make the response NON-EMPTY (at minimum the effect's own
+why-stdout: declaration), so the pinned `[]` changes shape the day #1027 is fixed, and
+why-stdout: nothing else in this tiny self-contained program can move that JSON string.

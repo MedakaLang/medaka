@@ -50,7 +50,7 @@ import driver.diagnostics.{
   analyzeProject,
   projectEntrySchemes,
 }
-import driver.loader.{findProjectRoot}
+import driver.loader.{findProjectRootOrSelf}
 import frontend.parser.{
   ParseError,
   parseResult,
@@ -784,7 +784,7 @@ hoverEnvFor runtimeSrc coreSrc uri src docs
 projectEntryEnv : String -> String -> String -> Docs -> <IO> Option (List (String, Scheme))
 projectEntryEnv runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
-  let projectDir = findProjectRoot (dirOfPath rootFile)
+  let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   projectEntrySchemes
@@ -1531,7 +1531,7 @@ headOr _ (x::_) = x
 publishProjectDiagnostics : String -> String -> String -> Docs -> <IO> Unit
 publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
-  let projectDir = findProjectRoot (dirOfPath rootFile)
+  let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   let results = analyzeProject projectCache projectParseCache read rootFile [projectDir, stdlibDir] runtimeSrc coreSrc
@@ -1688,7 +1688,7 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine pa
     None => jArray []
     Some _ =>
       let rootFile = pathOfUri uri
-      let projectDir = findProjectRoot (dirOfPath rootFile)
+      let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
       let read = path => docsGet (uriOfPath path) docs
       let idx = buildRefIndexProject read projectDir runtimeSrc coreSrc
       -- `binderAt` wants a 1-based line (the `Loc` convention); LSP positions
