@@ -1,0 +1,18 @@
+-- CONTROL: main.mdk with the local colliding `data T` declaration REMOVED -- the one
+-- variable this isolates. `T` now unambiguously resolves to pa.T (imported by name),
+-- `mkT` is a genuine pa.T built with pa's own constructor, and `f mkT` is honestly
+-- well-typed. It must stay green and print 42.
+--
+-- A bare "rename the local T to Tx, keep constructing MkB and calling f" version (the
+-- issue's own Control B) instead lands on the "correctly rejects" cell -- exit 1, `Type
+-- mismatch: T vs Tx` -- which this harness cannot express as a green control (`control:`
+-- always requires exit 0; see test/must_fail_fixtures/1092-.../control.mdk for the same
+-- constraint). So this control instead removes the collision outright and exercises the
+-- SAME call shape (`f` applied to a `T`-typed `mkT`) honestly. If this breaks, cross-module
+-- type resolution broke, not #1208.
+import pa.{T, MkA, f}
+
+mkT : T
+mkT = MkA 42
+
+main = println (f mkT)
