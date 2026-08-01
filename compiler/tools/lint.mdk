@@ -1226,7 +1226,7 @@ singleNamedType [t] = tyHeadName t
 singleNamedType _ = None
 
 tyHeadName : Ty -> Option String
-tyHeadName (TyCon n _) = Some n
+tyHeadName (TyCon { name = n }) = Some n
 tyHeadName (TyApp f _) = tyHeadName f
 tyHeadName _ = None
 

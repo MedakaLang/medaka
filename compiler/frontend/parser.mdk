@@ -37,6 +37,7 @@ import frontend.ast.{
   UsePath(..),
   useMemberOrigin,
   useMemberAlias,
+  tyConUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -1791,7 +1792,7 @@ extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
   Some (iface, args) => [Constraint iface args]
   None => []
-extractConstraints (TyCon iface _) = [Constraint iface []]
+extractConstraints (TyCon { name = iface }) = [Constraint iface []]
 extractConstraints (TyTuple cs) = concatMapC cs
 extractConstraints _ = []
 
@@ -1808,7 +1809,7 @@ tyAppSpine t = tyAppSpineAcc t []
 -- descends the spine outermost-first, prepending each argument, so the accumulator
 -- arrives in source order at the TyCon head (`Ix a i` -> ("Ix", [a, i])).
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
-tyAppSpineAcc (TyCon iface _) acc = Some (iface, acc)
+tyAppSpineAcc (TyCon { name = iface }) acc = Some (iface, acc)
 tyAppSpineAcc (TyApp f a) acc = tyAppSpineAcc f (a::acc)
 tyAppSpineAcc _ _ = None
 
@@ -2031,7 +2032,7 @@ parseTyAtom = do
       s <- getPos
       advance
       q <- getPos
-      pure (TyCon c (Some (locOfSpan s q)))
+      pure (tyConUnresolved c (Some (locOfSpan s q)))
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
     TLt => parseBareEffectAtom
@@ -2099,10 +2100,16 @@ tupleCtorTailFor commas TRParen = do
   tupleCtorTyOfArity (commas + 1)
 tupleCtorTailFor _ _ = failP "expected , or ) in tuple type constructor"
 
+-- ⚠️ #1110 residual: this head is a BUILTIN, so `DICT-SEMANTICS.md` §8 I6.2 (a)
+-- says its identity is the reserved `OriginBuiltin`, NOT the module the tuple
+-- was written in.  It carries `OriginUnresolved` here only because the carrier
+-- PR populates nothing; the A-1 PR that starts stamping identity must special-
+-- case this site FIRST, or every module's `(Int, Int)` becomes a distinct type
+-- and the prelude's `impl Bimappable (,)` stops applying — silently.
 tupleCtorTyOfArity : Int -> Parser Ty
 tupleCtorTyOfArity n =
   if n >= 2 && n <= 5 then
-    pure (TyCon (tupleCtorTyName n) None)
+    pure (tyConUnresolved (tupleCtorTyName n) None)
   else
     failP "tuple type constructor arity must be 2..5"
 

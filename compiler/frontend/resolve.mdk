@@ -338,7 +338,7 @@ patGroupDupErrors loc kind ps =
 -- `cur` (Stage B) is the enclosing `ELoc` span threaded from the expr walk (or
 -- `None` at decl level), mirroring lib/resolve.ml's `!current_loc`.
 checkType : Option Loc -> Env -> Ty -> List ResError
-checkType cur env (TyCon n loc) =
+checkType cur env (TyCon { name = n, loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
     []
   else

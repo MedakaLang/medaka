@@ -55,6 +55,7 @@ import frontend.ast.{
   Variant(..),
   DeriveRef(..),
   Decl(..),
+  tyConUnresolved,
 }
 import tools.printer.{programToString}
 import string.{toInt}
@@ -434,13 +435,13 @@ genAdtDecl ctx =
 -- deriving Ord requires Ord-able field types (Bool has Eq but no Ord).
 
 gtyToTy : Gty -> Ty
-gtyToTy GInt = TyCon "Int" None
-gtyToTy GFloat = TyCon "Float" None
-gtyToTy GBool = TyCon "Bool" None
-gtyToTy GString = TyCon "String" None
-gtyToTy GChar = TyCon "Char" None
+gtyToTy GInt = tyConUnresolved "Int" None
+gtyToTy GFloat = tyConUnresolved "Float" None
+gtyToTy GBool = tyConUnresolved "Bool" None
+gtyToTy GString = tyConUnresolved "String" None
+gtyToTy GChar = tyConUnresolved "Char" None
 gtyToTy (GTup ts) = TyTuple (map gtyToTy ts)
-gtyToTy (GData n) = TyCon n None
+gtyToTy (GData n) = tyConUnresolved n None
 
 variantToAst : (String, List Gty) -> Variant
 variantToAst (con, ftys) = Variant con (ConPos (map gtyToTy ftys))

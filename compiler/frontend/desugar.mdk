@@ -29,6 +29,7 @@ import frontend.ast.{
   UseMember(..),
   UsePath(..),
   qualifiedLocal,
+  tyConUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -184,7 +185,7 @@ derivedImpl : String -> String -> List ImplMethod -> Decl
 derivedImpl iface tyName methods = DImpl {
   pub = True,
   iface = iface,
-  tys = [TyCon tyName None],
+  tys = [tyConUnresolved tyName None],
   reqs = [],
   methods = methods,
 }
@@ -512,7 +513,7 @@ applyDeriveParams name params (d@(DImpl { iface, ... })) = DImpl { d | tys = [ap
 applyDeriveParams _ _ d = d
 
 appliedHead : String -> List String -> Ty
-appliedHead name params = appliedHeadGo (TyCon name None) params
+appliedHead name params = appliedHeadGo (tyConUnresolved name None) params
 
 appliedHeadGo : Ty -> List String -> Ty
 appliedHeadGo acc [] = acc
@@ -976,7 +977,7 @@ kvToTuple : (Expr, Expr) -> Expr
 kvToTuple (k, v) = ETuple [k, v]
 
 pinType : String -> List Ty -> Ty
-pinType name args = pinTypeGo (TyCon name None) args
+pinType name args = pinTypeGo (tyConUnresolved name None) args
 
 pinTypeGo : Ty -> List Ty -> Ty
 pinTypeGo acc [] = acc

@@ -14,6 +14,7 @@
 import frontend.ast.{
   Lit(..),
   Ty(..),
+  tyConUnresolved,
   firstTyLoc,
   firstTyLocList,
   Constraint(..),
@@ -1234,7 +1235,7 @@ argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
   ++ argPerformableOccs perf b
 argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
 argPerformableOccs perf (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon n _, args) => krowSlotOccs perf n args
+  (TyCon { name = n }, args) => krowSlotOccs perf n args
   _ => argPerformableOccs perf a ++ argPerformableOccs perf b
 argPerformableOccs perf (TyConstrained _ t) = argPerformableOccs perf t
 argPerformableOccs _ _ = []
@@ -1383,7 +1384,7 @@ checkGradedImplTys iface i (t::rest) =
 -- tyvar head carries no kind and is left to the checks that already reject it.
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHead iface t want = match tyAppSpine t
-  (TyCon n loc, applied) =>
+  (TyCon { name = n, loc }, applied) =>
     checkGradedImplHeadCon iface n loc (listLen applied) want
   -- A saturated tuple is kind `Type`, which is never a graded slot's kind.  It gets its
   -- OWN remedy: the generic "give it a Row parameter" advice is nonsense for a tuple —
@@ -4039,7 +4040,7 @@ wrapIf False s = s
 -- is a variable, not a TCon)
 tyVarNames : Ty -> List String
 tyVarNames (TyVar n) = [n]
-tyVarNames (TyCon _ _) = []
+tyVarNames (TyCon { name = _ }) = []
 tyVarNames (TyApp a b) = tyVarNames a ++ tyVarNames b
 tyVarNames (TyFun a b) = tyVarNames a ++ tyVarNames b
 tyVarNames (TyTuple ts) = flatMap tyVarNames ts
@@ -4078,7 +4079,7 @@ tyVarNamesWithConstraints ty = dedup (tyVarNames ty ++ constraintVarNamesTy ty)
 -- Ty.  Mirrors tyVarNames but for constructor slots.  TyVar names are alias
 -- params and never alias dependencies, so they are excluded.
 tyConNamesInTy : Ty -> List String
-tyConNamesInTy (TyCon n _) = [n]
+tyConNamesInTy (TyCon { name = n }) = [n]
 tyConNamesInTy (TyVar _) = []
 tyConNamesInTy (TyApp a b) = tyConNamesInTy a ++ tyConNamesInTy b
 tyConNamesInTy (TyFun a b) = tyConNamesInTy a ++ tyConNamesInTy b
@@ -4208,7 +4209,7 @@ sigToSchemeTvsIn scope ty =
 -- callback effect to its result effect
 effTailNames : Ty -> List String
 effTailNames (TyVar _) = []
-effTailNames (TyCon _ _) = []
+effTailNames (TyCon { name = _ }) = []
 effTailNames (TyApp a b) = effTailNames a ++ effTailNames b
 effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
@@ -4264,7 +4265,7 @@ tyAppSpine (TyApp a b) = match tyAppSpine a
 tyAppSpine t = (t, [])
 
 fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
-fromAstTypeE etbl tvs (TyCon n _) = match lookupAssoc n perRun.value.aliasTableRef.value
+fromAstTypeE etbl tvs (TyCon { name = n }) = match lookupAssoc n perRun.value.aliasTableRef.value
   -- Transparent non-parameterized alias (`type Foo = Int`): expand to its RHS,
   -- recursively so alias-of-alias (`type A = Int; type B = A`) flattens.  Cycle
   -- rejection is deferred (stage 4); the non-cyclic corpus terminates.
@@ -4278,7 +4279,7 @@ fromAstTypeE etbl tvs (TyCon n _) = match lookupAssoc n perRun.value.aliasTableR
   _ => TCon n
 fromAstTypeE etbl tvs (TyVar n) = fromOption (TCon n) (lookupAssoc n tvs)
 fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon n _, args) => fromAstTypeApp etbl tvs n args
+  (TyCon { name = n }, args) => fromAstTypeApp etbl tvs n args
   -- #822: an ABSTRACT head with known kinds — an interface typaram of graded kind
   -- (`f e a`, `f : Row -> Type -> Type`).  Anything else stays opaque.
   (TyVar h, args) => fromAstTypeVarApp etbl tvs h args a b
@@ -4494,7 +4495,7 @@ rowArgNames ty = rowArgNamesIn [] ty
 -- abstract head can be row-kinded, which is what confines #822 to method signatures.
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon n _, args) => rowArgNamesApp scope n args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
+  (TyCon { name = n }, args) => rowArgNamesApp scope n args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
   -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
   (TyVar h, args) => rowArgNamesVarApp scope h args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
   _ => rowArgNamesIn scope a ++ rowArgNamesIn scope b
@@ -8101,7 +8102,7 @@ inferHeadAnnot env e ty =
 -- to the literal annotation type.
 headAnnotTy : Ty -> Mono
 headAnnotTy ty = match tyAppSpine ty
-  (TyCon n _, _) => match lookupAssoc n perRun.value.dataParamKindsRef.value
+  (TyCon { name = n }, _) => match lookupAssoc n perRun.value.dataParamKindsRef.value
     Some kinds => applyParams (TCon n) (freshVars (listLen kinds))
     None => fst (astTypeFreshTbl ty)
   _ => fst (astTypeFreshTbl ty)
@@ -10710,7 +10711,7 @@ implDefinesMethodAtGo ((ImplEntry tag2 methodNames _ _ _ _)::rest) method tag
 -- module id and uses it to name BOTH modules in a conflict).  The 4th is the span of
 -- the impl's head type constructor (#414), so a conflict can point AT an impl instead
 -- of fabricating a file-start caret; `None` for a synthesized impl with no source
--- span (e.g. desugar's `deriving` lowering, which builds `TyCon tyName None`).
+-- span (e.g. desugar's `deriving` lowering, which builds `tyConUnresolved tyName None`).
 public export data CohImpl = CohImpl String (List Mono) String (Option Loc)
 
 cohImplsOf : Decl -> List CohImpl
@@ -10724,7 +10725,7 @@ cohImplsOf d = cohImplsOfMid "" d
 -- `firstTyLocList` itself (issue 480).
 -- A `DImpl` has no `Loc` of its own (`DUse` is the only `Decl` variant
 -- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
--- (`parser.mdk`'s parseTyAtom: `TyCon c (Some (locOfSpan s q))`), so the head's
+-- (`parser.mdk`'s parseTyAtom: `tyConUnresolved c (Some (locOfSpan s q))`), so the head's
 -- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
 -- `Pair` — the head — not the argument.
 --
@@ -11515,7 +11516,7 @@ implMatchesSuper _ _ _ = False
 -- which treats effect rows as transparent — TyEffect ignores its row).
 tyIsConcrete : Ty -> Bool
 tyIsConcrete (TyVar _) = False
-tyIsConcrete (TyCon _ _) = True
+tyIsConcrete (TyCon { name = _ }) = True
 tyIsConcrete (TyApp a b) = tyIsConcrete a && tyIsConcrete b
 tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
 tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
@@ -11531,7 +11532,7 @@ tyIsConcrete (TyRow _ _ _) = True
 -- concrete is fully ground).  Mirror of lib/typecheck.ml's mono_matches.
 tyMatchesAst : Ty -> Ty -> Bool
 tyMatchesAst (TyVar _) _ = True
-tyMatchesAst (TyCon a _) (TyCon b _) = a == b
+tyMatchesAst (TyCon { name = a }) (TyCon { name = b }) = a == b
 tyMatchesAst (TyApp f1 a1) (TyApp f2 a2) = tyMatchesAst f1 f2
   && tyMatchesAst a1 a2
 tyMatchesAst (TyFun a1 b1) (TyFun a2 b2) = tyMatchesAst a1 a2
@@ -12334,8 +12335,8 @@ tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
 -- vacuously matches anything in this position).
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStep (TyVar gn) _ = MVar gn
-tyStep (TyCon a _) (TyCon b _) = if a == b then MOk else MFail
-tyStep (TyCon _ _) _ = MFail
+tyStep (TyCon { name = a }) (TyCon { name = b }) = if a == b then MOk else MFail
+tyStep (TyCon { name = _ }) _ = MFail
 tyStep (TyApp f1 a1) (TyApp f2 a2) = MKids [(f1, f2), (a1, a2)]
 tyStep (TyApp _ _) _ = MFail
 tyStep (TyFun a1 b1) (TyFun a2 b2) = MKids [(a1, a2), (b1, b2)]
@@ -12364,7 +12365,7 @@ stripTyWrap t = t
 
 -- structural equality of two AST type patterns (rigid; TyVar names must match).
 tyStructEq : Ty -> Ty -> Bool
-tyStructEq (TyCon a _) (TyCon b _) = a == b
+tyStructEq (TyCon { name = a }) (TyCon { name = b }) = a == b
 tyStructEq (TyVar a) (TyVar b) = a == b
 tyStructEq (TyApp f1 a1) (TyApp f2 a2) = tyStructEq f1 f2 && tyStructEq a1 a2
 tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2
@@ -12457,7 +12458,7 @@ countHeadByIfaceGo ((KeyEntry _ tag2 _ _ ifn _ _ _)::rest) iface tag
 
 -- the head type constructor of an (unelaborated) AST type
 headTyconTy : Ty -> Option String
-headTyconTy (TyCon n _) = Some n
+headTyconTy (TyCon { name = n }) = Some n
 headTyconTy (TyApp a _) = headTyconTy a
 headTyconTy (TyTuple ts) = Some (tupleHeadTagTc (listLen ts))
 headTyconTy _ = None
@@ -12608,7 +12609,7 @@ entryHeadMatches hty itys goals
 --  • TyEffect/TyConstrained wrappers on the head are transparent.
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchStep (TyVar n) _ = MVar n
-matchStep (TyCon n _) m = match normalize m
+matchStep (TyCon { name = n }) m = match normalize m
   TCon n2 => if n == n2 then MOk else MFail
   _ => MFail
 matchStep (TyApp a b) m = match normalize m
@@ -13279,7 +13280,7 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
   -- the native emitter picks the Float primitive (bypassing the type-lost
   -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
   -- from the (lost) ref cell to a (surviving) node.
-  RScalar tag => EAnnot (EBinOp op l r routeRef) (TyCon tag None)
+  RScalar tag => EAnnot (EBinOp op l r routeRef) (tyConUnresolved tag None)
   _ => binopMethodApp op l r routeRef
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
 -- decision mirroring lib/dict_pass.ml's e7031e6 ENumLit arm.  setNumlitFloats already
@@ -15000,7 +15001,7 @@ implTysIfMatch _ _ _ = []
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 substTyVars : List (String, Ty) -> Ty -> Ty
 substTyVars sub (TyVar n) = fromOption (TyVar n) (lookupAssoc n sub)
-substTyVars _ (TyCon n _) = TyCon n None
+substTyVars _ (TyCon { name = n }) = tyConUnresolved n None
 substTyVars sub (TyApp a b) = TyApp (substTyVars sub a) (substTyVars sub b)
 substTyVars sub (TyFun a b) = TyFun (substTyVars sub a) (substTyVars sub b)
 substTyVars sub (TyTuple ts) = TyTuple (map (substTyVars sub) ts)
@@ -15071,7 +15072,7 @@ reqToObligation subst (Require ifaceR tysR) =
 -- unbound name gets a fresh var (defers, never a spurious concrete head).
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 reqTyToMono sub (TyVar n) = fromOption (freshVar ()) (lookupAssoc n sub)
-reqTyToMono _ (TyCon n _) = TCon n
+reqTyToMono _ (TyCon { name = n }) = TCon n
 reqTyToMono sub (TyApp a b) = TApp (reqTyToMono sub a) (reqTyToMono sub b)
 reqTyToMono sub (TyFun a b) =
   TFun (reqTyToMono sub a) (openRow ()) (reqTyToMono sub b)
@@ -17160,7 +17161,7 @@ annotTooGeneralMsg ty = "Type annotation '"
 
 -- pretty-print an AST type (mirrors lib/ast.ml's pp_ty byte-for-byte)
 ppTy : Ty -> String
-ppTy (TyCon n _) = n
+ppTy (TyCon { name = n }) = n
 ppTy (TyVar n) = n
 ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"

@@ -1230,7 +1230,7 @@ singleNamedType [t] = tyHeadName t
 singleNamedType _ = None
 
 tyHeadName : Ty -> Option String
-tyHeadName (TyCon n _) = Some n
+tyHeadName (TyCon { name = n }) = Some n
 tyHeadName (TyApp f _) = tyHeadName f
 tyHeadName _ = None
 
@@ -4298,7 +4298,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "tyHeadName" ((PCon "TyCon" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "stdlibNames" (TyApp (TyCon "List") (TyCon "String")))
@@ -5675,7 +5675,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
 (DTypeSig false "tyHeadName" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "tyHeadName" ((PCon "TyCon" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "name" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "stdlibNames" (TyApp (TyCon "List") (TyCon "String")))
