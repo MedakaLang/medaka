@@ -2084,7 +2084,13 @@ again, where `checkType:341-345` tests a `TyCon` and `checkType:346` is a separa
 that added this paragraph** (2026-08-01), which is the point rather than an
 embarrassment: a paragraph cataloguing a failure mode has to catch its own newest
 instance, or it is an example of the thing it warns about. A negative result scoped to
-one file is not a negative result, and neither is one scoped to one stage. The single surviving "no site" claim
+one file is not a negative result, and neither is one scoped to one stage.
+⚠️ **Wrong SCOPE and wrong PATTERN are two species with one symptom, and only the
+first is described above.** A regex that cannot match the shape it is looking for
+returns empty exactly like a search in the wrong place: a `TyCon` applied as an
+ARGUMENT is written `(TyCon name None)`, with the paren *before* the constructor, so a
+pattern anchored on `TyCon` followed by an open paren matches none of them — and an
+empty grep is a claim, not a proof, in either species. The single surviving "no site" claim
 (§4.1 **G1**) is therefore stated with a tree-wide derivation over the *name-minting*
 function rather than over the pass that was expected to call it.
 
