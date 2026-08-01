@@ -39,9 +39,10 @@ gh pr merge --auto --merge       # enqueues; the merge queue does the rest
 > ```
 >
 > If a change is needed after enqueue: dequeue first, or land it as a follow-up PR. And note the
-> sibling trap — **a STALE check-run is indistinguishable from a fresh one** in
-> `statusCheckRollup`. A red `gates (frontend)` on #1200 was two hours old, from before a rebase,
-> and read exactly like a current failure. Compare the check's `started_at` against your push:
+> sibling trap — **a STALE check-run is indistinguishable from a fresh one** in what
+> `gh pr view --json statusCheckRollup` returns. A red `gates (frontend)` on #1200 was two hours
+> old, from before a rebase, and read exactly like a current failure. Compare each check's
+> start time against your push:
 > ```sh
 > gh api "repos/MedakaLang/medaka/commits/$SHA/check-runs" --jq '.check_runs[]|"\(.name) \(.conclusion) \(.started_at)"'
 > ```
