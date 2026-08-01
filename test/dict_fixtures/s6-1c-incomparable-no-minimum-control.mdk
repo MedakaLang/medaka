@@ -1,4 +1,4 @@
--- THE DISCRIMINATING CONTROL for s6.1c-per-goal-unique-min-rejected (#614/#311):
+-- THE DISCRIMINATING CONTROL for s6-1c-per-goal-unique-min-accepted (#614/#311):
 -- the same program with `impl C (Pair Int Int)` -- the unique ⊑-minimum -- DELETED.
 --
 -- SPEC ANSWER (hand-derived): now `match(IE, C (Pair Int Int))` = {`Pair Int a`,
@@ -6,16 +6,21 @@
 -- No ⊑-minimum exists, so this is "ambiguous overlap" and BOTH condition (a) and
 -- condition (c) REJECT it. The verdict here is CONFORMANT under either reading.
 --
--- OBSERVED: check/run/build all REJECT with `T-CONFLICTING-IMPL`, and the
--- message is BYTE-IDENTICAL to its sibling's (it names only the first two
--- impls). CONFORMANT verdict.
+-- OBSERVED (post-F-3d): check/run/build all REJECT, with `T-AMBIGUOUS-INSTANCE` at
+-- the GOAL (`cname (MkPair 1 1)`) -- condition (c), the reject that survives -- plus
+-- the declaration-time `W-INCOMPARABLE-IMPLS` WARNING that condition (a) is now
+-- demoted to. CONFORMANT verdict.
 --
--- Why the pair is the evidence and neither row is: a gate holding only the
--- sibling could be "explained" by a correct (c) implementation that merely has a
--- bug. This row shows adding the unique ⊑-minimum -- the exact move §6.1 says
--- rescues the program -- changes NOTHING, so the checker is condition (a) BY
--- CONSTRUCTION: it fires pairwise at the `impl` site and never consults the goal
--- or the rest of the instance environment. That is #614's own argument, pinned.
+-- ⚠️ WHY THE PAIR IS THE EVIDENCE AND NEITHER ROW IS -- and the argument INVERTED
+-- with F-3d, which is the point of keeping both rows. It used to read: "adding the
+-- unique ⊑-minimum changes NOTHING, so the checker is condition (a) BY CONSTRUCTION
+-- -- it fires pairwise at the `impl` site and never consults the goal." That was
+-- #614's own argument and it was true. It is now FALSE, and the same two files prove
+-- the opposite: adding the third impl flips its sibling from REJECT to ACCEPT-with-3.
+-- The difference between the two files IS the per-goal behaviour, so the pair now
+-- pins that acceptance consults the GOAL and the rest of `IE` -- exactly what a
+-- single accepting row could not establish (an implementation that simply stopped
+-- checking would accept both).
 data Pair a b = MkPair a b
 
 interface C a where

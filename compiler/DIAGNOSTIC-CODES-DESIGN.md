@@ -189,6 +189,7 @@ kinds (enumerated from the message families):
 | unsupported (internal) | `typecheck: unsupported expression/pattern/operator …` | `T-UNSUPPORTED` |
 | **non-exhaustive match** (warning) | `non-exhaustive match — some values may not be covered` (`:4644`) | `W-NONEXHAUSTIVE` |
 | **unreachable match arm** (warning) | `unreachable match arm — this pattern is already covered by an earlier arm` | `W-UNREACHABLE-ARM` |
+| **`⊑`-incomparable impls** (warning) | `Overlapping impls of C: <h1> and <h2> are not ordered by specificity — neither head is more specific than the other, so a goal matching both has no most-specific impl to pick` (F-3d) | `W-INCOMPARABLE-IMPLS` |
 
 **Distinct-kind totals:** deliberately NOT written down — see the TL;DR bullet for the
 one-line `grep` that derives them. The counts that stood here (and the divergent ones in
@@ -279,6 +280,7 @@ kebab-case; never renumber (append only).
 | `W-UNREACHABLE-ARM` | unreachable/redundant `match` arm — pattern already covered by an earlier unguarded arm (typecheck `matchWarnings`; `checkMatchRedundant`) |
 | `W-GUARD-INEXHAUSTIVE` | guards may not be exhaustive (exhaust) |
 | `W-NONEXHAUSTIVE-CLAUSES` | non-exhaustive clauses of a multi-clause function — a constructor is not covered by any clause (exhaust; the function-clause analog of `W-NONEXHAUSTIVE`) |
+| `W-INCOMPARABLE-IMPLS` | two overlapping `impl`s of one interface whose heads are `⊑`-**incomparable** — neither is more specific than the other (typecheck `matchWarnings`; `checkCoherence` → `cohClassify`). DICT-SEMANTICS §6.1 choice-point 2 condition **(a)**, which that clause licenses as *"at most a warning at declaration time … but acceptance is per-goal"*; the acceptance decision belongs to the goal-site `min⊑` reject (`T-AMBIGUOUS-INSTANCE`). ⚠️ **Not the whole of the old `T-CONFLICTING-IMPL`.** Two *mutually*-`⊑` (α-equal) heads still take that ERROR code: they satisfy (a) but violate §6 C1 outright (two `⊑`-minimal elements), and `entryCovers` makes equal heads cover each other, so the goal-site reject never sees them |
 
 #### Adding a typecheck-stage warning
 

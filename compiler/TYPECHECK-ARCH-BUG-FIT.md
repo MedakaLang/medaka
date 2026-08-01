@@ -1566,6 +1566,18 @@ discriminator (`impl Index (List Int) Int Int`) keeps printing `42` on `run` and
 and the equal-head shape (`impl Eq Int`) keeps `check` exit 0. ⚠️ **Not executable today** —
 F-3c (#1155) is unmerged.
 
+⚠️ **CONTROL 1 HAS SINCE MOVED, and by F-3d rather than F-3c — re-read it before
+using it.** F-3d (#614/#311, 2026-08-01) demotes DICT §6.1 condition **(a)** to a
+`W-INCOMPARABLE-IMPLS` warning, so a ⊑-incomparable **user-vs-user** pair no longer
+carries a declaration-time `T-CONFLICTING-IMPL`; at a closed goal it is rejected by
+the goal-site `T-AMBIGUOUS-INSTANCE` alone, and at a non-closed goal it now COMPILES
+(#1183). The control as written — *"keeps its existing `T-CONFLICTING-IMPL` rejection
+at the declaration (not silently relocated to the goal site)"* — was a correct
+statement about F-3c and is a false one about the tree today; the relocation it
+guards against is exactly what F-3d did, deliberately. What survives unchanged, and
+is the control worth keeping, is the **equal-head** shape: two mutually-⊑ heads still
+hard-reject at the declaration, because they satisfy (a) while failing C1.
+
 **A-3 alone must NOT close this**: if it is claimed drained after A-3, re-run the repro —
 K's declaration-time diagnostic is advisory by its own text, so an advisory warning plus
 exit 0 is not a drain. **Without the G-11 clause below, the prediction for the

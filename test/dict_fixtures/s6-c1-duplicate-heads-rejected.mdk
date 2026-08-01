@@ -13,6 +13,18 @@
 -- This is the floor beneath the whole overlap regime: an implementation that
 -- silently picked one (first-match, declaration order) would be nondeterministic
 -- across resolution paths, which is exactly #203.
+--
+-- ⚠️ THE ROW F-3d (#614/#311) DELIBERATELY DID NOT WIDEN, and the one whose reject
+-- has no second line of defence. F-3d demoted DICT §6.1 condition **(a)** to a
+-- warning -- but α-equal heads SATISFY (a) (they are ⊑-COMPARABLE, mutually so), and
+-- §6.1.2's own ⚠️ records that the ladder breaks exactly here: **(a) ⇏ (c)**. So this
+-- pair is not an (a)-violation at all and was never (a)'s to demote; it is a §6 C1
+-- violation, and C1 is not relaxed. Nor could the goal-site min⊑ reject pick it up:
+-- `entryCovers` is `tyHeadEqV || tyStrictlyMoreSpecificV`, so two equal heads COVER
+-- EACH OTHER, `findMostSpecificEntry` returns `Some`, and `reportAmbiguousOverlap`
+-- is never reached. Demoting this arm with the rest would therefore have accepted a
+-- program the spec rejects, decided by declaration order, with NOTHING left to
+-- report it -- which is why the demotion is classified rather than wholesale.
 interface Tag a where
   tag : a -> Int
 

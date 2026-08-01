@@ -131,12 +131,39 @@
 #   Its no-overlap control (s3-nested-no-overlap-control) proves eval handles
 #   depth-3 recursive context discharge fine, so the trigger is the overlap.
 #   ⚠️ #323's filed BUILD-side symptom ("silent garbage") does NOT reproduce.
-# * s6-1c-per-goal-unique-min-rejected -- #614 (S2) / #311 (S3), both OPEN. The
-#   declaration-time coherence sweep enforces §6.1 condition (a) (global pairwise
-#   comparability) where the spec commits to (c) (per-goal unique minimum), so
-#   the §6.1 separating case is rejected. SOUND (an over-rejection), and #311
-#   records the 2026-07-16 owner decision to keep (a) for now.
-#   s6-1c-incomparable-no-minimum-control is the discriminating control.
+# * s6-1c-per-goal-unique-min-accepted -- #614 (S2) / #311 (S3) are FIXED and this
+#   row HAS DRAINED (F-3d, 2026-08-01). Kept in the ledger as the worked example of
+#   an ACCEPTANCE WIDENING, because that direction has its own trap:
+#     WAS: the declaration-time coherence sweep enforced §6.1 condition (a) (global
+#     pairwise comparability) where the spec commits to (c) (per-goal unique
+#     minimum), so the §6.1 separating case -- `C (Pair Int a)`, `C (Pair a Int)`,
+#     `C (Pair Int Int)` -- was rejected at the SECOND `impl`. Sound, but an
+#     over-rejection: the third impl is the unique ⊑-minimum at the goal.
+#     FIX: classify the pairwise sweep instead of deleting it. A ⊑-INCOMPARABLE pair
+#     becomes a `W-INCOMPARABLE-IMPLS` warning (the "MAY additionally warn at
+#     declaration time … but acceptance is per-goal" §6.1 licenses); acceptance moves
+#     to the goal-site min⊑ reject F-3c installed.
+#   ⚠️ THE TRAP, and it is the mirror image of #1128's: **every existing golden
+#   covers the old, NARROWER behaviour, so all of them pass by construction on an
+#   over-widening.** Section 1 cannot see a program that newly compiles unless
+#   someone writes the row. The two checks that CAN: the ACCEPT rows' `!`-negated
+#   codes (a positive-only pin cannot tell "(a) was demoted" from "(a) was deleted"),
+#   and Section 4, which needs no ground truth at all.
+#   ⚠️ WHAT DID **NOT** WIDEN: two MUTUALLY-⊑ (α-equal) heads still hard-reject.
+#   They SATISFY (a) -- §6.1.2's ⚠️ records that the ladder breaks exactly there,
+#   **(a) ⇏ (c)** -- so they were never (a)'s to demote, and `entryCovers` makes
+#   equal heads cover each other, so the goal-site reject cannot see them either.
+#   s6-c1-duplicate-heads-rejected is that control.
+#   s6-1c-incomparable-no-minimum-control remains the discriminating control, with
+#   its argument INVERTED: it used to show that adding the ⊑-minimum changes nothing;
+#   it now shows that adding it flips the sibling to ACCEPT.
+# * s6-2-t4-open-goal-deferred -- #1183 (OPEN, S1 `verified`). The residue F-3d made
+#   user-reachable: at a NON-CLOSED goal the min⊑ arm still COMMITS to the head of
+#   the candidate list, so declaration order decides the value at exit 0 (1 vs 2)
+#   under a warning rather than in silence. §6.2 T4 says defer to quiescence; there
+#   is no quiescence pass (§11's T3/T4 row). Pinned as a KNOWN-BAD row in BOTH
+#   Section 4 ledgers (run and build) -- and the run-arm ledger was ADDED for it,
+#   since `RUN-DIFF` previously had no known-bad branch at all.
 # * s4-gen-rec-inferred-asymmetric -- #1133 (OPEN, S1 `verified`). LOUD BREAKAGE.
 #   An INFERRED
 #   mutually-recursive group in which only ONE body dispatches on the class:
@@ -228,22 +255,23 @@
 #     fixture declares two α-equal heads with different contexts.
 #   * §6.1 condition (b) -- per-goal TOTAL order, the middle of the three. Only
 #     (a)-vs-(c) is separated.
-#   * §6.2 T3/T4's NON-CLOSED half is COVERED as of the s6-2-t3/s6-2-t4 pair; what
-#     is NOT covered is the same gate at a goal the program can still RUN. F-3c's
-#     goal-site T-AMBIGUOUS-INSTANCE is gated on the goal being CLOSED, because T4
-#     defers a goal carrying an unbound metavariable rather than deciding it. That
-#     gate IS exercised -- by a negative code assertion on the open half, since the
-#     pair's verdict, exit code and stdout are identical -- but only on a program
-#     coherence (a) rejects anyway, so no VERDICT depends on it today.
+#   * §6.2 T3/T4's NON-CLOSED half is COVERED as of the s6-2-t3/s6-2-t4 pair, and
+#     as of F-3d that pair decides a VERDICT: the closed half rejects, the open half
+#     ACCEPTS AND RUNS. F-3c's goal-site T-AMBIGUOUS-INSTANCE is gated on the goal
+#     being CLOSED, because T4 defers a goal carrying an unbound metavariable rather
+#     than deciding it; the negative code assertion on the open half is retained
+#     because verdict alone cannot attribute the sibling's reject to the min⊑ arm.
 #     ⚠️ AN EARLIER REVISION OF THIS BULLET SAID THE GATE WAS "UNTESTABLE" on the
 #     grounds that a ⊑-incomparable user pair is rejected at the declaration. That
-#     is true and it is not a reason: errors ACCUMULATE, a declaration-time reject
+#     was true and it was not a reason: errors ACCUMULATE, a declaration-time reject
 #     is not an early exit, and both impls still reach the selector. The refutation
 #     was already in this file's own corpus (conflicting_impl_overlap carries both
-#     codes). F-3d (#614/#311) is what makes the gate load-bearing rather than what
-#     makes it testable: relaxing (a) removes the coherence reject, and the open
-#     half becomes an ACCEPT that an ungated arm would reject.
-#     Ledgered at test/MUST-FAIL-NOT-PINNABLE.txt (#1155) for the must-fail half.
+#     codes). ⚠️ A SECOND PREDICTION IN THIS BULLET WAS ALSO WRONG: F-3d does NOT
+#     "remove the coherence reject" -- it DEMOTES condition (a) to a warning and
+#     leaves the α-equal class a hard error, per the 2026-08-01 owner decision.
+#     What is NOT covered is the residue that widening exposes: at the open goal the
+#     arm still COMMITS by declaration order (#1183), pinned as a KNOWN-BAD row in
+#     Section 4 rather than asserted correct.
 #   * 🚨 Section 4 permutes `impl` BLOCKS WITHIN ONE FILE, so it is STRUCTURALLY
 #     BLIND to the user-vs-PRELUDE overlap class -- exactly the class F-3c exists
 #     to catch. Each `s6-c1-rigid-goal-*` fixture has ONE user impl, because its
@@ -343,15 +371,15 @@ s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argu
 s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER #1134 (OPEN, S3 OVER-REJECTION): inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ Drains on #1134 (BEHAVIOUR), never on #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-argtag-unsound-under-overlap.mdk|§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10|
-s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
-s6-1c-per-goal-unique-min-rejected.mdk|§6.1 choice-point 2 -- LEDGER #614/#311 (both OPEN): the §6.1 SEPARATING CASE. Spec commits to (c) per-goal unique minimum and would ACCEPT, printing 3; the declaration-time sweep enforces (a) global comparability and rejects. Sound over-rejection; #311 records the owner decision to keep (a) for now|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
-s6-1c-incomparable-no-minimum-control.mdk|CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject. ⚠️ Since #1155 (F-3c) it carries TWO codes -- the declaration-time (a) reject pinned here, AND a goal-site T-AMBIGUOUS-INSTANCE from the per-goal (c) reject, which lands FIRST. Deliberate: they are two rules at two sites, and F-3d deletes (a), after which the second is all that remains. The earlier claim that the message is byte-identical to its sibling`s no longer holds -- the sibling still carries (a) ALONE, and that DIFFERENCE is now itself the (a)-by-construction evidence|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-c1-duplicate-heads-rejected.mdk|§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break. ⚠️ THE ROW F-3d DELIBERATELY DID NOT WIDEN: α-equal heads SATISFY condition (a) (they are ⊑-comparable), so this was never (a)`s to demote -- it is a C1 violation, and F-3d demotes (a) alone. It also has no second line of defence: `entryCovers` makes equal heads cover each other, so the goal-site min⊑ reject never sees this shape|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL
+s6-1c-per-goal-unique-min-accepted.mdk|§6.1 choice-point 2 -- THE #614/#311 DRAIN (F-3d): the §6.1 SEPARATING CASE, now conformant. `Pair Int Int` is ⊑ both `Pair Int a` and `Pair a Int` and is the unique ⊑-minimum at the goal, so §3 `inst` selects it and both engines print 3. The value is the SPEC answer the fixture`s own header hand-derived while the row was still pinned to a REJECT, not a recapture. The declaration-time (a) sweep still fires as the `W-INCOMPARABLE-IMPLS` WARNING §6.1 licenses -- asserted here, since a positive-only pin could not tell the demotion from (a) having been deleted|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|W-INCOMPARABLE-IMPLS,!T-CONFLICTING-IMPL
+s6-1c-incomparable-no-minimum-control.mdk|CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject. Since #1155 (F-3c) the reject is the goal-site T-AMBIGUOUS-INSTANCE; since F-3d the declaration-time (a) finding beside it is a WARNING. ⚠️ The pair`s ARGUMENT INVERTED at F-3d and that is why both rows survive: it used to show adding the ⊑-minimum changes NOTHING (condition (a) by construction); it now shows adding it flips the sibling to ACCEPT-with-3, i.e. acceptance really is per-goal. A single accepting row could not establish that -- an implementation that simply stopped checking would accept both|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE,W-INCOMPARABLE-IMPLS
 s6-c1-rigid-goal-no-minimum.mdk|§6 C1 AT A RIGID-VARIABLE GOAL -- the #1155 (F-3c) drain, and the goal-site half of C1`s requantification off "ground" onto "the goals `inst` decides". A user `impl Index (List (List b)) k c` beside the prelude`s `impl Index (List b) Int b`: at the CLOSED-but-not-ground goal `Index (List (List a)) Int (List a)` both match under §3 and neither ⊑ the other, so there is no ⊑-minimum. PRE-#1155 this printed `[1, 2]` at exit 0 on BOTH engines -- the prelude won on declaration index, silently. Coherence structurally cannot see it (its input is user decls only, and there is one user impl), which is why this needed the SELECTOR-keyed reject and not the declaration-time one|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE
 s6-c1-rigid-goal-unique-min-control.mdk|CONTROL 1/3 for the row above: user impl made STRICTLY MORE SPECIFIC (`Index (List (List b)) Int (List b)`), so min⊑(match) is the singleton {user} and §3 `inst` selects it -- ACCEPT, printing the second row `[3]`, a value ONLY that impl can produce. This is what rules out the three duller readings of its sibling`s reject (goal discharged by `assum` and never reaching `inst`; user impl not registered at a prelude-occupied head; prelude always wins) -- every one of those predicts `[1, 2]` here|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[3]|
 s6-c1-rigid-goal-no-user-impl-baseline.mdk|CONTROL 2/3: the same program with the user impl DELETED. The matching set is the SINGLETON {prelude}, trivially its own ⊑-minimum, so the rigid goal is well-formed and RESOLVES -- `[1, 2]`. Pins that the sibling`s reject is "this rigid goal has no ⊑-minimum", not "a rigid goal cannot be resolved". Also the exact value the buggy sibling printed, which is what made that S0 invisible|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|[1, 2]|
 s6-c1-rigid-goal-no-call-discriminator.mdk|CONTROL 3/3, and the one that makes "rigid" an ASSERTION rather than a label: identical to s6-c1-rigid-goal-no-minimum except `main` NEVER CALLS `firstRow`, so the ONLY `Index` goal the program poses is the DEFINITION-SITE rigid one and there is no ground goal anywhere. A reject keyed to groundness would ACCEPT this file. It rejects identically, which is #1155 acceptance item 2 stated as an experiment|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE
-s6-2-t3-closed-goal-reported.mdk|§6.2 T3 CLOSED half of the #1155 closedness pair. Two ⊑-incomparable USER impls, so coherence (a) rejects at the declaration -- but errors ACCUMULATE, so both are still registered and the GROUND goal `Sh (Q Int Bool (List Int))` still reaches the min⊑ selector and gets the goal-site reject too. Carries BOTH codes|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL,T-AMBIGUOUS-INSTANCE
-s6-2-t4-open-goal-deferred.mdk|§6.2 T4 OPEN half, and the ONLY in-tree test of the closedness gate. ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm -- but T4 defers a non-closed goal rather than deciding it, so the goal-site reject MUST NOT fire. ⚠️ The `!` assertion IS the row: verdict, exit code and stdout are identical to the sibling, so deleting the gate would change NOTHING a positive-only pin can see. ⚠️ This pair also refutes F-3c`s own original claim that the gate was unreachable -- a declaration-time reject is not an early exit|REJECT|REJECT|REJECT|NONE||T-CONFLICTING-IMPL,!T-AMBIGUOUS-INSTANCE
+s6-2-t3-closed-goal-reported.mdk|§6.2 T3 CLOSED half of the #1155 closedness pair. Two ⊑-incomparable USER impls; since F-3d coherence (a) only WARNS about them, so the GROUND goal `Sh (Q Int Bool (List Int))` reaching the min⊑ selector is the whole of this file`s reject. Carries the goal-site error AND the declaration-time warning|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE,W-INCOMPARABLE-IMPLS
+s6-2-t4-open-goal-deferred.mdk|§6.2 T4 OPEN half, and the ONLY in-tree test of the closedness gate. ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm -- but T4 defers a non-closed goal rather than deciding it, so the goal-site reject MUST NOT fire. Since F-3d that makes the pair an ACCEPT-vs-REJECT discriminator as well. ⚠️ KEEP THE `!` ASSERTION: verdict alone cannot say the sibling`s reject came from the min⊑ arm rather than from anything else, so a positive-only row would be strictly weaker against the regression this exists for. ⚠️ The pinned value 1 is DECLARATION-ORDER-DECIDED, not correct -- see the §4 KNOWN-BAD row and #1183|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1|W-INCOMPARABLE-IMPLS,!T-AMBIGUOUS-INSTANCE
 s6-1-3-commit-at-elaboration-site.mdk|§6.1 choice-point 3: selection COMMITS AT THE ELABORATION SITE. A rigid-variable goal inside a signed binding takes the general instance (11) and is NOT retroactively re-resolved when the caller instantiates at Int, while the same ground predicate resolved directly gives 99. ⚠️ DO NOT "FIX" 11 TO 99|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|11\n99|
 s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER #1127 (OPEN, S0 SILENT WRONGNESS ON THE BUILD PATH): a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
 s6-1-4-direct-constraint-control.mdk|CONTROL for #1127: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
@@ -814,7 +842,17 @@ done)"
 # and asserted to DIFFER, so the row reds the day they converge (the drain)
 # instead of silently passing or silently being skipped.
 #   entry | iface | orig-build-value | perm-build-value | issue
-KNOWNBAD_PERM='s6-1-4-supers-per-construction-goal.mdk|D|20\n77|77\n77|#1127'
+KNOWNBAD_PERM='s6-1-4-supers-per-construction-goal.mdk|D|20\n77|77\n77|#1127
+s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
+
+# THE SAME LEDGER FOR THE **RUN** ARM. ⚠️ It exists because the build-arm ledger
+# above is NOT a general escape hatch: `RUN-DIFF` had no known-bad branch at all,
+# so a pair whose divergence shows on BOTH engines could only be recorded by
+# excluding it -- and an exclusion is a skip-list, which cannot notice when the
+# thing it excuses is fixed. #1127 happens to diverge on `build` alone, which is
+# why one arm sufficed until F-3d.
+#   entry | iface | orig-run-value | perm-run-value | issue
+KNOWNBAD_PERM_RUN='s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
 
 printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
   [ -z "$entry" ] && continue
@@ -852,6 +890,7 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
   fi
 
   kb_line="$(printf '%s\n' "$KNOWNBAD_PERM" | awk -F'|' -v e="$entry" -v i="$iface" '$1==e && $2==i {print}')"
+  kbr_line="$(printf '%s\n' "$KNOWNBAD_PERM_RUN" | awk -F'|' -v e="$entry" -v i="$iface" '$1==e && $2==i {print}')"
   runbuild='n/a'
   if [ "$o_chk" -eq 0 ] && [ "$p_chk" -eq 0 ]; then
     bound "$MEDAKA" run "$entrypath" >"$TMP/$base.o.run.out" 2>"$TMP/$base.o.run.err"
@@ -877,7 +916,27 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
     # such structured code (#1130), so exit code is the coarsest thing that is
     # both meaningful and immune to location drift.
     if [ "$o_run" -eq 0 ] && [ "$p_run" -eq 0 ]; then
-      if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
+      if [ -n "$kbr_line" ]; then
+        # KNOWN-BAD run divergence: assert BOTH pinned values AND that they still
+        # DIFFER, so the row reds on convergence (the drain) rather than absorbing
+        # the fix.  Same shape as the build arm below.
+        kbr_o="$(printf '%s' "$kbr_line" | cut -d'|' -f3)"
+        kbr_p="$(printf '%s' "$kbr_line" | cut -d'|' -f4)"
+        kbr_issue="$(printf '%s' "$kbr_line" | cut -d'|' -f5)"
+        printf '%b\n' "$kbr_o" >"$TMP/$base.kbr.o.expected"
+        printf '%b\n' "$kbr_p" >"$TMP/$base.kbr.p.expected"
+        if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
+          run_v='CONVERGED-FIXED'
+          row_ok=0
+          reason="${reason:+$reason; }KNOWN-BAD $kbr_issue run divergence has CONVERGED -- re-pin or drop this ledger row"
+        elif cmp -s "$TMP/$base.o.run.out" "$TMP/$base.kbr.o.expected" && cmp -s "$TMP/$base.p.run.out" "$TMP/$base.kbr.p.expected"; then
+          run_v="ok(known-bad $kbr_issue)"
+        else
+          run_v='WRONG-KNOWNBAD-VALUE'
+          row_ok=0
+          reason="${reason:+$reason; }KNOWN-BAD $kbr_issue row's pinned run values no longer match observed output"
+        fi
+      elif cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
         run_v='ok'
       else
         run_v='RUN-DIFF'
