@@ -96,7 +96,7 @@ tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 
 constraintSexp : Constraint -> String
-constraintSexp (Constraint iface args) =
+constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
   node "cstr" (escStr iface :: map tySexp args)
 
 export optStrSexp : Option String -> String
@@ -298,11 +298,11 @@ ifaceMethodSexp (IfaceMethod name ty def) =
   node "imethod" [escStr name, tySexp ty, methodDefaultSexp def]
 
 superSexp : Super -> String
-superSexp (Super iface params) =
+superSexp (Super { superHead = iface, superParams = params }) =
   node "super" [escStr iface, slist (map escStr params)]
 
 requireSexp : Require -> String
-requireSexp (Require iface tys) =
+requireSexp (Require { requireHead = iface, requireArgs = tys }) =
   node "req" [escStr iface, slist (map tySexp tys)]
 
 implMethodSexp : ImplMethod -> String
@@ -371,7 +371,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "optStrSexp") (EVar "tail")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "constraintSexp" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "args")))))
+(DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "optStrSexp" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "optStrSexp" ((PCon "Some" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "Some"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
@@ -488,9 +488,9 @@ programToSexp prog = joinNl (map declSexp prog)
 (DTypeSig false "ifaceMethodSexp" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def"))) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
 (DTypeSig false "superSexp" (TyFun (TyCon "Super") (TyCon "String")))
-(DFunDef false "superSexp" ((PCon "Super" (PVar "iface") (PVar "params"))) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "params"))))))
+(DFunDef false "superSexp" ((PRec "Super" ((rf "superHead" (PVar "iface")) (rf "superParams" (PVar "params"))) false)) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "params"))))))
 (DTypeSig false "requireSexp" (TyFun (TyCon "Require") (TyCon "String")))
-(DFunDef false "requireSexp" ((PCon "Require" (PVar "iface") (PVar "tys"))) (EApp (EApp (EVar "node") (ELit (LString "req"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "tys"))))))
+(DFunDef false "requireSexp" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EApp (EApp (EVar "node") (ELit (LString "req"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "tys"))))))
 (DTypeSig false "implMethodSexp" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodSexp" ((PCon "ImplMethod" (PVar "name") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "im"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DTypeSig false "useMemberSexp" (TyFun (TyCon "UseMember") (TyCon "String")))
@@ -545,7 +545,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "tySexp" ((PCon "TyRow" (PVar "labels") (PVar "tail") PWild)) (EApp (EApp (EVar "node") (ELit (LString "TyRow"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "effAtomSexp")) (EVar "labels"))) (EApp (EVar "optStrSexp") (EVar "tail")))))
 (DFunDef false "tySexp" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "TyConstrained"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "constraintSexp")) (EVar "cs"))) (EApp (EVar "tySexp") (EVar "t")))))
 (DTypeSig false "constraintSexp" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "constraintSexp" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "args")))))
+(DFunDef false "constraintSexp" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "node") (ELit (LString "cstr"))) (EBinOp "::" (EApp (EVar "escStr") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "args")))))
 (DTypeSig true "optStrSexp" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
 (DFunDef false "optStrSexp" ((PCon "Some" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "Some"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "optStrSexp" ((PCon "None")) (ELit (LString "None")))
@@ -662,9 +662,9 @@ programToSexp prog = joinNl (map declSexp prog)
 (DTypeSig false "ifaceMethodSexp" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def"))) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
 (DTypeSig false "superSexp" (TyFun (TyCon "Super") (TyCon "String")))
-(DFunDef false "superSexp" ((PCon "Super" (PVar "iface") (PVar "params"))) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "params"))))))
+(DFunDef false "superSexp" ((PRec "Super" ((rf "superHead" (PVar "iface")) (rf "superParams" (PVar "params"))) false)) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "params"))))))
 (DTypeSig false "requireSexp" (TyFun (TyCon "Require") (TyCon "String")))
-(DFunDef false "requireSexp" ((PCon "Require" (PVar "iface") (PVar "tys"))) (EApp (EApp (EVar "node") (ELit (LString "req"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "tys"))))))
+(DFunDef false "requireSexp" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EApp (EApp (EVar "node") (ELit (LString "req"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "tys"))))))
 (DTypeSig false "implMethodSexp" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodSexp" ((PCon "ImplMethod" (PVar "name") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "im"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DTypeSig false "useMemberSexp" (TyFun (TyCon "UseMember") (TyCon "String")))

@@ -292,6 +292,46 @@ if [ "$declun_actual" != "$declun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer file(s)"
 
+# The INTERFACE-OCCURRENCE peers (#1110 PR B): `constraintUnresolved` /
+# `requireUnresolved` / `superUnresolved` / `dImplUnresolved` mint a node that NAMES
+# an interface at a use site (`=>` predicate, `requires`, superinterface, `impl`
+# head) whose module identity has not been acquired. Same hazard, same remedy as
+# the two ratchets above: a POST-resolve call re-synthesises the node from its
+# projected fields and silently resets an identity resolve already stamped, and the
+# immunity rule makes the reset permanent. Rebuild with a record UPDATE
+# (`Constraint { c | constraintArgs = … }`, `DImpl { d | methods = … }`).
+#
+# Deliberately a SEPARATE list from `declun_allowed` rather than four more names in
+# its alternation: an `impl` is not a DECLARATION of the interface it names, so
+# `DImpl` mints no decl-layer carrier and must never grow a `declHeadOf` arm (see
+# that function's own comment in compiler/entries/origin_agreement_main.mdk).
+# Merging the two lists is how that distinction gets lost.
+occun_allowed="compiler/frontend/ast.mdk
+compiler/frontend/desugar.mdk
+compiler/frontend/parser.mdk"
+# ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
+# TRACKED files. Same construction on purpose, so all three move together.
+occun_actual=$(git -C "$ROOT" grep -lwE -- 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      if grep -wE 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' "$ROOT/$f" \
+         | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$occun_actual" != "$occun_allowed" ]; then
+  echo "FAIL: the #1110 interface-occurrence unresolved-producer set changed."
+  echo "  allowed (PRE-RESOLVE construction only):"
+  printf '    %s\n' $occun_allowed
+  echo "  actual:"
+  printf '    %s\n' $occun_actual
+  echo "  A post-resolve call to one of these RESETS an acquired interface-occurrence"
+  echo "  identity, and the immunity rule makes that permanent. Rebuild with a record"
+  echo "  UPDATE (\`Constraint { c | constraintArgs = … }\`) instead. If the new site"
+  echo "  really is pre-resolve, add it to the list above and say why in the PR."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$occun_actual" | grep -c .) occurrence-layer producer file(s)"
+
 originun_actual=$(git -C "$ROOT" grep -lw -- 'OriginUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
       if grep -w 'OriginUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
@@ -324,11 +364,35 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # populated and graded by NOTHING, under a green gate that looks like it covers the
 # layer. This pins the NAME SET (not a count -- a bare count has no derivation and a
 # rename would slip past it) so a new or renamed carrier field fails HERE instead.
-carrier_expected="dataOrigin
+#
+# ⚠️ TWO CLASSES, PINNED SEPARATELY (#1110 PR B). A single flat name-set could be
+# kept green by adding a name to it, which is the masking move this pin exists to
+# refuse. So each carrier must declare WHICH grader owns it:
+#
+#   GRADED -- the agreement probe reads this field by name at runtime. Mechanically
+#             verified below: the name must appear OUTSIDE a comment in
+#             compiler/entries/origin_agreement_main.mdk.
+#   OWED   -- the field exists but no grader reads it yet, with the PR that owes the
+#             grading named here. Mechanically SELF-DRAINING below: the name must
+#             NOT yet appear in the probe, so the moment someone wires it in, this
+#             gate reds and forces the name to move up to the graded set.
+#
+# The four OWED names are #1110 PR B's interface-OCCURRENCE carriers. They cannot be
+# graded by this PR: nothing stamps them yet (PR B is carrier-only), so every arm
+# would report `OriginUnresolved` and the only thing the probe could print is a
+# larger RESIDUAL -- a golden move on a PR whose whole contract is byte-identity.
+# Extending the probe to interface heads is PR C's stated deliverable in #1110's
+# Stage A-1 handoff map, which is exactly what the self-drain above forces.
+carrier_graded_expected="dataOrigin
 ifaceOrigin
 newtypeOrigin
 tyAliasOrigin
 tyConOrigin"
+carrier_owed_expected="constraintOrigin
+implOrigin
+requireOrigin
+superOrigin"
+carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | sort)
 carrier_actual=$(grep -oE '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
   | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
 if [ "$carrier_actual" != "$carrier_expected" ]; then
@@ -340,14 +404,64 @@ if [ "$carrier_actual" != "$carrier_expected" ]; then
   echo "  A new (or renamed) TyConOrigin carrier is invisible to BOTH of:"
   echo "    - declHeadOf in compiler/entries/origin_agreement_main.mdk -- its wildcard"
   echo "      arm (\`declHeadOf _ = []\`) silently drops any carrier it doesn't name;"
-  echo "      add a match arm for the new decl constructor."
-  echo "    - the decl-layer producer ratchet just above in THIS file -- its hardcoded"
-  echo "      dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved"
-  echo "      alternation won't see the new carrier's mint helper; add it there too."
-  echo "  Update BOTH, then update carrier_expected above to the new field-name set."
+  echo "      add a match arm for the new decl constructor. (Note: an OCCURRENCE"
+  echo "      carrier does NOT belong there -- see declHeadOf's own comment.)"
+  echo "    - the producer ratchets just above in THIS file -- their hardcoded name"
+  echo "      alternations won't see the new carrier's mint helper; add it there too."
+  echo "  Update BOTH, then add the field to carrier_graded_expected (if a grader now"
+  echo "  reads it) or carrier_owed_expected (naming the PR that owes the grading)."
   exit 1
 fi
-echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s)"
+# GRADED: each name must be read, outside a comment, by the agreement probe.
+probe_src="$ROOT/compiler/entries/origin_agreement_main.mdk"
+for c in $carrier_graded_expected; do
+  if ! grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as GRADED but compiler/entries/origin_agreement_main.mdk"
+    echo "  no longer reads it outside a comment. Either restore the read, or move the"
+    echo "  name to carrier_owed_expected and say in the PR which PR owes the grading."
+    exit 1
+  fi
+done
+# OWED: the self-drain, pinned in BOTH directions -- the name must be absent from
+# the probe AND from the stamper.
+#
+# The probe half alone pins BOOKKEEPING, not grading, and would have a hole big
+# enough to drive the whole hazard through: a later PR could stamp an OWED carrier
+# inside compiler/frontend/resolve.mdk and never touch the probe, and EVERY ratchet
+# here stays green -- `originun_allowed` already lists resolve.mdk (it is the decl
+# stamper's home) and the producer ratchets pin only mint-helper CALL SITES, not
+# field writes. The gate would then print `ok: … (N graded, M owed)` over carriers
+# that are live, stamped, and graded by nothing -- verbatim the hazard the header
+# above says this ratchet exists to prevent. So pin the stamper too: the moment the
+# stamp lands, this reds and demands the promotion AND the probe wiring together.
+#
+# ⚠️ The comment filter is `^[[:space:]]*--`, i.e. LEADING comments only. A TRAILING
+# side comment or a string literal that merely NAMES an owed carrier would therefore
+# trip this check spuriously -- and the printed remedy would then "fix" it by moving
+# the name to the graded list, disarming the tripwire in two lines. That is the
+# remedy-disarms-the-tripwire shape, so it is stated rather than left to be
+# rediscovered. It is a note and not a code change because both files are clean of
+# that shape today (verified: no trailing `--` mentions of any carrier name in
+# either), and a looser filter would cost more than it buys.
+stamper_src="$ROOT/compiler/frontend/resolve.mdk"
+for c in $carrier_owed_expected; do
+  if grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/entries/origin_agreement_main.mdk"
+    echo "  now reads it -- the grading this list was waiting for has landed."
+    echo "  Move \`$c\` from carrier_owed_expected to carrier_graded_expected."
+    exit 1
+  fi
+  if grep -w "$c" "$stamper_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/frontend/resolve.mdk now"
+    echo "  WRITES it -- the carrier is live while nothing grades it, which is the"
+    echo "  exact state this ratchet exists to refuse."
+    echo "  Land the grading in the SAME change: extend the agreement probe"
+    echo "  (compiler/entries/origin_agreement_main.mdk) to read \`$c\`, then move it"
+    echo "  from carrier_owed_expected to carrier_graded_expected."
+    exit 1
+  fi
+done
+echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s) ($(printf '%s\n' "$carrier_graded_expected" | grep -c .) graded, $(printf '%s\n' "$carrier_owed_expected" | grep -c .) owed)"
 
 # The name-set pin above matches `<name> : TyConOrigin`, so it only sees a
 # NAMED-record field -- verified by mutation: a new named field fires it, a
@@ -364,7 +478,11 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # count steady (same mention, different name) but changes the name set, which
 # only the pin above catches; a POSITIONAL addition holds the name set steady
 # but moves this count, which only THIS pin catches.
-carrier_count_expected=6
+# 6 -> 10 (#1110 PR B): the four interface-occurrence carriers
+# (`constraintOrigin` / `superOrigin` / `requireOrigin` / `implOrigin`). Every one is
+# a NAMED field, so the name-set pin above sees them too; this count moves for the
+# same four and is bumped for that reason and no other.
+carrier_count_expected=10
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
@@ -380,11 +498,20 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   echo "  The name-set pin just above only sees NAMED-record fields, so it is SILENT on"
   echo "  a POSITIONAL TyConOrigin carrier (e.g. \`Variant String ConPayload TyConOrigin\`)"
   echo "  or one reached through a type alias -- both move THIS count instead."
-  echo "  If you added a genuine new carrier:"
-  echo "    - add a match arm to declHeadOf in compiler/entries/origin_agreement_main.mdk"
-  echo "      (its wildcard arm silently drops any carrier it doesn't name);"
-  echo "    - add its mint helper to the decl-layer producer ratchet above in THIS file;"
-  echo "    - if it is a NAMED field, add it to carrier_expected above too;"
+  echo "  If you added a genuine new carrier -- FIRST decide which LAYER it is on,"
+  echo "  because the remedy differs and getting it backwards is a contradiction:"
+  echo "    - DECL-layer (a type DECLARATION acquires identity): add a match arm to"
+  echo "      declHeadOf in compiler/entries/origin_agreement_main.mdk (its wildcard"
+  echo "      arm silently drops any carrier it doesn't name), and add its mint"
+  echo "      helper to the DECL-layer producer ratchet above in THIS file."
+  echo "    - OCCURRENCE-layer (a USE site names a head someone else declared): do"
+  echo "      NOT add a declHeadOf arm -- that function's own comment forbids it for"
+  echo "      exactly this case ('DImpl mints NO decl-layer carrier and must not"
+  echo "      appear here'). Add the mint helper to the OCCURRENCE-layer producer"
+  echo "      ratchet above instead, and grade it in the probe's occurrence walk."
+  echo "    - then classify the field: add it to carrier_graded_expected (a grader"
+  echo "      reads it) or carrier_owed_expected (grading owed; name the PR that owes"
+  echo "      it). Do NOT edit carrier_expected -- it is DERIVED from those two."
   echo "    - then update carrier_count_expected here to the new mention count,"
   echo "      and say why in the PR."
   exit 1

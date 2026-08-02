@@ -1,5 +1,5 @@
 # META
-source_lines=1936
+source_lines=1935
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -413,8 +413,7 @@ effAtomDoc (l, None) = text l
 effAtomDoc (l, Some s) = text "\{l} \{escStringLit s}"
 
 printConstraint : Constraint -> Doc
-printConstraint (Constraint iface args) =
-  Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
+printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) = Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
 
 printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon { tyConName = n }) = text (tyConSurface n)
@@ -1834,7 +1833,7 @@ superDoc supers =
   Cat (text " requires ") (sepBy (text ", ") (map oneSuper supers))
 
 oneSuper : Super -> Doc
-oneSuper (Super n ps) =
+oneSuper (Super { superHead = n, superParams = ps }) =
   Cat (text n) (concatD (map (p => Cat (text " ") (text p)) ps))
 
 ifaceMethodDoc : IfaceMethod -> Doc
@@ -1855,7 +1854,7 @@ reqsDoc [] = Nil
 reqsDoc reqs = Cat (text " requires ") (sepBy (text ", ") (map oneReq reqs))
 
 oneReq : Require -> Doc
-oneReq (Require iface args) =
+oneReq (Require { requireHead = iface, requireArgs = args }) =
   Cat (text iface) (concatD (map (t => Cat (text " ") (printTypeAtom t)) args))
 
 implMethodDoc : ImplMethod -> Doc
@@ -1918,7 +1917,7 @@ effDeclHead True = text "export effect "
 effDeclHead False = text "effect "
 
 ppConstr : Constraint -> String
-ppConstr (Constraint iface args) =
+ppConstr (Constraint { constraintHead = iface, constraintArgs = args }) =
   if isEmptyL args then
     iface
   else
@@ -2076,7 +2075,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "effAtomDoc" ((PTuple (PVar "l") (PCon "None"))) (EApp (EVar "text") (EVar "l")))
 (DFunDef false "effAtomDoc" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStringLit") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "printConstraint" (TyFun (TyCon "Constraint") (TyCon "Doc")))
-(DFunDef false "printConstraint" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "a"))))) (EVar "args")))))
+(DFunDef false "printConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "a"))))) (EVar "args")))))
 (DTypeSig false "printTypeAtom" (TyFun (TyCon "Ty") (TyCon "Doc")))
 (DFunDef false "printTypeAtom" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "text") (EApp (EVar "tyConSurface") (EVar "n"))))
 (DFunDef false "printTypeAtom" ((PCon "TyVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
@@ -2598,7 +2597,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "superDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "superDoc" ((PVar "supers")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " requires ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "oneSuper")) (EVar "supers")))))
 (DTypeSig false "oneSuper" (TyFun (TyCon "Super") (TyCon "Doc")))
-(DFunDef false "oneSuper" ((PCon "Super" (PVar "n") (PVar "ps"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
+(DFunDef false "oneSuper" ((PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
 (DTypeSig false "ifaceMethodDoc" (TyFun (TyCon "IfaceMethod") (TyCon "Doc")))
 (DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
 (DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
@@ -2608,7 +2607,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "reqsDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "reqsDoc" ((PVar "reqs")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " requires ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EVar "map") (EVar "oneReq")) (EVar "reqs")))))
 (DTypeSig false "oneReq" (TyFun (TyCon "Require") (TyCon "Doc")))
-(DFunDef false "oneReq" ((PCon "Require" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
+(DFunDef false "oneReq" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
 (DTypeSig false "implMethodDoc" (TyFun (TyCon "ImplMethod") (TyCon "Doc")))
 (DFunDef false "implMethodDoc" ((PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EVar "printDefRhs") (EVar "body")))))
 (DTypeSig false "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
@@ -2636,7 +2635,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "effDeclHead" ((PCon "True")) (EApp (EVar "text") (ELit (LString "export effect "))))
 (DFunDef false "effDeclHead" ((PCon "False")) (EApp (EVar "text") (ELit (LString "effect "))))
 (DTypeSig false "ppConstr" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "ppConstr" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EIf (EApp (EVar "isEmptyL") (EVar "args")) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyPrec") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString "")))))
+(DFunDef false "ppConstr" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EIf (EApp (EVar "isEmptyL") (EVar "args")) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyPrec") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString "")))))
 (DTypeSig true "exprToString" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "exprToString" ((PVar "e")) (EApp (EVar "render") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))))
 (DTypeSig true "declToString" (TyFun (TyCon "Decl") (TyCon "String")))
@@ -2783,7 +2782,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "effAtomDoc" ((PTuple (PVar "l") (PCon "None"))) (EApp (EVar "text") (EVar "l")))
 (DFunDef false "effAtomDoc" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStringLit") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "printConstraint" (TyFun (TyCon "Constraint") (TyCon "Doc")))
-(DFunDef false "printConstraint" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "a"))))) (EVar "args")))))
+(DFunDef false "printConstraint" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "a"))))) (EVar "args")))))
 (DTypeSig false "printTypeAtom" (TyFun (TyCon "Ty") (TyCon "Doc")))
 (DFunDef false "printTypeAtom" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "text") (EApp (EVar "tyConSurface") (EVar "n"))))
 (DFunDef false "printTypeAtom" ((PCon "TyVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
@@ -3305,7 +3304,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "superDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "superDoc" ((PVar "supers")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " requires ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "oneSuper")) (EVar "supers")))))
 (DTypeSig false "oneSuper" (TyFun (TyCon "Super") (TyCon "Doc")))
-(DFunDef false "oneSuper" ((PCon "Super" (PVar "n") (PVar "ps"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
+(DFunDef false "oneSuper" ((PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
 (DTypeSig false "ifaceMethodDoc" (TyFun (TyCon "IfaceMethod") (TyCon "Doc")))
 (DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
 (DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
@@ -3315,7 +3314,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "reqsDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "reqsDoc" ((PVar "reqs")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " requires ")))) (EApp (EApp (EVar "sepBy") (EApp (EVar "text") (ELit (LString ", ")))) (EApp (EApp (EMethodRef "map") (EVar "oneReq")) (EVar "reqs")))))
 (DTypeSig false "oneReq" (TyFun (TyCon "Require") (TyCon "Doc")))
-(DFunDef false "oneReq" ((PCon "Require" (PVar "iface") (PVar "args"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
+(DFunDef false "oneReq" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
 (DTypeSig false "implMethodDoc" (TyFun (TyCon "ImplMethod") (TyCon "Doc")))
 (DFunDef false "implMethodDoc" ((PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EVar "printDefRhs") (EVar "body")))))
 (DTypeSig false "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
@@ -3343,7 +3342,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "effDeclHead" ((PCon "True")) (EApp (EVar "text") (ELit (LString "export effect "))))
 (DFunDef false "effDeclHead" ((PCon "False")) (EApp (EVar "text") (ELit (LString "effect "))))
 (DTypeSig false "ppConstr" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "ppConstr" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EIf (EApp (EVar "isEmptyL") (EVar "args")) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyPrec") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString "")))))
+(DFunDef false "ppConstr" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EIf (EApp (EVar "isEmptyL") (EVar "args")) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyPrec") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString "")))))
 (DTypeSig true "exprToString" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "exprToString" ((PVar "e")) (EApp (EVar "render") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e"))))
 (DTypeSig true "declToString" (TyFun (TyCon "Decl") (TyCon "String")))

@@ -1879,20 +1879,13 @@ lambdaSectionFix _ (DFunDef vis name pats body) =
 lambdaSectionFix orc (DAttrib a d) = match lambdaSectionFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-lambdaSectionFix _ (DImpl { pub, iface, tys, reqs, methods }) =
+lambdaSectionFix _ (d@(DImpl { implOrigin = _, methods })) =
   let methods2 = map fixImplMethod methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
-    Some [
-      DImpl {
-        pub = pub,
-        iface = iface,
-        tys = tys,
-        reqs = reqs,
-        methods = methods2,
-      }
-    ]
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
 lambdaSectionFix _ _ = None
 
 fixImplMethod : ImplMethod -> ImplMethod
@@ -2118,20 +2111,13 @@ ifMaxMinFix _ (DFunDef vis name pats body) =
 ifMaxMinFix orc (DAttrib a d) = match ifMaxMinFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-ifMaxMinFix _ (DImpl { pub, iface, tys, reqs, methods }) =
+ifMaxMinFix _ (d@(DImpl { implOrigin = _, methods })) =
   let methods2 = map fixImplMethodIfMaxMin methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
-    Some [
-      DImpl {
-        pub = pub,
-        iface = iface,
-        tys = tys,
-        reqs = reqs,
-        methods = methods2,
-      }
-    ]
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
 ifMaxMinFix _ _ = None
 
 fixImplMethodIfMaxMin : ImplMethod -> ImplMethod
@@ -2380,20 +2366,13 @@ andThenPureMapFix _ (DFunDef vis name pats body) =
 andThenPureMapFix orc (DAttrib a d) = match andThenPureMapFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-andThenPureMapFix _ (DImpl { pub, iface, tys, reqs, methods }) =
+andThenPureMapFix _ (d@(DImpl { implOrigin = _, methods })) =
   let methods2 = map fixImplMethodAndThenPureMap methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
-    Some [
-      DImpl {
-        pub = pub,
-        iface = iface,
-        tys = tys,
-        reqs = reqs,
-        methods = methods2,
-      }
-    ]
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
 andThenPureMapFix _ _ = None
 
 fixImplMethodAndThenPureMap : ImplMethod -> ImplMethod
@@ -2714,20 +2693,13 @@ exprRuleFix excl f (DFunDef vis name pats body)
 exprRuleFix excl f (DAttrib a d) = match exprRuleFix excl f d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-exprRuleFix _ f (DImpl { pub, iface, tys, reqs, methods }) =
+exprRuleFix _ f (d@(DImpl { implOrigin = _, methods })) =
   let methods2 = map (fixImplMethodWith f) methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
-    Some [
-      DImpl {
-        pub = pub,
-        iface = iface,
-        tys = tys,
-        reqs = reqs,
-        methods = methods2,
-      }
-    ]
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
 exprRuleFix _ _ _ = None
 
 fixImplMethodWith : (Expr -> Expr) -> ImplMethod -> ImplMethod
@@ -2918,20 +2890,13 @@ concatToInterpFix _ (DFunDef vis name pats body) =
 concatToInterpFix orc (DAttrib a d) = match concatToInterpFix orc d
   Some [d2] => Some [DAttrib a d2]
   _ => None
-concatToInterpFix _ (DImpl { pub, iface, tys, reqs, methods }) =
+concatToInterpFix _ (d@(DImpl { implOrigin = _, methods })) =
   let methods2 = map fixImplMethodConcat methods
   if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
     None
   else
-    Some [
-      DImpl {
-        pub = pub,
-        iface = iface,
-        tys = tys,
-        reqs = reqs,
-        methods = methods2,
-      }
-    ]
+    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+    Some [DImpl { d | methods = methods2 }]
 concatToInterpFix _ _ = None
 
 fixImplMethodConcat : ImplMethod -> ImplMethod

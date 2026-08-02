@@ -1447,7 +1447,7 @@ methodLevelConstraintIfaces typarams (TyEffect _ _ t) =
 methodLevelConstraintIfaces _ _ = []
 
 constraintIfaceIfMethodLevel : List String -> Constraint -> List String
-constraintIfaceIfMethodLevel typarams (Constraint ifaceName args)
+constraintIfaceIfMethodLevel typarams (Constraint { constraintHead = ifaceName, constraintArgs = args })
   | constraintArgsMentionNonParam typarams args = [ifaceName]
   | otherwise = []
 

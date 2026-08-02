@@ -1,5 +1,5 @@
 # META
-source_lines=4799
+source_lines=4797
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -47,6 +47,10 @@ import frontend.ast.{
   dTypeAliasUnresolved,
   dNewtypeUnresolved,
   dInterfaceUnresolved,
+  dImplUnresolved,
+  constraintUnresolved,
+  superUnresolved,
+  requireUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -1807,9 +1811,10 @@ constraintTail lhs = do
 
 extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
-  Some (iface, args) => [Constraint iface args]
+  Some (iface, args) => [constraintUnresolved iface args]
   None => []
-extractConstraints (TyCon { tyConName = iface }) = [Constraint iface []]
+extractConstraints (TyCon { tyConName = iface }) =
+  [constraintUnresolved iface []]
 extractConstraints (TyTuple cs) = concatMapC cs
 extractConstraints _ = []
 
@@ -2657,7 +2662,7 @@ ifaceSuperEntry : Parser Super
 ifaceSuperEntry = do
   name <- upperNameP
   params <- many lowerNameP
-  pure (Super name params)
+  pure (superUnresolved name params)
 
 -- `where INDENT members DEDENT` body, or a marker interface (optional where)
 ifaceBody : Parser (List IfaceMethod)
@@ -2740,14 +2745,7 @@ implRest pub iface = do
   tyargs <- many parseTyAtom
   reqs <- implRequires
   methods <- implBody
-  pure
-    DImpl {
-      pub = pub,
-      iface = iface,
-      tys = tyargs,
-      reqs = reqs,
-      methods = methods,
-    }
+  pure (dImplUnresolved pub iface tyargs reqs methods)
 
 namedImplRemovedMsg : String
 namedImplRemovedMsg = "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)"
@@ -2771,7 +2769,7 @@ implRequireEntry : Parser Require
 implRequireEntry = do
   iface <- upperNameP
   tys <- many parseTyAtom
-  pure (Require iface tys)
+  pure (requireUnresolved iface tys)
 
 implBody : Parser (List ImplMethod)
 implBody = do
@@ -4802,7 +4800,7 @@ parseResultWith src tokList offList =
       else
         resultDeclsResult src toks offs srcLen (runP parseProgram toks 0)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithLines" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -5429,8 +5427,8 @@ parseResultWith src tokList offList =
 (DTypeSig false "constraintTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "constraintTail" ((PVar "lhs")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseTy")) (ELam ((PVar "rhs")) (EApp (EVar "pure") (EApp (EApp (EVar "TyConstrained") (EApp (EVar "extractConstraints") (EVar "lhs"))) (EVar "rhs"))))))))
 (DTypeSig false "extractConstraints" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Constraint"))))
-(DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
+(DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "constraintUnresolved") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "constraintUnresolved") (EVar "iface")) (EListLit))))
 (DFunDef false "extractConstraints" ((PCon "TyTuple" (PVar "cs"))) (EApp (EVar "concatMapC") (EVar "cs")))
 (DFunDef false "extractConstraints" (PWild) (EListLit))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
@@ -5689,7 +5687,7 @@ parseResultWith src tokList offList =
 (DFunDef false "ifaceSuperFor" ((PCon "TRequires")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "sepBy1") (EVar "ifaceSuperEntry")) (EApp (EVar "expectTok") (EVar "TComma"))))))
 (DFunDef false "ifaceSuperFor" (PWild) (EApp (EVar "pure") (EListLit)))
 (DTypeSig false "ifaceSuperEntry" (TyApp (TyCon "Parser") (TyCon "Super")))
-(DFunDef false "ifaceSuperEntry" () (EApp (EApp (EVar "andThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "lowerNameP"))) (ELam ((PVar "params")) (EApp (EVar "pure") (EApp (EApp (EVar "Super") (EVar "name")) (EVar "params"))))))))
+(DFunDef false "ifaceSuperEntry" () (EApp (EApp (EVar "andThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "lowerNameP"))) (ELam ((PVar "params")) (EApp (EVar "pure") (EApp (EApp (EVar "superUnresolved") (EVar "name")) (EVar "params"))))))))
 (DTypeSig false "ifaceBody" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "ifaceBody" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "ifaceBodyFor") (EVar "t")))))
 (DTypeSig false "ifaceBodyFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
@@ -5717,7 +5715,7 @@ parseResultWith src tokList offList =
 (DFunDef false "implHead" ((PVar "pub") (PCon "TIdent" PWild)) (EApp (EVar "failP") (EVar "namedImplRemovedMsg")))
 (DFunDef false "implHead" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected impl head"))))
 (DTypeSig false "implRest" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Decl")))))
-(DFunDef false "implRest" ((PVar "pub") (PVar "iface")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tyargs")) (EApp (EApp (EVar "andThen") (EVar "implRequires")) (ELam ((PVar "reqs")) (EApp (EApp (EVar "andThen") (EVar "implBody")) (ELam ((PVar "methods")) (EApp (EVar "pure") (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tyargs")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods"))))))))))))
+(DFunDef false "implRest" ((PVar "pub") (PVar "iface")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tyargs")) (EApp (EApp (EVar "andThen") (EVar "implRequires")) (ELam ((PVar "reqs")) (EApp (EApp (EVar "andThen") (EVar "implBody")) (ELam ((PVar "methods")) (EApp (EVar "pure") (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "pub")) (EVar "iface")) (EVar "tyargs")) (EVar "reqs")) (EVar "methods"))))))))))
 (DTypeSig false "namedImplRemovedMsg" (TyCon "String"))
 (DFunDef false "namedImplRemovedMsg" () (ELit (LString "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)")))
 (DTypeSig false "defaultImplRemovedMsg" (TyCon "String"))
@@ -5728,7 +5726,7 @@ parseResultWith src tokList offList =
 (DFunDef false "implRequiresFor" ((PCon "TRequires")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "sepBy1") (EVar "implRequireEntry")) (EApp (EVar "expectTok") (EVar "TComma"))))))
 (DFunDef false "implRequiresFor" (PWild) (EApp (EVar "pure") (EListLit)))
 (DTypeSig false "implRequireEntry" (TyApp (TyCon "Parser") (TyCon "Require")))
-(DFunDef false "implRequireEntry" () (EApp (EApp (EVar "andThen") (EVar "upperNameP")) (ELam ((PVar "iface")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tys")) (EApp (EVar "pure") (EApp (EApp (EVar "Require") (EVar "iface")) (EVar "tys"))))))))
+(DFunDef false "implRequireEntry" () (EApp (EApp (EVar "andThen") (EVar "upperNameP")) (ELam ((PVar "iface")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tys")) (EApp (EVar "pure") (EApp (EApp (EVar "requireUnresolved") (EVar "iface")) (EVar "tys"))))))))
 (DTypeSig false "implBody" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
 (DFunDef false "implBody" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "implBodyFor") (EVar "t")))))
 (DTypeSig false "implBodyFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod")))))
@@ -6299,7 +6297,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseResultWith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "parseResultWith" ((PVar "src") (PVar "tokList") (PVar "offList")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EVar "tokList"))) (DoLet false false (PVar "offs") (EApp (EVar "arrayFromList") (EVar "offList"))) (DoLet false false (PVar "srcLen") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "seIdx") (EApp (EApp (EVar "firstSlashEqIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "lmIdx") (EApp (EApp (EVar "firstMutIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "recIdx") (EApp (EApp (EVar "firstRecordIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "fnIdx") (EApp (EApp (EVar "firstFunctionIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "ilIdx") (EApp (EApp (EVar "firstInlineLetMissingIn") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "coIdx") (EApp (EApp (EVar "firstHsCaseOfIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "btIdx") (EApp (EApp (EVar "firstBacktickIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "wiIdx") (EApp (EApp (EVar "firstWithIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "sigIdx") (EApp (EApp (EApp (EApp (EVar "firstHsSigIdx") (EVar "toks")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "True"))) (DoLet false false (PVar "bcIdx") (EApp (EApp (EVar "firstBlockCommentIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "bbIdx") (EApp (EApp (EVar "firstBraceBlockIdx") (EVar "toks")) (ELit (LInt 0)))) (DoLet false false (PVar "fkwIdx") (EApp (EApp (EApp (EVar "firstForeignKwIdx") (EVar "toks")) (ELit (LInt 0))) (EVar "True"))) (DoExpr (EMatch (EApp (EApp (EVar "firstLexError") (EVar "toks")) (ELit (LInt 0))) (arm (PCon "Some" (PTuple (PVar "leIdx") (PVar "leMsg"))) () (EBlock (DoLet false false (PVar "leMsg2") (EIf (EBinOp "==" (EVar "leMsg") (ELit (LString "unexpected character ';'"))) (EVar "semicolonMsg") (EVar "leMsg"))) (DoExpr (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "leMsg2")) (EVar "leIdx")))))) (arm (PCon "None") () (EIf (EBinOp ">=" (EVar "seIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (ELit (LString "unexpected '/='. (Did you mean '!='?)"))) (EVar "seIdx"))) (EIf (EBinOp ">=" (EVar "lmIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "letMutRemovedMsg")) (EVar "lmIdx"))) (EIf (EBinOp ">=" (EVar "recIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "recordRemovedMsg")) (EVar "recIdx"))) (EIf (EBinOp ">=" (EVar "fnIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "functionRemovedMsg")) (EVar "fnIdx"))) (EIf (EBinOp ">=" (EVar "ilIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "inlineLetMissingInMsg")) (EVar "ilIdx"))) (EIf (EBinOp ">=" (EVar "coIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "hsCaseOfMsg")) (EVar "coIdx"))) (EIf (EBinOp ">=" (EVar "btIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "backtickInfixMsg")) (EVar "btIdx"))) (EIf (EBinOp ">=" (EVar "wiIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "letRecWithRemovedMsg")) (EVar "wiIdx"))) (EIf (EBinOp ">=" (EVar "sigIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "hsSigMsg")) (EVar "sigIdx"))) (EIf (EBinOp ">=" (EVar "bcIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "blockCommentMsg")) (EVar "bcIdx"))) (EIf (EBinOp ">=" (EVar "bbIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "braceBlockMsg")) (EVar "bbIdx"))) (EIf (EBinOp ">=" (EVar "fkwIdx") (ELit (LInt 0))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EVar "foreignKwMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "fkwIdx")))) (EVar "fkwIdx"))) (EApp (EApp (EApp (EApp (EApp (EVar "resultDeclsResult") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))))))))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithLines" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -6926,8 +6924,8 @@ parseResultWith src tokList offList =
 (DTypeSig false "constraintTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "constraintTail" ((PVar "lhs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TFatArrow"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseTy")) (ELam ((PVar "rhs")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "TyConstrained") (EApp (EVar "extractConstraints") (EVar "lhs"))) (EVar "rhs"))))))))
 (DTypeSig false "extractConstraints" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Constraint"))))
-(DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "Constraint") (EVar "iface")) (EListLit))))
+(DFunDef false "extractConstraints" ((PCon "TyApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "f")) (EVar "a"))) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "args"))) () (EListLit (EApp (EApp (EVar "constraintUnresolved") (EVar "iface")) (EVar "args")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "extractConstraints" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false)) (EListLit (EApp (EApp (EVar "constraintUnresolved") (EVar "iface")) (EListLit))))
 (DFunDef false "extractConstraints" ((PCon "TyTuple" (PVar "cs"))) (EApp (EVar "concatMapC") (EVar "cs")))
 (DFunDef false "extractConstraints" (PWild) (EListLit))
 (DTypeSig false "tyAppSpine" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
@@ -7186,7 +7184,7 @@ parseResultWith src tokList offList =
 (DFunDef false "ifaceSuperFor" ((PCon "TRequires")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "sepBy1") (EVar "ifaceSuperEntry")) (EApp (EVar "expectTok") (EVar "TComma"))))))
 (DFunDef false "ifaceSuperFor" (PWild) (EApp (EMethodRef "pure") (EListLit)))
 (DTypeSig false "ifaceSuperEntry" (TyApp (TyCon "Parser") (TyCon "Super")))
-(DFunDef false "ifaceSuperEntry" () (EApp (EApp (EMethodRef "andThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "lowerNameP"))) (ELam ((PVar "params")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "Super") (EVar "name")) (EVar "params"))))))))
+(DFunDef false "ifaceSuperEntry" () (EApp (EApp (EMethodRef "andThen") (EVar "upperNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "lowerNameP"))) (ELam ((PVar "params")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "superUnresolved") (EVar "name")) (EVar "params"))))))))
 (DTypeSig false "ifaceBody" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "ifaceBody" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "ifaceBodyFor") (EVar "t")))))
 (DTypeSig false "ifaceBodyFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
@@ -7214,7 +7212,7 @@ parseResultWith src tokList offList =
 (DFunDef false "implHead" ((PVar "pub") (PCon "TIdent" PWild)) (EApp (EVar "failP") (EVar "namedImplRemovedMsg")))
 (DFunDef false "implHead" (PWild PWild) (EApp (EVar "failP") (ELit (LString "expected impl head"))))
 (DTypeSig false "implRest" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Decl")))))
-(DFunDef false "implRest" ((PVar "pub") (PVar "iface")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tyargs")) (EApp (EApp (EMethodRef "andThen") (EVar "implRequires")) (ELam ((PVar "reqs")) (EApp (EApp (EMethodRef "andThen") (EVar "implBody")) (ELam ((PVar "methods")) (EApp (EMethodRef "pure") (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tyargs")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods"))))))))))))
+(DFunDef false "implRest" ((PVar "pub") (PVar "iface")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tyargs")) (EApp (EApp (EMethodRef "andThen") (EVar "implRequires")) (ELam ((PVar "reqs")) (EApp (EApp (EMethodRef "andThen") (EVar "implBody")) (ELam ((PVar "methods")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "pub")) (EVar "iface")) (EVar "tyargs")) (EVar "reqs")) (EVar "methods"))))))))))
 (DTypeSig false "namedImplRemovedMsg" (TyCon "String"))
 (DFunDef false "namedImplRemovedMsg" () (ELit (LString "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)")))
 (DTypeSig false "defaultImplRemovedMsg" (TyCon "String"))
@@ -7225,7 +7223,7 @@ parseResultWith src tokList offList =
 (DFunDef false "implRequiresFor" ((PCon "TRequires")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "sepBy1") (EVar "implRequireEntry")) (EApp (EVar "expectTok") (EVar "TComma"))))))
 (DFunDef false "implRequiresFor" (PWild) (EApp (EMethodRef "pure") (EListLit)))
 (DTypeSig false "implRequireEntry" (TyApp (TyCon "Parser") (TyCon "Require")))
-(DFunDef false "implRequireEntry" () (EApp (EApp (EMethodRef "andThen") (EVar "upperNameP")) (ELam ((PVar "iface")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tys")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "Require") (EVar "iface")) (EVar "tys"))))))))
+(DFunDef false "implRequireEntry" () (EApp (EApp (EMethodRef "andThen") (EVar "upperNameP")) (ELam ((PVar "iface")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseTyAtom"))) (ELam ((PVar "tys")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "requireUnresolved") (EVar "iface")) (EVar "tys"))))))))
 (DTypeSig false "implBody" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
 (DFunDef false "implBody" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "implBodyFor") (EVar "t")))))
 (DTypeSig false "implBodyFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod")))))
