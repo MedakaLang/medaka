@@ -1,0 +1,22 @@
+-- #1110 origin-agreement corpus — the IMPORTING + RE-EXPORTING module.
+--
+-- `Tag`/`Crate` reach a consumer only through beta's RE-EXPORT, so a driver that
+-- claims an identity for them must still say `alpha` — the DEFINER — never `beta`,
+-- the last re-exporter.  That is the half `ModuleExports.expTypes` structurally
+-- cannot answer (see resolve.mdk's `typeOriginExports`), so it needs a fixture.
+--
+-- `Shipment` is beta's own declaration, and `Result` is another prelude type used
+-- from a user module.
+
+export import alpha.{Tag, Crate, crateTag, crateLabel, fragileCrate}
+
+public export data Shipment = Shipment (Crate Int) Int
+
+export shipmentTag : Shipment -> Tag
+shipmentTag (Shipment c _) = crateTag c
+
+export shipmentSize : Shipment -> Int
+shipmentSize (Shipment _ n) = n
+
+export shipmentNote : Shipment -> Result String Int
+shipmentNote (Shipment _ n) = if n > 0 then Ok n else Err "empty"

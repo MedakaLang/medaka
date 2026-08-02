@@ -388,6 +388,10 @@ for f in $changed; do
     compiler/frontend/parser.mdk|compiler/frontend/ast.mdk)
       add 'diff_compiler_parse*'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
+      # #1110: ast.mdk declares TyConOrigin and mapTyInDecl — the carrier and the
+      # traversal BOTH the stamper and the agreement probe walk; parser.mdk mints the
+      # OriginBuiltin tuple heads (DICT-SEMANTICS §8 I6.2).
+      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
     # #1131: desugar.mdk is a cited DICT-SEMANTICS site.
     compiler/frontend/desugar.mdk)
@@ -396,8 +400,11 @@ for f in $changed; do
     # #1131: resolve.mdk is a cited DICT-SEMANTICS site (marker.mdk is cited in
     # neither table — derived via the same grep, not assumed from the issue's
     # "plausibly").
+    # #1110: resolve.mdk OWNS the two origin stampers and the agreement tap they are
+    # observed through, so it is the primary subject of diff_compiler_origin_agreement.
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
       add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
+      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
@@ -424,7 +431,11 @@ for f in $changed; do
       add 'diff_compiler_check*'; add 'diff_compiler_exhaust'
       add 'diff_compiler_diagnostics'; add 'diff_compiler_eval_typed*'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
+      # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
+      # path) — i.e. two of the three arms the agreement table compares.
+      add 'diff_compiler_origin_agreement' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -502,8 +513,12 @@ for f in $changed; do
     compiler/tools/repl.mdk)       add 'diff_compiler_repl' ;;
     # #1131: tools/test_cmd.mdk (matched by the `*test*` glob below) is a
     # cited DICT-SEMANTICS site.
+    # #1110: test_cmd.mdk is the driver the agreement probe's `single` arm mirrors
+    # (elaborateModules over [("__user__", decls)]), so a change to how it elaborates
+    # moves which module id that arm claims.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_test'; add 'diff_compiler_ported'
+      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_dict_semantics' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 

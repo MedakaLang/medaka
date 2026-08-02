@@ -1,0 +1,40 @@
+-- #1110 origin-agreement corpus — the DEFINING module.
+--
+-- `Tag` and `Crate` are alpha's OWN declarations, so any driver that claims an
+-- identity for them must say `alpha`.  F1 was a driver claiming `__user__` here
+-- while, in the same process, the graph driver said the loader id.
+--
+-- `Option` and `Ordering` are PRELUDE types spelled inside a USER module.  F2 was a
+-- driver attributing exactly those to the user's module instead of `core`, so they
+-- are here deliberately rather than incidentally.
+--
+-- `Int`/`String`/`Bool` are builtins: one program-global identity (DICT-SEMANTICS
+-- §8 I6.2), never the writing module's.
+
+public export data Tag = Fragile | Bulk
+
+public export data Crate a = Crate Tag a
+
+export crateTag : Crate a -> Tag
+crateTag (Crate t _) = t
+
+export crateValue : Crate a -> Option a
+crateValue (Crate _ v) = Some v
+
+export tagOrder : Tag -> Tag -> Ordering
+tagOrder Fragile Bulk = Lt
+tagOrder Bulk Fragile = Gt
+tagOrder _ _ = Eq
+
+export crateHeavy : Crate Int -> Bool
+crateHeavy (Crate _ n) = n > 10
+
+export crateLabel : Crate Int -> String
+crateLabel (Crate _ n) = "crate-\{n}"
+
+-- A CONSTRUCTOR FUNCTION, so a consumer can build a `Crate` while importing only
+-- the re-exported TYPE name from beta.  That is what keeps the re-export chain
+-- (`beta` re-exports alpha's `Tag`/`Crate`) under test: a type reached through a
+-- re-export must still be attributed to alpha, its DEFINER, never to beta.
+export fragileCrate : a -> Crate a
+fragileCrate v = Crate Fragile v

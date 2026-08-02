@@ -171,6 +171,7 @@ mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
+noteOriginTrace : String -> List Decl -> Unit
 numberFrom : Int -> List String -> List (String, Int)
 oneImport : Map String ModuleExports -> UsePath -> Loc -> ImportAdds
 oneImportEffects : Map String ModuleExports -> UsePath -> List String
@@ -178,6 +179,8 @@ oneImportIfaceMethods : Map String ModuleExports -> List String -> UsePath -> Li
 oneImportedModuleValues : Map String ModuleExports -> UsePath -> List (String, List String)
 optStrEq : Option String -> String -> Bool
 originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
+originTraceEnabled : Ref Bool
+originTraceLog : Ref (List (String, List Decl))
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownTyOrigin : String -> String -> (String, TyConOrigin)
 ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
@@ -256,6 +259,7 @@ scopeMem : String -> Scope -> Bool
 scopeNames : Scope -> List String
 scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
 selfBinding : String -> (String, String)
+setOriginTrace : Bool -> Unit
 singleFileImportErrors : List Decl -> List ResError
 stampArm : List BScope -> Arm -> Arm
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
@@ -294,6 +298,7 @@ suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
 suggestTypeFuzzy : Env -> String -> Option String
+takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
 tupleCtorTyNames : List String
 tyOriginScope : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> Map String TyConOrigin

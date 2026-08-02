@@ -1,0 +1,186 @@
+#!/bin/sh
+# diff_compiler_origin_agreement.sh — the compiler's three elaboration drivers must
+# not DISAGREE about which module declared a type-constructor head.
+#
+# ── what this gate is for ────────────────────────────────────────────────────
+# `Ty.TyCon` carries a `TyConOrigin` (#1110 / epic #1122) stamped by resolve on both
+# the check path and the emit path. Nothing in the compiler reads it — deliberately,
+# so the stamping PRs stayed byte-identical and mechanically verifiable. The cost of
+# that is that every identity fact the compiler mints is UNOBSERVABLE, and two
+# S0-class defects shipped through 12/12 green CI on exactly that:
+#
+#   F1  the flat driver stamped `mod:__user__` for a file's own declarations while
+#       the emitter's graph path stamped the real loader id — inside ONE
+#       `medaka build`. A check-vs-build divergence with no diagnostic.
+#   F2  on prelude-flattened paths the PRELUDE's own types (Option/Result/Ordering)
+#       were attributed to the USER's module.
+#
+# Both were found by hand-instrumenting a scratch build with `panic`. Nothing in the
+# 84-gate suite could see either one. This gate is the answer to that.
+#
+# ⚠️ A PROBE THAT CALLED THE STAMPERS DIRECTLY WOULD NOT HAVE CAUGHT F2, AND THAT
+# CONSTRAINT SHAPES THIS WHOLE GATE. `stampFlatTyOrigins` was *correct for its
+# arguments*; the defect was a CALLER passing an empty prelude list. F1 likewise was
+# a hardcoded literal at one of three call sites. A probe that hand-picks its
+# arguments re-encodes the assumption it exists to test and reports green. So
+# compiler/entries/origin_agreement_main.mdk drives the REAL entry points the way
+# the real drivers drive them —
+#
+#   flat    checkProgramSchemesWithRuntime   (`check` on a no-import file, LSP, doc,
+#                                             repl, playground)
+#   single  elaborateModules … [("__user__", …)]   (`medaka test <file>`, snapshot)
+#   graph   elaborateModules … <loader graph>      (`run` / `build` / `test <dir>`)
+#
+# — and reads back what THEY produced.
+#
+# ── what is asserted ────────────────────────────────────────────────────────
+# The golden is the AGREEMENT TABLE, not the origins. That is the load-bearing
+# choice: an agreement table detects a disagreement WITHOUT anyone having to know
+# the right answer, which is the only property that survives an arc whose entire
+# purpose is that the right answer is not settled yet. A golden of the origins
+# themselves would also have MISSED F1 outright — each arm's claim was individually
+# plausible; only their disagreement was wrong.
+#
+# Verdict vocabulary (per head, per arm pair), all defined in the probe:
+#   AGREE        both arms claim, same module
+#   CONFLICT     both arms claim, DIFFERENT modules      <- the defect class
+#   L-ONLY/R-ONLY  one arm claims, the other is honestly SILENT
+#   NEITHER      both saw the head, neither could attribute it
+#   *-ABSENT     an arm never processed the head at all
+#
+# ⚠️ `L-ONLY`/`R-ONLY` IS NOT A FAILURE AND MUST NOT BE "FIXED". The flat path is
+# deliberately silent (`OriginUnresolved`) wherever it has no loader-derived module
+# id, rather than inventing one — that asymmetry IS F1's fix (see stampFlatTyOrigins'
+# own comment in compiler/frontend/resolve.mdk). Under-supplying identity is
+# correctable later; over-supplying a wrong one is made permanent by the immunity
+# rule. So the gate distinguishes "silent" from "wrong", and only the second is a
+# defect.
+#
+# ── the CONFLICT rows in the committed golden are a PINNED OPEN DEFECT ────────
+# The `single` arm elaborates a file under the driver's own `"__user__"` label while
+# the `graph` arm elaborates the same file under its loader id — which is precisely
+# what `medaka test <dir>` does to one declaration in one process (recorded on #1110,
+# 2026-08-02). Those rows are committed as CONFLICT on purpose, exactly as
+# test/must_fail_fixtures/ pins a live bug: when the drivers are unified the rows
+# flip and this gate goes RED, naming the golden to re-bless. A gate whose golden
+# has to change when a bug is FIXED is a gate that drains itself.
+#
+# ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
+# AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
+# identity being DESTROYED somewhere downstream of the stamp (the known hazards are
+# `substMonoP` and `substTyVars`, which rebuild a `TCon`/`TyCon` from the name alone).
+#
+# ── anti-vacuity ────────────────────────────────────────────────────────────
+# Three counts are checked here, not just diffed, because a table that silently
+# became empty would otherwise diff-match an empty golden and report green:
+#   heads          > 0   the probe observed some type heads at all
+#   flat-segments  > 0   resolve.mdk's agreement tap actually FIRED — if a future
+#                        refactor stops routing the flat drivers through
+#                        `checkProgramSeededSplit`, the `flat` column silently
+#                        becomes all-ABSENT and every pair involving it stops
+#                        asserting anything
+#   fixtures       > 0   the corpus glob matched something
+#
+# Usage:  sh test/diff_compiler_origin_agreement.sh
+#         CAPTURE=1 sh test/diff_compiler_origin_agreement.sh    # (re)bless goldens
+# Exit:   0 all fixtures match; 1 a mismatch, an empty table, or a missing probe.
+#         There is NO skip path: the probe needs no clang and no toolchain at gate
+#         time, so "could not run" here is a real failure, never a skip.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SELF="$ROOT/test/bin/origin_agreement_main"
+RT="$ROOT/stdlib/runtime.mdk"
+CORE="$ROOT/stdlib/core.mdk"
+FIXDIR="$ROOT/test/origin_fixtures"
+
+if [ ! -x "$SELF" ]; then
+  echo "FAIL: missing probe $SELF"
+  echo "      build it with:  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one origin_agreement_main"
+  echo "      (this is a FAILURE, not a skip: the gate needs no clang at gate time,"
+  echo "       so an absent probe means the gate asserted nothing.)"
+  exit 1
+fi
+
+pass=0
+fail=0
+fixtures=0
+conflicts_total=0
+
+for dir in "$FIXDIR"/*/; do
+  [ -d "$dir" ] || continue
+  entry="$(ls "$dir"main_*.mdk 2>/dev/null | head -1)"
+  if [ -z "$entry" ]; then
+    echo "FAIL: $(basename "$dir") has no main_*.mdk entry"
+    fail=$((fail + 1))
+    continue
+  fi
+  fixtures=$((fixtures + 1))
+  name="$(basename "$dir")"
+  golden="${dir%/}/agreement.golden"
+
+  out="$("$SELF" "$RT" "$CORE" "$entry" "${dir%/}" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL $name (probe exited $rc)"
+    printf '%s\n' "$out" | sed 's/^/  /'
+    fail=$((fail + 1))
+    continue
+  fi
+
+  # ── anti-vacuity, BEFORE the diff ──────────────────────────────────────────
+  # A table that became empty diff-matches an empty golden. These three read the
+  # probe's own summary and fail on a zero, so "checked nothing" can never pass.
+  heads="$(printf '%s\n' "$out" | awk '$1 == "heads" { print $2 }')"
+  segs="$(printf '%s\n' "$out" | awk '$1 == "flat-segments" { print $2 }')"
+  nconf="$(printf '%s\n' "$out" | awk '$1 == "conflicts" { print $2 }')"
+  if [ -z "$heads" ] || [ "$heads" -le 0 ] 2>/dev/null; then
+    echo "FAIL $name: probe reported heads='$heads' — it observed NO type heads."
+    fail=$((fail + 1))
+    continue
+  fi
+  if [ -z "$segs" ] || [ "$segs" -le 0 ] 2>/dev/null; then
+    echo "FAIL $name: probe reported flat-segments='$segs' — resolve.mdk's agreement"
+    echo "     tap never fired, so the 'flat' column asserted NOTHING. Check that"
+    echo "     the flat drivers still route through checkProgramSeededSplit."
+    fail=$((fail + 1))
+    continue
+  fi
+  conflicts_total=$((conflicts_total + ${nconf:-0}))
+
+  if [ "${CAPTURE:-0}" = "1" ]; then
+    printf '%s' "$out" > "$golden"
+    printf 'blessed %s (%s heads, %s conflicting)\n' "$name" "$heads" "${nconf:-?}"
+    pass=$((pass + 1))
+    continue
+  fi
+
+  if [ ! -f "$golden" ]; then
+    echo "FAIL $name: no golden at $golden (CAPTURE=1 sh test/diff_compiler_origin_agreement.sh)"
+    fail=$((fail + 1))
+    continue
+  fi
+
+  if printf '%s' "$out" | diff -u "$golden" - > /dev/null 2>&1; then
+    printf 'ok   %s (%s heads, %s conflicting, tap fired %s times)\n' \
+      "$name" "$heads" "${nconf:-?}" "$segs"
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s — the agreement table MOVED:\n' "$name"
+    printf '%s' "$out" | diff -u "$golden" - | sed 's/^/  /'
+    echo "  Read the moved rows before re-blessing:"
+    echo "    AGREE -> CONFLICT      a NEW driver disagreement (the #1110 defect class)"
+    echo "    AGREE -> NEITHER       an acquired origin is being DESTROYED downstream"
+    echo "    CONFLICT -> anything   a pinned defect was FIXED — re-bless and say which"
+    fail=$((fail + 1))
+  fi
+done
+
+if [ "$fixtures" -eq 0 ]; then
+  echo "FAIL: no fixtures under $FIXDIR — this gate checked NOTHING."
+  exit 1
+fi
+
+printf '\n%d ok, %d failing (%d fixture(s), %d conflicting head(s) pinned)\n' \
+  "$pass" "$fail" "$fixtures" "$conflicts_total"
+[ "$fail" -eq 0 ]

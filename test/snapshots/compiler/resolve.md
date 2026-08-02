@@ -1,5 +1,5 @@
 # META
-source_lines=3405
+source_lines=3454
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3407,6 +3407,55 @@ flatTyOriginScope coreDecls =
       importedTyOrigin
       (map (typeDeclaredIn "core") (dataRecordNames coreDecls)))
     (omFromPairs builtinTyOrigins omEmpty)
+
+-- ── the AGREEMENT TAP (#1110) ────────────────────────────────────────────────
+-- ⚠️ NOTHING in the compiler reads this, and nothing may.  It exists so a GATE can
+-- observe what a driver ACTUALLY stamped — the one fact the two S0s fixed in #1219
+-- had in common.  Both (F1: a hardcoded `"__user__"` at one of three call sites;
+-- F2: a caller handing this file's flat stamper an EMPTY prelude) were *correct for
+-- the arguments they were given*, so a probe that picks its own arguments and calls
+-- `stampFlatTyOrigins`/`stampGraphTyOrigins` directly re-encodes the assumption it
+-- is meant to test and reports green.  The claim has to be read off the driver.
+--
+-- The GRAPH drivers need no tap: `elaborateModules` RETURNS the stamped trees, so a
+-- probe reads them straight out of its own call.  The FLAT driver
+-- (`checkProgramSeededSplit`) returns SCHEMES, and a `Mono.TCon` carries no origin
+-- (that layer is blocked one level down — see #1110's scoping comment), so the trees
+-- it stamped are otherwise unobservable from outside.  Hence this, and only this.
+--
+-- Shape is the established probe-flag idiom: `setFaithfulRoutes`
+-- (ir/core_ir_sexp.mdk), `gapRecordEnabled` (backend/llvm_emit.mdk).  OFF by
+-- default; one `Bool` read on the hot path; and it retains the decl lists BY
+-- REFERENCE (no copy, no projection, no rendering) so the probe owns the format and
+-- this file owns nothing but the fact.
+originTraceEnabled : Ref Bool
+originTraceEnabled = Ref False
+
+originTraceLog : Ref (List (String, List Decl))
+originTraceLog = Ref []
+
+-- Probe-only.  Enabling CLEARS the log too, so a probe that drives the flat entry
+-- once per module can never attribute one module's rows to the next.
+export setOriginTrace : Bool -> Unit
+setOriginTrace b =
+  let _ = setRef originTraceLog []
+  setRef originTraceEnabled b
+
+-- A flat driver records the decls it is about to hand to typecheck, labelled with
+-- WHICH HALF they are.  A no-op unless a probe turned the trace on.
+export noteOriginTrace : String -> List Decl -> Unit
+noteOriginTrace label decls =
+  if originTraceEnabled.value then
+    setRef originTraceLog (originTraceLog.value ++ [(label, decls)])
+  else
+    ()
+
+-- Drain: the recorded (label, decls) pairs in call order, log emptied.
+export takeOriginTrace : Unit -> List (String, List Decl)
+takeOriginTrace _ =
+  let rows = originTraceLog.value
+  let _ = setRef originTraceLog []
+  rows
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -4503,6 +4552,16 @@ flatTyOriginScope coreDecls =
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "originTraceLog" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "setOriginTrace" (TyFun (TyCon "Bool") (TyCon "Unit")))
+(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
+(DTypeSig true "noteOriginTrace" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "noteOriginTrace" ((PVar "label") (PVar "decls")) (EIf (EFieldAccess (EVar "originTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EBinOp "++" (EFieldAccess (EVar "originTraceLog") "value") (EListLit (ETuple (EVar "label") (EVar "decls"))))) (ELit LUnit)))
+(DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -5599,3 +5658,13 @@ flatTyOriginScope coreDecls =
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "originTraceLog" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "setOriginTrace" (TyFun (TyCon "Bool") (TyCon "Unit")))
+(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
+(DTypeSig true "noteOriginTrace" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "noteOriginTrace" ((PVar "label") (PVar "decls")) (EIf (EFieldAccess (EVar "originTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EBinOp "++" (EFieldAccess (EVar "originTraceLog") "value") (EListLit (ETuple (EVar "label") (EVar "decls"))))) (ELit LUnit)))
+(DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
