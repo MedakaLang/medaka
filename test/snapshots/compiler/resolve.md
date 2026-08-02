@@ -1,5 +1,5 @@
 # META
-source_lines=3583
+source_lines=3584
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3359,8 +3359,9 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 -- real module id in hand: `checkProgramSeededSplit` (`types/typecheck.mdk`) already
 -- knows its `coreProg0` argument is the prelude — that is the same fact
 -- `stampFlatTyOrigins coreProg0 coreProg0` relies on for the OCCURRENCE layer — so
--- it now also calls `stampDeclOrigins "core" coreProg` here, stamping the
--- prelude's OWN `DData`/`DNewtype`/`DTypeAlias`/`DInterface` declarations.
+-- it now also calls `stampDeclOrigins "core" coreProgTy` here (the occurrence-
+-- stamped prelude, `coreProg` is the name bound to THIS call's result), stamping
+-- the prelude's OWN `DData`/`DNewtype`/`DTypeAlias`/`DInterface` declarations.
 --
 -- What is still true, and will not stop being true without a loader-derived id:
 -- the flat driver's USER half (`userProg0`) has no module id and gets no call to
