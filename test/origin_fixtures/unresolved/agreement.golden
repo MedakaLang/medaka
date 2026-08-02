@@ -14,34 +14,34 @@ core Result AGREE AGREE AGREE
 core String AGREE AGREE AGREE
 core Unit AGREE AGREE AGREE
 core __tuple2__ AGREE AGREE AGREE
-core decl:Alternative R-ONLY AGREE R-ONLY
-core decl:Applicative R-ONLY AGREE R-ONLY
-core decl:Arbitrary R-ONLY AGREE R-ONLY
-core decl:Bimappable R-ONLY AGREE R-ONLY
-core decl:Bounded R-ONLY AGREE R-ONLY
-core decl:Debug R-ONLY AGREE R-ONLY
-core decl:Display R-ONLY AGREE R-ONLY
-core decl:Eq R-ONLY AGREE R-ONLY
-core decl:Filterable R-ONLY AGREE R-ONLY
-core decl:Foldable R-ONLY AGREE R-ONLY
-core decl:FromEntries R-ONLY AGREE R-ONLY
-core decl:Generic R-ONLY AGREE R-ONLY
-core decl:Hashable R-ONLY AGREE R-ONLY
-core decl:Index R-ONLY AGREE R-ONLY
-core decl:IndexMut R-ONLY AGREE R-ONLY
-core decl:Mappable R-ONLY AGREE R-ONLY
-core decl:Monoid R-ONLY AGREE R-ONLY
-core decl:Num R-ONLY AGREE R-ONLY
-core decl:Option R-ONLY AGREE R-ONLY
-core decl:Ord R-ONLY AGREE R-ONLY
-core decl:Ordering R-ONLY AGREE R-ONLY
-core decl:RField R-ONLY AGREE R-ONLY
-core decl:Rep R-ONLY AGREE R-ONLY
-core decl:Result R-ONLY AGREE R-ONLY
-core decl:Semigroup R-ONLY AGREE R-ONLY
-core decl:Slice R-ONLY AGREE R-ONLY
-core decl:Thenable R-ONLY AGREE R-ONLY
-core decl:Traversable R-ONLY AGREE R-ONLY
+core decl:Alternative AGREE AGREE AGREE
+core decl:Applicative AGREE AGREE AGREE
+core decl:Arbitrary AGREE AGREE AGREE
+core decl:Bimappable AGREE AGREE AGREE
+core decl:Bounded AGREE AGREE AGREE
+core decl:Debug AGREE AGREE AGREE
+core decl:Display AGREE AGREE AGREE
+core decl:Eq AGREE AGREE AGREE
+core decl:Filterable AGREE AGREE AGREE
+core decl:Foldable AGREE AGREE AGREE
+core decl:FromEntries AGREE AGREE AGREE
+core decl:Generic AGREE AGREE AGREE
+core decl:Hashable AGREE AGREE AGREE
+core decl:Index AGREE AGREE AGREE
+core decl:IndexMut AGREE AGREE AGREE
+core decl:Mappable AGREE AGREE AGREE
+core decl:Monoid AGREE AGREE AGREE
+core decl:Num AGREE AGREE AGREE
+core decl:Option AGREE AGREE AGREE
+core decl:Ord AGREE AGREE AGREE
+core decl:Ordering AGREE AGREE AGREE
+core decl:RField AGREE AGREE AGREE
+core decl:Rep AGREE AGREE AGREE
+core decl:Result AGREE AGREE AGREE
+core decl:Semigroup AGREE AGREE AGREE
+core decl:Slice AGREE AGREE AGREE
+core decl:Thenable AGREE AGREE AGREE
+core decl:Traversable AGREE AGREE AGREE
 main_unresolved Int AGREE AGREE AGREE
 main_unresolved Missing NEITHER NEITHER NEITHER
 main_unresolved Parcel R-ONLY CONFLICT R-ONLY
@@ -58,34 +58,6 @@ main_unresolved decl:Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
-flat core decl:Alternative
-flat core decl:Applicative
-flat core decl:Arbitrary
-flat core decl:Bimappable
-flat core decl:Bounded
-flat core decl:Debug
-flat core decl:Display
-flat core decl:Eq
-flat core decl:Filterable
-flat core decl:Foldable
-flat core decl:FromEntries
-flat core decl:Generic
-flat core decl:Hashable
-flat core decl:Index
-flat core decl:IndexMut
-flat core decl:Mappable
-flat core decl:Monoid
-flat core decl:Num
-flat core decl:Option
-flat core decl:Ord
-flat core decl:Ordering
-flat core decl:RField
-flat core decl:Rep
-flat core decl:Result
-flat core decl:Semigroup
-flat core decl:Slice
-flat core decl:Thenable
-flat core decl:Traversable
 flat main_unresolved Missing
 flat main_unresolved Parcel
 flat main_unresolved decl:Parcel
@@ -144,5 +116,5 @@ flat-segments 2
 decl-heads 29
 heads 46
 claims 138
-residual 33
+residual 5
 conflicts 2
