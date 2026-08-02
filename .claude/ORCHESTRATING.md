@@ -258,6 +258,14 @@ The fire-and-check list, every tick:
    queued" — check for it explicitly** (`gh run list --event merge_group`).
 2. **In-flight subagents.** Any still running? A long-silent one: inspect its worktree **read-only**
    (`git -C <wt> log --oneline -3`, `status --short`) — never build or `cp` in another tree.
+   ⚠️ **Low load on the box is NOT a stall signal, and `find` will lie to you.** A quiet box just means
+   the agent is in a reasoning phase, which costs nothing here. The reliable check is the worktree's
+   **git metadata mtime**, corroborated by concrete artifacts (a built `./medaka`, modified files):
+   `stat -c %y "$(git rev-parse --git-common-dir)/worktrees/agent-<id>"`. Two different `find`-based
+   probes gave wrong answers in one session — `-maxdepth 1` reported a busy agent as quiet because its
+   edits were in subdirectories, and a later `-newermt` returned zero while the filesystem plainly
+   showed a binary written three minutes earlier. Don't reach for `find` shortcuts here; check the
+   worktree metadata directly.
 3. **Orphans.** `ps -eo pid,etimes,args | grep -E 'build_oracles|xargs -P'` — a bare `build_oracles.sh`
    pool outlives its agent's turn and gets *respawned* by the harness; it has killed sessions. A live
    agent's own `run_gates`/`engines` fan-out is NOT an orphan. If genuinely orphaned: `TaskStop` the
@@ -369,6 +377,20 @@ Three times in one session, **refusing to "just add an exception" exposed a genu
 **If your first instinct is to excuse a check, that is where the bug is.** Corollary: *a gate that
 has to excuse its own false positives is a gate with a parsing bug* — fix the parser, not the ledger.
 
+#### A tripwire's spurious-trip class IS its masking class — ask both as one question
+
+A ratchet pinned a **count** of matching lines in a file, including comment lines. Chain: someone
+names the symbol in prose → the gate reds on a comment-only diff → they bump the expected number to
+make it green → the pin now has **slack** → a later change adds the real thing (+1) while deleting
+that comment (−1) → back to the pinned value, tripwire silent, hole reopened. A false positive is not
+an ergonomics complaint; it is **pressure to widen the pin**, and a widened pin is the masking path —
+same shape as the excused-check corollary above, one layer more mechanical.
+
+For any counted tripwire ask: *what does a maintainer do when this fires wrongly, and what does that
+action cost me?* If the answer is "bump the number," it is one annoyance away from disarmed. Make the
+failure message demand a reason, not just a new value — or derive the count instead of pinning it (see
+"DERIVE, don't encode" above).
+
 ---
 
 ## A gate must RUN where the bug lands — ask "where is this skipped?" FIRST
@@ -473,6 +495,15 @@ both backends are equally wrong"*. **The unit of verification must be the unit o
   clean STOP-with-a-correct-diagnosis is a **success**.
 - **A landing often closes adjacent gaps** (universal ctor mangling alone closed three parked gaps and
   mooted a fourth) — re-verify the set after a merge, before spawning the next agent.
+- **An arc's stated PAYOFF is a claim to verify against the bug's own fixture, not a fact to
+  inherit.** A planned stage titled around use-site ambiguity diagnostics read as "closing this stage
+  closes these S0s." It didn't: those diagnostics detect a **scope** collision (two provenances
+  visible in one module's scope), while the filed bugs were **table** collisions (two modules' same-
+  named interfaces in one program-global registry, never in one scope) — confirmed from the fixture,
+  whose `main.mdk` never even imports the colliding name. **The stage lived in one pipeline phase; the
+  bug lived in a registry populated later — the phase mismatch was the tell.** Before accepting that
+  planned work drains a listed bug, open that bug's fixture and check the mechanism matches; don't
+  take the arc's own framing of its payoff at face value.
 - **"Fixed" can be TRUE and MISLEADING — a one-backend fix is a half fix.** A partially-applied-ctor
   miscompile was fixed in the LLVM emitter and never reached WasmGC. The verifier said FIXED
   (correctly!), so I reverted the library's workaround, re-verified under native `build` — all green —
@@ -519,6 +550,20 @@ Each is a failure actually watched happen this session:
    'preflight|make medaka'`, wait on the PID yourself, READ the log, and hand the agent the *result*.
    Also verify a `timeout`-wrapped build **succeeded** rather than being killed at the limit; a
    timed-out build leaves a stale binary and every measurement after it is meaningless.
+
+   ⚠️ **CONFIRMED AGAIN 2026-08-02, and a run that dies this way is DEAD, not slow.** Three agents on
+   one PR failed identically: the entire final output was a waiting message ("Standing by for the
+   build-completion notification"), each had applied its edits correctly and **committed nothing**.
+   `make medaka` is ~1.5-3 min — inside the tool ceiling — but looks long enough to background, so the
+   instruction has to be explicit past "don't wait on a Task notification": *"run in the foreground,
+   do not yield waiting for a build, do not end your turn before `git push` succeeds."*
+
+   **Salvage recipe (the work is almost always recoverable):** check `git ls-remote origin <branch>`
+   FIRST (usually unchanged ⇒ nothing pushed); find the edits via `git -C <agent-worktree> status
+   --porcelain`; **extract the diff to a patch file yourself** and hand the replacement agent the
+   patch — never have the new agent read the dead agent's worktree directly, since cross-tree reads
+   can trip the isolation classifier and cost that session too (see "A fresh isolated worktree..."
+   under Failure modes below).
 2. **"APPEND each result to disk as you finish it. Never buffer for a final write."** If it dies
    halfway you want half a census on disk, not zero.
 3. **"NEVER end your turn with anything still running"** + **"Do NOT build."** A docs/audit agent has
@@ -529,6 +574,12 @@ Each is a failure actually watched happen this session:
    `sed -n '<line>p' <file> | grep <sym>` — at the **exact cited line**, not "exists somewhere." *If
    you cannot verify it, DELETE the claim rather than guess.* **This is the single highest-value line
    in any prompt** — it is what caught the Opus auditor fabricating symbols.
+   ⚠️ **This applies to YOU relaying a citation, not just to an agent writing one.** Two `file:line`
+   citations were passed from one report into the next brief unchecked, and both were wrong the same
+   way — they named where the *argument about* the code was written (a comment) rather than where the
+   code itself lives. Both were caught only because the *receiving* agent re-grepped. A relayed
+   citation is a claim you are re-asserting; one `grep -n` for the definition before you paste it into
+   a prompt is the whole cost.
 5. **"Disproving me is a SUCCESS."** Say it explicitly. It fired **three times in one session**, every
    time against the orchestrator. An honest `UNVERIFIED` beats a confident wrong answer.
 
@@ -564,6 +615,14 @@ Every delegated task prompt should contain, in order:
 4. **Context (verified facts):** the root cause + `file:line` pointers you already confirmed, and the
    precedent to mirror. Hand the agent the map, not a treasure hunt — this is where your bounded
    scope-read pays off.
+   ⚠️ **A *fix site* is a guess, not a verified fact — don't hand it over as if it were one.** Naming
+   a fix site converts your guess into the agent's constraint. One brief said "extend `noteHead` to
+   record the decl-layer carriers"; `noteHead` is a `Ty -> (Ty, Bool)` callback handed to
+   `mapTyInDecl`, which rewrites **Ty positions** — it can never observe a decl-node field. That
+   impossibility *was* the defect's mechanism: the layer was ungraded precisely because the only
+   observation hook couldn't reach it. Brief the defect and the required observation; let the agent
+   choose the site. When an agent reports "the named site can't do this," treat it as a root-cause
+   finding, not a detour — it is exactly the kind of thing item 7's STOP guardrail exists to surface.
 5. **The task**, with latitude where the approach is uncertain.
 6. **Gates:** exact commands + expected numbers. Rebuild `./medaka`, and prefix any `test/bin/*` gate
    with `FORCE=1 bash test/build_oracles.sh` (see Failure modes: stale-binary footguns).
