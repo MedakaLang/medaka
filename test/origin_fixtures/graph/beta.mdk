@@ -7,8 +7,14 @@
 --
 -- `Shipment` is beta's own declaration, and `Result` is another prelude type used
 -- from a user module.
+--
+-- #1110 coverage gap: `Weighable` is alpha's interface, imported here so beta can
+-- write an IMPL over `Crate` — a head reached only through beta's re-export, never
+-- declared here.  This is the re-exporter path (see alpha.mdk's header) exercised
+-- for a non-`data` decl form: the impl's identity must still read `alpha`, the
+-- DEFINER of `Crate`, never `beta`, the module the `impl` itself sits in.
 
-export import alpha.{Tag, Crate, crateTag, crateLabel, fragileCrate}
+export import alpha.{Tag, Crate, Weighable, crateTag, crateLabel, fragileCrate}
 
 public export data Shipment = Shipment (Crate Int) Int
 
@@ -20,3 +26,6 @@ shipmentSize (Shipment _ n) = n
 
 export shipmentNote : Shipment -> Result String Int
 shipmentNote (Shipment _ n) = if n > 0 then Ok n else Err "empty"
+
+export impl Weighable (Crate a) where
+  weight (Crate _ _) = 1
