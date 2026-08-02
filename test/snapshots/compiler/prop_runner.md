@@ -1,5 +1,5 @@
 # META
-source_lines=425
+source_lines=424
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner — port of lib/prop_runner.ml.
@@ -68,10 +68,9 @@ public export data TyDef = TDData (List String) (List Variant)
 buildTyDefs : List Decl -> List (String, TyDef)
 buildTyDefs [] = []
 buildTyDefs (d::rest) = match d
-  DData _ name params variants _ =>
+  DData { dataName = name, dataParams = params, dataCtors = variants } =>
     (name, TDData params variants) :: buildTyDefs rest
-  DNewtype _ name params con fty _ =>
-    (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
+  DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty } => (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
   _ => buildTyDefs rest
 
 -- ── type substitution + spine peeling (mirror lib/prop_runner.ml) ────────────
@@ -440,7 +439,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DData Public "TyDef" () ((variant "TDData" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))) ())
 (DTypeSig false "buildTyDefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))
 (DFunDef false "buildTyDefs" ((PList)) (EListLit))
-(DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") PWild) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
+(DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
 (DTypeSig false "substTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "substTy" ((PVar "subst") (PCon "TyVar" (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "subst")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "TyVar") (EVar "v")))))
 (DFunDef false "substTy" ((PVar "subst") (PCon "TyApp" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "substTy") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "substTy") (EVar "subst")) (EVar "b"))))
@@ -586,7 +585,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DData Public "TyDef" () ((variant "TDData" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant"))))) ())
 (DTypeSig false "buildTyDefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef")))))
 (DFunDef false "buildTyDefs" ((PList)) (EListLit))
-(DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") PWild) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
+(DFunDef false "buildTyDefs" ((PCons (PVar "d") (PVar "rest"))) (EMatch (EVar "d") (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EVar "variants"))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) () (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EVar "TDData") (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "buildTyDefs") (EVar "rest")))) (arm PWild () (EApp (EVar "buildTyDefs") (EVar "rest")))))
 (DTypeSig false "substTy" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "substTy" ((PVar "subst") (PCon "TyVar" (PVar "v"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "v")) (EVar "subst")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "TyVar") (EVar "v")))))
 (DFunDef false "substTy" ((PVar "subst") (PCon "TyApp" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "TyApp") (EApp (EApp (EVar "substTy") (EVar "subst")) (EVar "a"))) (EApp (EApp (EVar "substTy") (EVar "subst")) (EVar "b"))))

@@ -814,15 +814,14 @@ defsOfDecl ctx expSet mid uri (DExtern pub n _) loc _ = [
 defsOfDecl _ _ _ _ (DTypeSig _ _ _) _ _ = []
 defsOfDecl ctx expSet mid uri (DLetGroup pub binds) loc _ =
   map (letGroupDef ctx expSet mid uri loc pub) binds
-defsOfDecl ctx _ mid uri (DData vis n _ variants _) loc _ =
+defsOfDecl ctx _ mid uri (DData { dataVis = vis, dataName = n, dataCtors = variants }) loc _ =
   let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc (dataIsPub vis))
   tyDef :: flatMap (variantDefs ctx mid uri loc (ctorsPub vis)) variants
-defsOfDecl ctx _ mid uri (DNewtype pub n _ con _ _) loc _ =
+defsOfDecl ctx _ mid uri (DNewtype { newtypePub = pub, newtypeName = n, newtypeCtor = con }) loc _ =
   let tyDef = emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)
   let conDef = emitDef ctx uri (DefEntry nsCtor con (mkKey mid nsCtor con) loc pub)
   [tyDef, conDef]
-defsOfDecl ctx _ mid uri (DTypeAlias pub n _ _) loc _ =
-  [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
+defsOfDecl ctx _ mid uri (DTypeAlias { tyAliasPub = pub, tyAliasName = n }) loc _ = [emitDef ctx uri (DefEntry nsTy n (mkKey mid nsTy n) loc pub)]
 defsOfDecl ctx _ mid uri (DInterface { pub, name, methods, ... }) loc p =
   let tyDef = emitDef ctx uri (DefEntry nsTy name (mkKey mid nsTy name) loc pub)
   -- env/export-only: NOT `emitDef`, so no second binder lands on `name`'s span.
@@ -993,9 +992,11 @@ walkDeclBody w (DFunDef _ _ pats body) loc =
   walkExpr w [frame] loc body
 walkDeclBody w (DTypeSig _ _ ty) loc = walkTy w loc ty
 walkDeclBody w (DExtern _ _ ty) loc = walkTy w loc ty
-walkDeclBody w (DData _ _ _ variants _) loc = walkVariants w loc variants
-walkDeclBody w (DNewtype _ _ _ _ fieldTy _) loc = walkTy w loc fieldTy
-walkDeclBody w (DTypeAlias _ _ _ rhs) loc = walkTy w loc rhs
+walkDeclBody w (DData { dataCtors = variants }) loc =
+  walkVariants w loc variants
+walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
+  walkTy w loc fieldTy
+walkDeclBody w (DTypeAlias { tyAliasRhs = rhs }) loc = walkTy w loc rhs
 walkDeclBody w (DInterface { methods, ... }) loc =
   walkIfaceMethods w loc methods
 walkDeclBody w (DImpl { tys, methods, ... }) loc =
@@ -1212,13 +1213,10 @@ preludeDefEntries expSet mid (d::rest) = preludeDefsOfDecl expSet mid d
 preludeDefsOfDecl : HashMap String Unit -> String -> Decl -> List (String, String, String)
 preludeDefsOfDecl expSet mid (DFunDef pub n _ _) = valEntry expSet mid pub n
 preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
-preludeDefsOfDecl _ mid (DData vis n _ variants _) = consIf
-  (dataIsPub vis)
-  (nsTy, n, mkKey mid nsTy n)
-  (flatMap (preludeVariant mid) variants)
-preludeDefsOfDecl _ mid (DNewtype True n _ con _ _) =
-  [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
-preludeDefsOfDecl _ mid (DTypeAlias True n _ _) = [(nsTy, n, mkKey mid nsTy n)]
+preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) = consIf (dataIsPub vis) (nsTy, n, mkKey mid nsTy n) (flatMap (preludeVariant mid) variants)
+preludeDefsOfDecl _ mid (DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) = [(nsTy, n, mkKey mid nsTy n), (nsCtor, con, mkKey mid nsCtor con)]
+preludeDefsOfDecl _ mid (DTypeAlias { tyAliasPub = True, tyAliasName = n }) =
+  [(nsTy, n, mkKey mid nsTy n)]
 -- A PRELUDE interface must seed `nsIface` too, or a project-local `impl Eq MyType`
 -- would find no origin for `Eq` and file its heads on `?ext` instead of joining
 -- `core<TAB>method<TAB>eq` (#1044).

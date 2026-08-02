@@ -1,5 +1,5 @@
 # META
-source_lines=893
+source_lines=894
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -228,9 +228,9 @@ unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String)
 unitCtorExportEntry (mid, decls) = (mid, flatMap ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
-ctorExportEntries (DData _ tyname _ variants _) =
+ctorExportEntries (DData { dataName = tyname, dataCtors = variants }) =
   [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
-ctorExportEntries (DNewtype _ tyname _ con _ _) =
+ctorExportEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
   if nonReservedCtor con then
     [(tyname, [con])]
   else
@@ -277,8 +277,8 @@ unitLocalCtorNames decls =
   filterList nonReservedCtor (flatMap localCtorNames decls)
 
 localCtorNames : Decl -> List String
-localCtorNames (DData _ _ _ variants _) = map variantCtorName variants
-localCtorNames (DNewtype _ _ _ con _ _) = [con]
+localCtorNames (DData { dataCtors = variants }) = map variantCtorName variants
+localCtorNames (DNewtype { newtypeCtor = con }) = [con]
 localCtorNames (DAttrib _ d) = localCtorNames d
 localCtorNames _ = []
 
@@ -657,10 +657,11 @@ renameDecl rm (DLetGroup pub binds) =
 -- short form) is a ConNamed variant renamed like any ctor; a DNewtype's con is its
 -- ctor.  Reserved ctors are not in `rm`
 -- (excluded at export), so renameDefName leaves them unchanged.
-renameDecl rm (DData vis tyname tps variants derives) =
-  DData vis tyname tps (map (renameVariant rm) variants) derives
-renameDecl rm (DNewtype pub tyname tps con fty derives) =
-  DNewtype pub tyname tps (renameDefName rm con) fty derives
+-- #1110: record UPDATE, so an already-acquired origin survives the rename.
+renameDecl rm (d@(DData { dataCtors = variants })) =
+  DData { d | dataCtors = map (renameVariant rm) variants }
+renameDecl rm (d@(DNewtype { newtypeCtor = con })) =
+  DNewtype { d | newtypeCtor = renameDefName rm con }
 renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 renameDecl _ d = d
 
@@ -927,8 +928,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitCtorExportEntry" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "unitCtorExportEntry" ((PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EVar "flatMap") (EVar "ctorExportEntries")) (EVar "decls"))))
 (DTypeSig false "ctorExportEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorExportEntries" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants"))))))
-(DFunDef false "ctorExportEntries" ((PCon "DNewtype" PWild (PVar "tyname") PWild (PVar "con") PWild PWild)) (EIf (EApp (EVar "nonReservedCtor") (EVar "con")) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))) (EListLit)))
+(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants"))))))
+(DFunDef false "ctorExportEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EIf (EApp (EVar "nonReservedCtor") (EVar "con")) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))) (EListLit)))
 (DFunDef false "ctorExportEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorExportEntries") (EVar "d")))
 (DFunDef false "ctorExportEntries" (PWild) (EListLit))
 (DTypeSig false "variantCtorName" (TyFun (TyCon "Variant") (TyCon "String")))
@@ -942,8 +943,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitLocalCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "unitLocalCtorNames" ((PVar "decls")) (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EVar "flatMap") (EVar "localCtorNames")) (EVar "decls"))))
 (DTypeSig false "localCtorNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "localCtorNames" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants")))
-(DFunDef false "localCtorNames" ((PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild)) (EListLit (EVar "con")))
+(DFunDef false "localCtorNames" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants")))
+(DFunDef false "localCtorNames" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false)) (EListLit (EVar "con")))
 (DFunDef false "localCtorNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localCtorNames") (EVar "d")))
 (DFunDef false "localCtorNames" (PWild) (EListLit))
 (DTypeSig false "localCtorRenameEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -1066,8 +1067,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "renameLetBindDef") (EVar "rm"))) (EVar "binds"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DData" (PVar "vis") (PVar "tyname") (PVar "tps") (PVar "variants") (PVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "tyname")) (EVar "tps")) (EApp (EApp (EVar "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))) (EVar "derives")))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DNewtype" (PVar "pub") (PVar "tyname") (PVar "tps") (PVar "con") (PVar "fty") (PVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "tyname")) (EVar "tps")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))) (EVar "fty")) (EVar "derives")))
+(DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EVar "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
+(DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
 (DFunDef false "renameDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))
@@ -1209,8 +1210,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitCtorExportEntry" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "unitCtorExportEntry" ((PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EDictApp "flatMap") (EVar "ctorExportEntries")) (EVar "decls"))))
 (DTypeSig false "ctorExportEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorExportEntries" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants"))))))
-(DFunDef false "ctorExportEntries" ((PCon "DNewtype" PWild (PVar "tyname") PWild (PVar "con") PWild PWild)) (EIf (EApp (EVar "nonReservedCtor") (EVar "con")) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))) (EListLit)))
+(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants"))))))
+(DFunDef false "ctorExportEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EIf (EApp (EVar "nonReservedCtor") (EVar "con")) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))) (EListLit)))
 (DFunDef false "ctorExportEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorExportEntries") (EVar "d")))
 (DFunDef false "ctorExportEntries" (PWild) (EListLit))
 (DTypeSig false "variantCtorName" (TyFun (TyCon "Variant") (TyCon "String")))
@@ -1224,8 +1225,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitLocalCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "unitLocalCtorNames" ((PVar "decls")) (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EDictApp "flatMap") (EVar "localCtorNames")) (EVar "decls"))))
 (DTypeSig false "localCtorNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "localCtorNames" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants")))
-(DFunDef false "localCtorNames" ((PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild)) (EListLit (EVar "con")))
+(DFunDef false "localCtorNames" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants")))
+(DFunDef false "localCtorNames" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false)) (EListLit (EVar "con")))
 (DFunDef false "localCtorNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localCtorNames") (EVar "d")))
 (DFunDef false "localCtorNames" (PWild) (EListLit))
 (DTypeSig false "localCtorRenameEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -1348,8 +1349,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameLetBindDef") (EVar "rm"))) (EVar "binds"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DData" (PVar "vis") (PVar "tyname") (PVar "tps") (PVar "variants") (PVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "tyname")) (EVar "tps")) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))) (EVar "derives")))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DNewtype" (PVar "pub") (PVar "tyname") (PVar "tps") (PVar "con") (PVar "fty") (PVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "tyname")) (EVar "tps")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))) (EVar "fty")) (EVar "derives")))
+(DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EMethodRef "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
+(DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
 (DFunDef false "renameDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))

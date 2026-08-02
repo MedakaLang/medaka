@@ -1,5 +1,5 @@
 # META
-source_lines=3477
+source_lines=3570
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -1185,7 +1185,7 @@ checkDecl env (DLetGroup _ binds) =
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
-checkDecl env (DData _ _ _ vs _) = flatMap (checkVariant env) vs
+checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DBench _ _ body) = checkExpr None env emptyScope body
@@ -1193,8 +1193,8 @@ checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
   checkImplDecl env iface tys reqs methods
-checkDecl env (DTypeAlias _ _ _ rhs) = checkType None env rhs
-checkDecl env (DNewtype _ _ _ _ fty _) = checkType None env fty
+checkDecl env (DTypeAlias { tyAliasRhs = rhs }) = checkType None env rhs
+checkDecl env (DNewtype { newtypeFieldTy = fty }) = checkType None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
 
@@ -1289,9 +1289,11 @@ externNames (_::rest) = externNames rest
 
 dataRecordNames : List Decl -> List String
 dataRecordNames [] = []
-dataRecordNames ((DData _ n _ _ _)::rest) = n :: dataRecordNames rest
-dataRecordNames ((DTypeAlias _ n _ _)::rest) = n :: dataRecordNames rest
-dataRecordNames ((DNewtype _ n _ _ _ _)::rest) = n :: dataRecordNames rest
+dataRecordNames ((DData { dataName = n })::rest) = n :: dataRecordNames rest
+dataRecordNames ((DTypeAlias { tyAliasName = n })::rest) =
+  n :: dataRecordNames rest
+dataRecordNames ((DNewtype { newtypeName = n })::rest) =
+  n :: dataRecordNames rest
 dataRecordNames ((DAttrib _ d)::rest) = dataRecordNames (d::rest)
 dataRecordNames (_::rest) = dataRecordNames rest
 
@@ -1304,8 +1306,9 @@ effectNames (_::rest) = effectNames rest
 
 ctorNames : List Decl -> List String
 ctorNames [] = []
-ctorNames ((DData _ _ _ vs _)::rest) = map variantName vs ++ ctorNames rest
-ctorNames ((DNewtype _ _ _ con _ _)::rest) = con :: ctorNames rest
+ctorNames ((DData { dataCtors = vs })::rest) = map variantName vs
+  ++ ctorNames rest
+ctorNames ((DNewtype { newtypeCtor = con })::rest) = con :: ctorNames rest
 ctorNames ((DAttrib _ d)::rest) = ctorNames (d::rest)
 ctorNames (_::rest) = ctorNames rest
 
@@ -1351,7 +1354,7 @@ userValueNames (_::rest) = userValueNames rest
 
 fieldOwnersOf : List Decl -> List (String, String)
 fieldOwnersOf [] = []
-fieldOwnersOf ((DData _ _ _ vs _)::rest) = flatMap variantFieldOwners vs
+fieldOwnersOf ((DData { dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ fieldOwnersOf rest
 fieldOwnersOf (_::rest) = fieldOwnersOf rest
 
@@ -1407,7 +1410,7 @@ programIsCore prog = hasOrdering prog && hasFoldable prog
 
 hasOrdering : List Decl -> Bool
 hasOrdering [] = False
-hasOrdering ((DData _ "Ordering" _ _ _)::_) = True
+hasOrdering ((DData { dataName = "Ordering" })::_) = True
 hasOrdering (_::rest) = hasOrdering rest
 
 hasFoldable : List Decl -> Bool
@@ -2520,9 +2523,9 @@ coreExports preludeDecls = ModuleExports {
 -- `T(..)` expansion for `import core.{Option(..)}`.
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsAllOf [] = []
-typeCtorsAllOf ((DNewtype _ n _ con _ _)::rest) =
+typeCtorsAllOf ((DNewtype { newtypeName = n, newtypeCtor = con })::rest) =
   (n, [con]) :: typeCtorsAllOf rest
-typeCtorsAllOf ((DData _ n _ vs _)::rest) =
+typeCtorsAllOf ((DData { dataName = n, dataCtors = vs })::rest) =
   (n, map variantName vs) :: typeCtorsAllOf rest
 typeCtorsAllOf ((DAttrib _ d)::rest) = typeCtorsAllOf (d::rest)
 typeCtorsAllOf (_::rest) = typeCtorsAllOf rest
@@ -2566,32 +2569,35 @@ pubIfaceMethodSets (_::rest) = pubIfaceMethodSets rest
 -- pub newtype + VisPublic/VisAbstract data & record (the type name only)
 expTypesDirect : List Decl -> List String
 expTypesDirect [] = []
-expTypesDirect ((DNewtype True n _ _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DData VisPublic n _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DData VisAbstract n _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DTypeAlias True n _ _)::rest) = n :: expTypesDirect rest
+expTypesDirect ((DNewtype { newtypePub = True, newtypeName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DData { dataVis = VisPublic, dataName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DData { dataVis = VisAbstract, dataName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n })::rest) =
+  n :: expTypesDirect rest
 expTypesDirect (_::rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
 expCtorsDirect : List Decl -> List String
 expCtorsDirect [] = []
-expCtorsDirect ((DNewtype True _ _ con _ _)::rest) = con :: expCtorsDirect rest
-expCtorsDirect ((DData VisPublic _ _ vs _)::rest) = map variantName vs
+expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con })::rest) =
+  con :: expCtorsDirect rest
+expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = map variantName vs
   ++ expCtorsDirect rest
 expCtorsDirect (_::rest) = expCtorsDirect rest
 
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypeCtorsDirect [] = []
-expTypeCtorsDirect ((DNewtype True n _ con _ _)::rest) =
-  (n, [con]) :: expTypeCtorsDirect rest
-expTypeCtorsDirect ((DData VisPublic n _ vs _)::rest) =
-  (n, map variantName vs) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (n, [con]) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs })::rest) = (n, map variantName vs) :: expTypeCtorsDirect rest
 expTypeCtorsDirect (_::rest) = expTypeCtorsDirect rest
 
 -- field owners for PUBLIC data (named-field variants) + record
 expFieldOwnersDirect : List Decl -> List (String, String)
 expFieldOwnersDirect [] = []
-expFieldOwnersDirect ((DData VisPublic _ _ vs _)::rest) = flatMap variantFieldOwners vs
+expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ expFieldOwnersDirect rest
 expFieldOwnersDirect (_::rest) = expFieldOwnersDirect rest
 
@@ -3322,6 +3328,82 @@ stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampHeadWith t OriginUnresolved = (t, False)
 stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 
+-- ── the DECLARATION layer (#1110, this PR) ──────────────────────────────────
+-- The walk above stamps OCCURRENCES — every `TyCon` head written in a signature.
+-- This one stamps DECLARATIONS: `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each
+-- carry a `…Origin` naming the module they were WRITTEN IN.
+--
+-- ⚠️ WHY THE OCCURRENCE LAYER IS NOT ENOUGH, i.e. why this is the blocker rather
+-- than a convenience.  `registerVariants` (`types/typecheck.mdk`) mints the head
+-- `Mono` for every user data type out of the `DData` ALONE — `applyParams (TCon
+-- name) paramReprs` — and that mono becomes each constructor's scheme return type,
+-- hence the head every dispatch GOAL is read from.  There is no `Ty` in that path
+-- to inherit an origin from, so until the declaration carries one the goal side of
+-- the dispatch key cannot acquire identity at all (the impl side already has it
+-- via `headTyconTy`).  The same declaration is also where interface identity
+-- (#1047) and constructor identity (#1070) have to come from: interface names live
+-- on `DInterface`, constructor names in `DData`'s variants.
+--
+-- ⚠️ AND IT CANNOT COME FROM AMBIENT STATE AT THE CONSUMER.  `typecheck.mdk` holds
+-- no current-module ref, and inventing one would be WRONG rather than merely
+-- absent: `registerAllData` runs over `importedCtorTypeDecls` — OTHER modules'
+-- declarations — so an ambient id attributes every imported type to the IMPORTER.
+-- That is the exact wrongness class #1219 removed from the flat path.  Identity is
+-- acquired HERE, where the module id is a fact, and travels with the tree.
+--
+-- ⚠️ NOTHING READS THESE FIELDS YET.  Deliberately: the PR is byte-identical, so
+-- the widening is mechanically verifiable, exactly as #1211 and #1219 were.
+--
+-- ⚠️ FLAT (loader-less) DRIVERS GET NOTHING HERE, and that is the same asymmetry
+-- `stampFlatTyOrigins` argues at length: they have no module id, an invented one is
+-- made PERMANENT by the immunity rule, and `medaka run` on a no-import file reaches
+-- both the flat and the graph arm in ONE process — so an invented id would directly
+-- contradict a real one.  Under-supplying is correctable later; over-supplying is
+-- not.  Residual, greppable as `#1110 flat-identity`.
+stampDeclOrigins : String -> List Decl -> List Decl
+stampDeclOrigins mid decls = map (stampDeclOrigin mid) decls
+
+-- ⚠️ Record UPDATE on a `d@` binding, never re-construction: a total literal would
+-- have to respell every field, which is how a field gets silently reset.
+-- ⚠️ The `DAttrib` arm is load-bearing — `@deprecated`/`@inline` wrap the decl they
+-- annotate, so a `@must_use data Foo` would otherwise never be stamped at all.
+stampDeclOrigin : String -> Decl -> Decl
+stampDeclOrigin mid (d@(DData { dataOrigin = o })) =
+  DData { d | dataOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DNewtype { newtypeOrigin = o })) =
+  DNewtype { d | newtypeOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
+  DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
+  DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
+stampDeclOrigin _ d = d
+
+-- The decl-layer peer of `stampHeadWith`'s immunity rule: fill in ONLY a
+-- still-unresolved origin, so a declaration that already carries identity is immune
+-- to re-stamping under any scope, on any path, however often a driver re-runs.
+--
+-- ⚠️ An EMPTY module id is refused rather than promoted.  §8 I6.3 is explicit that
+-- `""` is not an identity, and the failure mode if it were stamped is the worst one
+-- available: two modules that both stamped `OriginModule ""` would compare EQUAL,
+-- so a sentinel would manufacture exactly the cross-module confusion this carrier
+-- exists to prevent.  Leaving `OriginUnresolved` is honest absence, and no
+-- predicate may treat two of those as equal.
+--
+-- ⚠️ The three arms are enumerated rather than wildcarded so a fourth
+-- `TyConOrigin` inhabitant is MADE TO SHOW UP here.  But do not overstate it: a
+-- non-exhaustive match is a WARNING, exit 0 — a review aid, not a build gate.
+-- `OriginBuiltin` is unreachable at this layer (a builtin head has no declaration
+-- to stamp); the arm exists so that stays a stated fact rather than a wildcard.
+fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
+fillDeclOrigin mid OriginUnresolved =
+  if mid == "" then
+    OriginUnresolved
+  else
+    OriginModule mid
+fillDeclOrigin _ OriginBuiltin = OriginBuiltin
+fillDeclOrigin _ (o@(OriginModule _)) = o
+
 -- ── the resolve → typecheck channel ─────────────────────────────────────────
 -- Resolve's other entries return `List ResError` and nothing else, so the drivers
 -- have always typechecked the ORIGINAL tree; there was no channel for resolve to
@@ -3344,13 +3426,24 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 export stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGraphTyOrigins coreDecls modules =
   let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
-  let coreS = stampTyOrigins (tyOriginScope coreTypes omEmpty "core" coreDecls) coreDecls
+  let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
   (coreS, stampModulesGo coreTypes omEmpty modules)
+
+-- Both identity layers for ONE module, in one place so the prelude pass above and
+-- the per-module walk below cannot drift apart — the `evalModules`/`cevalModules`
+-- lockstep hazard, in miniature.  Declarations first, then the occurrence heads:
+-- the two are independent (the occurrence scope is built from `dataRecordNames`,
+-- which reads names, not origins), so the order is for readability only.
+stampOneModule : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> List Decl
+stampOneModule coreTypes known mid prog =
+  stampTyOrigins
+    (tyOriginScope coreTypes known mid prog)
+    (stampDeclOrigins mid prog)
 
 stampModulesGo : List (String, String) -> OrdMap (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
 stampModulesGo _ _ [] = []
 stampModulesGo coreTypes known ((mid, prog)::rest) =
-  (mid, stampTyOrigins (tyOriginScope coreTypes known mid prog) prog) ::
+  (mid, stampOneModule coreTypes known mid prog) ::
     stampModulesGo
       coreTypes
       (omInsert mid (typeOriginExports known mid prog) known)
@@ -3802,14 +3895,14 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DData" PWild PWild PWild (PVar "vs") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DBench" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeAlias" PWild PWild PWild (PVar "rhs"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DNewtype" PWild PWild PWild PWild (PVar "fty") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -3857,9 +3950,9 @@ takeOriginTrace _ =
 (DFunDef false "externNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "externNames") (EVar "rest")))
 (DTypeSig false "dataRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dataRecordNames" ((PList)) (EListLit))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DData" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DTypeAlias" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DNewtype" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DData" ((rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
 (DFunDef false "dataRecordNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "dataRecordNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -3869,8 +3962,8 @@ takeOriginTrace _ =
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ctorNames" ((PList)) (EListLit))
-(DFunDef false "ctorNames" ((PCons (PCon "DData" PWild PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "ctorNames") (EVar "rest"))))
-(DFunDef false "ctorNames" ((PCons (PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
+(DFunDef false "ctorNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "ctorNames") (EVar "rest"))))
+(DFunDef false "ctorNames" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "ctorNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorNames") (EVar "rest")))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
@@ -3902,7 +3995,7 @@ takeOriginTrace _ =
 (DFunDef false "userValueNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "userValueNames") (EVar "rest")))
 (DTypeSig false "fieldOwnersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldOwnersOf" ((PList)) (EListLit))
-(DFunDef false "fieldOwnersOf" ((PCons (PCon "DData" PWild PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "fieldOwnersOf") (EVar "rest"))))
+(DFunDef false "fieldOwnersOf" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "fieldOwnersOf") (EVar "rest"))))
 (DFunDef false "fieldOwnersOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "fieldOwnersOf") (EVar "rest")))
 (DTypeSig false "recordFieldOwner" (TyFun (TyCon "String") (TyFun (TyCon "Field") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "recordFieldOwner" ((PVar "owner") (PCon "Field" (PVar "fname") PWild)) (ETuple (EVar "fname") (EVar "owner")))
@@ -3936,7 +4029,7 @@ takeOriginTrace _ =
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "hasOrdering") (EVar "prog")) (EApp (EVar "hasFoldable") (EVar "prog"))))
 (DTypeSig false "hasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasOrdering" ((PList)) (EVar "False"))
-(DFunDef false "hasOrdering" ((PCons (PCon "DData" PWild (PLit (LString "Ordering")) PWild PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "hasOrdering" ((PCons (PRec "DData" ((rf "dataName" (PLit (LString "Ordering")))) false) PWild)) (EVar "True"))
 (DFunDef false "hasOrdering" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasOrdering") (EVar "rest")))
 (DTypeSig false "hasFoldable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasFoldable" ((PList)) (EVar "False"))
@@ -4282,8 +4375,8 @@ takeOriginTrace _ =
 (DFunDef false "coreExports" ((PVar "preludeDecls")) (ERecordCreate "ModuleExports" ((fa "modId" (ELit (LString "core"))) (fa "expValues" (EApp (EVar "preludeValueNames") (EVar "preludeDecls"))) (fa "expTypes" (EApp (EVar "dataRecordNames") (EVar "preludeDecls"))) (fa "expCtors" (EApp (EVar "ctorNames") (EVar "preludeDecls"))) (fa "expTypeCtors" (EApp (EVar "typeCtorsAllOf") (EVar "preludeDecls"))) (fa "expFieldOwners" (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls"))) (fa "expInterfaces" (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (fa "expIfaceMethods" (EApp (EVar "interfaceList") (EVar "preludeDecls"))) (fa "expEffects" (EApp (EVar "effectNames") (EVar "preludeDecls"))))))
 (DTypeSig false "typeCtorsAllOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsAllOf" ((PList)) (EListLit))
-(DFunDef false "typeCtorsAllOf" ((PCons (PCon "DNewtype" PWild (PVar "n") PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
-(DFunDef false "typeCtorsAllOf" ((PCons (PCon "DData" PWild (PVar "n") PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
+(DFunDef false "typeCtorsAllOf" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
+(DFunDef false "typeCtorsAllOf" ((PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
 (DFunDef false "typeCtorsAllOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DTypeSig false "buildExports" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Env") (TyCon "ModuleExports")))))))
@@ -4304,24 +4397,24 @@ takeOriginTrace _ =
 (DFunDef false "pubIfaceMethodSets" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EVar "rest")))
 (DTypeSig false "expTypesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expTypesDirect" ((PList)) (EListLit))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DTypeAlias" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypesDirect") (EVar "rest")))
 (DTypeSig false "expCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expCtorsDirect" ((PList)) (EListLit))
-(DFunDef false "expCtorsDirect" ((PCons (PCon "DNewtype" (PCon "True") PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
-(DFunDef false "expCtorsDirect" ((PCons (PCon "DData" (PCon "VisPublic") PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EVar "rest")))
 (DTypeSig false "expTypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expTypeCtorsDirect" ((PList)) (EListLit))
-(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
-(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expFieldOwnersDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expFieldOwnersDirect" ((PList)) (EListLit))
-(DFunDef false "expFieldOwnersDirect" ((PCons (PCon "DData" (PCon "VisPublic") PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
+(DFunDef false "expFieldOwnersDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
 (DFunDef false "expFieldOwnersDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EVar "rest")))
 (DTypeSig false "expInterfacesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expInterfacesDirect" ((PList)) (EListLit))
@@ -4566,11 +4659,26 @@ takeOriginTrace _ =
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
+(DTypeSig false "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampDeclOrigins" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "stampDeclOrigin") (EVar "mid"))) (EVar "decls")))
+(DTypeSig false "stampDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DData" ((rf "dataOrigin" (PVar "o"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DNewtype" ((rf "newtypeOrigin" (PVar "o"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasOrigin" (PVar "o"))) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
+(DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))
+(DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
+(DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
+(DFunDef false "fillDeclOrigin" (PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
 (DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DTypeSig false "stampOneModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "stampOneModule" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EVar "stampDeclOrigins") (EVar "mid")) (EVar "prog"))))
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
+(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
 (DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
@@ -4908,14 +5016,14 @@ takeOriginTrace _ =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DData" PWild PWild PWild (PVar "vs") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkVariant") (EVar "env"))) (EVar "vs")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DBench" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DInterface" ((rf "supers" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkInterfaceDecl") (EVar "env")) (EVar "supers")) (EVar "methods")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplDecl") (EVar "env")) (EVar "iface")) (EVar "tys")) (EVar "reqs")) (EVar "methods")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeAlias" PWild PWild PWild (PVar "rhs"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DNewtype" PWild PWild PWild PWild (PVar "fty") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "rhs")))
+(DFunDef false "checkDecl" ((PVar "env") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "fty")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DAttrib" PWild (PVar "inner"))) (EApp (EApp (EVar "checkDecl") (EVar "env")) (EVar "inner")))
 (DFunDef false "checkDecl" (PWild PWild) (EListLit))
 (DTypeSig false "checkVariant" (TyFun (TyCon "Env") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -4963,9 +5071,9 @@ takeOriginTrace _ =
 (DFunDef false "externNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "externNames") (EVar "rest")))
 (DTypeSig false "dataRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dataRecordNames" ((PList)) (EListLit))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DData" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DTypeAlias" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
-(DFunDef false "dataRecordNames" ((PCons (PCon "DNewtype" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DData" ((rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
+(DFunDef false "dataRecordNames" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "dataRecordNames") (EVar "rest"))))
 (DFunDef false "dataRecordNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "dataRecordNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "dataRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "dataRecordNames") (EVar "rest")))
 (DTypeSig false "effectNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -4975,8 +5083,8 @@ takeOriginTrace _ =
 (DFunDef false "effectNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "effectNames") (EVar "rest")))
 (DTypeSig false "ctorNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ctorNames" ((PList)) (EListLit))
-(DFunDef false "ctorNames" ((PCons (PCon "DData" PWild PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "ctorNames") (EVar "rest"))))
-(DFunDef false "ctorNames" ((PCons (PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
+(DFunDef false "ctorNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "ctorNames") (EVar "rest"))))
+(DFunDef false "ctorNames" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "ctorNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorNames") (EVar "rest")))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
@@ -5008,7 +5116,7 @@ takeOriginTrace _ =
 (DFunDef false "userValueNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "userValueNames") (EVar "rest")))
 (DTypeSig false "fieldOwnersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "fieldOwnersOf" ((PList)) (EListLit))
-(DFunDef false "fieldOwnersOf" ((PCons (PCon "DData" PWild PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "fieldOwnersOf") (EVar "rest"))))
+(DFunDef false "fieldOwnersOf" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "fieldOwnersOf") (EVar "rest"))))
 (DFunDef false "fieldOwnersOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "fieldOwnersOf") (EVar "rest")))
 (DTypeSig false "recordFieldOwner" (TyFun (TyCon "String") (TyFun (TyCon "Field") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "recordFieldOwner" ((PVar "owner") (PCon "Field" (PVar "fname") PWild)) (ETuple (EVar "fname") (EVar "owner")))
@@ -5042,7 +5150,7 @@ takeOriginTrace _ =
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "hasOrdering") (EVar "prog")) (EApp (EVar "hasFoldable") (EVar "prog"))))
 (DTypeSig false "hasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasOrdering" ((PList)) (EVar "False"))
-(DFunDef false "hasOrdering" ((PCons (PCon "DData" PWild (PLit (LString "Ordering")) PWild PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "hasOrdering" ((PCons (PRec "DData" ((rf "dataName" (PLit (LString "Ordering")))) false) PWild)) (EVar "True"))
 (DFunDef false "hasOrdering" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasOrdering") (EVar "rest")))
 (DTypeSig false "hasFoldable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasFoldable" ((PList)) (EVar "False"))
@@ -5388,8 +5496,8 @@ takeOriginTrace _ =
 (DFunDef false "coreExports" ((PVar "preludeDecls")) (ERecordCreate "ModuleExports" ((fa "modId" (ELit (LString "core"))) (fa "expValues" (EApp (EVar "preludeValueNames") (EVar "preludeDecls"))) (fa "expTypes" (EApp (EVar "dataRecordNames") (EVar "preludeDecls"))) (fa "expCtors" (EApp (EVar "ctorNames") (EVar "preludeDecls"))) (fa "expTypeCtors" (EApp (EVar "typeCtorsAllOf") (EVar "preludeDecls"))) (fa "expFieldOwners" (EApp (EVar "fieldOwnersOf") (EVar "preludeDecls"))) (fa "expInterfaces" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "interfaceList") (EVar "preludeDecls")))) (fa "expIfaceMethods" (EApp (EVar "interfaceList") (EVar "preludeDecls"))) (fa "expEffects" (EApp (EVar "effectNames") (EVar "preludeDecls"))))))
 (DTypeSig false "typeCtorsAllOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsAllOf" ((PList)) (EListLit))
-(DFunDef false "typeCtorsAllOf" ((PCons (PCon "DNewtype" PWild (PVar "n") PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
-(DFunDef false "typeCtorsAllOf" ((PCons (PCon "DData" PWild (PVar "n") PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
+(DFunDef false "typeCtorsAllOf" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
+(DFunDef false "typeCtorsAllOf" ((PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest"))))
 (DFunDef false "typeCtorsAllOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DTypeSig false "buildExports" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Env") (TyCon "ModuleExports")))))))
@@ -5410,24 +5518,24 @@ takeOriginTrace _ =
 (DFunDef false "pubIfaceMethodSets" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EVar "rest")))
 (DTypeSig false "expTypesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expTypesDirect" ((PList)) (EListLit))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
-(DFunDef false "expTypesDirect" ((PCons (PCon "DTypeAlias" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypesDirect") (EVar "rest")))
 (DTypeSig false "expCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expCtorsDirect" ((PList)) (EListLit))
-(DFunDef false "expCtorsDirect" ((PCons (PCon "DNewtype" (PCon "True") PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
-(DFunDef false "expCtorsDirect" ((PCons (PCon "DData" (PCon "VisPublic") PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EVar "rest")))
 (DTypeSig false "expTypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expTypeCtorsDirect" ((PList)) (EListLit))
-(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
-(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expFieldOwnersDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expFieldOwnersDirect" ((PList)) (EListLit))
-(DFunDef false "expFieldOwnersDirect" ((PCons (PCon "DData" (PCon "VisPublic") PWild PWild (PVar "vs") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
+(DFunDef false "expFieldOwnersDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
 (DFunDef false "expFieldOwnersDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EVar "rest")))
 (DTypeSig false "expInterfacesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expInterfacesDirect" ((PList)) (EListLit))
@@ -5672,11 +5780,26 @@ takeOriginTrace _ =
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
+(DTypeSig false "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "stampDeclOrigins" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDeclOrigin") (EVar "mid"))) (EVar "decls")))
+(DTypeSig false "stampDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DData" ((rf "dataOrigin" (PVar "o"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DNewtype" ((rf "newtypeOrigin" (PVar "o"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasOrigin" (PVar "o"))) false))) (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" (PVar "o"))) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "ifaceOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
+(DFunDef false "stampDeclOrigin" ((PVar "mid") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDeclOrigin") (EVar "mid")) (EVar "d"))))
+(DFunDef false "stampDeclOrigin" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "fillDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))
+(DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
+(DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
+(DFunDef false "fillDeclOrigin" (PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
 (DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DTypeSig false "stampOneModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "stampOneModule" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EVar "stampDeclOrigins") (EVar "mid")) (EVar "prog"))))
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "stampModulesGo" (PWild PWild (PList)) (EListLit))
-(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
+(DFunDef false "stampModulesGo" ((PVar "coreTypes") (PVar "known") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EApp (EVar "typeOriginExports") (EVar "known")) (EVar "mid")) (EVar "prog"))) (EVar "known"))) (EVar "rest"))))
 (DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))

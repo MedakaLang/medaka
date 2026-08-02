@@ -3572,11 +3572,11 @@ nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _) = []
 nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
-nonDefRefL (DData _ _ _ _ _) = []
+nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
 nonDefRefL (DEffect _ _ _) = []
-nonDefRefL (DTypeAlias _ _ _ _) = []
-nonDefRefL (DNewtype _ _ _ _ _ _) = []
+nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
+nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d
 
 bodyIdents : Decl -> List String

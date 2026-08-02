@@ -39,6 +39,10 @@ import frontend.ast.{
   useMemberAlias,
   tyConUnresolved,
   tyConBuiltin,
+  dDataUnresolved,
+  dTypeAliasUnresolved,
+  dNewtypeUnresolved,
+  dInterfaceUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -2263,7 +2267,7 @@ parseTypeAlias pub = do
   expectTok TEqual
   ty <- parseTy
   skipNewlines
-  pure (DTypeAlias pub name params ty)
+  pure (dTypeAliasUnresolved pub name params ty)
 
 -- `newtype Name a… = Con ty [deriving (…)]`
 parseNewtype : Bool -> Parser Decl
@@ -2276,7 +2280,7 @@ parseNewtype pub = do
   fty <- parseTy
   derives <- derivingClause
   skipNewlines
-  pure (DNewtype pub name params con fty derives)
+  pure (dNewtypeUnresolved pub name params con fty derives)
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
@@ -2629,15 +2633,9 @@ parseInterface pub isDefault = do
   typarams <- many lowerNameP
   supers <- ifaceSuper
   methods <- ifaceBody
-  pure
-    DInterface {
-      pub = pub,
-      def = isDefault,
-      name = name,
-      typarams = typarams,
-      supers = supers,
-      methods = methods,
-    }
+  -- #1110: the parser has a token stream, not a module id, so it builds every
+  -- type declaration identity-less; resolve acquires it (`stampDeclOrigin`).
+  pure (dInterfaceUnresolved pub isDefault name typarams supers methods)
 
 -- optional `requires Iface a, …` superclass list
 ifaceSuper : Parser (List Super)
@@ -2949,7 +2947,7 @@ parseData vis = do
   let blockDerives = snd bodyAndDerives
   outerDerives <- derivingClause
   skipNewlines
-  pure (DData
+  pure (dDataUnresolved
     vis
     name
     params
@@ -3721,7 +3719,7 @@ declNameTokIdxAt toks (DTypeSig _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DFunDef _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DData _ _ _ _ _) i =
+declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DEffect _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
@@ -3733,9 +3731,9 @@ declNameTokIdxAt toks (DBench _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DInterface { ... }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DTypeAlias _ _ _ _) i =
+declNameTokIdxAt toks (DTypeAlias { tyAliasOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DNewtype _ _ _ _ _ _) i =
+declNameTokIdxAt toks (DNewtype { newtypeOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DLetGroup _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 2))  -- `let` `rec`
@@ -3782,7 +3780,7 @@ innerDeclOf d = d
 -- Child NAME-token indices, in `symbolPartsOfDecl` outline order (see invariant).
 declChildNameIdxs : Array Token -> (Decl, Int, Int) -> List (Option Int)
 declChildNameIdxs toks (d, s, e) = match innerDeclOf d
-  DData _ _ _ variants _ => dataChildIdxs toks s e variants
+  DData { dataCtors = variants } => dataChildIdxs toks s e variants
   DInterface { ... } => methodNameIdxs toks s e
   DImpl { ... } => methodNameIdxs toks s e
   -- A top-level `DLetGroup` always holds exactly ONE bind (`parseLetGroupDecl`
@@ -3996,7 +3994,7 @@ isCloseDelim _ = False
 -- for these, mirroring lib/parser_state.record_variant_line, which fires from
 -- the data-variant grammar productions.)
 isDataDecl : Decl -> Bool
-isDataDecl (DData _ _ _ _ _) = True
+isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 
 -- Flat list of every data decl's variant start lines, in decl order.

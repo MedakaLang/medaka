@@ -3576,11 +3576,11 @@ nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _) = []
 nonDefRefL (DTypeSig _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
-nonDefRefL (DData _ _ _ _ _) = []
+nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
 nonDefRefL (DEffect _ _ _) = []
-nonDefRefL (DTypeAlias _ _ _ _) = []
-nonDefRefL (DNewtype _ _ _ _ _ _) = []
+nonDefRefL (DTypeAlias { tyAliasOrigin = _ }) = []
+nonDefRefL (DNewtype { newtypeOrigin = _ }) = []
 nonDefRefL d = bodyIdents d
 
 bodyIdents : Decl -> List String
@@ -5413,11 +5413,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DData" PWild PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DTypeAlias" PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DNewtype" PWild PWild PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DTypeAlias" ((rf "tyAliasOrigin" PWild)) false)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
@@ -6842,11 +6842,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DData" PWild PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DTypeAlias" PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DNewtype" PWild PWild PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DTypeAlias" ((rf "tyAliasOrigin" PWild)) false)) (EListLit))
+(DFunDef false "nonDefRefL" ((PRec "DNewtype" ((rf "newtypeOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PVar "d")) (EApp (EVar "bodyIdents") (EVar "d")))
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))

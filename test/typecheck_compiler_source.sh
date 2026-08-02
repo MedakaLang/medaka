@@ -248,6 +248,50 @@ if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$tyconun_actual" | grep -c .) pre-resolve producer file(s)"
 
+# The DECLARATION-layer peers (#1110): `dDataUnresolved` / `dTypeAliasUnresolved` /
+# `dNewtypeUnresolved` / `dInterfaceUnresolved` mint a type DECLARATION whose module
+# identity has not been acquired. Same hazard as the `Ty` layer, one layer down: a
+# POST-resolve call re-synthesises a decl from its projected fields and silently
+# resets an identity resolve already stamped — and the immunity rule
+# (`fillDeclOrigin` fills only an unresolved origin) makes that reset PERMANENT.
+# The remedy is a record UPDATE (`DData { d | dataCtors = … }`), which is what every
+# rebuild site in the tree now uses.
+#
+# ⚠️ `tools/printer.mdk` IS on this list, and it is the one entry that is not
+# pre-resolve. `printNamedFieldData`'s fallback arm builds a throwaway `DData` purely
+# to reach `printDecl`'s arm, and every renderer STRIPS decl identity the way `ELoc`
+# is stripped — so the origin of that node is unobservable by construction, and the
+# node itself is discarded in the same expression. It is listed with that reasoning
+# rather than silently tolerated; a NEW entry needs its own.
+declun_allowed="compiler/entries/fuzz_gen_main.mdk
+compiler/frontend/ast.mdk
+compiler/frontend/parser.mdk
+compiler/tools/printer.mdk"
+# â ï¸ Inherits #1222: `git grep` sees only TRACKED files, so an UNTRACKED `.mdk`
+# calling one of these post-resolve passes this check. Character-for-character the
+# same construction as the two sibling ratchets, and fixed in the same place when
+# #1222 lands â not worked around here, so all three move together.
+declun_actual=$(git -C "$ROOT" grep -lwE -- 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      if grep -wE 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' "$ROOT/$f" \
+         | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$declun_actual" != "$declun_allowed" ]; then
+  echo "FAIL: the #1110 decl-layer unresolved-producer set changed."
+  echo "  allowed (PRE-RESOLVE construction, plus the identity-stripping printer):"
+  printf '    %s\n' $declun_allowed
+  echo "  actual:"
+  printf '    %s\n' $declun_actual
+  echo "  A post-resolve call to one of these RESETS an acquired decl identity, and"
+  echo "  the immunity rule makes that permanent. Rebuild with a record UPDATE"
+  echo "  (\`DData { d | dataCtors = … }\`) instead. If the new site really is"
+  echo "  pre-resolve, add it to the list above and say why in the PR."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer file(s)"
+
 originun_actual=$(git -C "$ROOT" grep -lw -- 'OriginUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
       if grep -w 'OriginUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then

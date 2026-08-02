@@ -1,5 +1,5 @@
 # META
-source_lines=1032
+source_lines=1029
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -375,12 +375,9 @@ anyRefutable (p::ps) = isRefutable p || anyRefutable ps
 -- are dead: no test forces them, and a top-level nullary is lazy.  `checkDerives`
 -- below now reports those sites instead of dropping them silently — #421.)
 expandDecl : Decl -> List Decl
-expandDecl (DData vis name params variants derives) =
-  DData vis name params variants [] ::
-    deriveImpls (deriveForData name params variants) derives
-expandDecl (DNewtype vis name params con fty derives) =
-  DNewtype vis name params con fty [] ::
-    deriveImpls (deriveForNewtype name params con fty) derives
+-- #1110: record UPDATE — `deriving` is consumed here, identity must survive it.
+expandDecl (d@(DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives })) = DData { d | dataDerives = [] } :: deriveImpls (deriveForData name params variants) derives
+expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) = DNewtype { d | newtypeDerives = [] } :: deriveImpls (deriveForNewtype name params con fty) derives
 expandDecl (DAttrib attrs d) = attribHead attrs (expandDecl d)
 expandDecl d = [d]
 
@@ -490,10 +487,10 @@ checkDerives decls = flatMap declDeriveErrors decls
 -- passing `map fst (dataDerivers …)` to a decl with NO derives would still build
 -- the deriver table for every `data` in the program.
 declDeriveErrors : Decl -> List (String, Option Loc)
-declDeriveErrors (DData _ name params variants derives) = match derives
+declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) = match derives
   [] => []
   _ => flatMap (unknownDerive name (map fst (dataDerivers name params variants))) derives
-declDeriveErrors (DNewtype _ name params con fty derives) = match derives
+declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = match derives
   [] => []
   _ => flatMap (unknownDerive name (map fst (newtypeDerivers name params con fty))) derives
 declDeriveErrors (DAttrib _ d) = declDeriveErrors d
@@ -931,7 +928,7 @@ desugarRecordPuns prog =
 -- qualify too).
 collectRecordNames : List Decl -> List String
 collectRecordNames [] = []
-collectRecordNames ((DData _ _ _ variants _)::rest) = conNamedCtorNames variants
+collectRecordNames ((DData { dataCtors = variants })::rest) = conNamedCtorNames variants
   ++ collectRecordNames rest
 collectRecordNames (_::rest) = collectRecordNames rest
 
@@ -1208,8 +1205,8 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "anyRefutable" ((PList)) (EVar "False"))
 (DFunDef false "anyRefutable" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "||" (EApp (EVar "isRefutable") (EVar "p")) (EApp (EVar "anyRefutable") (EVar "ps"))))
 (DTypeSig false "expandDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "expandDecl" ((PCon "DData" (PVar "vis") (PVar "name") (PVar "params") (PVar "variants") (PVar "derives"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "name")) (EVar "params")) (EVar "variants")) (EListLit)) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "variants"))) (EVar "derives"))))
-(DFunDef false "expandDecl" ((PCon "DNewtype" (PVar "vis") (PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "vis")) (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty")) (EListLit)) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))
+(DFunDef false "expandDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DData" (EVar "d") ((fa "dataDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "variants"))) (EVar "derives"))))
+(DFunDef false "expandDecl" ((PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))
 (DFunDef false "expandDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "attribHead") (EVar "attrs")) (EApp (EVar "expandDecl") (EVar "d"))))
 (DFunDef false "expandDecl" ((PVar "d")) (EListLit (EVar "d")))
 (DTypeSig false "attribHead" (TyFun (TyApp (TyCon "List") (TyCon "Attr")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -1232,8 +1229,8 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig true "checkDerives" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "checkDerives" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "declDeriveErrors")) (EVar "decls")))
 (DTypeSig false "declDeriveErrors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "declDeriveErrors" ((PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))) (EVar "derives")))))
-(DFunDef false "declDeriveErrors" ((PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives"))) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))) (EVar "derives")))))
+(DFunDef false "declDeriveErrors" ((PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))) (EVar "derives")))))
+(DFunDef false "declDeriveErrors" ((PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false)) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))) (EVar "derives")))))
 (DFunDef false "declDeriveErrors" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declDeriveErrors") (EVar "d")))
 (DFunDef false "declDeriveErrors" (PWild) (EListLit))
 (DTypeSig false "unknownDerive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveRef") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
@@ -1410,7 +1407,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
-(DFunDef false "collectRecordNames" ((PCons (PCon "DData" PWild PWild PWild (PVar "variants") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
+(DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
 (DFunDef false "collectRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectRecordNames") (EVar "rest")))
 (DTypeSig false "conNamedCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "conNamedCtorNames" ((PList)) (EListLit))
@@ -1628,8 +1625,8 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "anyRefutable" ((PList)) (EVar "False"))
 (DFunDef false "anyRefutable" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "||" (EApp (EVar "isRefutable") (EVar "p")) (EApp (EVar "anyRefutable") (EVar "ps"))))
 (DTypeSig false "expandDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "expandDecl" ((PCon "DData" (PVar "vis") (PVar "name") (PVar "params") (PVar "variants") (PVar "derives"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "name")) (EVar "params")) (EVar "variants")) (EListLit)) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "variants"))) (EVar "derives"))))
-(DFunDef false "expandDecl" ((PCon "DNewtype" (PVar "vis") (PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "vis")) (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty")) (EListLit)) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))
+(DFunDef false "expandDecl" ((PAs "d" (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DData" (EVar "d") ((fa "dataDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EVar "deriveForData") (EVar "name")) (EVar "params")) (EVar "variants"))) (EVar "derives"))))
+(DFunDef false "expandDecl" ((PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false))) (EBinOp "::" (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeDerives" (EListLit)))) (EApp (EApp (EVar "deriveImpls") (EApp (EApp (EApp (EApp (EVar "deriveForNewtype") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))) (EVar "derives"))))
 (DFunDef false "expandDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "attribHead") (EVar "attrs")) (EApp (EVar "expandDecl") (EVar "d"))))
 (DFunDef false "expandDecl" ((PVar "d")) (EListLit (EVar "d")))
 (DTypeSig false "attribHead" (TyFun (TyApp (TyCon "List") (TyCon "Attr")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -1652,8 +1649,8 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig true "checkDerives" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "checkDerives" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "declDeriveErrors")) (EVar "decls")))
 (DTypeSig false "declDeriveErrors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "declDeriveErrors" ((PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))) (EVar "derives")))))
-(DFunDef false "declDeriveErrors" ((PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives"))) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))) (EVar "derives")))))
+(DFunDef false "declDeriveErrors" ((PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))) (EVar "derives")))))
+(DFunDef false "declDeriveErrors" ((PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "derives"))) false)) (EMatch (EVar "derives") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "unknownDerive") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))) (EVar "derives")))))
 (DFunDef false "declDeriveErrors" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declDeriveErrors") (EVar "d")))
 (DFunDef false "declDeriveErrors" (PWild) (EListLit))
 (DTypeSig false "unknownDerive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveRef") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
@@ -1830,7 +1827,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
-(DFunDef false "collectRecordNames" ((PCons (PCon "DData" PWild PWild PWild (PVar "variants") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
+(DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
 (DFunDef false "collectRecordNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectRecordNames") (EVar "rest")))
 (DTypeSig false "conNamedCtorNames" (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "conNamedCtorNames" ((PList)) (EListLit))

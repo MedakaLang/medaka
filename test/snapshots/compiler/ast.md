@@ -1,5 +1,5 @@
 # META
-source_lines=1042
+source_lines=1254
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -72,6 +72,21 @@ public export data Loc = Loc String Int Int Int Int
 -- source-destroying operation.  Same class as the `__tupleN__` round-trip
 -- `tyConSurface`'s own comment records.  Every renderer therefore STRIPS this
 -- field exactly the way `ELoc` is stripped.
+--
+-- ── ALSO the DECLARATION-layer carrier (#1110, this PR) ─────────────────────
+-- The same three inhabitants carry the identity of a type DECLARATION
+-- (`DData`/`DNewtype`/`DTypeAlias`/`DInterface`, below), not just of an
+-- occurrence.  ONE type rather than a parallel `DeclOrigin` on purpose: the two
+-- layers name the same fact — §8 I4's `(originModule, name)` — and a second ADT
+-- would need a conversion at every seam that relates a declaration to a head
+-- spelling it, which is precisely the seam the arc exists to make trivial.
+--
+-- ⚠️ `OriginBuiltin` is NOT PRODUCED at the declaration layer, and that is a
+-- fact about the language rather than about this pass: a builtin head is
+-- builtin BECAUSE no module declares it, so there is no decl node to stamp.
+-- The inhabitant is reachable in the type and unreachable in the data; do not
+-- add a decl-layer producer for it, and do not read its absence as "cannot
+-- happen" at a consumer that also sees occurrence origins.
 public export data TyConOrigin =
   | OriginUnresolved
   | OriginBuiltin
@@ -106,16 +121,24 @@ public export data Ty =
   -- the rule as "do not ADD to the exposure", not as a description of the file.
   --
   -- 🚨 Match it as a PARTIAL record pattern naming only the fields you want —
-  -- `TyCon { tyConName = n }`, or `TyCon {}` to bind nothing.  A partial pattern
-  -- already tolerates fields added later (`desugarPat`/`lookupRecField`,
-  -- `frontend/exhaust.mdk`, fill every unmentioned field with `PWild`), so the
-  -- `...` rest marker buys NOTHING here and costs the exhaustiveness check:
-  -- `desugarPat _ (PRec _ _ True) = PWild` collapses a `...` pattern to a
-  -- CATCH-ALL, which would silently make every `Ty` match in the compiler
-  -- trivially "exhaustive" and turn a future missing-constructor error into a
-  -- runtime match failure.  Measured both ways on this change, and the
-  -- underlying `...`-lowering defect is #1217 — so this is a workaround with an
-  -- expiry, not a style rule: when #1217 lands, re-derive rather than assume.
+  -- `TyCon { tyConName = n }`.  A partial pattern already tolerates fields added
+  -- later (`desugarPat`/`lookupRecField`, `frontend/exhaust.mdk`, fill every
+  -- unmentioned field with `PWild`), so the `...` rest marker buys NOTHING here
+  -- and costs the exhaustiveness check: `desugarPat _ (PRec _ _ True) = PWild`
+  -- collapses a `...` pattern to a CATCH-ALL, which would silently make every
+  -- `Ty` match in the compiler trivially "exhaustive" and turn a future
+  -- missing-constructor error into a runtime match failure (#1217).
+  --
+  -- ⚠️ THAT IS ONLY HALF OF #1217, AND THE HALF THIS NODE HAPPENS TO BE IMMUNE TO
+  -- IS NOT IMMUNE ELSEWHERE.  A record pattern matches by LABEL SET, not by
+  -- constructor — see the full mechanism in the `Decl` comment below, which is
+  -- the authoritative statement.  `TyCon` gets away with a bare `{ tyConName }`
+  -- ONLY because it is the sole record-form constructor of `Ty`, so it has no
+  -- siblings to be confused with; the safety is a property of THIS TYPE, not of
+  -- partial patterns.  ⚠️ Do NOT carry `TyCon {}` (which this line used to offer)
+  -- to a type with siblings: naming zero labels is a catch-all.  An earlier
+  -- version of this paragraph generalised the wrong property and ~50 sites and
+  -- one PR were written on it.
   | TyCon {
       tyConName : String,
       tyConLoc : Option Loc,
@@ -580,7 +603,103 @@ public export data Decl =
   | DTypeSig Bool String Ty
   | DExtern Bool String Ty
   | DFunDef Bool String (List Pat) Expr
-  | DData DataVis String (List String) (List Variant) (List DeriveRef)
+  -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
+  -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
+  -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
+  -- module the declaration was written in.  NOTHING READS IT YET — this PR is
+  -- deliberately byte-identical, exactly as #1211 (the `Ty.TyCon` carrier) and
+  -- #1219 (its stamper) were.  What it unblocks is enumerated in #1110's
+  -- scoping comment: `registerVariants` mints the head `Mono` for every user
+  -- data type from the `DData` alone, so the dispatch GOAL side cannot acquire
+  -- identity until the declaration has one; interface identity (#1047) needs
+  -- `DInterface`'s; constructor identity (#1070) needs `DData`'s variants'.
+  --
+  -- 🚨 The three positional forms became NAMED-FIELD RECORDS in the same step,
+  -- and the two halves are not separable: a positional widening re-churns every
+  -- one of the ~130 pattern sites again at the next field, whereas a PARTIAL
+  -- record pattern (`DData { dataName = n }`) already tolerates fields added
+  -- later.  `DInterface` was a record before this PR and shows the payoff — it
+  -- needed edits at exactly its two TOTAL construction sites and nowhere else.
+  --
+  -- 🚨 FIELD NAMES ARE PREFIXED BECAUSE THEY ARE A PROGRAM-GLOBAL NAMESPACE.
+  -- Two records sharing a field name at DIFFERENT INDICES make the native
+  -- emitter read the wrong slot — `run` stays correct while the BUILT binary is
+  -- wrong (#1216: a bare `loc` on `Ty.TyCon` vs `Finding`'s, which only
+  -- `diff_compiler_lint_cache` caught).  Every name introduced here was checked
+  -- for global uniqueness across `compiler/`, `stdlib/` and `sqlite/`; see the
+  -- PR body for the command.  `DInterface`'s pre-existing BARE `pub`/`def`/
+  -- `name`/`typarams`/`supers`/`methods` are the grandfathered exposure #1216
+  -- tracks — the new `ifaceOrigin` is prefixed rather than joining them.
+  --
+  -- 🚨 A RECORD PATTERN MATCHES BY LABEL SET, NOT BY CONSTRUCTOR — so every arm
+  -- below MUST NAME AT LEAST ONE LABEL NO SIBLING CONSTRUCTOR HAS.
+  --
+  -- ⚠️ THIS BLOCK PREVIOUSLY SAID "use a partial pattern, never `...`; a partial
+  -- pattern is strictly better and costs nothing."  BOTH CLAUSES ARE FALSE, and
+  -- ~50 `Ty` sites plus this PR's first cut were written on them (#1217 restates
+  -- the same wrong remedy).  Do not restore that wording.
+  --
+  -- The mechanism, at source rather than by reputation.  `compiler/eval/eval.mdk`:
+  --
+  --     matchPat (PRec _ fields _) (VRecord _ recFields) =
+  --       matchRecFields fields recFields          -- ctor DISCARDED (`_`)
+  --     matchPat (PRec ctor fields _) (VCon ctor2 vals)
+  --       | ctor == ctor2 = …                      -- ctor CHECKED
+  --     matchRecFields [] _ = Some []              -- NO labels ⇒ matches anything
+  --
+  -- The `VRecord` arm binds the constructor to `_` and sits ABOVE the `VCon` arm
+  -- that compares it, so for a record-form value the constructor is never
+  -- consulted: the pattern succeeds iff the value carries every label named.
+  -- Three consequences, none of them what the old wording implied:
+  --
+  --   * **`{ }` and `{ ... }` are BOTH catch-alls** — `matchRecFields [] _` returns
+  --     `Some []`.  Naming zero labels means "any record", including other
+  --     constructors of this very type.
+  --   * **The `...` rest flag is irrelevant HERE** — it is the `_` third argument
+  --     of `PRec` in that arm.  `desugarPat _ (PRec _ _ True) = PWild`
+  --     (`frontend/exhaust.mdk`) is a SECOND, INDEPENDENT defect, about
+  --     EXHAUSTIVENESS.  Two mechanisms, one issue (#1217); fixing either leaves
+  --     the other.
+  --   * **"Partial" is not the safe property; UNIQUENESS OF A NAMED LABEL is.**
+  --     `DInterface { methods }` is partial and WRONG: `DImpl` also has `methods`,
+  --     so a `DImpl` takes the `DInterface` arm.
+  --
+  -- ⚠️ THE FAILURE IS run ≠ build AT EXIT 0.  Native compares the constructor
+  -- correctly; only the interpreter does not.  Measured on this binary with one
+  -- `DImpl` value against arms declared `DIface`-first:
+  --
+  --     pattern                            medaka run      built binary
+  --     DIface { methods }   (shared)      TOOK-DIface     TOOK-DImp     ← diverges
+  --     DIface {}            (zero-field)  TOOK-DIface     TOOK-DImp     ← diverges
+  --     DIface { ifaceOrigin = _, … }      TOOK-DImp       TOOK-DImp     ← agrees
+  --
+  -- 🚨 THE RULE: name one label unique to the constructor, and bind nothing where
+  -- you do not need the value — `DData { dataOrigin = _ }`,
+  -- `DTypeAlias { tyAliasOrigin = _ }`, `DNewtype { newtypeOrigin = _ }`,
+  -- `d@(DInterface { ifaceOrigin = _, methods })`.  The `…Origin` fields are the
+  -- ideal discriminators and that is a free consequence of the prefixing rule
+  -- above: prefixed-per-constructor names are unique BY CONSTRUCTION.  Among
+  -- `Decl`, the only labels shared by two constructors are `DInterface`/`DImpl`'s
+  -- `pub` and `methods` — every other label already discriminates.
+  --
+  -- ⚠️ READ THIS AS A RULE, NOT AS A DESCRIPTION OF THE TREE.  Pre-existing
+  -- `DInterface { … , ... }` arms that name only shared labels still exist in
+  -- several modules; they are #1217's business, not this carrier's.  Their
+  -- severity is LATENT rather than live only because compiler code is never
+  -- interpreted (`test/typecheck_compiler_source.sh` records that the interpreter
+  -- does not finish over the whole compiler, and every gate runs it natively) —
+  -- which is also why NO GATE CAN SEE THIS CLASS.  Do not add to it.
+  --
+  -- ⚠️ Exhaustiveness is a WARNING here, exit 0 — a missed arm does not fail the
+  -- build, it fails at RUNTIME.  Audit arms as a SET.
+  | DData {
+      dataVis : DataVis,
+      dataName : String,
+      dataParams : List String,
+      dataCtors : List Variant,
+      dataDerives : List DeriveRef,
+      dataOrigin : TyConOrigin,
+    }
   | DUse Bool UsePath Loc
   -- pub? name domain?  `effect Foo` (atomic host capability),
   -- `effect Net Prefix` (domain-carrying).  v2 Stage 2a: domain = Some "Prefix" or None.
@@ -595,7 +714,10 @@ public export data Decl =
       typarams : List String,
       supers : List Super,
       methods : List IfaceMethod,
+      ifaceOrigin : TyConOrigin,
     }
+  -- #1110 decl-layer identity.  Prefixed; the six above are the
+  -- grandfathered bare names #1216 tracks, not a precedent to follow.
   | DImpl {
       pub : Bool,
       iface : String,
@@ -603,14 +725,91 @@ public export data Decl =
       reqs : List Require,
       methods : List ImplMethod,
     }
-  -- pub? name typarams rhs
-  | DTypeAlias Bool String (List String) Ty
-  -- pub? tyname typarams conname fieldty derives
-  | DNewtype Bool String (List String) String Ty (List DeriveRef)
+  -- `tyAliasRhs` is the expansion; `tyAliasOrigin` is #1110 decl identity.
+  | DTypeAlias {
+      tyAliasPub : Bool,
+      tyAliasName : String,
+      tyAliasParams : List String,
+      tyAliasRhs : Ty,
+      tyAliasOrigin : TyConOrigin,
+    }
+  -- `newtypeName` is the TYPE name, `newtypeCtor` the (single) constructor's;
+  -- `newtypeOrigin` is #1110 decl identity.
+  | DNewtype {
+      newtypePub : Bool,
+      newtypeName : String,
+      newtypeParams : List String,
+      newtypeCtor : String,
+      newtypeFieldTy : Ty,
+      newtypeDerives : List DeriveRef,
+      newtypeOrigin : TyConOrigin,
+    }
   -- top-level `let rec … with …` mutually-recursive group
   | DLetGroup Bool (List LetBind)
   -- `@attr…` annotations wrapping the next decl
   | DAttrib (List Attr) Decl
+
+-- ── FRESH type declarations, identity not yet acquired (#1110) ──────────────
+-- The peers of `tyConUnresolved` above, and the same contract: these are the
+-- ONLY producers of a decl-layer `OriginUnresolved`, so `grep -rwE
+-- 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved'` plus the parser's
+-- one `ifaceOrigin = OriginUnresolved` literal is the exact worklist a later A-1
+-- PR drains.  They exist so the parser (which has no module id — it has a token
+-- stream) states the absence once, positionally, instead of every construction
+-- site spelling out a record literal that would then re-churn at the next field.
+--
+-- 🚨 NOT for REBUILDING an existing decl.  A rebuild must use record UPDATE
+-- (`DData { d | dataCtors = … }`), because passing an already-stamped decl's
+-- fields through here would silently reset its origin to `OriginUnresolved` —
+-- the identity-destroying shape #1219 found in `substTyVars`, and one the
+-- immunity rule cannot repair (`stampDeclOrigin` re-stamps only what a driver
+-- re-runs over, and the emit path runs it once).
+export dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
+dDataUnresolved vis n params variants derives = DData {
+  dataVis = vis,
+  dataName = n,
+  dataParams = params,
+  dataCtors = variants,
+  dataDerives = derives,
+  dataOrigin = OriginUnresolved,
+}
+
+export dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
+dTypeAliasUnresolved pub n params rhs = DTypeAlias {
+  tyAliasPub = pub,
+  tyAliasName = n,
+  tyAliasParams = params,
+  tyAliasRhs = rhs,
+  tyAliasOrigin = OriginUnresolved,
+}
+
+-- ⚠️ `DInterface` was ALREADY a record, so unlike its three siblings this helper
+-- buys no churn saving — it exists solely so the parser does not have to NAME
+-- `OriginUnresolved`.  `test/typecheck_compiler_source.sh`'s §8 I6.3 ratchet pins
+-- the set of files allowed to name that constructor to three (this one, resolve's
+-- stamper, and a probe that only patterns on it), and that ratchet is worth more
+-- than the one line of directness it costs here.
+export dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
+dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
+  pub = pub,
+  def = isDefault,
+  name = n,
+  typarams = typarams,
+  supers = supers,
+  methods = methods,
+  ifaceOrigin = OriginUnresolved,
+}
+
+export dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
+dNewtypeUnresolved pub n params con fty derives = DNewtype {
+  newtypePub = pub,
+  newtypeName = n,
+  newtypeParams = params,
+  newtypeCtor = con,
+  newtypeFieldTy = fty,
+  newtypeDerives = derives,
+  newtypeOrigin = OriginUnresolved,
+}
 
 -- ── generic Ty/Decl/Expr traversal (#1110) ──────────────────────────────────
 -- A TOTAL, change-flagged rewrite of every `Ty` position in a decl or an expr.
@@ -701,9 +900,13 @@ mapTyInDecl f (DExtern pub n t) =
 mapTyInDecl f (DFunDef pub n ps e) =
   let (e2, c) = mapTyInExpr f e
   (DFunDef pub n ps e2, c)
-mapTyInDecl f (DData vis n tps variants ders) =
-  let (vs2, c) = mapVariantsB f variants
-  (DData vis n tps vs2 ders, c)
+-- ⚠️ Record UPDATE, not re-construction: rebuilding from the projected fields
+-- would DROP an already-acquired `dataOrigin`, which is exactly the identity-
+-- destroying shape #1219 found in `substTyVars`.  Every rebuild arm below follows
+-- the same rule.
+mapTyInDecl f (d@(DData { dataCtors })) =
+  let (vs2, c) = mapVariantsB f dataCtors
+  (DData { d | dataCtors = vs2 }, c)
 mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
 mapTyInDecl _ (DEffect pub n dom) = (DEffect pub n dom, False)
 mapTyInDecl f (DProp pub n params body) =
@@ -725,7 +928,16 @@ mapTyInDecl f (DBench pub n body) =
 -- arrived here with the `...` in the move from `tools/codemod.mdk` and are fixed
 -- in place; a partial pattern already tolerates fields added later, so the marker
 -- bought nothing.
-mapTyInDecl f (d@(DInterface { methods })) =
+-- ⚠️ DROPPING THE MARKER IS NOT SUFFICIENT, and this comment used to imply it was.
+-- That covers only #1217's EXHAUSTIVENESS half; the MATCHING half is that a record
+-- pattern is keyed on its LABEL SET with the constructor discarded, so an arm must
+-- also name a label no sibling has.  The `Decl` comment above has the mechanism.
+-- ⚠️ `ifaceOrigin = _` for the same reason `annotateDecl` needs it: `methods` is
+-- shared with `DImpl`, whose arm is BELOW, so a label-keyed match on `methods`
+-- alone sends every `DImpl` here under the interpreter.  Pre-existing (it arrived
+-- with the move from `tools/codemod.mdk`); narrowed here because this is the file
+-- that states the rule.  The tree has more of them — see the `Decl` comment.
+mapTyInDecl f (d@(DInterface { ifaceOrigin = _, methods })) =
   let (ms2, c) = mapIfaceMethodsB f methods
   (DInterface { d | methods = ms2 }, c)
 mapTyInDecl f (d@(DImpl { tys, reqs, methods })) =
@@ -733,12 +945,12 @@ mapTyInDecl f (d@(DImpl { tys, reqs, methods })) =
   let (reqs2, c2) = mapRequiresB f reqs
   let (ms2, c3) = mapImplMethodsB f methods
   (DImpl { d | tys = tys2, reqs = reqs2, methods = ms2 }, c1 || c2 || c3)
-mapTyInDecl f (DTypeAlias pub n tps t) =
-  let (t2, c) = mapTyFull f t
-  (DTypeAlias pub n tps t2, c)
-mapTyInDecl f (DNewtype pub n tps cn t ders) =
-  let (t2, c) = mapTyFull f t
-  (DNewtype pub n tps cn t2 ders, c)
+mapTyInDecl f (d@(DTypeAlias { tyAliasRhs })) =
+  let (t2, c) = mapTyFull f tyAliasRhs
+  (DTypeAlias { d | tyAliasRhs = t2 }, c)
+mapTyInDecl f (d@(DNewtype { newtypeFieldTy })) =
+  let (t2, c) = mapTyFull f newtypeFieldTy
+  (DNewtype { d | newtypeFieldTy = t2 }, c)
 mapTyInDecl f (DLetGroup pub binds) =
   let (bs2, c) = mapLetBindsB f binds
   (DLetGroup pub bs2, c)
@@ -1108,7 +1320,15 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConPos (TyCon "DataVis") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "DeriveRef")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "DNewtype" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyCon "DeriveRef")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
+(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
+(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
+(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
+(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
@@ -1130,16 +1350,16 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DData" (PVar "vis") (PVar "n") (PVar "tps") (PVar "variants") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "variants"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "tps")) (EVar "vs2")) (EVar "ders")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DData" ((rf "dataCtors" None)) false))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "dataCtors"))) (DoExpr (ETuple (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EVar "vs2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (ETuple (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "False")))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeAlias" (PVar "pub") (PVar "n") (PVar "tps") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeAlias") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "t2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DNewtype" (PVar "pub") (PVar "n") (PVar "tps") (PVar "cn") (PVar "t") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "cn")) (EVar "t2")) (EVar "ders")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasRhs" None)) false))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "tyAliasRhs"))) (DoExpr (ETuple (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasRhs" (EVar "t2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DNewtype" ((rf "newtypeFieldTy" None)) false))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "newtypeFieldTy"))) (DoExpr (ETuple (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeFieldTy" (EVar "t2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoExpr (ETuple (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "bs2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c")) (EApp (EApp (EVar "mapTyInDecl") (EVar "f")) (EVar "d"))) (DoExpr (ETuple (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EVar "d2")) (EVar "c")))))
 (DTypeSig false "mapVariantsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyTuple (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "Bool")))))
@@ -1312,7 +1532,15 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConPos (TyCon "DataVis") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "DeriveRef")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "DNewtype" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "String") (TyCon "Ty") (TyApp (TyCon "List") (TyCon "DeriveRef")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
+(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
+(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
+(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
+(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
@@ -1334,16 +1562,16 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DData" (PVar "vis") (PVar "n") (PVar "tps") (PVar "variants") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "variants"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "tps")) (EVar "vs2")) (EVar "ders")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DData" ((rf "dataCtors" None)) false))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "dataCtors"))) (DoExpr (ETuple (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EVar "vs2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom"))) (ETuple (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "False")))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DProp" (PVar "pub") (PVar "n") (PVar "params") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "params2") (PVar "c1")) (EApp (EApp (EVar "mapPropParamsB") (EVar "f")) (EVar "params"))) (DoLet false false (PTuple (PVar "body2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "n")) (EVar "params2")) (EVar "body2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTest" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DBench" (PVar "pub") (PVar "n") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "b2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "n")) (EVar "b2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "ms2") (PVar "c")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EVar "ms2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "tys" None) (rf "reqs" None) (rf "methods" None)) false))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "reqs2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "reqs"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c3")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "methods"))) (DoExpr (ETuple (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EVar "tys2")) (fa "reqs" (EVar "reqs2")) (fa "methods" (EVar "ms2")))) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeAlias" (PVar "pub") (PVar "n") (PVar "tps") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeAlias") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "t2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DNewtype" (PVar "pub") (PVar "n") (PVar "tps") (PVar "cn") (PVar "t") (PVar "ders"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DNewtype") (EVar "pub")) (EVar "n")) (EVar "tps")) (EVar "cn")) (EVar "t2")) (EVar "ders")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasRhs" None)) false))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "tyAliasRhs"))) (DoExpr (ETuple (EVariantUpdate "DTypeAlias" (EVar "d") ((fa "tyAliasRhs" (EVar "t2")))) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DNewtype" ((rf "newtypeFieldTy" None)) false))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "newtypeFieldTy"))) (DoExpr (ETuple (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeFieldTy" (EVar "t2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoExpr (ETuple (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EVar "bs2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EBlock (DoLet false false (PTuple (PVar "d2") (PVar "c")) (EApp (EApp (EVar "mapTyInDecl") (EVar "f")) (EVar "d"))) (DoExpr (ETuple (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EVar "d2")) (EVar "c")))))
 (DTypeSig false "mapVariantsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyTuple (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "Bool")))))

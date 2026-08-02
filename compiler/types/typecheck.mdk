@@ -1656,8 +1656,7 @@ public export data Kind = KType | KRow
 -- branch with a field access — its fields never exist).
 collectAbstractRecordTypes : List Decl -> List String
 collectAbstractRecordTypes [] = []
-collectAbstractRecordTypes ((DData VisAbstract n _ _ _)::rest) =
-  n :: collectAbstractRecordTypes rest
+collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n })::rest) = n :: collectAbstractRecordTypes rest
 collectAbstractRecordTypes (_::rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
@@ -8317,13 +8316,11 @@ inferLetGroup env binds body =
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
-registerData env (DData _ name params variants _) =
-  registerVariants env name params variants
-registerData env (DTypeAlias _ name params rhs) =
+registerData env (DData { dataName = name, dataParams = params, dataCtors = variants }) = registerVariants env name params variants
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs }) =
   let _ = setRef perRun.value.aliasTableRef ((name, (params, rhs))::perRun.value.aliasTableRef.value)
   env
-registerData env (DNewtype _ name params con fty _) =
-  registerVariants env name params [Variant con (ConPos [fty])]
+registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty }) = registerVariants env name params [Variant con (ConPos [fty])]
 -- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
 -- unlike a data type's they are inferred from the METHOD SIGNATURES.  Registered here
 -- rather than at interface-method registration because every consumer (rowArgNames /
@@ -18210,10 +18207,10 @@ appendDataUniverse prog0 =
 -- different-arity clash abstains rather than mis-kinds.
 registerOpaqueParamKinds : List Decl -> Unit
 registerOpaqueParamKinds [] = ()
-registerOpaqueParamKinds ((DData VisAbstract n ps vs _)::rest) =
+registerOpaqueParamKinds ((DData { dataVis = VisAbstract, dataName = n, dataParams = ps, dataCtors = vs })::rest) =
   let _ = recordParamKinds n (inferParamKinds ps vs)
   registerOpaqueParamKinds rest
-registerOpaqueParamKinds ((DNewtype True n ps con fty _)::rest) =
+registerOpaqueParamKinds ((DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty })::rest) =
   let _ = recordParamKinds n (inferParamKinds ps [Variant con (ConPos [fty])])
   registerOpaqueParamKinds rest
 registerOpaqueParamKinds (_::rest) = registerOpaqueParamKinds rest
@@ -18314,13 +18311,16 @@ buildStandaloneShadowsGraph allDecls userDecls =
 -- DImpl entries are inert for them.
 publicDataDecls : List Decl -> List Decl
 publicDataDecls [] = []
-publicDataDecls ((DData VisPublic n ps vs ds)::rest) =
-  DData VisPublic n ps vs ds :: publicDataDecls rest
+-- #1110: pass the decl THROUGH rather than rebuilding it, or the acquired
+-- `dataOrigin` is dropped on the export path.  Matches the arms below.
+publicDataDecls ((d@(DData { dataVis = VisPublic }))::rest) =
+  d :: publicDataDecls rest
 publicDataDecls ((d@(DInterface { pub = True, ... }))::rest) =
   d :: publicDataDecls rest
 publicDataDecls ((d@(DImpl { pub = True, ... }))::rest) =
   d :: publicDataDecls rest
-publicDataDecls ((d@(DTypeAlias True _ _ _))::rest) = d :: publicDataDecls rest
+publicDataDecls ((d@(DTypeAlias { tyAliasPub = True }))::rest) =
+  d :: publicDataDecls rest
 publicDataDecls (_::rest) = publicDataDecls rest
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
@@ -18781,12 +18781,12 @@ findDataDeclNamed _ [] = None
 findDataDeclNamed name ((DAttrib _ d)::rest) = match findDataDeclNamed name [d]
   Some x => Some x
   None => findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DData _ n _ _ _))::rest) =
+findDataDeclNamed name ((d@(DData { dataName = n }))::rest) =
   if n == name then
     Some d
   else
     findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DNewtype _ n _ _ _ _))::rest) =
+findDataDeclNamed name ((d@(DNewtype { newtypeName = n }))::rest) =
   if n == name then
     Some d
   else

@@ -188,7 +188,7 @@ needsMore source =
 -- ── Pipeline helpers ──────────────────────────────────────────────────────
 declTypeAnnotations : List Decl -> List (String, String)
 declTypeAnnotations [] = []
-declTypeAnnotations ((DData _ n _ _ _)::rest) =
+declTypeAnnotations ((DData { dataName = n })::rest) =
   ("type", n) :: declTypeAnnotations rest
 declTypeAnnotations ((DInterface { name = n, ... })::rest) =
   ("interface", n) :: declTypeAnnotations rest
@@ -511,7 +511,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "needsMore" ((PVar "source")) (EIf (EApp (EVar "endsWithBlankLine") (EVar "source")) (EVar "False") (EBlock (DoLet false false (PVar "lines") (EApp (EVar "stringSplitNewlines") (EVar "source"))) (DoLet false false (PVar "nonEmpty") (EApp (EVar "filterEmpty") (EVar "lines"))) (DoExpr (EMatch (EApp (EVar "lastLine") (EVar "nonEmpty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "last")) () (EBlock (DoLet false false (PVar "first") (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "last")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "last")) (ELit (LString "")))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "first") (ELit (LString " "))) (EBinOp "==" (EVar "first") (ELit (LString "\t")))) (EApp (EApp (EVar "endsWithKeyword") (EVar "last")) (ELit (LString "where"))))))))))))
 (DTypeSig false "declTypeAnnotations" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "declTypeAnnotations" ((PList)) (EListLit))
-(DFunDef false "declTypeAnnotations" ((PCons (PCon "DData" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "type")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
+(DFunDef false "declTypeAnnotations" ((PCons (PRec "DData" ((rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "type")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
 (DFunDef false "declTypeAnnotations" ((PCons (PRec "DInterface" ((rf "name" (PVar "n"))) true) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "interface")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
 (DFunDef false "declTypeAnnotations" ((PCons PWild (PVar "rest"))) (EApp (EVar "declTypeAnnotations") (EVar "rest")))
 (DTypeSig false "startsWithAt" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -654,7 +654,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "needsMore" ((PVar "source")) (EIf (EApp (EVar "endsWithBlankLine") (EVar "source")) (EVar "False") (EBlock (DoLet false false (PVar "lines") (EApp (EVar "stringSplitNewlines") (EVar "source"))) (DoLet false false (PVar "nonEmpty") (EApp (EVar "filterEmpty") (EVar "lines"))) (DoExpr (EMatch (EApp (EVar "lastLine") (EVar "nonEmpty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "last")) () (EBlock (DoLet false false (PVar "first") (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "last")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "last")) (ELit (LString "")))) (DoExpr (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "first") (ELit (LString " "))) (EBinOp "==" (EVar "first") (ELit (LString "\t")))) (EApp (EApp (EVar "endsWithKeyword") (EVar "last")) (ELit (LString "where"))))))))))))
 (DTypeSig false "declTypeAnnotations" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "declTypeAnnotations" ((PList)) (EListLit))
-(DFunDef false "declTypeAnnotations" ((PCons (PCon "DData" PWild (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "type")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
+(DFunDef false "declTypeAnnotations" ((PCons (PRec "DData" ((rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "type")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
 (DFunDef false "declTypeAnnotations" ((PCons (PRec "DInterface" ((rf "name" (PVar "n"))) true) (PVar "rest"))) (EBinOp "::" (ETuple (ELit (LString "interface")) (EVar "n")) (EApp (EVar "declTypeAnnotations") (EVar "rest"))))
 (DFunDef false "declTypeAnnotations" ((PCons PWild (PVar "rest"))) (EApp (EVar "declTypeAnnotations") (EVar "rest")))
 (DTypeSig false "startsWithAt" (TyFun (TyCon "String") (TyCon "Bool")))

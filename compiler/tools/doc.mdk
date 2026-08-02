@@ -245,7 +245,7 @@ renderSig (DExtern True name ty) schemes =
 renderSig (DLetGroup True bindings) schemes = match bindings
   (LetBind name _)::_ => Some (name, valueSig name schemes None)
   [] => None
-renderSig (DData vis name params variants _) _
+renderSig (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants }) _
   | not (dataVisPrivate vis) =
     let head = joinWith " " (name::params)
     let body = match variants
@@ -259,10 +259,10 @@ renderSig (DInterface { pub = True, name, typarams, methods }) _ =
     [] => ""
     _ => "\n" ++ joinWith "\n" ms
   Some (name, "interface \{head}\{body}")
-renderSig (DTypeAlias True name params ty) _ =
+renderSig (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasRhs = ty }) _ =
   let head = joinWith " " (name::params)
   Some (name, "type \{head} = \{ppTyDoc ty}")
-renderSig (DNewtype True name params ctor ty _) _ =
+renderSig (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
   let head = joinWith " " (name::params)
   Some (name, "newtype \{head} = \{ctor} \{ppTyP 2 ty}")
 renderSig (DImpl { pub = True, iface, tys, reqs }) _ =

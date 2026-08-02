@@ -1660,8 +1660,7 @@ public export data Kind = KType | KRow
 -- branch with a field access — its fields never exist).
 collectAbstractRecordTypes : List Decl -> List String
 collectAbstractRecordTypes [] = []
-collectAbstractRecordTypes ((DData VisAbstract n _ _ _)::rest) =
-  n :: collectAbstractRecordTypes rest
+collectAbstractRecordTypes ((DData { dataVis = VisAbstract, dataName = n })::rest) = n :: collectAbstractRecordTypes rest
 collectAbstractRecordTypes (_::rest) = collectAbstractRecordTypes rest
 
 -- seed abstractRecordTypesRef from every module's decls (the per-module progs plus
@@ -8321,13 +8320,11 @@ inferLetGroup env binds body =
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
-registerData env (DData _ name params variants _) =
-  registerVariants env name params variants
-registerData env (DTypeAlias _ name params rhs) =
+registerData env (DData { dataName = name, dataParams = params, dataCtors = variants }) = registerVariants env name params variants
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs }) =
   let _ = setRef perRun.value.aliasTableRef ((name, (params, rhs))::perRun.value.aliasTableRef.value)
   env
-registerData env (DNewtype _ name params con fty _) =
-  registerVariants env name params [Variant con (ConPos [fty])]
+registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty }) = registerVariants env name params [Variant con (ConPos [fty])]
 -- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
 -- unlike a data type's they are inferred from the METHOD SIGNATURES.  Registered here
 -- rather than at interface-method registration because every consumer (rowArgNames /
@@ -18214,10 +18211,10 @@ appendDataUniverse prog0 =
 -- different-arity clash abstains rather than mis-kinds.
 registerOpaqueParamKinds : List Decl -> Unit
 registerOpaqueParamKinds [] = ()
-registerOpaqueParamKinds ((DData VisAbstract n ps vs _)::rest) =
+registerOpaqueParamKinds ((DData { dataVis = VisAbstract, dataName = n, dataParams = ps, dataCtors = vs })::rest) =
   let _ = recordParamKinds n (inferParamKinds ps vs)
   registerOpaqueParamKinds rest
-registerOpaqueParamKinds ((DNewtype True n ps con fty _)::rest) =
+registerOpaqueParamKinds ((DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty })::rest) =
   let _ = recordParamKinds n (inferParamKinds ps [Variant con (ConPos [fty])])
   registerOpaqueParamKinds rest
 registerOpaqueParamKinds (_::rest) = registerOpaqueParamKinds rest
@@ -18318,13 +18315,16 @@ buildStandaloneShadowsGraph allDecls userDecls =
 -- DImpl entries are inert for them.
 publicDataDecls : List Decl -> List Decl
 publicDataDecls [] = []
-publicDataDecls ((DData VisPublic n ps vs ds)::rest) =
-  DData VisPublic n ps vs ds :: publicDataDecls rest
+-- #1110: pass the decl THROUGH rather than rebuilding it, or the acquired
+-- `dataOrigin` is dropped on the export path.  Matches the arms below.
+publicDataDecls ((d@(DData { dataVis = VisPublic }))::rest) =
+  d :: publicDataDecls rest
 publicDataDecls ((d@(DInterface { pub = True, ... }))::rest) =
   d :: publicDataDecls rest
 publicDataDecls ((d@(DImpl { pub = True, ... }))::rest) =
   d :: publicDataDecls rest
-publicDataDecls ((d@(DTypeAlias True _ _ _))::rest) = d :: publicDataDecls rest
+publicDataDecls ((d@(DTypeAlias { tyAliasPub = True }))::rest) =
+  d :: publicDataDecls rest
 publicDataDecls (_::rest) = publicDataDecls rest
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
@@ -18785,12 +18785,12 @@ findDataDeclNamed _ [] = None
 findDataDeclNamed name ((DAttrib _ d)::rest) = match findDataDeclNamed name [d]
   Some x => Some x
   None => findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DData _ n _ _ _))::rest) =
+findDataDeclNamed name ((d@(DData { dataName = n }))::rest) =
   if n == name then
     Some d
   else
     findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DNewtype _ n _ _ _ _))::rest) =
+findDataDeclNamed name ((d@(DNewtype { newtypeName = n }))::rest) =
   if n == name then
     Some d
   else
@@ -20337,7 +20337,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
-(DFunDef false "collectAbstractRecordTypes" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
+(DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
 (DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
 (DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EVar "collectAbstractRecordTypes") (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))))
@@ -21588,9 +21588,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
 (DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
-(DFunDef false "registerData" ((PVar "env") (PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
-(DFunDef false "registerData" ((PVar "env") (PCon "DTypeAlias" PWild (PVar "name") (PVar "params") (PVar "rhs"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EVar "name") (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
-(DFunDef false "registerData" ((PVar "env") (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
+(DFunDef false "registerData" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EVar "name") (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit"))))))
@@ -23809,8 +23809,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "appendDataUniverse" ((PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (ELit LUnit))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EVar "pubDecls"))) (DoLet false false PWild (EApp (EVar "registerOpaqueParamKinds") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "storeDataUniverse") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv")) (EVar "env2"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataDecls")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataDecls") "value") (EVar "pubDecls"))))))
 (DTypeSig false "registerOpaqueParamKinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "registerOpaqueParamKinds" ((PList)) (ELit LUnit))
-(DFunDef false "registerOpaqueParamKinds" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") (PVar "ps") (PVar "vs") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs")))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
-(DFunDef false "registerOpaqueParamKinds" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") (PVar "ps") (PVar "con") (PVar "fty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
+(DFunDef false "registerOpaqueParamKinds" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs")))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
+(DFunDef false "registerOpaqueParamKinds" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
 (DFunDef false "registerOpaqueParamKinds" ((PCons PWild (PVar "rest"))) (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))
 (DTypeSig false "definerShadowsFromSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "definerShadowsFromSet" ((PVar "ifaceSet") (PVar "prog")) (EBlock (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "ifaceSet")))) (EVar "localNames"))) (DoLet false false (PVar "bares") (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
@@ -23824,10 +23824,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
 (DTypeSig false "publicDataDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "publicDataDecls" ((PList)) (EListLit))
-(DFunDef false "publicDataDecls" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") (PVar "ps") (PVar "vs") (PVar "ds")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "VisPublic")) (EVar "n")) (EVar "ps")) (EVar "vs")) (EVar "ds")) (EApp (EVar "publicDataDecls") (EVar "rest"))))
+(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
-(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PCon "DTypeAlias" (PCon "True") PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
+(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicDataDecls") (EVar "rest")))
 (DTypeSig false "pickSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "pickSchemes" ((PList) PWild) (EListLit))
@@ -23958,8 +23958,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "findDataDeclNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))
 (DFunDef false "findDataDeclNamed" (PWild (PList)) (EVar "None"))
 (DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PCon "DData" PWild (PVar "n") PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PCon "DNewtype" PWild (PVar "n") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
+(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
+(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
 (DFunDef false "findDataDeclNamed" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))
 (DTypeSig false "importDefinersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "importDefinersOf" ((PList)) (EListLit))
@@ -24548,7 +24548,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectAbstractRecordTypes" ((PList)) (EListLit))
-(DFunDef false "collectAbstractRecordTypes" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
+(DFunDef false "collectAbstractRecordTypes" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "collectAbstractRecordTypes") (EVar "rest"))))
 (DFunDef false "collectAbstractRecordTypes" ((PCons PWild (PVar "rest"))) (EApp (EVar "collectAbstractRecordTypes") (EVar "rest")))
 (DTypeSig false "seedAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
 (DFunDef false "seedAbstractRecordTypes" ((PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef")) (EBinOp "++" (EApp (EVar "collectAbstractRecordTypes") (EVar "coreDecls")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EVar "collectAbstractRecordTypes") (EApp (EVar "snd") (EVar "m"))))) (EVar "modules")))))
@@ -25799,9 +25799,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
 (DFunDef false "inferLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false PWild (EApp (EVar "checkLetGroupBindsLocated") (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "processLetGroup") (EVar "env")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "registerData" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Decl") (TyCon "TcEnv"))))
-(DFunDef false "registerData" ((PVar "env") (PCon "DData" PWild (PVar "name") (PVar "params") (PVar "variants") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
-(DFunDef false "registerData" ((PVar "env") (PCon "DTypeAlias" PWild (PVar "name") (PVar "params") (PVar "rhs"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EVar "name") (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
-(DFunDef false "registerData" ((PVar "env") (PCon "DNewtype" PWild (PVar "name") (PVar "params") (PVar "con") (PVar "fty") PWild)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
+(DFunDef false "registerData" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EVar "name") (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit"))))))
@@ -28020,8 +28020,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "appendDataUniverse" ((PVar "prog0")) (EBlock (DoLet false false (PVar "pubDecls") (EApp (EVar "publicDataDecls") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (ELit LUnit))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EVar "pubDecls"))) (DoLet false false PWild (EApp (EVar "registerOpaqueParamKinds") (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "storeDataUniverse") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv")) (EVar "env2"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataDecls")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataDecls") "value") (EVar "pubDecls"))))))
 (DTypeSig false "registerOpaqueParamKinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "registerOpaqueParamKinds" ((PList)) (ELit LUnit))
-(DFunDef false "registerOpaqueParamKinds" ((PCons (PCon "DData" (PCon "VisAbstract") (PVar "n") (PVar "ps") (PVar "vs") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs")))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
-(DFunDef false "registerOpaqueParamKinds" ((PCons (PCon "DNewtype" (PCon "True") (PVar "n") (PVar "ps") (PVar "con") (PVar "fty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
+(DFunDef false "registerOpaqueParamKinds" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs")))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
+(DFunDef false "registerOpaqueParamKinds" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordParamKinds") (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))) (DoExpr (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))))
 (DFunDef false "registerOpaqueParamKinds" ((PCons PWild (PVar "rest"))) (EApp (EVar "registerOpaqueParamKinds") (EVar "rest")))
 (DTypeSig false "definerShadowsFromSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "definerShadowsFromSet" ((PVar "ifaceSet") (PVar "prog")) (EBlock (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "ifaceSet")))) (EVar "localNames"))) (DoLet false false (PVar "bares") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
@@ -28035,10 +28035,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "buildStandaloneShadowsGraph" ((PVar "allDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EVar "allIfaceMethodNames") (EVar "allDecls"))) (DoLet false false (PVar "fns") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "userDecls"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "contains") (EVar "n")) (EVar "methodNames")))) (EVar "fns"))) (DoLet false false (PVar "mangled") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value"))))) (EVar "fns"))) (DoExpr (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "mangled"))))))
 (DTypeSig false "publicDataDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "publicDataDecls" ((PList)) (EListLit))
-(DFunDef false "publicDataDecls" ((PCons (PCon "DData" (PCon "VisPublic") (PVar "n") (PVar "ps") (PVar "vs") (PVar "ds")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "VisPublic")) (EVar "n")) (EVar "ps")) (EVar "vs")) (EVar "ds")) (EApp (EVar "publicDataDecls") (EVar "rest"))))
+(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DData" ((rf "dataVis" (PCon "VisPublic"))) false)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DInterface" ((rf "pub" (PCon "True"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DImpl" ((rf "pub" (PCon "True"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
-(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PCon "DTypeAlias" (PCon "True") PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
+(DFunDef false "publicDataDecls" ((PCons (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True"))) false)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "publicDataDecls") (EVar "rest"))))
 (DFunDef false "publicDataDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "publicDataDecls") (EVar "rest")))
 (DTypeSig false "pickSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "pickSchemes" ((PList) PWild) (EListLit))
@@ -28169,8 +28169,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "findDataDeclNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))
 (DFunDef false "findDataDeclNamed" (PWild (PList)) (EVar "None"))
 (DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PCon "DData" PWild (PVar "n") PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PCon "DNewtype" PWild (PVar "n") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
+(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
+(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
 (DFunDef false "findDataDeclNamed" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))
 (DTypeSig false "importDefinersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "importDefinersOf" ((PList)) (EListLit))

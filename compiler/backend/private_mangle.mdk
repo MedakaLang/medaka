@@ -224,9 +224,9 @@ unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String)
 unitCtorExportEntry (mid, decls) = (mid, flatMap ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
-ctorExportEntries (DData _ tyname _ variants _) =
+ctorExportEntries (DData { dataName = tyname, dataCtors = variants }) =
   [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
-ctorExportEntries (DNewtype _ tyname _ con _ _) =
+ctorExportEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
   if nonReservedCtor con then
     [(tyname, [con])]
   else
@@ -273,8 +273,8 @@ unitLocalCtorNames decls =
   filterList nonReservedCtor (flatMap localCtorNames decls)
 
 localCtorNames : Decl -> List String
-localCtorNames (DData _ _ _ variants _) = map variantCtorName variants
-localCtorNames (DNewtype _ _ _ con _ _) = [con]
+localCtorNames (DData { dataCtors = variants }) = map variantCtorName variants
+localCtorNames (DNewtype { newtypeCtor = con }) = [con]
 localCtorNames (DAttrib _ d) = localCtorNames d
 localCtorNames _ = []
 
@@ -653,10 +653,11 @@ renameDecl rm (DLetGroup pub binds) =
 -- short form) is a ConNamed variant renamed like any ctor; a DNewtype's con is its
 -- ctor.  Reserved ctors are not in `rm`
 -- (excluded at export), so renameDefName leaves them unchanged.
-renameDecl rm (DData vis tyname tps variants derives) =
-  DData vis tyname tps (map (renameVariant rm) variants) derives
-renameDecl rm (DNewtype pub tyname tps con fty derives) =
-  DNewtype pub tyname tps (renameDefName rm con) fty derives
+-- #1110: record UPDATE, so an already-acquired origin survives the rename.
+renameDecl rm (d@(DData { dataCtors = variants })) =
+  DData { d | dataCtors = map (renameVariant rm) variants }
+renameDecl rm (d@(DNewtype { newtypeCtor = con })) =
+  DNewtype { d | newtypeCtor = renameDefName rm con }
 renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 renameDecl _ d = d
 

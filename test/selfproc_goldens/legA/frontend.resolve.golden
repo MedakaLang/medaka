@@ -103,6 +103,7 @@ fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
 fieldOwnersOf : List Decl -> List (String, String)
 fieldVerdict : Option Loc -> Env -> String -> String -> List String -> List ResError
+fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
 filterContains : List String -> List String -> List String
 filterIfaceMethods : List String -> List (String, List String) -> List (String, List String)
 filterInSet : Map String Unit -> List String -> List String
@@ -265,6 +266,8 @@ stampArm : List BScope -> Arm -> Arm
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampClause : List BScope -> FunClause -> FunClause
 stampDecl : Map String Int -> Decl -> Decl
+stampDeclOrigin : String -> Decl -> Decl
+stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
 stampExpr : List BScope -> Expr -> Expr
 stampFieldAssign : List BScope -> FieldAssign -> FieldAssign
@@ -281,6 +284,7 @@ stampLet : List BScope -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLetBind : List BScope -> LetBind -> LetBind
 stampLetGroup : List BScope -> List LetBind -> Expr -> Expr
 stampModulesGo : List (String, String) -> Map String (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
+stampOneModule : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> List Decl
 stampSection : List BScope -> Section -> Section
 stampStmts : List BScope -> List DoStmt -> List DoStmt
 stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)

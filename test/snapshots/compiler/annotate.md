@@ -1,5 +1,5 @@
 # META
-source_lines=301
+source_lines=313
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -276,7 +276,19 @@ annotateDecl (DTest p n body) = DTest p n (annotateExpr [] body)
 annotateDecl (DBench p n body) = DBench p n (annotateExpr [] body)
 annotateDecl (DLetGroup p binds) =
   DLetGroup p (map (annotateLetBind (map letBindName binds :: [])) binds)
-annotateDecl (DInterface { pub, def, name, typarams, supers, methods }) = DInterface { pub = pub, def = def, name = name, typarams = typarams, supers = supers, methods = map annotateIfaceMethod methods }
+-- #1110: record UPDATE, not re-construction.  A total literal here would have
+-- to respell `ifaceOrigin`, and respelling it is how an acquired identity gets
+-- silently reset (the `substTyVars` shape #1219 found).
+--
+-- ⚠️ `ifaceOrigin = _` is LOAD-BEARING and is not about identity.  A record
+-- pattern matches by LABEL SET in the interpreter (`matchPat`'s `VRecord` arm,
+-- `eval/eval.mdk`, discards the constructor) — and `methods` is a label `DImpl`
+-- ALSO has, with its arm BELOW this one.  Naming only `methods` therefore makes
+-- a `DImpl` take this arm under `medaka run` and the right arm under a built
+-- binary, at exit 0 both ways.  `ifaceOrigin` is a label no sibling has, which is
+-- the actual safety property.  See `frontend/ast.mdk`'s `Decl` comment and #1217.
+annotateDecl (d@(DInterface { ifaceOrigin = _, methods })) =
+  DInterface { d | methods = map annotateIfaceMethod methods }
 annotateDecl (DImpl { pub, iface, tys, reqs, methods }) = DImpl {
   pub = pub,
   iface = iface,
@@ -420,7 +432,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PCon "DTest" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DBench" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DLetGroup" (PVar "p") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "p")) (EApp (EApp (EVar "map") (EApp (EVar "annotateLetBind") (EBinOp "::" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")) (EListLit)))) (EVar "binds"))))
-(DFunDef false "annotateDecl" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false)) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "def")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EApp (EApp (EVar "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
+(DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EApp (EApp (EVar "map") (EVar "annotateImplMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "annotateDecl") (EVar "inner"))))
 (DFunDef false "annotateDecl" ((PVar "d")) (EVar "d"))
@@ -548,7 +560,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PCon "DTest" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DBench" (PVar "p") (PVar "n") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "p")) (EVar "n")) (EApp (EApp (EVar "annotateExpr") (EListLit)) (EVar "body"))))
 (DFunDef false "annotateDecl" ((PCon "DLetGroup" (PVar "p") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "p")) (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateLetBind") (EBinOp "::" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")) (EListLit)))) (EVar "binds"))))
-(DFunDef false "annotateDecl" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false)) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "def")) (fa "name" (EVar "name")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
+(DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateImplMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "annotateDecl") (EVar "inner"))))
 (DFunDef false "annotateDecl" ((PVar "d")) (EVar "d"))
