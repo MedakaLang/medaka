@@ -7,6 +7,7 @@ bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String,
 bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
 bestOfNames : SugQuery -> List String -> Option String
 bestOfPool : SugQuery -> List SugCand -> Option String
+bindTypeOrigin : Map String String -> (String, String) -> List (String, String)
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : List Decl -> List Decl -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
@@ -14,6 +15,8 @@ buildErrors : List Decl -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
+builtinTyOrigin : String -> (String, TyConOrigin)
+builtinTyOrigins : List (String, TyConOrigin)
 charMask : Int -> String -> Int
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
@@ -111,6 +114,7 @@ findExports : String -> Map String ModuleExports -> Option ModuleExports
 firstExprLoc : Expr -> Option Loc
 firstLocList : List Expr -> Option Loc
 firstOr : String -> List String -> String
+flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
@@ -133,6 +137,9 @@ importedIfaceMethods : Map String ModuleExports -> List Decl -> List String -> L
 importedModuleValueSets : Map String ModuleExports -> List Decl -> List (String, List String)
 importedNames : List Decl -> List String
 importedNamesMM : UsePath -> ModuleExports -> (List String, List ResError)
+importedTyOrigin : (String, String) -> (String, TyConOrigin)
+importedTypeOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
+importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
 indexOwners : List (String, String) -> Map String (List String) -> Map String (List String)
 interfaceList : List Decl -> List (String, List String)
 internalExterns : List String
@@ -150,6 +157,7 @@ isTupleCtorTyName : String -> Bool
 keepAmbiguous : List String -> List (String, List String) -> List (String, List String)
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundMethods : Env -> List String -> List String
+keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
 lastOf : List String -> String
 letBindDupErrors : Option Loc -> String -> List FunClause -> List ResError
 letBindName : LetBind -> String
@@ -169,7 +177,9 @@ oneImportEffects : Map String ModuleExports -> UsePath -> List String
 oneImportIfaceMethods : Map String ModuleExports -> List String -> UsePath -> List (String, List String)
 oneImportedModuleValues : Map String ModuleExports -> UsePath -> List (String, List String)
 optStrEq : Option String -> String -> Bool
+originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
+ownTyOrigin : String -> String -> (String, TyConOrigin)
 ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
 ownersForTypes : List String -> List (String, String) -> List (String, String)
 ownersOf : String -> Map String (List String) -> List String
@@ -251,10 +261,14 @@ stampArm : List BScope -> Arm -> Arm
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampClause : List BScope -> FunClause -> FunClause
 stampDecl : Map String Int -> Decl -> Decl
+stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
 stampExpr : List BScope -> Expr -> Expr
 stampFieldAssign : List BScope -> FieldAssign -> FieldAssign
+stampFlatTyOrigins : List Decl -> List Decl -> List Decl
+stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGuardArm : List BScope -> GuardArm -> GuardArm
 stampGuards : List BScope -> List Guard -> (List Guard, List BScope)
+stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampIfaceMethod : Map String Int -> IfaceMethod -> IfaceMethod
 stampImplMethod : Map String Int -> ImplMethod -> ImplMethod
 stampInterp : List BScope -> InterpPart -> InterpPart
@@ -262,8 +276,11 @@ stampKv : List BScope -> (Expr, Expr) -> (Expr, Expr)
 stampLet : List BScope -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLetBind : List BScope -> LetBind -> LetBind
 stampLetGroup : List BScope -> List LetBind -> Expr -> Expr
+stampModulesGo : List (String, String) -> Map String (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
 stampSection : List BScope -> Section -> Section
 stampStmts : List BScope -> List DoStmt -> List DoStmt
+stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
+stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
@@ -278,11 +295,16 @@ suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
 suggestTypeFuzzy : Env -> String -> Option String
 topBinderNames : List Decl -> List String
+tupleCtorTyNames : List String
+tyOriginScope : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> Map String TyConOrigin
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
+typeDeclaredIn : String -> String -> (String, String)
+typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
 useImportNames : UsePath -> List String
+useMemberBinding : UseMember -> (String, String)
 useModId : UsePath -> String
 usePathLocsOf : List Decl -> List (UsePath, Loc)
 usePathsOf : List Decl -> List UsePath

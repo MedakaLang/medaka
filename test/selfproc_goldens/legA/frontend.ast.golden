@@ -1,8 +1,34 @@
 deriveRefName : DeriveRef -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
+mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
+mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
+mapDoStmtB : (Ty -> (Ty, Bool)) -> DoStmt -> (DoStmt, Bool)
+mapDoStmtsB : (Ty -> (Ty, Bool)) -> List DoStmt -> (List DoStmt, Bool)
+mapExprsB : (Ty -> (Ty, Bool)) -> List Expr -> (List Expr, Bool)
+mapFieldAssignsB : (Ty -> (Ty, Bool)) -> List FieldAssign -> (List FieldAssign, Bool)
+mapFieldsB : (Ty -> (Ty, Bool)) -> List Field -> (List Field, Bool)
+mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
+mapGuardArmsB : (Ty -> (Ty, Bool)) -> List GuardArm -> (List GuardArm, Bool)
+mapGuardsB : (Ty -> (Ty, Bool)) -> List Guard -> (List Guard, Bool)
+mapIfaceMethodB : (Ty -> (Ty, Bool)) -> IfaceMethod -> (IfaceMethod, Bool)
+mapIfaceMethodsB : (Ty -> (Ty, Bool)) -> List IfaceMethod -> (List IfaceMethod, Bool)
+mapImplMethodsB : (Ty -> (Ty, Bool)) -> List ImplMethod -> (List ImplMethod, Bool)
+mapInterpsB : (Ty -> (Ty, Bool)) -> List InterpPart -> (List InterpPart, Bool)
+mapKvsB : (Ty -> (Ty, Bool)) -> List (Expr, Expr) -> (List (Expr, Expr), Bool)
+mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
+mapPropParamsB : (Ty -> (Ty, Bool)) -> List PropParam -> (List PropParam, Bool)
+mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
+mapTyFull : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
+mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
+mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
+mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
+mapTyListB : (Ty -> (Ty, Bool)) -> List Ty -> (List Ty, Bool)
+mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
+mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 qualifiedLocal : String -> String -> String
+tyConBuiltin : String -> Option Loc -> Ty
 tyConUnresolved : String -> Option Loc -> Ty
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String

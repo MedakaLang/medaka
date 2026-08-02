@@ -144,6 +144,17 @@ export tyConUnresolved : String -> Option Loc -> Ty
 tyConUnresolved n l =
   TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginUnresolved }
 
+-- Build a `TyCon` for a head the LANGUAGE provides rather than a module (#1110).
+-- `DICT-SEMANTICS.md` §8 I6.2 (a): such a head has ONE program-global identity, so
+-- it must NOT be stamped with whichever module happens to be under elaboration.
+-- Two sites use it, and both are heads no user ever declares: the parser's tuple
+-- type constructors (`(,)` … `(,,,,)` → `TyCon "__tupleN__"`) and typecheck's
+-- synthesised scalar-route tag.  Resolve's origin stamper only ever fills in an
+-- `OriginUnresolved` head, so a node built here is left alone by construction.
+export tyConBuiltin : String -> Option Loc -> Ty
+tyConBuiltin n l =
+  TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginBuiltin }
+
 -- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
 public export data Constraint = Constraint String (List Ty)
 
@@ -596,3 +607,436 @@ public export data Decl =
   | DLetGroup Bool (List LetBind)
   -- `@attr…` annotations wrapping the next decl
   | DAttrib (List Attr) Decl
+
+-- ── generic Ty/Decl/Expr traversal (#1110) ──────────────────────────────────
+-- A TOTAL, change-flagged rewrite of every `Ty` position in a decl or an expr.
+-- It lives HERE, beside the nodes it walks, for the same reason `firstTyLoc`
+-- does: it is infrastructure more than one stage needs, and a second hand-rolled
+-- copy is how the two drift.  Two consumers today:
+--
+--   * `tools/codemod.mdk` — the `medaka codemod` source-rewriting framework, its
+--     original home (moved here by #1110, unchanged apart from the `EVarId` arm
+--     noted below).
+--   * `frontend/resolve.mdk` — the #1110 type-constructor origin stamper, which
+--     cannot import `tools/` at all (a frontend stage importing a tool would
+--     invert the layering and drag `parser`/`fmt` into every consumer's closure).
+--
+-- ⚠️ Keep the `Expr` arms in lockstep with `Expr` itself.  A new constructor makes
+-- `mapTyInExpr` non-exhaustive — but be precise about what that is worth, because
+-- the comment this replaces was wrong and the one it replaces in `mapTyInExpr`
+-- below was wrong in the same way: a non-exhaustive match here is a WARNING, exit
+-- 0.  Verified on this binary, not assumed: `non-exhaustive match of 'T'. Missing
+-- case: 'C'` prints, and the very next line is `ok (2 declaration(s) checked, 0
+-- errors)`.  So the walk does NOT fail the build on a missed node; it fails at
+-- RUNTIME, when a tree containing one reaches it.  Adding the arm is on you.
+
+-- `mapTyFull f t` applies `f` to EVERY Ty node in `t`, post-order (children
+-- first, then the rebuilt node), OR-folding the change flags.  Effect rows nest,
+-- so recursing the carried type of a `TyEffect` BEFORE applying `f` at that node
+-- is what lets a transform see an already-rewritten inner row.
+export mapTyFull : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
+mapTyFull f ty =
+  let (ty1, c1) = mapTyKids f ty
+  let (ty2, c2) = f ty1
+  (ty2, c1 || c2)
+
+mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
+mapTyKids _ (t@(TyCon { tyConName = _ })) = (t, False)
+mapTyKids _ (TyVar n) = (TyVar n, False)
+mapTyKids f (TyApp a b) =
+  let (a2, ca) = mapTyFull f a
+  let (b2, cb) = mapTyFull f b
+  (TyApp a2 b2, ca || cb)
+mapTyKids f (TyFun a b) =
+  let (a2, ca) = mapTyFull f a
+  let (b2, cb) = mapTyFull f b
+  (TyFun a2 b2, ca || cb)
+mapTyKids f (TyTuple ts) =
+  let (ts2, c) = mapTyListB f ts
+  (TyTuple ts2, c)
+mapTyKids f (TyEffect es tail t) =
+  let (t2, c) = mapTyFull f t
+  (TyEffect es tail t2, c)
+-- A bare row atom (#997) has no wrapped Ty child to recurse into — a leaf,
+-- like `TyCon`/`TyVar` above.  `mapTyFull`'s outer `f ty1` call still
+-- visits the node itself.
+mapTyKids _ (TyRow es tail l) = (TyRow es tail l, False)
+mapTyKids f (TyConstrained cs t) =
+  let (cs2, cc) = mapConstraintsB f cs
+  let (t2, ct) = mapTyFull f t
+  (TyConstrained cs2 t2, cc || ct)
+
+mapTyListB : (Ty -> (Ty, Bool)) -> List Ty -> (List Ty, Bool)
+mapTyListB _ [] = ([], False)
+mapTyListB f (t::ts) =
+  let (t2, c1) = mapTyFull f t
+  let (ts2, c2) = mapTyListB f ts
+  (t2::ts2, c1 || c2)
+
+mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
+mapConstraintsB _ [] = ([], False)
+mapConstraintsB f ((Constraint iface tys)::rest) =
+  let (tys2, c1) = mapTyListB f tys
+  let (rest2, c2) = mapConstraintsB f rest
+  (Constraint iface tys2 :: rest2, c1 || c2)
+
+-- ── generic Decl traversal ───────────────────────────────────────────────────
+-- Threads `f` through EVERY Ty position of a decl (verified against ast.mdk):
+-- signatures, externs, `data` variant payloads, prop params, interface method
+-- sigs (+ their default bodies' Exprs), impl heads + requires (+ method Exprs),
+-- type aliases, newtypes, let-groups, and `@attr`-wrapped decls.  `DEffect`
+-- decls carry no Ty and are left untouched (the effect-labels codemod warns
+-- about them separately).
+export mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
+mapTyInDecl f (DTypeSig pub n t) =
+  let (t2, c) = mapTyFull f t
+  (DTypeSig pub n t2, c)
+mapTyInDecl f (DExtern pub n t) =
+  let (t2, c) = mapTyFull f t
+  (DExtern pub n t2, c)
+mapTyInDecl f (DFunDef pub n ps e) =
+  let (e2, c) = mapTyInExpr f e
+  (DFunDef pub n ps e2, c)
+mapTyInDecl f (DData vis n tps variants ders) =
+  let (vs2, c) = mapVariantsB f variants
+  (DData vis n tps vs2 ders, c)
+mapTyInDecl _ (DUse pub path loc) = (DUse pub path loc, False)
+mapTyInDecl _ (DEffect pub n dom) = (DEffect pub n dom, False)
+mapTyInDecl f (DProp pub n params body) =
+  let (params2, c1) = mapPropParamsB f params
+  let (body2, c2) = mapTyInExpr f body
+  (DProp pub n params2 body2, c1 || c2)
+mapTyInDecl f (DTest pub n body) =
+  let (b2, c) = mapTyInExpr f body
+  (DTest pub n b2, c)
+mapTyInDecl f (DBench pub n body) =
+  let (b2, c) = mapTyInExpr f body
+  (DBench pub n b2, c)
+-- ⚠️ PARTIAL record patterns, NO `...` rest marker.  This file's own `TyCon`
+-- comment forbids it and #1217 is why: `desugarPat _ (PRec _ _ True) = PWild`
+-- collapses a `...` pattern to a CATCH-ALL, so with it these two arms made the
+-- whole `Decl` match trivially "exhaustive" and an unhandled constructor produced
+-- NO diagnostic at all.  Reproduced on this binary: `f (DA { da_x, ... })` is
+-- silent where `g (DA { da_x })` correctly reports `Missing case: 'DB _'`.  These
+-- arrived here with the `...` in the move from `tools/codemod.mdk` and are fixed
+-- in place; a partial pattern already tolerates fields added later, so the marker
+-- bought nothing.
+mapTyInDecl f (d@(DInterface { methods })) =
+  let (ms2, c) = mapIfaceMethodsB f methods
+  (DInterface { d | methods = ms2 }, c)
+mapTyInDecl f (d@(DImpl { tys, reqs, methods })) =
+  let (tys2, c1) = mapTyListB f tys
+  let (reqs2, c2) = mapRequiresB f reqs
+  let (ms2, c3) = mapImplMethodsB f methods
+  (DImpl { d | tys = tys2, reqs = reqs2, methods = ms2 }, c1 || c2 || c3)
+mapTyInDecl f (DTypeAlias pub n tps t) =
+  let (t2, c) = mapTyFull f t
+  (DTypeAlias pub n tps t2, c)
+mapTyInDecl f (DNewtype pub n tps cn t ders) =
+  let (t2, c) = mapTyFull f t
+  (DNewtype pub n tps cn t2 ders, c)
+mapTyInDecl f (DLetGroup pub binds) =
+  let (bs2, c) = mapLetBindsB f binds
+  (DLetGroup pub bs2, c)
+mapTyInDecl f (DAttrib attrs d) =
+  let (d2, c) = mapTyInDecl f d
+  (DAttrib attrs d2, c)
+
+mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
+mapVariantsB _ [] = ([], False)
+mapVariantsB f (v::vs) =
+  let (v2, c1) = mapVariantB f v
+  let (vs2, c2) = mapVariantsB f vs
+  (v2::vs2, c1 || c2)
+
+mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
+mapVariantB f (Variant n (ConPos tys)) =
+  let (tys2, c) = mapTyListB f tys
+  (Variant n (ConPos tys2), c)
+mapVariantB f (Variant n (ConNamed fields omitted)) =
+  let (fs2, c) = mapFieldsB f fields
+  (Variant n (ConNamed fs2 omitted), c)
+
+mapFieldsB : (Ty -> (Ty, Bool)) -> List Field -> (List Field, Bool)
+mapFieldsB _ [] = ([], False)
+mapFieldsB f ((Field n t)::rest) =
+  let (t2, c1) = mapTyFull f t
+  let (rest2, c2) = mapFieldsB f rest
+  (Field n t2 :: rest2, c1 || c2)
+
+mapPropParamsB : (Ty -> (Ty, Bool)) -> List PropParam -> (List PropParam, Bool)
+mapPropParamsB _ [] = ([], False)
+mapPropParamsB f ((PropParam n l t)::rest) =
+  let (t2, c1) = mapTyFull f t
+  let (rest2, c2) = mapPropParamsB f rest
+  (PropParam n l t2 :: rest2, c1 || c2)
+
+mapIfaceMethodsB : (Ty -> (Ty, Bool)) -> List IfaceMethod -> (List IfaceMethod, Bool)
+mapIfaceMethodsB _ [] = ([], False)
+mapIfaceMethodsB f (m::ms) =
+  let (m2, c1) = mapIfaceMethodB f m
+  let (ms2, c2) = mapIfaceMethodsB f ms
+  (m2::ms2, c1 || c2)
+
+mapIfaceMethodB : (Ty -> (Ty, Bool)) -> IfaceMethod -> (IfaceMethod, Bool)
+mapIfaceMethodB f (IfaceMethod n ty None) =
+  let (ty2, c) = mapTyFull f ty
+  (IfaceMethod n ty2 None, c)
+mapIfaceMethodB f (IfaceMethod n ty (Some (MethodDefault ps e))) =
+  let (ty2, c1) = mapTyFull f ty
+  let (e2, c2) = mapTyInExpr f e
+  (IfaceMethod n ty2 (Some (MethodDefault ps e2)), c1 || c2)
+
+mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
+mapRequiresB _ [] = ([], False)
+mapRequiresB f ((Require iface tys)::rest) =
+  let (tys2, c1) = mapTyListB f tys
+  let (rest2, c2) = mapRequiresB f rest
+  (Require iface tys2 :: rest2, c1 || c2)
+
+mapImplMethodsB : (Ty -> (Ty, Bool)) -> List ImplMethod -> (List ImplMethod, Bool)
+mapImplMethodsB _ [] = ([], False)
+mapImplMethodsB f ((ImplMethod n ps e)::rest) =
+  let (e2, c1) = mapTyInExpr f e
+  let (rest2, c2) = mapImplMethodsB f rest
+  (ImplMethod n ps e2 :: rest2, c1 || c2)
+
+mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
+mapLetBindsB _ [] = ([], False)
+mapLetBindsB f ((LetBind n clauses)::rest) =
+  let (cs2, c1) = mapFunClausesB f clauses
+  let (rest2, c2) = mapLetBindsB f rest
+  (LetBind n cs2 :: rest2, c1 || c2)
+
+mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
+mapFunClausesB _ [] = ([], False)
+mapFunClausesB f ((FunClause ps e)::rest) =
+  let (e2, c1) = mapTyInExpr f e
+  let (rest2, c2) = mapFunClausesB f rest
+  (FunClause ps e2 :: rest2, c1 || c2)
+
+-- ── generic Expr traversal (TOTAL over ast.mdk's Expr) ───────────────────────
+-- Ty appears in an Expr ONLY at `EAnnot`/`EHeadAnnot`, but every Expr-carrying
+-- constructor must be walked to REACH them.  This mirrors desugar.mdk's `mapKids`
+-- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
+-- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
+-- header above; NOT a build error), but threads the
+-- change flag purely.  Ref-typed fields (EBinOp/EUnOp/EFieldAccess/ESlice/EIndex
+-- /ERecordUpdate/EMethodAt/EDictAt/ENumLit) are carried through unchanged.
+export mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
+mapTyInExpr _ (ELit l) = (ELit l, False)
+mapTyInExpr _ (EVar n) = (EVar n, False)
+mapTyInExpr f (EApp a b) =
+  let (a2, ca) = mapTyInExpr f a
+  let (b2, cb) = mapTyInExpr f b
+  (EApp a2 b2, ca || cb)
+mapTyInExpr f (ELam ps b) =
+  let (b2, c) = mapTyInExpr f b
+  (ELam ps b2, c)
+mapTyInExpr f (ELet m r p e1 e2) =
+  let (e1b, c1) = mapTyInExpr f e1
+  let (e2b, c2) = mapTyInExpr f e2
+  (ELet m r p e1b e2b, c1 || c2)
+mapTyInExpr f (EMatch e0 arms) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (arms2, c2) = mapArmsB f arms
+  (EMatch e0b arms2, c1 || c2)
+mapTyInExpr f (EIf c t el) =
+  let (cb, c1) = mapTyInExpr f c
+  let (tb, c2) = mapTyInExpr f t
+  let (elb, c3) = mapTyInExpr f el
+  (EIf cb tb elb, c1 || c2 || c3)
+mapTyInExpr f (EBinOp op a b r) =
+  let (a2, ca) = mapTyInExpr f a
+  let (b2, cb) = mapTyInExpr f b
+  (EBinOp op a2 b2 r, ca || cb)
+mapTyInExpr f (EUnOp op a r) =
+  let (a2, c) = mapTyInExpr f a
+  (EUnOp op a2 r, c)
+mapTyInExpr f (EInfix op a b) =
+  let (a2, ca) = mapTyInExpr f a
+  let (b2, cb) = mapTyInExpr f b
+  (EInfix op a2 b2, ca || cb)
+mapTyInExpr f (EFieldAccess e0 n r) =
+  let (e0b, c) = mapTyInExpr f e0
+  (EFieldAccess e0b n r, c)
+mapTyInExpr f (ETuple es) =
+  let (es2, c) = mapExprsB f es
+  (ETuple es2, c)
+mapTyInExpr f (EListLit es) =
+  let (es2, c) = mapExprsB f es
+  (EListLit es2, c)
+mapTyInExpr f (EArrayLit es) =
+  let (es2, c) = mapExprsB f es
+  (EArrayLit es2, c)
+mapTyInExpr f (ERangeList lo hi incl) =
+  let (lo2, c1) = mapTyInExpr f lo
+  let (hi2, c2) = mapTyInExpr f hi
+  (ERangeList lo2 hi2 incl, c1 || c2)
+mapTyInExpr f (ERangeArray lo hi incl) =
+  let (lo2, c1) = mapTyInExpr f lo
+  let (hi2, c2) = mapTyInExpr f hi
+  (ERangeArray lo2 hi2 incl, c1 || c2)
+mapTyInExpr f (ESlice e0 lo hi incl r) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (lo2, c2) = mapTyInExpr f lo
+  let (hi2, c3) = mapTyInExpr f hi
+  (ESlice e0b lo2 hi2 incl r, c1 || c2 || c3)
+mapTyInExpr f (ELetGroup binds e2) =
+  let (bs2, c1) = mapLetBindsB f binds
+  let (e2b, c2) = mapTyInExpr f e2
+  (ELetGroup bs2 e2b, c1 || c2)
+mapTyInExpr _ (ESection (SecBare op)) = (ESection (SecBare op), False)
+mapTyInExpr f (ESection (SecRight op e0)) =
+  let (e0b, c) = mapTyInExpr f e0
+  (ESection (SecRight op e0b), c)
+mapTyInExpr f (ESection (SecLeft e0 op)) =
+  let (e0b, c) = mapTyInExpr f e0
+  (ESection (SecLeft e0b op), c)
+mapTyInExpr f (EIndex e0 i r) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (i2, c2) = mapTyInExpr f i
+  (EIndex e0b i2 r, c1 || c2)
+mapTyInExpr f (EAnnot e0 t) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (t2, c2) = mapTyFull f t
+  (EAnnot e0b t2, c1 || c2)
+mapTyInExpr f (EHeadAnnot e0 t) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (t2, c2) = mapTyFull f t
+  (EHeadAnnot e0b t2, c1 || c2)
+mapTyInExpr f (EBlock stmts) =
+  let (ss2, c) = mapDoStmtsB f stmts
+  (EBlock ss2, c)
+mapTyInExpr f (EDo stmts) =
+  let (ss2, c) = mapDoStmtsB f stmts
+  (EDo ss2, c)
+mapTyInExpr f (EStringInterp parts) =
+  let (ps2, c) = mapInterpsB f parts
+  (EStringInterp ps2, c)
+mapTyInExpr f (EGuards arms) =
+  let (as2, c) = mapGuardArmsB f arms
+  (EGuards as2, c)
+mapTyInExpr f (ERecordCreate n fs) =
+  let (fs2, c) = mapFieldAssignsB f fs
+  (ERecordCreate n fs2, c)
+mapTyInExpr f (ERecordUpdate e0 fs r) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (fs2, c2) = mapFieldAssignsB f fs
+  (ERecordUpdate e0b fs2 r, c1 || c2)
+mapTyInExpr f (EVariantUpdate cn e0 fs) =
+  let (e0b, c1) = mapTyInExpr f e0
+  let (fs2, c2) = mapFieldAssignsB f fs
+  (EVariantUpdate cn e0b fs2, c1 || c2)
+mapTyInExpr f (EMapLit n kvs) =
+  let (kvs2, c) = mapKvsB f kvs
+  (EMapLit n kvs2, c)
+mapTyInExpr f (ESetLit n es) =
+  let (es2, c) = mapExprsB f es
+  (ESetLit n es2, c)
+mapTyInExpr f (EAsPat n e0) =
+  let (e0b, c) = mapTyInExpr f e0
+  (EAsPat n e0b, c)
+mapTyInExpr _ (EMethodRef n) = (EMethodRef n, False)
+mapTyInExpr _ (EDictApp n) = (EDictApp n, False)
+mapTyInExpr _ (EVarAt n a) = (EVarAt n a, False)
+-- #837's resolve-stamped variable occurrence.  It carries no Ty and no Expr
+-- child, so this is a passthrough — but the arm is NOT optional: without it the
+-- match is non-exhaustive, and `frontend.resolve`'s #1110 origin stamper walks
+-- trees that a later `stampBindingIds` can have rewritten.  (It was genuinely
+-- missing while this traversal lived in `tools/codemod.mdk`, where only
+-- freshly-PARSED trees — which never hold an `EVarId` — ever reached it.)
+mapTyInExpr _ (EVarId n i) = (EVarId n i, False)
+mapTyInExpr _ (EMethodAt n r1 r2 r3) = (EMethodAt n r1 r2 r3, False)
+mapTyInExpr _ (EDictAt n r) = (EDictAt n r, False)
+mapTyInExpr f (ELoc l e) =
+  let (e2, c) = mapTyInExpr f e
+  (ELoc l e2, c)
+mapTyInExpr f (EDoOrigin l e) =
+  let (e2, c) = mapTyInExpr f e
+  (EDoOrigin l e2, c)
+mapTyInExpr _ (ENumLit n rf rr lx) = (ENumLit n rf rr lx, False)
+
+mapExprsB : (Ty -> (Ty, Bool)) -> List Expr -> (List Expr, Bool)
+mapExprsB _ [] = ([], False)
+mapExprsB f (e::es) =
+  let (e2, c1) = mapTyInExpr f e
+  let (es2, c2) = mapExprsB f es
+  (e2::es2, c1 || c2)
+
+mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
+mapArmsB _ [] = ([], False)
+mapArmsB f ((Arm p gs b)::rest) =
+  let (gs2, c1) = mapGuardsB f gs
+  let (b2, c2) = mapTyInExpr f b
+  let (rest2, c3) = mapArmsB f rest
+  (Arm p gs2 b2 :: rest2, c1 || c2 || c3)
+
+mapGuardsB : (Ty -> (Ty, Bool)) -> List Guard -> (List Guard, Bool)
+mapGuardsB _ [] = ([], False)
+mapGuardsB f ((GBool g)::rest) =
+  let (g2, c1) = mapTyInExpr f g
+  let (rest2, c2) = mapGuardsB f rest
+  (GBool g2 :: rest2, c1 || c2)
+mapGuardsB f ((GBind p g)::rest) =
+  let (g2, c1) = mapTyInExpr f g
+  let (rest2, c2) = mapGuardsB f rest
+  (GBind p g2 :: rest2, c1 || c2)
+
+mapGuardArmsB : (Ty -> (Ty, Bool)) -> List GuardArm -> (List GuardArm, Bool)
+mapGuardArmsB _ [] = ([], False)
+mapGuardArmsB f ((GuardArm gs b)::rest) =
+  let (gs2, c1) = mapGuardsB f gs
+  let (b2, c2) = mapTyInExpr f b
+  let (rest2, c3) = mapGuardArmsB f rest
+  (GuardArm gs2 b2 :: rest2, c1 || c2 || c3)
+
+mapDoStmtsB : (Ty -> (Ty, Bool)) -> List DoStmt -> (List DoStmt, Bool)
+mapDoStmtsB _ [] = ([], False)
+mapDoStmtsB f (s::ss) =
+  let (s2, c1) = mapDoStmtB f s
+  let (ss2, c2) = mapDoStmtsB f ss
+  (s2::ss2, c1 || c2)
+
+mapDoStmtB : (Ty -> (Ty, Bool)) -> DoStmt -> (DoStmt, Bool)
+mapDoStmtB f (DoExpr e) =
+  let (e2, c) = mapTyInExpr f e
+  (DoExpr e2, c)
+mapDoStmtB f (DoBind p e) =
+  let (e2, c) = mapTyInExpr f e
+  (DoBind p e2, c)
+mapDoStmtB f (DoLet m r p e) =
+  let (e2, c) = mapTyInExpr f e
+  (DoLet m r p e2, c)
+mapDoStmtB f (DoAssign x e) =
+  let (e2, c) = mapTyInExpr f e
+  (DoAssign x e2, c)
+mapDoStmtB f (DoFieldAssign x fs e) =
+  let (e2, c) = mapTyInExpr f e
+  (DoFieldAssign x fs e2, c)
+
+mapInterpsB : (Ty -> (Ty, Bool)) -> List InterpPart -> (List InterpPart, Bool)
+mapInterpsB _ [] = ([], False)
+mapInterpsB f (InterpStr s :: rest0) =
+  -- InterpStr carries no Expr; recurse the rest with the real transform.
+  let (rest2, c) = mapInterpsB f rest0
+  (InterpStr s :: rest2, c)
+mapInterpsB f ((InterpExpr e)::rest) =
+  let (e2, c1) = mapTyInExpr f e
+  let (rest2, c2) = mapInterpsB f rest
+  (InterpExpr e2 :: rest2, c1 || c2)
+
+mapFieldAssignsB : (Ty -> (Ty, Bool)) -> List FieldAssign -> (List FieldAssign, Bool)
+mapFieldAssignsB _ [] = ([], False)
+mapFieldAssignsB f ((FieldAssign n v)::rest) =
+  let (v2, c1) = mapTyInExpr f v
+  let (rest2, c2) = mapFieldAssignsB f rest
+  (FieldAssign n v2 :: rest2, c1 || c2)
+
+mapKvsB : (Ty -> (Ty, Bool)) -> List (Expr, Expr) -> (List (Expr, Expr), Bool)
+mapKvsB _ [] = ([], False)
+mapKvsB f ((k, v)::rest) =
+  let (k2, c1) = mapTyInExpr f k
+  let (v2, c2) = mapTyInExpr f v
+  let (rest2, c3) = mapKvsB f rest
+  ((k2, v2)::rest2, c1 || c2 || c3)

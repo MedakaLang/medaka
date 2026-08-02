@@ -175,5 +175,82 @@ if [ "$fail_count" -ne 0 ]; then
   exit 1
 fi
 
+# ── #1110 §8 I6.3 producer ratchet ─────────────────────────────────────────
+# `OriginUnresolved` (frontend/ast.mdk) is the "no identity was available"
+# inhabitant of `TyConOrigin`, and DICT-SEMANTICS.md §8 I6.3 forbids a sentinel
+# origin whose meaning is decided per call site. It survives resolve in exactly
+# two shapes, both honest ABSENCE: a name in no scope at all, and a loader-less
+# (flat) driver that has no module id for the user's own declarations. What must
+# never appear is a THIRD shape — a post-resolve site minting the sentinel onto a
+# head that already had, or should have had, a real identity.
+#
+# That is not hypothetical: it bit the carrier PR twice (typecheck's `RScalar`
+# synthesis, and `substTyVars` rebuilding a node from its name alone — both since
+# moved to `tyConBuiltin` / node-preserving). This pins the producer set so a
+# third one cannot land silently.
+#
+# TWO checks, because the first alone is a hole: `tyConUnresolved` is only the
+# HELPER, and a direct `TyCon { …, tyConOrigin = OriginUnresolved }` record
+# literal bypasses it entirely. So the constructor itself is pinned too. Its
+# allowed set is SMALLER, and deliberately so — `frontend/{parser,desugar}.mdk`
+# and the fuzz generator all go through the helper, so only the module that
+# DEFINES the type and the module that CONSUMES it in a pattern may name it.
+#
+# ⚠️ It lives HERE, in a gate the `soundness` job runs on every PR, rather than
+# in the topically-better `test/check_removed_constructs.sh` — that one is
+# NIGHTLY-only, so a ratchet in it cannot block the PR that breaks it.
+#
+# ⚠️ This is a PRODUCER ratchet, not the runtime drain #1110 asks for. It cannot
+# see whether a driver forgot to stamp, nor whether one stamped the WRONG id --
+# the defect class review found in the first cut. Both need a way to OBSERVE an
+# origin from a compilation, which today does not exist. See the PR body.
+echo "checking #1110 OriginUnresolved producer set ..."
+tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
+compiler/frontend/ast.mdk
+compiler/frontend/desugar.mdk
+compiler/frontend/parser.mdk"
+originun_allowed="compiler/frontend/ast.mdk
+compiler/frontend/resolve.mdk"
+tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      # a file counts only if it mentions the producer OUTSIDE a comment line
+      if grep -w 'tyConUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
+  echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
+  echo "  allowed (PRE-RESOLVE construction only):"
+  printf '    %s\n' $tyconun_allowed
+  echo "  actual:"
+  printf '    %s\n' $tyconun_actual
+  echo "  A POST-RESOLVE producer reintroduces the \`OriginUnresolved\` sentinel"
+  echo "  DICT-SEMANTICS.md §8 I6.3 forbids. Use \`tyConBuiltin\` for a language-"
+  echo "  provided head, or preserve the node you are rebuilding. If the new site"
+  echo "  really is pre-resolve, add it to the list above and say why in the PR."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$tyconun_actual" | grep -c .) pre-resolve producer file(s)"
+
+originun_actual=$(git -C "$ROOT" grep -lw -- 'OriginUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      if grep -w 'OriginUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$originun_actual" != "$originun_allowed" ]; then
+  echo "FAIL: the #1110 \`OriginUnresolved\` constructor site set changed."
+  echo "  allowed (definition + resolve's own stamper):"
+  printf '    %s\n' $originun_allowed
+  echo "  actual:"
+  printf '    %s\n' $originun_actual
+  echo "  A direct \`TyCon { …, tyConOrigin = OriginUnresolved }\` literal bypasses the"
+  echo "  \`tyConUnresolved\` helper and its ratchet above. Build pre-resolve nodes with"
+  echo "  \`tyConUnresolved\`, language-provided heads with \`tyConBuiltin\`, and preserve"
+  echo "  the node you are rebuilding rather than re-synthesising it from its name."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
+
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0
