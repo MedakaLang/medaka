@@ -445,6 +445,12 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     PERMANENT by the immunity rule.  That asymmetry is the documented
 --     subset-and-agreement safety property, and these rows ARE it.
 --
+--     ⚠️ EXCEPT the `flat core decl:*` rows: for those, `checkProgramSeededSplit`
+--     already knows the id (`stampFlatTyOrigins coreProg0 coreProg0` stamps the
+--     prelude's own type OCCURRENCES `mod:core`), so their silence is not
+--     "no loader id to invent" — it is an unwired decl-layer stamp on a known
+--     id, tracked as #1227, not an instance of the safety property above.
+--
 --   * a `graph` row is the one that deserves reading.  The graph path has a real
 --     module id for every module and a scope built from builtins + prelude +
 --     imports + own declarations, so a head it left unstamped is either genuinely
@@ -452,6 +458,16 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     tree still gets here) or a driver gap.  Neither is decidable from this
 --     output alone — which is why the set is PINNED for review rather than
 --     asserted empty.
+--
+--     ⚠️ The committed `unresolved` fixture makes the OCCURRENCE zero above
+--     earned (falsifiable by mutation-of-fixture) — it proves the graph arm's
+--     occurrence walk can emit a row at all.  It proves nothing about the
+--     `decl:` layer: `fillDeclOrigin` stamps `OriginUnresolved -> OriginModule
+--     mid` unconditionally for any non-empty `mid`, and the loader never mints
+--     `""`, so no source program can produce a `graph <slot> decl:X` residual
+--     row.  That zero is structural — provable only by mutating the stamper —
+--     not earned by any fixture.  Do not read this section as blanket
+--     falsifiable across both layers.
 --
 -- ⚠️ A head can appear here AND carry a real origin in the same arm and slot; that
 -- is `ArmMulti`, an arm contradicting itself, and it is strictly worse than a plain

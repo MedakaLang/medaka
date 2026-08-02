@@ -115,6 +115,10 @@
 #           identity is correctable by a later graph pass; OVER-supplying a wrong
 #           one is made PERMANENT by the immunity rule. That asymmetry is the
 #           documented subset-and-agreement safety property, and these rows ARE it.
+#           ⚠️ EXCEPT `flat core decl:*`: `checkProgramSeededSplit` already knows
+#           `mod:core` for the prelude (it stamps prelude OCCURRENCES with it via
+#           `stampFlatTyOrigins coreProg0 coreProg0`), so those rows are an
+#           unwired decl-layer stamp on a known id, not "no id to invent" — #1227.
 #   single  EXPECTED where the head comes from a module the 1-module graph does not
 #           contain — `medaka test <file>` on a file whose imports are not loaded
 #           has no source module to attribute them to.
@@ -125,12 +129,20 @@
 #           here) or a DRIVER GAP. Not decidable from this output alone — which is
 #           why the set is pinned for review rather than asserted empty.
 #
-# ⚠️ The `unresolved` fixture exists so this section stays FALSIFIABLE. On the
-# `graph` corpus the graph arm's residual is EMPTY — a good result that is also
-# indistinguishable, from the golden alone, from a section structurally unable to
-# emit a graph row. `unresolved` pins one (`graph main_unresolved Missing`, a type
-# declared nowhere). Do not "fix" that row by deleting the undeclared type; doing so
-# disarms the control and returns the section to unfalsifiable.
+# ⚠️ The `unresolved` fixture exists so the OCCURRENCE half of this section stays
+# FALSIFIABLE. On the `graph` corpus the graph arm's occurrence residual is EMPTY —
+# a good result that is also indistinguishable, from the golden alone, from a
+# section structurally unable to emit a graph row. `unresolved` pins one (`graph
+# main_unresolved Missing`, a bare occurrence — `Missing` is declared nowhere).
+# Do not "fix" that row by deleting the undeclared type; doing so disarms the
+# control and returns the occurrence half to unfalsifiable.
+#
+# This control says NOTHING about the `decl:` layer. `fillDeclOrigin` (resolve.mdk)
+# stamps `OriginUnresolved -> OriginModule mid` unconditionally whenever `mid /= ""`,
+# and the loader never mints `""`, so no source program can produce a
+# `graph <slot> decl:X` residual row — that zero is structural, provable only by
+# mutating the stamper, not earned by any fixture. Don't read "the residual section
+# is falsifiable" as covering both layers.
 #
 # ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
 # AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
