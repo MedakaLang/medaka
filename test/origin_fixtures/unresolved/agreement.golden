@@ -1,26 +1,5 @@
 === ORIGIN AGREEMENT (#1110) ===
 # <slot> <head> <flat~graph> <single~graph> <flat~single>
-alpha Bool AGREE AGREE AGREE
-alpha Crate R-ONLY CONFLICT R-ONLY
-alpha CrateId R-ONLY CONFLICT R-ONLY
-alpha Int AGREE AGREE AGREE
-alpha Option AGREE AGREE AGREE
-alpha Ordering AGREE AGREE AGREE
-alpha String AGREE AGREE AGREE
-alpha Tag R-ONLY CONFLICT R-ONLY
-alpha Weight R-ONLY CONFLICT R-ONLY
-alpha decl:Crate R-ONLY CONFLICT R-ONLY
-alpha decl:CrateId R-ONLY CONFLICT R-ONLY
-alpha decl:Tag R-ONLY CONFLICT R-ONLY
-alpha decl:Weighable R-ONLY CONFLICT R-ONLY
-alpha decl:Weight R-ONLY CONFLICT R-ONLY
-beta Crate R-ONLY R-ONLY NEITHER
-beta Int AGREE AGREE AGREE
-beta Result AGREE AGREE AGREE
-beta Shipment R-ONLY CONFLICT R-ONLY
-beta String AGREE AGREE AGREE
-beta Tag R-ONLY R-ONLY NEITHER
-beta decl:Shipment R-ONLY CONFLICT R-ONLY
 core Array AGREE AGREE AGREE
 core Bool AGREE AGREE AGREE
 core Char AGREE AGREE AGREE
@@ -63,12 +42,10 @@ core decl:Semigroup R-ONLY AGREE R-ONLY
 core decl:Slice R-ONLY AGREE R-ONLY
 core decl:Thenable R-ONLY AGREE R-ONLY
 core decl:Traversable R-ONLY AGREE R-ONLY
-main_graph Crate R-ONLY R-ONLY NEITHER
-main_graph Int AGREE AGREE AGREE
-main_graph Option AGREE AGREE AGREE
-main_graph Shipment R-ONLY R-ONLY NEITHER
-main_graph String AGREE AGREE AGREE
-main_graph Tag R-ONLY R-ONLY NEITHER
+main_unresolved Int AGREE AGREE AGREE
+main_unresolved Missing NEITHER NEITHER NEITHER
+main_unresolved Parcel R-ONLY CONFLICT R-ONLY
+main_unresolved decl:Parcel R-ONLY CONFLICT R-ONLY
 === CONFLICTS ===
 # PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
 # ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
@@ -76,33 +53,11 @@ main_graph Tag R-ONLY R-ONLY NEITHER
 # so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
 # must delete them here by hand. (Sourcing the id from the driver would make it
 # mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
-alpha Crate flat=- single=mod:__user__ graph=mod:alpha
-alpha CrateId flat=- single=mod:__user__ graph=mod:alpha
-alpha Tag flat=- single=mod:__user__ graph=mod:alpha
-alpha Weight flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Crate flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:CrateId flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Tag flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Weighable flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Weight flat=- single=mod:__user__ graph=mod:alpha
-beta Shipment flat=- single=mod:__user__ graph=mod:beta
-beta decl:Shipment flat=- single=mod:__user__ graph=mod:beta
+main_unresolved Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
+main_unresolved decl:Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
-flat alpha Crate
-flat alpha CrateId
-flat alpha Tag
-flat alpha Weight
-flat alpha decl:Crate
-flat alpha decl:CrateId
-flat alpha decl:Tag
-flat alpha decl:Weighable
-flat alpha decl:Weight
-flat beta Crate
-flat beta Shipment
-flat beta Tag
-flat beta decl:Shipment
 flat core decl:Alternative
 flat core decl:Applicative
 flat core decl:Arbitrary
@@ -131,42 +86,33 @@ flat core decl:Semigroup
 flat core decl:Slice
 flat core decl:Thenable
 flat core decl:Traversable
-flat main_graph Crate
-flat main_graph Shipment
-flat main_graph Tag
-single beta Crate
-single beta Tag
-single main_graph Crate
-single main_graph Shipment
-single main_graph Tag
+flat main_unresolved Missing
+flat main_unresolved Parcel
+flat main_unresolved decl:Parcel
+graph main_unresolved Missing
+single main_unresolved Missing
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
 Array 1 builtin
 Bool 1 builtin
 Char 1 builtin
-Crate 1 mod:alpha
-CrateId 1 mod:alpha
 Float 1 builtin
 Int 1 builtin
 List 1 builtin
 Option 1 mod:core
 Ordering 1 mod:core
+Parcel 1 mod:main_unresolved
 RField 1 mod:core
 Rep 1 mod:core
 Result 1 mod:core
-Shipment 1 mod:beta
 String 1 builtin
-Tag 1 mod:alpha
 Unit 1 builtin
-Weight 1 mod:alpha
 __tuple2__ 1 builtin
 decl:Alternative 1 mod:core
 decl:Applicative 1 mod:core
 decl:Arbitrary 1 mod:core
 decl:Bimappable 1 mod:core
 decl:Bounded 1 mod:core
-decl:Crate 1 mod:alpha
-decl:CrateId 1 mod:alpha
 decl:Debug 1 mod:core
 decl:Display 1 mod:core
 decl:Eq 1 mod:core
@@ -183,23 +129,20 @@ decl:Num 1 mod:core
 decl:Option 1 mod:core
 decl:Ord 1 mod:core
 decl:Ordering 1 mod:core
+decl:Parcel 1 mod:main_unresolved
 decl:RField 1 mod:core
 decl:Rep 1 mod:core
 decl:Result 1 mod:core
 decl:Semigroup 1 mod:core
-decl:Shipment 1 mod:beta
 decl:Slice 1 mod:core
-decl:Tag 1 mod:alpha
 decl:Thenable 1 mod:core
 decl:Traversable 1 mod:core
-decl:Weighable 1 mod:alpha
-decl:Weight 1 mod:alpha
 === SUMMARY ===
-modules 3
-graph-modules 3
-flat-segments 6
-decl-heads 34
-heads 69
-claims 207
-residual 49
-conflicts 11
+modules 1
+graph-modules 1
+flat-segments 2
+decl-heads 29
+heads 46
+claims 138
+residual 33
+conflicts 2
