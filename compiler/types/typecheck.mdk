@@ -10883,10 +10883,12 @@ cohGoR subst (TVar c1) t = cohBind subst (tyvarId c1) t
 cohGoR subst t (TVar c2) = cohBind subst (tyvarId c2) t
 cohGoR _ (TCon a) (TCon b) = a == b
 -- #1110: name equality, exactly as the shared `TCon` arm gave — INCLUDING the
--- cross-population pairs, which are not dead: a rigid and a real head can share
--- the name `__tupleN__` (see `Mono.TRigid`), so `a == b` could be True across
--- them and `cohGoR _ _ _ = False` would change the answer.  Same forgery
--- preserved as `unifyN`/`matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
+-- cross-population pairs.  ⚠️ NOT SEPARATELY PROBED — armed because the pre-split
+-- `TCon` arm answered these pairings with the same `a == b`, and a rigid and a
+-- real head CAN share the name `__tupleN__` (see `Mono.TRigid`).  Whether a
+-- coherence sweep can actually be reached with such a pair is unmeasured; the arm
+-- is answer-preserving either way.  Measured instances of the same forgery are
+-- `unifyN` and `matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
 cohGoR _ (TRigid a) (TRigid b) = a == b
 cohGoR _ (TCon a) (TRigid b) = a == b
 cohGoR _ (TRigid a) (TCon b) = a == b
@@ -10968,10 +10970,10 @@ cohStep g0 s0 =
   match g
     TVar c => MVar (tyvarId c)
     -- #1110: the shared `TCon` constructor compared these four pairings with one
-    -- `a == b`, and the cross-population ones are LIVE — a rigid and a real head
-    -- can both spell `__tupleN__` (see `Mono.TRigid`), so routing them to
-    -- `_ => MFail` would change the answer.  Same forgery preserved as
-    -- `unifyN`/`matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
+    -- `a == b`.  ⚠️ The cross-population ones are NOT SEPARATELY PROBED — armed
+    -- because that arm answered them, and because a rigid and a real head CAN
+    -- both spell `__tupleN__` (see `Mono.TRigid`).  Answer-preserving either way.
+    -- Measured instances: `unifyN`, `matchStep` (§8 I6.2(b), OWED-#1110).
     TCon a => match s
       TCon b => if a == b then MOk else MFail
       TRigid b => if a == b then MOk else MFail
@@ -11001,7 +11003,9 @@ cohEqR : Mono -> Mono -> Bool
 cohEqR (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
 cohEqR (TCon a) (TCon b) = a == b
 -- #1110: same shape as the `cohGoR` arms — name equality on all four pairings.
--- The cross-population pairs are live (`__tupleN__`); see `Mono.TRigid`.
+-- Cross-population pairs NOT SEPARATELY PROBED; armed because the pre-split `TCon`
+-- arm answered them.  Reached from `matchStep`'s consistency check, so it is not
+-- independent of the measured `matchStep` case.  See `Mono.TRigid`.
 cohEqR (TRigid a) (TRigid b) = a == b
 cohEqR (TCon a) (TRigid b) = a == b
 cohEqR (TRigid a) (TCon b) = a == b
@@ -16473,8 +16477,9 @@ monoSameGiven a b = match normalize a
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => False
   -- #1110: the shared `TCon` constructor answered all four pairings with one
-  -- `x == y`, and the cross-population ones are LIVE (`__tupleN__`; see
-  -- `Mono.TRigid`), so routing them to `_ => False` would change the answer.
+  -- `x == y`.  ⚠️ Cross-population pairs NOT SEPARATELY PROBED — armed because
+  -- that arm answered them (`__tupleN__`; see `Mono.TRigid`).  Answer-preserving
+  -- either way; measured instances are `unifyN` and `matchStep`.
   TCon x => match normalize b
     TCon y => x == y
     TRigid y => x == y

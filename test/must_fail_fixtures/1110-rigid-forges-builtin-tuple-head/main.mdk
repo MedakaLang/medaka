@@ -1,0 +1,11 @@
+-- `__tuple2__` is a legal TYPE-PARAMETER spelling (identStartLower admits a
+-- leading `_`), so `Bad`'s field is a RIGID VARIABLE, not the builtin tuple head.
+-- `g` then claims that rigid IS the builtin `(,)`, and it is accepted.
+data Bad = Bad __tuple2__
+
+g : Bad -> (,)
+g (Bad v) = v
+
+-- proves the command reached the scheme dump rather than dying early
+sane : Int -> Int
+sane n = n

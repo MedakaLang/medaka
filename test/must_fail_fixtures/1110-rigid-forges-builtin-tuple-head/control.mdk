@@ -1,0 +1,12 @@
+-- CONTROL: byte-identical to main.mdk except the field's rigid is spelled `zzz`
+-- instead of `__tuple2__`, and `g`'s result type is that same rigid rather than
+-- the builtin `(,)`.  An ordinary rigid in a constructor field, and a signature
+-- over it, must keep working — if THIS breaks, rigids broke generally and the
+-- environment moved, not the forgery.
+data Bad = Bad zzz
+
+g : Bad -> Bad
+g b = b
+
+sane : Int -> Int
+sane n = n

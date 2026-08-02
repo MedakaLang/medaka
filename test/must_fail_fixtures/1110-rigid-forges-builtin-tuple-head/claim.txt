@@ -1,0 +1,57 @@
+issue: 1110
+what: A RIGID TYPE VARIABLE FORGES THE BUILTIN TUPLE HEAD. `__tuple2__` is a legal
+what: type-PARAMETER spelling -- `identStartLower` (compiler/frontend/lexer.mdk:1638)
+what: is `isLower … || … == '_'`, so the lexer emits `TIdent` and `parseTyAtom`
+what: (compiler/frontend/parser.mdk:2049) makes it a `TyVar`. But `__tuple2__` is ALSO
+what: the reserved builtin tuple tag that `tupleCtorTyName`
+what: (compiler/frontend/parser.mdk:2137) mints for the `(,)` sugar. So `data Bad = Bad
+what: __tuple2__` declares a field whose type is a rigid VARIABLE, and `g : Bad -> (,)`
+what: -- which claims that variable IS the builtin 2-tuple constructor -- typechecks
+what: clean at exit 0 with no diagnostic. `check` prints `g : Bad -> (,)`. This is
+what: DICT-SEMANTICS §8 I6.2(b) ("UNFORGEABLE: no source file may produce a head
+what: carrying the reserved origin"), which that table records as VERIFIED at the
+what: SURFACE level and OWED at the `Mono` level. Pre-existing: it reproduces on
+what: `main` before ARCH A-1 PR "A" and is deliberately preserved by it, since that
+what: PR is the answer-preserving carrier step.
+cmd: check main.mdk
+exit: 0
+stdout-line: g : Bad -> (,)
+stdout-line: sane : Int -> Int
+control: check control.mdk
+why-fixture: SINGLE-FILE, and `check` rather than `run`: the defect is an ACCEPTANCE
+why-fixture: (a program that must be rejected is not), so the observable is the
+why-fixture: inferred scheme, not a runtime value -- there is no wrong value to print
+why-fixture: because there is no way to construct a `Bad`. Two `stdout-line` pins, per
+why-fixture: this suite's rule to pin both the bug's line and a line proving the
+why-fixture: command still ran: `g : Bad -> (,)` IS the forgery (the rigid rendered as
+why-fixture: the builtin tuple head), and `sane : Int -> Int` proves the run reached
+why-fixture: the scheme dump rather than dying early. The trailing `-- <path>: ok …`
+why-fixture: line is deliberately NOT pinned -- it embeds the absolute fixture path,
+why-fixture: which differs per checkout.
+why-control: control.mdk is byte-identical except the rigid is spelled `zzz` instead of
+why-control: `__tuple2__`, and `g`'s result is that same rigid rather than the builtin
+why-control: `(,)`. That is the ONE distinguishing feature: an ordinary rigid in a
+why-control: constructor field, with a signature over it, must keep checking clean at
+why-control: exit 0. If the control breaks, rigid variables broke generally -- the
+why-control: environment moved, not this forgery -- and this gate says CONTROL-BROKE
+why-control: rather than DRAINED.
+why-note: MEASURED, not derived, on both sides of the split. On the pre-split binary
+why-note: (b74381ea) this program checks clean, exit 0. During ARCH A-1 PR "A" it
+why-note: briefly became `Type mismatch: (,) vs (,)` -- an error whose two sides render
+why-note: identically -- because splitting `Mono.TCon` into `TCon`/`TRigid` sent the
+why-note: cross-population pair to a wildcard. Val's ruling on #1110 is
+why-note: answer-preserving (carrier now, semantics later), so SEVEN sites now carry
+why-note: EXPLICIT cross-population arms that reproduce the forgery: unifyN, matchStep,
+why-note: cohGoR, cohStep, cohEqR, monoSameGiven and tupleSpine
+why-note: (compiler/types/typecheck.mdk). THIS FIXTURE IS THE ONLY REGRESSION COVERAGE
+why-note: FOR THOSE ARMS -- delete any of them as "unreachable" and this row goes RED
+why-note: rather than silently reintroducing the mismatch.
+why-note: FIX SHAPE: make a rigid variable unusable as an identity-bearing head, per
+why-note: I6.1 -- `headTyconMono`/`monoHeadCon` must stop handing a rigid's parameter
+why-note: name out as a dispatch key, and the seven cross-population arms then go with
+why-note: it. That flips this program to a type error, draining this row.
+why-note: ⚠️ ISSUE NUMBER: pinned to #1110 because DICT-SEMANTICS §8 I6.2(b) records
+why-note: this as OWED-#1110 and no narrower issue exists. #1110 is a multi-PR STAGE
+why-note: issue and may close before the forgery is fixed -- if it does,
+why-note: must_fail_census.sh will flag PINNED-BUT-CLOSED. Re-point this `issue:` line
+why-note: at the follow-on issue when one is filed.
