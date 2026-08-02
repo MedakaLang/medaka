@@ -1,4 +1,4 @@
-issue: 1110
+issue: 1243
 what: A RIGID TYPE VARIABLE FORGES THE BUILTIN TUPLE HEAD. `__tuple2__` is a legal
 what: type-PARAMETER spelling -- `identStartLower` (compiler/frontend/lexer.mdk:1638)
 what: is `isLower … || … == '_'`, so the lexer emits `TIdent` and `parseTyAtom`
@@ -50,8 +50,23 @@ why-note: FIX SHAPE: make a rigid variable unusable as an identity-bearing head,
 why-note: I6.1 -- `headTyconMono`/`monoHeadCon` must stop handing a rigid's parameter
 why-note: name out as a dispatch key, and the seven cross-population arms then go with
 why-note: it. That flips this program to a type error, draining this row.
-why-note: ⚠️ ISSUE NUMBER: pinned to #1110 because DICT-SEMANTICS §8 I6.2(b) records
-why-note: this as OWED-#1110 and no narrower issue exists. #1110 is a multi-PR STAGE
-why-note: issue and may close before the forgery is fixed -- if it does,
-why-note: must_fail_census.sh will flag PINNED-BUT-CLOSED. Re-point this `issue:` line
-why-note: at the follow-on issue when one is filed.
+why-note: SEVERITY IS S3, NOT S0, AND THE REASON IS LOAD-BEARING FOR THIS PIN: THE
+why-note: FORGING TYPE IS UNINHABITABLE. `Bad`'s field type is an unbound rigid, and a
+why-note: rigid unifies only with itself, so no `Bad` value can be constructed and `g`
+why-note: can never be called -- `mk : Bad; mk = Bad (1, 2)` is rejected `Type mismatch:
+why-note: (,) vs (a, b)` (measured). The wrongness is type-level only, with no runtime
+why-note: consequence, which is why this is `S3: friction & debt` and why the pin is on
+why-note: `check` rather than `run`: there is no wrong VALUE to observe.
+why-note: ⚠️ A BOUND type parameter does NOT forge -- `data Box __tuple2__ = Box
+why-note: __tuple2__` with `unbox : Box Int -> (,)` correctly errors `Type mismatch: (,)
+why-note: vs Int` (measured), because the parameter is substituted before any head
+why-note: comparison. ONLY AN UNBOUND RIGID REACHES THIS. So the sole route in is the
+why-note: shape filed as #1240 (an unbound type variable in a constructor field type is
+why-note: accepted with no diagnostic), and fixing #1240 may make this unreachable
+why-note: rather than fixed -- if this row drains at the same time as #1240, check
+why-note: WHICH of the two actually changed before closing #1243.
+why-note: ⚠️ DO NOT "FIX" control.mdk TO MATCH #1243'S ISSUE BODY. That issue's control
+why-note: is `g : Bad -> (,)` with the rigid renamed `zzz`, which REJECTS (`Type
+why-note: mismatch: (,) vs zzz`, measured). This harness requires a control that exits
+why-note: 0, so control.mdk uses `g : Bad -> Bad` instead. Both isolate the same one
+why-note: feature -- the reserved spelling -- but only this one can be the control here.

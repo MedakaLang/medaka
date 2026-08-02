@@ -35,7 +35,7 @@ stages=CORE_IR
 --   test/typecheck_error_fixtures/rigid_mono_head_key.mdk
 --     the goal-side dispatch key (`headTyconMono`); positive-controlled — deleting
 --     that arm makes the program silently ACCEPT, and the fixture fails.
---   test/must_fail_fixtures/1110-rigid-forges-builtin-tuple-head/
+--   test/must_fail_fixtures/1243-rigid-forges-builtin-tuple-head/
 --     the seven cross-population arms; positive-controlled — deleting `unifyN`'s
 --     two makes the pin DRAIN.
 --
