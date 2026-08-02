@@ -3719,7 +3719,7 @@ declNameTokIdxAt toks (DTypeSig _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DFunDef _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DData {  }) i =
+declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DEffect _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
@@ -3731,9 +3731,9 @@ declNameTokIdxAt toks (DBench _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DInterface { ... }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DTypeAlias {  }) i =
+declNameTokIdxAt toks (DTypeAlias { tyAliasOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
-declNameTokIdxAt toks (DNewtype {  }) i =
+declNameTokIdxAt toks (DNewtype { newtypeOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DLetGroup _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 2))  -- `let` `rec`
@@ -3994,7 +3994,7 @@ isCloseDelim _ = False
 -- for these, mirroring lib/parser_state.record_variant_line, which fires from
 -- the data-variant grammar productions.)
 isDataDecl : Decl -> Bool
-isDataDecl (DData {  }) = True
+isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 
 -- Flat list of every data decl's variant start lines, in decl order.

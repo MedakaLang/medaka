@@ -242,7 +242,7 @@ isInterior startLine endLine c =
 -- DData (incl. an attribute-wrapped one) routes interior comments through
 -- vcommentsFor, not the generic inline splice.
 isDataDeclF : Decl -> Bool
-isDataDeclF (DData {  }) = True
+isDataDeclF (DData { dataOrigin = _ }) = True
 isDataDeclF (DAttrib _ inner) = isDataDeclF inner
 isDataDeclF _ = False
 
@@ -696,7 +696,7 @@ formatSource src = match parseWithPositions src
 (DTypeSig false "isInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
 (DTypeSig false "isDataDeclF" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isDataDeclF" ((PRec "DData" () false)) (EVar "True"))
+(DFunDef false "isDataDeclF" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDeclF" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "isDataDeclF") (EVar "inner")))
 (DFunDef false "isDataDeclF" (PWild) (EVar "False"))
 (DTypeSig false "isSingleNamedFieldData" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -843,7 +843,7 @@ formatSource src = match parseWithPositions src
 (DTypeSig false "isInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
 (DTypeSig false "isDataDeclF" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isDataDeclF" ((PRec "DData" () false)) (EVar "True"))
+(DFunDef false "isDataDeclF" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDeclF" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "isDataDeclF") (EVar "inner")))
 (DFunDef false "isDataDeclF" (PWild) (EVar "False"))
 (DTypeSig false "isSingleNamedFieldData" (TyFun (TyCon "Decl") (TyCon "Bool")))

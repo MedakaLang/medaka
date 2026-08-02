@@ -275,7 +275,15 @@ annotateDecl (DLetGroup p binds) =
 -- #1110: record UPDATE, not re-construction.  A total literal here would have
 -- to respell `ifaceOrigin`, and respelling it is how an acquired identity gets
 -- silently reset (the `substTyVars` shape #1219 found).
-annotateDecl (d@(DInterface { methods })) =
+--
+-- ⚠️ `ifaceOrigin = _` is LOAD-BEARING and is not about identity.  A record
+-- pattern matches by LABEL SET in the interpreter (`matchPat`'s `VRecord` arm,
+-- `eval/eval.mdk`, discards the constructor) — and `methods` is a label `DImpl`
+-- ALSO has, with its arm BELOW this one.  Naming only `methods` therefore makes
+-- a `DImpl` take this arm under `medaka run` and the right arm under a built
+-- binary, at exit 0 both ways.  `ifaceOrigin` is a label no sibling has, which is
+-- the actual safety property.  See `frontend/ast.mdk`'s `Decl` comment and #1217.
+annotateDecl (d@(DInterface { ifaceOrigin = _, methods })) =
   DInterface { d | methods = map annotateIfaceMethod methods }
 annotateDecl (DImpl { pub, iface, tys, reqs, methods }) = DImpl {
   pub = pub,

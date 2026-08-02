@@ -238,7 +238,7 @@ isInterior startLine endLine c =
 -- DData (incl. an attribute-wrapped one) routes interior comments through
 -- vcommentsFor, not the generic inline splice.
 isDataDeclF : Decl -> Bool
-isDataDeclF (DData {  }) = True
+isDataDeclF (DData { dataOrigin = _ }) = True
 isDataDeclF (DAttrib _ inner) = isDataDeclF inner
 isDataDeclF _ = False
 

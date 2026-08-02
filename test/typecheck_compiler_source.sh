@@ -267,6 +267,10 @@ declun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/parser.mdk
 compiler/tools/printer.mdk"
+# â ï¸ Inherits #1222: `git grep` sees only TRACKED files, so an UNTRACKED `.mdk`
+# calling one of these post-resolve passes this check. Character-for-character the
+# same construction as the two sibling ratchets, and fixed in the same place when
+# #1222 lands â not worked around here, so all three move together.
 declun_actual=$(git -C "$ROOT" grep -lwE -- 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
       if grep -wE 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' "$ROOT/$f" \
