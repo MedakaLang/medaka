@@ -422,12 +422,42 @@ for c in $carrier_graded_expected; do
     exit 1
   fi
 done
-# OWED: the self-drain. A name here must NOT be read by the probe yet.
+# OWED: the self-drain, pinned in BOTH directions -- the name must be absent from
+# the probe AND from the stamper.
+#
+# The probe half alone pins BOOKKEEPING, not grading, and would have a hole big
+# enough to drive the whole hazard through: a later PR could stamp an OWED carrier
+# inside compiler/frontend/resolve.mdk and never touch the probe, and EVERY ratchet
+# here stays green -- `originun_allowed` already lists resolve.mdk (it is the decl
+# stamper's home) and the producer ratchets pin only mint-helper CALL SITES, not
+# field writes. The gate would then print `ok: … (N graded, M owed)` over carriers
+# that are live, stamped, and graded by nothing -- verbatim the hazard the header
+# above says this ratchet exists to prevent. So pin the stamper too: the moment the
+# stamp lands, this reds and demands the promotion AND the probe wiring together.
+#
+# ⚠️ The comment filter is `^[[:space:]]*--`, i.e. LEADING comments only. A TRAILING
+# side comment or a string literal that merely NAMES an owed carrier would therefore
+# trip this check spuriously -- and the printed remedy would then "fix" it by moving
+# the name to the graded list, disarming the tripwire in two lines. That is the
+# remedy-disarms-the-tripwire shape, so it is stated rather than left to be
+# rediscovered. It is a note and not a code change because both files are clean of
+# that shape today (verified: no trailing `--` mentions of any carrier name in
+# either), and a looser filter would cost more than it buys.
+stamper_src="$ROOT/compiler/frontend/resolve.mdk"
 for c in $carrier_owed_expected; do
   if grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
     echo "FAIL: carrier \`$c\` is listed as OWED but compiler/entries/origin_agreement_main.mdk"
     echo "  now reads it -- the grading this list was waiting for has landed."
     echo "  Move \`$c\` from carrier_owed_expected to carrier_graded_expected."
+    exit 1
+  fi
+  if grep -w "$c" "$stamper_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/frontend/resolve.mdk now"
+    echo "  WRITES it -- the carrier is live while nothing grades it, which is the"
+    echo "  exact state this ratchet exists to refuse."
+    echo "  Land the grading in the SAME change: extend the agreement probe"
+    echo "  (compiler/entries/origin_agreement_main.mdk) to read \`$c\`, then move it"
+    echo "  from carrier_owed_expected to carrier_graded_expected."
     exit 1
   fi
 done
@@ -468,11 +498,20 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   echo "  The name-set pin just above only sees NAMED-record fields, so it is SILENT on"
   echo "  a POSITIONAL TyConOrigin carrier (e.g. \`Variant String ConPayload TyConOrigin\`)"
   echo "  or one reached through a type alias -- both move THIS count instead."
-  echo "  If you added a genuine new carrier:"
-  echo "    - add a match arm to declHeadOf in compiler/entries/origin_agreement_main.mdk"
-  echo "      (its wildcard arm silently drops any carrier it doesn't name);"
-  echo "    - add its mint helper to the decl-layer producer ratchet above in THIS file;"
-  echo "    - if it is a NAMED field, add it to carrier_expected above too;"
+  echo "  If you added a genuine new carrier -- FIRST decide which LAYER it is on,"
+  echo "  because the remedy differs and getting it backwards is a contradiction:"
+  echo "    - DECL-layer (a type DECLARATION acquires identity): add a match arm to"
+  echo "      declHeadOf in compiler/entries/origin_agreement_main.mdk (its wildcard"
+  echo "      arm silently drops any carrier it doesn't name), and add its mint"
+  echo "      helper to the DECL-layer producer ratchet above in THIS file."
+  echo "    - OCCURRENCE-layer (a USE site names a head someone else declared): do"
+  echo "      NOT add a declHeadOf arm -- that function's own comment forbids it for"
+  echo "      exactly this case ('DImpl mints NO decl-layer carrier and must not"
+  echo "      appear here'). Add the mint helper to the OCCURRENCE-layer producer"
+  echo "      ratchet above instead, and grade it in the probe's occurrence walk."
+  echo "    - then classify the field: add it to carrier_graded_expected (a grader"
+  echo "      reads it) or carrier_owed_expected (grading owed; name the PR that owes"
+  echo "      it). Do NOT edit carrier_expected -- it is DERIVED from those two."
   echo "    - then update carrier_count_expected here to the new mention count,"
   echo "      and say why in the PR."
   exit 1
