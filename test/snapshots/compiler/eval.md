@@ -1,5 +1,5 @@
 # META
-source_lines=3534
+source_lines=3535
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -233,9 +233,10 @@ export buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = flatMap ctorTypeEntries prog
 
 ctorTypeEntries : Decl -> List (String, String)
-ctorTypeEntries (DData _ tyname _ variants _) =
+ctorTypeEntries (DData { dataName = tyname, dataCtors = variants }) =
   map (v => (variantName v, tyname)) variants
-ctorTypeEntries (DNewtype _ tyname _ con _ _) = [(con, tyname)]
+ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
+  [(con, tyname)]
 ctorTypeEntries _ = []
 
 variantName : Variant -> String
@@ -373,7 +374,7 @@ export buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorFieldOrders prog = flatMap ctorFieldOrderEntries prog
 
 ctorFieldOrderEntries : Decl -> List (String, List String)
-ctorFieldOrderEntries (DData _ _ _ variants _) =
+ctorFieldOrderEntries (DData { dataCtors = variants }) =
   flatMap variantFieldOrder variants
 ctorFieldOrderEntries _ = []
 
@@ -1739,8 +1740,8 @@ export collectCtors : List Decl -> List (String, Value e)
 collectCtors prog = flatMap ctorsOfDecl prog
 
 ctorsOfDecl : Decl -> List (String, Value e)
-ctorsOfDecl (DData _ _ _ variants _) = map ctorEntry variants
-ctorsOfDecl (DNewtype _ _ _ con fty _) =
+ctorsOfDecl (DData { dataCtors = variants }) = map ctorEntry variants
+ctorsOfDecl (DNewtype { newtypeCtor = con, newtypeFieldTy = fty }) =
   [ctorEntry (Variant con (ConPos [fty]))]
 ctorsOfDecl _ = []
 
@@ -3600,8 +3601,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorToType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "buildCtorToType" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "ctorTypeEntries" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
-(DFunDef false "ctorTypeEntries" ((PCon "DNewtype" PWild (PVar "tyname") PWild (PVar "con") PWild PWild)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
+(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
+(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
 (DFunDef false "ctorTypeEntries" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
@@ -3651,7 +3652,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorFieldOrderEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "flatMap") (EVar "variantFieldOrder")) (EVar "variants")))
+(DFunDef false "ctorFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "flatMap") (EVar "variantFieldOrder")) (EVar "variants")))
 (DFunDef false "ctorFieldOrderEntries" (PWild) (EListLit))
 (DTypeSig false "variantFieldOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantFieldOrder" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))))
@@ -4263,8 +4264,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "collectCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "collectCtors" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorsOfDecl")) (EVar "prog")))
 (DTypeSig false "ctorsOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "ctorsOfDecl" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (EVar "ctorEntry")) (EVar "variants")))
-(DFunDef false "ctorsOfDecl" ((PCon "DNewtype" PWild PWild PWild (PVar "con") (PVar "fty") PWild)) (EListLit (EApp (EVar "ctorEntry") (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
+(DFunDef false "ctorsOfDecl" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "ctorEntry")) (EVar "variants")))
+(DFunDef false "ctorsOfDecl" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EListLit (EApp (EVar "ctorEntry") (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "ctorsOfDecl" (PWild) (EListLit))
 (DTypeSig false "ctorEntry" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "ctorEntry" ((PCon "Variant" (PVar "n") (PVar "payload"))) (ETuple (EVar "n") (EApp (EApp (EVar "makeCtor") (EVar "n")) (EApp (EVar "payloadArity") (EVar "payload")))))
@@ -5016,8 +5017,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorToType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "buildCtorToType" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "ctorTypeEntries" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
-(DFunDef false "ctorTypeEntries" ((PCon "DNewtype" PWild (PVar "tyname") PWild (PVar "con") PWild PWild)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
+(DFunDef false "ctorTypeEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (ETuple (EApp (EVar "variantName") (EVar "v")) (EVar "tyname")))) (EVar "variants")))
+(DFunDef false "ctorTypeEntries" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "con") (EVar "tyname"))))
 (DFunDef false "ctorTypeEntries" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
@@ -5067,7 +5068,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorFieldOrderEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOrder")) (EVar "variants")))
+(DFunDef false "ctorFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOrder")) (EVar "variants")))
 (DFunDef false "ctorFieldOrderEntries" (PWild) (EListLit))
 (DTypeSig false "variantFieldOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantFieldOrder" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))))
@@ -5679,8 +5680,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "collectCtors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "collectCtors" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorsOfDecl")) (EVar "prog")))
 (DTypeSig false "ctorsOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "ctorsOfDecl" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (EVar "ctorEntry")) (EVar "variants")))
-(DFunDef false "ctorsOfDecl" ((PCon "DNewtype" PWild PWild PWild (PVar "con") (PVar "fty") PWild)) (EListLit (EApp (EVar "ctorEntry") (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
+(DFunDef false "ctorsOfDecl" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "ctorEntry")) (EVar "variants")))
+(DFunDef false "ctorsOfDecl" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EListLit (EApp (EVar "ctorEntry") (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
 (DFunDef false "ctorsOfDecl" (PWild) (EListLit))
 (DTypeSig false "ctorEntry" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "ctorEntry" ((PCon "Variant" (PVar "n") (PVar "payload"))) (ETuple (EVar "n") (EApp (EApp (EVar "makeCtor") (EVar "n")) (EApp (EVar "payloadArity") (EVar "payload")))))

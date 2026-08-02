@@ -371,12 +371,9 @@ anyRefutable (p::ps) = isRefutable p || anyRefutable ps
 -- are dead: no test forces them, and a top-level nullary is lazy.  `checkDerives`
 -- below now reports those sites instead of dropping them silently — #421.)
 expandDecl : Decl -> List Decl
-expandDecl (DData vis name params variants derives) =
-  DData vis name params variants [] ::
-    deriveImpls (deriveForData name params variants) derives
-expandDecl (DNewtype vis name params con fty derives) =
-  DNewtype vis name params con fty [] ::
-    deriveImpls (deriveForNewtype name params con fty) derives
+-- #1110: record UPDATE — `deriving` is consumed here, identity must survive it.
+expandDecl (d@(DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives })) = DData { d | dataDerives = [] } :: deriveImpls (deriveForData name params variants) derives
+expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) = DNewtype { d | newtypeDerives = [] } :: deriveImpls (deriveForNewtype name params con fty) derives
 expandDecl (DAttrib attrs d) = attribHead attrs (expandDecl d)
 expandDecl d = [d]
 
@@ -486,10 +483,10 @@ checkDerives decls = flatMap declDeriveErrors decls
 -- passing `map fst (dataDerivers …)` to a decl with NO derives would still build
 -- the deriver table for every `data` in the program.
 declDeriveErrors : Decl -> List (String, Option Loc)
-declDeriveErrors (DData _ name params variants derives) = match derives
+declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) = match derives
   [] => []
   _ => flatMap (unknownDerive name (map fst (dataDerivers name params variants))) derives
-declDeriveErrors (DNewtype _ name params con fty derives) = match derives
+declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = match derives
   [] => []
   _ => flatMap (unknownDerive name (map fst (newtypeDerivers name params con fty))) derives
 declDeriveErrors (DAttrib _ d) = declDeriveErrors d
@@ -927,7 +924,7 @@ desugarRecordPuns prog =
 -- qualify too).
 collectRecordNames : List Decl -> List String
 collectRecordNames [] = []
-collectRecordNames ((DData _ _ _ variants _)::rest) = conNamedCtorNames variants
+collectRecordNames ((DData { dataCtors = variants })::rest) = conNamedCtorNames variants
   ++ collectRecordNames rest
 collectRecordNames (_::rest) = collectRecordNames rest
 

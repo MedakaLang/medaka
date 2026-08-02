@@ -1,3 +1,7 @@
+dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
+dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
+dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
+dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
 deriveRefName : DeriveRef -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc

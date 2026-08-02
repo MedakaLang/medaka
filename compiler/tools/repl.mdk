@@ -184,7 +184,7 @@ needsMore source =
 -- ── Pipeline helpers ──────────────────────────────────────────────────────
 declTypeAnnotations : List Decl -> List (String, String)
 declTypeAnnotations [] = []
-declTypeAnnotations ((DData _ n _ _ _)::rest) =
+declTypeAnnotations ((DData { dataName = n })::rest) =
   ("type", n) :: declTypeAnnotations rest
 declTypeAnnotations ((DInterface { name = n, ... })::rest) =
   ("interface", n) :: declTypeAnnotations rest

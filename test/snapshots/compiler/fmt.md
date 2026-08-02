@@ -1,5 +1,5 @@
 # META
-source_lines=644
+source_lines=641
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — port of lib/printer.ml's
@@ -187,7 +187,7 @@ allEmptyPairs ((ld, tr)::xs) = isEmptyL ld && isEmptyL tr && allEmptyPairs xs
 -- Returns (renderedString, newState) — the Doc is rendered here so the comment
 -- pops are threaded back into the state.
 declDoc : FmtState -> Decl -> (String, FmtState)
-declDoc (FmtState pieces cs vlines cursor started) (DData vis n params variants derives) = match takeNVariantLines vlines (listLen variants)
+declDoc (FmtState pieces cs vlines cursor started) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives })) = match takeNVariantLines vlines (listLen variants)
   (vlinesRest, vls) => match vcommentsFor cs vls
     (vcomments, csRest) =>
       if listLen vcomments == listLen variants && not (allEmptyPairs vcomments) then
@@ -196,10 +196,7 @@ declDoc (FmtState pieces cs vlines cursor started) (DData vis n params variants 
           FmtState pieces csRest vlinesRest cursor started,
         )
       else
-        (
-          render (printDecl (DData vis n params variants derives)),
-          FmtState pieces cs vlinesRest cursor started,
-        )
+        (render (printDecl d), FmtState pieces cs vlinesRest cursor started)
 declDoc st decl = (render (printDecl decl), st)
 
 -- ── Trailing comments ─────────────────────────────
@@ -245,7 +242,7 @@ isInterior startLine endLine c =
 -- DData (incl. an attribute-wrapped one) routes interior comments through
 -- vcommentsFor, not the generic inline splice.
 isDataDeclF : Decl -> Bool
-isDataDeclF (DData _ _ _ _ _) = True
+isDataDeclF (DData {  }) = True
 isDataDeclF (DAttrib _ inner) = isDataDeclF inner
 isDataDeclF _ = False
 
@@ -257,13 +254,13 @@ isDataDeclF _ = False
 -- through the generic interior splice instead (see stepDecl).  Only the bare
 -- (non-attribute-wrapped) shape, to avoid dropping `@attr` annotations.
 isSingleNamedFieldData : Decl -> Bool
-isSingleNamedFieldData (DData _ _ _ [Variant _ (ConNamed _ _)] _) = True
+isSingleNamedFieldData (DData { dataCtors = [Variant _ (ConNamed _ _)] }) = True
 isSingleNamedFieldData _ = False
 
 -- Render a single-variant named-field data decl one-field-per-line, consuming its
 -- one variant line (to keep vlines aligned, exactly as declDoc's DData arm does).
 renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
-renderNamedFieldMulti (FmtState pieces cs vlines cursor started) (DData vis n params variants derives) = match takeNVariantLines vlines 1
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started) (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) = match takeNVariantLines vlines 1
   (vlinesRest, _) => (
     render (printNamedFieldData vis n params variants derives),
     FmtState pieces cs vlinesRest cursor started,
@@ -687,7 +684,7 @@ formatSource src = match parseWithPositions src
 (DFunDef false "allEmptyPairs" ((PList)) (EVar "True"))
 (DFunDef false "allEmptyPairs" ((PCons (PTuple (PVar "ld") (PVar "tr")) (PVar "xs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "ld")) (EApp (EVar "isEmptyL") (EVar "tr"))) (EApp (EVar "allEmptyPairs") (EVar "xs"))))
 (DTypeSig false "declDoc" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
-(DFunDef false "declDoc" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (EApp (EVar "listLen") (EVar "variants"))) (arm (PTuple (PVar "vlinesRest") (PVar "vls")) () (EMatch (EApp (EApp (EVar "vcommentsFor") (EVar "cs")) (EVar "vls")) (arm (PTuple (PVar "vcomments") (PVar "csRest")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "vcomments")) (EApp (EVar "listLen") (EVar "variants"))) (EApp (EVar "not") (EApp (EVar "allEmptyPairs") (EVar "vcomments")))) (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printDataDeclCommented") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")) (EVar "vcomments"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "csRest")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")))))))))
+(DFunDef false "declDoc" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PAs "d" (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (EApp (EVar "listLen") (EVar "variants"))) (arm (PTuple (PVar "vlinesRest") (PVar "vls")) () (EMatch (EApp (EApp (EVar "vcommentsFor") (EVar "cs")) (EVar "vls")) (arm (PTuple (PVar "vcomments") (PVar "csRest")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "vcomments")) (EApp (EVar "listLen") (EVar "variants"))) (EApp (EVar "not") (EApp (EVar "allEmptyPairs") (EVar "vcomments")))) (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printDataDeclCommented") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")) (EVar "vcomments"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "csRest")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")))))))))
 (DFunDef false "declDoc" ((PVar "st") (PVar "decl")) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "decl"))) (EVar "st")))
 (DTypeSig false "isTrailing" (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool"))))
 (DFunDef false "isTrailing" ((PVar "endLine") (PVar "c")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))
@@ -699,14 +696,14 @@ formatSource src = match parseWithPositions src
 (DTypeSig false "isInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
 (DTypeSig false "isDataDeclF" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isDataDeclF" ((PCon "DData" PWild PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isDataDeclF" ((PRec "DData" () false)) (EVar "True"))
 (DFunDef false "isDataDeclF" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "isDataDeclF") (EVar "inner")))
 (DFunDef false "isDataDeclF" (PWild) (EVar "False"))
 (DTypeSig false "isSingleNamedFieldData" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isSingleNamedFieldData" ((PCon "DData" PWild PWild PWild (PList (PCon "Variant" PWild (PCon "ConNamed" PWild PWild))) PWild)) (EVar "True"))
+(DFunDef false "isSingleNamedFieldData" ((PRec "DData" ((rf "dataCtors" (PList (PCon "Variant" PWild (PCon "ConNamed" PWild PWild))))) false)) (EVar "True"))
 (DFunDef false "isSingleNamedFieldData" (PWild) (EVar "False"))
 (DTypeSig false "renderNamedFieldMulti" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
-(DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
+(DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
 (DTypeSig false "spliceInterior" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))
 (DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "fieldIndent") (EApp (EVar "fieldIndentOf") (EVar "outLines"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))
@@ -834,7 +831,7 @@ formatSource src = match parseWithPositions src
 (DFunDef false "allEmptyPairs" ((PList)) (EVar "True"))
 (DFunDef false "allEmptyPairs" ((PCons (PTuple (PVar "ld") (PVar "tr")) (PVar "xs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "ld")) (EApp (EVar "isEmptyL") (EVar "tr"))) (EApp (EVar "allEmptyPairs") (EVar "xs"))))
 (DTypeSig false "declDoc" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
-(DFunDef false "declDoc" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (EApp (EVar "listLen") (EVar "variants"))) (arm (PTuple (PVar "vlinesRest") (PVar "vls")) () (EMatch (EApp (EApp (EVar "vcommentsFor") (EVar "cs")) (EVar "vls")) (arm (PTuple (PVar "vcomments") (PVar "csRest")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "vcomments")) (EApp (EVar "listLen") (EVar "variants"))) (EApp (EVar "not") (EApp (EVar "allEmptyPairs") (EVar "vcomments")))) (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printDataDeclCommented") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")) (EVar "vcomments"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "csRest")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EApp (EApp (EApp (EApp (EApp (EVar "DData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")))))))))
+(DFunDef false "declDoc" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PAs "d" (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (EApp (EVar "listLen") (EVar "variants"))) (arm (PTuple (PVar "vlinesRest") (PVar "vls")) () (EMatch (EApp (EApp (EVar "vcommentsFor") (EVar "cs")) (EVar "vls")) (arm (PTuple (PVar "vcomments") (PVar "csRest")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "vcomments")) (EApp (EVar "listLen") (EVar "variants"))) (EApp (EVar "not") (EApp (EVar "allEmptyPairs") (EVar "vcomments")))) (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printDataDeclCommented") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives")) (EVar "vcomments"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "csRest")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")))))))))
 (DFunDef false "declDoc" ((PVar "st") (PVar "decl")) (ETuple (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "decl"))) (EVar "st")))
 (DTypeSig false "isTrailing" (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool"))))
 (DFunDef false "isTrailing" ((PVar "endLine") (PVar "c")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))
@@ -846,14 +843,14 @@ formatSource src = match parseWithPositions src
 (DTypeSig false "isInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
 (DTypeSig false "isDataDeclF" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isDataDeclF" ((PCon "DData" PWild PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isDataDeclF" ((PRec "DData" () false)) (EVar "True"))
 (DFunDef false "isDataDeclF" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "isDataDeclF") (EVar "inner")))
 (DFunDef false "isDataDeclF" (PWild) (EVar "False"))
 (DTypeSig false "isSingleNamedFieldData" (TyFun (TyCon "Decl") (TyCon "Bool")))
-(DFunDef false "isSingleNamedFieldData" ((PCon "DData" PWild PWild PWild (PList (PCon "Variant" PWild (PCon "ConNamed" PWild PWild))) PWild)) (EVar "True"))
+(DFunDef false "isSingleNamedFieldData" ((PRec "DData" ((rf "dataCtors" (PList (PCon "Variant" PWild (PCon "ConNamed" PWild PWild))))) false)) (EVar "True"))
 (DFunDef false "isSingleNamedFieldData" (PWild) (EVar "False"))
 (DTypeSig false "renderNamedFieldMulti" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
-(DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PCon "DData" (PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives"))) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
+(DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started")) (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "variants")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
 (DTypeSig false "spliceInterior" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment")))))))
 (DFunDef false "spliceInterior" ((PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "fieldIndent") (EApp (EVar "fieldIndentOf") (EVar "outLines"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "fieldIndent")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))

@@ -272,7 +272,11 @@ annotateDecl (DTest p n body) = DTest p n (annotateExpr [] body)
 annotateDecl (DBench p n body) = DBench p n (annotateExpr [] body)
 annotateDecl (DLetGroup p binds) =
   DLetGroup p (map (annotateLetBind (map letBindName binds :: [])) binds)
-annotateDecl (DInterface { pub, def, name, typarams, supers, methods }) = DInterface { pub = pub, def = def, name = name, typarams = typarams, supers = supers, methods = map annotateIfaceMethod methods }
+-- #1110: record UPDATE, not re-construction.  A total literal here would have
+-- to respell `ifaceOrigin`, and respelling it is how an acquired identity gets
+-- silently reset (the `substTyVars` shape #1219 found).
+annotateDecl (d@(DInterface { methods })) =
+  DInterface { d | methods = map annotateIfaceMethod methods }
 annotateDecl (DImpl { pub, iface, tys, reqs, methods }) = DImpl {
   pub = pub,
   iface = iface,

@@ -257,7 +257,7 @@ programIsCore prog = pcHasOrdering prog && pcHasFoldable prog
 
 pcHasOrdering : List Decl -> Bool
 pcHasOrdering [] = False
-pcHasOrdering ((DData _ "Ordering" _ _ _)::_) = True
+pcHasOrdering ((DData { dataName = "Ordering" })::_) = True
 pcHasOrdering (_::rest) = pcHasOrdering rest
 
 pcHasFoldable : List Decl -> Bool

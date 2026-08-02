@@ -261,7 +261,7 @@ programIsCore prog = pcHasOrdering prog && pcHasFoldable prog
 
 pcHasOrdering : List Decl -> Bool
 pcHasOrdering [] = False
-pcHasOrdering ((DData _ "Ordering" _ _ _)::_) = True
+pcHasOrdering ((DData { dataName = "Ordering" })::_) = True
 pcHasOrdering (_::rest) = pcHasOrdering rest
 
 pcHasFoldable : List Decl -> Bool
@@ -632,7 +632,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "pcHasOrdering") (EVar "prog")) (EApp (EVar "pcHasFoldable") (EVar "prog"))))
 (DTypeSig false "pcHasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "pcHasOrdering" ((PList)) (EVar "False"))
-(DFunDef false "pcHasOrdering" ((PCons (PCon "DData" PWild (PLit (LString "Ordering")) PWild PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "pcHasOrdering" ((PCons (PRec "DData" ((rf "dataName" (PLit (LString "Ordering")))) false) PWild)) (EVar "True"))
 (DFunDef false "pcHasOrdering" ((PCons PWild (PVar "rest"))) (EApp (EVar "pcHasOrdering") (EVar "rest")))
 (DTypeSig false "pcHasFoldable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "pcHasFoldable" ((PList)) (EVar "False"))
@@ -747,7 +747,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "pcHasOrdering") (EVar "prog")) (EApp (EVar "pcHasFoldable") (EVar "prog"))))
 (DTypeSig false "pcHasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "pcHasOrdering" ((PList)) (EVar "False"))
-(DFunDef false "pcHasOrdering" ((PCons (PCon "DData" PWild (PLit (LString "Ordering")) PWild PWild PWild) PWild)) (EVar "True"))
+(DFunDef false "pcHasOrdering" ((PCons (PRec "DData" ((rf "dataName" (PLit (LString "Ordering")))) false) PWild)) (EVar "True"))
 (DFunDef false "pcHasOrdering" ((PCons PWild (PVar "rest"))) (EApp (EVar "pcHasOrdering") (EVar "rest")))
 (DTypeSig false "pcHasFoldable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "pcHasFoldable" ((PList)) (EVar "False"))

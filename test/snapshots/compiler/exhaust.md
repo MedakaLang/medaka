@@ -1,5 +1,5 @@
 # META
-source_lines=915
+source_lines=916
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — Stage 4 port of `lib/exhaust.ml`'s standalone
@@ -165,16 +165,16 @@ builtinCtorType = [
 ]
 
 dataTypeCtors : Decl -> List (String, List String)
-dataTypeCtors (DData _ tyname _ variants _) =
+dataTypeCtors (DData { dataName = tyname, dataCtors = variants }) =
   [(tyname, map variantName variants)]
 dataTypeCtors _ = []
 
 dataArity : Decl -> List (String, Int)
-dataArity (DData _ _ _ variants _) = map variantArity variants
+dataArity (DData { dataCtors = variants }) = map variantArity variants
 dataArity _ = []
 
 dataCtorType : Decl -> List (String, String)
-dataCtorType (DData _ tyname _ variants _) =
+dataCtorType (DData { dataName = tyname, dataCtors = variants }) =
   map (variantCtorType tyname) variants
 dataCtorType _ = []
 
@@ -189,7 +189,8 @@ variantCtorType : String -> Variant -> (String, String)
 variantCtorType tyname (Variant n _) = (n, tyname)
 
 dataCtorFields : Decl -> List (String, List String)
-dataCtorFields (DData _ _ _ variants _) = flatMap variantCtorFields variants
+dataCtorFields (DData { dataCtors = variants }) =
+  flatMap variantCtorFields variants
 dataCtorFields _ = []
 
 variantCtorFields : Variant -> List (String, List String)
@@ -952,13 +953,13 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (ELit (LString "Bool"))) (ETuple (ELit (LString "False")) (ELit (LString "Bool"))) (ETuple (ELit (LString "Cons")) (ELit (LString "List"))) (ETuple (ELit (LString "Nil")) (ELit (LString "List"))) (ETuple (ELit (LString "Unit")) (ELit (LString "Unit")))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dataTypeCtors" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
+(DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
 (DTypeSig false "dataArity" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "dataArity" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "variants")))
+(DFunDef false "dataArity" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "variants")))
 (DFunDef false "dataArity" (PWild) (EListLit))
 (DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dataCtorType" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
+(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
 (DFunDef false "dataCtorType" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
@@ -968,7 +969,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "variantCtorType" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "variantCtorType" ((PVar "tyname") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tyname")))
 (DTypeSig false "dataCtorFields" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dataCtorFields" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
+(DFunDef false "dataCtorFields" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
 (DFunDef false "dataCtorFields" (PWild) (EListLit))
 (DTypeSig false "variantCtorFields" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantCtorFields" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))))
@@ -1334,13 +1335,13 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (ELit (LString "Bool"))) (ETuple (ELit (LString "False")) (ELit (LString "Bool"))) (ETuple (ELit (LString "Cons")) (ELit (LString "List"))) (ETuple (ELit (LString "Nil")) (ELit (LString "List"))) (ETuple (ELit (LString "Unit")) (ELit (LString "Unit")))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dataTypeCtors" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
+(DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
 (DTypeSig false "dataArity" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "dataArity" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "variants")))
+(DFunDef false "dataArity" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "variants")))
 (DFunDef false "dataArity" (PWild) (EListLit))
 (DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dataCtorType" ((PCon "DData" PWild (PVar "tyname") PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
+(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
 (DFunDef false "dataCtorType" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
@@ -1350,7 +1351,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "variantCtorType" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "variantCtorType" ((PVar "tyname") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tyname")))
 (DTypeSig false "dataCtorFields" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "dataCtorFields" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
+(DFunDef false "dataCtorFields" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
 (DFunDef false "dataCtorFields" (PWild) (EListLit))
 (DTypeSig false "variantCtorFields" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantCtorFields" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))))

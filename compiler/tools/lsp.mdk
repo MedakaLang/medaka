@@ -475,7 +475,7 @@ symbolPartsOfDecl d range childLocs = match innerDecl d
       (LetBind n0 _)::_ =>
         let kids = zipKids range 12 childLocs (map letBindName binds)
         Some (n0, 12, True, kids)
-    DData _ name _ variants _ =>
+    DData { dataName = name, dataCtors = variants } =>
       -- records (the `data X = { … }` short form, nameOmitted) expose their
       -- fields as child symbols (kind 8); ordinary variants show their ctor name.
       let kids = variantKids range childLocs variants
@@ -487,8 +487,8 @@ symbolPartsOfDecl d range childLocs = match innerDecl d
       let label = implLabel ifc
       let kids = zipKids range 6 childLocs (map implMethodName ms)
       Some (label, 5, False, kids)
-    DTypeAlias _ name _ _ => Some (name, 26, False, [])
-    DNewtype _ name _ _ _ _ => Some (name, 23, False, [])
+    DTypeAlias { tyAliasName = name } => Some (name, 26, False, [])
+    DNewtype { newtypeName = name } => Some (name, 23, False, [])
     DUse _ _ _ => None
     DProp _ name _ _ => Some (name, 12, False, [])
     DTest _ name _ => Some (name, 12, False, [])
@@ -592,11 +592,11 @@ declOwnNameMatches d name = match innerDecl d
   DExtern _ n _ => n == name
   DFunDef _ n _ _ => n == name
   DLetGroup _ binds => anyName (map letBindName binds) name
-  DData _ n _ _ _ => n == name
+  DData { dataName = n } => n == name
   DInterface { name = n, ... } => n == name
   DImpl { ... } => False
-  DTypeAlias _ n _ _ => n == name
-  DNewtype _ n _ c _ _ => n == name || c == name
+  DTypeAlias { tyAliasName = n } => n == name
+  DNewtype { newtypeName = n, newtypeCtor = c } => n == name || c == name
   DUse _ _ _ => False
   DProp _ n _ _ => n == name
   DTest _ n _ => n == name
@@ -611,7 +611,7 @@ declOwnNameMatches d name = match innerDecl d
 -- `[]` for decl kinds with no children.
 declChildNames : Decl -> List String
 declChildNames d = match innerDecl d
-  DData _ _ _ vs _ => dataChildNames vs
+  DData { dataCtors = vs } => dataChildNames vs
   DInterface { methods = ms, ... } => map ifaceMethodName ms
   DImpl { methods = ms, ... } => map implMethodName ms
   DLetGroup _ binds => map letBindName binds

@@ -567,7 +567,7 @@ buildRecPatFieldOrders : List Decl -> List (String, List String)
 buildRecPatFieldOrders prog = flatMap recPatFieldOrderEntries prog
 
 recPatFieldOrderEntries : Decl -> List (String, List String)
-recPatFieldOrderEntries (DData _ _ _ variants _) =
+recPatFieldOrderEntries (DData { dataCtors = variants }) =
   flatMap variantNamedOrder variants
 recPatFieldOrderEntries (DAttrib _ inner) = recPatFieldOrderEntries inner
 recPatFieldOrderEntries _ = []
@@ -1493,10 +1493,9 @@ export ctorFieldTypeNames : List Decl -> List (String, List String)
 ctorFieldTypeNames prog = flatMap ctorFieldTypeEntries prog
 
 ctorFieldTypeEntries : Decl -> List (String, List String)
-ctorFieldTypeEntries (DData _ _ _ variants _) =
+ctorFieldTypeEntries (DData { dataCtors = variants }) =
   map variantFieldTypeEntry variants
-ctorFieldTypeEntries (DNewtype _ _ _ con fieldTy _) =
-  [(con, [tyHeadName fieldTy])]
+ctorFieldTypeEntries (DNewtype { newtypeCtor = con, newtypeFieldTy = fieldTy }) = [(con, [tyHeadName fieldTy])]
 ctorFieldTypeEntries _ = []
 
 variantFieldTypeEntry : Variant -> (String, List String)
@@ -1589,12 +1588,13 @@ lowerLetBind n (FunClause pats body) = (n, CClause pats (lower body))
 
 ctorArities : List Decl -> List (String, Int)
 ctorArities [] = []
-ctorArities ((DData _ _ _ variants _)::rest) = map variantArity variants
+ctorArities ((DData { dataCtors = variants })::rest) = map variantArity variants
   ++ ctorArities rest
 -- A newtype is structurally a single-constructor, single-field data type, so its
 -- constructor is a callable arity-1 ctor (matches the oracle's `make_ctor con 1`).
 -- Without this the emitter sees `UserId 42` as an unbound variable.
-ctorArities ((DNewtype _ _ _ con _ _)::rest) = (con, 1) :: ctorArities rest
+ctorArities ((DNewtype { newtypeCtor = con })::rest) =
+  (con, 1) :: ctorArities rest
 ctorArities (_::rest) = ctorArities rest
 
 variantArity : Variant -> (String, Int)
@@ -1846,7 +1846,7 @@ nodeTag _ = "?"
 (DTypeSig false "buildRecPatFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildRecPatFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "recPatFieldOrderEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
+(DFunDef false "recPatFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
 (DFunDef false "recPatFieldOrderEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "recPatFieldOrderEntries") (EVar "inner")))
 (DFunDef false "recPatFieldOrderEntries" (PWild) (EListLit))
 (DTypeSig false "variantNamedOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2179,8 +2179,8 @@ nodeTag _ = "?"
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorFieldTypeEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EVar "map") (EVar "variantFieldTypeEntry")) (EVar "variants")))
-(DFunDef false "ctorFieldTypeEntries" ((PCon "DNewtype" PWild PWild PWild (PVar "con") (PVar "fieldTy") PWild)) (EListLit (ETuple (EVar "con") (EListLit (EApp (EVar "tyHeadName") (EVar "fieldTy"))))))
+(DFunDef false "ctorFieldTypeEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "variantFieldTypeEntry")) (EVar "variants")))
+(DFunDef false "ctorFieldTypeEntries" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fieldTy"))) false)) (EListLit (ETuple (EVar "con") (EListLit (EApp (EVar "tyHeadName") (EVar "fieldTy"))))))
 (DFunDef false "ctorFieldTypeEntries" (PWild) (EListLit))
 (DTypeSig false "variantFieldTypeEntry" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "variantFieldTypeEntry" ((PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "name") (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EVar "tys"))))
@@ -2227,8 +2227,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerLetBind" ((PVar "n") (PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "n") (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))
 (DTypeSig false "ctorArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ctorArities" ((PList)) (EListLit))
-(DFunDef false "ctorArities" ((PCons (PCon "DData" PWild PWild PWild (PVar "variants") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "variants")) (EApp (EVar "ctorArities") (EVar "rest"))))
-(DFunDef false "ctorArities" ((PCons (PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (ELit (LInt 1))) (EApp (EVar "ctorArities") (EVar "rest"))))
+(DFunDef false "ctorArities" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "variants")) (EApp (EVar "ctorArities") (EVar "rest"))))
+(DFunDef false "ctorArities" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (ELit (LInt 1))) (EApp (EVar "ctorArities") (EVar "rest"))))
 (DFunDef false "ctorArities" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorArities") (EVar "rest")))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PVar "payload"))) (ETuple (EVar "n") (EApp (EVar "payloadArityL") (EVar "payload"))))
@@ -2476,7 +2476,7 @@ nodeTag _ = "?"
 (DTypeSig false "buildRecPatFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildRecPatFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "recPatFieldOrderEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
+(DFunDef false "recPatFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
 (DFunDef false "recPatFieldOrderEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "recPatFieldOrderEntries") (EVar "inner")))
 (DFunDef false "recPatFieldOrderEntries" (PWild) (EListLit))
 (DTypeSig false "variantNamedOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2809,8 +2809,8 @@ nodeTag _ = "?"
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorFieldTypeEntries" ((PCon "DData" PWild PWild PWild (PVar "variants") PWild)) (EApp (EApp (EMethodRef "map") (EVar "variantFieldTypeEntry")) (EVar "variants")))
-(DFunDef false "ctorFieldTypeEntries" ((PCon "DNewtype" PWild PWild PWild (PVar "con") (PVar "fieldTy") PWild)) (EListLit (ETuple (EVar "con") (EListLit (EApp (EVar "tyHeadName") (EVar "fieldTy"))))))
+(DFunDef false "ctorFieldTypeEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "variantFieldTypeEntry")) (EVar "variants")))
+(DFunDef false "ctorFieldTypeEntries" ((PRec "DNewtype" ((rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fieldTy"))) false)) (EListLit (ETuple (EVar "con") (EListLit (EApp (EVar "tyHeadName") (EVar "fieldTy"))))))
 (DFunDef false "ctorFieldTypeEntries" (PWild) (EListLit))
 (DTypeSig false "variantFieldTypeEntry" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "variantFieldTypeEntry" ((PCon "Variant" (PVar "name") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "name") (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EVar "tys"))))
@@ -2857,8 +2857,8 @@ nodeTag _ = "?"
 (DFunDef false "lowerLetBind" ((PVar "n") (PCon "FunClause" (PVar "pats") (PVar "body"))) (ETuple (EVar "n") (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))
 (DTypeSig false "ctorArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ctorArities" ((PList)) (EListLit))
-(DFunDef false "ctorArities" ((PCons (PCon "DData" PWild PWild PWild (PVar "variants") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "variants")) (EApp (EVar "ctorArities") (EVar "rest"))))
-(DFunDef false "ctorArities" ((PCons (PCon "DNewtype" PWild PWild PWild (PVar "con") PWild PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (ELit (LInt 1))) (EApp (EVar "ctorArities") (EVar "rest"))))
+(DFunDef false "ctorArities" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "variants")) (EApp (EVar "ctorArities") (EVar "rest"))))
+(DFunDef false "ctorArities" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (ELit (LInt 1))) (EApp (EVar "ctorArities") (EVar "rest"))))
 (DFunDef false "ctorArities" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorArities") (EVar "rest")))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PVar "payload"))) (ETuple (EVar "n") (EApp (EVar "payloadArityL") (EVar "payload"))))

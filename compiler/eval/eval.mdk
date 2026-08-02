@@ -229,9 +229,10 @@ export buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = flatMap ctorTypeEntries prog
 
 ctorTypeEntries : Decl -> List (String, String)
-ctorTypeEntries (DData _ tyname _ variants _) =
+ctorTypeEntries (DData { dataName = tyname, dataCtors = variants }) =
   map (v => (variantName v, tyname)) variants
-ctorTypeEntries (DNewtype _ tyname _ con _ _) = [(con, tyname)]
+ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
+  [(con, tyname)]
 ctorTypeEntries _ = []
 
 variantName : Variant -> String
@@ -369,7 +370,7 @@ export buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorFieldOrders prog = flatMap ctorFieldOrderEntries prog
 
 ctorFieldOrderEntries : Decl -> List (String, List String)
-ctorFieldOrderEntries (DData _ _ _ variants _) =
+ctorFieldOrderEntries (DData { dataCtors = variants }) =
   flatMap variantFieldOrder variants
 ctorFieldOrderEntries _ = []
 
@@ -1735,8 +1736,8 @@ export collectCtors : List Decl -> List (String, Value e)
 collectCtors prog = flatMap ctorsOfDecl prog
 
 ctorsOfDecl : Decl -> List (String, Value e)
-ctorsOfDecl (DData _ _ _ variants _) = map ctorEntry variants
-ctorsOfDecl (DNewtype _ _ _ con fty _) =
+ctorsOfDecl (DData { dataCtors = variants }) = map ctorEntry variants
+ctorsOfDecl (DNewtype { newtypeCtor = con, newtypeFieldTy = fty }) =
   [ctorEntry (Variant con (ConPos [fty]))]
 ctorsOfDecl _ = []
 

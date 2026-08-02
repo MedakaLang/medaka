@@ -563,7 +563,7 @@ buildRecPatFieldOrders : List Decl -> List (String, List String)
 buildRecPatFieldOrders prog = flatMap recPatFieldOrderEntries prog
 
 recPatFieldOrderEntries : Decl -> List (String, List String)
-recPatFieldOrderEntries (DData _ _ _ variants _) =
+recPatFieldOrderEntries (DData { dataCtors = variants }) =
   flatMap variantNamedOrder variants
 recPatFieldOrderEntries (DAttrib _ inner) = recPatFieldOrderEntries inner
 recPatFieldOrderEntries _ = []
@@ -1489,10 +1489,9 @@ export ctorFieldTypeNames : List Decl -> List (String, List String)
 ctorFieldTypeNames prog = flatMap ctorFieldTypeEntries prog
 
 ctorFieldTypeEntries : Decl -> List (String, List String)
-ctorFieldTypeEntries (DData _ _ _ variants _) =
+ctorFieldTypeEntries (DData { dataCtors = variants }) =
   map variantFieldTypeEntry variants
-ctorFieldTypeEntries (DNewtype _ _ _ con fieldTy _) =
-  [(con, [tyHeadName fieldTy])]
+ctorFieldTypeEntries (DNewtype { newtypeCtor = con, newtypeFieldTy = fieldTy }) = [(con, [tyHeadName fieldTy])]
 ctorFieldTypeEntries _ = []
 
 variantFieldTypeEntry : Variant -> (String, List String)
@@ -1585,12 +1584,13 @@ lowerLetBind n (FunClause pats body) = (n, CClause pats (lower body))
 
 ctorArities : List Decl -> List (String, Int)
 ctorArities [] = []
-ctorArities ((DData _ _ _ variants _)::rest) = map variantArity variants
+ctorArities ((DData { dataCtors = variants })::rest) = map variantArity variants
   ++ ctorArities rest
 -- A newtype is structurally a single-constructor, single-field data type, so its
 -- constructor is a callable arity-1 ctor (matches the oracle's `make_ctor con 1`).
 -- Without this the emitter sees `UserId 42` as an unbound variable.
-ctorArities ((DNewtype _ _ _ con _ _)::rest) = (con, 1) :: ctorArities rest
+ctorArities ((DNewtype { newtypeCtor = con })::rest) =
+  (con, 1) :: ctorArities rest
 ctorArities (_::rest) = ctorArities rest
 
 variantArity : Variant -> (String, Int)

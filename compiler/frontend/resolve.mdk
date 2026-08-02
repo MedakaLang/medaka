@@ -1181,7 +1181,7 @@ checkDecl env (DLetGroup _ binds) =
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
-checkDecl env (DData _ _ _ vs _) = flatMap (checkVariant env) vs
+checkDecl env (DData { dataCtors = vs }) = flatMap (checkVariant env) vs
 checkDecl env (DProp _ _ params body) = checkProp env params body
 checkDecl env (DTest _ _ body) = checkExpr None env emptyScope body
 checkDecl env (DBench _ _ body) = checkExpr None env emptyScope body
@@ -1189,8 +1189,8 @@ checkDecl env (DInterface { supers, methods, ... }) =
   checkInterfaceDecl env supers methods
 checkDecl env (DImpl { iface, tys, reqs, methods, ... }) =
   checkImplDecl env iface tys reqs methods
-checkDecl env (DTypeAlias _ _ _ rhs) = checkType None env rhs
-checkDecl env (DNewtype _ _ _ _ fty _) = checkType None env fty
+checkDecl env (DTypeAlias { tyAliasRhs = rhs }) = checkType None env rhs
+checkDecl env (DNewtype { newtypeFieldTy = fty }) = checkType None env fty
 checkDecl env (DAttrib _ inner) = checkDecl env inner
 checkDecl _ _ = []
 
@@ -1285,9 +1285,11 @@ externNames (_::rest) = externNames rest
 
 dataRecordNames : List Decl -> List String
 dataRecordNames [] = []
-dataRecordNames ((DData _ n _ _ _)::rest) = n :: dataRecordNames rest
-dataRecordNames ((DTypeAlias _ n _ _)::rest) = n :: dataRecordNames rest
-dataRecordNames ((DNewtype _ n _ _ _ _)::rest) = n :: dataRecordNames rest
+dataRecordNames ((DData { dataName = n })::rest) = n :: dataRecordNames rest
+dataRecordNames ((DTypeAlias { tyAliasName = n })::rest) =
+  n :: dataRecordNames rest
+dataRecordNames ((DNewtype { newtypeName = n })::rest) =
+  n :: dataRecordNames rest
 dataRecordNames ((DAttrib _ d)::rest) = dataRecordNames (d::rest)
 dataRecordNames (_::rest) = dataRecordNames rest
 
@@ -1300,8 +1302,9 @@ effectNames (_::rest) = effectNames rest
 
 ctorNames : List Decl -> List String
 ctorNames [] = []
-ctorNames ((DData _ _ _ vs _)::rest) = map variantName vs ++ ctorNames rest
-ctorNames ((DNewtype _ _ _ con _ _)::rest) = con :: ctorNames rest
+ctorNames ((DData { dataCtors = vs })::rest) = map variantName vs
+  ++ ctorNames rest
+ctorNames ((DNewtype { newtypeCtor = con })::rest) = con :: ctorNames rest
 ctorNames ((DAttrib _ d)::rest) = ctorNames (d::rest)
 ctorNames (_::rest) = ctorNames rest
 
@@ -1347,7 +1350,7 @@ userValueNames (_::rest) = userValueNames rest
 
 fieldOwnersOf : List Decl -> List (String, String)
 fieldOwnersOf [] = []
-fieldOwnersOf ((DData _ _ _ vs _)::rest) = flatMap variantFieldOwners vs
+fieldOwnersOf ((DData { dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ fieldOwnersOf rest
 fieldOwnersOf (_::rest) = fieldOwnersOf rest
 
@@ -1403,7 +1406,7 @@ programIsCore prog = hasOrdering prog && hasFoldable prog
 
 hasOrdering : List Decl -> Bool
 hasOrdering [] = False
-hasOrdering ((DData _ "Ordering" _ _ _)::_) = True
+hasOrdering ((DData { dataName = "Ordering" })::_) = True
 hasOrdering (_::rest) = hasOrdering rest
 
 hasFoldable : List Decl -> Bool
@@ -2516,9 +2519,9 @@ coreExports preludeDecls = ModuleExports {
 -- `T(..)` expansion for `import core.{Option(..)}`.
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsAllOf [] = []
-typeCtorsAllOf ((DNewtype _ n _ con _ _)::rest) =
+typeCtorsAllOf ((DNewtype { newtypeName = n, newtypeCtor = con })::rest) =
   (n, [con]) :: typeCtorsAllOf rest
-typeCtorsAllOf ((DData _ n _ vs _)::rest) =
+typeCtorsAllOf ((DData { dataName = n, dataCtors = vs })::rest) =
   (n, map variantName vs) :: typeCtorsAllOf rest
 typeCtorsAllOf ((DAttrib _ d)::rest) = typeCtorsAllOf (d::rest)
 typeCtorsAllOf (_::rest) = typeCtorsAllOf rest
@@ -2562,32 +2565,35 @@ pubIfaceMethodSets (_::rest) = pubIfaceMethodSets rest
 -- pub newtype + VisPublic/VisAbstract data & record (the type name only)
 expTypesDirect : List Decl -> List String
 expTypesDirect [] = []
-expTypesDirect ((DNewtype True n _ _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DData VisPublic n _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DData VisAbstract n _ _ _)::rest) = n :: expTypesDirect rest
-expTypesDirect ((DTypeAlias True n _ _)::rest) = n :: expTypesDirect rest
+expTypesDirect ((DNewtype { newtypePub = True, newtypeName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DData { dataVis = VisPublic, dataName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DData { dataVis = VisAbstract, dataName = n })::rest) =
+  n :: expTypesDirect rest
+expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n })::rest) =
+  n :: expTypesDirect rest
 expTypesDirect (_::rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
 expCtorsDirect : List Decl -> List String
 expCtorsDirect [] = []
-expCtorsDirect ((DNewtype True _ _ con _ _)::rest) = con :: expCtorsDirect rest
-expCtorsDirect ((DData VisPublic _ _ vs _)::rest) = map variantName vs
+expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con })::rest) =
+  con :: expCtorsDirect rest
+expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = map variantName vs
   ++ expCtorsDirect rest
 expCtorsDirect (_::rest) = expCtorsDirect rest
 
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypeCtorsDirect [] = []
-expTypeCtorsDirect ((DNewtype True n _ con _ _)::rest) =
-  (n, [con]) :: expTypeCtorsDirect rest
-expTypeCtorsDirect ((DData VisPublic n _ vs _)::rest) =
-  (n, map variantName vs) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (n, [con]) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs })::rest) = (n, map variantName vs) :: expTypeCtorsDirect rest
 expTypeCtorsDirect (_::rest) = expTypeCtorsDirect rest
 
 -- field owners for PUBLIC data (named-field variants) + record
 expFieldOwnersDirect : List Decl -> List (String, String)
 expFieldOwnersDirect [] = []
-expFieldOwnersDirect ((DData VisPublic _ _ vs _)::rest) = flatMap variantFieldOwners vs
+expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ expFieldOwnersDirect rest
 expFieldOwnersDirect (_::rest) = expFieldOwnersDirect rest
 
@@ -3318,6 +3324,82 @@ stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampHeadWith t OriginUnresolved = (t, False)
 stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 
+-- ── the DECLARATION layer (#1110, this PR) ──────────────────────────────────
+-- The walk above stamps OCCURRENCES — every `TyCon` head written in a signature.
+-- This one stamps DECLARATIONS: `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each
+-- carry a `…Origin` naming the module they were WRITTEN IN.
+--
+-- ⚠️ WHY THE OCCURRENCE LAYER IS NOT ENOUGH, i.e. why this is the blocker rather
+-- than a convenience.  `registerVariants` (`types/typecheck.mdk`) mints the head
+-- `Mono` for every user data type out of the `DData` ALONE — `applyParams (TCon
+-- name) paramReprs` — and that mono becomes each constructor's scheme return type,
+-- hence the head every dispatch GOAL is read from.  There is no `Ty` in that path
+-- to inherit an origin from, so until the declaration carries one the goal side of
+-- the dispatch key cannot acquire identity at all (the impl side already has it
+-- via `headTyconTy`).  The same declaration is also where interface identity
+-- (#1047) and constructor identity (#1070) have to come from: interface names live
+-- on `DInterface`, constructor names in `DData`'s variants.
+--
+-- ⚠️ AND IT CANNOT COME FROM AMBIENT STATE AT THE CONSUMER.  `typecheck.mdk` holds
+-- no current-module ref, and inventing one would be WRONG rather than merely
+-- absent: `registerAllData` runs over `importedCtorTypeDecls` — OTHER modules'
+-- declarations — so an ambient id attributes every imported type to the IMPORTER.
+-- That is the exact wrongness class #1219 removed from the flat path.  Identity is
+-- acquired HERE, where the module id is a fact, and travels with the tree.
+--
+-- ⚠️ NOTHING READS THESE FIELDS YET.  Deliberately: the PR is byte-identical, so
+-- the widening is mechanically verifiable, exactly as #1211 and #1219 were.
+--
+-- ⚠️ FLAT (loader-less) DRIVERS GET NOTHING HERE, and that is the same asymmetry
+-- `stampFlatTyOrigins` argues at length: they have no module id, an invented one is
+-- made PERMANENT by the immunity rule, and `medaka run` on a no-import file reaches
+-- both the flat and the graph arm in ONE process — so an invented id would directly
+-- contradict a real one.  Under-supplying is correctable later; over-supplying is
+-- not.  Residual, greppable as `#1110 flat-identity`.
+stampDeclOrigins : String -> List Decl -> List Decl
+stampDeclOrigins mid decls = map (stampDeclOrigin mid) decls
+
+-- ⚠️ Record UPDATE on a `d@` binding, never re-construction: a total literal would
+-- have to respell every field, which is how a field gets silently reset.
+-- ⚠️ The `DAttrib` arm is load-bearing — `@deprecated`/`@inline` wrap the decl they
+-- annotate, so a `@must_use data Foo` would otherwise never be stamped at all.
+stampDeclOrigin : String -> Decl -> Decl
+stampDeclOrigin mid (d@(DData { dataOrigin = o })) =
+  DData { d | dataOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DNewtype { newtypeOrigin = o })) =
+  DNewtype { d | newtypeOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DTypeAlias { tyAliasOrigin = o })) =
+  DTypeAlias { d | tyAliasOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (d@(DInterface { ifaceOrigin = o })) =
+  DInterface { d | ifaceOrigin = fillDeclOrigin mid o }
+stampDeclOrigin mid (DAttrib attrs d) = DAttrib attrs (stampDeclOrigin mid d)
+stampDeclOrigin _ d = d
+
+-- The decl-layer peer of `stampHeadWith`'s immunity rule: fill in ONLY a
+-- still-unresolved origin, so a declaration that already carries identity is immune
+-- to re-stamping under any scope, on any path, however often a driver re-runs.
+--
+-- ⚠️ An EMPTY module id is refused rather than promoted.  §8 I6.3 is explicit that
+-- `""` is not an identity, and the failure mode if it were stamped is the worst one
+-- available: two modules that both stamped `OriginModule ""` would compare EQUAL,
+-- so a sentinel would manufacture exactly the cross-module confusion this carrier
+-- exists to prevent.  Leaving `OriginUnresolved` is honest absence, and no
+-- predicate may treat two of those as equal.
+--
+-- ⚠️ The three arms are enumerated rather than wildcarded so a fourth
+-- `TyConOrigin` inhabitant is MADE TO SHOW UP here.  But do not overstate it: a
+-- non-exhaustive match is a WARNING, exit 0 — a review aid, not a build gate.
+-- `OriginBuiltin` is unreachable at this layer (a builtin head has no declaration
+-- to stamp); the arm exists so that stays a stated fact rather than a wildcard.
+fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
+fillDeclOrigin mid OriginUnresolved =
+  if mid == "" then
+    OriginUnresolved
+  else
+    OriginModule mid
+fillDeclOrigin _ OriginBuiltin = OriginBuiltin
+fillDeclOrigin _ (o@(OriginModule _)) = o
+
 -- ── the resolve → typecheck channel ─────────────────────────────────────────
 -- Resolve's other entries return `List ResError` and nothing else, so the drivers
 -- have always typechecked the ORIGINAL tree; there was no channel for resolve to
@@ -3340,13 +3422,24 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 export stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGraphTyOrigins coreDecls modules =
   let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
-  let coreS = stampTyOrigins (tyOriginScope coreTypes omEmpty "core" coreDecls) coreDecls
+  let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
   (coreS, stampModulesGo coreTypes omEmpty modules)
+
+-- Both identity layers for ONE module, in one place so the prelude pass above and
+-- the per-module walk below cannot drift apart — the `evalModules`/`cevalModules`
+-- lockstep hazard, in miniature.  Declarations first, then the occurrence heads:
+-- the two are independent (the occurrence scope is built from `dataRecordNames`,
+-- which reads names, not origins), so the order is for readability only.
+stampOneModule : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> List Decl
+stampOneModule coreTypes known mid prog =
+  stampTyOrigins
+    (tyOriginScope coreTypes known mid prog)
+    (stampDeclOrigins mid prog)
 
 stampModulesGo : List (String, String) -> OrdMap (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
 stampModulesGo _ _ [] = []
 stampModulesGo coreTypes known ((mid, prog)::rest) =
-  (mid, stampTyOrigins (tyOriginScope coreTypes known mid prog) prog) ::
+  (mid, stampOneModule coreTypes known mid prog) ::
     stampModulesGo
       coreTypes
       (omInsert mid (typeOriginExports known mid prog) known)
