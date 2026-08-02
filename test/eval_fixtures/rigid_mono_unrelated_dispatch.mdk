@@ -1,0 +1,51 @@
+-- #1110 ARCH A-1 PR A: `Mono.TRigid`, the rigid type-variable constructor split
+-- out of `Mono.TCon` (compiler/types/typecheck.mdk).
+--
+-- ⚠️ THE ASSERTION HERE IS ABOUT THE CODE THAT MENTIONS NO TYPE VARIABLE AT ALL.
+-- `Holder`'s field type names `q`, which is not a parameter of the declaration,
+-- so elaborating it takes `fromAstTypeE`'s `TyVar` fallback and MINTS a rigid
+-- into this program's type environment.  Nothing below `Holder` refers to it:
+-- every interface head, every impl head and every operand from there down is
+-- concrete.  Those answers must be exactly what they would be if `Holder` were
+-- deleted.
+--
+-- Why this shape rather than "rigids work": a new `Mono` constructor is silently
+-- swallowed by every `_ =>` wildcard arm in every function that does not yet
+-- know about it, and a fixture that exercises the new constructor passes whether
+-- or not those wildcards are right — every pre-existing golden pins the output
+-- the author expected.  What a swallowed rigid actually breaks is UNRELATED
+-- dispatch, because `headTyconMono` is the goal-side bucket key; so the
+-- discriminating assertion is an ordinary dispatch answer taken in a rigid's
+-- presence.
+--
+-- Expected value derived by hand BEFORE running anything (AGENTS.md: a captured
+-- golden records what the engine did, not what is correct):
+--   tag (Bead 4)   -> "bead"    · size (Bead 4)   -> 4
+--   tag (Strand 3) -> "strand"  · size (Strand 3) -> 3 * 10 = 30
+--   both (Bead 4)  -> "bead" ++ "/" ++ "4"  -> "bead/4"
+--   total          -> 4 + 30 = 34
+--   the tuple      -> (bead, 34, bead/4, strand/30)
+
+data Holder = Holder { slot : q }
+
+interface Bit a where
+  tag : a -> String
+  size : a -> Int
+
+data Bead = Bead Int
+
+data Strand = Strand Int
+
+impl Bit Bead where
+  tag _ = "bead"
+  size (Bead n) = n
+
+impl Bit Strand where
+  tag _ = "strand"
+  size (Strand n) = n * 10
+
+both b = tag b ++ "/" ++ intToString (size b)
+
+total = size (Bead 4) + size (Strand 3)
+
+main = (tag (Bead 4), total, both (Bead 4), both (Strand 3))
