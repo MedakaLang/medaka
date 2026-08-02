@@ -38,3 +38,40 @@ crateLabel (Crate _ n) = "crate-\{n}"
 -- re-export must still be attributed to alpha, its DEFINER, never to beta.
 export fragileCrate : a -> Crate a
 fragileCrate v = Crate Fragile v
+
+-- #1110 coverage gap (issue title: "types/aliases/interfaces/methods/records/
+-- ctors"): the corpus above is ALL `data`.  Everything below adds one of the
+-- other decl forms that mints/uses a type head, so a defect confined to
+-- `stampDeclTyOrigins`'s non-`data` arms has somewhere to print itself.
+--
+-- `Weighable` is an INTERFACE.  Its own name is never a `TyCon` — an interface
+-- is a constraint predicate, not a type constructor, and `mapTyInDecl`'s
+-- `DInterface` arm walks only `methods`' Ty positions — so this declaration by
+-- itself mints no HEAD SPREAD row.  It exists to give the `impl`s below (here
+-- and in beta) something to be an impl OF.
+export interface Weighable a where
+  weight : a -> Int
+
+-- An IMPL, over `Tag` — alpha's own type, alpha's own interface.  `DImpl.tys`
+-- is walked by the same traversal the stamper uses, so this exercises the
+-- decl form directly; the re-exported case (impl over a head reached only via
+-- beta's re-export) is in beta.mdk.
+export impl Weighable Tag where
+  weight Fragile = 1
+  weight Bulk = 5
+
+-- `CrateId` is a NEWTYPE.  A bare `newtype` decl mints no Ty-position
+-- occurrence of its OWN name (`mapTyInDecl`'s `DNewtype` arm walks only the
+-- underlying field type) — so `crateIdOf`'s signature is what turns `CrateId`
+-- into a claimable head.
+newtype CrateId = CrateId Int
+
+export crateIdOf : Crate a -> CrateId
+crateIdOf _ = CrateId 0
+
+-- `Weight` is a TYPE ALIAS over `Int`, referenced the same way as `CrateId`
+-- above: the alias decl's own name needs a USE site to become a head.
+export type Weight = Int
+
+export crateWeightOf : Crate Int -> Weight
+crateWeightOf (Crate t n) = n + weight t

@@ -2,11 +2,13 @@
 # <slot> <head> <flat~graph> <single~graph> <flat~single>
 alpha Bool AGREE AGREE AGREE
 alpha Crate R-ONLY CONFLICT R-ONLY
+alpha CrateId R-ONLY CONFLICT R-ONLY
 alpha Int AGREE AGREE AGREE
 alpha Option AGREE AGREE AGREE
 alpha Ordering AGREE AGREE AGREE
 alpha String AGREE AGREE AGREE
 alpha Tag R-ONLY CONFLICT R-ONLY
+alpha Weight R-ONLY CONFLICT R-ONLY
 beta Crate R-ONLY R-ONLY NEITHER
 beta Int AGREE AGREE AGREE
 beta Result AGREE AGREE AGREE
@@ -41,7 +43,9 @@ main_graph Tag R-ONLY R-ONLY NEITHER
 # must delete them here by hand. (Sourcing the id from the driver would make it
 # mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
 alpha Crate flat=- single=mod:__user__ graph=mod:alpha
+alpha CrateId flat=- single=mod:__user__ graph=mod:alpha
 alpha Tag flat=- single=mod:__user__ graph=mod:alpha
+alpha Weight flat=- single=mod:__user__ graph=mod:alpha
 beta Shipment flat=- single=mod:__user__ graph=mod:beta
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
@@ -49,6 +53,7 @@ Array 1 builtin
 Bool 1 builtin
 Char 1 builtin
 Crate 1 mod:alpha
+CrateId 1 mod:alpha
 Float 1 builtin
 Int 1 builtin
 List 1 builtin
@@ -61,11 +66,12 @@ Shipment 1 mod:beta
 String 1 builtin
 Tag 1 mod:alpha
 Unit 1 builtin
+Weight 1 mod:alpha
 __tuple2__ 1 builtin
 === SUMMARY ===
 modules 3
 graph-modules 3
 flat-segments 6
-heads 33
-claims 99
-conflicts 3
+heads 35
+claims 105
+conflicts 5
