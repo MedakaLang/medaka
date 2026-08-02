@@ -1,0 +1,6 @@
+data Boxed = Boxed Int
+
+boxedVal : Boxed
+boxedVal = Boxed 5
+
+main = println "boxed ok"
