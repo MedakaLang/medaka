@@ -9,14 +9,36 @@
 -- concrete.  Those answers must be exactly what they would be if `Holder` were
 -- deleted.
 --
--- Why this shape rather than "rigids work": a new `Mono` constructor is silently
--- swallowed by every `_ =>` wildcard arm in every function that does not yet
--- know about it, and a fixture that exercises the new constructor passes whether
--- or not those wildcards are right — every pre-existing golden pins the output
--- the author expected.  What a swallowed rigid actually breaks is UNRELATED
--- dispatch, because `headTyconMono` is the goal-side bucket key; so the
--- discriminating assertion is an ordinary dispatch answer taken in a rigid's
--- presence.
+-- 🚨 WHAT THIS FIXTURE ACTUALLY CATCHES — stated narrowly, because the first
+-- version of this header over-claimed and a reviewer had to trace it.  `Holder`
+-- is never REFERENCED, so its rigid never becomes a dispatch goal and none of
+-- the nine WILDCARD-bearing consumers is reached.  What the rigid does reach is
+-- the ELEVEN matches that are exhaustive over `Mono` (`substMono`, `substMonoP`,
+-- `ppGo`, `freeGenVars`, `occursAdjust`, `lowerToCurrent`, `freeEffvars`,
+-- `monoUnboundIds`, `monoUnboundVarLevels`, `cohStep`, `findTvarN`): generalizing
+-- `Holder`'s scheme walks them, so a MISSING arm in any of them fails this
+-- fixture as a runtime match failure.
+--
+-- That is worth a fixture precisely because nothing else would catch it: a
+-- non-exhaustive match is only a WARNING here (#1239), so `make medaka` and
+-- `make check-self` both stay green with an arm missing.
+--
+-- The goal-side/dispatch half — the dangerous nine, `headTyconMono` in
+-- particular — is pinned SEPARATELY by
+-- `test/typecheck_error_fixtures/rigid_mono_head_key.mdk`, which makes a rigid
+-- the receiver of an interface method and discriminates on the resulting
+-- diagnostic's wording.
+--
+-- ⚠️ COUPLED TO #1240 (`data Holder = Holder { slot : q }` — an unbound type
+-- variable in a constructor field type is accepted with NO diagnostic).  The
+-- `data Holder` line below is verbatim #1240's repro.  When #1240 is fixed this
+-- file becomes a
+-- compile error and reds FIVE gates: bootstrap_eval, diff_compiler_eval,
+-- diff_compiler_core_ir, diff_compiler_core_ir_roundtrip and
+-- diff_compiler_snapshot_core_ir.  Whoever fixes #1240 will meet that red here
+-- first: re-express the rigid through whatever route survives the fix (the
+-- `paramMonoOf` producer, if the `fromAstTypeE` one is closed), or retire this
+-- fixture and keep the `typecheck_error_fixtures` one.
 --
 -- Expected value derived by hand BEFORE running anything (AGENTS.md: a captured
 -- golden records what the engine did, not what is correct):

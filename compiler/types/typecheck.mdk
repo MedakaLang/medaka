@@ -126,9 +126,26 @@ public export data Mono =
   -- from any declaration.  It has exactly two producers — `fromAstTypeE`'s
   -- `TyVar` fallback and `paramMonoOf` — and both mint it from a name the
   -- parser already routed through `TIdent` (`parseTyAtom`,
-  -- `compiler/frontend/parser.mdk:2049`), so a rigid name is lexically
-  -- lowercase and a real `TCon` name lexically uppercase: the two populations
-  -- never collided by name even while they shared a constructor.
+  -- `compiler/frontend/parser.mdk:2049`).
+  --
+  -- 🚨 THE NAMING RULE, STATED CORRECTLY — it is the safety argument for every
+  -- consumer that does NOT carry a `TRigid` arm, so getting it wrong silently
+  -- changes answers:
+  --   * a RIGID name never starts with an UPPERCASE letter.  It is not
+  --     necessarily lowercase: `identStartLower` (`frontend/lexer.mdk:1638`) is
+  --     `isLower … || … == '_'`, so `_k`/`_v`/`_a` (synthesized by
+  --     `frontend/desugar.mdk:964,967`), `_` (`frontend/parser.mdk:2720`) and
+  --     `__tuple2__` are all legal rigid spellings.
+  --   * a REAL head is uppercase-initial, OR one of the reserved `__tupleN__`
+  --     builtin tags (`tupleCtorTyName`, `frontend/parser.mdk:2137`;
+  --     `tupleHeadTagTc` below).
+  -- So the two populations are disjoint on the UPPERCASE test alone, and they
+  -- DO collide on `__tupleN__` — which is why `tupleSpine` and `matchStep` each
+  -- carry an explicit answer-preserving `TRigid` arm rather than relying on a
+  -- wildcard.  An earlier version of this comment claimed "rigid = lowercase,
+  -- real = uppercase"; both halves are false at the edges and the claim is what
+  -- let the `matchStep` case through review.  DICT-SEMANTICS §8 I6.2(b) tracks
+  -- the `__tupleN__` forgery as OWED-#1110.
   --
   -- WHY IT IS ITS OWN CONSTRUCTOR (#1110, DICT-SEMANTICS §8 I6.1 ∧ I6.3):
   -- a rigid variable must carry NO module identity, a real head MUST carry
@@ -3552,16 +3569,34 @@ unifyN t (TVar c) = bindVar c t
 unifyN (TCon a) (TCon b) = if a == b then () else typeMismatch (TCon a) (TCon b)
 -- #1110: rigid~rigid.  MANDATORY, not optional — without it a rigid variable
 -- fails to unify with ITSELF (it would fall to the catch-all `typeMismatch`),
--- which the shared `TCon` constructor used to handle for free.  Same
--- name-equality answer, same mismatch arguments.  A rigid meeting a real `TCon`
--- (or anything else) falls through to the catch-all exactly as before: the old
--- `TCon a == TCon b` test was already False across the two populations, because
--- a rigid name is lexically lowercase and a real head lexically uppercase.
+-- which the shared `TCon` constructor used to handle for free.
 unifyN (TRigid a) (TRigid b) =
   if a == b then
     ()
   else
     typeMismatch (TRigid a) (TRigid b)
+-- #1110 CROSS-POPULATION, and it is NOT dead code.  A rigid and a real head can
+-- share a name — both spell `__tupleN__` (see `Mono.TRigid`) — so the pre-split
+-- `TCon a == TCon b` test could be TRUE across the populations, and dropping
+-- these two arms changes an answer: `data Bad = Bad __tuple2__; g : Bad -> (,)`
+-- checked clean before the split and becomes `Type mismatch: (,) vs (,)` without
+-- them — an error whose two sides render IDENTICALLY.  For every other name the
+-- test is False and the message is byte-identical to the catch-all's, since
+-- `ppMono` renders `TRigid` exactly as `TCon`.  Placed ABOVE the
+-- `tupleUnifyClash` guard because the old `TCon`/`TCon` arm was above it too.
+--
+-- ⚠️ The preserved answer is a FORGERY (DICT-SEMANTICS §8 I6.2(b), OWED-#1110):
+-- a rigid variable is not the builtin tuple head.  Carrier now, semantics later.
+unifyN (TCon a) (TRigid b) =
+  if a == b then
+    ()
+  else
+    typeMismatch (TCon a) (TRigid b)
+unifyN (TRigid a) (TCon b) =
+  if a == b then
+    ()
+  else
+    typeMismatch (TRigid a) (TCon b)
 -- A tuple TYPE is now a `__tupleN__`-headed `TApp` spine; when it clashes with a
 -- differing-arity tuple or with a concrete non-tuple head, report the FULL types
 -- (which render `(a, b)` via ppGo) instead of letting the generic `TApp~TApp`
@@ -10847,10 +10882,14 @@ cohGoR subst (TVar c1) (TVar c2)
 cohGoR subst (TVar c1) t = cohBind subst (tyvarId c1) t
 cohGoR subst t (TVar c2) = cohBind subst (tyvarId c2) t
 cohGoR _ (TCon a) (TCon b) = a == b
--- #1110: rigid~rigid is name equality, exactly as the shared `TCon` arm gave.
--- A rigid meeting a real head still falls to `cohGoR _ _ _ = False` — the old
--- `a == b` across the two populations was already False (lower vs upper case).
+-- #1110: name equality, exactly as the shared `TCon` arm gave — INCLUDING the
+-- cross-population pairs, which are not dead: a rigid and a real head can share
+-- the name `__tupleN__` (see `Mono.TRigid`), so `a == b` could be True across
+-- them and `cohGoR _ _ _ = False` would change the answer.  Same forgery
+-- preserved as `unifyN`/`matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
 cohGoR _ (TRigid a) (TRigid b) = a == b
+cohGoR _ (TCon a) (TRigid b) = a == b
+cohGoR _ (TRigid a) (TCon b) = a == b
 cohGoR subst (TApp f1 a1) (TApp f2 a2) = cohGo subst f1 f2 && cohGo subst a1 a2
 cohGoR subst (TFun a1 _ b1) (TFun a2 _ b2) = cohGo subst a1 a2
   && cohGo subst b1 b2
@@ -10928,14 +10967,18 @@ cohStep g0 s0 =
   let s = normalize s0
   match g
     TVar c => MVar (tyvarId c)
+    -- #1110: the shared `TCon` constructor compared these four pairings with one
+    -- `a == b`, and the cross-population ones are LIVE — a rigid and a real head
+    -- can both spell `__tupleN__` (see `Mono.TRigid`), so routing them to
+    -- `_ => MFail` would change the answer.  Same forgery preserved as
+    -- `unifyN`/`matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
     TCon a => match s
       TCon b => if a == b then MOk else MFail
+      TRigid b => if a == b then MOk else MFail
       _ => MFail
-    -- #1110: mirror of the `TCon` arm.  Cross-population (rigid general side vs
-    -- real specific head, or the reverse) already answered MFail before the
-    -- split via the `a == b` test, and still does via the `_ => MFail` arms.
     TRigid a => match s
       TRigid b => if a == b then MOk else MFail
+      TCon b => if a == b then MOk else MFail
       _ => MFail
     TApp f1 a1 => match s
       TApp f2 a2 => MKids [(f1, f2), (a1, a2)]
@@ -10957,9 +11000,11 @@ cohEqMono a b = cohEqR (normalize a) (normalize b)
 cohEqR : Mono -> Mono -> Bool
 cohEqR (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
 cohEqR (TCon a) (TCon b) = a == b
--- #1110: same shape as the `cohGoR` rigid arm — name equality, and the
--- cross-population case keeps falling to `cohEqR _ _ = False`.
+-- #1110: same shape as the `cohGoR` arms — name equality on all four pairings.
+-- The cross-population pairs are live (`__tupleN__`); see `Mono.TRigid`.
 cohEqR (TRigid a) (TRigid b) = a == b
+cohEqR (TCon a) (TRigid b) = a == b
+cohEqR (TRigid a) (TCon b) = a == b
 cohEqR (TApp f1 a1) (TApp f2 a2) = cohEqMono f1 f2 && cohEqMono a1 a2
 cohEqR (TFun a1 _ b1) (TFun a2 _ b2) = cohEqMono a1 a2 && cohEqMono b1 b2
 cohEqR (TEff _) (TEff _) = True
@@ -12691,6 +12736,21 @@ matchStep : Ty -> Mono -> MStep String Ty Mono
 matchStep (TyVar n) _ = MVar n
 matchStep (TyCon { tyConName = n }) m = match normalize m
   TCon n2 => if n == n2 then MOk else MFail
+  -- #1110 ANSWER-PRESERVING, and it really does fire — the twin of `tupleSpine`'s
+  -- rigid arm.  A real head is uppercase-initial OR one of the four reserved
+  -- `__tupleN__` tags (`tupleCtorTyName`, `compiler/frontend/parser.mdk:2137-2141`,
+  -- minted via `tyConBuiltin` at `:2131`), and `__tupleN__` is ALSO a legal rigid
+  -- spelling: `identStartLower` (`compiler/frontend/lexer.mdk:1638`) admits a
+  -- leading `_`, so `data Bad = Bad __tuple2__` binds a type PARAMETER and both
+  -- rigid producers can mint `TRigid "__tuple2__"`.  Measured: without this arm
+  -- `impl Q (,)` stops matching such a goal and a program that checked clean before
+  -- the split becomes `No impl of Q for (,)` — a real answer change.
+  --
+  -- ⚠️ The pre-split answer this restores is a FORGERY: a rigid variable is not the
+  -- builtin tuple head, and letting it match one is exactly the identity confusion
+  -- DICT-SEMANTICS §8 I6.2(b) records as OWED-#1110.  Preserved deliberately —
+  -- this PR is the carrier step; changing answers is the follow-on.
+  TRigid n2 => if n == n2 then MOk else MFail
   _ => MFail
 matchStep (TyApp a b) m = match normalize m
   TApp ma mb => MKids [(a, ma), (b, mb)]
@@ -16412,13 +16472,16 @@ monoSameGiven a b = match normalize a
   TVar c1 => match normalize b
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => False
+  -- #1110: the shared `TCon` constructor answered all four pairings with one
+  -- `x == y`, and the cross-population ones are LIVE (`__tupleN__`; see
+  -- `Mono.TRigid`), so routing them to `_ => False` would change the answer.
   TCon x => match normalize b
     TCon y => x == y
+    TRigid y => x == y
     _ => False
-  -- #1110: name equality, exactly as the shared `TCon` arm gave.  Cross-
-  -- population comparisons keep answering False through the `_` arms.
   TRigid x => match normalize b
     TRigid y => x == y
+    TCon y => x == y
     _ => False
   TApp a1 b1 => match normalize b
     TApp a2 b2 => monoSameGiven a1 a2 && monoSameGiven b1 b2

@@ -1,0 +1,33 @@
+-- #1110 ARCH A-1 PR "A": the DISCRIMINATING fixture for `Mono.TRigid`.
+--
+-- `Bad`'s field type names `zzz`, which is not a parameter of the declaration,
+-- so `fromAstTypeE`'s `TyVar` fallback mints a rigid for it.  `use` then makes
+-- that rigid the RECEIVER of an interface method, which is the only way to force
+-- the rigid to be used as a GOAL-SIDE DISPATCH KEY.
+--
+-- WHAT THIS PINS, and why the wording of the error is the whole assertion:
+-- `headTyconMono` answers `Some "zzz"` for a rigid, so `allConcreteHeads` is
+-- True, the goal is treated as concrete, and `checkOneCallObligation` reports
+-- the no-instance error naming the head.  If a `TRigid` were swallowed by that
+-- function's `_ => None` wildcard, `allConcreteHeads` would go False and the
+-- call would route to `checkUndeterminedObligations` instead — a DIFFERENT
+-- diagnostic.  So the golden discriminates the dangerous case; an exit code or
+-- a mere "it errors" assertion would not.
+--
+-- Deliberately an ORDINARY rigid name.  `__tupleN__` is also a legal rigid
+-- spelling and collides with the builtin tuple head — that forgery is tracked
+-- separately (DICT-SEMANTICS §8 I6.2(b), OWED-#1110) and is NOT what this
+-- fixture is for.
+--
+-- ⚠️ This fixture asserts an ANSWER, not a correct answer.  Handing a rigid
+-- variable out as a dispatch key violates §8 I6.1; PR "A" is the carrier step
+-- and preserves it deliberately.  When the follow-on lands, this golden MOVES —
+-- that is the intended self-drain, not a regression.
+
+interface Q a where
+  qq : a -> Int
+
+data Bad = Bad zzz
+
+use : Bad -> Int
+use (Bad v) = qq v
