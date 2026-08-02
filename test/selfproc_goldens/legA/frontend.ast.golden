@@ -1,4 +1,6 @@
+constraintUnresolved : String -> List Ty -> Constraint
 dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
+dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
 dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
 dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
 dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
@@ -32,6 +34,8 @@ mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
 mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 qualifiedLocal : String -> String -> String
+requireUnresolved : String -> List Ty -> Require
+superUnresolved : String -> List String -> Super
 tyConBuiltin : String -> Option Loc -> Ty
 tyConUnresolved : String -> Option Loc -> Ty
 useMemberAlias : UseMember -> Option String

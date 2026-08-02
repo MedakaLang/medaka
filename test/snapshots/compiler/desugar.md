@@ -1,5 +1,5 @@
 # META
-source_lines=1029
+source_lines=1026
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -34,6 +34,8 @@ import frontend.ast.{
   UsePath(..),
   qualifiedLocal,
   tyConUnresolved,
+  dImplUnresolved,
+  requireUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -186,13 +188,8 @@ intLit n = ENumLit n (Ref None) (Ref RNone) ""
 -- a derived impl head with the fixed pub / non-default / no-name shape;
 -- applyDeriveParams rewrites tys + reqs afterwards for the type's params.
 derivedImpl : String -> String -> List ImplMethod -> Decl
-derivedImpl iface tyName methods = DImpl {
-  pub = True,
-  iface = iface,
-  tys = [tyConUnresolved tyName None],
-  reqs = [],
-  methods = methods,
-}
+derivedImpl iface tyName methods =
+  dImplUnresolved True iface [tyConUnresolved tyName None] [] methods
 
 -- two-parameter impl method: `m a b = body`
 binMethod : String -> String -> String -> Expr -> ImplMethod
@@ -524,7 +521,7 @@ paramRequires : String -> List String -> List Require
 paramRequires iface params = map (paramReq iface) params
 
 paramReq : String -> String -> Require
-paramReq iface p = Require iface [TyVar p]
+paramReq iface p = requireUnresolved iface [TyVar p]
 
 conArity : Variant -> Int
 conArity (Variant _ (ConPos tys)) = listLen tys
@@ -1032,7 +1029,7 @@ desugar prog = qualifyAliasRefs prog
   |> mapProg rewriteAssignIndex
   |> mapProg rewriteSugar
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
@@ -1117,7 +1114,7 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
 (DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
-(DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (EVar "iface")) (fa "tys" (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (fa "reqs" (EListLit)) (fa "methods" (EVar "methods")))))
+(DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "True")) (EVar "iface")) (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (EListLit)) (EVar "methods")))
 (DTypeSig false "binMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "ImplMethod"))))))
 (DFunDef false "binMethod" ((PVar "m") (PVar "a") (PVar "b") (PVar "body")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "m")) (EListLit (EApp (EApp (EVar "PVar") (EVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EVar "PVar") (EVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "body")))
 (DTypeSig false "rewriteSugar" (TyFun (TyCon "Expr") (TyCon "Expr")))
@@ -1248,7 +1245,7 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "paramRequires" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Require")))))
 (DFunDef false "paramRequires" ((PVar "iface") (PVar "params")) (EApp (EApp (EVar "map") (EApp (EVar "paramReq") (EVar "iface"))) (EVar "params")))
 (DTypeSig false "paramReq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Require"))))
-(DFunDef false "paramReq" ((PVar "iface") (PVar "p")) (EApp (EApp (EVar "Require") (EVar "iface")) (EListLit (EApp (EVar "TyVar") (EVar "p")))))
+(DFunDef false "paramReq" ((PVar "iface") (PVar "p")) (EApp (EApp (EVar "requireUnresolved") (EVar "iface")) (EListLit (EApp (EVar "TyVar") (EVar "p")))))
 (DTypeSig false "conArity" (TyFun (TyCon "Variant") (TyCon "Int")))
 (DFunDef false "conArity" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EVar "listLen") (EVar "tys")))
 (DFunDef false "conArity" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EVar "listLen") (EVar "fs")))
@@ -1452,7 +1449,7 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
@@ -1537,7 +1534,7 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
 (DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
-(DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "True")) (fa "iface" (EVar "iface")) (fa "tys" (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (fa "reqs" (EListLit)) (fa "methods" (EVar "methods")))))
+(DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "True")) (EVar "iface")) (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (EListLit)) (EVar "methods")))
 (DTypeSig false "binMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "ImplMethod"))))))
 (DFunDef false "binMethod" ((PVar "m") (PVar "a") (PVar "b") (PVar "body")) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "m")) (EListLit (EApp (EApp (EVar "PVar") (EVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EApp (EVar "PVar") (EVar "b")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EVar "body")))
 (DTypeSig false "rewriteSugar" (TyFun (TyCon "Expr") (TyCon "Expr")))
@@ -1668,7 +1665,7 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "paramRequires" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Require")))))
 (DFunDef false "paramRequires" ((PVar "iface") (PVar "params")) (EApp (EApp (EMethodRef "map") (EApp (EVar "paramReq") (EVar "iface"))) (EVar "params")))
 (DTypeSig false "paramReq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Require"))))
-(DFunDef false "paramReq" ((PVar "iface") (PVar "p")) (EApp (EApp (EVar "Require") (EVar "iface")) (EListLit (EApp (EVar "TyVar") (EVar "p")))))
+(DFunDef false "paramReq" ((PVar "iface") (PVar "p")) (EApp (EApp (EVar "requireUnresolved") (EVar "iface")) (EListLit (EApp (EVar "TyVar") (EVar "p")))))
 (DTypeSig false "conArity" (TyFun (TyCon "Variant") (TyCon "Int")))
 (DFunDef false "conArity" ((PCon "Variant" PWild (PCon "ConPos" (PVar "tys")))) (EApp (EVar "listLen") (EVar "tys")))
 (DFunDef false "conArity" ((PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") PWild))) (EApp (EVar "listLen") (EVar "fs")))

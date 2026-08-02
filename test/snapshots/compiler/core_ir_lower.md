@@ -1451,7 +1451,7 @@ methodLevelConstraintIfaces typarams (TyEffect _ _ t) =
 methodLevelConstraintIfaces _ _ = []
 
 constraintIfaceIfMethodLevel : List String -> Constraint -> List String
-constraintIfaceIfMethodLevel typarams (Constraint ifaceName args)
+constraintIfaceIfMethodLevel typarams (Constraint { constraintHead = ifaceName, constraintArgs = args })
   | constraintArgsMentionNonParam typarams args = [ifaceName]
   | otherwise = []
 
@@ -2164,7 +2164,7 @@ nodeTag _ = "?"
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))
 (DFunDef false "methodLevelConstraintIfaces" (PWild PWild) (EListLit))
 (DTypeSig false "constraintIfaceIfMethodLevel" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "constraintIfaceIfMethodLevel" ((PVar "typarams") (PCon "Constraint" (PVar "ifaceName") (PVar "args"))) (EIf (EApp (EApp (EVar "constraintArgsMentionNonParam") (EVar "typarams")) (EVar "args")) (EListLit (EVar "ifaceName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constraintIfaceIfMethodLevel" ((PVar "typarams") (PRec "Constraint" ((rf "constraintHead" (PVar "ifaceName")) (rf "constraintArgs" (PVar "args"))) false)) (EIf (EApp (EApp (EVar "constraintArgsMentionNonParam") (EVar "typarams")) (EVar "args")) (EListLit (EVar "ifaceName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "constraintArgsMentionNonParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "constraintArgsMentionNonParam" ((PVar "typarams") (PVar "args")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "typarams")))) (EVar "args")))
 (DTypeSig false "tyMentionsNonParam" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -2794,7 +2794,7 @@ nodeTag _ = "?"
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))
 (DFunDef false "methodLevelConstraintIfaces" (PWild PWild) (EListLit))
 (DTypeSig false "constraintIfaceIfMethodLevel" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "constraintIfaceIfMethodLevel" ((PVar "typarams") (PCon "Constraint" (PVar "ifaceName") (PVar "args"))) (EIf (EApp (EApp (EVar "constraintArgsMentionNonParam") (EVar "typarams")) (EVar "args")) (EListLit (EVar "ifaceName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constraintIfaceIfMethodLevel" ((PVar "typarams") (PRec "Constraint" ((rf "constraintHead" (PVar "ifaceName")) (rf "constraintArgs" (PVar "args"))) false)) (EIf (EApp (EApp (EVar "constraintArgsMentionNonParam") (EVar "typarams")) (EVar "args")) (EListLit (EVar "ifaceName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "constraintArgsMentionNonParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
 (DFunDef false "constraintArgsMentionNonParam" ((PVar "typarams") (PVar "args")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "typarams")))) (EVar "args")))
 (DTypeSig false "tyMentionsNonParam" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))

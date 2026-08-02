@@ -57,6 +57,7 @@ import frontend.resolve.{
   stampBindingIds,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
+  stampDeclOrigins,
   noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
@@ -4121,7 +4122,8 @@ constraintVarNamesTy (TyEffect _ _ t) = constraintVarNamesTy t
 constraintVarNamesTy _ = []
 
 constraintArgVarNames : Constraint -> List String
-constraintArgVarNames (Constraint _ tys) = flatMap tyVarNames tys
+constraintArgVarNames (Constraint { constraintArgs = tys }) =
+  flatMap tyVarNames tys
 
 -- tyVarNames PLUS the signature's constraint-only vars (deduped).
 tyVarNamesWithConstraints : Ty -> List String
@@ -4143,8 +4145,7 @@ tyConNamesInTy (TyConstrained cs t) = flatMap tyConNamesInConstraint cs
   ++ tyConNamesInTy t
 
 tyConNamesInConstraint : Constraint -> List String
-tyConNamesInConstraint (Constraint iname tys) =
-  iname :: flatMap tyConNamesInTy tys
+tyConNamesInConstraint (Constraint { constraintHead = iname, constraintArgs = tys }) = iname :: flatMap tyConNamesInTy tys
 
 -- Collect all elements from the HEAD of a list up to and including `target`.
 -- The on-stack list is newest-first; when a back-edge to `target` is detected,
@@ -5459,7 +5460,7 @@ superSlotsOf allDecls (iface, id)
 -- one `Super superName params`: map each param name through subst → its id; emit the
 -- super slot only if ALL params resolved (matches the oracle's length guard).
 superSlotOf : List (String, Int) -> Super -> List (String, Int)
-superSlotOf subst (Super superName params) =
+superSlotOf subst (Super { superHead = superName, superParams = params }) =
   let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
   if listLen mapped == listLen params then
     (superName, firstOrZero mapped)::[]
@@ -7101,7 +7102,7 @@ directSupers iface = match ifaceSupersOf driverState.value.superDeclsRef.value i
   Some (_, supers) => map superIfaceName supers
 
 superIfaceName : Super -> String
-superIfaceName (Super n _) = n
+superIfaceName (Super { superHead = n }) = n
 
 -- P0-19: impose a definer-shadow standalone's declared domain on the actual argument
 -- [xt] WHEN the occurrence resolves to the standalone (RLocal).  No declared signature ⇒
@@ -7618,7 +7619,7 @@ sigConstraintsOf _ = []
 -- dropping it is the never-over-reject direction (#607).
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
 recordSigConstraintObls [] _ _ = ()
-recordSigConstraintObls ((Constraint iface args)::rest) tvs subst =
+recordSigConstraintObls ((Constraint { constraintHead = iface, constraintArgs = args })::rest) tvs subst =
   let _ = match recordSigConstraintArgs args tvs subst
     Some monos => recordObl Predicate {
       iface = iface,
@@ -10277,7 +10278,7 @@ constraintIsMethodLevel typarams c =
   isNonEmptyL (constraintNonParamVars typarams c)
 
 constraintNonParamVars : List String -> Constraint -> List String
-constraintNonParamVars typarams (Constraint _ args) =
+constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
   removeAllS typarams (flatMap tyVarNames args)
 
 resolveSites : ImplBuckets -> KeyBuckets -> List String -> List PendingEntry -> Unit
@@ -11503,7 +11504,7 @@ ifaceDfsCycle allDecls done path current = match ifaceSupersOf allDecls current
 
 ifaceDfsCycleSupers : List Decl -> Ref (OrdMap Unit) -> List String -> List Super -> List String
 ifaceDfsCycleSupers _ _ _ [] = []
-ifaceDfsCycleSupers allDecls done path ((Super superName _)::rest) =
+ifaceDfsCycleSupers allDecls done path ((Super { superHead = superName })::rest) =
   let msgs1 = ifaceDfsCycleOneSuper allDecls done path superName
   msgs1 ++ ifaceDfsCycleSupers allDecls done path rest
 
@@ -11540,7 +11541,7 @@ superImplMsgsOf _ _ = []
 -- param name through [subst] to its concrete Ty; if every param mapped, all are
 -- concrete, AND no matching `impl superName <concrete>` exists, emit the error.
 superMsgFor : List Decl -> String -> List Ty -> List (String, Ty) -> Super -> List String
-superMsgFor allDecls iface implTys subst (Super superName params) =
+superMsgFor allDecls iface implTys subst (Super { superHead = superName, superParams = params }) =
   let concrete = substParams params subst
   if listLen concrete == listLen params && allList tyIsConcrete concrete && not (superImplExists allDecls superName concrete) then
     [missingSuperImplMsg iface implTys superName concrete]
@@ -13223,7 +13224,7 @@ argImplDictRoutesForEncl implTable keyTable encl name _tag mono goals = match ma
 -- (implDictRoutesForFull) also seeds 0.
 argImplReqRoutes : ImplBuckets -> KeyBuckets -> String -> List (String, Mono) -> List Require -> Int -> List Route
 argImplReqRoutes _ _ _ _ [] _ = []
-argImplReqRoutes implTable keyTable encl subst ((Require rIface rargs)::rest) depth = argReqRoute implTable keyTable rIface encl subst rargs depth :: argImplReqRoutes implTable keyTable encl subst rest depth
+argImplReqRoutes implTable keyTable encl subst ((Require { requireHead = rIface, requireArgs = rargs })::rest) depth = argReqRoute implTable keyTable rIface encl subst rargs depth :: argImplReqRoutes implTable keyTable encl subst rest depth
 
 argReqRoute : ImplBuckets -> KeyBuckets -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argReqRoute _ _ _ _ _ [] _ = RNone
@@ -13891,9 +13892,20 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 -- (the internal `checkProgramSeeded` passes flatten the prelude into `prog`), and
 -- then nothing is claimed at all — which is why the prelude can no longer be
 -- attributed to the user's module.
+--
+-- #1227: the paragraph above is about the OCCURRENCE layer (`stampFlatTyOrigins`)
+-- only.  The DECLARATION layer (`stampDeclOrigins`, resolve.mdk) is narrower still:
+-- `coreProg0` is a KNOWN module id here (unlike the graph drivers' `registerData`,
+-- which would have to invent one for an imported module), so this driver now also
+-- stamps the prelude's own `DData`/`DNewtype`/`DTypeAlias`/`DInterface` heads
+-- `core`.  ONLY `coreProg` gets this call — `userProg0` still has no module id and
+-- must stay unstamped, exactly as the occurrence layer already treats it.  When
+-- `coreProg0` is `[]` (the prelude-free / already-flattened callers), stamping an
+-- empty list is a no-op, so this adds nothing on those paths.
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit seed coreProg0 userProg0 =
-  let coreProg = stampFlatTyOrigins coreProg0 coreProg0
+  let coreProgTy = stampFlatTyOrigins coreProg0 coreProg0
+  let coreProg = stampDeclOrigins "core" coreProgTy
   let userProg = stampFlatTyOrigins coreProg0 userProg0
   -- #1110 agreement tap.  OFF unless a probe enabled it (`noteOriginTrace` is a
   -- `Bool` read and a return otherwise).  It is here, at the DRIVER, rather than
@@ -15218,7 +15230,7 @@ reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
   Some (subst, reqs) => map (reqToObligation subst) reqs
 
 reqToObligation : List (String, Mono) -> Require -> (String, List Mono)
-reqToObligation subst (Require ifaceR tysR) =
+reqToObligation subst (Require { requireHead = ifaceR, requireArgs = tysR }) =
   (ifaceR, map (reqTyToMono subst) tysR)
 
 -- Convert a `Require`'s declared type arg to a mono under the head-match subst.
@@ -16055,10 +16067,11 @@ declaredIfacesOn vname (TyEffect _ _ t) = declaredIfacesOn vname t
 declaredIfacesOn _ _ = []
 
 constraintIface : Constraint -> String
-constraintIface (Constraint n _) = n
+constraintIface (Constraint { constraintHead = n }) = n
 
 constraintVarNames : Constraint -> List String
-constraintVarNames (Constraint _ args) = flatMap tyVarNames args
+constraintVarNames (Constraint { constraintArgs = args }) =
+  flatMap tyVarNames args
 
 isUnboundTvar : Mono -> Bool
 isUnboundTvar m = match normalize m
@@ -16337,7 +16350,7 @@ registersElementDict mname rpNames = contains mname rpNames
 
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerReqSlots _ _ _ [] = ()
-registerReqSlots mname implTvMap slot ((Require iface rargs)::rest) =
+registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireArgs = rargs })::rest) =
   let ids = flatMap (a => monoTyvarIds (fromAstType implTvMap a)) rargs
   let _ = registerEachActive ids (dictParamName mname slot)
   let _ = registerPredGiven iface (map (a => fromAstType implTvMap a) rargs) (dictParamName mname slot)
@@ -17020,8 +17033,7 @@ sigConstraints (TyConstrained cs _) = flatMap constraintTyVars cs
 sigConstraints _ = []
 
 constraintTyVars : Constraint -> List (String, String)
-constraintTyVars (Constraint iface tys) =
-  map (n => (iface, n)) (tyVarArgNames tys)
+constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys }) = map (n => (iface, n)) (tyVarArgNames tys)
 
 tyVarArgNames : List Ty -> List String
 tyVarArgNames [] = []
@@ -17042,7 +17054,8 @@ sigConstraintArgTys (TyConstrained cs _) = flatMap constraintTyVarArgs cs
 sigConstraintArgTys _ = []
 
 constraintTyVarArgs : Constraint -> List (List Ty)
-constraintTyVarArgs (Constraint _ tys) = map (_ => tys) (tyVarArgNames tys)
+constraintTyVarArgs (Constraint { constraintArgs = tys }) =
+  map (_ => tys) (tyVarArgNames tys)
 
 -- like constraintVarMonos but KEEPS the iface name paired with each constraint var's
 -- mono (slot order preserved), so registerMember can register call-obligation ifaces.
@@ -17367,8 +17380,9 @@ ppTyAtom (TyApp a b) = "(" ++ ppTy (TyApp a b) ++ ")"
 ppTyAtom t = ppTy t
 
 ppConstraint : Constraint -> String
-ppConstraint (Constraint iface []) = iface
-ppConstraint (Constraint iface tys) =
+ppConstraint (Constraint { constraintHead = iface, constraintArgs = [] }) =
+  iface
+ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
   "\{iface} \{joinWith " " (map ppTyAtom tys)}"
 
 -- ── inferred-constraint promotion (unsignatured `=>` — the two-pass layer) ──
@@ -17467,7 +17481,7 @@ declaredSchemeOblsFor sigTvMaps m boundIds = match lookupSigTvMap m sigTvMaps
     flatMap (declaredOblOne boundIds tvMap) (sigConstraintsOf ty)
 
 declaredOblOne : List Int -> List (String, Mono) -> Constraint -> List (String, List Int)
-declaredOblOne boundIds tvMap (Constraint iface args) = match constraintArgMonos args tvMap
+declaredOblOne boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args }) = match constraintArgMonos args tvMap
   None => []
   Some monos => match boundTyvarIds boundIds monos
     Some ids => [(iface, ids)]
@@ -17691,7 +17705,7 @@ censusSuperSlotsVecOf allDecls (iface, ids) = match ifaceSupersOf allDecls iface
     flatMap (superSlotVecOf subst) supers
 
 superSlotVecOf : List (String, Int) -> Super -> List (String, List Int)
-superSlotVecOf subst (Super superName params) =
+superSlotVecOf subst (Super { superHead = superName, superParams = params }) =
   let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
   if listLen mapped == listLen params then [(superName, mapped)] else []
 

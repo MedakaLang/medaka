@@ -83,6 +83,18 @@ public export data Loc = Loc String Int Int Int Int
 -- The inhabitant is reachable in the type and unreachable in the data; do not
 -- add a decl-layer producer for it, and do not read its absence as "cannot
 -- happen" at a consumer that also sees occurrence origins.
+--
+-- ── ALSO the INTERFACE-OCCURRENCE carrier (#1110 PR B) ───────────────────────
+-- `Constraint` / `Require` / `Super` / `DImpl` (below) each name an interface at
+-- a USE site, and they reuse this same type for the same reason the declaration
+-- layer does: `DInterface.ifaceOrigin` — the declaration these occurrences must
+-- eventually be compared AGAINST — is already a `TyConOrigin`, so a parallel
+-- `IfaceOrigin` would buy a conversion at exactly the seam (occurrence ↔ decl)
+-- that the comparison lives on.  `OriginBuiltin` is unreachable for an interface
+-- for the very same reason it is unreachable at the decl layer — an interface is
+-- always declared by some module (`Eq`/`Ord`/`Debug` by `stdlib/core.mdk`, i.e.
+-- `OriginModule "core"`) — so this widening adds no new dead inhabitant beyond
+-- the one the paragraph above already documents and accepts.
 public export data TyConOrigin =
   | OriginUnresolved
   | OriginBuiltin
@@ -178,8 +190,43 @@ export tyConBuiltin : String -> Option Loc -> Ty
 tyConBuiltin n l =
   TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginBuiltin }
 
--- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
-public export data Constraint = Constraint String (List Ty)
+-- an interface constraint `Iface arg…` on the LHS of a `=>` in a type.
+--
+-- `constraintOrigin` is the #1110 interface-OCCURRENCE identity carrier: which
+-- module declared the interface this predicate names.  Stripped by every
+-- renderer (`ir/sexp.mdk`, `tools/printer.mdk`, `tools/doc.mdk`, `ppConstraint`
+-- in `types/typecheck.mdk`) exactly the way `ELoc` is, so dumps and printed
+-- source are byte-identical to the pre-#1110 tree.
+--
+-- 🚨 Named-field record, and the `constraint` PREFIX is LOAD-BEARING — the
+-- field-namespace rule stated in full on `Ty.TyCon` above.  A bare `head`/`args`
+-- would collide across records AND make this type's patterns match a `Require`
+-- (a record pattern matches by LABEL SET, not by constructor).  Positional was
+-- not an option: a positional widening re-churns every pattern site again at the
+-- next field, whereas a partial record pattern tolerates added fields for free.
+public export data Constraint =
+  | Constraint {
+      constraintHead : String,
+      constraintArgs : List Ty,
+      constraintOrigin : TyConOrigin,
+    }
+
+-- Build a `Constraint` whose interface identity has NOT been acquired yet
+-- (#1110).  The peer of `tyConUnresolved`, same contract: the ONE producer of an
+-- occurrence-layer `OriginUnresolved` for this node, so
+-- `grep -rw constraintUnresolved` is the exact worklist PR C drains when resolve
+-- starts stamping interface occurrences.
+--
+-- 🚨 NOT for REBUILDING an existing constraint — use record UPDATE
+-- (`Constraint { c | constraintArgs = … }`).  Re-synthesising from projected
+-- fields silently resets an acquired identity, and the stamper's immunity rule
+-- (fill in only a still-unresolved origin) makes that reset permanent.
+export constraintUnresolved : String -> List Ty -> Constraint
+constraintUnresolved iface args = Constraint {
+  constraintHead = iface,
+  constraintArgs = args,
+  constraintOrigin = OriginUnresolved,
+}
 
 -- ── Loc plumbing (issue 480) ──────────────────────────────────────────────
 -- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
@@ -567,8 +614,45 @@ public export data PropParam = PropParam String Loc Ty
 -- interface / impl pieces
 public export data MethodDefault = MethodDefault (List Pat) Expr
 public export data IfaceMethod = IfaceMethod String Ty (Option MethodDefault)
-public export data Super = Super String (List String)
-public export data Require = Require String (List Ty)
+-- `interface Sub … : Sup a` — a SUPERINTERFACE occurrence.  `superOrigin` is the
+-- #1110 interface-occurrence identity of `Sup`; `superParams` are the subject
+-- interface's own type-parameter NAMES the superinterface is applied to (not
+-- `Ty`s), which is why this node has no `Ty` position at all.  Prefixed fields,
+-- stripped by every renderer — same contract as `Constraint` above.
+public export data Super =
+  | Super {
+      superHead : String,
+      superParams : List String,
+      superOrigin : TyConOrigin,
+    }
+
+-- `impl I (T a) requires Eq a` — one `requires` predicate.  Structurally a
+-- `Constraint` at a different syntactic site, and kept as its own type because
+-- the two print differently (`=>` vs `requires`) and the tree already separates
+-- them.  `requireOrigin`: #1110 interface-occurrence identity.
+public export data Require =
+  | Require {
+      requireHead : String,
+      requireArgs : List Ty,
+      requireOrigin : TyConOrigin,
+    }
+
+-- The `constraintUnresolved` peers.  See its comment for the full contract; the
+-- short version is: these are the ONLY producers of an unresolved occurrence
+-- identity for their node, and a REBUILD must use record update instead.
+export superUnresolved : String -> List String -> Super
+superUnresolved iface params = Super {
+  superHead = iface,
+  superParams = params,
+  superOrigin = OriginUnresolved,
+}
+
+export requireUnresolved : String -> List Ty -> Require
+requireUnresolved iface args = Require {
+  requireHead = iface,
+  requireArgs = args,
+  requireOrigin = OriginUnresolved,
+}
 public export data ImplMethod = ImplMethod String (List Pat) Expr
 
 -- data/record declarations
@@ -714,12 +798,26 @@ public export data Decl =
     }
   -- #1110 decl-layer identity.  Prefixed; the six above are the
   -- grandfathered bare names #1216 tracks, not a precedent to follow.
+  --
+  -- ⚠️ `implOrigin` is an OCCURRENCE carrier, not a decl-layer one: an `impl` is
+  -- not a declaration of the interface it names, it is a USE of one — which is
+  -- why `declHeadOf` (`compiler/entries/origin_agreement_main.mdk`) deliberately
+  -- has no `DImpl` arm and must not grow one.  It is the identity of `iface`,
+  -- the peer of `Constraint`/`Require`/`Super` above.  The identity of the
+  -- TYPE(s) being implemented is already carried by the `Ty`s in `tys`.
+  --
+  -- Free side benefit worth knowing: `implOrigin` is the first label on this
+  -- constructor that `DInterface` does not also have, so it is now available as
+  -- the unique discriminator the `Decl` comment above asks every record arm to
+  -- name.  Retrofitting the existing shared-label arms is #1217's business, not
+  -- this carrier's — but new arms have no excuse.
   | DImpl {
       pub : Bool,
       iface : String,
       tys : List Ty,
       reqs : List Require,
       methods : List ImplMethod,
+      implOrigin : TyConOrigin,
     }
   -- `tyAliasRhs` is the expansion; `tyAliasOrigin` is #1110 decl identity.
   | DTypeAlias {
@@ -794,6 +892,23 @@ dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
   supers = supers,
   methods = methods,
   ifaceOrigin = OriginUnresolved,
+}
+
+-- ⚠️ `DImpl` mints an OCCURRENCE carrier, not a decl-layer one (see its comment
+-- above), so this helper belongs to the `constraintUnresolved` family and NOT to
+-- the `d*Unresolved` decl-layer producer ratchet — the two are pinned separately
+-- in `test/typecheck_compiler_source.sh`.  Like `dInterfaceUnresolved` it buys no
+-- churn saving (`DImpl` was already a record); it exists so the parser and
+-- desugar do not have to NAME `OriginUnresolved`, which is what keeps that
+-- constructor's file set pinned at three.
+export dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
+dImplUnresolved pub iface tys reqs methods = DImpl {
+  pub = pub,
+  iface = iface,
+  tys = tys,
+  reqs = reqs,
+  methods = methods,
+  implOrigin = OriginUnresolved,
 }
 
 export dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
@@ -874,10 +989,11 @@ mapTyListB f (t::ts) =
 
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
 mapConstraintsB _ [] = ([], False)
-mapConstraintsB f ((Constraint iface tys)::rest) =
+-- #1110: record UPDATE, so an acquired occurrence identity survives the rewrite.
+mapConstraintsB f ((c@(Constraint { constraintArgs = tys }))::rest) =
   let (tys2, c1) = mapTyListB f tys
   let (rest2, c2) = mapConstraintsB f rest
-  (Constraint iface tys2 :: rest2, c1 || c2)
+  (Constraint { c | constraintArgs = tys2 }::rest2, c1 || c2)
 
 -- ── generic Decl traversal ───────────────────────────────────────────────────
 -- Threads `f` through EVERY Ty position of a decl (verified against ast.mdk):
@@ -1001,10 +1117,11 @@ mapIfaceMethodB f (IfaceMethod n ty (Some (MethodDefault ps e))) =
 
 mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
 mapRequiresB _ [] = ([], False)
-mapRequiresB f ((Require iface tys)::rest) =
+-- #1110: record UPDATE, so an acquired occurrence identity survives the rewrite.
+mapRequiresB f ((r@(Require { requireArgs = tys }))::rest) =
   let (tys2, c1) = mapTyListB f tys
   let (rest2, c2) = mapRequiresB f rest
-  (Require iface tys2 :: rest2, c1 || c2)
+  (Require { r | requireArgs = tys2 }::rest2, c1 || c2)
 
 mapImplMethodsB : (Ty -> (Ty, Bool)) -> List ImplMethod -> (List ImplMethod, Bool)
 mapImplMethodsB _ [] = ([], False)

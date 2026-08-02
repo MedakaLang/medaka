@@ -90,9 +90,12 @@
 # before this widening `interface Weighable` had no representation in this gate at
 # all, and `#1047`'s interface-identity carrier was ungraded by construction.
 #
-# ⚠️ The flat arm is silent for the ENTIRE decl layer, by design, and that is not a
-# defect to fix: `stampFlatTyOrigins` stamps occurrences only and never calls
-# `stampDeclOrigins` (resolve.mdk — "FLAT (loader-less) DRIVERS GET NOTHING HERE").
+# ⚠️ The flat arm is silent for the USER half of the decl layer, by design, and
+# that is not a defect to fix: `checkProgramSeededSplit` (types/typecheck.mdk)
+# calls `stampDeclOrigins` on its PRELUDE half only (#1227, fixed) — the user
+# program still has no module id on the flat path, and neither does any flat
+# driver with no separate prelude boundary (resolve.mdk's `stampDeclOrigins`,
+# narrowed from its old "FLAT (loader-less) DRIVERS GET NOTHING HERE").
 #
 # ── the RESIDUAL section — the runtime drain #1110 asked for ─────────────────
 # Per arm, the `OriginUnresolved` heads that SURVIVED that driver's stamping pass.
@@ -110,15 +113,13 @@
 #   flat    EXPECTED, in bulk. `flatTyOriginScope` claims a strict SUBSET of what
 #           the graph path claims — builtins plus the prelude's own types, and
 #           nothing else. It has no loader id for the user's own declarations, it
-#           never walks `usePathsOf prog` so it stamps nothing the buffer IMPORTS,
-#           and it never runs the decl-layer stamper at all. Under-supplying
+#           never walks `usePathsOf prog` so it stamps nothing the buffer IMPORTS.
+#           The decl-layer stamper runs on the flat arm's PRELUDE half only
+#           (`checkProgramSeededSplit`, #1227, fixed) — so `flat core decl:*` no
+#           longer appears in this section, it moved to AGREE above. Under-supplying
 #           identity is correctable by a later graph pass; OVER-supplying a wrong
 #           one is made PERMANENT by the immunity rule. That asymmetry is the
 #           documented subset-and-agreement safety property, and these rows ARE it.
-#           ⚠️ EXCEPT `flat core decl:*`: `checkProgramSeededSplit` already knows
-#           `mod:core` for the prelude (it stamps prelude OCCURRENCES with it via
-#           `stampFlatTyOrigins coreProg0 coreProg0`), so those rows are an
-#           unwired decl-layer stamp on a known id, not "no id to invent" — #1227.
 #   single  EXPECTED where the head comes from a module the 1-module graph does not
 #           contain — `medaka test <file>` on a file whose imports are not loaded
 #           has no source module to attribute them to.

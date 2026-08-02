@@ -30,6 +30,8 @@ import frontend.ast.{
   UsePath(..),
   qualifiedLocal,
   tyConUnresolved,
+  dImplUnresolved,
+  requireUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -182,13 +184,8 @@ intLit n = ENumLit n (Ref None) (Ref RNone) ""
 -- a derived impl head with the fixed pub / non-default / no-name shape;
 -- applyDeriveParams rewrites tys + reqs afterwards for the type's params.
 derivedImpl : String -> String -> List ImplMethod -> Decl
-derivedImpl iface tyName methods = DImpl {
-  pub = True,
-  iface = iface,
-  tys = [tyConUnresolved tyName None],
-  reqs = [],
-  methods = methods,
-}
+derivedImpl iface tyName methods =
+  dImplUnresolved True iface [tyConUnresolved tyName None] [] methods
 
 -- two-parameter impl method: `m a b = body`
 binMethod : String -> String -> String -> Expr -> ImplMethod
@@ -520,7 +517,7 @@ paramRequires : String -> List String -> List Require
 paramRequires iface params = map (paramReq iface) params
 
 paramReq : String -> String -> Require
-paramReq iface p = Require iface [TyVar p]
+paramReq iface p = requireUnresolved iface [TyVar p]
 
 conArity : Variant -> Int
 conArity (Variant _ (ConPos tys)) = listLen tys

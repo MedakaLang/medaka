@@ -409,8 +409,7 @@ effAtomDoc (l, None) = text l
 effAtomDoc (l, Some s) = text "\{l} \{escStringLit s}"
 
 printConstraint : Constraint -> Doc
-printConstraint (Constraint iface args) =
-  Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
+printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) = Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
 
 printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon { tyConName = n }) = text (tyConSurface n)
@@ -1830,7 +1829,7 @@ superDoc supers =
   Cat (text " requires ") (sepBy (text ", ") (map oneSuper supers))
 
 oneSuper : Super -> Doc
-oneSuper (Super n ps) =
+oneSuper (Super { superHead = n, superParams = ps }) =
   Cat (text n) (concatD (map (p => Cat (text " ") (text p)) ps))
 
 ifaceMethodDoc : IfaceMethod -> Doc
@@ -1851,7 +1850,7 @@ reqsDoc [] = Nil
 reqsDoc reqs = Cat (text " requires ") (sepBy (text ", ") (map oneReq reqs))
 
 oneReq : Require -> Doc
-oneReq (Require iface args) =
+oneReq (Require { requireHead = iface, requireArgs = args }) =
   Cat (text iface) (concatD (map (t => Cat (text " ") (printTypeAtom t)) args))
 
 implMethodDoc : ImplMethod -> Doc
@@ -1914,7 +1913,7 @@ effDeclHead True = text "export effect "
 effDeclHead False = text "effect "
 
 ppConstr : Constraint -> String
-ppConstr (Constraint iface args) =
+ppConstr (Constraint { constraintHead = iface, constraintArgs = args }) =
   if isEmptyL args then
     iface
   else
