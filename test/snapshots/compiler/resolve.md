@@ -1,5 +1,5 @@
 # META
-source_lines=3422
+source_lines=3428
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3363,9 +3363,15 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
 -- 🚨 IT STAMPS ONLY WHAT A DRIVER WITH NO LOADER ACTUALLY KNOWS: builtin heads, and
 -- the PRELUDE's own types when the caller passed the prelude separately.  It does
 -- NOT stamp the user program's own declarations, and the omission is the whole
--- point of the function.  ⚠️ It also does NOT stamp any IMPORTED type — there is no
--- imports term in `flatTyOriginScope` at all, and that half is not said by the line
--- above.  It matters because `checkProgramSchemesWithRuntime` serves the LSP,
+-- point of the function.  ⚠️ It stamps only what is reachable from `coreDecls` — the
+-- PRELUDE's own type names plus the builtins — so nothing the USER PROGRAM imports
+-- is stamped either, and that half is not said by the line above.  `prog` is not
+-- even in scope when the stamping set is built: `flatTyOriginScope` takes ONLY
+-- `coreDecls`, so there is no `DUse`/`usePathsOf` term over the user program here at
+-- all.  Contrast the GRAPH path's `tyOriginScope`, which does walk `prog`'s real
+-- imports (`flatMap (importedTypeOrigins known) (usePathsOf prog)`) — that machinery
+-- is exactly what is absent here, which is why flat's claims are a strict subset of
+-- graph's.  It matters because `checkProgramSchemesWithRuntime` serves the LSP,
 -- `doc`, and the playground on buffers that may well have imports, so what this
 -- function leaves unstamped reaches further than "the user's own declarations."
 --
