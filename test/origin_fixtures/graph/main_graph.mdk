@@ -7,7 +7,16 @@
 -- is wrong for every single head — which is exactly the mechanical reading of
 -- DICT-SEMANTICS §8 I4 that F2 was.
 
-import beta.{Shipment(..), shipmentSize, shipmentNote, shipmentTag, Tag, Crate, fragileCrate, crateLabel}
+import beta.{
+  Shipment(..),
+  shipmentSize,
+  shipmentNote,
+  shipmentTag,
+  Tag,
+  Crate,
+  fragileCrate,
+  crateLabel,
+}
 
 boxed : Crate Int
 boxed = fragileCrate 7

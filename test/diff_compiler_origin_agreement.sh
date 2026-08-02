@@ -56,19 +56,38 @@
 # rule. So the gate distinguishes "silent" from "wrong", and only the second is a
 # defect.
 #
-# ── the CONFLICT rows in the committed golden are a PINNED OPEN DEFECT ────────
+# ── the CONFLICT rows in the committed golden are a PINNED OPEN DEFECT (#1223) ─
 # The `single` arm elaborates a file under the driver's own `"__user__"` label while
 # the `graph` arm elaborates the same file under its loader id — which is precisely
-# what `medaka test <dir>` does to one declaration in one process (recorded on #1110,
-# 2026-08-02). Those rows are committed as CONFLICT on purpose, exactly as
-# test/must_fail_fixtures/ pins a live bug: when the drivers are unified the rows
-# flip and this gate goes RED, naming the golden to re-bless. A gate whose golden
-# has to change when a bug is FIXED is a gate that drains itself.
+# what `medaka test <dir>` does to one declaration in one process (#1223). Those rows
+# are committed as CONFLICT on purpose, as test/must_fail_fixtures/ pins a live bug.
+#
+# ⚠️ BUT THEY DRAIN BY REVIEW, NOT MECHANICALLY, AND AN EARLIER DRAFT OF THIS HEADER
+# CLAIMED OTHERWISE. The `single` arm spells `"__user__"` in the PROBE, not in
+# compiler/tools/test_cmd.mdk where the real driver spells it — so unifying the
+# drivers will NOT flip these rows: the probe will keep passing `"__user__"`, keep
+# producing three CONFLICTs, and this gate will stay green against a stale golden.
+# Whoever fixes #1223 must delete them here by hand; the golden's own header says so,
+# and #1223 carries the caveat. Making it mechanical means exporting the id from
+# test_cmd.mdk and importing it here — a change to a shipping driver, deliberately
+# not bundled into a gate-only PR. This is the same hazard the probe argues against
+# for the stampers ("a probe that hand-picks its arguments re-encodes the assumption
+# it exists to test"), turned on one of its own arms; naming it is the minimum.
 #
 # ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
 # AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
 # identity being DESTROYED somewhere downstream of the stamp (the known hazards are
 # `substMonoP` and `substTyVars`, which rebuild a `TCon`/`TyCon` from the name alone).
+# A HEAD SPREAD line changing its ORIGIN (`Option 1 mod:core` -> `Option 1
+# mod:__user__`) is a UNIFORM mis-attribution — every arm wrong the same way, so no
+# verdict moves and that line is the only thing that can say it.
+#
+# ── the one EXPECTED-BENIGN shape, named so it is not mistaken for the above ──
+# Adding a type to `stdlib/core.mdk` adds a `core <NewType> AGREE AGREE AGREE` row
+# and a `<NewType> 1 mod:core` spread line, and moves `heads`/`claims`. That is the
+# prelude growing, not a defect. It is also the ONLY innocent churn this golden has,
+# and `stdlib/*` is already whole-suite blast radius in preflight — so anything else
+# that moves here deserves the reading this header asks for.
 #
 # ── anti-vacuity ────────────────────────────────────────────────────────────
 # Three counts are checked here, not just diffed, because a table that silently
@@ -80,6 +99,15 @@
 #                        becomes all-ABSENT and every pair involving it stops
 #                        asserting anything
 #   fixtures       > 0   the corpus glob matched something
+#
+# ── OWED, not built here (#1222) ────────────────────────────────────────────
+# A ratchet asserting that NOTHING IN THE COMPILER READS `setOriginTrace` — i.e.
+# that the tap stays probe-only and no shipping path ever switches it on — belongs
+# next to the #1110 producer ratchets in test/typecheck_compiler_source.sh. It is
+# deliberately NOT added there yet: those ratchets scan with `git grep`, which sees
+# only TRACKED files, so they report PASS on a working tree that fails the instant it
+# is committed (filed as #1222). Building a new invariant on that foundation would
+# inherit the hole. Owed once #1222 lands.
 #
 # Usage:  sh test/diff_compiler_origin_agreement.sh
 #         CAPTURE=1 sh test/diff_compiler_origin_agreement.sh    # (re)bless goldens
@@ -101,6 +129,15 @@ if [ ! -x "$SELF" ]; then
   echo "       so an absent probe means the gate asserted nothing.)"
   exit 1
 fi
+
+# A strictly-positive decimal count, and nothing else. See the guard below for why
+# this is a `case` and not an arithmetic test.
+is_count() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -gt 0 ]
+}
 
 pass=0
 fail=0
@@ -131,22 +168,33 @@ for dir in "$FIXDIR"/*/; do
   # ── anti-vacuity, BEFORE the diff ──────────────────────────────────────────
   # A table that became empty diff-matches an empty golden. These three read the
   # probe's own summary and fail on a zero, so "checked nothing" can never pass.
-  heads="$(printf '%s\n' "$out" | awk '$1 == "heads" { print $2 }')"
-  segs="$(printf '%s\n' "$out" | awk '$1 == "flat-segments" { print $2 }')"
-  nconf="$(printf '%s\n' "$out" | awk '$1 == "conflicts" { print $2 }')"
-  if [ -z "$heads" ] || [ "$heads" -le 0 ] 2>/dev/null; then
-    echo "FAIL $name: probe reported heads='$heads' — it observed NO type heads."
+  # ⚠️ Read the SUMMARY section only. `awk '$1=="heads"'` over the whole output also
+  # matches a `<slot> <head> …` table row, so a fixture directory literally named
+  # `heads` / `flat-segments` / `conflicts` would feed this guard a verdict token.
+  summary="$(printf '%s\n' "$out" | sed -n '/^=== SUMMARY ===$/,$p')"
+  heads="$(printf '%s\n' "$summary" | awk '$1 == "heads" { print $2 }')"
+  segs="$(printf '%s\n' "$summary" | awk '$1 == "flat-segments" { print $2 }')"
+  nconf="$(printf '%s\n' "$summary" | awk '$1 == "conflicts" { print $2 }')"
+
+  # ⚠️ NOT `[ "$x" -le 0 ] 2>/dev/null`. On a NON-NUMERIC value that test exits 2
+  # with the diagnostic suppressed, the `if` reads false, and the guard PASSES —
+  # i.e. the one check standing between us and a silent no-op had a path where a
+  # malformed summary read as healthy. Reject non-numeric explicitly instead.
+  if ! is_count "$heads"; then
+    echo "FAIL $name: probe reported heads='$heads' — not a positive count, so it"
+    echo "     observed NO type heads (or the summary is malformed)."
     fail=$((fail + 1))
     continue
   fi
-  if [ -z "$segs" ] || [ "$segs" -le 0 ] 2>/dev/null; then
+  if ! is_count "$segs"; then
     echo "FAIL $name: probe reported flat-segments='$segs' — resolve.mdk's agreement"
     echo "     tap never fired, so the 'flat' column asserted NOTHING. Check that"
     echo "     the flat drivers still route through checkProgramSeededSplit."
     fail=$((fail + 1))
     continue
   fi
-  conflicts_total=$((conflicts_total + ${nconf:-0}))
+  case "$nconf" in ''|*[!0-9]*) nconf=0 ;; esac
+  conflicts_total=$((conflicts_total + nconf))
 
   if [ "${CAPTURE:-0}" = "1" ]; then
     printf '%s' "$out" > "$golden"

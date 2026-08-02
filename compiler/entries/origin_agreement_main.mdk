@@ -52,6 +52,24 @@
 -- own comment.  So "one arm silent, the other claims" is `L-ONLY`/`R-ONLY` and is
 -- fine; "both claim, differently" is `CONFLICT` and is the defect class.
 --
+-- 🚨 AND HERE IS THE HONEST BOUND ON ALL OF THAT — the flip side of the property
+-- that makes the design good.  PAIRWISE AGREEMENT RESTS ON AT LEAST ONE ARM BEING
+-- RIGHT.  Where the three arms share an input, that premise fails and a UNIFORM
+-- wrong answer has no disagreement left to expose: relabel the prelude at BOTH of
+-- resolve.mdk's `"core"` sites, or point every builtin at a module that does not
+-- exist, and all three arms tell the same wrong story — every verdict stays AGREE
+-- and the table is byte-identical.  Review found exactly that, and it is F2's
+-- literal symptom (the prelude's own types attributed elsewhere) getting through.
+--
+-- `HEAD SPREAD` is what closes it, and ONLY because it prints the claim KEYS rather
+-- than counting them.  A uniform wrong story is still ONE story, so no count moves;
+-- the origin itself has to be on the page.  It is the single place in this output
+-- where a concrete origin is asserted for every head rather than only for the ones
+-- already known to disagree, and it is a per-NAME assertion (~17 lines) rather than
+-- a per-row one, so it pins the answer without the churn a full origins golden has.
+-- It also upgrades the re-export check from "one story" to "ALPHA's story", which is
+-- what that section was always trying to say.
+--
 -- Slots are the probe's OWN bookkeeping — the loader path it read each decl list
 -- from — never an id the compiler minted.  That is what lets a driver that invents
 -- an id show up as a disagreeing CLAIM rather than as a quietly relabelled row.
@@ -104,9 +122,15 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "# <slot> <head> <flat~graph> <single~graph> <flat~single>\n"
   let _ = putStr table
   let _ = putStr "=== CONFLICTS ===\n"
+  let _ = putStr "# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).\n"
+  let _ = putStr "# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's \"__user__\" is\n"
+  let _ = putStr "# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,\n"
+  let _ = putStr "# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223\n"
+  let _ = putStr "# must delete them here by hand. (Sourcing the id from the driver would make it\n"
+  let _ = putStr "# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)\n"
   let _ = putStr conflicts
   let _ = putStr "=== HEAD SPREAD ===\n"
-  let _ = putStr "# <head> <distinct graph-arm origins across ALL slots>\n"
+  let _ = putStr "# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>\n"
   let _ = putStr (spreadSection uniq)
   let _ = putStr "=== SUMMARY ===\n"
   let _ = putStr "modules \{listLen modules}\n"
@@ -149,7 +173,23 @@ flatSlot mid _ = mid
 -- SINGLE: `medaka test <file>` and the snapshot driver elaborate ONE file as a
 -- 1-module graph under the driver's own `"__user__"` label.  Driven here over the
 -- SAME decls the graph arm gets, which is precisely the `medaka test <dir>`
--- situation: one declaration, two module ids, one process.
+-- situation: one declaration, two module ids, one process (#1223).
+--
+-- ⚠️ THIS ARM HAND-PICKS ITS ARGUMENT, AND THAT IS A REAL WEAKNESS, NOT A DETAIL.
+-- The literal `"__user__"` below is spelled HERE, not read from
+-- compiler/tools/test_cmd.mdk where the real driver spells it — so this arm MODELS
+-- the driver rather than observing it, and it is the exact hazard this file's header
+-- argues against for the stampers, turned on one of its own arms.  Two consequences,
+-- both stated rather than papered over:
+--   * the CONFLICT rows it produces do NOT self-drain.  Unify the drivers and this
+--     probe keeps saying `"__user__"`, keeps producing them, and the gate stays
+--     green against a stale golden.  The golden says so in its own header.
+--   * if `test_cmd.mdk` changed the id to something else tomorrow, this arm would
+--     silently stop modelling anything real.
+-- The `flat` arm earns its keep through the tap and `graph` reads its own call;
+-- this one is the shape model.  Making it mechanical means exporting the id from
+-- `test_cmd.mdk` and importing it here — a change to a shipping driver, out of
+-- scope for a gate-only PR.
 singleArm : List Decl -> List Decl -> List (String, List Decl) -> List Claim
 singleArm _ _ [] = []
 singleArm rt core ((mid, decls)::rest) =
@@ -290,6 +330,13 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 -- the slots that spell it?  This encodes no answer — it does not say which module
 -- is right, only whether the compiler told one story or several.
 --
+-- ⚠️ PRINT THE KEYS, DO NOT MERELY COUNT THEM.  The count alone is blind to a
+-- UNIFORM mis-attribution (see the bound at the top of this file): one wrong story
+-- is still one story.  With the keys on the page, relabelling the prelude turns
+-- `Option 1 mod:core` into `Option 1 mod:__user__` — F2 on the screen.  Row
+-- cardinality is unchanged either way (`rows` is already deduped by (name, key)),
+-- so this adds no new golden rot over the counting form.
+--
 -- ⚠️ `> 1` IS NOT AUTOMATICALLY A DEFECT.  Two unrelated modules declaring
 -- same-named types is exactly the case module-qualified identity exists to SUPPORT
 -- (#1047), and such a corpus would legitimately read 2.  It is pinned in the golden
@@ -324,7 +371,7 @@ spreadGo [] = ""
 spreadGo (c::rest) =
   let name = claimName c
   let (rows, after) = spanWhile (x => claimName x == name) (c::rest)
-  "\{name} \{listLen rows}\n\{spreadGo after}"
+  "\{name} \{listLen rows} \{joinPipe (map claimKey rows)}\n\{spreadGo after}"
 
 consFst : Claim -> (List Claim, List Claim) -> (List Claim, List Claim)
 consFst c (rows, after) = (c::rows, after)

@@ -34,28 +34,34 @@ main_graph Shipment R-ONLY R-ONLY NEITHER
 main_graph String AGREE AGREE AGREE
 main_graph Tag R-ONLY R-ONLY NEITHER
 === CONFLICTS ===
+# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
+# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
+# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,
+# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
+# must delete them here by hand. (Sourcing the id from the driver would make it
+# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
 alpha Crate flat=- single=mod:__user__ graph=mod:alpha
 alpha Tag flat=- single=mod:__user__ graph=mod:alpha
 beta Shipment flat=- single=mod:__user__ graph=mod:beta
 === HEAD SPREAD ===
-# <head> <distinct graph-arm origins across ALL slots>
-Array 1
-Bool 1
-Char 1
-Crate 1
-Float 1
-Int 1
-List 1
-Option 1
-Ordering 1
-RField 1
-Rep 1
-Result 1
-Shipment 1
-String 1
-Tag 1
-Unit 1
-__tuple2__ 1
+# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
+Array 1 builtin
+Bool 1 builtin
+Char 1 builtin
+Crate 1 mod:alpha
+Float 1 builtin
+Int 1 builtin
+List 1 builtin
+Option 1 mod:core
+Ordering 1 mod:core
+RField 1 mod:core
+Rep 1 mod:core
+Result 1 mod:core
+Shipment 1 mod:beta
+String 1 builtin
+Tag 1 mod:alpha
+Unit 1 builtin
+__tuple2__ 1 builtin
 === SUMMARY ===
 modules 3
 graph-modules 3
