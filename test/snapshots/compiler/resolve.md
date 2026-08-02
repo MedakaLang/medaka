@@ -1,5 +1,5 @@
 # META
-source_lines=3405
+source_lines=3422
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3363,7 +3363,11 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
 -- 🚨 IT STAMPS ONLY WHAT A DRIVER WITH NO LOADER ACTUALLY KNOWS: builtin heads, and
 -- the PRELUDE's own types when the caller passed the prelude separately.  It does
 -- NOT stamp the user program's own declarations, and the omission is the whole
--- point of the function.
+-- point of the function.  ⚠️ It also does NOT stamp any IMPORTED type — there is no
+-- imports term in `flatTyOriginScope` at all, and that half is not said by the line
+-- above.  It matters because `checkProgramSchemesWithRuntime` serves the LSP,
+-- `doc`, and the playground on buffers that may well have imports, so what this
+-- function leaves unstamped reaches further than "the user's own declarations."
 --
 -- A module id is a fact about a FILE IN A PROJECT, produced by the loader.  These
 -- drivers do not have one — `runCheck` receives SOURCE TEXT, the playground has a
@@ -3394,6 +3398,19 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
 -- entries, or the single-file path routed through the 1-module graph driver
 -- (`checkModulesEntryFull`).  Both are DRIVER changes that move the `check` dump,
 -- so neither belongs in a byte-identical stamping PR.
+--
+-- ⚠️ THE SUBSET PROPERTY ABOVE HAS A PRECONDITION THIS SIGNATURE DOES NOT ENFORCE.
+-- Which of the two `List Decl` arguments IS the prelude is POSITIONAL CONVENTION,
+-- not a type — `List Decl -> List Decl -> List Decl` cannot distinguish `coreDecls`
+-- from `prog`.  A future caller that passes a non-prelude list as `coreDecls`
+-- stamps THAT list's types `core`, PERMANENTLY: the immunity rule (`stampTyHead`
+-- fills only an `OriginUnresolved` head) means a head that already carries an
+-- origin is never re-stamped, so nothing would notice.  This is the SAME CLASS of
+-- defect the module-id parameter's removal made unrepresentable (see the
+-- `"__user__"` paragraph above) — displaced one argument to the left instead of
+-- eliminated.  The subset property holds only while every caller passes the real
+-- prelude as `coreDecls`; that is a fact about the CALL SITES, re-verify it there,
+-- do not assume it from this signature.
 export stampFlatTyOrigins : List Decl -> List Decl -> List Decl
 stampFlatTyOrigins coreDecls prog =
   stampTyOrigins (flatTyOriginScope coreDecls) prog
