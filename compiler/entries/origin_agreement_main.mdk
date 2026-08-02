@@ -6,7 +6,9 @@
 --
 -- ── why this exists ─────────────────────────────────────────────────────────
 -- `Ty.TyCon` carries a `TyConOrigin` stamped by resolve on both the check path and
--- the emit path.  Nothing in the compiler reads it, which is deliberate — but it
+-- the emit path, and so do the four TYPE-DECLARATION nodes (`DData.dataOrigin`,
+-- `DNewtype.newtypeOrigin`, `DTypeAlias.tyAliasOrigin`, `DInterface.ifaceOrigin`).
+-- Nothing in the compiler reads any of them, which is deliberate — but it
 -- also means every identity fact the compiler mints is UNOBSERVABLE, and two
 -- S0-class defects shipped through 12/12 green CI on exactly that:
 --
@@ -73,8 +75,26 @@
 -- Slots are the probe's OWN bookkeeping — the loader path it read each decl list
 -- from — never an id the compiler minted.  That is what lets a driver that invents
 -- an id show up as a disagreeing CLAIM rather than as a quietly relabelled row.
+--
+-- ── the RESIDUAL section: what agreement structurally cannot say ─────────────
+-- Everything above compares arms to each other, so it is blind in one direction by
+-- construction: a head NO arm attributed has nothing to disagree about, and reads
+-- as a placid `NEITHER`.  `OriginUnresolved` surviving the stamping pass is exactly
+-- that shape, and `stampTyHead`'s immunity rule (fill in only a still-unresolved
+-- head) is what makes it matter — the first stamp is the ONLY stamp, so a head that
+-- reaches a consumer unstamped stays unstamped for the rest of the pipeline.
+--
+-- `=== RESIDUAL ===` prints that surviving set per arm, by name.  It is the runtime
+-- half of #1110's drain: the producer ratchet in `test/typecheck_compiler_source.sh`
+-- pins who may MINT the sentinel (a fact about the source) and says in its own
+-- comment that it "cannot see whether a driver forgot to stamp, nor whether one
+-- stamped the WRONG id".  CONFLICT answers the second; this answers the first.
+--
+-- 🚨 IT IS NOT ASSERTED EMPTY, AND MUST NOT BE.  The flat arm is silent about a
+-- large, DELIBERATE, documented set (subset-and-agreement — see the section's own
+-- comment further down).  Only the pinning is the assertion.
 
-import frontend.ast.{Decl, Ty(..), TyConOrigin(..), mapTyInDecl}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
 import frontend.resolve.{setOriginTrace, takeOriginTrace}
 import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
 import entries.entry_support.{driveModules}
@@ -114,10 +134,11 @@ report : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 report runtimeDecls coreDecls modules =
   let (segments, flatClaims) = flatArm runtimeDecls coreDecls modules
   let singleClaims = singleArm runtimeDecls coreDecls modules
-  let (graphMods, graphClaims) = graphArm runtimeDecls coreDecls modules
+  let (graphMods, graphDecls, graphClaims) = graphArm runtimeDecls coreDecls modules
   let allClaims = flatClaims ++ singleClaims ++ graphClaims
   let uniq = dedupAdj sameClaim (sortByCmp cmpClaim allClaims)
   let (table, conflicts, nrows, nconf) = groupRows uniq
+  let (residual, nresid) = residualSection uniq
   let _ = putStr "=== ORIGIN AGREEMENT (#1110) ===\n"
   let _ = putStr "# <slot> <head> <flat~graph> <single~graph> <flat~single>\n"
   let _ = putStr table
@@ -129,6 +150,10 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "# must delete them here by hand. (Sourcing the id from the driver would make it\n"
   let _ = putStr "# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)\n"
   let _ = putStr conflicts
+  let _ = putStr "=== RESIDUAL ===\n"
+  let _ = putStr "# <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.\n"
+  let _ = putStr "# NOT necessarily a defect; NOT necessarily empty. Read the section comment.\n"
+  let _ = putStr residual
   let _ = putStr "=== HEAD SPREAD ===\n"
   let _ = putStr "# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>\n"
   let _ = putStr (spreadSection uniq)
@@ -136,8 +161,10 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "modules \{listLen modules}\n"
   let _ = putStr "graph-modules \{graphMods}\n"
   let _ = putStr "flat-segments \{segments}\n"
+  let _ = putStr "decl-heads \{graphDecls}\n"
   let _ = putStr "heads \{nrows}\n"
   let _ = putStr "claims \{listLen uniq}\n"
+  let _ = putStr "residual \{nresid}\n"
   putStr "conflicts \{nconf}\n"
 
 -- ── the three arms ───────────────────────────────────────────────────────────
@@ -199,11 +226,16 @@ singleArm rt core ((mid, decls)::rest) =
     ++ singleArm rt core rest
 
 -- GRAPH: the loader's whole module graph, elaborated once — `run` / `build`.
-graphArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, List Claim)
+-- Returns (module count, DECL-LAYER carriers seen, claims).  The middle number is
+-- the anti-vacuity signal for the decl layer, the exact peer of `flat-segments`
+-- for the tap: if a future refactor stops the decl carriers reaching the trees
+-- `elaborateModules` returns, this goes to 0 and the gate reds — rather than the
+-- table quietly losing every `decl:` row while still reporting "0 conflicts".
+graphArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, Int, List Claim)
 graphArm rt core modules =
   let (coreD, mods) = elaborateModules rt core modules
   let cs = claimsOf "graph" "core" coreD ++ graphModClaims (map fst modules) mods
-  (listLen mods, cs)
+  (listLen mods, listLen (declHeads coreD) + declHeadsCount mods, cs)
 
 -- Slots come from the INPUT list, positionally.  The probe must not take the
 -- driver's word for which module a returned decl list belongs to.
@@ -220,15 +252,44 @@ headClaim : String -> String -> (String, TyConOrigin) -> Claim
 headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 
 -- ── the head collector ───────────────────────────────────────────────────────
--- Driven through `mapTyInDecl` — the SAME total Ty-position traversal the stamper
--- uses (resolve.mdk's `stampDeclTyOrigins`).  Sharing the traversal is the point:
--- this probe can never observe a SMALLER set of positions than the stamper wrote,
--- and a new Ty position added to the AST reaches both at once.
+-- TWO LAYERS, and the distinction is the whole reason this probe was widened.
+--
+--   OCCURRENCE  every `TyCon` head written in a signature, stamped by resolve's
+--               `stampTyOrigins`/`stampTyHead`.  Collected through `mapTyInDecl` —
+--               the SAME total Ty-position traversal the stamper uses
+--               (`stampDeclTyOrigins`).  Sharing the traversal is the point: this
+--               probe can never observe a SMALLER set of positions than the
+--               stamper wrote, and a new Ty position added to the AST reaches
+--               both at once.
+--   DECLARATION `DData.dataOrigin` / `DNewtype.newtypeOrigin` /
+--               `DTypeAlias.tyAliasOrigin` / `DInterface.ifaceOrigin`, stamped by
+--               resolve's `stampDeclOrigins`/`stampDeclOrigin`.
+--
+-- 🚨 THE DECL LAYER WAS INVISIBLE HERE UNTIL THIS CHANGE, AND THAT IS EXACTLY THE
+-- CONDITION UNDER WHICH THE TWO S0s IN THIS FILE'S HEADER SHIPPED THROUGH GREEN CI.
+-- `mapTyInDecl` rewrites `Ty` POSITIONS; a `…Origin` field is a field on the DECL
+-- NODE, not a `Ty`, so no callback handed to it can ever see one.  The four
+-- carriers landed populated and graded by nothing — a carrier no gate reads is the
+-- precondition for every defect this gate exists to catch.  So the decl layer is
+-- collected by its OWN walk, beside the occurrence one, and not by widening
+-- `noteHead` (which is a `Ty -> (Ty, Bool)` callback and structurally cannot).
+--
+-- ⚠️ THE TWO LAYERS ARE STAMPED BY DIFFERENT FUNCTIONS ON DIFFERENT PATHS, so they
+-- must stay TELLABLE APART in the output or a decl-layer regression hides behind an
+-- occurrence-layer row of the same name.  A decl carrier is reported under the name
+-- `decl:<TypeName>`; a bare `<TypeName>` row is always an occurrence.  `:` cannot
+-- occur in a Medaka type name, so the two namespaces cannot collide.
+--
+-- ⚠️ The layers genuinely disagree today, by design, and the golden shows it: the
+-- FLAT driver runs `stampFlatTyOrigins`, which stamps occurrences ONLY and never
+-- calls `stampDeclOrigins` at all (`frontend/resolve.mdk` — "FLAT (loader-less)
+-- DRIVERS GET NOTHING HERE").  So every `decl:` row on the flat arm is silent, and
+-- that silence is the documented `#1110 flat-identity` residual, not a defect.
 headsOf : List Decl -> List (String, TyConOrigin)
 headsOf decls =
   let acc = Ref []
   let _ = walkDecls acc decls
-  acc.value
+  declHeads decls ++ acc.value
 
 walkDecls : Ref (List (String, TyConOrigin)) -> List Decl -> Unit
 walkDecls _ [] = ()
@@ -241,6 +302,41 @@ noteHead acc (t@(TyCon { tyConName = n, tyConOrigin = o })) =
   let _ = setRef acc ((n, o)::acc.value)
   (t, False)
 noteHead _ t = (t, False)
+
+-- ── the DECL-LAYER carrier collector (#1110) ─────────────────────────────────
+declHeads : List Decl -> List (String, TyConOrigin)
+declHeads decls = flatMap declHeadOf decls
+
+-- 🚨 EVERY ARM NAMES A LABEL NO SIBLING CONSTRUCTOR HAS, and that is a correctness
+-- requirement here, not a style note: a record pattern matches by LABEL SET, not by
+-- constructor (`frontend/ast.mdk`'s rule, and the run≠build divergence at exit 0
+-- that motivates it).  The four `…Origin` fields are prefixed per constructor, so
+-- they are unique BY CONSTRUCTION — which is why each arm keys on the origin field
+-- it is here to read rather than on the name field it also needs.
+--
+-- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
+-- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use data Foo`
+-- would otherwise be observed by neither the stamper's grader nor this probe — the
+-- one shape where a stamping bug and its gate would go blind together.
+--
+-- ⚠️ `DImpl` mints NO decl-layer carrier and must not appear here.  An impl is not
+-- a type declaration; the identity of the head it is an impl OF is carried by the
+-- `Ty`s in `DImpl.tys`, which the OCCURRENCE walk above already covers (that is
+-- what beta.mdk's `impl Weighable (Crate a)` fixture exercises).
+declHeadOf : Decl -> List (String, TyConOrigin)
+declHeadOf (DData { dataName = n, dataOrigin = o }) = [("decl:\{n}", o)]
+declHeadOf (DNewtype { newtypeName = n, newtypeOrigin = o }) =
+  [("decl:\{n}", o)]
+declHeadOf (DTypeAlias { tyAliasName = n, tyAliasOrigin = o }) =
+  [("decl:\{n}", o)]
+declHeadOf (DInterface { name = n, ifaceOrigin = o }) = [("decl:\{n}", o)]
+declHeadOf (DAttrib _ d) = declHeadOf d
+declHeadOf _ = []
+
+declHeadsCount : List (String, List Decl) -> Int
+declHeadsCount [] = 0
+declHeadsCount ((_, decls)::rest) =
+  listLen (declHeads decls) + declHeadsCount rest
 
 -- ── what one arm claims about one head ───────────────────────────────────────
 
@@ -316,6 +412,92 @@ spanRow slot name cs = spanWhile (c => sameRow slot name c) cs
 
 sameRow : String -> String -> Claim -> Bool
 sameRow slot name c = claimSlot c == slot && claimName c == name
+
+-- ── residual: the RUNTIME DRAIN (#1110 §8 I6.3) ──────────────────────────────
+-- Per arm, which heads still carry `OriginUnresolved` AFTER that driver's stamping
+-- pass ran.  This is the half #1110 asked for and the half that was missing: the
+-- producer ratchet in `test/typecheck_compiler_source.sh` pins WHO MAY MINT the
+-- sentinel, which is a fact about the SOURCE, and its own comment says what that
+-- cannot reach —
+--
+--     "This is a PRODUCER ratchet, not the runtime drain #1110 asks for. It cannot
+--      see whether a driver forgot to stamp, nor whether one stamped the WRONG id"
+--
+-- The second of those two is covered by the CONFLICT rows above.  This section is
+-- the first.  Pinning the surviving set in the golden means a driver that FORGETS
+-- to stamp a head grows a row here, and `stampTyHead`'s immunity rule (fill in only
+-- an `OriginUnresolved` head) is what makes that worth catching: the FIRST stamp is
+-- the only one, so a head that reaches a consumer unstamped stays unstamped.
+--
+-- 🚨 A NONZERO RESIDUAL IS NOT A BUG REPORT, AND THIS SECTION MUST NOT BE READ AS
+-- ONE.  `OriginUnresolved` means "no identity was available here", and resolve.mdk
+-- names two ways to reach it that are both HONEST ABSENCE: a name in no scope at
+-- all, and a driver with no module graph.  The second is a whole ARM of this probe.
+-- Concretely, the shapes that are EXPECTED here:
+--
+--   * every `flat` row.  `stampFlatTyOrigins` claims a strict SUBSET of what the
+--     graph path claims — builtins and the prelude's own types, and nothing else.
+--     It does not stamp the user program's own declarations (no loader id to
+--     attribute them to), it does not walk `usePathsOf prog` so it stamps nothing
+--     the buffer IMPORTS either, and it never calls `stampDeclOrigins` at all, so
+--     the entire `decl:` layer is silent on that arm.  Under-supplying identity is
+--     correctable by a later graph pass; OVER-supplying a wrong one is made
+--     PERMANENT by the immunity rule.  That asymmetry is the documented
+--     subset-and-agreement safety property, and these rows ARE it.
+--
+--   * a `graph` row is the one that deserves reading.  The graph path has a real
+--     module id for every module and a scope built from builtins + prelude +
+--     imports + own declarations, so a head it left unstamped is either genuinely
+--     out of scope (already reported as `UnknownType`; errors accumulate, so the
+--     tree still gets here) or a driver gap.  Neither is decidable from this
+--     output alone — which is why the set is PINNED for review rather than
+--     asserted empty.
+--
+-- ⚠️ A head can appear here AND carry a real origin in the same arm and slot; that
+-- is `ArmMulti`, an arm contradicting itself, and it is strictly worse than a plain
+-- residual.  The verdict table is where that reads as CONFLICT — this section only
+-- reports that SOME occurrence of the head survived, never that all of them did.
+-- ⚠️ The re-SORT is required (`uniq` is ordered slot-first, this section is ordered
+-- arm-first).  The `dedupAdj` is NOT, today: `uniq` is already deduped on
+-- (slot, name, arm, key) and this filter fixes `key` to `"-"`, so at most one row
+-- per (arm, slot, name) can reach here.  It is kept anyway so this section's output
+-- does not silently depend on a keying choice made in `cmpClaim` for the TABLE's
+-- benefit — a de-dup that is a no-op is cheap; a duplicated residual row that
+-- nobody predicted is a golden diff nobody can explain.
+residualSection : List Claim -> (String, Int)
+residualSection uniq =
+  residualGo (dedupAdj
+    sameArmSlotName
+    (sortByCmp cmpArmSlotName (silentClaims uniq)))
+
+silentClaims : List Claim -> List Claim
+silentClaims [] = []
+silentClaims (c::rest) =
+  if claimKey c == "-" then
+    c :: silentClaims rest
+  else
+    silentClaims rest
+
+residualGo : List Claim -> (String, Int)
+residualGo [] = ("", 0)
+residualGo (c::rest) =
+  let (s, n) = residualGo rest
+  ("\{claimArm c} \{claimSlot c} \{claimName c}\n\{s}", 1 + n)
+
+-- ARM first: the section's whole point is that a `flat` row and a `graph` row mean
+-- different things, so they must not interleave.
+cmpArmSlotName : Claim -> Claim -> Ordering
+cmpArmSlotName a b =
+  thenCmp
+    (compare (claimArm a) (claimArm b))
+    (thenCmp
+      (compare (claimSlot a) (claimSlot b))
+      (compare (claimName a) (claimName b)))
+
+sameArmSlotName : Claim -> Claim -> Bool
+sameArmSlotName a b = claimArm a == claimArm b
+  && claimSlot a == claimSlot b
+  && claimName a == claimName b
 
 -- ── head spread: the DEFINER-CHASE check ─────────────────────────────────────
 -- The agreement table above compares arms WITHIN one slot, so it is structurally

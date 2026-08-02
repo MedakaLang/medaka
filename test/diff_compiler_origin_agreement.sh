@@ -4,7 +4,10 @@
 #
 # ── what this gate is for ────────────────────────────────────────────────────
 # `Ty.TyCon` carries a `TyConOrigin` (#1110 / epic #1122) stamped by resolve on both
-# the check path and the emit path. Nothing in the compiler reads it — deliberately,
+# the check path and the emit path, and so do the four TYPE-DECLARATION nodes
+# (`DData.dataOrigin` / `DNewtype.newtypeOrigin` / `DTypeAlias.tyAliasOrigin` /
+# `DInterface.ifaceOrigin`). Nothing in the compiler reads any of them —
+# deliberately,
 # so the stamping PRs stayed byte-identical and mechanically verifiable. The cost of
 # that is that every identity fact the compiler mints is UNOBSERVABLE, and two
 # S0-class defects shipped through 12/12 green CI on exactly that:
@@ -74,6 +77,61 @@
 # for the stampers ("a probe that hand-picks its arguments re-encodes the assumption
 # it exists to test"), turned on one of its own arms; naming it is the minimum.
 #
+# ── TWO LAYERS: `<Name>` is an OCCURRENCE, `decl:<Name>` is a DECLARATION ─────
+# The two are stamped by DIFFERENT functions on DIFFERENT paths — `stampTyOrigins`
+# walks every `Ty` position, `stampDeclOrigins` fills the decl nodes' own carriers —
+# so they are reported in separate namespaces (`:` cannot occur in a Medaka type
+# name). Until this gate was widened, `noteHead` matched `TyCon` only, and since it
+# is driven through `mapTyInDecl` — a `Ty`-POSITION rewrite — no callback it is
+# handed could ever reach a decl-node field. The whole decl layer was therefore
+# populated and graded by NOTHING, which is precisely the condition under which the
+# two S0s above shipped green. An interface is the sharpest case: an interface name
+# is never a `TyCon` (it is a constraint predicate, not a type constructor), so
+# before this widening `interface Weighable` had no representation in this gate at
+# all, and `#1047`'s interface-identity carrier was ungraded by construction.
+#
+# ⚠️ The flat arm is silent for the ENTIRE decl layer, by design, and that is not a
+# defect to fix: `stampFlatTyOrigins` stamps occurrences only and never calls
+# `stampDeclOrigins` (resolve.mdk — "FLAT (loader-less) DRIVERS GET NOTHING HERE").
+#
+# ── the RESIDUAL section — the runtime drain #1110 asked for ─────────────────
+# Per arm, the `OriginUnresolved` heads that SURVIVED that driver's stamping pass.
+# The producer ratchet in test/typecheck_compiler_source.sh pins who may MINT the
+# sentinel — a fact about the SOURCE — and its own comment states the gap: it
+# "cannot see whether a driver forgot to stamp, nor whether one stamped the WRONG
+# id". CONFLICT rows answer the second. This section answers the first. It matters
+# because `stampTyHead`'s immunity rule fills in only a still-unresolved head, so
+# the FIRST stamp is the only one: a head that reaches a consumer unstamped stays
+# unstamped.
+#
+# 🚨 THE RESIDUAL IS NOT ASSERTED EMPTY, AND A NONZERO COUNT IS NOT A BUG REPORT.
+# `OriginUnresolved` means "no identity was available here", and both of resolve's
+# routes to it are honest ABSENCE. What each arm means:
+#   flat    EXPECTED, in bulk. `flatTyOriginScope` claims a strict SUBSET of what
+#           the graph path claims — builtins plus the prelude's own types, and
+#           nothing else. It has no loader id for the user's own declarations, it
+#           never walks `usePathsOf prog` so it stamps nothing the buffer IMPORTS,
+#           and it never runs the decl-layer stamper at all. Under-supplying
+#           identity is correctable by a later graph pass; OVER-supplying a wrong
+#           one is made PERMANENT by the immunity rule. That asymmetry is the
+#           documented subset-and-agreement safety property, and these rows ARE it.
+#   single  EXPECTED where the head comes from a module the 1-module graph does not
+#           contain — `medaka test <file>` on a file whose imports are not loaded
+#           has no source module to attribute them to.
+#   graph   THE ONE TO READ. The graph path has a real module id for every module
+#           and a scope of builtins + prelude + imports + own declarations, so a
+#           head it left unstamped is either genuinely out of scope (already
+#           reported as `UnknownType`; errors accumulate, so the tree still gets
+#           here) or a DRIVER GAP. Not decidable from this output alone — which is
+#           why the set is pinned for review rather than asserted empty.
+#
+# ⚠️ The `unresolved` fixture exists so this section stays FALSIFIABLE. On the
+# `graph` corpus the graph arm's residual is EMPTY — a good result that is also
+# indistinguishable, from the golden alone, from a section structurally unable to
+# emit a graph row. `unresolved` pins one (`graph main_unresolved Missing`, a type
+# declared nowhere). Do not "fix" that row by deleting the undeclared type; doing so
+# disarms the control and returns the section to unfalsifiable.
+#
 # ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
 # AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
 # identity being DESTROYED somewhere downstream of the stamp (the known hazards are
@@ -98,6 +156,14 @@
 #                        `checkProgramSeededSplit`, the `flat` column silently
 #                        becomes all-ABSENT and every pair involving it stops
 #                        asserting anything
+#   decl-heads     > 0   the graph arm actually observed DECL-LAYER carriers. The
+#                        exact peer of `flat-segments`, for the layer this gate was
+#                        blind to for two PRs: if a refactor stops the `…Origin`
+#                        fields reaching the trees `elaborateModules` returns (a
+#                        decl rebuilt through `dDataUnresolved` instead of a record
+#                        UPDATE would do it), every `decl:` row vanishes at once.
+#                        Rows vanishing en masse is a shape a golden diff shows but
+#                        does not INTERPRET, and the interpretation is the point.
 #   fixtures       > 0   the corpus glob matched something
 #
 # ── OWED, not built here (#1222) ────────────────────────────────────────────
@@ -174,7 +240,9 @@ for dir in "$FIXDIR"/*/; do
   summary="$(printf '%s\n' "$out" | sed -n '/^=== SUMMARY ===$/,$p')"
   heads="$(printf '%s\n' "$summary" | awk '$1 == "heads" { print $2 }')"
   segs="$(printf '%s\n' "$summary" | awk '$1 == "flat-segments" { print $2 }')"
+  declheads="$(printf '%s\n' "$summary" | awk '$1 == "decl-heads" { print $2 }')"
   nconf="$(printf '%s\n' "$summary" | awk '$1 == "conflicts" { print $2 }')"
+  nresid="$(printf '%s\n' "$summary" | awk '$1 == "residual" { print $2 }')"
 
   # ⚠️ NOT `[ "$x" -le 0 ] 2>/dev/null`. On a NON-NUMERIC value that test exits 2
   # with the diagnostic suppressed, the `if` reads false, and the guard PASSES —
@@ -193,12 +261,27 @@ for dir in "$FIXDIR"/*/; do
     fail=$((fail + 1))
     continue
   fi
+  if ! is_count "$declheads"; then
+    echo "FAIL $name: probe reported decl-heads='$declheads' — the graph arm saw NO"
+    echo "     decl-layer origin carriers, so every 'decl:' row in the golden is"
+    echo "     asserting nothing. Check that DData/DNewtype/DTypeAlias/DInterface"
+    echo "     still carry their ...Origin fields through elaborateModules, and that"
+    echo "     no decl is REBUILT via a d*Unresolved helper (which resets the field)"
+    echo "     instead of a record update."
+    fail=$((fail + 1))
+    continue
+  fi
+  # ⚠️ `residual` is deliberately NOT guarded as > 0 or == 0. Its correct value is a
+  # property of the CORPUS, not an invariant (see the residual notes in the header),
+  # so the golden is the only assertion. It is read here purely to be reported.
+  case "$nresid" in ''|*[!0-9]*) nresid='?' ;; esac
   case "$nconf" in ''|*[!0-9]*) nconf=0 ;; esac
   conflicts_total=$((conflicts_total + nconf))
 
   if [ "${CAPTURE:-0}" = "1" ]; then
     printf '%s' "$out" > "$golden"
-    printf 'blessed %s (%s heads, %s conflicting)\n' "$name" "$heads" "${nconf:-?}"
+    printf 'blessed %s (%s heads incl. %s decl-layer, %s conflicting, %s residual)\n' \
+      "$name" "$heads" "$declheads" "${nconf:-?}" "$nresid"
     pass=$((pass + 1))
     continue
   fi
@@ -210,8 +293,8 @@ for dir in "$FIXDIR"/*/; do
   fi
 
   if printf '%s' "$out" | diff -u "$golden" - > /dev/null 2>&1; then
-    printf 'ok   %s (%s heads, %s conflicting, tap fired %s times)\n' \
-      "$name" "$heads" "${nconf:-?}" "$segs"
+    printf 'ok   %s (%s heads incl. %s decl-layer, %s conflicting, %s residual, tap fired %s times)\n' \
+      "$name" "$heads" "$declheads" "${nconf:-?}" "$nresid" "$segs"
     pass=$((pass + 1))
   else
     printf 'FAIL %s — the agreement table MOVED:\n' "$name"
@@ -220,6 +303,14 @@ for dir in "$FIXDIR"/*/; do
     echo "    AGREE -> CONFLICT      a NEW driver disagreement (the #1110 defect class)"
     echo "    AGREE -> NEITHER       an acquired origin is being DESTROYED downstream"
     echo "    CONFLICT -> anything   a pinned defect was FIXED — re-bless and say which"
+    echo "    + a 'graph ...' RESIDUAL row   a head the graph driver did NOT stamp."
+    echo "                           Either the name is genuinely in no scope, or a"
+    echo "                           driver forgot to stamp it. Decide which and say so."
+    echo "    - a 'graph ...' RESIDUAL row   identity was ACQUIRED where it was not"
+    echo "                           before. Good — but confirm it is the RIGHT module,"
+    echo "                           because the immunity rule makes a first stamp final."
+    echo "    every 'decl:' row gone  the decl-layer carriers stopped reaching the"
+    echo "                           returned trees. See the decl-heads guard above."
     fail=$((fail + 1))
   fi
 done
