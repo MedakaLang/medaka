@@ -3426,3 +3426,52 @@ flatTyOriginScope coreDecls =
       importedTyOrigin
       (map (typeDeclaredIn "core") (dataRecordNames coreDecls)))
     (omFromPairs builtinTyOrigins omEmpty)
+
+-- ── the AGREEMENT TAP (#1110) ────────────────────────────────────────────────
+-- ⚠️ NOTHING in the compiler reads this, and nothing may.  It exists so a GATE can
+-- observe what a driver ACTUALLY stamped — the one fact the two S0s fixed in #1219
+-- had in common.  Both (F1: a hardcoded `"__user__"` at one of three call sites;
+-- F2: a caller handing this file's flat stamper an EMPTY prelude) were *correct for
+-- the arguments they were given*, so a probe that picks its own arguments and calls
+-- `stampFlatTyOrigins`/`stampGraphTyOrigins` directly re-encodes the assumption it
+-- is meant to test and reports green.  The claim has to be read off the driver.
+--
+-- The GRAPH drivers need no tap: `elaborateModules` RETURNS the stamped trees, so a
+-- probe reads them straight out of its own call.  The FLAT driver
+-- (`checkProgramSeededSplit`) returns SCHEMES, and a `Mono.TCon` carries no origin
+-- (that layer is blocked one level down — see #1110's scoping comment), so the trees
+-- it stamped are otherwise unobservable from outside.  Hence this, and only this.
+--
+-- Shape is the established probe-flag idiom: `setFaithfulRoutes`
+-- (ir/core_ir_sexp.mdk), `gapRecordEnabled` (backend/llvm_emit.mdk).  OFF by
+-- default; one `Bool` read on the hot path; and it retains the decl lists BY
+-- REFERENCE (no copy, no projection, no rendering) so the probe owns the format and
+-- this file owns nothing but the fact.
+originTraceEnabled : Ref Bool
+originTraceEnabled = Ref False
+
+originTraceLog : Ref (List (String, List Decl))
+originTraceLog = Ref []
+
+-- Probe-only.  Enabling CLEARS the log too, so a probe that drives the flat entry
+-- once per module can never attribute one module's rows to the next.
+export setOriginTrace : Bool -> Unit
+setOriginTrace b =
+  let _ = setRef originTraceLog []
+  setRef originTraceEnabled b
+
+-- A flat driver records the decls it is about to hand to typecheck, labelled with
+-- WHICH HALF they are.  A no-op unless a probe turned the trace on.
+export noteOriginTrace : String -> List Decl -> Unit
+noteOriginTrace label decls =
+  if originTraceEnabled.value then
+    setRef originTraceLog (originTraceLog.value ++ [(label, decls)])
+  else
+    ()
+
+-- Drain: the recorded (label, decls) pairs in call order, log emptied.
+export takeOriginTrace : Unit -> List (String, List Decl)
+takeOriginTrace _ =
+  let rows = originTraceLog.value
+  let _ = setRef originTraceLog []
+  rows

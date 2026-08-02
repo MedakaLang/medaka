@@ -57,6 +57,7 @@ import frontend.resolve.{
   stampBindingIds,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
+  noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
 -- reuses the Maranget matrix machinery already ported in exhaust.mdk — the only
@@ -13801,7 +13802,14 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit seed coreProg0 userProg0 =
   let coreProg = stampFlatTyOrigins coreProg0 coreProg0
-  checkBodyImpl seed (Flat coreProg) (stampFlatTyOrigins coreProg0 userProg0)
+  let userProg = stampFlatTyOrigins coreProg0 userProg0
+  -- #1110 agreement tap.  OFF unless a probe enabled it (`noteOriginTrace` is a
+  -- `Bool` read and a return otherwise).  It is here, at the DRIVER, rather than
+  -- inside the stamper, because the two defects it exists to catch were both in
+  -- the ARGUMENTS a driver passed, not in the stamping.
+  let _ = noteOriginTrace "core" coreProg
+  let _ = noteOriginTrace "user" userProg
+  checkBodyImpl seed (Flat coreProg) userProg
 
 -- #80: the SINGLE whole-program typecheck body, shared by the flat/single-file path
 -- (checkProgramSeededSplit, `Flat coreProg`) and the per-module path

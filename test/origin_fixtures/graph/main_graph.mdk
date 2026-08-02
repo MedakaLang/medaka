@@ -1,0 +1,35 @@
+-- #1110 origin-agreement corpus — the ENTRY.
+--
+-- Every type it spells is DECLARED SOMEWHERE ELSE: `Tag`/`Crate` in alpha but
+-- reached only through beta's RE-EXPORT, `Shipment` in beta, `Option`/`Result` in
+-- the prelude, `Int`/`String` in the language.  A module that declares no type of
+-- its own is the case where "attribute every head to the module being elaborated"
+-- is wrong for every single head — which is exactly the mechanical reading of
+-- DICT-SEMANTICS §8 I4 that F2 was.
+
+import beta.{
+  Shipment(..),
+  shipmentSize,
+  shipmentNote,
+  shipmentTag,
+  Tag,
+  Crate,
+  fragileCrate,
+  crateLabel,
+}
+
+boxed : Crate Int
+boxed = fragileCrate 7
+
+tagOf : Shipment -> Tag
+tagOf s = shipmentTag s
+
+describe : Shipment -> String
+describe s = "\{shipmentSize s} \{crateLabel boxed}"
+
+outcome : Shipment -> Option String
+outcome s = match shipmentNote s
+  Ok _ => Some (describe s)
+  Err _ => None
+
+main = println (outcome (Shipment boxed 5))

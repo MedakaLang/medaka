@@ -133,6 +133,12 @@ fi
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
 #                         because diff_compiler_parse_errors.sh still drives it.)
+#   origin_agreement_main — diff_compiler_origin_agreement.sh (#1110): drives the
+#                           flat / single-module / graph elaboration entry points over
+#                           ONE loader graph and diffs the resulting agreement table.
+#                           It must be a compiled probe, not `./medaka`: the fact it
+#                           reads (`Ty.TyCon`'s `TyConOrigin`) is deliberately not
+#                           surfaced by any CLI verb.
 #   resolve_main          — diff_compiler_resolve.sh
 #   resolve_batch         — diff_compiler_resolve_batch.sh
 #   resolve_modules_main  — diff_compiler_resolve_modules.sh
@@ -171,7 +177,7 @@ core_ir_dict_pp_main \
 llvm_emit_main llvm_emit_typed_main llvm_emit_modules_main \
 llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
-resolve_main resolve_batch resolve_modules_main \
+resolve_main resolve_batch resolve_modules_main origin_agreement_main \
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main exhaust_main lint_main lint_fix_main \
 diagnostics_main diagnostics_project_main \

@@ -1,0 +1,464 @@
+-- ORIGIN AGREEMENT probe (#1110) — do the compiler's THREE elaboration drivers
+-- agree about which module declared each type-constructor head?
+--
+--   medaka build --allow-internal compiler/entries/origin_agreement_main.mdk -o <bin>
+--   <bin> <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
+--
+-- ── why this exists ─────────────────────────────────────────────────────────
+-- `Ty.TyCon` carries a `TyConOrigin` stamped by resolve on both the check path and
+-- the emit path.  Nothing in the compiler reads it, which is deliberate — but it
+-- also means every identity fact the compiler mints is UNOBSERVABLE, and two
+-- S0-class defects shipped through 12/12 green CI on exactly that:
+--
+--   F1  the flat driver stamped `mod:__user__` for a file's own declarations while
+--       the emitter's graph path stamped the real loader id — INSIDE ONE PROCESS.
+--   F2  on prelude-flattened paths the PRELUDE's own types (`Option`, `Result`,
+--       `Ordering`) were attributed to the USER's module.
+--
+-- ⚠️ NEITHER IS CATCHABLE BY A PROBE THAT CALLS THE STAMPERS DIRECTLY.
+-- `stampFlatTyOrigins` was correct for its arguments in both cases; the bug was a
+-- CALLER — a hardcoded literal at one of three call sites (F1), and an empty prelude
+-- list (F2).  A probe that hand-picks its arguments re-encodes the assumption it
+-- exists to test and reports green.  So this drives the REAL entry points, the way
+-- the real drivers drive them, and reads back what THEY produced:
+--
+--   flat    checkProgramSchemesWithRuntime   `medaka check` on a no-import file, the
+--                                            LSP, `doc`, `repl`, the playground —
+--                                            one buffer at a time, prelude separate.
+--                                            Its result is SCHEMES, and a `Mono.TCon`
+--                                            carries no origin, so it is read through
+--                                            resolve.mdk's agreement tap.
+--   single  elaborateModules … [("__user__", …)]
+--                                            `medaka test <file>` / the snapshot
+--                                            driver (compiler/tools/test_cmd.mdk).
+--   graph   elaborateModules … <loader graph>
+--                                            `medaka run` / `medaka build` /
+--                                            `medaka test <dir>`.  Reads the trees
+--                                            elaborateModules RETURNS — what the
+--                                            emitter actually consumes — so a later
+--                                            pass that DESTROYS an acquired origin
+--                                            shows up as a claim that vanished.
+--
+-- ── why the OUTPUT is an agreement table and not the origins ──────────────────
+-- A golden of the origins themselves would (a) churn on every module added and
+-- (b) NOT have caught F1: each arm's claim was individually plausible, and only the
+-- DISAGREEMENT was wrong.  An agreement table detects a disagreement without anyone
+-- having to know the right answer — the only property that survives an arc whose
+-- whole point is that the right answer is not decided yet.
+--
+-- ⚠️ The current asymmetry is DELIBERATE and must NOT read as a failure: the flat
+-- path is SILENT (`OriginUnresolved`) where it has no loader-derived module id,
+-- rather than inventing one.  That silence IS F1's fix — see stampFlatTyOrigins'
+-- own comment.  So "one arm silent, the other claims" is `L-ONLY`/`R-ONLY` and is
+-- fine; "both claim, differently" is `CONFLICT` and is the defect class.
+--
+-- 🚨 AND HERE IS THE HONEST BOUND ON ALL OF THAT — the flip side of the property
+-- that makes the design good.  PAIRWISE AGREEMENT RESTS ON AT LEAST ONE ARM BEING
+-- RIGHT.  Where the three arms share an input, that premise fails and a UNIFORM
+-- wrong answer has no disagreement left to expose: relabel the prelude at BOTH of
+-- resolve.mdk's `"core"` sites, or point every builtin at a module that does not
+-- exist, and all three arms tell the same wrong story — every verdict stays AGREE
+-- and the table is byte-identical.  Review found exactly that, and it is F2's
+-- literal symptom (the prelude's own types attributed elsewhere) getting through.
+--
+-- `HEAD SPREAD` is what closes it, and ONLY because it prints the claim KEYS rather
+-- than counting them.  A uniform wrong story is still ONE story, so no count moves;
+-- the origin itself has to be on the page.  It is the single place in this output
+-- where a concrete origin is asserted for every head rather than only for the ones
+-- already known to disagree, and it is a per-NAME assertion (~17 lines) rather than
+-- a per-row one, so it pins the answer without the churn a full origins golden has.
+-- It also upgrades the re-export check from "one story" to "ALPHA's story", which is
+-- what that section was always trying to say.
+--
+-- Slots are the probe's OWN bookkeeping — the loader path it read each decl list
+-- from — never an id the compiler minted.  That is what lets a driver that invents
+-- an id show up as a disagreeing CLAIM rather than as a quietly relabelled row.
+
+import frontend.ast.{Decl, Ty(..), TyConOrigin(..), mapTyInDecl}
+import frontend.resolve.{setOriginTrace, takeOriginTrace}
+import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
+import entries.entry_support.{driveModules}
+import support.util.{listLen}
+
+-- ── claims ───────────────────────────────────────────────────────────────────
+
+-- (arm, slot, head name, origin key).  Positional on purpose: record field names
+-- are a program-global namespace in this language (#1216) and this probe needs none.
+data Claim = Claim String String String String
+
+claimArm : Claim -> String
+claimArm (Claim a _ _ _) = a
+
+claimSlot : Claim -> String
+claimSlot (Claim _ s _ _) = s
+
+claimName : Claim -> String
+claimName (Claim _ _ n _) = n
+
+claimKey : Claim -> String
+claimKey (Claim _ _ _ k) = k
+
+-- `-` is ABSENCE OF A CLAIM, not a claim of "nothing".  Per resolve.mdk: no
+-- predicate may treat two `OriginUnresolved` heads as matching each other.
+originKey : TyConOrigin -> String
+originKey OriginUnresolved = "-"
+originKey OriginBuiltin = "builtin"
+originKey (OriginModule m) = "mod:\{m}"
+
+-- ── driver ───────────────────────────────────────────────────────────────────
+
+main : <IO> Unit
+main = driveModules report
+
+report : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+report runtimeDecls coreDecls modules =
+  let (segments, flatClaims) = flatArm runtimeDecls coreDecls modules
+  let singleClaims = singleArm runtimeDecls coreDecls modules
+  let (graphMods, graphClaims) = graphArm runtimeDecls coreDecls modules
+  let allClaims = flatClaims ++ singleClaims ++ graphClaims
+  let uniq = dedupAdj sameClaim (sortByCmp cmpClaim allClaims)
+  let (table, conflicts, nrows, nconf) = groupRows uniq
+  let _ = putStr "=== ORIGIN AGREEMENT (#1110) ===\n"
+  let _ = putStr "# <slot> <head> <flat~graph> <single~graph> <flat~single>\n"
+  let _ = putStr table
+  let _ = putStr "=== CONFLICTS ===\n"
+  let _ = putStr "# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).\n"
+  let _ = putStr "# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's \"__user__\" is\n"
+  let _ = putStr "# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,\n"
+  let _ = putStr "# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223\n"
+  let _ = putStr "# must delete them here by hand. (Sourcing the id from the driver would make it\n"
+  let _ = putStr "# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)\n"
+  let _ = putStr conflicts
+  let _ = putStr "=== HEAD SPREAD ===\n"
+  let _ = putStr "# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>\n"
+  let _ = putStr (spreadSection uniq)
+  let _ = putStr "=== SUMMARY ===\n"
+  let _ = putStr "modules \{listLen modules}\n"
+  let _ = putStr "graph-modules \{graphMods}\n"
+  let _ = putStr "flat-segments \{segments}\n"
+  let _ = putStr "heads \{nrows}\n"
+  let _ = putStr "claims \{listLen uniq}\n"
+  putStr "conflicts \{nconf}\n"
+
+-- ── the three arms ───────────────────────────────────────────────────────────
+
+-- FLAT: one buffer at a time, exactly as the LSP / `doc` / `check` drivers call it.
+-- Returns (how many times the tap fired, claims).  The segment count is the
+-- anti-vacuity signal for the TAP ITSELF: if a future refactor stops routing the
+-- flat drivers through `checkProgramSeededSplit`, this goes to 0 and the gate reds —
+-- rather than the table quietly losing its `flat` column while still reporting
+-- "0 conflicts".
+flatArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, List Claim)
+flatArm _ _ [] = (0, [])
+flatArm rt core ((mid, decls)::rest) =
+  let _ = setOriginTrace True
+  let _ = checkProgramSchemesWithRuntime rt core decls
+  let trace = takeOriginTrace ()
+  let _ = setOriginTrace False
+  let (n, cs) = flatArm rt core rest
+  (listLen trace + n, flatClaimsOf mid trace ++ cs)
+
+-- The flat driver labels its two halves "core" and "user".  The user half is the
+-- buffer THIS probe handed it, so its slot is the loader path the probe read —
+-- never a name the compiler chose.
+flatClaimsOf : String -> List (String, List Decl) -> List Claim
+flatClaimsOf _ [] = []
+flatClaimsOf mid ((label, decls)::rest) = claimsOf "flat" (flatSlot mid label) decls
+  ++ flatClaimsOf mid rest
+
+flatSlot : String -> String -> String
+flatSlot _ "core" = "core"
+flatSlot mid _ = mid
+
+-- SINGLE: `medaka test <file>` and the snapshot driver elaborate ONE file as a
+-- 1-module graph under the driver's own `"__user__"` label.  Driven here over the
+-- SAME decls the graph arm gets, which is precisely the `medaka test <dir>`
+-- situation: one declaration, two module ids, one process (#1223).
+--
+-- ⚠️ THIS ARM HAND-PICKS ITS ARGUMENT, AND THAT IS A REAL WEAKNESS, NOT A DETAIL.
+-- The literal `"__user__"` below is spelled HERE, not read from
+-- compiler/tools/test_cmd.mdk where the real driver spells it — so this arm MODELS
+-- the driver rather than observing it, and it is the exact hazard this file's header
+-- argues against for the stampers, turned on one of its own arms.  Two consequences,
+-- both stated rather than papered over:
+--   * the CONFLICT rows it produces do NOT self-drain.  Unify the drivers and this
+--     probe keeps saying `"__user__"`, keeps producing them, and the gate stays
+--     green against a stale golden.  The golden says so in its own header.
+--   * if `test_cmd.mdk` changed the id to something else tomorrow, this arm would
+--     silently stop modelling anything real.
+-- The `flat` arm earns its keep through the tap and `graph` reads its own call;
+-- this one is the shape model.  Making it mechanical means exporting the id from
+-- `test_cmd.mdk` and importing it here — a change to a shipping driver, out of
+-- scope for a gate-only PR.
+singleArm : List Decl -> List Decl -> List (String, List Decl) -> List Claim
+singleArm _ _ [] = []
+singleArm rt core ((mid, decls)::rest) =
+  let (coreD, mods) = elaborateModules rt core [("__user__", decls)]
+  claimsOf "single" "core" coreD
+    ++ claimsOf "single" mid (flatMap snd mods)
+    ++ singleArm rt core rest
+
+-- GRAPH: the loader's whole module graph, elaborated once — `run` / `build`.
+graphArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, List Claim)
+graphArm rt core modules =
+  let (coreD, mods) = elaborateModules rt core modules
+  let cs = claimsOf "graph" "core" coreD ++ graphModClaims (map fst modules) mods
+  (listLen mods, cs)
+
+-- Slots come from the INPUT list, positionally.  The probe must not take the
+-- driver's word for which module a returned decl list belongs to.
+graphModClaims : List String -> List (String, List Decl) -> List Claim
+graphModClaims [] _ = []
+graphModClaims _ [] = []
+graphModClaims (slot::slots) ((_, decls)::rest) = claimsOf "graph" slot decls
+  ++ graphModClaims slots rest
+
+claimsOf : String -> String -> List Decl -> List Claim
+claimsOf arm slot decls = map (headClaim arm slot) (headsOf decls)
+
+headClaim : String -> String -> (String, TyConOrigin) -> Claim
+headClaim arm slot (n, o) = Claim arm slot n (originKey o)
+
+-- ── the head collector ───────────────────────────────────────────────────────
+-- Driven through `mapTyInDecl` — the SAME total Ty-position traversal the stamper
+-- uses (resolve.mdk's `stampDeclTyOrigins`).  Sharing the traversal is the point:
+-- this probe can never observe a SMALLER set of positions than the stamper wrote,
+-- and a new Ty position added to the AST reaches both at once.
+headsOf : List Decl -> List (String, TyConOrigin)
+headsOf decls =
+  let acc = Ref []
+  let _ = walkDecls acc decls
+  acc.value
+
+walkDecls : Ref (List (String, TyConOrigin)) -> List Decl -> Unit
+walkDecls _ [] = ()
+walkDecls acc (d::rest) =
+  let _ = mapTyInDecl (noteHead acc) d
+  walkDecls acc rest
+
+noteHead : Ref (List (String, TyConOrigin)) -> Ty -> (Ty, Bool)
+noteHead acc (t@(TyCon { tyConName = n, tyConOrigin = o })) =
+  let _ = setRef acc ((n, o)::acc.value)
+  (t, False)
+noteHead _ t = (t, False)
+
+-- ── what one arm claims about one head ───────────────────────────────────────
+
+data ArmState = ArmAbsent | ArmSilent | ArmOne String | ArmMulti (List String)
+
+-- ⚠️ `ArmMulti` is ONE arm claiming TWO different origins for the same head in the
+-- same slot.  It is not a tie to be broken — it is an internal contradiction, so it
+-- conflicts with everything, including an identical `ArmMulti`.
+armStateOf : String -> List Claim -> ArmState
+armStateOf arm rows = armStateFrom (nubStrs (keysOfArm arm rows))
+
+armStateFrom : List String -> ArmState
+armStateFrom [] = ArmAbsent
+armStateFrom ["-"] = ArmSilent
+armStateFrom [k] = ArmOne k
+armStateFrom ks = ArmMulti ks
+
+keysOfArm : String -> List Claim -> List String
+keysOfArm _ [] = []
+keysOfArm arm (c::rest) =
+  if claimArm c == arm then
+    claimKey c :: keysOfArm arm rest
+  else
+    keysOfArm arm rest
+
+showArm : ArmState -> String
+showArm ArmAbsent = "absent"
+showArm ArmSilent = "-"
+showArm (ArmOne k) = k
+showArm (ArmMulti ks) = "multi:\{joinPipe ks}"
+
+-- The whole verdict vocabulary, in one place:
+--   BOTH-ABSENT           neither arm processed this head at all
+--   L-ABSENT / R-ABSENT   one arm never saw it
+--   NEITHER               both saw it, neither could attribute it (§8 I6.3 residual)
+--   L-ONLY / R-ONLY       one arm claims, the other is honestly SILENT — CORRECT
+--                         today for every user declaration on the flat path
+--   AGREE                 both claim, same module
+--   CONFLICT              both claim, DIFFERENT modules — the defect class
+verdict : ArmState -> ArmState -> String
+verdict ArmAbsent ArmAbsent = "BOTH-ABSENT"
+verdict ArmAbsent _ = "L-ABSENT"
+verdict _ ArmAbsent = "R-ABSENT"
+verdict ArmSilent ArmSilent = "NEITHER"
+verdict ArmSilent _ = "R-ONLY"
+verdict _ ArmSilent = "L-ONLY"
+verdict (ArmOne a) (ArmOne b) = if a == b then "AGREE" else "CONFLICT"
+verdict _ _ = "CONFLICT"
+
+-- ── grouping + rendering ─────────────────────────────────────────────────────
+-- `uniq` is sorted by (slot, name, arm, key), so each head's claims form ONE
+-- contiguous run.  Returns (table, conflict detail, row count, conflicting rows).
+groupRows : List Claim -> (String, String, Int, Int)
+groupRows [] = ("", "", 0, 0)
+groupRows (c::rest) =
+  let slot = claimSlot c
+  let name = claimName c
+  let (rows, after) = spanRow slot name (c::rest)
+  let (line, conf, nc) = renderRow slot name rows
+  let (lines2, confs2, nrows, nconf) = groupRows after
+  ("\{line}\{lines2}", "\{conf}\{confs2}", 1 + nrows, nc + nconf)
+
+spanWhile : (Claim -> Bool) -> List Claim -> (List Claim, List Claim)
+spanWhile _ [] = ([], [])
+spanWhile p (c::rest) =
+  if p c then
+    consFst c (spanWhile p rest)
+  else
+    ([], c::rest)
+
+spanRow : String -> String -> List Claim -> (List Claim, List Claim)
+spanRow slot name cs = spanWhile (c => sameRow slot name c) cs
+
+sameRow : String -> String -> Claim -> Bool
+sameRow slot name c = claimSlot c == slot && claimName c == name
+
+-- ── head spread: the DEFINER-CHASE check ─────────────────────────────────────
+-- The agreement table above compares arms WITHIN one slot, so it is structurally
+-- blind to one thing the corpus deliberately contains: a type reached through a
+-- RE-EXPORT must be attributed to its DEFINER, never to the last re-exporter
+-- (resolve.mdk's `typeOriginExports` exists for exactly this, and it is the half
+-- `ModuleExports.expTypes` cannot answer).  If the graph arm attributed `Crate` to
+-- `beta` in beta's slot and to `alpha` in alpha's, every row would still read
+-- AGREE/R-ONLY and the gate would say nothing.
+--
+-- So: per head NAME, how many DISTINCT origins does the graph arm claim across all
+-- the slots that spell it?  This encodes no answer — it does not say which module
+-- is right, only whether the compiler told one story or several.
+--
+-- ⚠️ PRINT THE KEYS, DO NOT MERELY COUNT THEM.  The count alone is blind to a
+-- UNIFORM mis-attribution (see the bound at the top of this file): one wrong story
+-- is still one story.  With the keys on the page, relabelling the prelude turns
+-- `Option 1 mod:core` into `Option 1 mod:__user__` — F2 on the screen.  Row
+-- cardinality is unchanged either way (`rows` is already deduped by (name, key)),
+-- so this adds no new golden rot over the counting form.
+--
+-- ⚠️ `> 1` IS NOT AUTOMATICALLY A DEFECT.  Two unrelated modules declaring
+-- same-named types is exactly the case module-qualified identity exists to SUPPORT
+-- (#1047), and such a corpus would legitimately read 2.  It is pinned in the golden
+-- rather than asserted, so a change here has to be looked at and blessed, which is
+-- the honest treatment for a number whose correct value depends on the corpus.
+spreadSection : List Claim -> String
+spreadSection uniq =
+  spreadGo (dedupAdj sameNameKey (sortByCmp cmpNameKey (graphKeyed uniq)))
+
+graphKeyed : List Claim -> List Claim
+graphKeyed [] = []
+graphKeyed (c::rest) =
+  if isGraphClaim c then
+    c :: graphKeyed rest
+  else
+    graphKeyed rest
+
+isGraphClaim : Claim -> Bool
+isGraphClaim c = claimArm c == "graph" && claimKey c != "-"
+
+cmpNameKey : Claim -> Claim -> Ordering
+cmpNameKey a b =
+  thenCmp
+    (compare (claimName a) (claimName b))
+    (compare (claimKey a) (claimKey b))
+
+sameNameKey : Claim -> Claim -> Bool
+sameNameKey a b = claimName a == claimName b && claimKey a == claimKey b
+
+spreadGo : List Claim -> String
+spreadGo [] = ""
+spreadGo (c::rest) =
+  let name = claimName c
+  let (rows, after) = spanWhile (x => claimName x == name) (c::rest)
+  "\{name} \{listLen rows} \{joinPipe (map claimKey rows)}\n\{spreadGo after}"
+
+consFst : Claim -> (List Claim, List Claim) -> (List Claim, List Claim)
+consFst c (rows, after) = (c::rows, after)
+
+renderRow : String -> String -> List Claim -> (String, String, Int)
+renderRow slot name rows =
+  let f = armStateOf "flat" rows
+  let s = armStateOf "single" rows
+  let g = armStateOf "graph" rows
+  let vFG = verdict f g
+  let vSG = verdict s g
+  let vFS = verdict f s
+  let bad = vFG == "CONFLICT" || vSG == "CONFLICT" || vFS == "CONFLICT"
+  let line = "\{slot} \{name} \{vFG} \{vSG} \{vFS}\n"
+  let detail = "\{slot} \{name} flat=\{showArm f} single=\{showArm s} graph=\{showArm g}\n"
+  (line, if bad then detail else "", if bad then 1 else 0)
+
+-- ── local list utilities ─────────────────────────────────────────────────────
+-- Hand-rolled and POLYMORPHIC (one copy, not one per element type): these probe
+-- entries are compiled off the compiler root, and the compiler's own mini-stdlib
+-- has no sort.  O(n log n) is not optional — the unsorted claim list is one entry
+-- per Ty position per arm per module, tens of thousands of rows on a real corpus.
+
+sortByCmp : (a -> a -> Ordering) -> List a -> List a
+sortByCmp _ [] = []
+sortByCmp _ [x] = [x]
+sortByCmp cmp xs =
+  let (l, r) = halveL xs
+  mergeByCmp cmp (sortByCmp cmp l) (sortByCmp cmp r)
+
+mergeByCmp : (a -> a -> Ordering) -> List a -> List a -> List a
+mergeByCmp _ [] ys = ys
+mergeByCmp _ xs [] = xs
+mergeByCmp cmp (x::xs) (y::ys) = match cmp x y
+  Gt => y :: mergeByCmp cmp (x::xs) ys
+  _ => x :: mergeByCmp cmp xs (y::ys)
+
+halveL : List a -> (List a, List a)
+halveL xs =
+  let n = listLen xs / 2
+  (takeN n xs, dropN n xs)
+
+takeN : Int -> List a -> List a
+takeN _ [] = []
+takeN n (x::rest) = if n <= 0 then [] else x :: takeN (n - 1) rest
+
+dropN : Int -> List a -> List a
+dropN _ [] = []
+dropN n (x::rest) = if n <= 0 then x::rest else dropN (n - 1) rest
+
+dedupAdj : (a -> a -> Bool) -> List a -> List a
+dedupAdj _ [] = []
+dedupAdj _ [x] = [x]
+dedupAdj eq (x::y::rest) =
+  if eq x y then
+    dedupAdj eq (y::rest)
+  else
+    x :: dedupAdj eq (y::rest)
+
+-- (slot, name) FIRST so each head's claims form one contiguous run for `groupRows`.
+cmpClaim : Claim -> Claim -> Ordering
+cmpClaim (Claim a1 s1 n1 k1) (Claim a2 s2 n2 k2) =
+  thenCmp
+    (compare s1 s2)
+    (thenCmp (compare n1 n2) (thenCmp (compare a1 a2) (compare k1 k2)))
+
+thenCmp : Ordering -> Ordering -> Ordering
+thenCmp Eq b = b
+thenCmp a _ = a
+
+sameClaim : Claim -> Claim -> Bool
+sameClaim a b = match cmpClaim a b
+  Eq => True
+  _ => False
+
+-- The per-head runs are tiny (at most one claim per arm per Ty position), so a
+-- first-occurrence nub is cheaper than another sort — and it preserves the sorted
+-- key order `cmpClaim` already established, which keeps `ArmMulti` deterministic.
+nubStrs : List String -> List String
+nubStrs [] = []
+nubStrs (x::rest) = x :: nubStrs (dropStr x rest)
+
+dropStr : String -> List String -> List String
+dropStr _ [] = []
+dropStr x (y::rest) = if x == y then dropStr x rest else y :: dropStr x rest
+
+joinPipe : List String -> String
+joinPipe [] = ""
+joinPipe [x] = x
+joinPipe (x::rest) = "\{x}|\{joinPipe rest}"

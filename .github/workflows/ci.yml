@@ -626,7 +626,19 @@ jobs:
             # class. It parks here next to its two siblings for the SAME cost reason: it
             # needs only ./medaka + the emitter (which this shard already builds), and the
             # heavier shards have no room. It is NOT in types/engines (the poles).
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            #
+            # 'diff_compiler_origin_agreement' (#1110) is a FRONTEND/TYPES gate here for
+            # the same cost reason, fourth time over. Measured on the 2026-08-02 full
+            # merge-queue run 30725382057, the shard walls were engines 448s, types 422s,
+            # backend 382s, frontend 348s, tools 310s, eval 292s, sqlite 237s — so its two
+            # thematic homes (`frontend`, which owns diff_compiler_resolve*, and `types`)
+            # are both poles and this shard is the cheapest one that already builds a large
+            # oracle set (19). Its marginal cost is one more entry in an xargs -P batch of
+            # 19 plus a couple of seconds of gate time; putting it in `sqlite` (cheaper on
+            # paper) would instead be the FULL serial cost of the first and only oracle
+            # that shard builds. ⚠️ Re-measure before moving it — those numbers rot; the
+            # one-liner is in the `engines` entry above.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed
