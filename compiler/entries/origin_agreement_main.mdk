@@ -280,11 +280,15 @@ headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 -- `decl:<TypeName>`; a bare `<TypeName>` row is always an occurrence.  `:` cannot
 -- occur in a Medaka type name, so the two namespaces cannot collide.
 --
--- ⚠️ The layers genuinely disagree today, by design, and the golden shows it: the
--- FLAT driver runs `stampFlatTyOrigins`, which stamps occurrences ONLY and never
--- calls `stampDeclOrigins` at all (`frontend/resolve.mdk` — "FLAT (loader-less)
--- DRIVERS GET NOTHING HERE").  So every `decl:` row on the flat arm is silent, and
--- that silence is the documented `#1110 flat-identity` residual, not a defect.
+-- ⚠️ The layers still disagree today, by design, and the golden shows it — but
+-- narrower than it used to be (#1227, fixed): the FLAT driver's
+-- `checkProgramSeededSplit` (`types/typecheck.mdk`) now calls `stampDeclOrigins
+-- "core"` on its PRELUDE half, alongside `stampFlatTyOrigins`'s occurrence stamp,
+-- so `flat core decl:*` rows AGREE with the graph arm.  It still never stamps the
+-- USER half, or any flat driver with no separate prelude boundary
+-- (`coreProg0 = []`, e.g. `checkProgramSeeded`) — those have no module id, so
+-- their `decl:` rows stay silent, and that silence is the documented
+-- `#1110 flat-identity` residual, not a defect.
 headsOf : List Decl -> List (String, TyConOrigin)
 headsOf decls =
   let acc = Ref []
@@ -439,17 +443,16 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     graph path claims — builtins and the prelude's own types, and nothing else.
 --     It does not stamp the user program's own declarations (no loader id to
 --     attribute them to), it does not walk `usePathsOf prog` so it stamps nothing
---     the buffer IMPORTS either, and it never calls `stampDeclOrigins` at all, so
---     the entire `decl:` layer is silent on that arm.  Under-supplying identity is
+--     the buffer IMPORTS either.  The decl layer (`stampDeclOrigins`) is called on
+--     the flat arm's PRELUDE half only (`checkProgramSeededSplit`, #1227, fixed),
+--     so `flat core decl:*` no longer shows up here — it moved to AGREE in the
+--     table above.  `decl:` rows are still silent here for the user program's own
+--     declarations, and for any flat driver with no separate prelude boundary
+--     (`coreProg0 = []`, e.g. `checkProgramSeeded`) — those have no module id to
+--     stamp with, same as the occurrence layer.  Under-supplying identity is
 --     correctable by a later graph pass; OVER-supplying a wrong one is made
 --     PERMANENT by the immunity rule.  That asymmetry is the documented
 --     subset-and-agreement safety property, and these rows ARE it.
---
---     ⚠️ EXCEPT the `flat core decl:*` rows: for those, `checkProgramSeededSplit`
---     already knows the id (`stampFlatTyOrigins coreProg0 coreProg0` stamps the
---     prelude's own type OCCURRENCES `mod:core`), so their silence is not
---     "no loader id to invent" — it is an unwired decl-layer stamp on a known
---     id, tracked as #1227, not an instance of the safety property above.
 --
 --   * a `graph` row is the one that deserves reading.  The graph path has a real
 --     module id for every module and a scope built from builtins + prelude +

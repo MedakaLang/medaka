@@ -57,6 +57,7 @@ import frontend.resolve.{
   stampBindingIds,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
+  stampDeclOrigins,
   noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
@@ -13796,9 +13797,20 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 -- (the internal `checkProgramSeeded` passes flatten the prelude into `prog`), and
 -- then nothing is claimed at all — which is why the prelude can no longer be
 -- attributed to the user's module.
+--
+-- #1227: the paragraph above is about the OCCURRENCE layer (`stampFlatTyOrigins`)
+-- only.  The DECLARATION layer (`stampDeclOrigins`, resolve.mdk) is narrower still:
+-- `coreProg0` is a KNOWN module id here (unlike the graph drivers' `registerData`,
+-- which would have to invent one for an imported module), so this driver now also
+-- stamps the prelude's own `DData`/`DNewtype`/`DTypeAlias`/`DInterface` heads
+-- `core`.  ONLY `coreProg` gets this call — `userProg0` still has no module id and
+-- must stay unstamped, exactly as the occurrence layer already treats it.  When
+-- `coreProg0` is `[]` (the prelude-free / already-flattened callers), stamping an
+-- empty list is a no-op, so this adds nothing on those paths.
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit seed coreProg0 userProg0 =
-  let coreProg = stampFlatTyOrigins coreProg0 coreProg0
+  let coreProgTy = stampFlatTyOrigins coreProg0 coreProg0
+  let coreProg = stampDeclOrigins "core" coreProgTy
   let userProg = stampFlatTyOrigins coreProg0 userProg0
   -- #1110 agreement tap.  OFF unless a probe enabled it (`noteOriginTrace` is a
   -- `Bool` read and a return otherwise).  It is here, at the DRIVER, rather than

@@ -3350,13 +3350,27 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 -- ⚠️ NOTHING READS THESE FIELDS YET.  Deliberately: the PR is byte-identical, so
 -- the widening is mechanically verifiable, exactly as #1211 and #1219 were.
 --
--- ⚠️ FLAT (loader-less) DRIVERS GET NOTHING HERE, and that is the same asymmetry
--- `stampFlatTyOrigins` argues at length: they have no module id, an invented one is
--- made PERMANENT by the immunity rule, and `medaka run` on a no-import file reaches
--- both the flat and the graph arm in ONE process — so an invented id would directly
--- contradict a real one.  Under-supplying is correctable later; over-supplying is
--- not.  Residual, greppable as `#1110 flat-identity`.
-stampDeclOrigins : String -> List Decl -> List Decl
+-- ⚠️ #1227 NARROWED THIS: it used to read "FLAT (loader-less) DRIVERS GET NOTHING
+-- HERE" outright.  That is no longer true for the ONE flat call site that has a
+-- real module id in hand: `checkProgramSeededSplit` (`types/typecheck.mdk`) already
+-- knows its `coreProg0` argument is the prelude — that is the same fact
+-- `stampFlatTyOrigins coreProg0 coreProg0` relies on for the OCCURRENCE layer — so
+-- it now also calls `stampDeclOrigins "core" coreProgTy` here (the occurrence-
+-- stamped prelude, `coreProg` is the name bound to THIS call's result), stamping
+-- the prelude's OWN `DData`/`DNewtype`/`DTypeAlias`/`DInterface` declarations.
+--
+-- What is still true, and will not stop being true without a loader-derived id:
+-- the flat driver's USER half (`userProg0`) has no module id and gets no call to
+-- this function.  Every other flat driver (any caller that hands
+-- `checkProgramSeededSplit` an empty `coreProg0` because it has already flattened
+-- prelude+user together — `checkProgramSeeded`, or an explicit `[]` prelude-free
+-- caller) still gets nothing, for the reason the rest of this comment gives: they
+-- have no module id, an invented one is made PERMANENT by the immunity rule, and
+-- `medaka run` on a no-import file reaches both the flat and the graph arm in ONE
+-- process — so an invented id would directly contradict a real one.
+-- Under-supplying is correctable later; over-supplying is not.  Residual,
+-- greppable as `#1110 flat-identity`.
+export stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclOrigins mid decls = map (stampDeclOrigin mid) decls
 
 -- ⚠️ Record UPDATE on a `d@` binding, never re-construction: a total literal would
