@@ -43,6 +43,10 @@ import frontend.ast.{
   dTypeAliasUnresolved,
   dNewtypeUnresolved,
   dInterfaceUnresolved,
+  dImplUnresolved,
+  constraintUnresolved,
+  superUnresolved,
+  requireUnresolved,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -1803,9 +1807,10 @@ constraintTail lhs = do
 
 extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
-  Some (iface, args) => [Constraint iface args]
+  Some (iface, args) => [constraintUnresolved iface args]
   None => []
-extractConstraints (TyCon { tyConName = iface }) = [Constraint iface []]
+extractConstraints (TyCon { tyConName = iface }) =
+  [constraintUnresolved iface []]
 extractConstraints (TyTuple cs) = concatMapC cs
 extractConstraints _ = []
 
@@ -2653,7 +2658,7 @@ ifaceSuperEntry : Parser Super
 ifaceSuperEntry = do
   name <- upperNameP
   params <- many lowerNameP
-  pure (Super name params)
+  pure (superUnresolved name params)
 
 -- `where INDENT members DEDENT` body, or a marker interface (optional where)
 ifaceBody : Parser (List IfaceMethod)
@@ -2736,14 +2741,7 @@ implRest pub iface = do
   tyargs <- many parseTyAtom
   reqs <- implRequires
   methods <- implBody
-  pure
-    DImpl {
-      pub = pub,
-      iface = iface,
-      tys = tyargs,
-      reqs = reqs,
-      methods = methods,
-    }
+  pure (dImplUnresolved pub iface tyargs reqs methods)
 
 namedImplRemovedMsg : String
 namedImplRemovedMsg = "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)"
@@ -2767,7 +2765,7 @@ implRequireEntry : Parser Require
 implRequireEntry = do
   iface <- upperNameP
   tys <- many parseTyAtom
-  pure (Require iface tys)
+  pure (requireUnresolved iface tys)
 
 implBody : Parser (List ImplMethod)
 implBody = do

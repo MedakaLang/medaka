@@ -104,7 +104,7 @@ ppEffAtomDoc (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
 -- a constraint `Iface arg…` (mirror pp_c inside TyConstrained / pp_requires).
 ppConstrDoc : Constraint -> String
-ppConstrDoc (Constraint iface args) = match args
+ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) = match args
   [] => iface
   _ => "\{iface} \{joinWith " " (map (ppTyP 2) args)}"
 
@@ -205,7 +205,7 @@ ppRequiresDoc [] = ""
 ppRequiresDoc rs = " requires " ++ joinWith ", " (map ppRequireOne rs)
 
 ppRequireOne : Require -> String
-ppRequireOne (Require iface tys) = match tys
+ppRequireOne (Require { requireHead = iface, requireArgs = tys }) = match tys
   [] => iface
   _ => "\{iface} \{joinWith " " (map (ppTyP 2) tys)}"
 
@@ -424,7 +424,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "ppEffAtomDoc" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "ppEffAtomDoc" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "ppConstrDoc" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "ppConstrDoc" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
+(DFunDef false "ppConstrDoc" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
 (DTypeSig false "ppTyDoc" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
@@ -458,7 +458,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "ppRequiresDoc" ((PList)) (ELit (LString "")))
 (DFunDef false "ppRequiresDoc" ((PVar "rs")) (EBinOp "++" (ELit (LString " requires ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "ppRequireOne")) (EVar "rs")))))
 (DTypeSig false "ppRequireOne" (TyFun (TyCon "Require") (TyCon "String")))
-(DFunDef false "ppRequireOne" ((PCon "Require" (PVar "iface") (PVar "tys"))) (EMatch (EVar "tys") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))))
+(DFunDef false "ppRequireOne" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EMatch (EVar "tys") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))))
 (DTypeSig false "valueSig" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "String")))))
 (DFunDef false "valueSig" ((PVar "name") (PVar "schemes") (PVar "fallbackTy")) (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "name")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EVar "fallbackTy") (arm (PCon "Some" (PVar "ty")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppTyDoc") (EVar "ty")))) (ELit (LString "")))) (arm (PCon "None") () (EVar "name"))))))
 (DTypeSig false "lookupScheme" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "Option") (TyCon "Scheme")))))
@@ -542,7 +542,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "ppEffAtomDoc" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "ppEffAtomDoc" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString "_"))) (EBinOp "++" (EVar "l") (ELit (LString " _"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "s")))) (ELit (LString "")))))
 (DTypeSig false "ppConstrDoc" (TyFun (TyCon "Constraint") (TyCon "String")))
-(DFunDef false "ppConstrDoc" ((PCon "Constraint" (PVar "iface") (PVar "args"))) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
+(DFunDef false "ppConstrDoc" ((PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EMatch (EVar "args") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "args"))))) (ELit (LString ""))))))
 (DTypeSig false "ppTyDoc" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
@@ -576,7 +576,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "ppRequiresDoc" ((PList)) (ELit (LString "")))
 (DFunDef false "ppRequiresDoc" ((PVar "rs")) (EBinOp "++" (ELit (LString " requires ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "ppRequireOne")) (EVar "rs")))))
 (DTypeSig false "ppRequireOne" (TyFun (TyCon "Require") (TyCon "String")))
-(DFunDef false "ppRequireOne" ((PCon "Require" (PVar "iface") (PVar "tys"))) (EMatch (EVar "tys") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))))
+(DFunDef false "ppRequireOne" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EMatch (EVar "tys") (arm (PList) () (EVar "iface")) (arm PWild () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ppTyP") (ELit (LInt 2)))) (EVar "tys"))))) (ELit (LString ""))))))
 (DTypeSig false "valueSig" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyCon "String")))))
 (DFunDef false "valueSig" ((PVar "name") (PVar "schemes") (PVar "fallbackTy")) (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "name")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EVar "fallbackTy") (arm (PCon "Some" (PVar "ty")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppTyDoc") (EVar "ty")))) (ELit (LString "")))) (arm (PCon "None") () (EVar "name"))))))
 (DTypeSig false "lookupScheme" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "Option") (TyCon "Scheme")))))

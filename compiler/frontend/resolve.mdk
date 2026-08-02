@@ -388,8 +388,7 @@ checkEffect cur env e =
     [UnknownEffect e cur]
 
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
-checkConstraint cur env (Constraint iface args) = (if contains iface env.interfaces then [] else [UnknownInterface iface cur])
-  ++ flatMap (checkType cur env) args
+checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) = (if contains iface env.interfaces then [] else [UnknownInterface iface cur]) ++ flatMap (checkType cur env) args
 
 -- ── check_pat ─────────────────────────────────────────────────────────────
 checkPat : Option Loc -> Env -> Pat -> List ResError
@@ -1216,7 +1215,7 @@ checkInterfaceDecl env supers methods = flatMap (checkSuper env) supers
   ++ flatMap (checkIfaceMethod env) methods
 
 checkSuper : Env -> Super -> List ResError
-checkSuper env (Super iface _) =
+checkSuper env (Super { superHead = iface }) =
   if contains iface env.interfaces then
     []
   else
@@ -1235,7 +1234,7 @@ checkImplDecl env iface tyargs reqs methods = flatMap (checkType None env) tyarg
   ++ checkImplIface env iface methods
 
 checkRequire : Env -> Require -> List ResError
-checkRequire env (Require iface tys) = (if contains iface env.interfaces then [] else [UnknownInterface iface None])
+checkRequire env (Require { requireHead = iface, requireArgs = tys }) = (if contains iface env.interfaces then [] else [UnknownInterface iface None])
   ++ flatMap (checkType None env) tys
 
 checkImplMethod : Env -> ImplMethod -> List ResError
