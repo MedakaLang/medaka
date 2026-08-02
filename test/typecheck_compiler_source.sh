@@ -202,14 +202,30 @@ fi
 #
 # ⚠️ This is a PRODUCER ratchet, not the runtime drain #1110 asks for. It cannot
 # see whether a driver forgot to stamp, nor whether one stamped the WRONG id --
-# the defect class review found in the first cut. Both need a way to OBSERVE an
-# origin from a compilation, which today does not exist. See the PR body.
+# the defect class review found in the first cut.
+#
+# Both need a way to OBSERVE an origin from a compilation, and as of #1110's
+# agreement gate that way EXISTS: test/diff_compiler_origin_agreement.sh drives the
+# flat / single-module / graph elaboration entry points over one loader graph and
+# diffs the resulting agreement table, so a driver that stamps the WRONG id shows up
+# as a CONFLICT row. (This note used to end "which today does not exist" -- it did
+# not, then; it does now. The two gates are complements: this one pins WHO MAY MINT
+# the sentinel, that one pins WHAT THE DRIVERS AGREE ON.)
 echo "checking #1110 OriginUnresolved producer set ..."
 tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk"
-originun_allowed="compiler/frontend/ast.mdk
+# ⚠️ THIS LIST IS FILENAMES, so it cannot tell CONSTRUCTION from a PATTERN, and a
+# file that only READS the constructor has to be listed too. That is the case for
+# origin_agreement_main.mdk: its single mention is `originKey OriginUnresolved = "-"`,
+# an arm of a total match over `TyConOrigin` (deliberately enumerated rather than
+# wildcarded, so a fourth inhabitant is made to show up rather than silently reading
+# as "no claim"). The comment above already licenses this -- "the module that
+# CONSUMES it in a pattern may name it" -- the mechanism just cannot see the
+# difference. It mints nothing: it is a probe with no `TyCon` construction anywhere.
+originun_allowed="compiler/entries/origin_agreement_main.mdk
+compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk"
 tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
