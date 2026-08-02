@@ -1,5 +1,5 @@
 # META
-source_lines=3569
+source_lines=3584
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -392,7 +392,8 @@ checkEffect cur env e =
     [UnknownEffect e cur]
 
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
-checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) = (if contains iface env.interfaces then [] else [UnknownInterface iface cur]) ++ flatMap (checkType cur env) args
+checkConstraint cur env (Constraint iface args) = (if contains iface env.interfaces then [] else [UnknownInterface iface cur])
+  ++ flatMap (checkType cur env) args
 
 -- ── check_pat ─────────────────────────────────────────────────────────────
 checkPat : Option Loc -> Env -> Pat -> List ResError
@@ -1219,7 +1220,7 @@ checkInterfaceDecl env supers methods = flatMap (checkSuper env) supers
   ++ flatMap (checkIfaceMethod env) methods
 
 checkSuper : Env -> Super -> List ResError
-checkSuper env (Super { superHead = iface }) =
+checkSuper env (Super iface _) =
   if contains iface env.interfaces then
     []
   else
@@ -1238,7 +1239,7 @@ checkImplDecl env iface tyargs reqs methods = flatMap (checkType None env) tyarg
   ++ checkImplIface env iface methods
 
 checkRequire : Env -> Require -> List ResError
-checkRequire env (Require { requireHead = iface, requireArgs = tys }) = (if contains iface env.interfaces then [] else [UnknownInterface iface None])
+checkRequire env (Require iface tys) = (if contains iface env.interfaces then [] else [UnknownInterface iface None])
   ++ flatMap (checkType None env) tys
 
 checkImplMethod : Env -> ImplMethod -> List ResError
@@ -3353,13 +3354,27 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 -- ⚠️ NOTHING READS THESE FIELDS YET.  Deliberately: the PR is byte-identical, so
 -- the widening is mechanically verifiable, exactly as #1211 and #1219 were.
 --
--- ⚠️ FLAT (loader-less) DRIVERS GET NOTHING HERE, and that is the same asymmetry
--- `stampFlatTyOrigins` argues at length: they have no module id, an invented one is
--- made PERMANENT by the immunity rule, and `medaka run` on a no-import file reaches
--- both the flat and the graph arm in ONE process — so an invented id would directly
--- contradict a real one.  Under-supplying is correctable later; over-supplying is
--- not.  Residual, greppable as `#1110 flat-identity`.
-stampDeclOrigins : String -> List Decl -> List Decl
+-- ⚠️ #1227 NARROWED THIS: it used to read "FLAT (loader-less) DRIVERS GET NOTHING
+-- HERE" outright.  That is no longer true for the ONE flat call site that has a
+-- real module id in hand: `checkProgramSeededSplit` (`types/typecheck.mdk`) already
+-- knows its `coreProg0` argument is the prelude — that is the same fact
+-- `stampFlatTyOrigins coreProg0 coreProg0` relies on for the OCCURRENCE layer — so
+-- it now also calls `stampDeclOrigins "core" coreProgTy` here (the occurrence-
+-- stamped prelude, `coreProg` is the name bound to THIS call's result), stamping
+-- the prelude's OWN `DData`/`DNewtype`/`DTypeAlias`/`DInterface` declarations.
+--
+-- What is still true, and will not stop being true without a loader-derived id:
+-- the flat driver's USER half (`userProg0`) has no module id and gets no call to
+-- this function.  Every other flat driver (any caller that hands
+-- `checkProgramSeededSplit` an empty `coreProg0` because it has already flattened
+-- prelude+user together — `checkProgramSeeded`, or an explicit `[]` prelude-free
+-- caller) still gets nothing, for the reason the rest of this comment gives: they
+-- have no module id, an invented one is made PERMANENT by the immunity rule, and
+-- `medaka run` on a no-import file reaches both the flat and the graph arm in ONE
+-- process — so an invented id would directly contradict a real one.
+-- Under-supplying is correctable later; over-supplying is not.  Residual,
+-- greppable as `#1110 flat-identity`.
+export stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclOrigins mid decls = map (stampDeclOrigin mid) decls
 
 -- ⚠️ Record UPDATE on a `d@` binding, never re-construction: a total literal would
@@ -3654,7 +3669,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
+(DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PCon "Constraint" (PVar "iface") (PVar "args"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
 (DTypeSig false "checkPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EVar "whenL") (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "c"))) (EListLit (EApp (EApp (EApp (EVar "AmbiguousConstructor") (EVar "c")) (EApp (EApp (EVar "ctorAmbigMods") (EVar "env")) (EVar "c"))) (EVar "cur")))) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
@@ -3918,14 +3933,14 @@ takeOriginTrace _ =
 (DTypeSig false "checkInterfaceDecl" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkInterfaceDecl" ((PVar "env") (PVar "supers") (PVar "methods")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkSuper") (EVar "env"))) (EVar "supers")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkIfaceMethod") (EVar "env"))) (EVar "methods"))))
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkSuper" ((PVar "env") (PRec "Super" ((rf "superHead" (PVar "iface"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
+(DFunDef false "checkSuper" ((PVar "env") (PCon "Super" (PVar "iface") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
 (DTypeSig false "checkIfaceMethod" (TyFun (TyCon "Env") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkRequire" ((PVar "env") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
+(DFunDef false "checkRequire" ((PVar "env") (PCon "Require" (PVar "iface") (PVar "tys"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
 (DTypeSig false "checkImplMethod" (TyFun (TyCon "Env") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkImplMethod" ((PVar "env") (PCon "ImplMethod" PWild (PVar "pats") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplIface" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -4658,7 +4673,7 @@ takeOriginTrace _ =
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
-(DTypeSig false "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampDeclOrigins" ((PVar "mid") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "stampDeclOrigin") (EVar "mid"))) (EVar "decls")))
 (DTypeSig false "stampDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DData" ((rf "dataOrigin" (PVar "o"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
@@ -4775,7 +4790,7 @@ takeOriginTrace _ =
 (DTypeSig false "checkEffect" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkEffect" ((PVar "cur") (PVar "env") (PVar "e")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "e")) (EVar "builtInEffects")) (EApp (EApp (EVar "contains") (EVar "e")) (EFieldAccess (EVar "env") "effects"))) (EListLit) (EListLit (EApp (EApp (EVar "UnknownEffect") (EVar "e")) (EVar "cur")))))
 (DTypeSig false "checkConstraint" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "ResError"))))))
-(DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PRec "Constraint" ((rf "constraintHead" (PVar "iface")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
+(DFunDef false "checkConstraint" ((PVar "cur") (PVar "env") (PCon "Constraint" (PVar "iface") (PVar "args"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "cur")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env"))) (EVar "args"))))
 (DTypeSig false "checkPat" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCon" (PVar "c") (PVar "ps"))) (EBinOp "++" (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "ctors")) (EApp (EApp (EVar "omHasKey") (EVar "c")) (EFieldAccess (EVar "env") "imported"))) (EApp (EApp (EVar "whenL") (EApp (EApp (EVar "isCtorAmbiguous") (EVar "env")) (EVar "c"))) (EListLit (EApp (EApp (EApp (EVar "AmbiguousConstructor") (EVar "c")) (EApp (EApp (EVar "ctorAmbigMods") (EVar "env")) (EVar "c"))) (EVar "cur")))) (EListLit (EApp (EApp (EApp (EVar "UnknownConstructor") (EVar "c")) (EVar "cur")) (EApp (EVar "suggestCtor") (EVar "c"))))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env"))) (EVar "ps"))))
 (DFunDef false "checkPat" ((PVar "cur") (PVar "env") (PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "a")) (EApp (EApp (EApp (EVar "checkPat") (EVar "cur")) (EVar "env")) (EVar "b"))))
@@ -5039,14 +5054,14 @@ takeOriginTrace _ =
 (DTypeSig false "checkInterfaceDecl" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkInterfaceDecl" ((PVar "env") (PVar "supers") (PVar "methods")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkSuper") (EVar "env"))) (EVar "supers")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkIfaceMethod") (EVar "env"))) (EVar "methods"))))
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkSuper" ((PVar "env") (PRec "Super" ((rf "superHead" (PVar "iface"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
+(DFunDef false "checkSuper" ((PVar "env") (PCon "Super" (PVar "iface") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
 (DTypeSig false "checkIfaceMethod" (TyFun (TyCon "Env") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkRequire" ((PVar "env") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "tys"))) false)) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
+(DFunDef false "checkRequire" ((PVar "env") (PCon "Require" (PVar "iface") (PVar "tys"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EListLit) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tys"))))
 (DTypeSig false "checkImplMethod" (TyFun (TyCon "Env") (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkImplMethod" ((PVar "env") (PCon "ImplMethod" PWild (PVar "pats") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplIface" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -5779,7 +5794,7 @@ takeOriginTrace _ =
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
-(DTypeSig false "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "stampDeclOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampDeclOrigins" ((PVar "mid") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDeclOrigin") (EVar "mid"))) (EVar "decls")))
 (DTypeSig false "stampDeclOrigin" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "stampDeclOrigin" ((PVar "mid") (PAs "d" (PRec "DData" ((rf "dataOrigin" (PVar "o"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataOrigin" (EApp (EApp (EVar "fillDeclOrigin") (EVar "mid")) (EVar "o"))))))
