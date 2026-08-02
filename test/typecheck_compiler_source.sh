@@ -365,7 +365,15 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # only the pin above catches; a POSITIONAL addition holds the name set steady
 # but moves this count, which only THIS pin catches.
 carrier_count_expected=6
-carrier_count_actual=$(grep -cw 'TyConOrigin' "$ROOT/compiler/frontend/ast.mdk")
+# Comment-filtered, matching the idiom the three sibling ratchets above already
+# use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
+# gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
+# trips on that and bumps 6->7, and the pin now has SLACK: a later PR that adds a
+# genuine positional carrier (+1) while deleting that comment (-1) lands back on 7
+# with BOTH pins silent, reopening the exact hole this pin exists to close. The
+# spurious-trip class IS the masking class -- filter it out at the source.
+carrier_count_actual=$(grep -w 'TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
+  | grep -cvE '^[[:space:]]*--')
 if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   echo "FAIL: the number of \`TyConOrigin\` mentions in compiler/frontend/ast.mdk changed"
   echo "  (expected $carrier_count_expected, got $carrier_count_actual)."
@@ -377,7 +385,8 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   echo "      (its wildcard arm silently drops any carrier it doesn't name);"
   echo "    - add its mint helper to the decl-layer producer ratchet above in THIS file;"
   echo "    - if it is a NAMED field, add it to carrier_expected above too;"
-  echo "    - then update carrier_count_expected here to the new mention count."
+  echo "    - then update carrier_count_expected here to the new mention count,"
+  echo "      and say why in the PR."
   exit 1
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
