@@ -1,27 +1,35 @@
--- #1110 origin-agreement corpus — the RESIDUAL section's POSITIVE CONTROL.
+-- #1110 origin-agreement corpus — the RESIDUAL section's OCCURRENCE-layer POSITIVE CONTROL.
 --
--- The `graph` fixture beside this one produces a residual with ZERO `graph` rows:
--- every head the graph driver saw acquired an identity. That is a good result, but
--- ON ITS OWN IT IS NOT READABLE — an empty arm is exactly what a section that
--- CANNOT emit that arm would also print, and "the check that reported green was
--- structurally unable to report anything else" is the failure this whole gate
--- exists to prevent. A reviewer looking at the other golden cannot tell the two
--- apart.
+-- The `graph` fixture beside this one produces an occurrence residual with ZERO
+-- `graph` rows: every head the graph driver saw acquired an identity. That is a
+-- good result, but ON ITS OWN IT IS NOT READABLE — an empty arm is exactly what a
+-- section that CANNOT emit that arm would also print, and "the check that reported
+-- green was structurally unable to report anything else" is the failure this whole
+-- gate exists to prevent. A reviewer looking at the other golden cannot tell the
+-- two apart.
 --
--- So this fixture makes the graph arm's residual NON-EMPTY on purpose. `Missing` is
--- declared nowhere, in no module and not in the prelude, so it is resolve.mdk's
--- residual case (1): "the name is in no scope at all". `checkType` reports it as
--- `UnknownType`, errors ACCUMULATE rather than exiting, so the tree still reaches
--- the stamper — which correctly leaves the head `OriginUnresolved`, because there
--- is no module to attribute it to. The golden pins `graph main_unresolved Missing`.
+-- So this fixture makes the graph arm's occurrence residual NON-EMPTY on purpose.
+-- `Missing` is declared nowhere, in no module and not in the prelude, so it is
+-- resolve.mdk's residual case (1): "the name is in no scope at all". `checkType`
+-- reports it as `UnknownType`, errors ACCUMULATE rather than exiting, so the tree
+-- still reaches the stamper — which correctly leaves the head `OriginUnresolved`,
+-- because there is no module to attribute it to. The golden pins
+-- `graph main_unresolved Missing`.
 --
 -- ⚠️ THAT ROW IS THE CONTROL, NOT A BUG. Deleting `Missing` to "fix" the gate
--- disarms the control and silently returns the residual section to unfalsifiable.
--- If this row ever disappears, the question is what stopped emitting it.
+-- disarms the control and silently returns the occurrence residual to
+-- unfalsifiable. If this row ever disappears, the question is what stopped
+-- emitting it.
 --
 -- ⚠️ It must ALSO stay a graph-arm row specifically. The flat and single arms are
 -- silent about far more (see the probe's residual section comment), so a residual
--- row from either of them proves nothing about the graph arm's ability to speak.
+-- row from either of them proves nothing about the graph arm's occurrence walk.
+--
+-- ⚠️ This control covers the OCCURRENCE walk ONLY. It says NOTHING about the
+-- `decl:` layer: `fillDeclOrigin` stamps unconditionally whenever it has a module
+-- id, and the loader never mints an empty one, so no source program can produce a
+-- `graph <slot> decl:X` residual row — that zero is structural, provable only by
+-- mutating the compiler, not earned by this or any fixture.
 --
 -- One module, no imports: the control needs a head the GRAPH path cannot attribute,
 -- and adding a module graph around it would only enlarge the golden.

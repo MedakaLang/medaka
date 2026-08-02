@@ -329,7 +329,7 @@ ifaceOrigin
 newtypeOrigin
 tyAliasOrigin
 tyConOrigin"
-carrier_actual=$(grep -oE '^\s*[A-Za-z0-9_]+\s*:\s*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
+carrier_actual=$(grep -oE '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
   | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
 if [ "$carrier_actual" != "$carrier_expected" ]; then
   echo "FAIL: the set of \`: TyConOrigin\`-typed fields in compiler/frontend/ast.mdk changed."
@@ -348,6 +348,39 @@ if [ "$carrier_actual" != "$carrier_expected" ]; then
   exit 1
 fi
 echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s)"
+
+# The name-set pin above matches `<name> : TyConOrigin`, so it only sees a
+# NAMED-record field -- verified by mutation: a new named field fires it, a
+# rename fires it, tab-indent fires it, but a POSITIONAL carrier (e.g.
+# `Variant String ConPayload TyConOrigin`, no field name at all) is SILENT, and
+# so is a field reached through a type alias. That gap is not academic:
+# `Variant` (ConPayload's ctor), `IfaceMethod`, and `Field` are ALL positional
+# today, and #1110's three remaining carrier families (ctor / method / record)
+# land on exactly those -- the name-set pin would stay green while reproducing
+# the very hole it exists to close. This second pin is FORM-INDEPENDENT: every
+# literal mention of `TyConOrigin` in ast.mdk (the data decl itself, plus each
+# named or positional type occurrence) moves this count, named or not. It
+# complements rather than replaces the name-set pin above: a RENAME holds this
+# count steady (same mention, different name) but changes the name set, which
+# only the pin above catches; a POSITIONAL addition holds the name set steady
+# but moves this count, which only THIS pin catches.
+carrier_count_expected=6
+carrier_count_actual=$(grep -cw 'TyConOrigin' "$ROOT/compiler/frontend/ast.mdk")
+if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
+  echo "FAIL: the number of \`TyConOrigin\` mentions in compiler/frontend/ast.mdk changed"
+  echo "  (expected $carrier_count_expected, got $carrier_count_actual)."
+  echo "  The name-set pin just above only sees NAMED-record fields, so it is SILENT on"
+  echo "  a POSITIONAL TyConOrigin carrier (e.g. \`Variant String ConPayload TyConOrigin\`)"
+  echo "  or one reached through a type alias -- both move THIS count instead."
+  echo "  If you added a genuine new carrier:"
+  echo "    - add a match arm to declHeadOf in compiler/entries/origin_agreement_main.mdk"
+  echo "      (its wildcard arm silently drops any carrier it doesn't name);"
+  echo "    - add its mint helper to the decl-layer producer ratchet above in THIS file;"
+  echo "    - if it is a NAMED field, add it to carrier_expected above too;"
+  echo "    - then update carrier_count_expected here to the new mention count."
+  exit 1
+fi
+echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0

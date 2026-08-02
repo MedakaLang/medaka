@@ -465,9 +465,10 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     `decl:` layer: `fillDeclOrigin` stamps `OriginUnresolved -> OriginModule
 --     mid` unconditionally for any non-empty `mid`, and the loader never mints
 --     `""`, so no source program can produce a `graph <slot> decl:X` residual
---     row.  That zero is structural — provable only by mutating the stamper —
---     not earned by any fixture.  Do not read this section as blanket
---     falsifiable across both layers.
+--     row.  That zero is structural — provable only by mutating the compiler
+--     (the stamper, or a post-resolve decl re-synthesis — `d*Unresolved`, the
+--     hazard the decl-layer ratchet pins) — not earned by any fixture.  Do not
+--     read this section as blanket falsifiable across both layers.
 --
 -- ⚠️ A head can appear here AND carry a real origin in the same arm and slot; that
 -- is `ArmMulti`, an arm contradicting itself, and it is strictly worse than a plain

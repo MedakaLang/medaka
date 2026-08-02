@@ -141,8 +141,9 @@
 # stamps `OriginUnresolved -> OriginModule mid` unconditionally whenever `mid /= ""`,
 # and the loader never mints `""`, so no source program can produce a
 # `graph <slot> decl:X` residual row — that zero is structural, provable only by
-# mutating the stamper, not earned by any fixture. Don't read "the residual section
-# is falsifiable" as covering both layers.
+# mutating the compiler (the stamper, or a post-resolve decl re-synthesis —
+# `d*Unresolved`, the hazard the decl-layer ratchet pins), not earned by any
+# fixture. Don't read "the residual section is falsifiable" as covering both layers.
 #
 # ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
 # AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
