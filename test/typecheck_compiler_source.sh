@@ -689,7 +689,26 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # pin above is correctly silent — a signature is not a named record field — and
 # this form-independent count is correctly NOT, which is exactly the division of
 # labour the paragraph above describes.  Bumped for that reason and no other.
-carrier_count_expected=11
+#
+# 11 -> 13 (#1111, Stage A-2 unit A-2.0): `identOriginOf : TyConOrigin -> Option
+# IdentOrigin` and `mkIdent : Ns -> TyConOrigin -> String -> Option Ident`, the
+# substrate's two CONSUMERS of the carrier — the total conversion from a
+# pipeline-stage-marked `TyConOrigin` to the well-formed `IdentOrigin` that keys
+# every re-keyed cross-module table, and the convenience form over it.  Exactly
+# the same class as the 10 -> 11 bump above and bumped for the same reason: both
+# are READERS.  Neither adds a field to any node, mints an origin, or declares a
+# new `TyConOrigin` inhabitant, so no `declHeadOf` arm and no producer-ratchet
+# entry is owed — and the carrier field set is INDEPENDENTLY still `9 graded, 0
+# owed`, which is the pin that would have caught a real carrier sneaking in here.
+#
+# ⚠️ This bump was forced by the MERGE QUEUE, not by either branch: #1264 set this
+# to 11 and #1262 added the two signatures, so both were green alone and the
+# merged tree was red.  That is the pin working.  Any A-2 unit that adds a
+# `TyConOrigin` reader to ast.mdk while another is in flight will land here again;
+# re-derive with
+#   grep -w 'TyConOrigin' compiler/frontend/ast.mdk | grep -cvE '^[[:space:]]*--'
+# rather than trusting this number.
+carrier_count_expected=13
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
