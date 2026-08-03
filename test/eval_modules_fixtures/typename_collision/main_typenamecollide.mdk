@@ -1,0 +1,27 @@
+-- #1110 unit D (`Mono.TCon` carries a module identity).  The GATING SHAPE, not a
+-- demonstration of the feature: two modules with NO import relationship each
+-- declare a type spelled `Shape`, so after unit D the two head Monos carry
+-- DIFFERENT `TyConOrigin`s while every name-equality comparison in the checker
+-- still ignores the field.  The assertion is that this changes nothing.
+--
+-- ⚠️ Read what this pins and what it does not.  A fixture exercising the new
+-- carrier would pass by construction — nothing reads the field yet, so no output
+-- can depend on it.  What is worth pinning is the opposite: that a program whose
+-- heads now disagree about identity behaves exactly as it did when they could not
+-- disagree at all.  `shapeone` never imports `shapetwo`; its two lines of output
+-- are the assertion, and the machinery that changed is in the other module.
+--
+-- It is also the shape the NEXT unit will move.  When a consumer starts reading
+-- these origins, this is the first program whose answers could change, and a
+-- diff here will name it.
+--
+-- Expected output, derived by hand before capture:
+--   mkOne 3   = Corner 3 6   → oneSpan = 6 - 3   = 3
+--   mkTwo "e" = Edge "e"     → twoLabel = "e", and `println` on a String prints
+--                              it unquoted
+import shapeone.{mkOne, oneSpan}
+import shapetwo.{mkTwo, twoLabel}
+
+main =
+  println (oneSpan (mkOne 3))
+  println (twoLabel (mkTwo "e"))

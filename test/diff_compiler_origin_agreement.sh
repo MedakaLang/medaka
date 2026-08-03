@@ -158,8 +158,12 @@
 #
 # ⚠️ So: a diff here is never "just re-bless it". Read the moved rows. A row going
 # AGREE -> CONFLICT is a NEW divergence. A row going AGREE -> NEITHER/*-ABSENT is
-# identity being DESTROYED somewhere downstream of the stamp (the known hazards are
-# `substMonoP` and `substTyVars`, which rebuild a `TCon`/`TyCon` from the name alone).
+# identity being DESTROYED somewhere downstream of the stamp. The two rebuild-from-
+# the-name hazards this line used to name -- `substTyVars` (`Ty`) and `substMonoP`
+# (`Mono`) -- are both closed as of #1110 unit D: `substTyVars` rebuilds by RECORD
+# UPDATE (`TyCon { t | tyConLoc = None }`, types/typecheck.mdk) and substMono/
+# substMonoP return the MATCHED NODE. Look for a NEW one: any site that takes a head
+# apart and puts it back together from its name.
 # A HEAD SPREAD line changing its ORIGIN (`Option 1 mod:core` -> `Option 1
 # mod:__user__`) is a UNIFORM mis-attribution — every arm wrong the same way, so no
 # verdict moves and that line is the only thing that can say it.

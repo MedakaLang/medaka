@@ -27,9 +27,14 @@
 --   flat    checkProgramSchemesWithRuntime   `medaka check` on a no-import file, the
 --                                            LSP, `doc`, `repl`, the playground —
 --                                            one buffer at a time, prelude separate.
---                                            Its result is SCHEMES, and a `Mono.TCon`
---                                            carries no origin, so it is read through
---                                            resolve.mdk's agreement tap.
+--                                            Its result is SCHEMES, i.e. `Mono`,
+--                                            not the stamped decl trees — so it is
+--                                            read through resolve.mdk's agreement
+--                                            tap.  (`Mono.TCon` gained an origin
+--                                            field in #1110's unit D; this probe
+--                                            still reads the DECL trees, because
+--                                            the schemes only cover heads that
+--                                            reach a top-level binding's type.)
 --   single  elaborateModules … [("__user__", …)]
 --                                            `medaka test <file>` / the snapshot
 --                                            driver (compiler/tools/test_cmd.mdk).

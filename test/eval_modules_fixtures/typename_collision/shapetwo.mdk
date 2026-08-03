@@ -1,0 +1,9 @@
+-- Independently declares a type ALSO named `Shape`, with a different arity and a
+-- different payload type.  Same bare name, unrelated declaration.
+data Shape = Edge String
+
+export mkTwo : String -> Shape
+mkTwo s = Edge s
+
+export twoLabel : Shape -> String
+twoLabel (Edge s) = s
