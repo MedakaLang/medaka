@@ -191,12 +191,23 @@
 #   iface-occs-*   > 0   the same guard for the INTERFACE-occurrence layer, which is
 #                        equally unreachable from a `Ty` callback: a `=>` predicate's
 #                        origin lives on a `Constraint`, and `Super`/`Require`/
-#                        `DImpl.iface` are decl FIELDS. A rebuild through
+#                        `DImpl.iface` are decl FIELDS. FOUR counts, one per carrier,
+#                        deliberately: a merged total stays healthily large while the
+#                        smallest population (`superOrigin`) goes entirely dead.
+#
+#                        ⚠️ IT COUNTS POSITIONS VISITED, NOT ORIGINS ACQUIRED. The
+#                        probe's `bumpCarrier` ignores the origin value entirely, so
+#                        this guard catches the carrier becoming UNREACHABLE — the
+#                        field disappearing from the AST, `mapOriginsInDecl` losing
+#                        an arm, `elaborateModules` dropping decls, or the tag
+#                        string diverging between resolve.mdk's call sites and the
+#                        probe's `ifaceCarriers` list. It does NOT catch a stamp
+#                        that ran and produced nothing: a rebuild through
 #                        constraintUnresolved / requireUnresolved / superUnresolved /
-#                        dImplUnresolved instead of a record update would blank the
-#                        layer. FOUR counts, one per carrier, deliberately: a merged
-#                        total stays healthily large while the smallest population
-#                        (`superOrigin`) goes entirely dead.
+#                        dImplUnresolved leaves the position count UNCHANGED and this
+#                        guard GREEN. That failure surfaces in the GOLDEN DIFF, as
+#                        `iface:` rows moving out of the table into RESIDUAL — see
+#                        the moved-row list at the bottom of this header.
 #   fixtures       > 0   the corpus glob matched something
 #
 # ── OWED, not built here (#1222) ────────────────────────────────────────────
@@ -277,6 +288,14 @@ for dir in "$FIXDIR"/*/; do
   # One count PER interface-occurrence carrier, never a merged total: `superOrigin`
   # is the smallest population in every corpus here, so a merged number would stay
   # healthily large with that carrier entirely dead.
+  #
+  # ⚠️ TWO PASSES, and they catch OPPOSITE mistakes. The hardcoded list catches a
+  # carrier that STOPPED being reported (its line is gone, so the lookup is empty).
+  # It is blind to the reverse: a FIFTH carrier wired into the probe's
+  # `ifaceCarriers` prints an `iface-occs-<new>` line that this loop never names, so
+  # it would land in the golden graded by nothing — the exact "populated and read by
+  # no one" state the #1110 ratchets exist to refuse. The derived pass below reads
+  # whatever the probe actually emitted and guards every line, named or not.
   ifaceoccs=""
   iface_bad=""
   for c in constraintOrigin superOrigin requireOrigin implOrigin; do
@@ -284,6 +303,17 @@ for dir in "$FIXDIR"/*/; do
     is_count "$n" || iface_bad="$iface_bad $c=${n:-<missing>}"
     ifaceoccs="$ifaceoccs $c=${n:-?}"
   done
+  # Derived: every `iface-occs-*` line the probe emitted must be a positive count,
+  # including one this script has never heard of.
+  emitted_carriers="$(printf '%s\n' "$summary" | awk '/^iface-occs-/ { print $1 "=" $2 }')"
+  for kv in $emitted_carriers; do
+    ck="${kv%%=*}"
+    cv="${kv#*=}"
+    is_count "$cv" || iface_bad="$iface_bad ${ck#iface-occs-}=${cv:-<missing>}"
+  done
+  if [ -z "$emitted_carriers" ]; then
+    iface_bad="$iface_bad <no iface-occs-* line emitted at all>"
+  fi
   nconf="$(printf '%s\n' "$summary" | awk '$1 == "conflicts" { print $2 }')"
   nresid="$(printf '%s\n' "$summary" | awk '$1 == "residual" { print $2 }')"
 
@@ -316,13 +346,18 @@ for dir in "$FIXDIR"/*/; do
   fi
   if [ -n "$iface_bad" ]; then
     echo "FAIL $name: interface-occurrence carrier(s) with no observations:$iface_bad"
-    echo "     The graph arm saw NOTHING for that carrier, so every 'iface:' row it"
-    echo "     contributes to the golden is asserting nothing. Check that"
-    echo "     Constraint/Super/Require/DImpl still carry their ...Origin fields"
-    echo "     through elaborateModules, that resolve's mapOriginsInDecl still has"
-    echo "     an arm for that position, and that no node is REBUILT via"
-    echo "     constraintUnresolved / requireUnresolved / superUnresolved /"
-    echo "     dImplUnresolved (which reset the field) instead of a record update."
+    echo "     The graph arm never VISITED that carrier's positions, so every"
+    echo "     'iface:' row it contributes to the golden is asserting nothing."
+    echo "     This counts positions visited, NOT origins acquired, so the causes are:"
+    echo "       - the field is gone from Constraint/Super/Require/DImpl in ast.mdk;"
+    echo "       - resolve's mapOriginsInDecl / mapIfaceOccDeclLocal lost an arm;"
+    echo "       - elaborateModules stopped returning those decls;"
+    echo "       - the carrier tag string diverged between resolve.mdk's call sites"
+    echo "         and the probe's ifaceCarriers list (a typo on either side)."
+    echo "     NOT a cause: a rebuild through constraintUnresolved / requireUnresolved"
+    echo "     / superUnresolved / dImplUnresolved. That still VISITS every position,"
+    echo "     so it leaves these counts unchanged; it shows up in the golden diff as"
+    echo "     'iface:' rows moving from the table into RESIDUAL instead."
     fail=$((fail + 1))
     continue
   fi
@@ -366,6 +401,13 @@ for dir in "$FIXDIR"/*/; do
     echo "                           because the immunity rule makes a first stamp final."
     echo "    every 'decl:' row gone  the decl-layer carriers stopped reaching the"
     echo "                           returned trees. See the decl-heads guard above."
+    echo "    'iface:' rows -> RESIDUAL en masse   an interface occurrence is being"
+    echo "                           REBUILT rather than record-UPDATEd — the"
+    echo "                           constraintUnresolved / requireUnresolved /"
+    echo "                           superUnresolved / dImplUnresolved shape. The"
+    echo "                           iface-occs-* guards CANNOT see this (they count"
+    echo "                           positions visited, not origins acquired), so this"
+    echo "                           diff is the only place it shows."
     fail=$((fail + 1))
   fi
 done

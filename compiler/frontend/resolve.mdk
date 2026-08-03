@@ -3242,12 +3242,29 @@ builtinTyOrigin n = (n, OriginBuiltin)
 -- CONCATENATED with the ones it re-exports — so by the time any consumer reads it
 -- the definer is already gone, and no amount of care at the read site recovers it.
 -- Here a re-export carries the ORIGINAL definer through, so a chain of
--- `export import` never re-attributes a type to its last re-exporter.
+-- `export import` does not re-attribute a type to its last re-exporter.
+--
+-- 🚨 THAT HOLDS ONLY WHERE THE RE-EXPORTER DOES NOT ALSO DECLARE THE NAME ITSELF,
+-- and this comment claimed it unqualified until #1245 was filed.  When a module
+-- BOTH declares `Foo` AND `export import`s another module's `Foo`, this list has an
+-- entry for each and `omFromPairs` (in the consumer's `tyOriginScope`) is
+-- LAST-WRITE-WINS, so the re-exported one wins — while what the consumer's
+-- `import m.{Foo}` actually BINDS is `m`'s OWN declaration.  Verified first-hand on
+-- both namespaces: a consumer of such an `m` can use `m`'s own interface method and
+-- is rejected using the re-exported interface's, yet the occurrence is stamped with
+-- the re-exported source's id; the `data` version behaves identically.  PRE-EXISTING
+-- and namespace-symmetric — filed as #1245, deliberately not fixed alongside the
+-- interface stamping, because the ordering fix moves goldens on the type side too
+-- and a red in a combined change would not name its culprit.  The wrong answer is
+-- PINNED in `test/origin_fixtures/ifaces/` (`deep.mdk` / `mid.mdk`) so it is visible
+-- rather than merely described.
 --
 -- ⚠️ #1110 PR C: also carries this module's public INTERFACES, tagged `iface:` (see
 -- `ifaceKey`).  The `pubUsePaths` half needs no change — a re-exported interface
--- arrives already tagged, so a chain of `export import` attributes it to its
--- DEFINER exactly as it does for a type.
+-- arrives already tagged, so it behaves exactly as a type does, INCLUDING the #1245
+-- exception above: definer-attribution through a re-export chain, and last-wins
+-- mis-attribution when the re-exporter declares the name too.  The two namespaces
+-- share this function, so they cannot diverge on it.
 typeOriginExports : OrdMap (List (String, String)) -> String -> List Decl -> List (String, String)
 typeOriginExports known mid prog = map (typeDeclaredIn mid) (expTypesDirect prog)
   ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
@@ -3496,11 +3513,18 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 -- 🚨 IT TAKES BOTH CALLBACKS RATHER THAN BEING A SECOND PASS, and that is a design
 -- decision with two reasons, neither cosmetic:
 --
---   * COST.  `mapTyInDecl` is a total rebuild of every `Ty` position in a decl,
---     including the ones inside expression bodies.  Running it twice per decl per
---     module is a measurable constant-factor addition to a stage `compiler/
---     AGENTS.md` calls GC-bound, and `diff_compiler_perf_scaling` grades a RATIO,
---     so nothing in CI would report it.
+--   * ALLOCATION.  The argument is structural, not empirical.  `mapTyInDecl`
+--     REBUILDS every `Ty` position in a decl, expression bodies included, so a
+--     second pass allocates a whole second rewritten decl tree — O(nodes) of fresh
+--     garbage per decl per module, in a stage `compiler/AGENTS.md` calls GC-bound.
+--     Fusing costs one extra indirect call and one extra pattern test per `Ty` node
+--     and rebuilds NOTHING extra.  `diff_compiler_perf_scaling` grades a growth
+--     RATIO, so a constant-factor regression of this shape is invisible to CI.
+--     ⚠️ Wall-clock timing taken while writing this (a two-pass cut measured ~0.94 s
+--     slower on `medaka check compiler/driver/medaka_cli.mdk`) is CONSISTENT WITH
+--     that and does not ESTABLISH it: the spread across three unchanged runs of the
+--     fused build was 0.92 s, i.e. the same size as the effect.  If a number is ever
+--     needed here, measure ALLOCATION (deterministic) rather than time.
 --   * DRIFT.  Two passes means two dispatches over the same node set, and the
 --     agreement probe would drive one of them while the stamper drove the other —
 --     so the probe could silently observe a SMALLER set of positions than the
@@ -3622,7 +3646,7 @@ fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 --
 -- `:` cannot occur in a Medaka identifier, so a tagged key can never collide with a
 -- bare one, and a bare-name lookup can never accidentally hit an interface row.
-ifaceKey : String -> String
+export ifaceKey : String -> String
 ifaceKey n = "iface:\{n}"
 
 -- The interface peers of `typeDeclaredIn` / `ownTyOrigin`, tagging as they pair.

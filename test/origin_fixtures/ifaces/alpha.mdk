@@ -44,13 +44,24 @@ export impl Loud Cat where
 -- ── PER-CARRIER DISCRIMINATORS ───────────────────────────────────────────────
 -- Everything above names `Speak` through several carriers at once, so a golden row
 -- for it would survive three of the four arms being deleted.  Each interface below
--- is named through EXACTLY ONE occurrence carrier and nothing else, so its
--- `iface:` row in agreement.golden vanishes if and only if that arm stops working:
+-- is named through EXACTLY ONE occurrence carrier and nothing else:
 --
 --   `Constraint`   -> `Quiet`   named only by the `=>` on `sotto`
 --   `Super`        -> `Tagged`  named only by `interface Sub a requires Tagged a`
 --   `Require`      -> `Boxed`   named only by `impl … requires Boxed a`
 --   `DImpl.iface`  -> `Plain`   named only as the HEAD of an `impl`
+--
+-- ⚠️ THE MAP IS ONE-WAY: name -> carrier, not carrier -> a row only it can move.
+-- `Quiet` and `Tagged` really are independently falsifiable — deleting the
+-- `TyConstrained` arm of `mapOriginsInTy` removes exactly `iface:Quiet` (and
+-- `iface:Echo`), measured.  `Boxed` and `Plain` are NOT independent AT ARM
+-- GRANULARITY, because `mapIfaceOccDeclLocal`'s single `DImpl` arm stamps
+-- `implOrigin` AND maps `reqs`: deleting that arm removes `iface:Plain` and
+-- `iface:Boxed` together, and narrowing the deletion to just the `implOrigin` field
+-- expression still takes `iface:Loud` and the prelude interfaces named only through
+-- impls along with `iface:Plain`.  What the table above states, and all it states,
+-- is that each NAME is reachable through exactly one carrier — which is checkable
+-- straight from this file.
 --
 -- The control for the other direction is already in the corpus and costs nothing:
 -- `FromEntries` is declared in `stdlib/core.mdk` and OCCURS nowhere in it, so it

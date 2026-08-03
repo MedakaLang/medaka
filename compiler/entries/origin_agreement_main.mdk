@@ -95,7 +95,12 @@
 -- comment further down).  Only the pinning is the assertion.
 
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
-import frontend.resolve.{setOriginTrace, takeOriginTrace, mapOriginsInDecl}
+import frontend.resolve.{
+  setOriginTrace,
+  takeOriginTrace,
+  mapOriginsInDecl,
+  ifaceKey,
+}
 import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
 import entries.entry_support.{driveModules}
 import support.util.{listLen}
@@ -158,6 +163,16 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>\n"
   let _ = putStr (spreadSection uniq)
   let _ = putStr "=== SUMMARY ===\n"
+  -- What each number counts, so a reviewer checking the arithmetic on a golden diff
+  -- does not have to reconstruct the claim model from this file:
+  --   heads       TABLE ROWS — distinct (slot, head) pairs, all arms merged.
+  --   claims      distinct (arm, slot, head, originKey) tuples AFTER dedup, so ONE
+  --               head claimed identically by all three arms contributes 3, and a
+  --               head an arm never saw contributes 0 for that arm.
+  --   residual    distinct (arm, slot, head) with NO origin — a subset of `claims`.
+  --   conflicts   TABLE ROWS carrying a CONFLICT in any of the three arm pairs.
+  --   decl-heads / iface-occs-*   raw carrier SITES the graph arm visited (not
+  --               deduped, not row counts) — the anti-vacuity signals.
   let _ = putStr "modules \{listLen modules}\n"
   let _ = putStr "graph-modules \{graphMods}\n"
   let _ = putStr "flat-segments \{segments}\n"
@@ -355,7 +370,7 @@ noteHead _ t = (t, False)
 -- each other.  The tag is what `carrierCounts` below asserts on.
 noteIfaceOcc : Ref (List (String, TyConOrigin)) -> String -> String -> TyConOrigin -> TyConOrigin
 noteIfaceOcc acc _ n o =
-  let _ = setRef acc (("iface:\{n}", o)::acc.value)
+  let _ = setRef acc ((ifaceKey n, o)::acc.value)
   o
 
 -- ── the PER-CARRIER anti-vacuity counts (#1110 PR C) ─────────────────────────

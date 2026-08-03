@@ -12,12 +12,20 @@
 -- `AmbiguousInterface` diagnostic (unit E/F of Stage A-1) has to REPLACE; the
 -- honest end state here is a diagnostic, and when it lands this line moves.
 --
--- ⚠️ This file compiles and runs at exit 0 today, printing `alpha-cat`, with no
--- diagnostic of any kind. That is not a property to preserve — it is #1047 on the
--- page.  PR C changes none of it; it only makes the identities observable.
+-- ⚠️ This file compiles and runs at exit 0 today with no diagnostic of any kind,
+-- printing
+--
+--     alpha-cat alpha-cat/alpha-cat beta-dog kennel(beta-dog)
+--
+-- That is not a property to preserve — it is #1047 on the page.  Note the last two
+-- fields especially: `speak Dog` and `speak (Kennel Dog)` call ALPHA's `speak`
+-- (beta's is not imported) against impls written for BETA's `Speak`, and the bare
+-- name merges them silently.  PR C changes none of it; it only makes the identities
+-- observable.
 
 import alpha.{Speak, Echo, Cat(..), speak, twice, echo}
 import beta.{Speak, Echo, Dog(..), Kennel(..)}
+import mid.{Relay, hop}
 
 data Pair a = Pair a a
 
@@ -37,5 +45,13 @@ impl Speak (Pair a) requires Speak a where
 -- declaration this import pair resolved to.
 resound : Echo a => a -> String
 resound x = echo x
+
+-- THE PINNED RESIDUAL for #1245 (see mid.mdk for the full derivation).  `Relay` is
+-- declared by `deep` and re-exported by `mid`, which declares one of its OWN.  This
+-- impl binds MID's interface — it compiles, and it would not if `via` (deep's
+-- method) were substituted — yet the golden attributes the occurrence to
+-- `mod:deep`.  The row is WRONG ON PURPOSE and moves when #1245 lands.
+impl Relay Int where
+  hop n = n
 
 main = println "\{sayIt (Pair Cat Cat)} \{twice Cat} \{speak Dog} \{speak (Kennel Dog)}"

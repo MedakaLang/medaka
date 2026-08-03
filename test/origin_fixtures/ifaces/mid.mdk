@@ -1,0 +1,35 @@
+-- #1110 PR C corpus — DECLARE AND RE-EXPORT THE SAME NAME.  This module pins a
+-- PRE-EXISTING mis-attribution, filed as #1245.
+--
+-- `mid` re-exports `deep`'s `Relay` AND declares a `Relay` of its own.  What a
+-- consumer writing `import mid.{Relay, hop}` actually binds is **mid's own**
+-- interface — verified by method identity on the binary this fixture was written
+-- against, not inferred:
+--
+--     import mid.{Relay, hop} ; impl Relay Int where hop n = n   -> exit 0
+--     import mid.{Relay, via} ; impl Relay Int where via n = n
+--       -> "Method 'via' is not part of interface 'Relay'", exit 1
+--
+-- But `known["mid"]` is built by `ifaceOriginExports` as
+-- `[("iface:Relay","mid"), … re-exports …]` and the re-export half contributes
+-- `("iface:Relay","deep")`; `omFromPairs` is last-write-wins, so `bindTypeOrigin`
+-- hands a consumer `iface:Relay -> OriginModule "deep"`.
+--
+-- 🚨 SO THE GOLDEN'S `iface:Relay 1 mod:deep` IS THE WRONG ANSWER, PINNED ON
+-- PURPOSE.  It records current behaviour so the defect is VISIBLE rather than
+-- merely described in a comment, exactly as the CONFLICT rows pin #1223.  It is
+-- expected to move to `mod:mid` when #1245 lands; whoever fixes that re-blesses
+-- this fixture and says so.
+--
+-- ⚠️ THE DEFECT IS PRE-EXISTING AND NOT SPECIFIC TO INTERFACES.  The type
+-- namespace has always had it, for the same reason and in the same fold — also
+-- verified first-hand: two modules declaring `data Bar`, the second re-exporting
+-- the first's, a consumer binding the SECOND's constructor while the occurrence is
+-- attributed to the first.  #1245 covers both; fixing only the interface half here
+-- would have moved goldens beyond this layer and a red would not have named its
+-- culprit.
+
+export import deep.{Relay}
+
+export interface Relay a where
+  hop : a -> Int
