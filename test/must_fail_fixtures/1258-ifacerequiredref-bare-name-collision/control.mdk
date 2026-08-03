@@ -1,0 +1,11 @@
+-- CONTROL for #1258: identical to entry.mdk minus the shadowing `zmodr` module and its
+-- import -- the ONE flipped feature. With no other `Same` in scope, `impl Same ET`
+-- must typecheck against `amodr.Same` alone and print `1`.
+import amodr.{Same, foo}
+
+data ET = MkET
+
+impl Same ET where
+  foo e = 1
+
+main = println (foo MkET)

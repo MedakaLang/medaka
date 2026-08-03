@@ -1,0 +1,4 @@
+-- issue #1258: sibling module for the SHADOWED (correct) `Same` -- its only method is
+-- `foo`.
+export interface Same a where
+  foo : a -> Int
