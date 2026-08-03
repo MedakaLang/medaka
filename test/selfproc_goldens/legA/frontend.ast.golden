@@ -7,6 +7,7 @@ dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
 deriveRefName : DeriveRef -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
+identOriginOf : TyConOrigin -> Option IdentOrigin
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
 mapDoStmtB : (Ty -> (Ty, Bool)) -> DoStmt -> (DoStmt, Bool)
@@ -32,6 +33,7 @@ mapTyKids : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
 mapTyListB : (Ty -> (Ty, Bool)) -> List Ty -> (List Ty, Bool)
 mapVariantB : (Ty -> (Ty, Bool)) -> Variant -> (Variant, Bool)
 mapVariantsB : (Ty -> (Ty, Bool)) -> List Variant -> (List Variant, Bool)
+mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 qualifiedLocal : String -> String -> String
 requireUnresolved : String -> List Ty -> Require
