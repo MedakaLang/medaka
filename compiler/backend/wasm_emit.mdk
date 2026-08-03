@@ -4478,9 +4478,20 @@ findByTagW method tag (_::rest) = findByTagW method tag rest
 -- [tag] is the concrete dispatch tag the default is being emitted FOR.  With ≤1
 -- candidate default named [method] — every collision-free program — this is
 -- first-match, byte-for-byte; it narrows by interface IDENTITY only when two
--- same-named interfaces both declare a default for the same method name and the
--- declared-impl table names exactly one of them at [tag].  See llvm_emit's
--- `defaultFor` comment for the full argument.
+-- interfaces both declare a default for the same METHOD name and the declared-impl
+-- table names exactly one of them at [tag].  See llvm_emit's `defaultFor` comment
+-- for the full argument.
+--
+-- ⚠️ THE TRIGGER IS A **METHOD**-NAME COLLISION, NOT AN INTERFACE-NAME ONE.  This
+-- comment said "two same-named interfaces" until 2026-08-03; the interface names are
+-- irrelevant and may differ freely — only the method name has to coincide.
+--
+-- ⚠️ RESIDUAL, STILL OPEN: #1265.  `ifaceIdsAtTag` returns the identity of EVERY
+-- interface implemented at [tag], so when ONE type implements TWO interfaces that
+-- share a method name, `narrowDefaultsW` has two survivors and falls back to
+-- first-match.  Not fixable in this filter: `defaultFnNameW` is
+-- `mdk_default_<method>_<tag>`, one symbol for two bodies.  Pinned at
+-- test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 defaultForW : Prog -> String -> String -> Option CImplEntry
 defaultForW prog method tag =
   pickDefaultAtW

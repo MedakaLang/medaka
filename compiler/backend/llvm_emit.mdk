@@ -1276,7 +1276,12 @@ findByTag tag (_::rest) = findByTag tag rest
 -- The registry is filtered by the interface METHOD name alone, and a method name
 -- is not unique across interfaces: two UNRELATED modules may each declare
 -- `interface Speak x where speak : x -> String` with a DIFFERENT default body.
--- Both lower to a `CImplDefault "speak"` entry, so first-match handed a method-less
+-- Both lower to a `CImplEntry "speak" _ (CImplDefault <ifaceId> …)`, i.e. two entries
+-- under one METHOD name — `CImplDefault`'s own leading String is the interface
+-- IDENTITY, never the method name (core_ir.mdk:222-230); the method name lives on the
+-- enclosing `CImplEntry`.  (Pre-#1264 `CImplDefault` had no String field at all, so a
+-- `CImplDefault "speak"` exists in neither the old tree nor the new one.)
+-- So first-match handed a method-less
 -- `impl Speak DogB` the OTHER module's body — `@mdk_default_speak_DogB` was
 -- correctly routed and correctly named, and simply contained the wrong string.
 -- Exit 0, no diagnostic, all three engines equally wrong.
@@ -1287,12 +1292,31 @@ findByTag tag (_::rest) = findByTag tag rest
 -- sees a METHOD-LESS impl, the shape that has no `CImplTagged` at all).
 --
 -- ⚠️ CONSERVATIVE BY CONSTRUCTION.  With ≤1 candidate — every program in this tree
--- and every program without an interface-name collision — it returns exactly what
--- first-match returned, so the emitted IR is byte-identical and the fixpoint is
--- unaffected.  It narrows only when the narrowing is UNAMBIGUOUS (exactly one
+-- (derived 2026-08-03: 15 defaulted interface methods across stdlib/, compiler/ and
+-- sqlite/lib/, all 15 names distinct) and every program without a METHOD-name
+-- collision — it returns exactly what first-match returned, so the emitted IR is
+-- byte-identical and the fixpoint is unaffected.
+-- It narrows only when the narrowing is UNAMBIGUOUS (exactly one
 -- survivor); an empty or ambiguous intersection falls back to first-match rather
 -- than inventing an answer, because `ifaceIdentity` is `""` (absence) on every
 -- loader-less driver and absence must never decide a dispatch.
+--
+-- ⚠️ THE TRIGGER IS A **METHOD**-NAME COLLISION, NOT AN INTERFACE-NAME ONE.  This
+-- envelope said "interface-name collision" until 2026-08-03, silently narrowing the
+-- section header above — and the narrowed version is what the fix was validated
+-- against.  Two interfaces with DIFFERENT names sharing only a method name are not
+-- caught by the `Conflicting impl <Iface>` guard, which never sees method names at
+-- all.
+--
+-- ⚠️ RESIDUAL, STILL OPEN: #1265.  `ifaceIdsAtTag` returns the identity of EVERY
+-- interface implemented at [tag], so when ONE type implements TWO interfaces that
+-- share a method name, BOTH candidates pass `defaultOwnedBy`, `narrowDefaults` has
+-- two survivors, and the `_ => Some fallback` arm restores first-match.  #1264's own
+-- fixture is green because its two types are DISTINCT tags.  Narrowing harder cannot
+-- fix it: `defaultFnName` is `mdk_default_<method>_<tag>`, so two interfaces' default
+-- bodies have exactly ONE symbol to live under and one is simply not emitted.  The
+-- fix is to put the interface identity in the KEY, not only in this filter.  Pinned
+-- at test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 defaultFor : Emit -> String -> Option CImplEntry
 defaultFor e method = defaultForAt e method ""
 

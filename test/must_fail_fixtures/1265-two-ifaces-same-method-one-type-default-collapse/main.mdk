@@ -1,0 +1,22 @@
+-- #1265: two DIFFERENT interfaces (`ifa.Speak`, `ifb.Greet`) declare a method of the
+-- SAME bare name `speak` with different defaults, and ONE type (`Dog`) implements both
+-- with METHOD-LESS impls.  The Core IR untagged-default registry is keyed
+-- (method, tag) -- `mdk_default_speak_Dog` -- which has no room for the interface, so
+-- both defaults collapse onto one symbol and first-match wins.
+--
+-- CORRECT ANSWER IS NOT IN DISPUTE, and was derived from the spec BEFORE the engines
+-- were run: DICT-SEMANTICS §5 / §5.1 M1 -- an interface default fills the slot the
+-- SELECTED INSTANCE omits.  `sayA`'s selected instance is `ifa::Speak Dog` (default
+-- "A-default"); `sayB`'s is `ifb::Greet Dog` (default "B-default").  §8 I4 makes a
+-- class `(module, name)`, so neither can observe the other's default.
+--   CORRECT: A-default|B-default
+--   ACTUAL:  A-default|A-default   (eval AND native AND wasm, exit 0, no diagnostic)
+--
+-- ⚠️ NO ENGINE PRODUCES THE CORRECT ANSWER IN ANY IMPORT ORDER -- see order-probe.mdk,
+-- which is this file with the first two imports swapped and prints B-default|B-default.
+import ca.{sayA}
+import cb.{sayB}
+import dog.{Dog(..)}
+
+main : <IO> Unit
+main = putStrLn (sayA Dog ++ "|" ++ sayB Dog)

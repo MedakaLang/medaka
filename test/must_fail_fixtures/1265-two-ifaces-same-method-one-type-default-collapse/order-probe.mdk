@@ -1,0 +1,19 @@
+-- #1265 ORDER PROBE — NOT run by this gate.  It ships to settle a question neither
+-- graded file can: is the wrong answer merely wrong, or is it ORDER-DEPENDENT?
+--
+-- This file is main.mdk with its first two imports SWAPPED and nothing else changed —
+-- a change that cannot alter program meaning.  main.mdk prints A-default|A-default;
+-- this prints B-default|B-default.  So the correct answer, A-default|B-default, is
+-- produced by NEITHER permutation: the loader's module order picks the winner.
+--
+--   ./medaka run test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/order-probe.mdk
+--     -> B-default|B-default, exit 0
+--
+-- Measured 2026-08-03 on a cold `make medaka` of 2a8c4905 (the merge of PR #1264),
+-- on eval, native (`medaka build` + exec) and wasm (`--target wasm` + node) alike.
+import cb.{sayB}
+import ca.{sayA}
+import dog.{Dog(..)}
+
+main : <IO> Unit
+main = putStrLn (sayA Dog ++ "|" ++ sayB Dog)

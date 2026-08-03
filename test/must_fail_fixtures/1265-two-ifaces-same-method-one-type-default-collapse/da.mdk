@@ -1,0 +1,10 @@
+-- #1265 CONTROL support: A's implementor, on its OWN type `KDog`.  Identical to
+-- ca.mdk except the implementing type is not shared with db.mdk.
+import ifa.{Speak(..), speak}
+
+public export data KDog = KDog
+
+impl Speak KDog where
+
+export sayKA : KDog -> String
+sayKA d = speak d
