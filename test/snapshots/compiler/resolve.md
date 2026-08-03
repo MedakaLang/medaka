@@ -1,5 +1,5 @@
 # META
-source_lines=3893
+source_lines=3910
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3341,7 +3341,24 @@ useMemberBinding : UseMember -> (String, String)
 useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
 
 -- Keep the bindings whose ORIGIN name is a type the source module exports, and
--- attribute each to the module that DECLARED it — never to the re-exporter.
+-- attribute each to the module that source module's own export list names as the
+-- definer.
+--
+-- ⚠️ NOT "never to the re-exporter".  That is what this line said until #1245, and
+-- it is FALSE for one shape — on the function that performs the lookup, which is
+-- the worst place for it to be wrong.  `definers` is a LAST-WINS fold
+-- (`omFromPairs`) over `src`, i.e. over the source module's `typeOriginExports`
+-- list, which is ordered re-exports-FIRST and own-declarations-LAST per THE ONE
+-- PRECEDENCE RULE (stated above `tyOriginScope`).  So:
+--   * a source module that merely PASSES A NAME ALONG yields the original
+--     definer, through any length of `export import` chain — the property this
+--     line was written for, and it still holds;
+--   * a source module that ALSO DECLARES the name yields ITSELF.  That is not a
+--     leak, it is correct: its own declaration is what a consumer's
+--     `import m.{Foo}` actually binds.
+-- Measured, not argued: `test/origin_fixtures/ifaces/` chains `deep` -> `mid` ->
+-- `main_ifaces` with `mid` doing both, and the golden reads `Baton 1 mod:mid` /
+-- `iface:Relay 1 mod:mid`.
 keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
 keepTypeOrigins src bindings =
   let definers = omFromPairs src omEmpty
