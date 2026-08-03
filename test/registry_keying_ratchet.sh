@@ -174,9 +174,9 @@ universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map
 universeFieldOwners -- accumulated field-name -> owning-record(s) map
-universeDataParamKinds -- accumulated data-type param-kind list; IDENTITY-KEYED since A-2.3 (TabKey, module-path only -- flat/single-file rows stay TkBare until #1115)
+universeDataParamKinds -- accumulated data-type param-kind list; IDENTITY-KEYED since A-2.3 (TabKey; flat/single-file table holds BOTH populations -- prelude rows key TkIdent via stampDeclOrigins "core", flat USER rows have no identity and stay TkBare until #1115)
 universeIfaceParamKinds -- accumulated interface param-kind list (#822, iface half of the kind universe)
-universeAliasTable -- accumulated type-alias table; IDENTITY-KEYED since A-2.3 (TabKey, module-path only -- flat/single-file rows stay TkBare until #1115)
+universeAliasTable -- accumulated type-alias table; IDENTITY-KEYED since A-2.3 (TabKey; flat/single-file table holds BOTH populations -- prelude rows key TkIdent via stampDeclOrigins "core", flat USER rows have no identity and stay TkBare until #1115)
 universeDataEnv -- accumulated ctor environment (bare-name, last-write-wins -- the thing #674 works around)
 universeDataDecls -- accumulated PUBLIC data decls (#674: recovers per-module ctor identity universeDataEnv loses)
 obUnivConcreteRef -- accumulated concrete-instance obligation-impl universe bucket

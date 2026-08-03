@@ -589,16 +589,29 @@ sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
 -- `universeDataParamKinds`, `types/typecheck.mdk`) is the first of them.
 -- Two independent reasons, both measured or cited rather than asserted:
 --
---   * ALLOCATION. `Registry` keys on `regKeyRender`, so every LOOKUP builds a
---     fresh `String` (four netstrings, concatenated). Those two tables are
---     read from `fromAstTypeApp`/`fromAstTypeE` — once per type-application
---     node of every signature the elaborator meets — inside `medaka check`,
---     which `compiler/AGENTS.md` measures as GC-BOUND (libgc 62% of a real
---     `check`, no `mdk_` symbol above 0.8%). That file's "the exception that
---     IS one" section is this exact shape: migrating a `List` scan whose KEY
---     PROJECTION ALLOCATES measured 9.33×–14.96× MORE allocation at every n
---     tested, with no crossover, and BOTH perf CI arms structurally blind to
---     it. `TabKey` comparison allocates nothing.
+--   * ALLOCATION. `Registry` keys on `regKeyRender`, so every LOOKUP would
+--     build a fresh `String` (four netstrings, concatenated), UNCONDITIONALLY
+--     and on every call — REJECTED for that reason. Those two tables are read
+--     from `fromAstTypeApp`/`fromAstTypeE`/`headRemainingKinds` — once or more
+--     per type-application node of every signature the elaborator meets —
+--     inside `medaka check`, which `compiler/AGENTS.md` measures as GC-BOUND
+--     (libgc 62% of a real `check`, no `mdk_` symbol above 0.8%). That file's
+--     "the exception that IS one" section is this exact shape: migrating a
+--     `List` scan whose KEY PROJECTION ALLOCATES measured 9.33×–14.96× MORE
+--     allocation at every n tested, with no crossover, and BOTH perf CI arms
+--     structurally blind to it.
+--     ⚠️ **`TabKey` COMPARISON allocates nothing — true, and beside the
+--     point: comparison was never where allocation moved, the MINT is.**
+--     `tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way (an
+--     `Option (IdentModule mid)`, the `map` closure over it, the `Ident`
+--     record, the `Some`/`None`, then the `TkIdent`/`TkBare` wrapper) every
+--     time a caller mints a key — and the two hottest readers
+--     (`fromAstTypeApp`, `headRemainingKinds`, `types/typecheck.mdk`) each
+--     minted it TWICE per node, once per table lookup, until hoisted to a
+--     single shared binding (#1111 A-2.3 follow-up). The design chosen here
+--     is cheaper than `Registry`'s render-per-LOOKUP cost (paid every call,
+--     uncached), not free — price the alternative that was rejected AND the
+--     one that was picked, not only the former.
 --   * ENUMERATION ORDER. See the "NO ordered/insertion-order enumeration"
 --     bullet below: `rejectCyclicAliases` + `emitCyclicAliasErrors`
 --     (`types/typecheck.mdk`) depend on the alias table's enumeration order,
