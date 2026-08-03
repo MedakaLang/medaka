@@ -968,8 +968,14 @@ orders merges, and the plan does not pretend otherwise.
   selfproc-legA "additive-only" recapture rule is explicitly waived per-PR
   with justification where existing bindings' rendered schemes change.
   **Folded in from the withdrawn A-1a: identity must reach `Mono`/`TCon`,
-  not stop at the AST decl layer.** `compiler/types/typecheck.mdk`'s `Mono`
-  declares a bare `TCon String` arm, and #1070's own remedy states a shared
+  not stop at the AST decl layer.** ✅ **Landed as A-1 unit D (#1110):**
+  `compiler/types/typecheck.mdk`'s `Mono` declares `TCon String
+  TyConOrigin`, minted through four named helpers that
+  `test/typecheck_compiler_source.sh` pins as the only construction sites.
+  Carrier only — no comparison reads the field yet. The paragraph below
+  described the pre-unit-D state (`a bare TCon String arm`) and is kept
+  because its *bounding* argument is unaffected: #1070's own remedy states
+  a shared
   `(module, name)` keying helper is insufficient for five of its seven rows
   (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
   `universeRecordByName`, `universeDataEnv`) — but #1070's own "precisely

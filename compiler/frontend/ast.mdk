@@ -58,8 +58,9 @@ public export data Loc = Loc String Int Int Int Int
 -- I6.3 corollary says a fabricated head must not be carried by the
 -- type-CONSTRUCTOR node at all — "carries no identity" has to be a structural
 -- fact about the node.  The surface AST already satisfies that: `TyVar` is a
--- separate constructor.  The violation the corollary names is at the `Mono`
--- level (`TCon String`, `types/typecheck.mdk`), which this PR does not touch.
+-- separate constructor.  The `Mono` level (`types/typecheck.mdk`) has since
+-- reached the same shape: #1110 PR "A" split `TRigid` out of `TCon`, and unit D
+-- gave `TCon` — and only `TCon` — a `TyConOrigin` field.
 --
 -- ⚠️ NOT an encoded/qualified string, and never renderable.  The printer
 -- projects a type through `tyConSurface` straight back into the user's source

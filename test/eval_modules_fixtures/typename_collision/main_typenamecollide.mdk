@@ -1,0 +1,40 @@
+-- #1110 unit D (`Mono.TCon` carries a module identity).  The GATING SHAPE, not a
+-- demonstration of the feature: two modules with NO import relationship each
+-- declare a type spelled `Shape`, so after unit D the two head Monos carry
+-- DIFFERENT `TyConOrigin`s while every name-equality comparison in the checker
+-- still ignores the field.  The assertion is that this changes nothing.
+--
+-- ⚠️ Read what this pins and what it does not.  A fixture exercising the new
+-- carrier would pass by construction — nothing reads the field yet, so no output
+-- can depend on it.  What is worth pinning is the opposite: that a program whose
+-- heads now disagree about identity behaves exactly as it did when they could not
+-- disagree at all.  `shapeone` never imports `shapetwo`, and the FIRST output line
+-- is entirely its own — the module that has nothing to do with the collision.
+-- (The machinery that changed is in the COMPILER, of course; both modules traverse
+-- it identically.  What is "unrelated" here is the two DECLARATIONS to each other.)
+--
+-- 🚨 IT IS NOT THE PROGRAM THE NEXT UNIT MOVES, and an earlier version of this
+-- header claimed it was.  For an origin-reading consumer to change an answer, two
+-- differently-originated same-named heads must MEET IN A COMPARISON.  Here they
+-- never do: each `Shape` is built and consumed entirely inside its own module,
+-- `main` only ever handles the `Int`/`String` they hand back, and neither module
+-- declares an `impl`, so no `Shape`-headed `Mono` is ever a dispatch goal.  This
+-- will print `3`/`e` through the next unit and name nothing.
+--
+-- The program with THAT property already exists and already self-drains:
+-- `test/must_fail_fixtures/1208-xmod-type-name-collision/` — two modules' `T`s
+-- unify because the head carries no identity, `medaka check` exits 0 with zero
+-- diagnostics, and the must-fail gate goes RED the day a consumer makes it reject.
+-- Watch that one for the acceptance change; watch this one for the byte-identical
+-- behaviour of code standing next to it.
+--
+-- Expected output, derived by hand before capture:
+--   mkOne 3   = Corner 3 6   → oneSpan = 6 - 3   = 3
+--   mkTwo "e" = Edge "e"     → twoLabel = "e", and `println` on a String prints
+--                              it unquoted
+import shapeone.{mkOne, oneSpan}
+import shapetwo.{mkTwo, twoLabel}
+
+main =
+  println (oneSpan (mkOne 3))
+  println (twoLabel (mkTwo "e"))
