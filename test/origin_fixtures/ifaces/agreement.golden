@@ -92,11 +92,17 @@ core iface:Semigroup AGREE AGREE AGREE
 core iface:Slice AGREE AGREE AGREE
 core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
+deep Int AGREE AGREE AGREE
+deep decl:Relay R-ONLY CONFLICT R-ONLY
+main_ifaces Int AGREE AGREE AGREE
 main_ifaces Pair R-ONLY CONFLICT R-ONLY
 main_ifaces String AGREE AGREE AGREE
 main_ifaces decl:Pair R-ONLY CONFLICT R-ONLY
 main_ifaces iface:Echo R-ONLY R-ONLY NEITHER
+main_ifaces iface:Relay R-ONLY R-ONLY NEITHER
 main_ifaces iface:Speak R-ONLY R-ONLY NEITHER
+mid Int AGREE AGREE AGREE
+mid decl:Relay R-ONLY CONFLICT R-ONLY
 === CONFLICTS ===
 # PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
 # ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
@@ -129,8 +135,10 @@ beta decl:Echo flat=- single=mod:__user__ graph=mod:beta
 beta decl:Kennel flat=- single=mod:__user__ graph=mod:beta
 beta decl:Speak flat=- single=mod:__user__ graph=mod:beta
 beta iface:Speak flat=- single=mod:__user__ graph=mod:beta
+deep decl:Relay flat=- single=mod:__user__ graph=mod:deep
 main_ifaces Pair flat=- single=mod:__user__ graph=mod:main_ifaces
 main_ifaces decl:Pair flat=- single=mod:__user__ graph=mod:main_ifaces
+mid decl:Relay flat=- single=mod:__user__ graph=mod:mid
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
@@ -159,11 +167,15 @@ flat beta decl:Echo
 flat beta decl:Kennel
 flat beta decl:Speak
 flat beta iface:Speak
+flat deep decl:Relay
 flat main_ifaces Pair
 flat main_ifaces decl:Pair
 flat main_ifaces iface:Echo
+flat main_ifaces iface:Relay
 flat main_ifaces iface:Speak
+flat mid decl:Relay
 single main_ifaces iface:Echo
+single main_ifaces iface:Relay
 single main_ifaces iface:Speak
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
@@ -218,6 +230,7 @@ decl:Pair 1 mod:main_ifaces
 decl:Plain 1 mod:alpha
 decl:Quiet 1 mod:alpha
 decl:RField 1 mod:core
+decl:Relay 2 mod:deep|mod:mid
 decl:Rep 1 mod:core
 decl:Result 1 mod:core
 decl:Semigroup 1 mod:core
@@ -250,6 +263,7 @@ iface:Num 1 mod:core
 iface:Ord 1 mod:core
 iface:Plain 1 mod:alpha
 iface:Quiet 1 mod:alpha
+iface:Relay 1 mod:deep
 iface:Semigroup 1 mod:core
 iface:Slice 1 mod:core
 iface:Speak 2 mod:alpha|mod:beta
@@ -257,15 +271,15 @@ iface:Tagged 1 mod:alpha
 iface:Thenable 1 mod:core
 iface:Traversable 1 mod:core
 === SUMMARY ===
-modules 3
-graph-modules 3
-flat-segments 6
-decl-heads 43
+modules 5
+graph-modules 5
+flat-segments 10
+decl-heads 45
 iface-occs-constraintOrigin 47
 iface-occs-superOrigin 12
 iface-occs-requireOrigin 96
-iface-occs-implOrigin 123
-heads 97
-claims 291
-residual 31
-conflicts 27
+iface-occs-implOrigin 124
+heads 103
+claims 309
+residual 35
+conflicts 29
