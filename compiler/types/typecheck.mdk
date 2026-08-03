@@ -124,6 +124,11 @@ import support.util.{
   editDistance,
   noneHeadTag,
 }
+-- Stage A-2 unit A-2.2 (#1111): the head-tycon projections below return a key
+-- that CAN carry identity.  `HeadKey`'s declaration half is A-2.3's `TabKey`
+-- itself; why it has a second inhabitant anyway, and why the `Option` around
+-- it stays, are derived at the type in that file.
+import types.registry.{HeadKey(..), headKeyOfCon, headKeyName}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
 public export data Mono =
@@ -2147,9 +2152,16 @@ routeLocalSym _ = ""
 -- checkers (implMatchesU / implMatchesReceiverU / findMatchingImplReqsU /
 -- implCountForIfaceU).  Same lifecycle: survive per-module `resetState`, cleared per
 -- RUN by `resetCrossModuleState`, seeded by the core pass.  The head-tag alignment
--- `headTyconTy` (impl side) == `headTyconMono` (mono side) — the invariant KeyBuckets
--- already relies on — makes existence/count/tag reads (implMatchesU /
+-- `headTyconTy` (impl side, via `univReceiverTag`) == `headTyconMono` (mono side,
+-- via `univConcreteBucket`'s caller) makes existence/count/tag reads (implMatchesU /
 -- implMatchesReceiverU / implCountForIfaceU) BYTE-IDENTICAL to the old flat scans.
+-- ⚠️ THAT IS *THIS* TABLE'S PAIR, NOT `KeyBuckets`'.  This sentence read "the
+-- invariant KeyBuckets already relies on" until A-2.2, and it named a function
+-- `KeyBuckets` never calls on its goal side: `KeyBuckets` pairs `headTyconTy`
+-- (impl side, via `keyEntryOf`) with `monoHeadCon` (goal side, via `goalHeadCon`
+-- → `matchingEntries`/`matchingEntriesByIface`).  Three head projections exist,
+-- not two — see `monoHeadCon`'s doc-comment — and mis-citing the pair is exactly
+-- what makes that asymmetry easy to walk past.
 -- The one deliberate NON-identity is `findMatchingImplReqsU`'s first-match: see its
 -- doc-comment — it canonicalizes overlapping-impl requires-selection to the MOST-
 -- SPECIFIC impl (a soundness/conformance fix over the old declaration-order scan),
@@ -3392,6 +3404,29 @@ currentMethodMismatch = Ref None
 
 -- Head type-constructor of a (possibly applied) mono: walk the TApp left spine to
 -- the constructor.  `Async e Unit` → Some "Async".
+--
+-- 🚨 THIS IS THE **THIRD** HEAD PROJECTION IN THIS FILE, AND IT IS THE ONE ON A
+-- DISPATCH PATH.  The other two are `headTyconMono` (`Mono`) and `headTyconTy`
+-- (`Ty`); Stage A-2 unit A-2.2 (#1111) widened THOSE to `Option HeadKey` and left
+-- this one `Option String`, deliberately.  Anything that says "the two functions
+-- that project a head tycon" is wrong — derive the set instead:
+--
+--   grep -nE '^(monoHeadCon|headTyconMono|headTyconTy) :' compiler/types/typecheck.mdk
+--
+-- ⚠️ WHERE IT LANDS, and why the asymmetry matters.  This is the **GOAL side of
+-- `KeyBuckets`** — `monoHeadCon` → `goalHeadCon` → `matchingEntries` /
+-- `matchingEntriesByIface` → `candidateBucket` → `matchedEntry` /
+-- `selectImplEntryByIface`, i.e. the most-specific-wins selector and #1155's
+-- `T-AMBIGUOUS-INSTANCE`.  A-2.2 widened the **IMPL** side of that same table
+-- (`keyEntryOf`, via `headTyconTy`) and stopped there, because widening a
+-- SELECTOR is a semantics change and A-2.2 is answer-preserving by construction.
+--
+-- 🚨 THE UNIT THAT RE-KEYS `universeKeyBucketsRef` MUST WIDEN THIS TOO.  Until it
+-- does, `keyEntryOf` hands that table a `HeadKey` (projected back to its bare name
+-- by `headKeyNameOr`) while `goalHeadCon` hands it a `String`, so the two sides
+-- agree only because the impl side throws the identity away again.  Re-keying the
+-- buckets on identity without widening this function would leave the goal side
+-- unable to name the bucket it must look in.
 monoHeadCon : Mono -> Option String
 monoHeadCon m = match normalize m
   TCon n _ => Some n
@@ -5997,7 +6032,7 @@ fieldOwnerNames fname =
 --     the usual mismatch), or unknown field if none.
 -- On error it pushes the matching type error and returns None.
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
-resolveFieldRecord te fname = match headTyconMono te
+resolveFieldRecord te fname = match headTyconNameMono te
   Some r => match lookupRecordByName r
     Some ri => Some (r, ri)
     None => match lookupRecordByMangledHead r fname
@@ -7056,7 +7091,7 @@ inferShadowApp env mname tagRefs f x =
   -- groundShadowReceiver is also inert on an already-grounded receiver, so i1/i3/i4 (all
   -- concrete receivers) are byte-identical.
   let _ = groundShadowReceiver (importerShadowDomain mname) tx (definerReceiverIsDictVar mname tx) dloc
-  match headTyconMono tx
+  match headTyconNameMono tx
     Some head => if implExistsForHead perRun.value.shadowKeyTableRef.value mname head then inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
     else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
       Some sscheme =>
@@ -7342,7 +7377,7 @@ isDefinerShadow name = ifaceMethodName name
 definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverDispatches name xt
   | isDefinerShadow name = definerReceiverIsDictVar name xt
-  | otherwise = match headTyconMono xt
+  | otherwise = match headTyconNameMono xt
     Some head =>
       implExistsForHead perRun.value.shadowKeyTableRef.value name head
     None => definerReceiverIsDictVar name xt
@@ -7453,7 +7488,7 @@ enforceStandaloneDomain _ name xt dloc = match standaloneShadowDomain name
 groundShadowReceiver : Option Mono -> Mono -> Bool -> Option Loc -> Unit
 groundShadowReceiver dom xt isDictVar dloc
   | isDictVar = ()
-  | isSome (headTyconMono xt) = ()
+  | isSome (headTyconNameMono xt) = ()
   | otherwise = match dom
     None => ()
     Some d => unifyStandaloneDomain d xt dloc
@@ -8633,7 +8668,7 @@ nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 -- TCon/TApp head gives the type name; a tuple has no TCon head, so it maps to a
 -- synthetic per-arity tuple type (mirrors the reference's col0_type).
 matchCol0Type : Mono -> Option String
-matchCol0Type ty = map (n => n) (headTyconMono ty)
+matchCol0Type ty = map (n => n) (headTyconNameMono ty)
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> Unit
 inferArms _ _ _ [] = ()
@@ -9535,7 +9570,7 @@ pinnedEntryName (_, name, _, _) = name
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
 pinnedEntryMatches (stored, _, _, loc) a b =
   let g = normalize stored
-  match headTyconMono g
+  match headTyconNameMono g
     None => False
     Some _ => (ppMono g == ppMono a || ppMono g == ppMono b)
       && locSameFileAsError loc
@@ -9727,7 +9762,7 @@ oblDispatchMonos (iface, typarams, mty, occ, _)
 -- the unbound var ids carried by a dispatch mono WITH a concrete head (`Set _a` →
 -- [_a]); a bare-var dispatch (`t0`) anchors nothing.
 concreteHeadVarIds : Mono -> List Int
-concreteHeadVarIds dm = match headTyconMono dm
+concreteHeadVarIds dm = match headTyconNameMono dm
   Some _ => monoUnboundIds dm
   None => []
 
@@ -10744,7 +10779,7 @@ resolveRLocalSites prog implTable keyTable ((PendingEntry name tagRef am _ kind 
 -- An ungrounded receiver (still a tyvar) → leave it.  Mirrors lib/typecheck.ml's
 -- RLocal-vs-ordinary-dispatch split (the oracle keys the genuine case off the receiver).
 resolveRLocalSite : List Decl -> ImplBuckets -> KeyBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> Unit
-resolveRLocalSite prog implTable keyTable name tagRef am sym monos ifaces = match headTyconMono am
+resolveRLocalSite prog implTable keyTable name tagRef am sym monos ifaces = match headTyconNameMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
   --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
   --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
@@ -10887,7 +10922,7 @@ resolveArithSites ((dref, m)::rest) =
 
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSite dref m = match dref.value
-  RNone => match headTyconMono m
+  RNone => match headTyconNameMono m
     Some "Float" => setRef dref (RScalar "Float")
     _ => ()
   _ => ()
@@ -12069,7 +12104,7 @@ implEntryOf _ = []
 
 implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List ImplEntry
 implEntryFromTys _ [] _ _ = []
-implEntryFromTys iface (headTy::rest) reqs methods = match headTyconTy headTy
+implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headTy
   Some tag => [
     ImplEntry tag (map implMethodNameTc methods) headTy reqs (headTy::rest) iface
   ]
@@ -12200,7 +12235,7 @@ keyEntryOf : Decl -> List KeyEntry
 keyEntryOf (DAttrib _ d) = keyEntryOf d
 keyEntryOf (DImpl { iface, tys, reqs, methods, ... }) = match tys
   headTy::_ => [
-    KeyEntry (map implMethodNameTc methods) (fromOption noneHeadTag (headTyconTy headTy)) headTy (implKeyTc iface tys) iface tys reqs 0
+    KeyEntry (map implMethodNameTc methods) (headKeyNameOr noneHeadTag (headTyconTy headTy)) headTy (implKeyTc iface tys) iface tys reqs 0
   ]
   [] => []
 keyEntryOf _ = []
@@ -12868,12 +12903,90 @@ countHeadByIfaceGo ((KeyEntry _ tag2 _ _ ifn _ _ _)::rest) iface tag
   | ifn == iface && tag2 == tag = 1 + countHeadByIfaceGo rest iface tag
   | otherwise = countHeadByIfaceGo rest iface tag
 
--- the head type constructor of an (unelaborated) AST type
-headTyconTy : Ty -> Option String
-headTyconTy (TyCon { tyConName = n }) = Some n
-headTyconTy (TyApp a _) = headTyconTy a
-headTyconTy (TyTuple ts) = Some (tupleHeadTagTc (listLen ts))
-headTyconTy _ = None
+-- the head node of an (unelaborated) AST type's left-nested `TyApp` spine.
+-- Total (every `Ty` has a head) and ALLOCATION-FREE (it returns a node that
+-- already exists).  Both projections below are written against it, so the
+-- spine walk is shared and cannot drift between them; what they do NOT share
+-- is the classification of that head node, which is the part that differs by
+-- construction — see `headTyconMono`'s note on the same split.
+headTyNode : Ty -> Ty
+headTyNode (TyApp a _) = headTyNode a
+headTyNode t = t
+
+-- the head type constructor of an (unelaborated) AST type, as the IMPL-SIDE
+-- dispatch key — Stage A-2 unit A-2.2 (#1111).  The result was `Option String`
+-- until this unit, which threw away the `tyConOrigin` Stage A-1 put on the very
+-- node this matches; `HeadKey` (`types/registry.mdk`) carries it, and its
+-- doc-comment derives why `None` had to keep meaning exactly what it meant
+-- before ("no head type constructor at all") rather than absorbing "a head with
+-- no identity yet".
+--
+-- ⚠️ `TyTuple` is the one arm with no node to read an origin off: the head it
+-- names is the synthetic `__tupleN__` tag, which the LANGUAGE provides.
+-- `OriginBuiltin` is therefore the same answer, by the same authority, as the
+-- two mints that build such a head — `tconTupleHead` above and the parser's own
+-- `tyConBuiltin (tupleCtorTyName n)` (`frontend/parser.mdk`).  It is also what
+-- keeps the impl side and the goal side agreeing on tuple heads, the invariant
+-- the `ImplUniverse` comment above already relies on.
+headTyconTy : Ty -> Option HeadKey
+headTyconTy t = match headTyNode t
+  TyCon { tyConName = n, tyConOrigin = o } => Some (headKeyOfCon o n)
+  TyTuple ts => Some (headKeyOfCon OriginBuiltin (tupleHeadTagTc (listLen ts)))
+  _ => None
+
+-- The BARE-NAME residual of the projection above: byte-identical to what
+-- `headTyconTy` itself answered before A-2.2, and allocating exactly what it
+-- allocated (one `Some`).  Every consumer that has not yet been re-keyed calls
+-- THIS, so the IMPL-side half of the Stage A-2 ledger is what this prints —
+-- a command, never a number copied down here:
+--
+--   grep -nw headTyconNameTy compiler/types/typecheck.mdk \
+--     | grep -vE '^[0-9]+:[[:space:]]*--' \
+--     | grep -vE '^[0-9]+:headTyconNameTy'
+--
+-- ⚠️ Both filters are load-bearing: the unfiltered command also prints every
+-- COMMENT that names the function (including this one) and its own signature
+-- and clauses, none of which is a residual call site.
+--
+-- ⚠️ Deliberately NOT `map headKeyName (headTyconTy t)`.  That spelling has no
+-- duplication at all, and it is the one `compiler/AGENTS.md` warns about: it
+-- would build a `HeadKey` (and an `Ident`, and a second `Option`) on every call
+-- of a projection that runs per type-application node, on the GC-bound `check`
+-- stage, purely to throw them away — and BOTH perf CI arms are structurally
+-- blind to a constant factor.  The price paid instead is these three arms,
+-- which must classify the same head nodes as the three above.
+headTyconNameTy : Ty -> Option String
+headTyconNameTy t = match headTyNode t
+  TyCon { tyConName = n } => Some n
+  TyTuple ts => Some (tupleHeadTagTc (listLen ts))
+  _ => None
+
+-- The bare name of a head key, with [dflt] when there is NO head type
+-- constructor — the `fromOption <placeholder> (headTycon… …)` shape the
+-- dispatch-key sites already used, now spelled once so the projection happens
+-- exactly once per call (Medaka is strict: `map headKeyName` over the `Option`
+-- would allocate a second `Option` to throw away).  HOW MANY such sites there
+-- are is a command, not a number written here — the same shape spelled
+-- `fromOption` on the commit before A-2.2 is
+-- `git show <pre-A-2.2>:compiler/types/typecheck.mdk
+--  | grep -nE 'fromOption[^(]*\(headTycon'`, and the sites this covers now are:
+--
+--   grep -nw headKeyNameOr compiler/types/typecheck.mdk \
+--     | grep -vE '^[0-9]+:[[:space:]]*--' \
+--     | grep -vE '^[0-9]+:headKeyNameOr'
+--
+-- (the two filters drop the comments that name it — including this one — and
+-- this definition's own signature and clauses).  Neither count is copied down,
+-- because a count copied down has no derivation and no expiry.
+--
+-- ⚠️ The [dflt] is a PLACEHOLDER for "this position has no head", NOT a name,
+-- and it is a DIFFERENT fact from `TkBare` ("a head with no identity yet") —
+-- `types/registry.mdk`'s `HeadKey` derives the distinction, and
+-- `checkCallObligationsU`'s `""` is the row where collapsing the two would lose
+-- a diagnostic (#607).  Both are preserved verbatim here.
+headKeyNameOr : String -> Option HeadKey -> String
+headKeyNameOr _ (Some hk) = headKeyName hk
+headKeyNameOr dflt None = dflt
 
 -- Multi-param-interface variant: [paramMonos] is the FULL list of the interface's
 -- type-parameter monos at this occurrence (recovered by ifaceParamMonos), e.g. for
@@ -12963,7 +13076,7 @@ mergeOne ((k2, v2)::rest) k v
   | otherwise = (k2, v2) :: mergeOne rest k v
 
 preferConcrete : Mono -> Mono -> Mono
-preferConcrete a b = match headTyconMono a
+preferConcrete a b = match headTyconNameMono a
   Some _ => a
   None => b
 
@@ -13155,7 +13268,7 @@ data EntailKind =
 entail : ImplBuckets -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entail implTable name m encl kind = match entailAssum m encl name kind
   Some dname => (entailAssumRoute dname kind, [])
-  None => match headTyconMono m
+  None => match headTyconNameMono m
     Some tag => entailInst implTable name m encl tag kind
     None => (entailFallback implTable kind, [])
 
@@ -13405,7 +13518,7 @@ implHeadTagForIface : String -> Decl -> List String
 implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
 implHeadTagForIface want (DImpl { iface, tys, ... })
   | iface == want = match tys
-    headTy::_ => match headTyconTy headTy
+    headTy::_ => match headTyconNameTy headTy
       Some tag => [tag]
       None => []
     [] => []
@@ -13635,7 +13748,7 @@ recRoute encl mono id = match findTvarInMono mono id
   Some m => resolveRecMono encl m
 
 resolveRecMono : String -> Mono -> Route
-resolveRecMono encl m = match headTyconMono m
+resolveRecMono encl m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
     Some slot => RDict (dictParamName encl slot)
@@ -14092,19 +14205,74 @@ dictParamsFrom n start count
 dictParamName : String -> Int -> String
 dictParamName fn slot = "$dict_\{fn}_\{intToString slot}"
 
--- head type constructor, normalizing at each level (the head may be a TVar
--- linked to a concrete type after unification — normalize follows only the top
--- link, so recurse through normalize)
-headTyconMono : Mono -> Option String
-headTyconMono t = match normalize t
-  TApp a _ => headTyconMono a
-  TCon n _ => Some n
+-- the head node of a left-spine `TApp`, normalizing at each level (the head may
+-- be a TVar linked to a concrete type after unification — normalize follows only
+-- the top link, so recurse through normalize).  Total (every `Mono` has a head)
+-- and ALLOCATION-FREE (it returns a node that already exists).
+headMonoNode : Mono -> Mono
+headMonoNode t = match normalize t
+  TApp a _ => headMonoNode a
+  other => other
+
+-- the head type constructor as the GOAL-SIDE dispatch key — Stage A-2 unit
+-- A-2.2 (#1111).  The result was `Option String` until this unit, which threw
+-- away the `TyConOrigin` Stage A-1 put on the `TCon` this matches; `HeadKey`
+-- (`types/registry.mdk`) carries it, and its doc-comment derives why `None` had
+-- to keep meaning exactly what it meant before ("no head type constructor at
+-- all") rather than absorbing "a head with no identity yet".
+--
+-- ⚠️ IT IS NOT THE ONLY `Mono` HEAD PROJECTION.  `monoHeadCon` (above) is
+-- extensionally identical to `headTyconNameMono` below, carries its own copy of
+-- the same I6.1 forgery, and is `KeyBuckets`' GOAL side — A-2.2 deliberately left
+-- it `Option String`.  Its doc-comment states what the unit re-keying
+-- `universeKeyBucketsRef` owes it; read that before assuming this widening
+-- reached the selector.
+--
+-- 🚨 THIS IS THE FIRST SITE IN THIS FILE THAT READS A `Mono.TCon` ORIGIN, which
+-- is why `test/typecheck_compiler_source.sh`'s `Mono.TCon` mint ratchet carries
+-- this line: its discriminator is a `_` in the origin slot, so a pattern that
+-- BINDS the origin is the false positive its own remedy predicts ("a pattern
+-- that legitimately BINDS the origin is the expected first false positive; list
+-- it, and the list stays the audit").  Nothing is CONSTRUCTED here.
+headTyconMono : Mono -> Option HeadKey
+headTyconMono t = match headMonoNode t
+  TCon n o => Some (headKeyOfCon o n)
   -- ⚠️ ANSWER-PRESERVING, NOT CORRECT — the twin of `monoHeadCon`'s arm, and the
   -- more load-bearing of the two: this is the GOAL-side dispatch key (#1110,
   -- DICT-SEMANTICS §8 I6.1).  A rigid variable has no head type constructor, so
   -- handing its parameter name out as a bucket key is the residual violation the
   -- split makes visible.  It reproduced today's answer byte-for-byte and is left
   -- alone deliberately; changing it is the follow-on semantics PR.
+  --
+  -- A-2.2 does NOT give it one: `HkRigid` is the inhabitant that says "this is
+  -- not a declaration", so the widening carries the violation forward VISIBLY
+  -- instead of minting the identity §8 I6.1 forbids.  The answer is unchanged —
+  -- `headKeyName (HkRigid n) == n`, exactly the `Some n` this arm gave before.
+  TRigid n => Some (HkRigid n)
+  _ => None
+
+-- The BARE-NAME residual of the projection above: byte-identical to what
+-- `headTyconMono` itself answered before A-2.2, and allocating exactly what it
+-- allocated (one `Some`).  Every consumer that has not yet been re-keyed calls
+-- THIS, so the GOAL-side half of the Stage A-2 ledger is what this prints —
+-- a command, never a number copied down here:
+--
+--   grep -nw headTyconNameMono compiler/types/typecheck.mdk \
+--     | grep -vE '^[0-9]+:[[:space:]]*--' \
+--     | grep -vE '^[0-9]+:headTyconNameMono'
+--
+-- ⚠️ Both filters are load-bearing, for the reason `headTyconNameTy` above
+-- gives: the unfiltered command also prints the comments and the definition.
+--
+-- ⚠️ Deliberately NOT `map headKeyName (headTyconMono t)` — see the same note on
+-- `headTyconNameTy` above for why the three duplicated arms are the cheaper of
+-- the two prices.  The invariant they owe: these arms and `headTyconMono`'s must
+-- classify the SAME head nodes, so a new `Mono` head constructor is owed an arm
+-- in both (both fall through `_ => None`, which is exactly the wildcard hazard
+-- `AGENTS.md` names — audit them as a SET).
+headTyconNameMono : Mono -> Option String
+headTyconNameMono t = match headMonoNode t
+  TCon n _ => Some n
   TRigid n => Some n
   _ => None
 
@@ -15095,7 +15263,11 @@ growImplUniverse (t::rest) univ = growImplUniverse rest (insertUnivImpl univ t)
 -- headless bucket, which every lookup also consults (matchTyMono wildcard matches any).
 insertUnivImpl : ImplUniverse -> (String, List Ty, List Require) -> ImplUniverse
 insertUnivImpl (ImplUniverse conc hl tags) (iface, tys, reqs) = match univReceiverTag tys
-  Some tag =>
+  Some hk =>
+    -- A-2.2 (#1111): `hk` CAN carry the receiver head's declaring module now; the
+    -- bucket tag is still its bare NAME, so this table keys exactly as before.
+    -- Bound ONCE — Medaka is strict, and the tag is read twice below.
+    let tag = headKeyName hk
     let k = "\{iface}|\{tag}"
     ImplUniverse
       (omInsert k (bucketOf k conc ++ [(tys, reqs)]) conc)
@@ -15109,7 +15281,7 @@ insertUnivImpl (ImplUniverse conc hl tags) (iface, tys, reqs) = match univReceiv
 -- the receiver-position head tycon tag of an impl's head types (None for a headless
 -- receiver or an empty head list) — the SAME tag `headTyconMono` computes for a
 -- dispatch mono, so an impl and the args it matches land under the same key.
-univReceiverTag : List Ty -> Option String
+univReceiverTag : List Ty -> Option HeadKey
 univReceiverTag (headTy::_) = headTyconTy headTy
 univReceiverTag [] = None
 
@@ -15220,9 +15392,13 @@ implCountForIfaceU (ImplUniverse _ _ tags) iface =
   omSize (fromOption omEmpty (omLookup iface tags))
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
-univConcreteBucket : ImplUniverse -> String -> Option String -> List (List Ty, List Require)
-univConcreteBucket (ImplUniverse conc _ _) iface (Some t) =
-  bucketOf "\{iface}|\{t}" conc
+-- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
+-- identity — this is the row `obUnivConcreteRef`'s `"<iface>|<tag>"` key is
+-- built from, on both sides (`insertUnivImpl` is the impl side).  The tag is
+-- still that key's bare NAME, so every bucket lookup answers exactly as before.
+univConcreteBucket : ImplUniverse -> String -> Option HeadKey -> List (List Ty, List Require)
+univConcreteBucket (ImplUniverse conc _ _) iface (Some hk) =
+  bucketOf "\{iface}|\{headKeyName hk}" conc
 univConcreteBucket _ _ None = []
 
 univHeadless : ImplUniverse -> String -> List (List Ty, List Require)
@@ -15317,7 +15493,7 @@ checkCallObligationsU deferNonGround dedup univ seen (o::rest) =
   let iface = o.pred.iface
   let occs = o.pred.args
   let loc = o.loc
-  let key = joinWith "," (iface :: map (o2 => fromOption "" (headTyconMono o2)) occs)
+  let key = joinWith "," (iface :: map (o2 => headKeyNameOr "" (headTyconMono o2)) occs)
   -- dedup=False (IMPL channel): never SKIP — check every obligation like the retired
   -- checkImplObligationsU (S0 #863: a same-key different-verdict obligation must not be
   -- dropped).  dedup=True (CALL channel): skip a repeat of an already-checked key.
@@ -15475,7 +15651,7 @@ groundOneObligation prog iface typarams mty occ
   | listLen typarams <= 1 = ()
   | otherwise = match dispatchMonosOf typarams mty occ
     [] => ()
-    dispMono::_ => match headTyconMono dispMono
+    dispMono::_ => match headTyconNameMono dispMono
       None => ()
       Some tag => match uniqueImplTysFor prog iface tag
         None => ()
@@ -15501,7 +15677,7 @@ implTysIfMatch : String -> String -> Decl -> List (List Ty)
 implTysIfMatch iface tag (DAttrib _ d) = implTysIfMatch iface tag d
 implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
   | ifn == iface = match tys
-    headTy::_ => match headTyconTy headTy
+    headTy::_ => match headTyconNameTy headTy
       Some t => if t == tag then [tys] else []
       None => []
     [] => []
@@ -15672,9 +15848,11 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppMonosShared args}"
 -- type is structurally un-implementable, so both stay hint-free (unchanged
 -- message) rather than print misleading advice.
 -- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
--- question, and it is a membership test rather than a lookup.  `headTyconMono`
--- returns `Option String` — it throws the head's identity away at its return
--- type, which is A-2.2's widening, not landed here — so no key can be minted.
+-- question, and it is a membership test rather than a lookup.  A-2.2 has since
+-- landed, so the identity IS reachable here (`headTyconMono` now answers a
+-- `HeadKey`); this site deliberately calls the bare-name residual
+-- `headTyconNameMono` instead, and is therefore one of the residual rows the
+-- Stage A-2 ledger counts.
 -- That costs nothing real: the question this asks is "is a type by this name
 -- user-declared anywhere?", used ONLY to decide whether `add 'deriving X'` is
 -- applicable advice rather than a dead end for a builtin.  `tabHasName`
@@ -15682,7 +15860,7 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppMonosShared args}"
 -- collision can do is offer applicable advice for the right reason under the
 -- wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
-noImplHint iface [arg] = match headTyconMono arg
+noImplHint iface [arg] = match headTyconNameMono arg
   Some n => noImplHintFor iface n
   None => None
 noImplHint _ _ = None
@@ -15858,7 +16036,8 @@ collectByParamGo (p::rest) pairs = match lookupAssoc p pairs
 -- concrete head with free args, e.g. `Maybe a`, still uniquely picks the impl).
 allConcreteHeads : List Mono -> Bool
 allConcreteHeads [] = True
-allConcreteHeads (m::rest) = isSome (headTyconMono m) && allConcreteHeads rest
+allConcreteHeads (m::rest) = isSome (headTyconNameMono m)
+  && allConcreteHeads rest
 
 -- #154 PR3: implMatches / implMatchesReceiver (flat whole-universe scans) are replaced
 -- by the keyed implMatchesU / implMatchesReceiverU above.  implHeadMatchesArgs (used by

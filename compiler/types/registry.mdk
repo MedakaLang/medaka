@@ -589,6 +589,13 @@ sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
 -- `universeDataParamKinds`, `types/typecheck.mdk`) is the first of them.
 -- Two independent reasons, both measured or cited rather than asserted:
 --
+-- ⚠️ "THE CONVERSIONS THAT KEEP THE ASSOC LIST" IS WHY THIS TYPE EXISTS, NOT
+-- THE SET OF THINGS THAT USE IT — and that set grows. `HeadKey` below embeds a
+-- `TabKey` as its declaration half and is not an assoc-list conversion at all.
+-- Derive the users rather than reading them off this paragraph:
+--
+--   grep -nw TabKey compiler/types/*.mdk | grep -vE ':[[:space:]]*--'
+--
 --   * ALLOCATION. `Registry` keys on `regKeyRender`, so every LOOKUP would
 --     build a fresh `String` (four netstrings, concatenated), UNCONDITIONALLY
 --     and on every call — REJECTED for that reason. Those two tables are read
@@ -683,6 +690,114 @@ lookupTab k ((k2, v)::rest) = if tabKeyEq k k2 then Some v else lookupTab k rest
 export tabHasName : String -> List (TabKey, v) -> Bool
 tabHasName _ [] = False
 tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
+
+-- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
+-- Stage A-2 unit A-2.2 (#1111).  `types/typecheck.mdk`'s head projections —
+-- `headTyconMono : Mono -> …` (the GOAL side of a dispatch key) and
+-- `headTyconTy : Ty -> …` (the IMPL side) — both had `Option String` as their
+-- result, so the identity `Mono.TCon`/`Ty.TyCon` already CARRY (Stage A-1) was
+-- thrown away at the return type.  This is the type that lets it through.
+--
+-- 🚨 THE DECLARATION HALF IS `TabKey` ITSELF, NOT A COPY OF IT.  A-2.2 was
+-- authored while A-2.3 (#1267) was still open, so its first draft minted its
+-- own `HkIdent`/`HkBare` pair; that premise expired when A-2.3 landed, and two
+-- near-identical ADTs — two mints, two name projections — in ONE file is a
+-- seam every later unit that builds a dispatch key would have to relate at
+-- every site.  So a head that IS a declaration is a `TabKey`, and `tabKeyOf`
+-- above is the one place the "does this origin carry identity?" question is
+-- answered.
+--
+-- ⚠️ THE ONE REAL DIVERGENCE, AND IT IS PAID ONCE HERE.  `TabKey` carries an
+-- `Ns` (inside `TkIdent`'s `Ident`, and directly on `TkBare`) and a head
+-- projection has no use for one: the head of a TYPE is always in the TYPE
+-- namespace, so that field is redundant-but-always-`NsType` inside every
+-- `HkDecl`.  It is fixed at the single mint below — `headKeyOfCon` supplies
+-- `NsType` and nothing else may — which is why the unification was chosen over
+-- a second ADT whose only difference from this one is an absent field: the
+-- redundancy is one constant in one function, where a parallel key type would
+-- have to be related to `TabKey` at every future dispatch-key seam.
+--
+-- 🚨 `None` STILL MEANS ONE THING, and it is not what `TkBare` means.  The
+-- projections stay `Option HeadKey` because two absences are not the same
+-- fact:
+--
+--   (1) "this type has no head type constructor at all" — a bare tyvar, a
+--       function type, an effect row.  That is what `None` meant before this
+--       unit and what it means after, unchanged at every call site.  It is a
+--       property of the TYPE.
+--   (2) "there is a head type constructor, but no identity for it" — `mkIdent`
+--       answers `None` on the FLAT/single-file driver path, where a user
+--       declaration still carries the pipeline-stage marker (`Ns`' doc-comment
+--       in `frontend/ast.mdk`; A-2 is Module-path-only until #1115/E-1).  That
+--       is a property of the PIPELINE, and it is `TkBare`, inside `HkDecl`.
+--
+-- Collapsing (1) into (2) — dropping the `Option` — is the conflation class
+-- this whole stage exists to remove.
+--
+-- 🚨 AND THERE IS A THIRD FACT, which is why this is not simply
+-- `Option TabKey`.  `headTyconMono` has an explicit `TRigid n => Some n` arm:
+-- a head fabricated from a type-PARAMETER name.  `docs/spec/DICT-SEMANTICS.md`
+-- §8 I6.1 says such a head denotes a rigid type variable, is not a
+-- declaration, and MUST NOT be assigned an identity — and `Mono`'s own
+-- doc-comment (`types/typecheck.mdk`) records that the arm is
+-- ANSWER-PRESERVING, NOT CORRECT, kept deliberately, and that A-1's gain was
+-- making the violation GREPPABLE rather than invisible inside `TCon`.
+--
+-- Routing a rigid head into `TkBare` would throw that gain away at exactly the
+-- layer A-1 bought it for: `TkBare` means "a real declaration whose module id
+-- has not been acquired yet", and two `TkBare`s of the same name ARE the same
+-- declaration on the flat path.  A rigid `a` is not a declaration at ALL, so
+-- it must not be able to sit in the same inhabitant as one.  `HkRigid` keeps
+-- the I6.1 residual visible AND greppable at the key layer, which is what lets
+-- the follow-on semantics unit delete it by deleting an arm.
+--
+-- ⚠️ THIS UNIT CHANGES NO ANSWER.  Every consumer projects straight back to
+-- the bare name, so a rigid head is still handed out as a dispatch key exactly
+-- as it was.  Whoever removes that must remove the ARM, not this inhabitant.
+public export data HeadKey =
+  -- a real head type constructor: `TkIdent` when its declaring module is known
+  -- (§8 I4's `(originModule, name)`) or the LANGUAGE provides it
+  -- (`IdentBuiltin`); `TkBare` when no identity has been acquired.  Always
+  -- `NsType` — see the divergence note above.
+  | HkDecl TabKey
+  -- 🚨 NOT A DECLARATION: the parameter name of a rigid type variable, handed
+  -- out as a dispatch key.  The §8 I6.1 residual, named rather than hidden.
+  | HkRigid String
+deriving (Eq, Ord, Debug)
+
+-- The ONE mint for a head that IS a declaration, and the ONE place `NsType` is
+-- supplied.  Argument order mirrors `tconFrom : TyConOrigin -> String -> Mono`
+-- (`types/typecheck.mdk`), the mint that BUILT the head this projects, so a
+-- swapped pair does not typecheck.
+--
+-- ⚠️ There is deliberately no `headKeyOfRigid`: `HkRigid` is applied at exactly
+-- one site (`headTyconMono`'s `TRigid` arm) and a one-line helper would make
+-- that site read like a routine mint rather than the flagged violation it is.
+export headKeyOfCon : TyConOrigin -> String -> HeadKey
+headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
+
+-- The bare name inside a head key, whatever its inhabitant.  Allocation-free:
+-- it returns a `String` that already exists.
+--
+-- 🚨 THIS IS THE STAGE A-2 LEDGER, AND IT IS A COMMAND RATHER THAN A NUMBER —
+-- a count written here would carry no derivation and no expiry.  Every line
+-- the recipe prints is a dispatch key STILL keyed by a bare name, and a later
+-- unit's progress is a line LEAVING that set:
+--
+--   grep -nwE 'headKeyName|headKeyNameOr' compiler/types/typecheck.mdk \
+--     | grep -vE '^[0-9]+:[[:space:]]*(--|import )' \
+--     | grep -vE '^[0-9]+:headKeyNameOr'
+--
+-- ⚠️ Every filter is load-bearing, and a bare `grep -n headKeyName` answers a
+-- DIFFERENT question: it also matches the substring inside `headKeyNameOr`,
+-- the `import types.registry.{…}` line, and every comment that names either.
+-- The last filter drops `headKeyNameOr`'s OWN signature and clauses
+-- (`types/typecheck.mdk`, column 0) — that wrapper is the SPELLING of the
+-- residual, not an instance of it.  Pipe to `wc -l` for the size; do not copy
+-- the size back into this comment.
+export headKeyName : HeadKey -> String
+headKeyName (HkDecl k) = tabKeyName k
+headKeyName (HkRigid name) = name
 
 -- ── Deliberately NOT added, with the table each omission affects ───────────
 --   * NO `Display` for `Ident`/`RegKey` — see `Ident` in `frontend/ast.mdk`:
@@ -1247,3 +1362,81 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 -- False
 -- > tabHasName "Box" ([] : List (TabKey, Int))
 -- False
+
+-- ── F5: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
+-- Fixtures mirror the `TabKey` ones above, because the declaration half of a
+-- `HeadKey` IS a `TabKey`: `headA`/`headZ` are the SAME bare head name `Box`
+-- declared by two unrelated modules — the #1069/#1090/#1070 collision shape
+-- verbatim, and the reason the projection had to widen at all.
+--
+-- ⚠️ `headU` is spelled with the CONSTRUCTORS, not as `headKeyOfCon
+-- OriginUnresolved "Box"`, for the reason `tabU` above gives: the #1110
+-- ratchet in `test/typecheck_compiler_source.sh` pins the SET OF FILES
+-- carrying a non-comment `OriginUnresolved` mention. Nothing is lost — the
+-- mint's own answer for that origin is asserted below via `OriginModule ""`,
+-- the other input `mkIdent` refuses, and both land in the same half.
+headA : HeadKey
+headA = headKeyOfCon (OriginModule "apub") "Box"
+
+headZ : HeadKey
+headZ = headKeyOfCon (OriginModule "zopapub") "Box"
+
+headU : HeadKey
+headU = HkDecl (TkBare NsType "Box")
+
+-- The mint is total, it delegates the identity question to `tabKeyOf`, and it
+-- is the one site that fixes the namespace to `NsType`.
+-- > headKeyOfCon (OriginModule "apub") "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box"))
+-- False
+-- > headKeyOfCon OriginBuiltin "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box"))
+-- True
+-- > headKeyOfCon (OriginModule "") "Box" == HkDecl (TkBare NsType "Box")
+-- True
+-- > headKeyOfCon (OriginModule "apub") "Box" == HkDecl (tabKeyOf NsIface (OriginModule "apub") "Box")
+-- False
+
+-- 🚨 THE POINT OF THE WIDENING: two modules' same-named heads are now DISTINCT
+-- keys, where the old `Option String` made them the same string.
+-- > headA == headZ
+-- False
+-- > headA == headKeyOfCon (OriginModule "apub") "Box"
+-- True
+
+-- A declaration head and a rigid type variable never equate, in either
+-- direction — §8 I6.1, which is why `HkRigid` is a separate inhabitant rather
+-- than a `TkBare` with a parameter name in it.
+-- > headA == HkRigid "Box"
+-- False
+-- > headU == HkRigid "Box"
+-- False
+-- > HkRigid "Box" == HkRigid "Box"
+-- True
+
+-- Inside the declaration half, `TabKey`'s own separation is inherited: an
+-- identity-bearing head is not an identity-less one, and two identity-less
+-- heads of the same name still match — which is what keeps the flat/
+-- single-file path answering exactly as it does today.
+-- > headA == headU
+-- False
+-- > headU == HkDecl (TkBare NsType "Box")
+-- True
+
+-- 🚨 ANSWER-PRESERVATION IS STRUCTURAL, AND THE DOCTESTS BELOW ONLY
+-- ILLUSTRATE IT. The proof is that `headKeyName` inverts the mint on the name,
+-- unconditionally and for every input either projection can see:
+--
+--   * `headKeyOfCon o n = HkDecl (tabKeyOf NsType o n)`, and `tabKeyOf` puts
+--     `n` in whichever half it picks (`TkIdent (Ident _ _ n)` via `mkIdent`,
+--     or `TkBare _ n`), so `tabKeyName` — and therefore `headKeyName` —
+--     returns that same `n` whatever the origin was.  No origin can route `n`
+--     anywhere `headKeyName` does not read it back out.
+--   * `headKeyName (HkRigid n) = n` by its own clause.
+--
+-- Since those are the only two ways a `HeadKey` is built, `headKeyName` of the
+-- new key is the `String` the old `Option String` projection returned, at
+-- every call site, with no case analysis left over. The list below is one
+-- witness per class the two projections actually produce — a module-declared
+-- head, a second module's same-named head, an identity-less head, a rigid
+-- variable, and a builtin tuple head — not the argument itself.
+-- > map headKeyName [headA, headZ, headU, HkRigid "a", headKeyOfCon OriginBuiltin "__tuple2__"]
+-- ["Box", "Box", "Box", "a", "__tuple2__"]

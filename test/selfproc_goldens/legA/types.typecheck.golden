@@ -605,11 +605,16 @@ hasMethodLevelConstraint : List String -> Ty -> Bool
 headAnnotTy : Ty -> Mono
 headCollides : Map String (List KeyEntry) -> String -> String -> Bool
 headCollidesByIface : Map String (List KeyEntry) -> String -> String -> Bool
+headKeyNameOr : String -> Option HeadKey -> String
 headL : List String -> String
+headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
 headSubstWithParams : Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
-headTyconMono : Mono -> Option String
-headTyconTy : Ty -> Option String
+headTyNode : Ty -> Ty
+headTyconMono : Mono -> Option HeadKey
+headTyconNameMono : Mono -> Option String
+headTyconNameTy : Ty -> Option String
+headTyconTy : Ty -> Option HeadKey
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idsForIfaceSlots : List String -> List Int
 idsForIfaceSlotsGo : Int -> List String -> List Int
@@ -1442,9 +1447,9 @@ unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
-univConcreteBucket : ImplUniverse -> String -> Option String -> List (List Ty, List Require)
+univConcreteBucket : ImplUniverse -> String -> Option HeadKey -> List (List Ty, List Require)
 univHeadless : ImplUniverse -> String -> List (List Ty, List Require)
-univReceiverTag : List Ty -> Option String
+univReceiverTag : List Ty -> Option HeadKey
 unknownCtorMsg : String -> String
 unknownFieldFresh : String -> String -> List String -> Mono
 unknownFieldMsg : String -> String -> String
