@@ -998,7 +998,7 @@ dispBindHeads cf (CBind _ clauses) =
 dispImplEntryHeads : (String -> String) -> CImplEntry -> List String
 dispImplEntryHeads cf (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) =
   allCallHeads cf body
-dispImplEntryHeads cf (CImplEntry _ _ (CImplDefault _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ (CImplDefault _ _ body)) =
   allCallHeads cf body
 
 allCallHeadsStmt : (String -> String) -> CStmt -> List String

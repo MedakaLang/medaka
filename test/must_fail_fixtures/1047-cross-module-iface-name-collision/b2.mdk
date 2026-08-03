@@ -1,7 +1,0 @@
--- CONTROL half for #1047: b.mdk with the interface and its method RENAMED
--- (`Speak`/`speak` -> `Speak2`/`speak2`). Everything else -- the default body
--- "B-default", the shape, the export -- is identical to b.mdk. The NAME is the one
--- variable this control flips.
-export interface Speak2 x where
-  speak2 : x -> String
-  speak2 _ = "B-default"

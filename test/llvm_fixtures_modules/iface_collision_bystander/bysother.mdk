@@ -1,0 +1,15 @@
+-- #1047 BYSTANDER: the code the fixture actually ASSERTS on.  `Greet` has a
+-- UNIQUELY spelled name and a UNIQUELY spelled method, and this module has no
+-- import relationship with the colliding `Speak` pair.  It is the shape #1047's fix
+-- must leave alone: exactly one `CImplDefault` named `greet`, so the identity
+-- narrowing must never fire and the answer must be the same one first-match gave.
+export interface Greet x where
+  greet : x -> String
+  greet _ = "glub"
+
+-- A SECOND method with a default, overridden by one implementor and inherited by
+-- another -- the mixed default/override shape the dispatcher's default-arm chain
+-- walks per tag.
+export interface Wave x where
+  wave : x -> String
+  wave _ = "~"

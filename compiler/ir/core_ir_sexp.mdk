@@ -205,8 +205,9 @@ cimplBodySexp (CImplTagged tag key iface positions pats body) = node
     slist (map patSexp pats),
     cexprSexp body,
   ]
-cimplBodySexp (CImplDefault pats body) =
-  node "CImplDefault" [slist (map patSexp pats), cexprSexp body]
+cimplBodySexp (CImplDefault ifaceId pats body) = node
+  "CImplDefault"
+  [escStr ifaceId, slist (map patSexp pats), cexprSexp body]
 
 export cimplEntrySexp : CImplEntry -> String
 cimplEntrySexp (CImplEntry name score body) =

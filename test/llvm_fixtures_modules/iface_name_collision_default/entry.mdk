@@ -1,0 +1,25 @@
+-- #1047 (S0, CLOSED by Stage A-2 unit A-2.9): two UNRELATED modules each declare
+-- `interface Speak x where speak : x -> String` with a DIFFERENT default body, and
+-- each is implemented by a METHOD-LESS impl in its own module.  The Core IR's
+-- untagged-default registry (`CImplDefault`) carried no interface identity and was
+-- looked up by the bare METHOD name, so first-match gave BOTH types module A's
+-- body: `A-default|A-default`, exit 0, no diagnostic, on eval AND native AND wasm
+-- (which is exactly why diff_compiler_engines never saw it -- all three agreed and
+-- all three were wrong).
+--
+-- ⚠️ The EXPECTED value is derived from the spec, not captured from an engine.
+-- DICT-SEMANTICS §5: the interface default is used only when the SELECTED INSTANCE
+-- omits the method.  `ifai.DogA` implements the only `Speak` in ITS scope (ifa's),
+-- so it selects ifa's default; `ifbi.DogB` likewise selects ifb's.  Under the
+-- decided class model a class is `(module, name)` (§8 I4), so neither module can
+-- observe the other's default at all.  Correct = `A-default|B-default`.
+--
+-- ⚠️ The discriminating variable is the METHOD name, not the interface name:
+-- renaming the INTERFACE in one pair (keeping `speak`) still reproduced the bug,
+-- renaming the METHOD (keeping `Speak`) did not.  A fix keyed on interface name
+-- alone would leave this fixture red.
+import ifai.{DogA(..), sayA}
+import ifbi.{DogB(..), sayB}
+
+main : <IO> Unit
+main = putStrLn (sayA DogA ++ "|" ++ sayB DogB)

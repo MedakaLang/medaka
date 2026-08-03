@@ -678,7 +678,18 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # (`constraintOrigin` / `superOrigin` / `requireOrigin` / `implOrigin`). Every one is
 # a NAMED field, so the name-set pin above sees them too; this count moves for the
 # same four and is bumped for that reason and no other.
-carrier_count_expected=10
+#
+# 10 -> 11 (#1047, Stage A-2 unit A-2.9): `ifaceIdentity : TyConOrigin -> String ->
+# String`, ast.mdk's first CONSUMER of the carrier — the function that projects
+# `(originModule, name)` into the one comparable string the Core IR's
+# `CImplDefault` and eval's default cells carry.  It is a READER, not a carrier:
+# it adds no field to any node, mints no origin, and declares no new inhabitant,
+# so neither `declHeadOf` nor either producer ratchet gains an arm (adding one
+# would be the contradiction this gate's own message warns about).  The name-set
+# pin above is correctly silent — a signature is not a named record field — and
+# this form-independent count is correctly NOT, which is exactly the division of
+# labour the paragraph above describes.  Bumped for that reason and no other.
+carrier_count_expected=11
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone

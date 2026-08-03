@@ -1,0 +1,8 @@
+-- #1047, module B: an UNRELATED module declaring an interface with the SAME bare
+-- name `Speak` and the default `"B-default"`.  It never imports ifa.mdk and
+-- ifa.mdk never imports it, so per DICT-SEMANTICS §8 I4 these are two DISTINCT
+-- classes that merely share a spelling.  B's default is the one that used to
+-- vanish.
+export interface Speak x where
+  speak : x -> String
+  speak _ = "B-default"

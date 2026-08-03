@@ -101,6 +101,36 @@ public export data TyConOrigin =
   | OriginBuiltin
   | OriginModule String
 
+-- ── the INTERFACE IDENTITY KEY (#1047, Stage A-2 unit A-2.9) ─────────────────
+-- §8 I4's `(originModule, name)` for an INTERFACE, rendered as ONE comparable
+-- string so the downstream registries (Core IR's `CImplDefault`, eval's default
+-- entries) can carry it in a plain `String` field rather than dragging
+-- `TyConOrigin` into `ir/`, `backend/` and `eval/`.  `::` cannot occur in a
+-- Medaka identifier, so `"b::Speak"` can never collide with a bare name — the
+-- same discipline as `resolve.ifaceKey`'s `iface:` tag and typecheck's
+-- `<iface>@<slot>`.
+--
+-- 🚨 `""` IS ABSENCE OF AN IDENTITY, NOT AN IDENTITY.  Resolve is explicit that
+-- no predicate may treat two `OriginUnresolved` origins as matching each other
+-- (`fillDeclOrigin`), and this function is the seam where that rule has to be
+-- enforced for every consumer at once — hence `ifaceIdMatches` right below it,
+-- which is the ONLY comparison any consumer may use.  `OriginBuiltin` is
+-- unreachable for an interface (the language provides none; `Eq`/`Ord`/`Debug`
+-- are declarations in `stdlib/core.mdk`), and it maps to absence for the same
+-- reason: there is no module to name.
+export ifaceIdentity : TyConOrigin -> String -> String
+ifaceIdentity (OriginModule m) name = "\{m}::\{name}"
+ifaceIdentity OriginUnresolved _ = ""
+ifaceIdentity OriginBuiltin _ = ""
+
+-- The ONLY legal comparison on two `ifaceIdentity` strings: absence never
+-- matches, not even itself.  A bare `==` would make two unstamped interfaces
+-- compare EQUAL, which is exactly the cross-module confusion the carrier exists
+-- to prevent (and which the flat/loader-less drivers would hit immediately,
+-- since they deliberately stamp nothing — see `stampFlatTyOrigins`).
+export ifaceIdMatches : String -> String -> Bool
+ifaceIdMatches a b = a != "" && a == b
+
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
   -- by every renderer, so structural dumps and printed source are byte-identical

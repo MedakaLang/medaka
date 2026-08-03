@@ -1,5 +1,5 @@
 # META
-source_lines=1372
+source_lines=1402
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -104,6 +104,36 @@ public export data TyConOrigin =
   | OriginUnresolved
   | OriginBuiltin
   | OriginModule String
+
+-- ── the INTERFACE IDENTITY KEY (#1047, Stage A-2 unit A-2.9) ─────────────────
+-- §8 I4's `(originModule, name)` for an INTERFACE, rendered as ONE comparable
+-- string so the downstream registries (Core IR's `CImplDefault`, eval's default
+-- entries) can carry it in a plain `String` field rather than dragging
+-- `TyConOrigin` into `ir/`, `backend/` and `eval/`.  `::` cannot occur in a
+-- Medaka identifier, so `"b::Speak"` can never collide with a bare name — the
+-- same discipline as `resolve.ifaceKey`'s `iface:` tag and typecheck's
+-- `<iface>@<slot>`.
+--
+-- 🚨 `""` IS ABSENCE OF AN IDENTITY, NOT AN IDENTITY.  Resolve is explicit that
+-- no predicate may treat two `OriginUnresolved` origins as matching each other
+-- (`fillDeclOrigin`), and this function is the seam where that rule has to be
+-- enforced for every consumer at once — hence `ifaceIdMatches` right below it,
+-- which is the ONLY comparison any consumer may use.  `OriginBuiltin` is
+-- unreachable for an interface (the language provides none; `Eq`/`Ord`/`Debug`
+-- are declarations in `stdlib/core.mdk`), and it maps to absence for the same
+-- reason: there is no module to name.
+export ifaceIdentity : TyConOrigin -> String -> String
+ifaceIdentity (OriginModule m) name = "\{m}::\{name}"
+ifaceIdentity OriginUnresolved _ = ""
+ifaceIdentity OriginBuiltin _ = ""
+
+-- The ONLY legal comparison on two `ifaceIdentity` strings: absence never
+-- matches, not even itself.  A bare `==` would make two unstamped interfaces
+-- compare EQUAL, which is exactly the cross-module confusion the carrier exists
+-- to prevent (and which the flat/loader-less drivers would hit immediately,
+-- since they deliberately stamp nothing — see `stampFlatTyOrigins`).
+export ifaceIdMatches : String -> String -> Bool
+ifaceIdMatches a b = a != "" && a == b
 
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
@@ -1379,6 +1409,12 @@ mapKvsB f ((k, v)::rest) =
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginUnresolved") PWild) (ELit (LString "")))
+(DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
+(DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "!=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
@@ -1599,6 +1635,12 @@ mapKvsB f ((k, v)::rest) =
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginUnresolved") PWild) (ELit (LString "")))
+(DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
+(DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "!=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))

@@ -167,7 +167,14 @@
 --            (literals + intToString); cp_count cached so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Loc(..)}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  Addr(..),
+  Route(..),
+  Loc(..),
+  ifaceIdMatches,
+}
 import ir.core_ir.{
   CExpr(..),
   CField(..),
@@ -188,6 +195,7 @@ import ir.core_ir_lower.{
   canonPat,
   ifaceImplRouteKeys,
   ifaceDeclHeadUnique,
+  ifaceIdsAtTag,
 }
 import support.util.{
   reverseL,
@@ -196,6 +204,7 @@ import support.util.{
   listLen,
   contains,
   filterList,
+  anyList,
   startsWith,
   fallthroughName,
   noneHeadTag,
@@ -1262,15 +1271,73 @@ findByTag tag (_::rest) = findByTag tag rest
 -- the interface DEFAULT entry (CImplDefault) for a method: the untagged body the
 -- interface declared and the type's `impl` did not override.  None ⇒ no default
 -- (the method has no default body — a genuine missing-impl error).
+--
+-- ── #1047: WHICH default, when two interfaces share a method name ────────────
+-- The registry is filtered by the interface METHOD name alone, and a method name
+-- is not unique across interfaces: two UNRELATED modules may each declare
+-- `interface Speak x where speak : x -> String` with a DIFFERENT default body.
+-- Both lower to a `CImplDefault "speak"` entry, so first-match handed a method-less
+-- `impl Speak DogB` the OTHER module's body — `@mdk_default_speak_DogB` was
+-- correctly routed and correctly named, and simply contained the wrong string.
+-- Exit 0, no diagnostic, all three engines equally wrong.
+--
+-- The tag-aware form intersects the candidate defaults' interface IDENTITIES
+-- (`CImplDefault`'s field 0) with the identities of the interfaces the impl(s) at
+-- [tag] actually implement (`ifaceIdsAtTag`, off the declared-impl table — which
+-- sees a METHOD-LESS impl, the shape that has no `CImplTagged` at all).
+--
+-- ⚠️ CONSERVATIVE BY CONSTRUCTION.  With ≤1 candidate — every program in this tree
+-- and every program without an interface-name collision — it returns exactly what
+-- first-match returned, so the emitted IR is byte-identical and the fixpoint is
+-- unaffected.  It narrows only when the narrowing is UNAMBIGUOUS (exactly one
+-- survivor); an empty or ambiguous intersection falls back to first-match rather
+-- than inventing an answer, because `ifaceIdentity` is `""` (absence) on every
+-- loader-less driver and absence must never decide a dispatch.
 defaultFor : Emit -> String -> Option CImplEntry
-defaultFor e method = findDefault method (methodEntries e method)
+defaultFor e method = defaultForAt e method ""
 
-findDefault : String -> List CImplEntry -> Option CImplEntry
-findDefault _ [] = None
-findDefault method ((CImplEntry n s (CImplDefault pats body))::rest)
-  | n == method = Some (CImplEntry n s (CImplDefault pats body))
-  | otherwise = findDefault method rest
-findDefault method (_::rest) = findDefault method rest
+-- [tag] is the concrete dispatch tag the default is being emitted FOR (the `<tag>`
+-- of `@mdk_default_<method>_<tag>`); "" means "no tag in hand", which degrades to
+-- first-match.
+defaultForAt : Emit -> String -> String -> Option CImplEntry
+defaultForAt e method tag =
+  pickDefaultAt tag (findDefaults method (methodEntries e method))
+
+-- every untagged default named [method], in program order (the set first-match
+-- used to take the head of).
+findDefaults : String -> List CImplEntry -> List CImplEntry
+findDefaults _ [] = []
+findDefaults method ((CImplEntry n s (CImplDefault ifaceId pats body))::rest)
+  | n == method =
+    CImplEntry n s (CImplDefault ifaceId pats body) :: findDefaults method rest
+  | otherwise = findDefaults method rest
+findDefaults method (_::rest) = findDefaults method rest
+
+pickDefaultAt : String -> List CImplEntry -> Option CImplEntry
+pickDefaultAt _ [] = None
+pickDefaultAt _ [d] = Some d
+pickDefaultAt tag (d::rest) = narrowDefaults (d::rest) (ifaceIdsAtTag tag) d
+
+narrowDefaults : List CImplEntry -> List String -> CImplEntry -> Option CImplEntry
+narrowDefaults ds ids fallback = match filterList (defaultOwnedBy ids) ds
+  [only] => Some only
+  _ => Some fallback
+
+defaultOwnedBy : List String -> CImplEntry -> Bool
+defaultOwnedBy ids ent = anyList (ifaceIdMatches (defaultIfaceIdOf ent)) ids
+
+defaultIfaceIdOf : CImplEntry -> String
+defaultIfaceIdOf (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
+defaultIfaceIdOf _ = ""
+
+-- the tag-narrowed default for (method, tag), or [fallback] when there is none to
+-- narrow to.  `defaultForAt` can only return None when the method has NO default
+-- at all — and every caller of this helper already holds one — so the fallback is
+-- reached in practice only via `pickDefaultAt`'s own ambiguity arm.
+defaultAtOr : CImplEntry -> Emit -> String -> String -> CImplEntry
+defaultAtOr fallback e method tag = match defaultForAt e method tag
+  Some ent => ent
+  None => fallback
 
 -- the lifted LLVM name of an interface default method (E19): `mdk_default_<method>_<tag>`.
 -- A default is emitted only on the CONCRETE RKey path (`filter`@List), keyed per
@@ -1392,11 +1459,11 @@ isImplMethod e name = match implMethodSetRef.value
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
 implPats (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implPats (CImplEntry _ _ (CImplDefault pats _)) = pats
+implPats (CImplEntry _ _ (CImplDefault _ pats _)) = pats
 
 implBody : CImplEntry -> CExpr
 implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
-implBody (CImplEntry _ _ (CImplDefault _ body)) = body
+implBody (CImplEntry _ _ (CImplDefault _ _ body)) = body
 
 -- #747: is this a nullary/return-position/no-requires impl — the exact shape
 -- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
@@ -1409,7 +1476,7 @@ implEntryMemoisable _ = False
 
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
-implEntryTag (CImplEntry _ _ (CImplDefault _ _)) = ""
+implEntryTag (CImplEntry _ _ (CImplDefault _ _ _)) = ""
 
 -- the ROUTE key the typechecker stamps for this impl — the bare head tag when the
 -- head is unique (byte-identical to the pre-C7 dict header), else the canonical
@@ -4524,7 +4591,9 @@ emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capName
 -- still shared across monoids: only the runtime dict word differs per call, so one
 -- `@mdk_default_foldMap_List` serves both a List- and a String-monoid fold.
 emitDefaultRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
-emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultFor e name
+-- #1047: `defaultForAt`, not `defaultFor` — the tag is exactly what disambiguates
+-- two same-named interfaces' defaults, and this is the site that emits the body.
+emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt e name tag
   Some entry =>
     let fname = defaultFnName tag name
     let _ = ensureDefaultEmitted e fname tag name entry
@@ -4783,7 +4852,7 @@ emitPapDefineIndirect e papName supplied remaining =
 -- lookup); "" for a default entry (it carries no tag/iface — never RKey-reached).
 implEntryIface : CImplEntry -> String
 implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
-implEntryIface (CImplEntry _ _ (CImplDefault _ _)) = ""
+implEntryIface (CImplEntry _ _ (CImplDefault _ _ _)) = ""
 
 -- a runtime method dispatch (RDict/RDictFwd): the enclosing function's dict
 -- PARAMETER `d` (a BOXED dict-witness pointer, GAP 1 Option A) selects the impl at
@@ -5234,7 +5303,11 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
   let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
   let fname = defaultFnName tag name
-  let _ = ensureDefaultEmitted e fname tag name entry
+  -- #1047: this chain walks MANY tags but was handed ONE `entry`, so under an
+  -- interface-name collision every arm would emit the same (possibly wrong)
+  -- body.  Re-resolve per arm; [entry] stays the fallback for a tag the
+  -- declared-impl table cannot narrow, which is the pre-#1047 behaviour.
+  let _ = ensureDefaultEmitted e fname tag name (defaultAtOr entry e name tag)
   let reqCount = innerDefaultReqCount e name tag
   let reqDicts = loadReqDicts e dictPtr reqCount 0
   let (rv, _) = emitImplCall e fname (reqDicts ++ argOps) LTInt
