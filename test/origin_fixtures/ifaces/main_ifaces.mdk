@@ -1,0 +1,41 @@
+-- #1110 PR C corpus — the ENTRY, importing BOTH `Speak`s.
+--
+-- Two same-named interfaces from two unrelated modules are in this module's scope
+-- at once.  Every `Speak` written below therefore has two candidate declarations
+-- and exactly one spelling, so the origin the occurrence acquires is decided by
+-- resolve's precedence rule (own > imports > prelude; within imports, later wins —
+-- `omFromPairs` inserts left to right and a later insert wins).  Measured on the
+-- corpus rather than reasoned from the source: the golden's `iface:Echo 1 mod:beta`
+-- spread line is that rule's output, `beta` being the SECOND import below.
+--
+-- That choice is PINNED rather than endorsed.  A silent winner is the input the
+-- `AmbiguousInterface` diagnostic (unit E/F of Stage A-1) has to REPLACE; the
+-- honest end state here is a diagnostic, and when it lands this line moves.
+--
+-- ⚠️ This file compiles and runs at exit 0 today, printing `alpha-cat`, with no
+-- diagnostic of any kind. That is not a property to preserve — it is #1047 on the
+-- page.  PR C changes none of it; it only makes the identities observable.
+
+import alpha.{Speak, Echo, Cat(..), speak, twice, echo}
+import beta.{Speak, Echo, Dog(..), Kennel(..)}
+
+data Pair a = Pair a a
+
+-- A `=>` predicate naming `Speak` at a use site in a THIRD module — neither
+-- declarer's own.
+sayIt : Speak a => a -> String
+sayIt x = speak x
+
+-- An `impl` with a `requires`, both naming `Speak`, in that same third module: the
+-- `DImpl.implOrigin` and `Require.requireOrigin` carriers side by side.
+impl Speak (Pair a) requires Speak a where
+  speak (Pair x _) = speak x
+
+-- THE PRECEDENCE WITNESS (see alpha.mdk).  `Echo` is declared by both alpha and
+-- beta and used by neither, so this `=>` is its ONLY occurrence anywhere in the
+-- corpus and `HEAD SPREAD`'s `iface:Echo 1 mod:<winner>` line is exactly the
+-- declaration this import pair resolved to.
+resound : Echo a => a -> String
+resound x = echo x
+
+main = println "\{sayIt (Pair Cat Cat)} \{twice Cat} \{speak Dog} \{speak (Kennel Dog)}"

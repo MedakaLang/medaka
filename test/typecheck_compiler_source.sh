@@ -377,22 +377,37 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 #             NOT yet appear in the probe, so the moment someone wires it in, this
 #             gate reds and forces the name to move up to the graded set.
 #
-# The four OWED names are #1110 PR B's interface-OCCURRENCE carriers. They cannot be
-# graded by this PR: nothing stamps them yet (PR B is carrier-only), so every arm
-# would report `OriginUnresolved` and the only thing the probe could print is a
-# larger RESIDUAL -- a golden move on a PR whose whole contract is byte-identity.
-# Extending the probe to interface heads is PR C's stated deliverable in #1110's
-# Stage A-1 handoff map, which is exactly what the self-drain above forces.
-carrier_graded_expected="dataOrigin
+# The OWED list held #1110 PR B's four interface-OCCURRENCE carriers, which PR B
+# could not grade: nothing stamped them yet (PR B was carrier-only), so every arm
+# would have reported `OriginUnresolved` and the only thing the probe could print
+# was a larger RESIDUAL -- a golden move on a PR whose whole contract was
+# byte-identity. PR C landed the stamping AND the grading together, which is
+# precisely what the two-sided self-drain below forces, and the four names moved to
+# GRADED.
+#
+# ⚠️ #1110 PR C DRAINED THE OWED LIST TO EMPTY, and the four names moved UP rather
+# than being deleted: resolve now stamps the interface-occurrence carriers
+# (`fillIfaceOccOrigin` through `mapOriginsInDecl`) and the agreement probe grades them as
+# `iface:<Name>` rows. Both halves of the OWED self-drain fired on that change —
+# the probe half and the stamper half — which is exactly the promotion this pin was
+# built to force. An EMPTY owed list is a legitimate steady state, not a disarmed
+# ratchet: the name-set pin below still fails on any new or renamed carrier, and a
+# newly-added one has to be classified into one of these two lists to get past it.
+carrier_graded_expected="constraintOrigin
+dataOrigin
 ifaceOrigin
+implOrigin
 newtypeOrigin
+requireOrigin
+superOrigin
 tyAliasOrigin
 tyConOrigin"
-carrier_owed_expected="constraintOrigin
-implOrigin
-requireOrigin
-superOrigin"
-carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | sort)
+carrier_owed_expected=""
+# ⚠️ `grep -v '^$'` is load-bearing now that the OWED list can legitimately be
+# EMPTY: `printf '%s\n%s\n'` on an empty second argument emits a blank line, which
+# sorts FIRST and would make this set comparison fail against a field list that can
+# never contain one.
+carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | grep -v '^$' | sort)
 carrier_actual=$(grep -oE '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
   | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
 if [ "$carrier_actual" != "$carrier_expected" ]; then

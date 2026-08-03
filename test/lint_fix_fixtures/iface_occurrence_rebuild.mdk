@@ -1,0 +1,58 @@
+-- #1110 PR C — `medaka lint --fix` over a file dense in INTERFACE-OCCURRENCE
+-- carriers (`Constraint` / `Super` / `Require` / `DImpl.iface`).
+--
+-- WHY THIS FIXTURE EXISTS.  Five `lint.mdk` rules REBUILD a `DImpl` node in order
+-- to rewrite a method body (`lambdaSectionFix`, `ifMaxMinFix`, `andThenPureMapFix`,
+-- `exprRuleFix`, `concatToInterpFix` — each matches `d@(DImpl { implOrigin = _,
+-- methods })`).  A rebuild through `dImplUnresolved`, or through a total record
+-- literal that respells every field, would silently reset an acquired
+-- `implOrigin`/`requireOrigin` — and resolve's immunity rule (fill in only a
+-- still-unresolved origin) makes such a reset PERMANENT.  Record UPDATE is the
+-- discipline that prevents it; this fixture is the corpus that keeps a rule-fixer
+-- exercised against the shape.
+--
+-- 🚨 WHAT IT CAN AND CANNOT PROVE.  `medaka lint` runs on the RAW, PRE-RESOLVE AST,
+-- so every origin in this file is `OriginUnresolved` when a fixer sees it: nothing
+-- here can OBSERVE an identity being destroyed, and claiming otherwise would be
+-- claiming past the evidence.  What the `.fixed` golden does prove is the half that
+-- is checkable at this stage and is the one that would destroy source: the fixers
+-- still produce the right text over interface-occurrence-dense decls, and the
+-- printer does not leak an identity field into the output.  The runtime half — that
+-- an acquired origin survives to the trees `elaborateModules` returns — is asserted
+-- by test/diff_compiler_origin_agreement.sh's per-carrier `iface-occs-*`
+-- anti-vacuity guards, which go to 0 the moment a rebuild blanks a carrier.
+--
+-- The `.fixed` golden was derived from the rules' own contracts BEFORE it was
+-- captured, not read off the tool: rule-if-max-min turns `if p > q then p else q`
+-- into `max p q` (and the `<` form into `min`), rule-concat-to-interp turns a
+-- two-hole `++` chain into one interpolated literal, and every impl HEAD and
+-- `requires` clause must come through byte-identical.
+
+interface Weigh a where
+  weigh : a -> Int
+
+interface Label a requires Weigh a where
+  label : a -> String
+
+data Crate a = Crate a a
+
+-- `requires` on an impl (a `Require` occurrence) beside a rule-if-max-min body:
+-- the fixer must rewrite the METHOD and leave the impl head and its `requires`
+-- alone.
+impl Weigh (Crate a) requires Weigh a where
+  weigh (Crate x y) = if weigh x > weigh y then weigh x else weigh y
+
+-- Two `requires` predicates, and a rule-concat-to-interp body (TWO holes — one
+-- hole is a documented negative for that rule).
+impl Label (Crate a) requires Weigh a, Label a where
+  label (Crate x y) = "crate[" ++ label x ++ "," ++ label y ++ "]"
+
+-- A `=>` predicate at a top-level signature over a fixable body, so the
+-- Constraint carrier is exercised outside an impl too.
+describe : Weigh a => a -> a -> Int
+describe x y = if weigh x < weigh y then weigh x else weigh y
+
+-- NEGATIVE: an interface-dense decl with nothing fixable — the fixer must decline
+-- rather than reformat.
+plain : Label a => a -> String
+plain x = label x
