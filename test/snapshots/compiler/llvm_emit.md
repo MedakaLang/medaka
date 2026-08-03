@@ -1,5 +1,5 @@
 # META
-source_lines=11231
+source_lines=11236
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -4619,8 +4619,11 @@ emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capName
 -- still shared across monoids: only the runtime dict word differs per call, so one
 -- `@mdk_default_foldMap_List` serves both a List- and a String-monoid fold.
 emitDefaultRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
--- #1047: `defaultForAt`, not `defaultFor` — the tag is exactly what disambiguates
--- two same-named interfaces' defaults, and this is the site that emits the body.
+-- #1047: `defaultForAt`, not `defaultFor` — the tag is what the narrowing keys on,
+-- and this is the site that emits the body.  ⚠️ The trigger is a METHOD-name
+-- collision, not an interface-name one (the interfaces' own names are irrelevant),
+-- and the tag does NOT disambiguate when ONE tag carries TWO interfaces sharing a
+-- method name — that is #1265, still open.
 emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt e name tag
   Some entry =>
     let fname = defaultFnName tag name
@@ -5331,10 +5334,12 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
   let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
   let fname = defaultFnName tag name
-  -- #1047: this chain walks MANY tags but was handed ONE `entry`, so under an
-  -- interface-name collision every arm would emit the same (possibly wrong)
+  -- #1047: this chain walks MANY tags but was handed ONE `entry`, so under a
+  -- METHOD-name collision (the interfaces' own names are irrelevant) every arm
+  -- would emit the same (possibly wrong)
   -- body.  Re-resolve per arm; [entry] stays the fallback for a tag the
   -- declared-impl table cannot narrow, which is the pre-#1047 behaviour.
+  -- ⚠️ Re-resolving PER ARM still cannot separate two interfaces at ONE tag: #1265.
   let _ = ensureDefaultEmitted e fname tag name (defaultAtOr entry e name tag)
   let reqCount = innerDefaultReqCount e name tag
   let reqDicts = loadReqDicts e dictPtr reqCount 0
