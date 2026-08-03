@@ -1,0 +1,19 @@
+-- #1111 A-2.3 BYSTANDER: this module declares NOTHING that any other module in
+-- the graph also declares.  Every name here is unique across the whole fixture,
+-- so nothing here participates in the same-name collision `dupa`/`dupz` create,
+-- and the entry's golden is an assertion about THIS module's types only.
+--
+-- It deliberately covers both halves of the re-keyed pair:
+--   * a row-kinded DATA head (`dataParamKindsRef`) — slot 0 of `Widget` is KRow
+--     because a ctor field puts `r` in an effect-tail position;
+--   * a nullary ALIAS, an alias-OF-an-alias, and a saturated PARAMETERIZED
+--     alias (`aliasTableRef`, all three of its reader arms).
+public export data Widget r b = MkWidget (Unit -> <r> b)
+
+public export data Pair x y = MkPair x y
+
+export type Gauge = Int
+
+export type Gauge2 = Gauge
+
+export type Boxed a = Pair a a

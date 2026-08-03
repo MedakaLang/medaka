@@ -1,0 +1,61 @@
+-- #1111 A-2.3 BYSTANDER FIXTURE — "feature + UNRELATED code still behaves",
+-- which is the shape `AGENTS.md` requires of any change that re-keys a
+-- PROGRAM-GLOBAL TABLE, as opposed to "feature works".
+--
+-- A-2.3 re-keys `aliasTableRef` / `dataParamKindsRef` (`compiler/types/
+-- typecheck.mdk`) from a bare type name to a module-qualified identity.  The
+-- fixtures that prove the FEATURE are the drained #1069/#1090/#1070 repros —
+-- each one asserts that a SHADOWED name now resolves to the right module.  This
+-- fixture asserts the other half, which no drained repro can: that a module
+-- which shadows NOTHING is inferred exactly as it would be with no collision in
+-- the graph at all.
+--
+-- The graph DOES contain a collision: `dupa.mdk` and `dupz.mdk` both declare a
+-- type `Dup` at arity 2 (one with a row-kinded slot 0, one all-Type) and an
+-- alias `Shared` (Int vs Float).  Only their unrelated FUNCTIONS are imported,
+-- so both are registered into the cross-module universe and neither is nameable
+-- from here.  NOTHING BELOW MENTIONS `Dup` OR `Shared`.
+--
+-- What the golden pins, and why each line can fail:
+--   * `w` writes a BARE row into `Widget`'s KRow slot.  A lookup that missed
+--     would fall to `appFallback`, the row would land in an ordinary type slot,
+--     and `fromAstTypeE`'s `TyRow` arm would raise T-ROW-KIND-MISMATCH — the
+--     binding would vanish from the dump (#1090's symptom, on a name that
+--     collides with nothing).
+--   * `wrapped` writes the WRAPPED spelling of the same row.  A miss there is
+--     SILENT: `fromAstTypeE`'s `TyEffect` arm unwraps to the real type and
+--     inference continues, so the scheme would read `Widget Unit Int` (#1069's
+--     symptom).  Both spellings are pinned because the two failure modes are
+--     different and each is invisible to the other.
+--   * `g` / `p` exercise the alias table's alias-of-alias and saturated
+--     parameterized arms; a wrong expansion shows as a different scheme
+--     (#1070's symptom).
+--   * `lst` / `opt` / `n` mention NONE of A-2.3's machinery — builtin and
+--     prelude heads, which have no row in either table and reach the
+--     `appFallback` miss path deliberately (miss-policy case 1).  They are here
+--     to answer `AGENTS.md`'s "what happens to a program that never touches the
+--     table" directly.
+import plain.{Widget, Pair, MkPair, Gauge2, Boxed}
+import dupa.{da} -- ONLY the function; never dupa's Dup or Shared
+import dupz.{dz} -- ONLY the function; never dupz's Dup or Shared
+
+w : Widget <Stdout> Int
+w = w
+
+wrapped : Widget (<Stdout> Unit) Int
+wrapped = wrapped
+
+g : Gauge2
+g = 7
+
+p : Boxed Int
+p = MkPair 1 2
+
+lst : List Int
+lst = [1, 2, 3]
+
+opt : Option String
+opt = Some "s"
+
+n : Int
+n = da (dz 1)

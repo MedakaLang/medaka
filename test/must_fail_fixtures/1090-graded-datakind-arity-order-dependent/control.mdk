@@ -1,9 +1,0 @@
--- CONTROL for #1090: identical to main.mdk minus the shadowing `z2` module and its
--- import -- the ONE flipped feature. With no other `Bx` in scope, `v`'s written effect
--- row must survive intact and typecheck cleanly as `v : Bx <Stdout> Int`.
-import gbox.{Bx}
-
-v : Bx <Stdout> Int
-v = v
-
-main = println "x"

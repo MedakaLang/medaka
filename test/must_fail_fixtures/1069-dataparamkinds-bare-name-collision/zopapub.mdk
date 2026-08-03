@@ -1,6 +1,0 @@
--- issue #1069: sibling module declaring a SAME-NAME, SAME-ARITY `Box` (the shadower).
--- Only `zf` is ever imported from this module -- `main.mdk` never imports this `Box`.
-public export data Box p q = MkZ p q
-
-export zf : Int -> Int
-zf n = n

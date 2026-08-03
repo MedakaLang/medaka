@@ -1,7 +1,0 @@
--- issue #1070: sibling module declaring a SAME-NAME, SAME-ARITY alias `T` (the
--- shadower). Only `zf` is ever imported from this module -- main.mdk never imports
--- this `T`.
-export type T = Float
-
-export zf : Int -> Int
-zf n = n

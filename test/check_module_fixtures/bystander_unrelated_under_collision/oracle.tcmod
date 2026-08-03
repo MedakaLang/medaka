@@ -1,0 +1,7 @@
+g : Int
+lst : List Int
+n : Int
+opt : Option String
+p : Pair Int Int
+w : Widget <Stdout> Int
+wrapped : Widget <Stdout> Int

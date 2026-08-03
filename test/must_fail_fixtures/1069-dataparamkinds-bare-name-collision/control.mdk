@@ -1,9 +1,0 @@
--- CONTROL for #1069: identical to main.mdk minus the shadowing `zopapub` module and
--- its import -- the ONE flipped feature. With no same-name `Box` in scope, `v`'s
--- written effect row must survive intact.
-import apub.{Box}
-
-v : Box (<Stdout> Unit) Int
-v = v
-
-main = println "x"

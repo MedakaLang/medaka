@@ -486,8 +486,12 @@ if [ "$mono_tcon_actual" != "$mono_tcon_expected" ]; then
 fi
 # ⚠️ minus TWO, not one: the declaration line AND the origin-BINDING pattern listed
 # above are both in the allowlist but neither is a mint.  A bare `- 1` here would
-# report "5 mints" for four, i.e. the count would silently absorb the next pattern
-# added — the slack the sibling ratchets' comments warn about.
+# report "5 mints" for four — the label would be wrong about the tree as it stands.
+# This is a LABEL fix, not a new guarantee: `- 2` is just as hardcoded as `- 1`, so
+# a THIRD non-mint line added to the allowlist would make this label wrong again.
+# What actually prevents a silent absorption is the exact-set comparison above, not
+# this arithmetic — a new pattern or a duplicate row fails there, before this line
+# is ever reached.
 echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 2)) Mono.TCon mint(s) + 1 origin-binding pattern, no other construction site"
 
 # The names `tconBuiltin` claims as language-provided must be exactly that, and the
