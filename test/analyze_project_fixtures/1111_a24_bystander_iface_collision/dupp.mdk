@@ -1,0 +1,10 @@
+-- #1111 A-2.4 BYSTANDER: half two of the SAME-NAME INTERFACE COLLISION.  Same
+-- spelling `Same`, same arity, but UNGRADED (slot 0 is a plain `Type`) and with a
+-- different required-method set (`pmth`, not `gandThen`).  Sorted after `dupg` so it
+-- is the one that registers LAST and would win a bare-name last-write-wins key.  The
+-- entry imports ONLY `dp` from this module.
+export interface Same f where
+  pmth : f a b -> Int
+
+export dp : Int -> Int
+dp n = n

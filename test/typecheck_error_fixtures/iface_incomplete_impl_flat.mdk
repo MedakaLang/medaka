@@ -1,0 +1,22 @@
+-- #1111 A-2.4 MIRROR PROBE (FLAT / single-file arm), impl-completeness half.
+--
+-- A-2.4 re-keys the impl-completeness table (`universeIfaceRequiredRef`) from a bare
+-- interface name to a module-qualified identity, which turns TWO exit-1 rejections
+-- into exit-0 acceptances (#1257, #1258).  Per AGENTS.md a fix that turns "returned
+-- NOTHING" into "returns SOMETHING" leaves the new something untested BY
+-- CONSTRUCTION -- so this fixture asserts the OTHER direction: a GENUINELY incomplete
+-- impl, with NO same-name interface anywhere, must STILL be rejected.
+--
+-- Single-file on purpose.  On the flat driver arm every USER declaration carries
+-- `OriginUnresolved` (`stampFlatTyOrigins`, frontend/resolve.mdk), so `Alpha` and the
+-- `impl`'s occurrence of it BOTH key `TkBare` -- the identity-less half of the key.
+-- If that half were dropped, or if a `TkBare` key could not meet a `TkBare` row, this
+-- rejection would silently disappear and no golden in the tree would move.
+interface Alpha a where
+  afoo : a -> Int
+  abar : a -> Int
+
+data ET = MkET
+
+impl Alpha ET where
+  afoo e = 1

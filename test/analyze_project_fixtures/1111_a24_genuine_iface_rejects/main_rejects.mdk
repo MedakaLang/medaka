@@ -1,0 +1,31 @@
+-- #1111 A-2.4 MIRROR PROBE (MODULE arm) -- the severity-ladder half of this unit.
+--
+-- A-2.4 turns two exit-1 rejections into exit-0 acceptances (#1257, #1258).  Per
+-- AGENTS.md, "does this fix turn a path that returned NOTHING into one that returns
+-- SOMETHING? If so, the new something is UNTESTED BY CONSTRUCTION" -- every
+-- pre-existing fixture covered the rejecting case, so none of them can fail if the
+-- fix over-widens and starts accepting things it must not.
+--
+-- So this fixture is the mirror: BOTH re-keyed tables' diagnostics, on GENUINE
+-- defects, with NO same-name interface anywhere in the graph.  Both must still fire.
+--   * `impl Alpha ET` defines `afoo` and NOT `abar` -- genuinely incomplete
+--     (T-INCOMPLETE-IMPL, via `universeIfaceRequiredRef`).
+--   * `impl Graded Q` heads a graded interface (slot 0 `Row`) with `Q`, whose slot 0
+--     is a plain `Type` -- genuinely wrong-kinded (T-IMPL-KIND-MISMATCH, via
+--     `universeIfaceParamKinds`).
+--
+-- The `gthen q f = gthen q f` body is deliberate: a body that CONSTRUCTS a `Q` drags
+-- in an unrelated `Num`-on-a-quantified-tyvar diagnostic, which would let this
+-- fixture keep passing on the wrong diagnostic if the kind check ever went quiet.
+import alphamod.{Alpha, afoo}
+import gradedmod2.{Graded, gthen}
+
+data ET = MkET
+
+impl Alpha ET where
+  afoo e = 1
+
+data Q a b = MkQ a b
+
+impl Graded Q where
+  gthen q f = gthen q f

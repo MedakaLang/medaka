@@ -1,0 +1,73 @@
+-- #1111 A-2.4 BYSTANDER FIXTURE -- "feature + UNRELATED code still behaves", which
+-- is the shape AGENTS.md requires of any change that re-keys a PROGRAM-GLOBAL TABLE,
+-- as opposed to "feature works".
+--
+-- A-2.4 re-keys `universeIfaceRequiredRef` (impl completeness) and
+-- `universeIfaceParamKinds` (graded instance-head kinds) from a bare INTERFACE name
+-- to a module-qualified identity.  The fixtures that prove the FEATURE are the
+-- drained #1257/#1258 repros -- each asserts that a SHADOWED interface name now
+-- resolves to the right module.  This fixture asserts the other half, which no
+-- drained repro can: that a module which shadows NOTHING is checked exactly as it
+-- would be with no collision in the graph at all.
+--
+-- The graph DOES contain a collision: `dupg.mdk` and `dupp.mdk` both declare an
+-- interface `Same` at arity 1 -- one graded with required method `gandThen`, one
+-- ungraded with required method `pmth`.  Only their unrelated FUNCTIONS are imported,
+-- so both are registered into the cross-module universe and neither is nameable from
+-- here.  NOTHING BELOW MENTIONS `Same`, `gandThen` OR `pmth`.
+--
+-- What the golden pins (every file's bucket is `[]`), and how each line can fail:
+--   * `impl Own ET` implements BOTH of `Own`'s required methods.  If the completeness
+--     lookup answered with the wrong interface's required-method list, this would
+--     gain a T-INCOMPLETE-IMPL naming `gandThen` or `pmth` -- #1258's symptom on a
+--     name that collides with nothing.
+--   * `impl OwnGraded Asy` is CORRECTLY kinded: `OwnGraded`'s slot 0 is `Row` and
+--     `Asy`'s slot 0 is `Row` too (`Unit -> <e> a` is what makes a param row-kinded).
+--     If the slot-kind lookup answered with the wrong interface's slot kinds this
+--     would gain a spurious T-IMPL-KIND-MISMATCH -- #1257's symptom, again on a
+--     non-colliding name.
+--   * `impl Display ET` exercises the same completeness path against a PRELUDE
+--     interface, whose identity is `mod:core` on both driver arms.  A key that could
+--     not reach the prelude's own rows would break here first.
+--   * `plain` mentions none of A-2.4's machinery at all -- it is here to answer
+--     AGENTS.md's "what happens to a program that never touches the table" directly.
+--
+-- 🚨 WHAT THIS FIXTURE CANNOT CATCH, stated so nobody reads it as covering more than
+-- it does.  It detects a key that WRONGLY MEETS another module's row (a spurious
+-- diagnostic appears).  It CANNOT detect a key that NEVER MEETS its own row: both
+-- readers abstain on a miss, so a write-side/read-side key disagreement would leave
+-- every bucket here `[]` and this fixture green while the checks had silently
+-- stopped running.  That direction is covered by the mirror-probe fixtures instead
+-- (`test/analyze_project_fixtures/1111_a24_genuine_iface_rejects/` on the module arm,
+-- `test/typecheck_error_fixtures/{iface_incomplete_impl_flat,
+-- graded_head_wrong_kind_flat}.mdk` on the flat arm), which go SILENT exactly when
+-- this one cannot.  The pair is the assertion; neither half is.
+import dupg.{dg}  -- ONLY the function; never dupg's Same
+import dupp.{dp}  -- ONLY the function; never dupp's Same
+
+interface Own a where
+  ownFoo : a -> Int
+  ownBar : a -> Int
+
+data ET = MkET
+
+impl Own ET where
+  ownFoo e = 1
+  ownBar e = 2
+
+impl Display ET where
+  display e = "ET"
+
+interface OwnGraded f where
+  ownThen : f e a -> (a -> <e> f e b) -> f e b
+
+public export data Asy e a = MkAsy (Unit -> <e> a)
+
+impl OwnGraded Asy where
+  ownThen a f = ownThen a f
+
+plain : Int -> Int
+plain n = n + 1
+
+n : Int
+n = dg (dp (plain (ownFoo MkET + ownBar MkET)))

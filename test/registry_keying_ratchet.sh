@@ -168,14 +168,14 @@ echo "checking #1111 CrossRun / DriverState field allowlist ..."
 cross_allowed='universeIfaceMethodsRef -- accumulated interface-method NAME set across all modules (definer-shadow checks)
 universeFunNamesRef -- accumulated top-level fn NAME set across all modules (importer-shadow checks)
 universeKeyBucketsRef -- accumulated impl-existence key buckets (implExistsForHead)
-universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl completeness)
+universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl completeness); IDENTITY-KEYED since A-2.4 (a Registry keyed by regKeyOfTab (ifaceTabKey <ifaceOrigin/implOrigin> name); drained #1258. Flat/single-file rows key TkBare until #1115 -- but this table is READ only on the Module arm)
 universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half)
-universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the map above
+universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the map above. STILL BARE-NAME, DELIBERATELY, and A-2.4 examined it and declined: the value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from; and what it gates is the obligation channel, which is itself "<iface>|<tag>"-keyed and belongs to A-2.2. Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH obUniv*, not before
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map
 universeFieldOwners -- accumulated field-name -> owning-record(s) map
 universeDataParamKinds -- accumulated data-type param-kind list; IDENTITY-KEYED since A-2.3 (TabKey; flat/single-file table holds BOTH populations -- prelude rows key TkIdent via stampDeclOrigins "core", flat USER rows have no identity and stay TkBare until #1115)
-universeIfaceParamKinds -- accumulated interface param-kind list (#822, iface half of the kind universe)
+universeIfaceParamKinds -- accumulated interface param-kind list (#822, iface half of the kind universe); IDENTITY x SLOT-KEYED since A-2.4 (RegKey via regKeyTabAt (ifaceTabKey o iface) i, replacing the "<iface>@<slot>" string; drained #1257. Read on BOTH driver arms, so flat/single-file rows key TkBare until #1115)
 universeAliasTable -- accumulated type-alias table; IDENTITY-KEYED since A-2.3 (TabKey; flat/single-file table holds BOTH populations -- prelude rows key TkIdent via stampDeclOrigins "core", flat USER rows have no identity and stay TkBare until #1115)
 universeDataEnv -- accumulated ctor environment (bare-name, last-write-wins -- the thing #674 works around)
 universeDataDecls -- accumulated PUBLIC data decls (#674: recovers per-module ctor identity universeDataEnv loses)

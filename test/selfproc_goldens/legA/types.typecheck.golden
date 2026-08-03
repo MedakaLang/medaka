@@ -171,10 +171,10 @@ checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int ->
 checkGradedImplHeadDecl : Decl -> Unit
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : List Decl -> Unit
-checkGradedImplTys : String -> Int -> List Ty -> Unit
+checkGradedImplTys : TyConOrigin -> String -> Int -> List Ty -> Unit
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkImplCompleteness : List Decl -> List Decl -> Unit
-checkImplCompletenessMap : Map String (List String) -> List Decl -> Unit
+checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit
 checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
 checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
 checkInterfaceCycles : List Decl -> Unit
@@ -635,12 +635,13 @@ ifaceParamMonos : String -> Mono -> Option (List Mono)
 ifaceRegistered : String -> Bool
 ifaceRequiredMethods : List Decl -> String -> Option (List String)
 ifaceSelfAndSupers : String -> List String
-ifaceSlotKey : String -> Int -> String
+ifaceSlotKey : TyConOrigin -> String -> Int -> RegKey
 ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
 ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
+ifaceTabKey : TyConOrigin -> String -> TabKey
 implBodyLoc : Expr -> Option Loc
 implCompletenessMsgsOf : List Decl -> Decl -> List (Option Loc, String)
-implCompletenessMsgsOfMap : Map String (List String) -> Decl -> List (Option Loc, String)
+implCompletenessMsgsOfMap : Registry (List String) -> Decl -> List (Option Loc, String)
 implCountForIfaceU : ImplUniverse -> String -> Int
 implDeclWithReqs : Decl -> List (String, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (String, List Ty, List Require)
@@ -789,8 +790,8 @@ initialEnv : TcEnv
 innerDefaultMethod : String -> String
 insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
 insertIfaceMethodsAcc : String -> List String -> List (String, List Kind) -> List IfaceMethod -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit)
-insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
-insertIfaceRequired : List Decl -> Map String (List String) -> Map String (List String)
+insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> Unit
+insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
 insertMethodIfaceParams : List Decl -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit)
 insertUnivImpl : ImplUniverse -> (String, List Ty, List Require) -> ImplUniverse
 instantiate : Scheme -> Mono
@@ -1149,8 +1150,8 @@ registerData : TcEnv -> Decl -> TcEnv
 registerDispatchMonos : String -> List Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> String -> Unit
 registerEffectDomain : String -> Option String -> Unit
-registerIfaceParamKinds : String -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKinds : TyConOrigin -> String -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
 registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> Unit
 registerImplMethodDicts : String -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) -> Unit

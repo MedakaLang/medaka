@@ -1,4 +1,0 @@
--- issue #1257: an UNRELATED, non-graded interface that happens to share the bare name
--- `Same` with gmod.mdk's graded one.
-export interface Same f where
-  pmth : f a b -> Int
