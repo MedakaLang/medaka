@@ -1,0 +1,9 @@
+-- CONTROL for #1256: identical to entry.mdk minus the shadowing `zrmod` module and its
+-- import -- the ONE flipped feature. With no same-name `Cfg` in scope, `v`'s Int field
+-- must survive intact and print `7`, not `7.0`.
+import armod.{Cfg}
+
+v : Cfg
+v = Cfg { fld = 7 }
+
+main = println v.fld

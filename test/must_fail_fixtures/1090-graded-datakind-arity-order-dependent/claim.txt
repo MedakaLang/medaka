@@ -1,0 +1,61 @@
+issue: 1090
+what: two UNRELATED modules (gbox.mdk, z2.mdk) each declare a DATA TYPE with the SAME
+what: BARE NAME `Bx`, both at arity 2. `gbox.mdk`'s `Bx e a = MkBx (Unit -> <e> a)` has
+what: a graded (KRow, KType) param-kind signature; `z2.mdk`'s `Bx p q = MkZ p q` has an
+what: unrelated (KType, KType) one. main.mdk imports ONLY `gbox`'s `Bx` and ONLY
+what: `z2`'s unrelated `z2` function -- it never imports `z2`'s `Bx` at all.
+what: `dataParamKindsRef`/`universeDataParamKinds` (compiler/types/typecheck.mdk) are
+what: keyed by BARE type name across the whole import graph (the same table
+what: #1069/#1070 already document), so whichever module registers LAST wins the
+what: lookup regardless of which module's `Bx` is actually in scope at the use site.
+what: A written effect row on `gbox`'s `Bx` (`v : Bx <Stdout> Int`) is elaborated
+what: against `z2`'s wrong (all-KType) kind list; the `<Stdout>` row lands in an
+what: ordinary type slot and `fromAstTypeE`'s bare-`TyRow` clause pushes
+what: `T-ROW-KIND-MISMATCH` unconditionally -- a LOUD, order-dependent false rejection
+what: of a valid program (the opposite failure mode from #1069's SAME table, which is
+what: silent-wrong-type when the collision instead lands in an ordinary type slot
+what: rather than a row slot).
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-ROW-KIND-MISMATCH 9:7-9:15
+control: check-json control.mdk
+why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
+why-fixture: separate modules that share a data type name, one of which is imported
+why-fixture: for an unrelated binding only. `medaka check` resolves the
+why-fixture: same-directory sibling imports with no medaka.toml (same convention as
+why-fixture: 1069-dataparamkinds-bare-name-collision/ in this corpus), and loads only
+why-fixture: what main.mdk/control.mdk transitively import.
+why-fixture: Pinned with `diag-code` (not `diag`) per TESTING-DESIGN's default -- the
+why-fixture: message's prose is not the defect; the defect is that the code fires at
+why-fixture: all against a valid, unrelated signature.
+why-fixture: DELIBERATELY pinned at MATCHING arity (both `Bx`s are arity 2), even
+why-fixture: though the arity-2/arity-3/etc question does NOT move the outcome (see
+why-fixture: the 2026-08-03 comment on this issue: a 2x5 matrix across arities 0/1/2/3
+why-fixture: and both import orders reproduces the identical order-dependent
+why-fixture: T-ROW-KIND-MISMATCH regardless of arity). The pin stays armed whatever a
+why-fixture: future editor believes about the `listLen kinds == listLen args` guard --
+why-fixture: it is not what gates silence-vs-loudness for THIS symptom family; the
+why-fixture: written row's own SPELLING at the use site is (a wrapped `TyEffect`
+why-fixture: unwraps silently at typecheck.mdk's `fromAstTypeE`'s `TyEffect _ _ t`
+why-fixture: clause; a bare `TyRow` always pushes T-ROW-KIND-MISMATCH at its own
+why-fixture: clause -- neither clause consults arity).
+why-control: control.mdk is BYTE-IDENTICAL to main.mdk except the `import z2.{z2}`
+why-control: line and the presence of z2.mdk in the import graph are both removed --
+why-control: the ONE flipped feature. With no other `Bx` in scope, `v`'s written
+why-control: effect row must survive intact and typecheck cleanly (pinned via
+why-control: `check-json`, which also asserts the control is diagnostic-free) as
+why-control: `v : Bx <Stdout> Int`.
+why-note: this pin does NOT drain #1090 by itself in the ordinary sense -- #1090 is
+why-note: about a MISLEADING COMMENT (typecheck.mdk, near registerOpaqueParamKinds'
+why-note: doc comment, and the parallel claim in #1069) as much as about the
+why-note: underlying behavior. The comment claims a different-arity clash "abstains
+why-note: rather than mis-kinds"; this fixture (and the arity matrix behind it) shows
+why-note: that framing is false regardless of arity -- what decides silent-vs-loud is
+why-note: the row's spelling at the use site, not arity at all. Draining THIS fixture
+why-note: (main.mdk starts printing "x" cleanly) requires the same (module, name)
+why-note: keying remedy #1069/#1070 propose for dataParamKindsRef's sibling tables.
+why-note: When it drains, also correct or delete the stale "abstains rather than
+why-note: mis-kinds" comment and #1069's parallel claim, per the reasoning recorded on
+why-note: issue #1090 -- they describe a distinction (different-arity is safe) that
+why-note: this fixture's own arity matrix disproves. Close #1090 and delete this
+why-note: fixture when that happens.

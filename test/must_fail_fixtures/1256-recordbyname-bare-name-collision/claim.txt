@@ -1,0 +1,50 @@
+issue: 1256
+what: two UNRELATED modules (armod.mdk, zrmod.mdk) each declare a RECORD TYPE with the
+what: SAME BARE NAME `Cfg` -- `armod.mdk`'s `Cfg = { fld : Int }` vs `zrmod.mdk`'s
+what: `Cfg = { fld : Float }`. entry.mdk imports ONLY `armod`'s `Cfg` and ONLY
+what: `zrmod`'s unrelated `zrf` function -- it never imports `zrmod`'s `Cfg` at all.
+what: `registerRecordInfoKeyed` (compiler/types/typecheck.mdk) keys the record-info
+what: registry (`recordByNameRef`) by BARE record-type name across the whole import
+what: graph, `omInsert` last-write-wins, read by `lookupRecordByName`. Whichever
+what: module registers `Cfg` LAST wins the lookup for every importer regardless of
+what: which module's `Cfg` is actually in scope at the use site. `medaka check`
+what: exits 0 with ZERO diagnostics; the interpreter (`medaka run`) reads the wrong,
+what: last-registered `Cfg`'s field type and prints the Int literal `7` as a Float
+what: `7.0`. The native backend (`medaka build` + run the binary) prints the correct
+what: `7` -- it disambiguates via mangled constructor keys on the emit path, a
+what: property the shared bare-keyed registry itself does not have. This is a genuine
+what: THREE-ENGINE DIVERGENCE (eval wrong, native/wasm right) reachable with NO
+what: diagnostic anywhere.
+cmd: run entry.mdk
+exit: 0
+stdout: 7.0
+control: run control.mdk
+why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
+why-fixture: separate modules that share a record-type name, one of which is imported
+why-fixture: for an unrelated binding only. `medaka check`/`run` resolve the
+why-fixture: same-directory sibling imports with no medaka.toml (same convention as
+why-fixture: 1069-dataparamkinds-bare-name-collision/ and
+why-fixture: 1092-methodifaceparamsref-bare-name-collision/ in this corpus), and load
+why-fixture: only what entry.mdk/control.mdk transitively import.
+why-fixture: Pinned on `run`, not `check-json`, because the defect's OBSERVABLE payload
+why-fixture: is the wrong VALUE the interpreter produces -- `check` itself emits no
+why-fixture: diagnostic at all (that silence is part of what makes this an S0), so
+why-fixture: there is no diagnostic to pin; the wrong runtime value is the only
+why-fixture: pinnable symptom.
+why-control: control.mdk is BYTE-IDENTICAL to entry.mdk except the `import zrmod.{zrf}`
+why-control: line and the presence of zrmod.mdk in the import graph are both removed --
+why-control: the ONE flipped feature, and exactly the issue's own stated control. With
+why-control: no other module declaring `Cfg`, `v`'s Int field must survive intact and
+why-control: print `7`.
+why-note: NOT the same defect as 1216-xmod-record-field-name-collision/, which pins a
+why-note: FIELD-INDEX collision (two records sharing a field name) with the OPPOSITE
+why-note: engine polarity (eval right, native wrong there). This fixture is a
+why-note: RECORD-TYPE-NAME collision in registerRecordInfoKeyed/lookupRecordByName,
+why-note: with eval wrong and the compiled backends right -- a different defect in the
+why-note: same general area of record machinery.
+why-note: fix shape per the issue: carry module identity (the TyConOrigin already
+why-note: threaded through registerRecordInfoKeyed as parameter `o`, currently used
+why-note: only to mint the result Mono via `tconFrom o typeName`) into the registry
+why-note: KEY as well, so recordByNameRef stops being a bare-name last-write-wins
+why-note: table. That flips entry.mdk's printed value to `7`, draining this row.
+why-note: Close #1256 and delete this fixture when that happens.

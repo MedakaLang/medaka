@@ -1,0 +1,13 @@
+-- issue #1259: NOT exercised by this fixture's cmd/control (documentary only -- see
+-- claim.txt's why-note). Byte-identical to entryBrace.mdk except the `amodd` import is
+-- spelled with the bring-all-constructors form `{A1(..)}` instead of `{A1, Dup}`. This
+-- spelling happens to typecheck cleanly despite the same bare-name Dup collision,
+-- confirming the defect is in universeDataEnv's KEYING, not in which constructor a
+-- given import spelling brings into scope.
+import amodd.{A1(..)}
+import zmodd.{zdf}
+
+v : A1
+v = Dup 5
+
+main = println "x"

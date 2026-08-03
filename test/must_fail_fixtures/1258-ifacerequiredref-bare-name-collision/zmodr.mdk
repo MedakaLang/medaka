@@ -1,0 +1,8 @@
+-- issue #1258: sibling module declaring a SAME-NAME `Same` (the shadower), whose only
+-- method is `bar`. Only `zrq` is ever imported from this module -- entry.mdk never
+-- imports this `Same`.
+export interface Same a where
+  bar : a -> Int
+
+export zrq : Int -> Int
+zrq n = n

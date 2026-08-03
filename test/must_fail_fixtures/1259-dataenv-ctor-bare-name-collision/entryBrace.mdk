@@ -1,0 +1,12 @@
+-- issue #1259: `universeDataEnv`/`addCtor` are keyed by BARE constructor name.
+-- `zmodd.mdk` declares its own same-name constructor `Dup` (attached to an unrelated
+-- type Z1), and even though this file imports ONLY `amodd`'s `A1`/`Dup` explicitly by
+-- name (plus zmodd's unrelated `zdf`), the constructor environment reads whichever
+-- `Dup` won the shared registry, producing a false type mismatch.
+import amodd.{A1, Dup}
+import zmodd.{zdf} -- ONLY the function; never zmodd's Z1 or its Dup
+
+v : A1
+v = Dup 5
+
+main = println "x"
