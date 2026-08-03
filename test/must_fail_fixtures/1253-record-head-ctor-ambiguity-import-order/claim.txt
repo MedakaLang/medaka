@@ -1,0 +1,67 @@
+issue: 1253
+what: an ambiguous RECORD-form constructor at a record literal head resolves by
+what: TEXTUAL IMPORT ORDER instead of being rejected. main.mdk imports both
+what: ra.TA(..) and rb.TB(..); both TA and TB declare an UNRELATED record-form
+what: constructor with the same name and field (`MkT { fx : Int }`). `medaka
+what: check main.mdk` exits 0 with NO diagnostic. `medaka run main.mdk` prints
+what: `FROM-RB`; swap only the two import lines (main_swapped.mdk, byte-identical
+what: otherwise) and it prints `FROM-RA` -- same program, opposite answer, exit 0
+what: either way, decided purely by which import line comes first. The POSITIONAL
+what: twin of this exact shape (pa.mdk/pb.mdk/mainpos.mdk) IS caught: `medaka
+what: check mainpos.mdk` reports `Ambiguous constructor: 'MkT2' is brought into
+what: scope by both `pa` and `pb`" and exits 1. `checkPat`'s PCon arm and the
+what: expression-constructor path both consult `isCtorAmbiguous`
+what: (compiler/frontend/resolve.mdk) -- a record-form head instead routes
+what: through `recPatHead` / `recCreateHead`, neither of which consults it.
+cmd: check main.mdk
+exit: 0
+stdout: main : Unit
+control: check-json control.mdk
+why-fixture: the observable this pins is the SILENT ACCEPTANCE itself (check:
+why-fixture: zero diagnostics, exit 0) on a genuinely ambiguous program -- not the
+why-fixture: downstream order-dependent VALUE, which is real and independently
+why-fixture: hand-verified (see main_swapped.mdk's header) but cannot itself be
+why-fixture: the pin: this harness grades exactly ONE command per fixture, and
+why-fixture: "prints FROM-RB vs FROM-RA depending on import order" needs TWO
+why-fixture: commands (or a diff) to observe, not one. `check`'s bare scheme
+why-fixture: dump is used (over `run`) because with zero diagnostics `check`
+why-fixture: prints exactly one line, `main : Unit`, with NO file path baked in
+why-fixture: (medaka check's success SUMMARY line does embed an absolute path --
+why-fixture: see AGENTS.md's must-fail hazards -- the bare scheme dump does not),
+why-fixture: so the pin does not encode this machine's directory layout.
+why-fixture: `main : Unit` is also the smallest possible witness that the command
+why-fixture: actually ran the whole pipeline rather than erroring out early.
+why-control: control.mdk is main.mdk's exact topology with rb.mdk's record ctor
+why-control: renamed MkT -> MkTB (rb2.mdk) -- the ONE flipped variable removing
+why-control: the genuine ambiguity. It must stay diagnostic-free (check-json
+why-control: additionally asserts zero diagnostics, not merely exit 0) and, by
+why-control: hand, `medaka run control.mdk` prints `FROM-RA` -- the unambiguous,
+why-control: obviously-correct answer. A break here means record-form
+why-control: constructor resolution or cross-module dispatch regressed broadly,
+why-control: not that #1253 was fixed.
+why-control: the natural "control" for THIS bug is the positional form
+why-control: (mainpos.mdk), since it is the closest program that IS correctly
+why-control: rejected -- but `control:` can only express a control that EXITS 0
+why-control: (documented in test/must_fail_fixtures/
+why-control: 1092-methodifaceparamsref-bare-name-collision/claim.txt, and filed
+why-control: as its own gap, #1144). mainpos.mdk is kept as a sibling with its
+why-control: own header explaining this instead of being contorted into the
+why-control: control: field.
+why-verify: verified by POSITIVE CONTROL only: main.mdk reproduces the silent
+why-verify: exit-0 acceptance on the binary at the SHA this fixture was added
+why-verify: (see main.mdk / main_swapped.mdk headers for the hand-run
+why-verify: check/run output on both import orders). The DRAIN direction -- that
+why-verify: a real fix flips main.mdk's `check` to report `Ambiguous
+why-verify: constructor` and exit 1, same as mainpos.mdk already does -- is NOT
+why-verify: independently verified here, since verifying it needs the fix itself
+why-verify: to exist. Said plainly rather than claimed.
+why-note: fix territory per the issue: give the record-literal-head path
+why-note: (`recPatHead` / `recCreateHead`, compiler/frontend/resolve.mdk) the
+why-note: same `isCtorAmbiguous` consultation the PCon arm and the plain
+why-note: expression-constructor path already have -- keyed on the CONSTRUCTOR
+why-note: name, not the type name (PR #1250's `typeAmbiguous` check at those two
+why-note: functions cannot fire here: MkT is a constructor-only name, not a
+why-note: type name). A fix makes `check main.mdk` report `Ambiguous
+why-note: constructor: 'MkT' is brought into scope by both `ra` and `rb`" and
+why-note: exit 1, draining this row. Close #1253 and delete this fixture when
+why-note: that happens.

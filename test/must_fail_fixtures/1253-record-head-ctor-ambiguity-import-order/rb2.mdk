@@ -1,0 +1,9 @@
+-- issue #1253: control twin of rb.mdk with the ONE flipped variable -- its
+-- record-form constructor is renamed MkTB (was MkT), so it no longer collides
+-- with ra.mdk's MkT. Used by control.mdk to prove that record-form ctor
+-- resolution and cross-module dispatch work fine when nothing is genuinely
+-- ambiguous -- isolating the bug to the TRULY-AMBIGUOUS case main.mdk pins.
+public export data TB = MkTB { fx : Int }
+import ra.{Tag, tag}
+export impl Tag TB where
+  tag _ = "FROM-RB"

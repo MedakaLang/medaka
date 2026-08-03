@@ -1,0 +1,16 @@
+-- issue #1253: imports BOTH ra.TA(..) and rb.TB(..), so the bare record-form
+-- constructor `MkT` is ambiguous between ra's TA and rb's TB. The positional
+-- sibling of this exact shape (pa.mdk/pb.mdk/mainpos.mdk) is correctly rejected
+-- with `Ambiguous constructor`. This record-form version is NOT: `medaka check`
+-- exits 0 with no diagnostic, and the pinned line below is the witness that check
+-- actually ran (medaka check's success summary embeds an absolute path, so it
+-- cannot be the pin -- see AGENTS.md's must-fail hazards; a bare scheme line is
+-- the established workaround).
+--
+-- Swapping the two import lines below (verified by hand, not pinned here -- see
+-- main_swapped.mdk) changes which impl `tag` resolves to at RUN time even though
+-- `check` reports nothing wrong either way: import order silently decides which
+-- of two unrelated types' impls is picked.
+import ra.{TA(..), Tag, tag}
+import rb.{TB(..)}
+main = println (tag MkT { fx = 1 })

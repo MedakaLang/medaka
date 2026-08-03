@@ -1,0 +1,9 @@
+-- issue #1253: TA's payload constructor is named MkT and uses RECORD-form syntax
+-- (`MkT { fx : Int }`), not positional (`MkT Int`). That is the load-bearing detail:
+-- the positional form IS caught by the existing ambiguous-constructor guard (see
+-- pa.mdk/pb.mdk/mainpos.mdk in this directory); the record form is not.
+public export data TA = MkT { fx : Int }
+export interface Tag a where
+  tag : a -> String
+export impl Tag TA where
+  tag _ = "FROM-RA"
