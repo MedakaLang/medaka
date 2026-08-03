@@ -32,11 +32,14 @@
 -- inherited_default_dict_dispatch / attributed_impl_dispatch, already ledgered for
 -- wasm under #1020.
 --
--- ⚠️ This corpus is PRELUDE-FREE (diff_compiler_llvm_modules.sh passes an EMPTY
--- core), so no prelude default can be asserted here.  The prelude's own defaults —
--- where the overwhelming majority of this tree's `CImplDefault` entries live — are
--- covered by the prelude-bearing corpora instead (diff_compiler_engines' llvm/ arm,
--- test/eval_fixtures, the doctest suite).
+-- ⚠️ Assert nothing about a PRELUDE default here.  Scope, corrected 2026-08-03 — this
+-- file used to say flatly "this corpus is PRELUDE-FREE", which is true of only ONE of
+-- its consumers: diff_compiler_llvm_modules.sh passes an EMPTY core, but
+-- diff_compiler_engines.sh feeds these same entries to `medaka run` / `medaka build`,
+-- which carry the REAL prelude.  So a prelude-default assertion here would mean
+-- different things to different gates — hence none.  The prelude's own defaults, where
+-- the overwhelming majority of this tree's `CImplDefault` entries live, are covered by
+-- the prelude-bearing corpora instead (test/eval_fixtures, the doctest suite).
 import bysai.{DogA(..), sayA}
 import bysbi.{DogB(..), sayB}
 import bysother.{Greet(..), greet, Wave(..), wave}
