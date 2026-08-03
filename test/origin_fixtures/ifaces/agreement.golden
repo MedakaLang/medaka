@@ -93,7 +93,9 @@ core iface:Slice AGREE AGREE AGREE
 core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
 deep Int AGREE AGREE AGREE
+deep decl:Baton R-ONLY CONFLICT R-ONLY
 deep decl:Relay R-ONLY CONFLICT R-ONLY
+main_ifaces Baton R-ONLY R-ONLY NEITHER
 main_ifaces Int AGREE AGREE AGREE
 main_ifaces Pair R-ONLY CONFLICT R-ONLY
 main_ifaces String AGREE AGREE AGREE
@@ -101,7 +103,9 @@ main_ifaces decl:Pair R-ONLY CONFLICT R-ONLY
 main_ifaces iface:Echo R-ONLY R-ONLY NEITHER
 main_ifaces iface:Relay R-ONLY R-ONLY NEITHER
 main_ifaces iface:Speak R-ONLY R-ONLY NEITHER
+mid Baton R-ONLY CONFLICT R-ONLY
 mid Int AGREE AGREE AGREE
+mid decl:Baton R-ONLY CONFLICT R-ONLY
 mid decl:Relay R-ONLY CONFLICT R-ONLY
 === CONFLICTS ===
 # PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
@@ -135,9 +139,12 @@ beta decl:Echo flat=- single=mod:__user__ graph=mod:beta
 beta decl:Kennel flat=- single=mod:__user__ graph=mod:beta
 beta decl:Speak flat=- single=mod:__user__ graph=mod:beta
 beta iface:Speak flat=- single=mod:__user__ graph=mod:beta
+deep decl:Baton flat=- single=mod:__user__ graph=mod:deep
 deep decl:Relay flat=- single=mod:__user__ graph=mod:deep
 main_ifaces Pair flat=- single=mod:__user__ graph=mod:main_ifaces
 main_ifaces decl:Pair flat=- single=mod:__user__ graph=mod:main_ifaces
+mid Baton flat=- single=mod:__user__ graph=mod:mid
+mid decl:Baton flat=- single=mod:__user__ graph=mod:mid
 mid decl:Relay flat=- single=mod:__user__ graph=mod:mid
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
@@ -167,19 +174,25 @@ flat beta decl:Echo
 flat beta decl:Kennel
 flat beta decl:Speak
 flat beta iface:Speak
+flat deep decl:Baton
 flat deep decl:Relay
+flat main_ifaces Baton
 flat main_ifaces Pair
 flat main_ifaces decl:Pair
 flat main_ifaces iface:Echo
 flat main_ifaces iface:Relay
 flat main_ifaces iface:Speak
+flat mid Baton
+flat mid decl:Baton
 flat mid decl:Relay
+single main_ifaces Baton
 single main_ifaces iface:Echo
 single main_ifaces iface:Relay
 single main_ifaces iface:Speak
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
 Array 1 builtin
+Baton 1 mod:mid
 Bool 1 builtin
 Cat 1 mod:alpha
 Char 1 builtin
@@ -201,6 +214,7 @@ __tuple2__ 1 builtin
 decl:Alternative 1 mod:core
 decl:Applicative 1 mod:core
 decl:Arbitrary 1 mod:core
+decl:Baton 2 mod:deep|mod:mid
 decl:Bimappable 1 mod:core
 decl:Bounded 1 mod:core
 decl:Boxed 1 mod:alpha
@@ -263,7 +277,7 @@ iface:Num 1 mod:core
 iface:Ord 1 mod:core
 iface:Plain 1 mod:alpha
 iface:Quiet 1 mod:alpha
-iface:Relay 1 mod:deep
+iface:Relay 1 mod:mid
 iface:Semigroup 1 mod:core
 iface:Slice 1 mod:core
 iface:Speak 2 mod:alpha|mod:beta
@@ -274,12 +288,12 @@ iface:Traversable 1 mod:core
 modules 5
 graph-modules 5
 flat-segments 10
-decl-heads 45
+decl-heads 47
 iface-occs-constraintOrigin 47
 iface-occs-superOrigin 12
 iface-occs-requireOrigin 96
 iface-occs-implOrigin 124
-heads 103
-claims 309
-residual 35
-conflicts 29
+heads 107
+claims 321
+residual 40
+conflicts 32

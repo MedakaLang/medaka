@@ -639,10 +639,19 @@ sameArmSlotName a b = claimArm a == claimArm b
 
 -- ── head spread: the DEFINER-CHASE check ─────────────────────────────────────
 -- The agreement table above compares arms WITHIN one slot, so it is structurally
--- blind to one thing the corpus deliberately contains: a type reached through a
--- RE-EXPORT must be attributed to its DEFINER, never to the last re-exporter
+-- blind to one thing the corpus deliberately contains: a type reached ONLY through
+-- a RE-EXPORT — one the re-exporting module does not itself declare — must be
+-- attributed to its DEFINER, never to the re-exporter
 -- (resolve.mdk's `typeOriginExports` exists for exactly this, and it is the half
--- `ModuleExports.expTypes` cannot answer).  If the graph arm attributed `Crate` to
+-- `ModuleExports.expTypes` cannot answer).
+--
+-- ⚠️ THAT "ONLY" IS LOAD-BEARING, and this comment lacked it until #1245.  When
+-- the re-exporting module ALSO DECLARES the name, the definer IS the re-exporter —
+-- its own declaration is what a consumer's `import m.{Foo}` binds — and this very
+-- section prints that: `Baton 1 mod:mid` and `iface:Relay 1 mod:mid` in
+-- `test/origin_fixtures/ifaces/agreement.golden`, where `mid` both re-exports
+-- `deep`'s and declares its own.  Unscoped, this header read as a claim its own
+-- output contradicts.  If the graph arm attributed `Crate` to
 -- `beta` in beta's slot and to `alpha` in alpha's, every row would still read
 -- AGREE/R-ONLY and the gate would say nothing.
 --

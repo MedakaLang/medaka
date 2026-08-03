@@ -25,7 +25,7 @@
 
 import alpha.{Speak, Echo, Cat(..), speak, twice, echo}
 import beta.{Speak, Echo, Dog(..), Kennel(..)}
-import mid.{Relay, hop}
+import mid.{Relay, hop, Baton, carry}
 
 data Pair a = Pair a a
 
@@ -46,12 +46,20 @@ impl Speak (Pair a) requires Speak a where
 resound : Echo a => a -> String
 resound x = echo x
 
--- THE PINNED RESIDUAL for #1245 (see mid.mdk for the full derivation).  `Relay` is
--- declared by `deep` and re-exported by `mid`, which declares one of its OWN.  This
--- impl binds MID's interface — it compiles, and it would not if `via` (deep's
--- method) were substituted — yet the golden attributes the occurrence to
--- `mod:deep`.  The row is WRONG ON PURPOSE and moves when #1245 lands.
+-- THE #1245 WITNESS, INTERFACE HALF (see mid.mdk for the full derivation).
+-- `Relay` is declared by `deep` and re-exported by `mid`, which declares one of its
+-- OWN.  This impl binds MID's interface — it compiles, and it would not if `via`
+-- (deep's method) were substituted — and the golden now agrees, attributing the
+-- occurrence to `mod:mid`.
 impl Relay Int where
   hop n = n
+
+-- THE #1245 WITNESS, TYPE HALF.  Same shape, other namespace: `Baton` is declared
+-- by `deep`, re-exported by `mid`, and `mid` declares one of its own.  This is the
+-- corpus's ONLY `Baton` occurrence, so the `Baton 1 mod:mid` spread line is exactly
+-- the declaration this import resolved to — `mod:deep` there is the pre-#1245
+-- mis-attribution.
+weigh : Baton -> Int
+weigh b = carry b
 
 main = println "\{sayIt (Pair Cat Cat)} \{twice Cat} \{speak Dog} \{speak (Kennel Dog)}"

@@ -1,5 +1,5 @@
 # META
-source_lines=3860
+source_lines=3910
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3172,11 +3172,32 @@ stampBindingIds decls =
 -- byte-identical PR.  The producer set is pinned by
 -- `test/typecheck_compiler_source.sh` (the `soundness` job).
 
--- Every type name in scope in module `mid`, mapped to the identity a `TyCon` head
--- spelling it must carry.  Built lowest-precedence FIRST, because `omFromPairs`
--- inserts left to right and a later insert wins:
+-- ── THE ONE PRECEDENCE RULE (#1245) ─────────────────────────────────────────
+-- Type/interface identity in this file is decided in exactly one way, and both
+-- functions that decide it are written the same way so the agreement is
+-- STRUCTURAL rather than coincidental:
 --
---     builtins < prelude < imports < this module's own declarations
+--   *build the layers as ONE list, LOWEST precedence first, and fold it with
+--    `omFromPairs`, which inserts left to right so a LATER entry wins.*
+--
+--     builtins < prelude < imports/re-exports < this module's own declarations
+--
+-- `tyOriginScope` (the consumer-side scope) spells all four layers;
+-- `typeOriginExports` (the producer-side export list) spells the last two — it
+-- emits a LIST rather than a map, but its consumers fold it with the same
+-- last-wins `omFromPairs` (`keepTypeOrigins`) or splice it in order into
+-- `tyOriginScope`'s imports layer (`UseWild`), so the same convention decides it.
+--
+-- ⚠️ Until #1245 the two disagreed: `tyOriginScope` nested its `omFromPairs`
+-- calls OUTERMOST-first (own written first in the source but inserted last, so
+-- own won), while `typeOriginExports` concatenated own FIRST and re-exports LAST
+-- (so re-exports won).  Both were "later wins", but one wrote the winner first
+-- and the other wrote it last, and nothing made the mismatch visible.  Keeping a
+-- single lowest-first-in-source-order convention is what stops that recurring —
+-- do not re-nest either one.
+--
+-- Every type name in scope in module `mid`, mapped to the identity a `TyCon` head
+-- spelling it must carry.  Built lowest-precedence FIRST, per the rule above.
 --
 -- ⚠️ That ORDER IS A NEW POLICY DECISION, made here, and it is what #1208 will be
 -- re-keyed against — so it is argued rather than inherited.  It is NOT read off
@@ -3184,7 +3205,7 @@ stampBindingIds decls =
 -- precedence at all and in fact lists own-declarations BEFORE imports.  An earlier
 -- draft of this comment claimed the order came from there; it does not.
 --
--- The argument for it, innermost-wins, matching how every other scope in the
+-- The argument for it, nearest-scope-wins, matching how every other scope in the
 -- language resolves a pun:
 --   * own declarations beat imports, because a module that declares `data Foo`
 --     and also imports one means its own — the same rule a local binding follows
@@ -3208,15 +3229,15 @@ tyOriginScope : List (String, String) -> OrdMap (List (String, String)) -> Strin
 -- The precedence argument below applies to each namespace independently, because
 -- the keys are disjoint by construction.
 tyOriginScope coreTypes known mid prog =
-  omFromPairs
-    (map (ownTyOrigin mid) (dataRecordNames prog) ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog))
-    (omFromPairs
-      (map
-        importedTyOrigin
-        (flatMap (importedTypeOrigins known) (usePathsOf prog)))
-      (omFromPairs
-        (map importedTyOrigin coreTypes)
-        (omFromPairs builtinTyOrigins omEmpty)))
+  -- one layer per `let`, LOWEST precedence first; concatenated in that order and
+  -- folded once, last-wins.  Naming the layers is not decoration: it is what keeps
+  -- the order readable after `fmt`, which reflows a bare five-way `++` chain onto
+  -- a single line and hides the very thing this function's comment argues about.
+  let builtinLayer = builtinTyOrigins
+  let preludeLayer = map importedTyOrigin coreTypes
+  let importLayer = map importedTyOrigin (flatMap (importedTypeOrigins known) (usePathsOf prog))
+  let ownLayer = map (ownTyOrigin mid) (dataRecordNames prog) ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog)
+  omFromPairs (builtinLayer ++ preludeLayer ++ importLayer ++ ownLayer) omEmpty
 
 -- `dataRecordNames` is the ALL-declarations extractor (`expTypesDirect` is the
 -- public subset) — a module's own private type is in its own scope.
@@ -3246,33 +3267,45 @@ builtinTyOrigin n = (n, OriginBuiltin)
 -- CONCATENATED with the ones it re-exports — so by the time any consumer reads it
 -- the definer is already gone, and no amount of care at the read site recovers it.
 -- Here a re-export carries the ORIGINAL definer through, so a chain of
--- `export import` does not re-attribute a type to its last re-exporter.
+-- `export import` does not re-attribute a type to a re-exporter that merely
+-- passes it along.  (A re-exporter that ALSO declares the name is not an
+-- exception to that but a different shape — see the ordering note below.)
 --
--- 🚨 THAT HOLDS ONLY WHERE THE RE-EXPORTER DOES NOT ALSO DECLARE THE NAME ITSELF,
--- and this comment claimed it unqualified until #1245 was filed.  When a module
--- BOTH declares `Foo` AND `export import`s another module's `Foo`, this list has an
--- entry for each and `omFromPairs` (in the consumer's `tyOriginScope`) is
--- LAST-WRITE-WINS, so the re-exported one wins — while what the consumer's
--- `import m.{Foo}` actually BINDS is `m`'s OWN declaration.  Verified first-hand on
--- both namespaces: a consumer of such an `m` can use `m`'s own interface method and
--- is rejected using the re-exported interface's, yet the occurrence is stamped with
--- the re-exported source's id; the `data` version behaves identically.  PRE-EXISTING
--- and namespace-symmetric — filed as #1245, deliberately not fixed alongside the
--- interface stamping, because the ordering fix moves goldens on the type side too
--- and a red in a combined change would not name its culprit.  The wrong answer is
--- PINNED in `test/origin_fixtures/ifaces/` (`deep.mdk` / `mid.mdk`) so it is visible
--- rather than merely described.
+-- 🚨 A RE-EXPORTER MAY ALSO DECLARE THE NAME ITSELF, and then this list has an
+-- entry for each.  The order below is what decides that collision, and it is the
+-- ONE PRECEDENCE RULE stated above `tyOriginScope`: lowest first, so RE-EXPORTS
+-- FIRST and this module's OWN declarations LAST.  Every consumer resolves it
+-- last-wins — `keepTypeOrigins`' `omFromPairs`, or `tyOriginScope`'s own fold
+-- after `UseWild` splices this list in order — so own beats re-export, which is
+-- what a consumer's `import m.{Foo}` actually BINDS.
+--
+-- ⚠️ Until #1245 this concatenation ran the other way (own first, re-exports
+-- last), so the re-exported source won the fold and a consumer's occurrence was
+-- stamped with the id of a module that did not declare the interface it bound.
+-- Verified first-hand on both namespaces, before and after: a consumer of such an
+-- `m` can use `m`'s OWN interface method and is rejected using the re-exported
+-- interface's; the `data` version behaves identically.  Nothing read these origins
+-- yet, so no program's accept/reject moved — but `fillIfaceOccOrigin` /
+-- `fillDeclOrigin` are first-write-immune, so a wrong id could not have been
+-- corrected downstream once Stage A-1 unit D reads one.
+--
+-- The three shapes this order must satisfy, all of them by the same rule:
+--   1. declares only            — no re-export entries, own wins vacuously;
+--   2. re-exports only          — no own entries, the definer carried through by
+--                                 `keepTypeOrigins` wins vacuously, so a CHAIN of
+--                                 `export import` still attributes to the original
+--                                 definer rather than the last re-exporter;
+--   3. declares AND re-exports  — both present, own is later, own wins.
 --
 -- ⚠️ #1110 PR C: also carries this module's public INTERFACES, tagged `iface:` (see
 -- `ifaceKey`).  The `pubUsePaths` half needs no change — a re-exported interface
--- arrives already tagged, so it behaves exactly as a type does, INCLUDING the #1245
--- exception above: definer-attribution through a re-export chain, and last-wins
--- mis-attribution when the re-exporter declares the name too.  The two namespaces
--- share this function, so they cannot diverge on it.
+-- arrives already tagged, so it behaves exactly as a type does, including the
+-- ordering above.  The two namespaces share this function, so they cannot diverge
+-- on it.
 typeOriginExports : OrdMap (List (String, String)) -> String -> List Decl -> List (String, String)
-typeOriginExports known mid prog = map (typeDeclaredIn mid) (expTypesDirect prog)
+typeOriginExports known mid prog = flatMap (importedTypeOrigins known) (pubUsePaths prog)
+  ++ map (typeDeclaredIn mid) (expTypesDirect prog)
   ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
-  ++ flatMap (importedTypeOrigins known) (pubUsePaths prog)
 
 typeDeclaredIn : String -> String -> (String, String)
 typeDeclaredIn mid n = (n, mid)
@@ -3308,7 +3341,24 @@ useMemberBinding : UseMember -> (String, String)
 useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
 
 -- Keep the bindings whose ORIGIN name is a type the source module exports, and
--- attribute each to the module that DECLARED it — never to the re-exporter.
+-- attribute each to the module that source module's own export list names as the
+-- definer.
+--
+-- ⚠️ NOT "never to the re-exporter".  That is what this line said until #1245, and
+-- it is FALSE for one shape — on the function that performs the lookup, which is
+-- the worst place for it to be wrong.  `definers` is a LAST-WINS fold
+-- (`omFromPairs`) over `src`, i.e. over the source module's `typeOriginExports`
+-- list, which is ordered re-exports-FIRST and own-declarations-LAST per THE ONE
+-- PRECEDENCE RULE (stated above `tyOriginScope`).  So:
+--   * a source module that merely PASSES A NAME ALONG yields the original
+--     definer, through any length of `export import` chain — the property this
+--     line was written for, and it still holds;
+--   * a source module that ALSO DECLARES the name yields ITSELF.  That is not a
+--     leak, it is correct: its own declaration is what a consumer's
+--     `import m.{Foo}` actually binds.
+-- Measured, not argued: `test/origin_fixtures/ifaces/` chains `deep` -> `mid` ->
+-- `main_ifaces` with `mid` doing both, and the golden reads `Baton 1 mod:mid` /
+-- `iface:Relay 1 mod:mid`.
 keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
 keepTypeOrigins src bindings =
   let definers = omFromPairs src omEmpty
@@ -4911,7 +4961,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
-(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "builtinLayer") (EVar "builtinTyOrigins")) (DoLet false false (PVar "preludeLayer") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (DoLet false false (PVar "importLayer") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (DoLet false false (PVar "ownLayer") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "builtinLayer") (EVar "preludeLayer")) (EVar "importLayer")) (EVar "ownLayer"))) (EVar "omEmpty")))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
@@ -4921,7 +4971,7 @@ takeOriginTrace _ =
 (DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
 (DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
 (DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog")))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))))
 (DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
 (DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -6065,7 +6115,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
-(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "builtinLayer") (EVar "builtinTyOrigins")) (DoLet false false (PVar "preludeLayer") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (DoLet false false (PVar "importLayer") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (DoLet false false (PVar "ownLayer") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (DoExpr (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "builtinLayer") (EVar "preludeLayer")) (EVar "importLayer")) (EVar "ownLayer"))) (EVar "omEmpty")))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
@@ -6075,7 +6125,7 @@ takeOriginTrace _ =
 (DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
 (DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
 (DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))))
 (DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
 (DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
