@@ -1,5 +1,5 @@
 # META
-source_lines=20575
+source_lines=20615
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -1571,9 +1571,26 @@ tyTabKey o n = tabKeyOf NsType o n
 -- need a flat impl of a prelude interface whose occurrence was NOT in that
 -- scope, and there is no such producer: the scope is built from exactly
 -- `interfaceNamesOf coreDecls`, the same decl list `stampDeclOrigins "core"`
--- stamps.  Verified behaviourally, not only by reading: a single-file
--- `impl Thenable`-shaped graded head is still rejected (this unit's flat
--- mirror probe, `test/typecheck_error_fixtures/graded_head_wrong_kind_flat*`).
+-- stamps.
+--
+-- ⚠️ AND THAT ARGUMENT IS STRUCTURAL, ONLY STRUCTURAL.  This paragraph used to
+-- end "Verified behaviourally, not only by reading", citing
+-- `test/typecheck_error_fixtures/graded_head_wrong_kind_flat.mdk`.  That
+-- fixture cannot witness it: it declares its OWN `interface Graded`, so what it
+-- exercises is a `TkBare` ↔ `TkBare` meeting, not the `TkIdent … core` ↔
+-- `TkIdent … core` one this paragraph is about.  No fixture witnesses this
+-- shape, and today none CAN: the FLAT arm reads only `ifaceParamKindsRef` (the
+-- completeness table is Module-only — see the mode switch feeding
+-- `checkImplCompletenessMap`), and there a HIT on a non-graded prelude row and
+-- an outright MISS both take `checkGradedImplTys`' `_ => ()` arm.  A prelude
+-- interface would have to become GRADED for the difference to be observable at
+-- all.  None is — DERIVE that, do not trust this sentence: a single file with
+-- `impl <each higher-kinded prelude iface> Q` over `data Q a b = MkQ a b`, plus
+-- one locally-declared graded interface as a POSITIVE CONTROL, yields exactly
+-- ONE T-IMPL-KIND-MISMATCH and it names the LOCAL interface (run against this
+-- HEAD, `medaka check --json`).  So the unreachability claim above rests on
+-- reading `resolve.mdk`; the residual risk is this comment rotting, not a
+-- missing gate.
 ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
 
@@ -8977,24 +8994,47 @@ registerIfaceParamKinds o iface typarams methods =
 registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
 registerIfaceParamKindsGo _ _ _ [] _ = ()
 registerIfaceParamKindsGo o iface i (p::ps) methods =
-  -- ⚠️ EVERY slot is recorded, graded or not, and the non-graded ones are the whole
-  -- point (S1, review round 2).  Recording only graded slots looks like a tidy
-  -- minimisation and is a false-reject bug.
-  -- ⚠️ #1111 A-2.4 CHANGED WHY, AND THE OLD WHY IS NOW A LIE, so it is rewritten
-  -- rather than kept: the old text said an all-KType entry is needed as a SHADOW,
-  -- because `ifaceParamKindsRef` is copied into the data universe, which is not
-  -- import-scoped, so an ORDINARY interface sharing a name with a graded one
-  -- anywhere in the graph found the graded entry and had its impl rejected with
-  -- T-IMPL-KIND-MISMATCH, order-dependently.  That shadow no longer does the job
-  -- and no longer has to: the two interfaces now have DIFFERENT keys, so the
-  -- ordinary one never reaches the graded one's row at all (#1257, drained here).
-  -- What still requires every slot to be recorded is the FLAT path, where two
-  -- same-named interfaces both key `TkBare` — the shadow is the only defence there
-  -- until #1115 (E-1) — plus the plain fact that `checkGradedImplTys` must be able
-  -- to tell "slot 0 of this interface is ungraded" (an all-KType row, filtered by
-  -- `anyKRow`) from "this interface has no row at all" (a miss).
-  -- A module's own decls are registered as a FRONT overlay during its own pass and
-  -- `lookupReg` is first-match, so a local entry still shadows the universe's.
+  -- ⚠️ EVERY slot is recorded, graded or not.  Since #1111 A-2.4 that is VESTIGIAL,
+  -- not load-bearing — and THIS COMMENT HAS NOW BEEN WRONG TWICE about why, so it
+  -- records what was actually checked instead of offering a third rationale.
+  --
+  -- THE ORIGINAL WHY (S1, review round 2) — real at the time.  An all-KType entry
+  -- was a SHADOW: `ifaceParamKindsRef` is copied into the data universe, which is
+  -- not import-scoped, so under the old bare `"<iface>@<slot>"` key an ORDINARY
+  -- interface sharing a name with a graded one anywhere in the graph found the
+  -- GRADED row and had its impl rejected with T-IMPL-KIND-MISMATCH, order-
+  -- dependently; recording its own all-KType row as a front overlay shadowed that.
+  -- A-2.4 gives the two interfaces DIFFERENT keys, so the ordinary one never reaches
+  -- the graded row at all (#1257, drained here) — the shadow has nothing to shadow.
+  --
+  -- ⚠️ THE REPLACEMENT WHY WAS ALSO FALSE, in both of its conjuncts, and is
+  -- RETRACTED here rather than silently reworded.  It said every slot is still
+  -- needed (a) for the FLAT path, "where two same-named interfaces both key
+  -- `TkBare` — the shadow is the only defence there", and (b) because
+  -- `checkGradedImplTys` must tell an ungraded row from an absent one.  Both were
+  -- refuted by running the binary, not by reading:
+  --   (a) UNREACHABLE.  No ACCEPTED flat program holds two `TkBare` rows of one
+  --       interface name.  Declaring `interface Same` twice in one file is
+  --       `Duplicate interface: Same`, exit 1; re-declaring a prelude name is
+  --       `Duplicate interface: Eq`, exit 1 (`duplicateErrors`,
+  --       `compiler/frontend/resolve.mdk`, whose `ifaceSeed` seeds the prelude's
+  --       interface names for any non-core program).  And a flat USER interface
+  --       keys `TkBare` while a prelude one keys `TkIdent … core`, so that pair
+  --       never shares a key either.  `stampFlatTyOrigins`' own comment reaches the
+  --       same unreachability for the type layer.
+  --   (b) FALSE.  `checkGradedImplTys` is `Some want if anyKRow want => …` / `_ =>
+  --       ()`: an all-KType row FAILS `anyKRow` and falls into `_`, and a miss is
+  --       `None` and falls into `_`.  The two are indistinguishable to the only
+  --       reader — `grep -n lookupReg compiler/types/typecheck.mdk` gives exactly
+  --       one call site, plus the import and two comments.
+  --
+  -- So recording every slot is dead weight on BOTH arms.  It is kept because
+  -- removing it is a separate behaviour-preserving change with its own goldens, not
+  -- because anything reads it.  What IS still load-bearing here: a module's own
+  -- decls are registered as a FRONT overlay during its own pass and `lookupReg` is
+  -- first-match, so a local entry still shadows the universe's — which is what makes
+  -- a row re-registered from the universe (same key, same value) a no-op rather than
+  -- a second, competing answer.
   let _ = insertIfaceParamKinds o iface i p (ifaceParamKindsOf p methods)
   registerIfaceParamKindsGo o iface (i + 1) ps methods
 

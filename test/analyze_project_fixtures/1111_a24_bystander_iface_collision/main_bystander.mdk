@@ -26,9 +26,19 @@
 --     If the slot-kind lookup answered with the wrong interface's slot kinds this
 --     would gain a spurious T-IMPL-KIND-MISMATCH -- #1257's symptom, again on a
 --     non-colliding name.
---   * `impl Display ET` exercises the same completeness path against a PRELUDE
---     interface, whose identity is `mod:core` on both driver arms.  A key that could
---     not reach the prelude's own rows would break here first.
+--   * `impl Display ET` is a BYSTANDER, not a witness -- the bullet here claimed it
+--     was one ("a key that could not reach the prelude's own rows would break here
+--     first") until adversarial review, which is a member of the very class the 🚨
+--     paragraph below excludes, twelve lines further down its own header.  `Display`
+--     has exactly one required method (`display`, stdlib/core.mdk), and this impl
+--     defines it: a MISS gives `None => []`, a HIT gives required `["display"]` minus
+--     defined `["display"]` = `[]`.  Byte-identical, so it can only ever pin that a
+--     complete prelude impl stays quiet.  COUNTERFACTUAL, RUN: deleting
+--     `insertIfaceRequired`'s `DInterface` arm -- killing the completeness registry
+--     for every module -- leaves this whole fixture green and every bucket `[]`.
+--     The REJECTING direction against a prelude interface is covered by
+--     `test/analyze_project_fixtures/1111_a24_genuine_iface_rejects/`'s
+--     `impl Ord GT2`, which was added because of this same review finding.
 --   * `plain` mentions none of A-2.4's machinery at all -- it is here to answer
 --     AGENTS.md's "what happens to a program that never touches the table" directly.
 --
@@ -37,11 +47,16 @@
 -- diagnostic appears).  It CANNOT detect a key that NEVER MEETS its own row: both
 -- readers abstain on a miss, so a write-side/read-side key disagreement would leave
 -- every bucket here `[]` and this fixture green while the checks had silently
--- stopped running.  That direction is covered by the mirror-probe fixtures instead
--- (`test/analyze_project_fixtures/1111_a24_genuine_iface_rejects/` on the module arm,
--- `test/typecheck_error_fixtures/{iface_incomplete_impl_flat,
--- graded_head_wrong_kind_flat}.mdk` on the flat arm), which go SILENT exactly when
--- this one cannot.  The pair is the assertion; neither half is.
+-- stopped running.  That direction is covered by the mirror-probe fixtures instead:
+-- `test/analyze_project_fixtures/1111_a24_genuine_iface_rejects/` covers BOTH tables
+-- on the module arm (and, since this same review, core's own rows via `impl Ord
+-- GT2`), and `test/typecheck_error_fixtures/graded_head_wrong_kind_flat.mdk` covers
+-- `ifaceParamKindsRef` on the flat arm.  Each goes SILENT exactly when this one
+-- cannot.  ⚠️ Its sibling `iface_incomplete_impl_flat.mdk` was listed here too and
+-- does NOT belong: the FLAT arm routes completeness to the bare-name scan
+-- `ifaceRequiredMethods`, never to the re-keyed registry, so it cannot go silent on
+-- a key disagreement.  See that fixture's own corrected header.
+-- The set is the assertion; no single member is.
 import dupg.{dg}  -- ONLY the function; never dupg's Same
 import dupp.{dp}  -- ONLY the function; never dupp's Same
 

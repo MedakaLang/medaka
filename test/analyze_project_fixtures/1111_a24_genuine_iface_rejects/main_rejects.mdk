@@ -13,6 +13,14 @@
 --   * `impl Graded Q` heads a graded interface (slot 0 `Row`) with `Q`, whose slot 0
 --     is a plain `Type` -- genuinely wrong-kinded (T-IMPL-KIND-MISMATCH, via
 --     `universeIfaceParamKinds`).
+--   * `impl Ord GT2` omits `compare` -- the same T-INCOMPLETE-IMPL diagnostic, but
+--     against a PRELUDE interface, so the key that has to meet is
+--     `ifaceTabKey (OriginModule "core") "Ord"` on BOTH sides.  Added by adversarial
+--     review of this unit: until then NO committed fixture drove the prelude
+--     population of `universeIfaceRequiredRef` in the REJECTING direction (the
+--     bystander fixture's complete `impl Display ET` cannot -- a miss and a hit both
+--     yield `[]` there), so core's whole write side could have stopped meeting its
+--     read side and every fixture in the tree would still have been green.
 --
 -- The `gthen q f = gthen q f` body is deliberate: a body that CONSTRUCTS a `Q` drags
 -- in an unrelated `Num`-on-a-quantified-tyvar diagnostic, which would let this
@@ -29,3 +37,17 @@ data Q a b = MkQ a b
 
 impl Graded Q where
   gthen q f = gthen q f
+
+-- The PRELUDE half.  `Ord`'s only required method is `compare` (stdlib/core.mdk:137-162
+-- declares seven; `lt`/`gt`/`lte`/`gte`/`min`/`max` all carry default bodies), so an
+-- impl supplying only `lt` is genuinely incomplete and must say so.
+-- `impl Eq GT2` is present ON PURPOSE: `Ord a requires Eq a`, and without it this
+-- fixture would also carry an unrelated superclass diagnostic that could keep it
+-- passing if the completeness check itself ever went quiet.
+data GT2 = MkGT2
+
+impl Eq GT2 where
+  eq a b = True
+
+impl Ord GT2 where
+  lt a b = False
