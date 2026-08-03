@@ -101,6 +101,43 @@ public export data TyConOrigin =
   | OriginBuiltin
   | OriginModule String
 
+-- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
+-- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
+-- TYPE head" to "which module declared this declaration, IN WHICH
+-- NAMESPACE" — the substrate the Stage A-2 table-conversion units (each its
+-- own PR) re-key their `universe*`/method/record/kind tables onto. See
+-- `compiler/types/registry.mdk`, which hosts the `Registry`/`MultiRegistry`/
+-- `SetRegistry` combinators built on top of `Ident` (kept out of THIS file
+-- because those combinators need `support/ordmap.mdk`, and `ast.mdk` — a
+-- ~26-gate import surface — should not gain that dependency for a handful of
+-- map-shaped helper functions; `Ns`/`Ident` themselves are plain data with no
+-- such dependency, so they belong beside the `TyConOrigin` they wrap).
+--
+-- SIX namespaces, matching the six declaration kinds #1070 catalogs as
+-- distinct collision surfaces: a type name, an interface name, an interface
+-- method name, a data/newtype constructor name, a record field name, and an
+-- ordinary top-level value name are six independent spellings-may-collide
+-- domains — `data Cfg = MkCfg { size : Int }` and `interface Sizeable where
+-- size : a -> Int` collide on `size` in TWO different namespaces (method vs.
+-- field) without colliding as declarations. ONE `Ns`-tagged `Ident` type
+-- rather than six parallel identity types is deliberate: it means one
+-- comparator, one collision-free key renderer (`identKey`,
+-- `types/registry.mdk`), and one place a namespace tag can be forgotten —
+-- the same lesson `resolve.mdk` already paid for at 2-namespace scale, where
+-- the TYPE and IFACE namespaces share one `OrdMap TyConOrigin` separated by
+-- an `"iface:<Name>"` string tag (`ownTyOrigin` / `ownIfaceOrigin`,
+-- `resolve.mdk:3494-3497,3962-3965`) with its own regression fixture
+-- (`test/references_fixtures/iface_ty_collide/`, `resolve.mdk:767-774`).
+public export data Ns = NsType | NsIface | NsMethod | NsCtor | NsField | NsValue
+
+-- `(namespace, origin, name)` — the full identity of a declaration or an
+-- occurrence naming one.  Carries a `TyConOrigin` (not a bare module String)
+-- so `OriginUnresolved`/`OriginBuiltin` stay distinguishable from a real
+-- module the same way they already are for a bare type-constructor origin —
+-- see the `TyConOrigin` doc-comment above for why those three inhabitants
+-- are NOT interchangeable with an `Option String`.
+public export data Ident = Ident Ns TyConOrigin String
+
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
   -- by every renderer, so structural dumps and printed source are byte-identical
