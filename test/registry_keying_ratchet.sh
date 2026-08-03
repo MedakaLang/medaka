@@ -172,7 +172,6 @@ universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl
 universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half)
 universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the map above
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
-universeRecords -- accumulated RecordInfo list
 universeRecordByName -- accumulated record name -> RecordInfo map
 universeFieldOwners -- accumulated field-name -> owning-record(s) map
 universeDataParamKinds -- accumulated data-type param-kind list
