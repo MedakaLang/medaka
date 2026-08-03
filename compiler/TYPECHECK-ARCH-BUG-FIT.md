@@ -333,9 +333,27 @@ to `v : Box <Stdout> Int` — byte-identical to the control with `zopapub.mdk` d
 A-1 alone is **not** sufficient and must not close this: identity has to reach the
 *table key*, which is A-2.
 
-⚠️ Guard when pinning: the repro is silent **only at matching arity** — every hot reader
-guards on `listLen kinds == listLen args` (`:1424`, `:4289`), so a same-name/different-
-arity clash abstains loudly and a naive pin is immune to the defect it means to catch.
+✅ **CONFIRMED, 2026-08-03, by A-2.3** (`universeAliasTable` + `universeDataParamKinds`
+re-keyed to `TabKey`). The repro's `check main.mdk` went from `v : Box Unit Int` to
+`v : Box <Stdout> Int`, byte-identical to its control, and
+`test/diff_compiler_must_fail.sh` drained the row and named the issue. The prediction's
+"A-1 alone is not sufficient" half also held: A-1 shipped with every hot reader binding
+the acquired origin `o` in the same pattern as the head NAME and using it only to mint
+the head, never to key the lookup.
+
+🚨 **THE GUARD PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and it is corrected rather
+than deleted because it would have disarmed the pin.** It said the repro is silent *"only
+at matching arity"*, because *"every hot reader guards on `listLen kinds == listLen
+args`, so a same-name/different-arity clash abstains loudly"*. Measured with a 2×5 matrix
+(shadower arity 0/1/2/3 plus a control × the use-site row spelled WRAPPED
+`Box (<Stdout> Unit) Int` or BARE `Bx <Stdout> Int`): **arity moved the outcome in
+neither direction.** On the guard-PASSING path the winning entry's kinds are all-`KType`,
+so `foldAppKinds` erases the row exactly as `appFallback` does. What actually selected
+silent-vs-loud was the row's SPELLING at the use site — the wrapped form unwraps to a
+real type and keeps inferring silently (#1069), the bare form raises
+`T-ROW-KIND-MISMATCH` (#1090, the same table with the opposite symptom). The identical
+claim in `compiler/types/typecheck.mdk`'s `registerOpaqueParamKinds` doc-comment was
+corrected by the same PR; #1069's issue body carries it too and is left alone.
 
 ---
 
@@ -398,6 +416,16 @@ reclassification in this ledger. Specifically: the `universeAliasTable` repro
 (`amod.type T = Int` / `zmod.type T = Float` + `zf`; entry imports only `zmod.{zf}`) must
 change from `check → v : Float`, `run → 42.0` to `v : Int` / `42`. The umbrella closes
 only when **all** rows are drained or reclassified — not when the first one is.
+
+✅ **THE `universeAliasTable` ROW IS CONFIRMED AND DRAINED, 2026-08-03, by A-2.3.** That
+repro now reads `v : Int` and prints `42` on all three engines (interpreter, native and
+WasmGC, each run first-hand — the row was previously wrong on all three, which is why
+`diff_compiler_engines` never saw it). Its fixture was deleted and **#1070 was left
+OPEN**, exactly as this paragraph's last sentence requires: the remaining rows are
+tracked as #1256 (`universeRecordByName`), #1257 (`ifaceSlotKey`), #1258
+(`universeIfaceRequiredRef`) and #1259 (`universeDataEnv`), each with its own
+`test/must_fail_fixtures/` pin, draining on units A-2.4 / A-2.6. The umbrella's own row
+in `test/MUST-FAIL-NOT-PINNABLE.txt` records why it now carries no fixture of its own.
 
 ⚠️ Two rows to hold to a higher bar: `universeRecordByName` and `universeDataEnv` were
 audit-verified but **not** independently re-run by #1070's author, and `universeRecordByName`

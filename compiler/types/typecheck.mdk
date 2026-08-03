@@ -15,6 +15,7 @@ import frontend.ast.{
   Lit(..),
   Ty(..),
   TyConOrigin(..),
+  Ns(..),
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -52,6 +53,12 @@ import frontend.ast.{
   useMemberAlias,
   qualifiedLocal,
 }
+-- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
+-- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
+-- `TabKey`, not by a bare `String`.  See `tabKeyOf`'s doc-comment in that
+-- module for why these two tables keep the assoc list rather than becoming a
+-- `Registry`, and `tyTabKey` below for the miss policy.
+import types.registry.{TabKey(..), tabKeyOf, tabKeyName, lookupTab, tabHasName}
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
@@ -1380,14 +1387,110 @@ argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
   ++ argPerformableOccs perf b
 argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
 argPerformableOccs perf (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n }, args) => krowSlotOccs perf n args
+  -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
+  -- the same record pattern as its name so the two cannot drift apart.
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => krowSlotOccs perf o n args
   _ => argPerformableOccs perf a ++ argPerformableOccs perf b
 argPerformableOccs perf (TyConstrained _ t) = argPerformableOccs perf t
 argPerformableOccs _ _ = []
 
+-- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
+-- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
+-- both the write side and the read side.  `o` is always the `TyConOrigin` the
+-- `Ty.TyCon` being registered or elaborated carries — never ambient state (see
+-- `registerVariants`' 🚨 note: `registerAllData` runs over OTHER modules'
+-- decls, so a "current module" id would attribute every imported type to the
+-- importer).
+--
+-- ── What changed, and what drains ─────────────────────────────────────────
+-- Both tables are grown per-module across the WHOLE import graph and used to
+-- be read by BARE NAME, so `lookupAssoc`'s first-match over a prepend meant
+-- THE MODULE THAT REGISTERED LAST WON for every importer, regardless of which
+-- module's type was actually in scope at the use site.  Three tracked defects
+-- were that one sentence: #1069 (a written row erased to its wrapped type,
+-- silently, exit 0), #1090 (the same table rejecting a VALID signature with
+-- T-ROW-KIND-MISMATCH — same collision, opposite symptom, selected by the
+-- row's SPELLING at the use site, not by arity) and #1070's alias row (`v : T`
+-- resolving to the wrong module's `Float`, wrong VALUE at run time, all three
+-- engines agreeing).
+--
+-- ── MISS POLICY: a miss stays a silent `appFallback`.  Derivation ─────────
+-- Every path that reaches `appFallback` (or the equivalent abstention at the
+-- other readers) after this change, enumerated:
+--   1. A BUILTIN HEAD.  `Int`/`Float`/`String`/`Char`/`Bool`/`Unit`/`List`/
+--      `Ref`/`Array` and the tuple heads have NO declaration anywhere (checked
+--      tree-wide, not assumed: no `data`/`newtype`/`type` declares any of those
+--      names in `stdlib/`, `compiler/` or `sqlite/`), so they have no row in
+--      either table and never had one.  This is the case the pre-existing
+--      comment on `checkGradedImplHead` already names ("a builtin like `Int`,
+--      whose kinds this compiler records nowhere").  It is COMMON and CORRECT.
+--   2. AN ALIAS HEAD looked up in `dataParamKindsRef` — an alias lives in the
+--      other table, and its saturation is already policed by T-ALIAS-ARITY.
+--   3. AN ARITY MISMATCH (`listLen kinds /= listLen args`) — a guard the hot
+--      readers apply AFTER the lookup; unchanged by this unit.
+--   4. A NAME WITH NO DECLARATION AT ALL, in a program resolve has already
+--      rejected — errors accumulate here rather than exiting, so typecheck
+--      still runs over the broken tree.
+--   5. NEW WITH THIS UNIT: a head whose identity names a module that declares
+--      no such type, while some OTHER module in the graph does.  That is
+--      exactly #1069/#1090/#1070, and abstaining is the FIX, not a residual.
+-- So "miss ⇒ hard diagnostic" is not available: case 1 alone would reject
+-- every `x : List Int` ever written, and nothing at the read site can tell
+-- case 1 from case 5 — the compiler records no kinds for builtins, which is
+-- the very reason case 1 exists.  Cases 2–4 are equally legitimate.  A miss
+-- therefore keeps doing what it does today.
+-- ⚠️ Note what this does NOT say: the drains above do not come from the miss
+-- policy, they come from the KEY.  Under bare-name keying #1069's lookup HIT
+-- the wrong module's row; under identity keying it HITS ITS OWN row.  Case 5
+-- is the residue (a genuinely absent type), not the mechanism.
+--
+-- ── THE IDENTITY-LESS PATH, and why it is not a bare-name fallback ────────
+-- 🚨 RESIDUAL, and A-2's stated bound — but NOT "no identity is built at all":
+-- on the FLAT / single-file driver path the table holds BOTH populations at
+-- once.  `checkProgramSeededSplit` (`:14219`) runs `stampDeclOrigins "core"
+-- coreProgTy`, so the PRELUDE's own `DData`/`DNewtype`/`DTypeAlias`/
+-- `DInterface` decls carry `OriginModule "core"` and register through
+-- `registerAllData` → `recordParamKinds` → `tyTabKey` as identity-bearing
+-- `TkIdent` rows.  Every FLAT **USER** declaration, by contrast, carries
+-- `OriginUnresolved` (`stampFlatTyOrigins`, `frontend/resolve.mdk`) — for
+-- those `mkIdent` returns `None`, so they key as `TkBare`.  That path is
+-- `medaka check` on a no-import file, the LSP, `doc`, `repl` and the
+-- playground.  A-2's MODULE-PATH-ONLY bound is specifically about the USER
+-- half: giving the flat path's own declarations identity is drained by #1115
+-- (E-1), which gives that path module ids.  Greppable here and in
+-- `frontend/ast.mdk` as the Module-path-only bound.
+--
+-- What makes a table holding both populations SAFE is per-population
+-- STAMPING AGREEMENT, not the miss policy: an occurrence and the declaration
+-- it names are always stamped by the SAME pass reading the SAME scope, so a
+-- `TkIdent` occurrence never meets a `TkBare` declaration of the same name,
+-- or vice versa.  Checked, not asserted: `flatTyOriginScope`
+-- (`frontend/resolve.mdk:4111-4117`) derives its scope from exactly
+-- `dataRecordNames coreDecls ++ interfaceNamesOf coreDecls` — precisely the
+-- decl set `stampDeclOrigin` covers (`dataRecordNames` reaches
+-- `DData`/`DNewtype`/`DTypeAlias`; `interfaceNamesOf` reaches `DInterface`).
+-- That agreement is what is verified here; it says nothing about whether the
+-- flat USER half ever gets identity, which is the #1115 residual above, not
+-- this paragraph's claim.
+--
+-- ⚠️ `TkBare` IS NOT A FALLBACK THE MODULE PATH CAN REACH.  `tabKeyEq`
+-- (`types/registry.mdk`) never equates a `TkIdent` with a `TkBare`, in either
+-- direction, so an identity-bearing lookup can neither hit a bare row nor be
+-- hit by one — re-creating the bug "with extra steps" is structurally
+-- excluded rather than avoided by care.  What makes that safe rather than a
+-- new silent hole is that the two halves cannot MIX within one run: an
+-- occurrence acquires identity only from `tyOriginScope`/`flatTyOriginScope`,
+-- whose every layer is derived from declarations that the SAME pass stamps
+-- (own / imported / prelude), plus a builtin layer whose names have no
+-- declarations (case 1 above).  So "identity-bearing occurrence, unstamped
+-- declaration" — the one shape that would turn a former hit into a miss —
+-- has no producer.
+tyTabKey : TyConOrigin -> String -> TabKey
+tyTabKey o n = tabKeyOf NsType o n
+
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
-krowSlotOccs : Bool -> String -> List Ty -> List (String, List Atom)
-krowSlotOccs perf n args = match lookupAssoc n perRun.value.dataParamKindsRef.value
+krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
+krowSlotOccs perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
   Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
     ++ flatMap (argPerformableOccs perf) args
   _ => flatMap (argPerformableOccs perf) args
@@ -1529,8 +1632,8 @@ checkGradedImplTys iface i (t::rest) =
 -- tyvar head carries no kind and is left to the checks that already reject it.
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHead iface t want = match tyAppSpine t
-  (TyCon { tyConName = n, tyConLoc = loc }, applied) =>
-    checkGradedImplHeadCon iface n loc (listLen applied) want
+  (TyCon { tyConName = n, tyConLoc = loc, tyConOrigin = o }, applied) =>
+    checkGradedImplHeadCon iface o n loc (listLen applied) want
   -- A saturated tuple is kind `Type`, which is never a graded slot's kind.  It gets its
   -- OWN remedy: the generic "give it a Row parameter" advice is nonsense for a tuple —
   -- you cannot add one.  ⚠️ The span is best-effort: `TyTuple` carries no loc of its own
@@ -1542,8 +1645,8 @@ checkGradedImplHead iface t want = match tyAppSpine t
     (implTupleHeadKindMsg iface (listLen ts) want)
   _ => ()
 
-checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
-checkGradedImplHeadCon iface n loc nApplied want = match headRemainingKinds n nApplied
+checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
+checkGradedImplHeadCon iface o n loc nApplied want = match headRemainingKinds o n nApplied
   None => ()
   Some got => checkGradedImplHeadKinds iface n loc nApplied want got
 
@@ -1553,10 +1656,20 @@ checkGradedImplHeadCon iface n loc nApplied want = match headRemainingKinds n nA
 -- ⚠️ An abstractly-exported type was in that bucket until #804/#1028 and is NOT any
 -- more — `registerOpaqueParamKinds` gives it a real `dataParamKindsRef` entry, so it
 -- returns `Some` and is judged exactly like a `public export` one.
-headRemainingKinds : String -> Int -> Option (List Kind)
-headRemainingKinds n nApplied
-  | isSome (lookupAssoc n perRun.value.aliasTableRef.value) = None
-  | otherwise = map (dropFirst nApplied) (lookupAssoc n perRun.value.dataParamKindsRef.value)
+-- `key` is minted ONCE and shared by both guard arms via the `where` (#1111
+-- A-2.3 follow-up): the first guard ALWAYS evaluates it (Medaka is strict, and
+-- a `where` scoping over guard arms lowers to `ELetGroup (..key..) (EGuards
+-- arms)`, so the binding runs once before either arm is tested), so hoisting
+-- adds nothing on the alias arm and removes the previously-redundant second
+-- mint on the common `otherwise` arm.  A redundant-allocation removal, not a
+-- measured perf win (`test/bench.sh` doesn't run on this box, #1187; the
+-- perf-scaling gate grades a growth ratio, blind to a constant factor).
+headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
+headRemainingKinds o n nApplied
+  | isSome (lookupTab key perRun.value.aliasTableRef.value) = None
+  | otherwise = map (dropFirst nApplied) (lookupTab key perRun.value.dataParamKindsRef.value)
+  where
+    key = tyTabKey o n
 
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeadKinds iface n loc nApplied want got
@@ -2688,9 +2801,9 @@ data CrossRun = CrossRun {
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
-    universeDataParamKinds : Ref (List (String, List Kind)),
+    universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeIfaceParamKinds : Ref (List (String, List Kind)),  -- #822: the interface half of the kind universe (see registerIfaceParamKinds)
-    universeAliasTable : Ref (List (String, (List String, Ty))),
+    universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeDataEnv : Ref TcEnv,
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
     obUnivConcreteRef : Ref (OrdMap (List (List Ty, List Require))),
@@ -3396,8 +3509,8 @@ data PerRun = PerRun {
     curEffect : Ref EffRow,  -- names GENERALIZED inside the top-level body currently being inferred
     recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
     fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
-    dataParamKindsRef : Ref (List (String, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
-    aliasTableRef : Ref (List (String, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
+    dataParamKindsRef : Ref (List (TabKey, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
+    aliasTableRef : Ref (List (TabKey, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
     pendingSites : Ref (List PendingEntry),  -- `Num a =>` on an unrelated scheme (types/numlit_bidir).
     pendingRLocalSites : Ref (List PendingEntry),
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
@@ -4297,10 +4410,31 @@ takeUntilInclusiveS target (x::xs) =
 
 -- Build the alias-dependency entry for one table entry: alias name → list of
 -- other alias keys mentioned in its RHS (the dependency edges).
-buildAliasGraphEntry : List String -> (String, (List String, Ty)) -> (String, List String)
-buildAliasGraphEntry aliasKeys (name, paramsRhs) =
+--
+-- ⚠️ #1111 A-2.3 DELIBERATELY LEFT THIS GRAPH BARE-NAME-KEYED, and it is the
+-- one consumer of `aliasTableRef` that is not re-keyed.  Three reasons, in the
+-- order that decided it:
+--   * it is a DELETION pass, and its over-approximation is conservative in the
+--     LOUD direction — two unrelated modules' aliases sharing a spelling, one
+--     of them cyclic, drops both rows and reports `T-RECURSIVE-ALIAS` naming
+--     the shared name.  Wrong-but-loud.  Re-keying could only ever make it
+--     delete FEWER rows, and "recursive alias silently expanded" is the one
+--     outcome this pass exists to prevent (it infinite-loops the expansion
+--     seam);
+--   * `tyConNamesInTy` yields bare `String`s from an arbitrary `Ty`, so an
+--     identity-keyed graph needs an identity-carrying spine walk — the
+--     comparison-reads-origin step the arc schedules as A-2.10, not a
+--     re-key;
+--   * it feeds `emitCyclicAliasErrors`, whose OUTPUT ORDER is observable in
+--     goldens (see the enumeration-order bullet in `types/registry.mdk`).
+-- `tabKeyName` is what makes the bare half explicit here rather than implicit.
+buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
+buildAliasGraphEntry aliasKeys (key, paramsRhs) =
   let rhs = snd paramsRhs
-  (name, filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)))
+  (
+    tabKeyName key,
+    filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)),
+  )
 
 -- DFS over the alias dependency graph.  Detects back-edges (a node is reached
 -- while it is already on the current path) → cycle.  On a back-edge to `target`,
@@ -4345,7 +4479,8 @@ emitCyclicAliasErrors (name::rest) =
 rejectCyclicAliases : Unit -> Unit
 rejectCyclicAliases _ =
   let table = perRun.value.aliasTableRef.value
-  let aliasKeys = map fst table
+  -- BARE NAMES on purpose — see `buildAliasGraphEntry`.
+  let aliasKeys = map (e => tabKeyName (fst e)) table
   let graph = map (buildAliasGraphEntry aliasKeys) table
   let visitedRef = Ref []
   let onStackRef = Ref []
@@ -4355,7 +4490,7 @@ rejectCyclicAliases _ =
   let _ = emitCyclicAliasErrors cyclic
   setRef
     perRun.value.aliasTableRef
-    (filterList (entry => not (contains (fst entry) cyclic)) table)
+    (filterList (entry => not (contains (tabKeyName (fst entry)) cyclic)) table)
 
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
@@ -4460,7 +4595,7 @@ fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 -- stamped on the `Ty.TyCon` this conversion is reading, and the record pattern
 -- puts it in scope for free — there is nowhere else it could come from and no
 -- ambient module id to get it wrong from.
-fromAstTypeE etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) = match lookupAssoc n perRun.value.aliasTableRef.value
+fromAstTypeE etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) = match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
   -- Transparent non-parameterized alias (`type Foo = Int`): expand to its RHS,
   -- recursively so alias-of-alias (`type A = Int; type B = A`) flattens.  Cycle
   -- rejection is deferred (stage 4); the non-cyclic corpus terminates.
@@ -4547,20 +4682,33 @@ foldAppFallback etbl tvs acc (a::as2) =
 -- the head is a data type with a KRow param, refold the spine kind-directed (KRow
 -- arg → TEff row); else the opaque `appFallback`.
 -- (`o` is the head's acquired identity — see `appFallback`'s note.)
+-- `key` is minted ONCE and shared by both lookups below (#1111 A-2.3 follow-up):
+-- `tyTabKey` → `mkIdent` → `identOriginOf` allocates on the way (an `Ident`, an
+-- `Option`, the `TkIdent`/`TkBare` wrapper), so minting it twice per call — once
+-- for `aliasTableRef`, again for `dataParamKindsRef` in the `_ =>` arm below —
+-- doubled the allocation on the COMMON path (every non-alias type application)
+-- for no reason: the alias arms above the `_ =>` arm never reach the second
+-- lookup at all, so they pay for the hoisted `let` exactly what they always
+-- paid for the first one. This is a redundant-allocation removal, not a
+-- measured perf win — `test/bench.sh` does not run on this box (#1187) and
+-- `diff_compiler_perf_scaling` grades a growth ratio, which cannot see a
+-- constant factor either way.
 fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
-fromAstTypeApp etbl tvs o n args = match lookupAssoc n perRun.value.aliasTableRef.value
-  -- Saturated parameterized alias: bind params → arg Monos (alias params shadow
-  -- outer tvs of the same name) and expand the RHS through the same seam.
-  Some (params, rhs) if listLen params == listLen args =>
-    fromAstTypeE etbl (zipL params (map (fromAstTypeE etbl tvs) args) ++ tvs) rhs
-  -- Alias applied to the wrong arity: reject, keep the opaque fallback.
-  Some (params, _) =>
-    let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) (listLen args))
-    appFallback etbl tvs o n args
-  _ => match lookupAssoc n perRun.value.dataParamKindsRef.value
-    Some kinds if listLen kinds == listLen args =>
-      foldAppKinds etbl tvs (tconFrom o n) kinds args
-    _ => appFallback etbl tvs o n args
+fromAstTypeApp etbl tvs o n args =
+  let key = tyTabKey o n
+  match lookupTab key perRun.value.aliasTableRef.value
+    -- Saturated parameterized alias: bind params → arg Monos (alias params shadow
+    -- outer tvs of the same name) and expand the RHS through the same seam.
+    Some (params, rhs) if listLen params == listLen args =>
+      fromAstTypeE etbl (zipL params (map (fromAstTypeE etbl tvs) args) ++ tvs) rhs
+    -- Alias applied to the wrong arity: reject, keep the opaque fallback.
+    Some (params, _) =>
+      let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) (listLen args))
+      appFallback etbl tvs o n args
+    _ => match lookupTab key perRun.value.dataParamKindsRef.value
+      Some kinds if listLen kinds == listLen args =>
+        foldAppKinds etbl tvs (tconFrom o n) kinds args
+      _ => appFallback etbl tvs o n args
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
 -- the SAME Mono shape a row-indexed data head does (`Async e b` =
@@ -4700,7 +4848,8 @@ rowArgNames ty = rowArgNamesIn [] ty
 -- abstract head can be row-kinded, which is what confines #822 to method signatures.
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n }, args) => rowArgNamesApp scope n args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
+  -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => rowArgNamesApp scope o n args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
   -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
   (TyVar h, args) => rowArgNamesVarApp scope h args (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
   _ => rowArgNamesIn scope a ++ rowArgNamesIn scope b
@@ -4710,8 +4859,8 @@ rowArgNamesIn scope (TyEffect _ _ t) = rowArgNamesIn scope t
 rowArgNamesIn scope (TyConstrained _ t) = rowArgNamesIn scope t
 rowArgNamesIn _ _ = []
 
-rowArgNamesApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
-rowArgNamesApp scope n args fallback = match lookupAssoc n perRun.value.dataParamKindsRef.value
+rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
+rowArgNamesApp scope o n args fallback = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
   Some kinds if listLen kinds == listLen args => krowArgVarNames kinds args
     ++ flatMap (rowArgNamesIn scope) args
   _ => fallback
@@ -8312,7 +8461,7 @@ headAnnotTy : Ty -> Mono
 headAnnotTy ty = match tyAppSpine ty
   -- OCCURRENCE MINT (#1110): same source as `fromAstTypeE`'s — the identity of
   -- the annotation head being rebuilt at its declared arity.
-  (TyCon { tyConName = n, tyConOrigin = o }, _) => match lookupAssoc n perRun.value.dataParamKindsRef.value
+  (TyCon { tyConName = n, tyConOrigin = o }, _) => match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
     Some kinds => applyParams (tconFrom o n) (freshVars (listLen kinds))
     None => fst (astTypeFreshTbl ty)
   _ => fst (astTypeFreshTbl ty)
@@ -8523,8 +8672,12 @@ inferLetGroup env binds body =
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
 registerData env (DData { dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params variants
-registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs }) =
-  let _ = setRef perRun.value.aliasTableRef ((name, (params, rhs))::perRun.value.aliasTableRef.value)
+-- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
+-- identity, stamped by `stampDeclOrigins` at the module that declared it — the
+-- same source `registerVariants` takes `dataOrigin`/`newtypeOrigin` from, and
+-- for the same reason (see its 🚨 note: it must not come from ambient state).
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+  let _ = setRef perRun.value.aliasTableRef ((tyTabKey o name, (params, rhs))::perRun.value.aliasTableRef.value)
   env
 registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params [Variant con (ConPos [fty])]
 -- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
@@ -8613,7 +8766,7 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
 registerVariants o env name params variants =
   let kinds = inferParamKinds params variants
-  let _ = recordParamKinds name kinds
+  let _ = recordParamKinds o name kinds
   let paramReprs = mintParamReprs kinds
   let tvs = ktypeTvs params kinds paramReprs
   let etbl = krowEtbl params kinds paramReprs
@@ -8630,11 +8783,12 @@ registerVariants o env name params variants =
 -- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
 -- overlay over the data universe and therefore win, which is the ordering every reader
 -- assumes (see the `dataEnv` binding in checkBodyImpl).
-recordParamKinds : String -> List Kind -> Unit
-recordParamKinds name kinds =
+-- (`o` is the DECLARATION's identity — #1111 A-2.3; see `tyTabKey`.)
+recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
+recordParamKinds o name kinds =
   setRef
     perRun.value.dataParamKindsRef
-    ((name, kinds)::perRun.value.dataParamKindsRef.value)
+    ((tyTabKey o name, kinds)::perRun.value.dataParamKindsRef.value)
 
 -- A data param is KRow iff its name appears in a field's effect-tail position
 -- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
@@ -15517,11 +15671,27 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppMonosShared args}"
 -- advice — a builtin (String/Int/Bool/…) can't take `deriving`, and a function
 -- type is structurally un-implementable, so both stay hint-free (unchanged
 -- message) rather than print misleading advice.
+-- ⚠️ #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
+-- question, and it is a membership test rather than a lookup.  `headTyconMono`
+-- returns `Option String` — it throws the head's identity away at its return
+-- type, which is A-2.2's widening, not landed here — so no key can be minted.
+-- That costs nothing real: the question this asks is "is a type by this name
+-- user-declared anywhere?", used ONLY to decide whether `add 'deriving X'` is
+-- applicable advice rather than a dead end for a builtin.  `tabHasName`
+-- returns no value, so it cannot select the wrong module's row; the worst a
+-- collision can do is offer applicable advice for the right reason under the
+-- wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconMono arg
-  Some n => map (_ => noImplAdvice iface n) (lookupAssoc n perRun.value.dataParamKindsRef.value)
+  Some n => noImplHintFor iface n
   None => None
 noImplHint _ _ = None
+
+noImplHintFor : String -> String -> Option String
+noImplHintFor iface n
+  | tabHasName n perRun.value.dataParamKindsRef.value =
+    Some (noImplAdvice iface n)
+  | otherwise = None
 
 -- Roadmap #18a: only a DERIVABLE interface may be suggested via `deriving`.  A
 -- `deriving <iface>` for anything outside that set is silently DROPPED by desugar's
@@ -18519,20 +18689,35 @@ appendDataUniverse prog0 =
 -- universe kind table is not import-scoped, so publishing it could only collide a name
 -- nobody can spell against one they can.
 --
--- ⚠️ `dataParamKindsRef` is keyed by BARE NAME across the whole import graph, so two
--- same-named types in different modules already share a key (#1047's territory, upstream
--- of this).  This does not widen that hazard so much as make it UNIFORM: an opaque type
--- now competes for its own name on exactly the terms a `public export` one always has —
--- prepend-per-module, `lookupAssoc` first-match, own-module overlay wins.  Every hot
--- reader additionally guards on `listLen kinds == listLen args`, so a same-name/
--- different-arity clash abstains rather than mis-kinds.
+-- ⚠️ THIS PARAGRAPH USED TO SAY `dataParamKindsRef` IS KEYED BY BARE NAME, and to
+-- excuse the resulting cross-module clash with a guard that does not do the job.  Both
+-- halves are now corrected rather than deleted, because the second half was FALSE and a
+-- reader who believed it would conclude there is nothing here to fix:
+--   * KEYING.  Since #1111 A-2.3 the key is a `TabKey` (see `tyTabKey`), so an opaque
+--     type's kinds are registered under ITS OWN module's identity and are reachable only
+--     from an occurrence that resolved to that module.  Two same-named types in
+--     unrelated modules no longer share a key on the module path.  The prepend /
+--     first-match / own-module-overlay ordering is unchanged.
+--   * THE GUARD.  The old text claimed "every hot reader additionally guards on
+--     `listLen kinds == listLen args`, so a same-name/different-arity clash abstains
+--     rather than mis-kinds".  It does not.  A 2×5 matrix (shadower arity 0/1/2/3 plus a
+--     control × the row spelled WRAPPED `Box (<Stdout> Unit) Int` or BARE
+--     `Bx <Stdout> Int` at the use site) moved the outcome in NEITHER direction: on the
+--     guard-PASSING path the winning entry's kinds are all-`KType`, so `foldAppKinds`
+--     erases the row exactly as `appFallback` does.  What actually selected
+--     silent-vs-loud was the SPELLING of the row at the use site — `fromAstTypeE`'s
+--     `TyEffect` arm unwraps a wrapped row to a real type and keeps inferring silently
+--     (#1069), while its `TyRow` arm has no wrapped type and raises
+--     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
+--   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
+--     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).
 registerOpaqueParamKinds : List Decl -> Unit
 registerOpaqueParamKinds [] = ()
-registerOpaqueParamKinds ((DData { dataVis = VisAbstract, dataName = n, dataParams = ps, dataCtors = vs })::rest) =
-  let _ = recordParamKinds n (inferParamKinds ps vs)
+registerOpaqueParamKinds ((DData { dataVis = VisAbstract, dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) =
+  let _ = recordParamKinds o n (inferParamKinds ps vs)
   registerOpaqueParamKinds rest
-registerOpaqueParamKinds ((DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty })::rest) =
-  let _ = recordParamKinds n (inferParamKinds ps [Variant con (ConPos [fty])])
+registerOpaqueParamKinds ((DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) =
+  let _ = recordParamKinds o n (inferParamKinds ps [Variant con (ConPos [fty])])
   registerOpaqueParamKinds rest
 registerOpaqueParamKinds (_::rest) = registerOpaqueParamKinds rest
 

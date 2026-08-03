@@ -1,9 +1,0 @@
--- CONTROL for #1070: identical to main.mdk minus the shadowing `zmod` module and its
--- import -- the ONE flipped feature. With no same-name `T` in scope, `v : T` must
--- resolve to `amod`'s `Int` and print an integer.
-import amod.{T}
-
-v : T
-v = 42
-
-main = println v
