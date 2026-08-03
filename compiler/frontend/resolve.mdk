@@ -20,6 +20,7 @@ import frontend.ast.{
   TyConOrigin(..),
   mapTyInDecl,
   firstTyLoc,
+  firstTyLocList,
   Constraint(..),
   Addr(..),
   Pat(..),
@@ -171,6 +172,24 @@ public export data ResError =
   -- accepted, run was right, the native build CRASHED.  Fired at the USE site, so
   -- importing both but never using the ctor stays legal.
   | AmbiguousConstructor String (List String) (Option Loc)
+  -- TYPE name (in a signature, an annotation, a record pattern head, or a record
+  -- literal head) that ≥2 non-`core` imports bring into scope under one spelling
+  -- (#1110 Stage A-1).  The TYPE peer of AmbiguousOccurrence, with the identical
+  -- trigger: a SCOPE collision.  ⚠️ It therefore says NOTHING about two modules
+  -- that declare the same type name and are never imported together — those never
+  -- meet in one scope, so no use-site diagnostic can see them (that is A-2's
+  -- registry re-keying, not this).  Fired at the USE site, so importing both and
+  -- never naming the type stays legal, and a module's OWN declaration settles the
+  -- name rather than participating in the ambiguity.
+  | AmbiguousType String (List String) (Option Loc)
+  -- INTERFACE name (a `=>` predicate, a superinterface, an impl `requires`, or the
+  -- interface an `impl` is of) that ≥2 non-`core` imports bring into scope under
+  -- one spelling (#1110 Stage A-1).  Same trigger and same limits as
+  -- AmbiguousType; separate because interfaces are a SEPARATE NAMESPACE (a file
+  -- may declare both `data Foo` and `interface Foo a` and check clean), so the two
+  -- ambiguity sets are computed from disjoint export lists and must never be keyed
+  -- together.
+  | AmbiguousInterface String (List String) (Option Loc)
   -- an internal-only array-kernel extern (arrayGetUnsafe, …) referenced from a
   -- module that is neither in the standard library nor compiled with
   -- `--allow-internal` (see internalExterns / Env.internalGuard)
@@ -217,6 +236,8 @@ resErrorLoc (DuplicateBinder _ _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
 resErrorLoc (AmbiguousConstructor _ _ l) = l
+resErrorLoc (AmbiguousType _ _ l) = l
+resErrorLoc (AmbiguousInterface _ _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
 resErrorLoc (ReassignImmutable _ l) = l
 
@@ -242,6 +263,8 @@ public export data Env = Env {
     importedModuleValues : List (String, List String),
     ambiguous : List (String, List String),
     ctorAmbiguous : List (String, List String),
+    typeAmbiguous : List (String, List String),
+    ifaceAmbiguous : List (String, List String),
     internalGuard : OrdMap Unit,
     sugValues : List SugCand,  -- the did-you-mean candidate POOLS, materialized ONCE per `Env`
     sugTypes : List SugCand,  -- (see `SugCand`) instead of per unbound name — #1016.
@@ -342,7 +365,11 @@ patGroupDupErrors loc kind ps =
 checkType : Option Loc -> Env -> Ty -> List ResError
 checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
-    []
+    -- in scope — but a cross-module duplicate TYPE name (≥2 explicitly-importing
+    -- modules) is AMBIGUOUS at this use site (#1110); a type declared in THIS
+    -- module is excluded from `typeAmbiguous`, so this only fires on a genuine
+    -- import collision.  Exactly the ctor peer's guard in `checkPat`'s PCon arm.
+    ambiguousTypeErrors env n (orElseLoc loc cur)
   else
     [UnknownType n (orElseLoc loc cur) (suggestType env n)]
 checkType _ _ (TyVar _) = []
@@ -358,7 +385,15 @@ checkType cur env (TyFun a b) = checkType cur env a ++ checkType cur env b
 checkType cur env (TyTuple ts) = flatMap (checkType cur env) ts
 checkType cur env (TyEffect labels _ t) = flatMap (checkEffect cur env) (map fst labels)
   ++ checkType cur env t
-checkType cur env (TyConstrained cs t) = flatMap (checkConstraint cur env) cs
+-- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
+-- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
+-- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
+-- a -> String` had no span anywhere for an interface-position diagnostic to use —
+-- the constrained body does, one token away.  `cur` still wins where it exists (it
+-- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
+-- narrows the pre-existing `UnknownInterface` at this site from `<unknown
+-- location>` to the signature it was written in.
+checkType cur env (TyConstrained cs t) = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
   ++ checkType cur env t
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
@@ -387,8 +422,44 @@ checkEffect cur env e =
   else
     [UnknownEffect e cur]
 
+-- The three type-occurrence sites (`checkType`'s `TyCon` arm, `recPatHead`,
+-- `recCreateHead`) share this so the ambiguity verdict cannot differ between a type
+-- written in a signature and the same type written as a pattern or literal head —
+-- diagnostic visibility is a SET over the positions a name can be written in, and
+-- three copies of a guard is how one of them silently loses it.
+ambiguousTypeErrors : Env -> String -> Option Loc -> List ResError
+ambiguousTypeErrors env n loc =
+  whenL (isTypeAmbiguous env n) [AmbiguousType n (typeAmbigMods env n) loc]
+
+-- The interface peer, shared by all four interface-occurrence positions.
+--
+-- 🚨 LOCATING AN INTERFACE OCCURRENCE IS BEST-EFFORT, AND THE RESIDUAL IS
+-- STRUCTURAL — none of the four occurrence carriers (`Constraint`, `Super`,
+-- `Require`, `DImpl.iface`) carries a `Loc`, so there is no span for the head
+-- itself anywhere in the AST.  What each caller passes is the nearest real span it
+-- can reach, in this order: the `Ty`s written beside the head (`firstTyLocList`),
+-- then the enclosing expression span, then — for a `=>` predicate — the constrained
+-- type's own first span (`checkType`'s `TyConstrained` arm).
+--
+-- Two residuals survive that chain, both pre-existing and both shared with the
+-- sibling `UnknownInterface` at the same site:
+--   * `checkSuper` — `Super` carries `superParams : List String` (type-parameter
+--     NAMES, not `Ty`s), so it has NO `Ty` position at all and nothing to borrow.
+--   * a predicate whose every type is a variable AND whose constrained body is too
+--     (`f : Speak a => a -> a`) — there is no `Loc` in that signature to find.
+-- Both are fixed by giving these nodes a `Loc`, which is an AST carrier change and
+-- not this unit's.  Reporting them unlocated beats not reporting them: each IS a
+-- use site, and silence there is the strictly worse failure.
+--
+-- The `Require` / `DImpl.iface` locators are a strict IMPROVEMENT on their
+-- co-located `UnknownInterface`, which passes a literal `None`.
+ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
+ambiguousIfaceErrors env n loc = whenL
+  (isIfaceAmbiguous env n)
+  [AmbiguousInterface n (ifaceAmbigMods env n) loc]
+
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
-checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) = (if contains iface env.interfaces then [] else [UnknownInterface iface cur]) ++ flatMap (checkType cur env) args
+checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) = (if contains iface env.interfaces then ambiguousIfaceErrors env iface (orElseLoc (firstTyLocList args) cur) else [UnknownInterface iface cur]) ++ flatMap (checkType cur env) args
 
 -- ── check_pat ─────────────────────────────────────────────────────────────
 checkPat : Option Loc -> Env -> Pat -> List ResError
@@ -413,7 +484,18 @@ checkRecPat cur env name fields = recPatHead cur env name
 recPatHead : Option Loc -> Env -> String -> List ResError
 recPatHead cur env name =
   if omHasKey name env.types || omHasKey name env.ctors then
-    []
+    -- #1110: a record PATTERN head names a TYPE **or one of its CONSTRUCTORS** —
+    -- which is what the `|| omHasKey name env.ctors` on the line above is for
+    -- (`data T = MkT { fx : Int }` gives the head `MkT`, a ctor spelling with no
+    -- type of that name).  `checkPat` routes `PRec` here rather than through its
+    -- `PCon` arm, so neither ambiguity peer sees this position by default.
+    --
+    -- ⚠️ THIS LINE COVERS THE TYPE SPELLING ONLY.  `typeAmbiguous` is keyed by
+    -- type names, so for a ctor-only head it does nothing and the head stays
+    -- silent — an open S0 (#1253), whose fix belongs at this site and
+    -- `recCreateHead` but needs the CTOR peer (`isCtorAmbiguous`), not this one.
+    -- Deliberately not fixed here: out of unit E/F's brief, and untouched by it.
+    ambiguousTypeErrors env name cur
   else
     [UnknownType name cur (suggestType env name)]
 
@@ -658,6 +740,45 @@ isCtorAmbiguous env n = match lookupAssoc n env.ctorAmbiguous
 
 ctorAmbigMods : Env -> String -> List String
 ctorAmbigMods env n = match lookupAssoc n env.ctorAmbiguous
+  Some mods => mods
+  None => []
+
+-- TYPE peer of isAmbiguous/ambigMods (#1110): is this TYPE name brought into scope
+-- by ≥2 explicitly-importing modules?  Read at every type-occurrence site — a
+-- `TyCon` head, a record-pattern head, a record-literal head.
+isTypeAmbiguous : Env -> String -> Bool
+isTypeAmbiguous env n = match lookupAssoc n env.typeAmbiguous
+  Some _ => True
+  None => False
+
+typeAmbigMods : Env -> String -> List String
+typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
+  Some mods => mods
+  None => []
+
+-- INTERFACE peer.  A SEPARATE lookup over a SEPARATE set rather than a tag on the
+-- type one: `typeAmbiguous` is keyed by bare name, and an interface `Foo` and a
+-- type `Foo` are two different declarations that may legally coexist in one file —
+-- so one shared table would grade them against each other, the collision
+-- `tyOriginScope`'s `ifaceKey` tag exists to prevent.  Two tables get the same
+-- separation with no key encoding at all, because nothing here is threaded through
+-- a signature the way that map is.
+--
+-- ⚠️ THAT SEPARATION HAS A WITNESS ALREADY IN THE TREE, and it is a better one than
+-- anything #1110 added: `test/references_fixtures/iface_ty_collide/main.mdk`
+-- (#1044) does `import a.{Foo, mfoo}` then `import b.{Foo}` where a's `Foo` is an
+-- INTERFACE and b's is a `data`.  Under one shared bare-name table that is two
+-- provenances for `Foo` and a spurious ambiguity error on a file that is correct;
+-- under two tables each set sees exactly one and it checks clean — measured, exit
+-- 0.  That fixture predates this change and would go red if the tables were ever
+-- merged, which is precisely what makes it the regression test for this decision.
+isIfaceAmbiguous : Env -> String -> Bool
+isIfaceAmbiguous env n = match lookupAssoc n env.ifaceAmbiguous
+  Some _ => True
+  None => False
+
+ifaceAmbigMods : Env -> String -> List String
+ifaceAmbigMods env n = match lookupAssoc n env.ifaceAmbiguous
   Some mods => mods
   None => []
 
@@ -1136,7 +1257,10 @@ checkRecordCreate cur env scope name fs = recCreateHead cur env name fs
 
 recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
 recCreateHead cur env name fs
-  | omHasKey name env.types || omHasKey name env.imported || omHasKey name env.ctors = flatMap (recCreateField cur env name) fs
+  -- #1110: the expression-position peer of `recPatHead` — same head, same set,
+  -- and the same ctor-spelling gap (#1253); see that site's comment.
+  | omHasKey name env.types || omHasKey name env.imported || omHasKey name env.ctors = ambiguousTypeErrors env name cur
+    ++ flatMap (recCreateField cur env name) fs
   | otherwise = [UnknownType name cur (suggestType env name)]
 
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
@@ -1214,10 +1338,11 @@ checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
 checkInterfaceDecl env supers methods = flatMap (checkSuper env) supers
   ++ flatMap (checkIfaceMethod env) methods
 
+-- ⚠️ The `None` is structural, not an oversight — see `ambiguousIfaceErrors`.
 checkSuper : Env -> Super -> List ResError
 checkSuper env (Super { superHead = iface }) =
   if contains iface env.interfaces then
-    []
+    ambiguousIfaceErrors env iface None
   else
     [UnknownInterface iface None]
 
@@ -1227,14 +1352,33 @@ checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body))) = checkT
   ++ flatMap (checkPat (firstExprLoc body) env) pats
   ++ checkExpr None env (mkScope (patsBindings pats)) body
 
+-- `firstTyLocList tyargs` is the impl HEAD's own span (`impl Iface Ty1 Ty2…`) —
+-- the locator `firstTyLoc`'s doc comment names for exactly this position, and the
+-- best one available for an occurrence carrier that has no `Loc` of its own.
+--
+-- ⚠️ THE AMBIGUITY CHECK FOR `DImpl.iface` IS HERE, not in `checkImplIface` beside
+-- its `UnknownInterface` where the other three occurrence positions put theirs, for
+-- two reasons.  `tyargs` — the only span this diagnostic can be located from — is in
+-- scope HERE and not there; and threading it in would have added a parameter to
+-- `checkImplIface`, whose signature is pinned in
+-- `test/selfproc_goldens/legA/frontend.resolve.golden`, forfeiting the
+-- ADDITIVE-ONLY recapture that makes this arc's goldens mechanically reviewable
+-- (#1211/#1219/#1225 each moved that file additively; so does this).
+--
+-- No `contains iface env.interfaces` guard is needed to keep this from
+-- double-reporting alongside `UnknownInterface`: `ifaceAmbiguousSet` and
+-- `env.interfaces`' `iaIfaces` are filtered from the SAME `expInterfaces` over the
+-- SAME `importedNamesMM` names, so an ambiguous interface is necessarily in scope
+-- and the two verdicts are mutually exclusive by construction.
 checkImplDecl : Env -> String -> List Ty -> List Require -> List ImplMethod -> List ResError
 checkImplDecl env iface tyargs reqs methods = flatMap (checkType None env) tyargs
   ++ flatMap (checkRequire env) reqs
   ++ flatMap (checkImplMethod env) methods
   ++ checkImplIface env iface methods
+  ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
 
 checkRequire : Env -> Require -> List ResError
-checkRequire env (Require { requireHead = iface, requireArgs = tys }) = (if contains iface env.interfaces then [] else [UnknownInterface iface None])
+checkRequire env (Require { requireHead = iface, requireArgs = tys }) = (if contains iface env.interfaces then ambiguousIfaceErrors env iface (firstTyLocList tys) else [UnknownInterface iface None])
   ++ flatMap (checkType None env) tys
 
 checkImplMethod : Env -> ImplMethod -> List ResError
@@ -1442,6 +1586,8 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     importedModuleValues = [],
     ambiguous = [],
     ctorAmbiguous = [],
+    typeAmbiguous = [],
+    ifaceAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
     sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
     sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),
@@ -1819,6 +1965,12 @@ resErrorSexp (AmbiguousOccurrence n mods _) = "(AmbiguousOccurrence "
 resErrorSexp (AmbiguousConstructor n mods _) = "(AmbiguousConstructor "
   ++ joinWith " " (escStr n :: map escStr mods)
   ++ ")"
+resErrorSexp (AmbiguousType n mods _) = "(AmbiguousType "
+  ++ joinWith " " (escStr n :: map escStr mods)
+  ++ ")"
+resErrorSexp (AmbiguousInterface n mods _) = "(AmbiguousInterface "
+  ++ joinWith " " (escStr n :: map escStr mods)
+  ++ ")"
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
 
 -- String key for an `Option Loc`, used only to distinguish dedup candidates
@@ -1921,6 +2073,15 @@ ppResError (AmbiguousOccurrence n mods _) = "Ambiguous occurrence: '\{n}' is exp
 -- only that module's constructors — with the other left as a bare `import <mod>` (or
 -- without `(..)`), which binds its impls but not its constructors.  Never "qualify".
 ppResError (AmbiguousConstructor n mods _) = "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. Import the constructors of only one — e.g. `import <mod>.{T(..)}` — and drop the other's `(..)`"
+-- Neither remedy the VALUE peer offers exists for a type or an interface, so the
+-- copy must not borrow its wording.  "Qualify" is impossible: `import m as A` binds
+-- m's VALUES as `A.name`, and an alias-qualified name in TYPE position is a parse
+-- error (`docs/spec/SYNTAX.md`, "Import aliasing").  A member alias is impossible
+-- too: only a value member may be renamed, so `import m.{Foo as Bar}` is rejected.
+-- That leaves exactly one fix — name it, rather than gesture at the two that do not
+-- work: import the name from one module and drop it from the other's list.
+ppResError (AmbiguousType n mods _) = "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. A type name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
+ppResError (AmbiguousInterface n mods _) = "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. An interface name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
 ppResError (InternalExternAccess n _) = "'"
   ++ n
   ++ "' is an internal-only primitive. Cannot be used outside the standard library (pass --allow-internal to override)"
@@ -1955,6 +2116,8 @@ resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
 resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
 resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
 resErrorCode (AmbiguousConstructor _ _ _) = "R-AMBIGUOUS-CTOR"
+resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
+resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
 resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
 resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
 
@@ -2305,6 +2468,95 @@ ctorAmbiguousSet known prog =
   let sameMod = ctorNames prog
   keepAmbiguous sameMod (provToPairs prov)
 
+-- ── type-name / interface-name provenance / ambiguity (#1110) ───────────────
+-- The TYPE and INTERFACE peers of the two blocks above, deliberately built from
+-- the same three parts (`importedNamesMM` → a namespace filter → `keepAmbiguous`)
+-- so all four ambiguity sets have ONE trigger and cannot drift into four rules.
+--
+-- 🚨 WHAT THIS TRIGGER IS, AND WHAT IT IS NOT.  It is a SCOPE collision: ≥2
+-- distinct non-`core` import provenances for one name, visible in THIS module's
+-- scope.  It is NOT a TABLE collision — two modules with no import relationship
+-- that each declare the same bare name never meet in one scope, so no use-site
+-- diagnostic, present or future, has anything to fire on for that shape.  #1047 /
+-- #1070 / #1092 are that shape (verified from #1047's own fixture, whose `main.mdk`
+-- never imports the colliding interface at all); they are drained by Stage A-2's
+-- registry re-keying, NOT by anything in this file.  Do not claim otherwise.
+--
+-- ⚠️ PROVENANCE IS THE DIRECTLY-IMPORTED MODULE, NOT THE DEFINER — so one
+-- declaration reached through two import paths counts as TWO, and is reported.
+-- That is not an oversight and it is not new: MEASURED on the shipped VALUE peer
+-- before this was written (`import b.{dup}` + `import c.{dup}` where `c` is
+-- `export import b.{dup}` → `Ambiguous occurrence: 'dup' is exported by both 'b'
+-- and 'c'`).  The definer IS recoverable here — `keepTypeOrigins` does exactly
+-- that lookup — but using it would make the type/interface peers reject a shape the
+-- value peer accepts and accept a shape it rejects, on the SAME import lines.  One
+-- rule for all four namespaces is worth more than a narrower rule for two of them;
+-- if that rule should change it should change for all four at once.
+--
+-- The one asymmetry with the ctor peer is which local declarations settle the name
+-- (`dataRecordNames` vs `interfaceNamesOf` vs `ctorNames`), because that is what
+-- "declared in this module" means per namespace.
+
+-- The TYPE names one non-core import contributes, attributed to its
+-- directly-imported module id.  Mirrors `importCtorNames` through `expTypes`.
+importTypeNames : OrdMap ModuleExports -> UsePath -> List String
+importTypeNames known path = importNamesIn expTypesOf known path
+
+-- The INTERFACE names one non-core import contributes.  ⚠️ `import m.*` contributes
+-- NONE, because `importedNamesMM`'s `UseWild` arm lists values/types/ctors and not
+-- interfaces — so a wildcard-imported interface is not in `env.interfaces` either
+-- (`realImport`'s `iaIfaces` filters the same list).  Reading the same source keeps
+-- the ambiguity set a subset of what is actually in scope, which is the property
+-- that matters: this must never flag a name resolve did not bind.
+importIfaceNames : OrdMap ModuleExports -> UsePath -> List String
+importIfaceNames known path = importNamesIn expInterfacesOf known path
+
+expTypesOf : ModuleExports -> List String
+expTypesOf exp = exp.expTypes
+
+expInterfacesOf : ModuleExports -> List String
+expInterfacesOf exp = exp.expInterfaces
+
+-- Shared body of the two above: the names one use path binds, narrowed to one
+-- export namespace.  `filterInSet` (not `filterContains`) for the same reason
+-- `importCtorNames` uses it — an `export import m.*` chain grows both lists with
+-- depth, and an O(n) membership test there is the #925 cubic.
+importNamesIn : (ModuleExports -> List String) -> OrdMap ModuleExports -> UsePath -> List String
+importNamesIn nsOf known path =
+  if useModId path == "core" then []
+  else match findExports (useModId path) known
+    None => []
+    Some exp =>
+      let (names, _) = importedNamesMM path exp
+      filterInSet (omFromNames (nsOf exp) omEmpty) names
+
+foldNamespaceProvenance : (OrdMap ModuleExports -> UsePath -> List String) -> OrdMap ModuleExports -> OrdMap (List String) -> List UsePath -> OrdMap (List String)
+foldNamespaceProvenance _ _ prov [] = prov
+foldNamespaceProvenance namesOf known prov (p::rest) =
+  let mid = useModId p
+  let prov2 = if mid == "core" then
+    prov
+  else
+    addImportProvenance prov mid (namesOf known p)
+  foldNamespaceProvenance namesOf known prov2 rest
+
+-- Keep only type names bound by ≥2 distinct modules AND not declared by a
+-- same-module `data`/`newtype`/`type` (a real local declaration wins, exactly as it
+-- does for values and ctors — see `tyOriginScope`'s precedence argument, which
+-- states the same rule for identity).
+typeAmbiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
+typeAmbiguousSet known prog =
+  let prov = foldNamespaceProvenance importTypeNames known omEmpty (usePathsOf prog)
+  keepAmbiguous (dataRecordNames prog) (provToPairs prov)
+
+-- The interface peer.  `interfaceNamesOf` (not `map fst (interfaceList prog)`) is
+-- the local-declaration set, because it has the `DAttrib` arm — an `@attr`-wrapped
+-- `interface` still settles its own name.
+ifaceAmbiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
+ifaceAmbiguousSet known prog =
+  let prov = foldNamespaceProvenance importIfaceNames known omEmpty (usePathsOf prog)
+  keepAmbiguous (interfaceNamesOf prog) (provToPairs prov)
+
 foldImports : OrdMap ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldImports _ [] = emptyAdds
 foldImports known ((p, loc)::rest) =
@@ -2464,6 +2716,8 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
     importedModuleValues = impModValues,
     ambiguous = ambiguousSet known prog,
     ctorAmbiguous = ctorAmbiguousSet known prog,
+    typeAmbiguous = typeAmbiguousSet known prog,
+    ifaceAmbiguous = ifaceAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,
     sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
     sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),

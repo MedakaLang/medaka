@@ -9,19 +9,33 @@
 -- spread line is that rule's output, `beta` being the SECOND import below.
 --
 -- That choice is PINNED rather than endorsed.  A silent winner is the input the
--- `AmbiguousInterface` diagnostic (unit E/F of Stage A-1) has to REPLACE; the
--- honest end state here is a diagnostic, and when it lands this line moves.
+-- `AmbiguousInterface` diagnostic (unit E/F of Stage A-1) has to REPLACE.
 --
--- ⚠️ This file compiles and runs at exit 0 today with no diagnostic of any kind,
--- printing
+-- ⚠️ UPDATED BY UNIT E/F, WHICH HAS LANDED.  Every `Speak` and `Echo` occurrence
+-- below is now reported `R-AMBIGUOUS-INTERFACE`, so this file no longer checks
+-- clean — which is what this corpus was built to provoke.  But the sentence that
+-- stood here, "when it lands this line moves", was WRONG, and the measurement is
+-- worth keeping over the guess: resolve ACCUMULATES errors rather than raising, so
+-- the tree still reaches the stamping walk and the `iface:Echo 1 mod:beta` spread
+-- line came out BYTE-IDENTICAL (`agreement.golden` unchanged, gate green).  A
+-- use-site diagnostic tells the user the spelling is ambiguous; it does not stop
+-- resolve from stamping the winner it would have stamped anyway.
+--
+-- ⚠️ It used to compile and run at exit 0 with no diagnostic of any kind, printing
 --
 --     alpha-cat alpha-cat/alpha-cat beta-dog kennel(beta-dog)
 --
--- That is not a property to preserve — it is #1047 on the page.  Note the last two
+-- That was not a property to preserve — it is #1047 on the page.  Note the last two
 -- fields especially: `speak Dog` and `speak (Kennel Dog)` call ALPHA's `speak`
 -- (beta's is not imported) against impls written for BETA's `Speak`, and the bare
--- name merges them silently.  PR C changes none of it; it only makes the identities
--- observable.
+-- name merges them silently.
+--
+-- 🚨 AND THE NEW DIAGNOSTIC DOES NOT FIX THAT, however much its arrival here looks
+-- like it did.  It fires because `Speak` is ambiguous in THIS module's SCOPE — two
+-- import provenances, one spelling.  #1047 proper is a TABLE collision between
+-- modules that never meet in one scope (its own fixture's `main.mdk` never imports
+-- the colliding interface at all), so no use-site diagnostic, present or future,
+-- has anything to fire on for it.  That is A-2's registry re-keying.
 
 import alpha.{Speak, Echo, Cat(..), speak, twice, echo}
 import beta.{Speak, Echo, Dog(..), Kennel(..)}
