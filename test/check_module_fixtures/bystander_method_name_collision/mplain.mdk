@@ -1,0 +1,15 @@
+-- #1111 A-2.5 BYSTANDER: this module declares NOTHING that any other module in
+-- the graph also declares.  `Uniq`, `umth`, `Widget` and `MkWidget` are unique
+-- across the whole fixture, so nothing here participates in the `cmth`
+-- collision, and the entry's golden is an assertion about THIS module's types.
+--
+-- It carries an interface WITH an impl deliberately: the entry's `u` binding is
+-- a method occurrence whose impl obligation must still be recorded and
+-- discharged normally while a colliding method name sits in the same universe.
+public export data Widget = MkWidget Int
+
+export interface Uniq a where
+  umth : a -> Int
+
+export impl Uniq Widget where
+  umth (MkWidget n) = n

@@ -1,0 +1,4 @@
+-- #1111 A-2.5: the ONLY interface in this graph, and `solo` is the only method
+-- name in it.  Nothing here collides with anything — that is the point.
+export interface MOnly a where
+  solo : a -> Int

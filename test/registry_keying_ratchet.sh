@@ -169,7 +169,9 @@ cross_allowed='universeIfaceMethodsRef -- accumulated interface-method NAME set 
 universeFunNamesRef -- accumulated top-level fn NAME set across all modules (importer-shadow checks)
 universeKeyBucketsRef -- accumulated impl-existence key buckets (implExistsForHead)
 universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl completeness)
-universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half)
+universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half); still BARE-NAME-keyed and last-write-wins, but since A-2.5 it is only the FLOOR: the Module arm installs it OVERLAID per module by applyMethodScopeOverrides, so a name two interfaces both declare is decided by the importing module scope, not by registration order (#1092)
+universeMethodIdentsRef -- A-2.5: the IDENTITY-KEYED companion of the line above -- every (declaring module, method name) declaration of each method name, so a bare-name collision keeps BOTH rows instead of losing one to last-write-wins. Module-path-only: a flat/unstamped declaration mints no Ident (#1115 / E-1)
+universeMethodCollidedRef -- A-2.5: the method NAMES universeMethodIdentsRef holds >=2 distinct identities for. Normally EMPTY; it is what keeps the per-module overlay O(collisions) instead of O(all methods)
 universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the map above
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map
