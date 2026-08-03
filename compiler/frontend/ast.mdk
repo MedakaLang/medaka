@@ -237,22 +237,51 @@ deriving (Eq, Ord, Debug)
 -- mid` is meant to carry a NON-EMPTY module id — I6.3's other half, "an
 -- identity whose module component is empty is not well-formed".
 --
--- ⚠️ BE PRECISE ABOUT WHERE THAT SECOND HALF IS ENFORCED.  Dropping the
--- "unresolved" inhabitant is a fact about the TYPE: no `IdentOrigin` exists
--- for it, full stop.  Non-emptiness is NOT — the constructors are
--- `public export` (later units must pattern-match an `Ident` to render one),
--- so `IdentModule ""` is spellable by hand.  What holds is that
--- `identOriginOf` is the only MINT from a `TyConOrigin` and it returns
--- `None` for `""`, and that `identKey` (`types/registry.mdk`) keeps a
--- hand-built `IdentModule ""` on a DIFFERENT key from `IdentBuiltin`
--- anyway — pinned by a doctest there, added after mutation testing showed
--- the origin tag was otherwise untested.  Making non-emptiness structural
--- too would mean hiding the constructors behind accessors in this file; that
--- is a bigger change than A-2.0 needs and is not claimed here.
-public export data IdentOrigin =
+-- ⚠️ BOTH HALVES ARE ENFORCED BY THE TYPE, and the second half is why this
+-- declaration is `export data` and NOT `public export data`.  Dropping the
+-- "unresolved" inhabitant was always a fact about the type: no `IdentOrigin`
+-- exists for it, full stop.  Non-emptiness used to be weaker — the
+-- constructors were `public`, so `IdentModule ""` was spellable by hand, two
+-- such origins minted in UNRELATED modules compared `Eq`-equal and rendered
+-- to ONE key, and only a doctest in `types/registry.mdk` stood between that
+-- and a silent cross-module collision.  A doctest is not an invariant.  So
+-- the constructors are now MODULE-PRIVATE and `identOriginOf` below is the
+-- only way to obtain an `IdentOrigin` at all: it rejects `""`, therefore no
+-- `IdentOrigin` in the program has an empty module component, therefore no
+-- `Ident` does either.  §8 I6.3's "make the absent case unrepresentable" now
+-- holds for BOTH halves structurally, rather than for one half structurally
+-- and the other by test.
+--
+-- ⚠️ CONSEQUENCE: nothing outside this file may pattern-match an
+-- `IdentOrigin`.  `identOriginFold` below is the eliminator, and it is total
+-- and sentinel-free — a consumer says what a builtin origin renders to and
+-- what a module origin renders to, and cannot forget that there are two
+-- cases.  `types/registry.mdk`'s `originTag`/`originModuleOf` are written
+-- against it; that is the whole cost, measured at ONE accessor.
+export data IdentOrigin =
   | IdentBuiltin
   | IdentModule String
 deriving (Eq, Ord, Debug)
+
+-- The ONLY eliminator for an `IdentOrigin`, since the constructors above are
+-- module-private.  Total by construction: a consumer supplies the builtin
+-- answer and the module answer, so it cannot fall through to a sentinel or
+-- forget an inhabitant.  A third inhabitant added here would break every
+-- consumer at COMPILE time, which is the point.
+export identOriginFold : a -> (String -> a) -> IdentOrigin -> a
+identOriginFold onBuiltin _ IdentBuiltin = onBuiltin
+identOriginFold _ onModule (IdentModule mid) = onModule mid
+
+-- The one TOTAL mint, and the reason it is safe to be total: the builtin
+-- origin has no module component, so there is no well-formedness question to
+-- answer — `identOriginOf OriginBuiltin` can never be `None`.  A site that
+-- statically KNOWS it is naming something the language provides (a prelude
+-- tycon) uses this instead of unwrapping an `Option` that cannot be `None`.
+-- There is deliberately NO total counterpart for the module case: `""` is
+-- exactly what must stay unrepresentable, so a module origin is only ever
+-- obtainable from `identOriginOf`, which checks.
+export identOriginBuiltin : IdentOrigin
+identOriginBuiltin = IdentBuiltin
 
 -- `(namespace, origin, name)` — the full identity of a declaration, or of an
 -- occurrence naming one.
@@ -264,6 +293,14 @@ deriving (Eq, Ord, Debug)
 -- namespaces named?) is A-2.8's decision, made when the first diagnostic
 -- needs it.  `Debug` is derived because `debug` is already understood to be
 -- developer output, and it is what makes an `Ident` printable in a probe.
+--
+-- This constructor stays `public` on purpose even though `IdentOrigin`'s do
+-- not.  The well-formedness question is entirely about the ORIGIN, and that
+-- is where it is now answered: there is no ill-formed `IdentOrigin` to put in
+-- this field, so there is no ill-formed `Ident` to build out of one.  Keeping
+-- `Ident` matchable is what lets `types/registry.mdk` render a key and lets
+-- every later A-2 conversion destructure an identity without a per-field
+-- accessor tax, at zero cost to the invariant.
 public export data Ident = Ident Ns IdentOrigin String deriving (Eq, Ord, Debug)
 
 -- The ONE total conversion from the pipeline-stage-marked `TyConOrigin` to an
@@ -292,7 +329,6 @@ identOriginOf (OriginModule mid) =
 -- already has in hand, or `None` if that origin is not an identity.
 export mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
-
 
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped

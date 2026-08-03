@@ -1,11 +1,26 @@
 # META
-source_lines=800
+source_lines=1049
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
--- (#1111 / TYPECHECK-TARGET-ARCHITECTURE.md §2 K, §6 A-2; drains #1070's
--- five audit rows across #1047/#1069/#1092/#1090 once LATER units re-key
--- their tables onto this).
+-- (#1111 / TYPECHECK-TARGET-ARCHITECTURE.md §2 K, §6 A-2).
+--
+-- ⚠️ WHAT THIS UNIT DRAINS: NOTHING, YET. It is the substrate the LATER A-2
+-- units re-key their tables onto; a defect is drained by the unit that
+-- converts the table it lives in, never by this one. The eight tracked
+-- defects Stage A-2 as a whole addresses, read off the tracker 2026-08-03:
+-- S0 #1047, #1069, #1092, #1256; S1 #1257, #1258, #1259; S2 #1090.
+-- ⚠️ #1047 is already CLOSED, and NOT by this substrate — PR #1264 (unit
+-- A-2.9) closed it by giving the Core IR's untagged-default registry an
+-- interface identity (`ifaceIdentity`/`ifaceIdMatches`, `frontend/ast.mdk`),
+-- a backend-side fix that does not use this module at all. It is listed
+-- because it is one of the eight collisions that motivated the arc, not
+-- because anything here drains it.
+-- 🚨 An earlier cut of this header said "drains #1070's five audit rows
+-- across #1047/#1069/#1092/#1090" — FOUR issues, and phrased as if the
+-- draining happened here. The severity self-correction updated
+-- `frontend/ast.mdk` and left this header behind; both now name the same
+-- tracker-derived set of eight.
 --
 -- 🚨 THIS UNIT CONVERTS NO TABLE AND HAS ZERO CALL SITES. It lands the
 -- `Ident`/`Ns` identity carrier (in `frontend/ast.mdk`) and the
@@ -23,6 +38,22 @@ stages=DESUGAR,MARK
 -- composite-key form (five target tables have composite keys) and no
 -- deletion/enumeration (two target conversions cannot be written without
 -- them).
+--
+-- 🚨 "NO CALL SITES" ALSO MEANT "IN NO GATE", AND THAT IS NOW FIXED — the
+-- paragraph above used to answer the hazard with doctests that NOTHING RAN.
+-- A module outside every entry's import closure is invisible to `make
+-- medaka`, to `make check-self`, and to `test/typecheck_compiler_source.sh`
+-- (pass 1 walks `compiler/driver/medaka_cli.mdk`, pass 2 covers
+-- `compiler/entries/*.mdk`; this file is in neither). MEASURED 2026-08-03:
+-- with `regSize (Registry m) = "not an int"` injected here, `./medaka check
+-- compiler/driver/medaka_cli.mdk` exited 0 and `make check-self` printed
+-- PASS. So `Makefile`'s `test:` target now names this module explicitly.
+-- `medaka test <file>` TYPECHECKS the file before running its doctests, so
+-- that one line puts both halves — the types and the ~90 assertions below —
+-- inside the required `inlang` check, which runs `make test`.
+-- ⚠️ EVERY LATER A-2 UNIT INHERITS THIS. A unit that lands a
+-- call-site-free module and forgets its `Makefile` line has shipped
+-- unverified code with every gate green.
 --
 -- ── Why one `Ident` type generalizes a pattern already in the tree ─────────
 -- `crossModuleFunConstraintsQualRef` (`types/typecheck.mdk`) is already keyed
@@ -91,10 +122,25 @@ stages=DESUGAR,MARK
 -- first `:` is always the delimiter). Both facts are load-bearing for the
 -- composite keys below.
 --
--- `identKey`'s output is OPAQUE: nothing may parse it back. `regEntries`
--- therefore does not reconstruct an `Ident` from the rendered key — it keeps
--- the original `RegKey` alongside its value in the backing map instead, so
--- recovering identities never depends on the key being decodable.
+-- `identKey`'s output is OPAQUE TO CONSUMERS: no code outside this module may
+-- parse it back, and this module's own non-test code does not either.
+-- `regEntries` therefore does not reconstruct an `Ident` from the rendered
+-- key — it keeps the original `RegKey` alongside its value in the backing map
+-- instead, so recovering identities never depends on the key being decodable.
+--
+-- ⚠️ THE DOCTESTS IN THIS FILE ARE A STATED EXCEPTION, AND DELETING THEM
+-- WOULD BE A REGRESSION, NOT A CLEANUP. Several assertions below read the
+-- key's BYTES on purpose (`identKey identTypeFooM == "4:type6:module1:m3:Foo"`
+-- and the three `startsWith "1:…"` count-prefix lines). They are not
+-- consumers violating the contract; they are the only witnesses to two
+-- invariants that no property-level test can see — that the origin TAG is
+-- present, and that the ident-COUNT prefix is present. Both are documented
+-- below as defense in depth precisely because the module still behaves
+-- correctly without them TODAY, so a reviewer who reads only this paragraph,
+-- concludes the byte-reading tests violate the contract, and deletes them
+-- removes the one thing keeping injectivity independent of `nsTag`'s
+-- alphabet. The contract is: opaque to CONSUMERS, transparent to the tests
+-- that pin the encoding.
 --
 -- ── What the target tables need: COMPOSITE keys (`RegKey`) ─────────────────
 -- An `Ident` names ONE declaration, and at least five tables A-2 must convert
@@ -105,18 +151,73 @@ stages=DESUGAR,MARK
 -- about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
 -- is its one-element case:
 --
---   | table                            | key              | site               |
---   |----------------------------------|------------------|--------------------|
---   | `universeIfaceParamKinds`        | Ident × Int      | typecheck.mdk      |
---   | `obUnivConcreteRef`              | Ident × Ident    | typecheck.mdk      |
---   | `checkCallObligationsU` dedup    | Ident × [Ident]  | typecheck.mdk      |
---   | `methodReqCountRef`              | Ident × Ident    | eval.mdk           |
---   | `ifaceDispatchRef`               | Ident × Ident    | eval.mdk           |
+--   | table                            | key                     | site          |
+--   |----------------------------------|-------------------------|---------------|
+--   | `universeIfaceParamKinds`        | Ident × Int             | typecheck.mdk |
+--   | `obUnivConcreteRef`              | Ident × Ident           | typecheck.mdk |
+--   | `checkCallObligationsU` dedup    | Ident × [Option Ident]  | typecheck.mdk |
+--   | `methodReqCountRef`              | Ident × Ident           | eval.mdk      |
+--   | `ifaceDispatchRef`               | Ident × Ident           | eval.mdk      |
 --
--- Four of the five are pure identity tuples (`regKeyN`); the fifth pairs an
+-- Three of the five are pure identity tuples (`regKeyN`); one pairs an
 -- identity with a parameter SLOT, which is an ordinal and not a declaration —
 -- it has no namespace and no origin, so it is carried in `RegKey`'s second
 -- component (`regKeyAt`) rather than faked as an `Ident`.
+--
+-- 🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
+-- RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's
+-- review; that shape is not merely imprecise, it is a live conflation hazard,
+-- so the derivation is spelled out here rather than left to the next unit.
+-- The key today is (`types/typecheck.mdk:15171`):
+--
+--     let key = joinWith "," (iface :: map (o2 => fromOption "" (headTyconMono o2)) occs)
+--
+-- `headTyconMono : Mono -> Option String`, so a POSITION CAN BE ABSENT and
+-- the `""` is a POSITIONAL PLACEHOLDER, not a name. Absent positions really
+-- do reach this key on the dedup channel: `checkOneCallObligation` has an
+-- explicit `else if not (allConcreteHeads args)` arm (`:15214-15215`) which
+-- on the CALL channel (`dedup=True`) runs `checkUndeterminedObligations`, so
+-- a non-ground obligation is checked AND its key is added to `seen`.
+--
+-- Concrete failure the `[Ident]` shape invites. Take `interface Ix a b` and
+-- two CALL-channel obligations `Ix Int b0` (argument 1 undetermined) and
+-- `Ix a0 Int` (argument 0 undetermined). Today the keys are `"Ix,Int,"` and
+-- `"Ix,,Int"` — DISTINCT, so both get an ambiguity diagnostic. Convert to
+-- `regKeyN (ifaceIdent :: presentHeads)` — which is what `Ident × [Ident]`
+-- implies, since an `Ident` cannot be absent — and both become the SAME
+-- `RegKey`; the `dedup && contains key seen` guard skips the second and ONE
+-- DIAGNOSTIC IS SILENTLY LOST. That is exactly the conflation the
+-- whole-vector key was introduced to prevent (`typecheck.mdk:15161-15163`,
+-- #607), re-introduced by a key shape that cannot express absence.
+--
+-- ENCODING, so the next unit does not have to re-derive one. Absence is
+-- positional, so carry the positions in the ordinal block, which is what it
+-- is for:
+--
+--     regKeyNAt (ifaceIdent :: presentHeads) (arity :: presentIndices)
+--
+-- where `presentHeads` are the identities of the positions whose
+-- `headTyconMono` was `Some`, in argument order, and `presentIndices` are
+-- those positions' 0-based indices. Injective: `regKeyRender` already reads
+-- the ident count, then exactly `4n` netstrings, then ordinals, so the two
+-- blocks never interfere. On the example, `Ix Int b0` renders with ordinals
+-- `[2, 0]` and `Ix a0 Int` with `[2, 1]` — different keys, both diagnostics
+-- kept. The `arity` element is not decoration: WITHOUT it the encoding is
+-- injective only if an interface's arity is fixed, which is true today but is
+-- an unstated premise living in another file; with it, injectivity is a
+-- property of the encoding alone.
+--
+-- ⚠️ A SECOND ABSENCE, in the same row, from a different cause. Turning a
+-- `headTyconMono` name into an `Ident` needs that head's `TyConOrigin` —
+-- `Mono`'s `TCon String TyConOrigin` carries one — and on the FLAT
+-- single-file path it is `OriginUnresolved`, so `mkIdent` returns `None`
+-- there for a position whose head IS concrete. So `Option` in this row covers
+-- two distinct facts: "this argument has no head type constructor" and "this
+-- head has no module identity yet". The conversion must not collapse them
+-- into one placeholder: the first is a property of the obligation and must
+-- key differently per position (above); the second is the Module-path-only
+-- residual `Ns`' doc-comment in `frontend/ast.mdk` states, and on the flat
+-- path this table simply keeps its string key until #1115 (E-1).
 --
 -- `regKeyRender`'s injectivity, in one line: the leading netstring is the
 -- IDENT COUNT `n`, so a decoder reads `n`, then exactly `4n` netstrings (the
@@ -129,14 +230,24 @@ stages=DESUGAR,MARK
 -- netstring mistaken for the start of an identity group) would need some
 -- `nsTag` to be a decimal-digit string, and none is. MEASURED 2026-08-03:
 -- deleting the prefix left every PROPERTY-level doctest in this file passing
--- (76/76 at the time), which is why the three byte-shape assertions below
--- were added — they are the only thing that reds it. So the
+-- (76/76 at the time), which is why the three `startsWith "1:…"` assertions
+-- below were added — they are the only thing that reds it. RE-MEASURED on the
+-- round-2 file (93 doctests): deleting the prefix gives 90/93, and the three
+-- failures are exactly those three lines. So the
 -- prefix buys exactly one thing: it makes injectivity independent of
 -- `nsTag`'s alphabet, an invariant that otherwise lives silently in a
 -- different function and that a seventh namespace could break without any
--- signal. It is kept for that reason, and the ONE doctest below that looks
--- inside the opaque key exists solely because no property-level test can
--- distinguish its presence.
+-- signal. It is kept for that reason, and those three doctests exist solely
+-- because no property-level test can distinguish its presence.
+--
+-- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: there are FIVE, in two groups with
+-- two different jobs, and earlier cuts of this file variously called them
+-- "three" and "the ONE doctest" (in one case immediately above three of
+-- them). THREE `startsWith "1:…"` lines pin the ident-COUNT prefix, described
+-- in this paragraph; TWO `identKey … == "…"` lines pin the origin TAG,
+-- described at their own site further down. Both groups are the documented
+-- exception to the opacity contract above. Do not re-encode the number here —
+-- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\)' ` this file.
 --
 -- ── `regInsert` conflict handling (decided for THIS unit only) ─────────────
 -- Per `docs/spec/DICT-SEMANTICS.md` §8 I4, declarations are never rejected —
@@ -173,12 +284,18 @@ stages=DESUGAR,MARK
 -- move. What IS preserved by construction is the last-write-wins RESOLUTION
 -- of a duplicate key, not the ORDER a whole-table walk produces.
 
+-- ⚠️ `IdentOrigin` is imported WITHOUT `(..)` — its constructors are private
+-- to `frontend/ast.mdk` so that `IdentModule ""` is unrepresentable (see the
+-- type's doc-comment there).  `identOriginFold` is the eliminator, and
+-- `mkIdent`/`identOriginBuiltin` are the only mints.
 import frontend.ast.{
   Ns(..),
   Ident(..),
-  IdentOrigin(..),
+  IdentOrigin,
   TyConOrigin(..),
   identOriginOf,
+  identOriginFold,
+  identOriginBuiltin,
   mkIdent,
 }
 import support.ordmap.{
@@ -191,6 +308,13 @@ import support.ordmap.{
   omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList, startsWith}
+-- ⚠️ `sort` looks unused — it is reached ONLY from the `mregMerge`/`mregAdd`
+-- doctests, which compare multi-registry buckets as multisets. MEASURED
+-- 2026-08-03: deleting this line does NOT fail `medaka check`; it fails at
+-- doctest RUN time with `runtime error [E-PANIC]: unbound constrained fn:
+-- sort`. So the only thing standing between this import and a silent
+-- "tidy-up" deletion is `make test` actually running this file's doctests —
+-- which is exactly why `Makefile`'s `test:` target now names this module.
 import list.{sort}
 import map.{toList}
 
@@ -204,17 +328,20 @@ nsTag NsCtor = "ctor"
 nsTag NsField = "field"
 nsTag NsValue = "value"
 
--- ⚠️ `IdentOrigin` has no "unresolved" inhabitant BY CONSTRUCTION (see its
--- doc-comment in `frontend/ast.mdk`), which is what stops this renderer from
--- mapping a whole population onto one constant key. Both arms below name a
--- real origin.
+-- ⚠️ `IdentOrigin` has no "unresolved" inhabitant and no empty-module
+-- inhabitant BY CONSTRUCTION (see its doc-comment in `frontend/ast.mdk`),
+-- which is what stops this renderer from mapping a whole population onto one
+-- constant key. Both arms below name a real origin, and `identOriginFold` is
+-- total, so neither can be forgotten.
 originTag : IdentOrigin -> String
-originTag IdentBuiltin = "builtin"
-originTag (IdentModule _) = "module"
+originTag origin = identOriginFold "builtin" (_ => "module") origin
 
+-- The `""` here is NOT the forbidden empty module id — it is the builtin
+-- arm's contribution to a FIXED-WIDTH four-netstring group, and `lenKey ""` =
+-- `"0:"` is a real netstring. No `IdentOrigin` can carry `""` as a module id,
+-- so `originModuleOf` returning `""` identifies the builtin arm unambiguously.
 originModuleOf : IdentOrigin -> String
-originModuleOf (IdentModule m) = m
-originModuleOf IdentBuiltin = ""
+originModuleOf origin = identOriginFold "" (m => m) origin
 
 -- The one renderer — see the module doc-comment above for the collision
 -- argument. Treat the result as OPAQUE. EXACTLY FOUR netstrings, always.
@@ -257,6 +384,17 @@ regKeyN idents = RegKey idents []
 -- An identity plus an ordinal (`universeIfaceParamKinds`' `<iface>@<slot>`).
 export regKeyAt : Ident -> Int -> RegKey
 regKeyAt ident slot = RegKey [ident] [slot]
+
+-- Identity tuple PLUS ordinals — the shape `checkCallObligationsU`'s dedup key
+-- needs, and the reason it exists: that key's argument vector has ABSENT
+-- positions (`Ident × [Option Ident]`, see "What the target tables need"), and
+-- the only way to keep two vectors that differ in WHICH position is absent on
+-- different keys is to carry the present positions' indices alongside the
+-- present identities. Neither `regKeyN` (no ordinals) nor `regKeyAt` (one
+-- ident, one ordinal) can express that, so the conversion would otherwise
+-- have had to spell `RegKey` by hand and re-derive the injectivity argument.
+export regKeyNAt : List Ident -> List Int -> RegKey
+regKeyNAt idents ords = RegKey idents ords
 
 export regKeyIdents : RegKey -> List Ident
 regKeyIdents (RegKey idents _) = idents
@@ -320,6 +458,14 @@ regDelete ident r = regDeleteK (regKeyOf ident) r
 -- still has to review" in the module doc-comment. It IS deterministic.
 export regEntries : Registry v -> List (RegKey, v)
 regEntries (Registry m) = map snd (toList m)
+
+-- Symmetry with `mregKeys`/`sregKeys`. Derivable (`map fst (regEntries r)`),
+-- added anyway because an API where two of three registry types can enumerate
+-- their keys and the third cannot is a papercut every conversion pays, and
+-- because a caller who wants only the keys should not have to know that the
+-- values come along for free. Same order caveat as `regEntries`.
+export regKeys : Registry v -> List RegKey
+regKeys r = map fst (regEntries r)
 
 export regSize : Registry v -> Int
 regSize (Registry m) = omSize m
@@ -467,28 +613,46 @@ sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
 -- expressions. Each pair differs from its sibling along exactly ONE axis
 -- (Ns, IdentOrigin, or name) so each doctest isolates one collision
 -- dimension.
+--
+-- ⚠️ Every module-origin fixture is minted through `mkIdent`, because that is
+-- now the ONLY way to obtain a module origin at all — `IdentModule` is
+-- private to `frontend/ast.mdk`. `mkIdent` is partial, so the fixtures need a
+-- total fallback; `identBuiltinFixture` is a WELL-FORMED identity with a name
+-- no assertion below uses, so a fixture that silently fell back would show up
+-- as the WRONG identity (every fixture would collapse onto one row and
+-- `regSize regAllNs == 6`, the `regBoth*` lookups and the `regShift` pair
+-- would all fail) rather than as a crash. That is checked, not assumed: see
+-- the `mkIdent`-is-Some doctest in the F1 block below.
+identBuiltinFixture : Ns -> String -> Ident
+identBuiltinFixture ns name = Ident ns identOriginBuiltin name
+
+identIn : Ns -> String -> String -> Ident
+identIn ns mid name =
+  fromOption
+    (identBuiltinFixture ns "__fixture_fallback__")
+    (mkIdent ns (OriginModule mid) name)
 
 identTypeFooM : Ident
-identTypeFooM = Ident NsType (IdentModule "m") "Foo"
+identTypeFooM = identIn NsType "m" "Foo"
 
 identIfaceFooM : Ident
-identIfaceFooM = Ident NsIface (IdentModule "m") "Foo"
+identIfaceFooM = identIn NsIface "m" "Foo"
 
 identTypeFooN : Ident
-identTypeFooN = Ident NsType (IdentModule "n") "Foo"
+identTypeFooN = identIn NsType "n" "Foo"
 
 identTypeBarM : Ident
-identTypeBarM = Ident NsType (IdentModule "m") "Bar"
+identTypeBarM = identIn NsType "m" "Bar"
 
 identTypeFooBuiltin : Ident
-identTypeFooBuiltin = Ident NsType IdentBuiltin "Foo"
+identTypeFooBuiltin = identBuiltinFixture NsType "Foo"
 
 -- ALL SIX namespaces at the SAME origin and the SAME name — the fixture the
 -- namespace doctests below discriminate over. `size` is the exact spelling
 -- `Ns`'s doc-comment (`frontend/ast.mdk`) uses for the field-vs-method case,
 -- measured to check clean in one file.
 identSizeIn : Ns -> Ident
-identSizeIn ns = Ident ns (IdentModule "m") "size"
+identSizeIn ns = identIn ns "m" "size"
 
 allNsIdents : List Ident
 allNsIdents =
@@ -499,10 +663,10 @@ allNsIdents =
 -- "bc"`. A naive un-prefixed concatenation of fields WOULD collide these;
 -- `identKey`'s `lenKey`-prefixing does not.
 identShiftA : Ident
-identShiftA = Ident NsType (IdentModule "ab") "c"
+identShiftA = identIn NsType "ab" "c"
 
 identShiftB : Ident
-identShiftB = Ident NsType (IdentModule "a") "bc"
+identShiftB = identIn NsType "a" "bc"
 
 regBothNs : Registry Int
 regBothNs = regInsert identIfaceFooM 2 (regInsert identTypeFooM 1 regEmpty)
@@ -520,6 +684,34 @@ regBothNames =
 
 regShift : Registry Int
 regShift = regInsert identShiftB 2 (regInsert identShiftA 1 regEmpty)
+
+-- ── #607 conflation fixtures: WHICH position is absent must key differently ─
+-- `interface Ix a b` with two CALL-channel obligations, each ground in ONE
+-- argument and undetermined in the other. These are the two keys the
+-- `Ident × [Option Ident]` row (module doc-comment) says must stay apart, in
+-- the encoding it prescribes: identities = iface :: present heads, ordinals =
+-- arity :: the present positions' 0-based indices.
+identIfaceIxM : Ident
+identIfaceIxM = identIn NsIface "m" "Ix"
+
+identTypeIntM : Ident
+identTypeIntM = identIn NsType "m" "Int"
+
+-- `Ix Int b0` — argument 0 present (head `Int`), argument 1 undetermined.
+keyIxIntUndet : RegKey
+keyIxIntUndet = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 0]
+
+-- `Ix a0 Int` — argument 0 undetermined, argument 1 present (head `Int`).
+keyIxUndetInt : RegKey
+keyIxUndetInt = regKeyNAt [identIfaceIxM, identTypeIntM] [2, 1]
+
+-- What the `[Ident]` shape would have produced for BOTH of the above: the
+-- present heads only, with no record of which position they came from.
+keyIxPresentOnly : RegKey
+keyIxPresentOnly = regKeyN [identIfaceIxM, identTypeIntM]
+
+regIxUndet : Registry Int
+regIxUndet = regInsertK keyIxUndetInt 2 (regInsertK keyIxIntUndet 1 regEmpty)
 
 -- One entry per namespace, all under origin `m` and name `size`: any two
 -- namespace tags collapsing into one makes this registry SMALLER than six.
@@ -553,7 +745,7 @@ mregOrderA = mregAdd identTypeFooM 2 (mregAdd identTypeFooM 1 mregEmpty)
 mregOrderB : MultiRegistry Int
 mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 
--- ── F1: an unresolved origin cannot become an identity ─────────────────────
+-- ── F1: neither non-identity can become an identity ────────────────────────
 -- `identOriginOf` is total and REFUSES both non-identities, so no `Ident`
 -- exists that would render to a shared constant key.
 -- ⚠️ This replaces a doctest the first cut of this file shipped
@@ -561,14 +753,25 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- SPECIFIED the prohibited behaviour: it asserted that an `OriginUnresolved`
 -- identity keys a registry row, i.e. exactly the collision
 -- `resolve.mdk`'s consumer rule and `DICT-SEMANTICS.md` §8 I6.3 forbid.
+--
+-- ⚠️ These are now the LAST WORD on the empty-module case, not a backstop for
+-- it: `IdentModule` is private to `frontend/ast.mdk`, so `IdentModule ""` is
+-- not spellable anywhere and a doctest asserting how it keys could not be
+-- written even if someone wanted to. Round 1's F1 residual is closed at the
+-- type. What these pin is that the MINT still refuses the two non-identities
+-- — the property the privacy of the constructor rests on.
 -- > identOriginOf OriginUnresolved == None
 -- True
 -- > identOriginOf (OriginModule "") == None
 -- True
--- > identOriginOf OriginBuiltin == Some IdentBuiltin
+-- > identOriginOf OriginBuiltin == Some identOriginBuiltin
 -- True
--- > identOriginOf (OriginModule "m") == Some (IdentModule "m")
+-- > identOriginOf (OriginModule "m") == identOriginOf (OriginModule "m")
 -- True
+-- > identOriginOf (OriginModule "m") == identOriginOf (OriginModule "n")
+-- False
+-- > identOriginOf OriginBuiltin == identOriginOf (OriginModule "builtin")
+-- False
 -- > mkIdent NsType OriginUnresolved "Foo" == None
 -- True
 -- > mkIdent NsType (OriginModule "") "Foo" == None
@@ -576,6 +779,13 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > mkIdent NsType (OriginModule "m") "Foo" == Some identTypeFooM
 -- True
 -- > mkIdent NsType OriginBuiltin "Foo" == Some identTypeFooBuiltin
+-- True
+
+-- The fixture-fallback guard (see `identIn` above): every module-origin
+-- fixture is a `Some`, so none of them silently became the builtin fallback.
+-- > isSome (mkIdent NsType (OriginModule "m") "Foo")
+-- True
+-- > isSome (mkIdent NsType (OriginModule "ab") "c")
 -- True
 
 -- Round-trip: insert then lookup under the SAME Ident finds the value; a
@@ -637,19 +847,30 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > regLookup identTypeFooBuiltin regOriginKinds
 -- Some 3
 
--- The TAG carries that distinction on its own, and this is the doctest that
--- proves it: `Ident NsType (IdentModule "") "Foo"` is an ILL-FORMED identity
--- (`identOriginOf` refuses to mint it — see the F1 block above), but the data
--- constructor is public, so a careless conversion COULD hand one to a
--- registry. It must not land on the builtin's row. Verified by mutation:
--- with `originTag IdentBuiltin = "module"` the rest of this file still passes
--- 76/76, so without this line the tag is untested and the module-string
--- difference is doing all the work.
--- > identKey identTypeFooBuiltin == identKey (Ident NsType (IdentModule "") "Foo")
--- False
+-- ⚠️ THE ORIGIN TAG IS NOW REDUNDANT BY CONSTRUCTION, AND THIS IS THE ONLY
+-- THING THAT TESTS IT. Until `IdentOrigin`'s constructors went private, the
+-- doctest here was `identKey identTypeFooBuiltin /= identKey (Ident NsType
+-- (IdentModule "") "Foo")` — a hand-built ill-formed identity that had to be
+-- kept off the builtin's row. That expression no longer COMPILES (the
+-- constructor is private), which is the point of the change. But it took the
+-- tag's only coverage with it: every module id is now non-empty, so
+-- `originModuleOf` alone already separates builtin from every module, and
+-- MEASURED 2026-08-03 the mutation `originTag = identOriginFold "module" (_
+-- => "module")` gives 92/93 — every PROPERTY-level doctest in this file still
+-- passes, and the single failure is the byte-shape line immediately below.
+-- The tag is therefore defense in depth in exactly the sense the count prefix
+-- is (see the module doc-comment): it keeps the builtin/module distinction
+-- from resting on the emptiness of one field, so a future third `IdentOrigin`
+-- inhabitant cannot quietly alias onto the builtin. Pinning it needs a
+-- BYTE-SHAPE assertion, because no property-level one can see it.
+-- `identKey` is four netstrings: ns, origin tag, origin module, name.
+-- > identKey identTypeFooBuiltin == "4:type7:builtin0:3:Foo"
+-- True
+-- > identKey identTypeFooM == "4:type6:module1:m3:Foo"
+-- True
 
--- The count prefix (see the module doc-comment): the ONLY doctest that reads
--- the opaque key's bytes, and the only thing that can distinguish the prefix
+-- The count prefix (see the module doc-comment): three more of the
+-- byte-shape assertions, and the only thing that can distinguish the prefix
 -- being there at all.
 -- > startsWith "1:1" (regKeyRender (regKeyOf identTypeFooM))
 -- True
@@ -672,6 +893,32 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- Some 1
 -- > regLookup identShiftB regShift
 -- Some 2
+
+-- ── F3: #607 — two vectors differing only in WHICH position is absent ───────
+-- THE assertion that would have caught the `Ident × [Ident]` row. Both keys
+-- carry the SAME identities (`Ix`, `Int`) and differ only in which argument
+-- position the present head came from, which under the wrong row would have
+-- made them one key and silently dropped one ambiguity diagnostic. See
+-- "What the target tables need" in the module doc-comment for the derivation.
+-- > regKeyRender keyIxIntUndet == regKeyRender keyIxUndetInt
+-- False
+-- > regKeyIdents keyIxIntUndet == regKeyIdents keyIxUndetInt
+-- True
+-- > regSize regIxUndet
+-- 2
+-- > regLookupK keyIxIntUndet regIxUndet
+-- Some 1
+-- > regLookupK keyIxUndetInt regIxUndet
+-- Some 2
+
+-- ...and the key the DISCARDED shape would have produced for both of them is
+-- a THIRD key, distinct from either: dropping the positions does not merely
+-- conflate the two, it also aliases nothing else, so no existing assertion
+-- about `regKeyN` could have detected the loss.
+-- > regLookupK keyIxPresentOnly regIxUndet
+-- None
+-- > regSize (regInsertK keyIxPresentOnly 3 regIxUndet)
+-- 3
 
 -- ── F3: composite keys ─────────────────────────────────────────────────────
 -- Same identity, different ORDINAL slot: two rows, each found by its own key.
@@ -725,6 +972,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > map (e => regKeyIdents (fst e)) (regEntries regBothNs) == [[identTypeFooM], [identIfaceFooM]]
 -- True
 -- > map snd (regEntries regBothNs) == [1, 2]
+-- True
+-- > regKeys regBothNs == [regKeyOf identTypeFooM, regKeyOf identIfaceFooM]
 -- True
 
 -- ── F3: delete / filter / fromEntries / merge / size ────────────────────────
@@ -803,7 +1052,7 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- > sregMemberK (regKeyAt identIfaceFooM 4) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty)
 -- False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" true) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "mkIdent" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -816,11 +1065,9 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "nsTag" ((PCon "NsField")) (ELit (LString "field")))
 (DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "value")))
 (DTypeSig false "originTag" (TyFun (TyCon "IdentOrigin") (TyCon "String")))
-(DFunDef false "originTag" ((PCon "IdentBuiltin")) (ELit (LString "builtin")))
-(DFunDef false "originTag" ((PCon "IdentModule" PWild)) (ELit (LString "module")))
+(DFunDef false "originTag" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString "builtin"))) (ELam (PWild) (ELit (LString "module")))) (EVar "origin")))
 (DTypeSig false "originModuleOf" (TyFun (TyCon "IdentOrigin") (TyCon "String")))
-(DFunDef false "originModuleOf" ((PCon "IdentModule" (PVar "m"))) (EVar "m"))
-(DFunDef false "originModuleOf" ((PCon "IdentBuiltin")) (ELit (LString "")))
+(DFunDef false "originModuleOf" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString ""))) (ELam ((PVar "m")) (EVar "m"))) (EVar "origin")))
 (DTypeSig true "identKey" (TyFun (TyCon "Ident") (TyCon "String")))
 (DFunDef false "identKey" ((PCon "Ident" (PVar "ns") (PVar "origin") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (EApp (EVar "originTag") (EVar "origin")))) (EApp (EVar "lenKey") (EApp (EVar "originModuleOf") (EVar "origin")))) (EApp (EVar "lenKey") (EVar "name"))))
 (DTypeSig true "identKeys" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "String")))
@@ -837,6 +1084,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regKeyN" ((PVar "idents")) (EApp (EApp (EVar "RegKey") (EVar "idents")) (EListLit)))
 (DTypeSig true "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyAt" ((PVar "ident") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "ident"))) (EListLit (EVar "slot"))))
+(DTypeSig true "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
+(DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "idents")) (EVar "ords")))
 (DTypeSig true "regKeyIdents" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Ident"))))
 (DFunDef false "regKeyIdents" ((PCon "RegKey" (PVar "idents") PWild)) (EVar "idents"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -864,6 +1113,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
 (DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EVar "toList") (EVar "m"))))
+(DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
+(DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "regSize" ((PCon "Registry" (PVar "m"))) (EApp (EVar "omSize") (EVar "m")))
 (DTypeSig true "regFilter" (TyFun (TyFun (TyTuple (TyCon "RegKey") (TyVar "v")) (TyCon "Bool")) (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
@@ -920,24 +1171,28 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
+(DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
+(DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "fromOption") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
-(DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))
-(DFunDef false "identIfaceFooM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsIface")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Foo"))))
+(DFunDef false "identIfaceFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsIface")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identTypeFooN" (TyCon "Ident"))
-(DFunDef false "identTypeFooN" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "n")))) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooN" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "n"))) (ELit (LString "Foo"))))
 (DTypeSig false "identTypeBarM" (TyCon "Ident"))
-(DFunDef false "identTypeBarM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Bar"))))
+(DFunDef false "identTypeBarM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Bar"))))
 (DTypeSig false "identTypeFooBuiltin" (TyCon "Ident"))
-(DFunDef false "identTypeFooBuiltin" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EVar "IdentBuiltin")) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooBuiltin" () (EApp (EApp (EVar "identBuiltinFixture") (EVar "NsType")) (ELit (LString "Foo"))))
 (DTypeSig false "identSizeIn" (TyFun (TyCon "Ns") (TyCon "Ident")))
-(DFunDef false "identSizeIn" ((PVar "ns")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "size"))))
+(DFunDef false "identSizeIn" ((PVar "ns")) (EApp (EApp (EApp (EVar "identIn") (EVar "ns")) (ELit (LString "m"))) (ELit (LString "size"))))
 (DTypeSig false "allNsIdents" (TyApp (TyCon "List") (TyCon "Ident")))
 (DFunDef false "allNsIdents" () (EApp (EApp (EVar "map") (EVar "identSizeIn")) (EListLit (EVar "NsType") (EVar "NsIface") (EVar "NsMethod") (EVar "NsCtor") (EVar "NsField") (EVar "NsValue"))))
 (DTypeSig false "identShiftA" (TyCon "Ident"))
-(DFunDef false "identShiftA" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "ab")))) (ELit (LString "c"))))
+(DFunDef false "identShiftA" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "ab"))) (ELit (LString "c"))))
 (DTypeSig false "identShiftB" (TyCon "Ident"))
-(DFunDef false "identShiftB" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "a")))) (ELit (LString "bc"))))
+(DFunDef false "identShiftB" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "a"))) (ELit (LString "bc"))))
 (DTypeSig false "regBothNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regBothNs" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identIfaceFooM")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeFooM")) (ELit (LInt 1))) (EVar "regEmpty"))))
 (DTypeSig false "regBothOrigin" (TyApp (TyCon "Registry") (TyCon "Int")))
@@ -948,6 +1203,18 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regBothNames" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeBarM")) (ELit (LInt 200))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeFooM")) (ELit (LInt 100))) (EVar "regEmpty"))))
 (DTypeSig false "regShift" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regShift" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identShiftB")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identShiftA")) (ELit (LInt 1))) (EVar "regEmpty"))))
+(DTypeSig false "identIfaceIxM" (TyCon "Ident"))
+(DFunDef false "identIfaceIxM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsIface")) (ELit (LString "m"))) (ELit (LString "Ix"))))
+(DTypeSig false "identTypeIntM" (TyCon "Ident"))
+(DFunDef false "identTypeIntM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Int"))))
+(DTypeSig false "keyIxIntUndet" (TyCon "RegKey"))
+(DFunDef false "keyIxIntUndet" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
+(DTypeSig false "keyIxUndetInt" (TyCon "RegKey"))
+(DFunDef false "keyIxUndetInt" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 1)))))
+(DTypeSig false "keyIxPresentOnly" (TyCon "RegKey"))
+(DFunDef false "keyIxPresentOnly" () (EApp (EVar "regKeyN") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))))
+(DTypeSig false "regIxUndet" (TyApp (TyCon "Registry") (TyCon "Int")))
+(DFunDef false "regIxUndet" () (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxUndetInt")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxIntUndet")) (ELit (LInt 1))) (EVar "regEmpty"))))
 (DTypeSig false "regAllNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regAllNs" () (EApp (EVar "regFromEntries") (EApp (EApp (EVar "zipNsValues") (EVar "allNsIdents")) (ELit (LInt 1)))))
 (DTypeSig false "zipNsValues" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))))
@@ -962,7 +1229,7 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DTypeSig false "mregOrderB" (TyApp (TyCon "MultiRegistry") (TyCon "Int")))
 (DFunDef false "mregOrderB" () (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 2))) (EVar "mregEmpty"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" true) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "mkIdent" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -975,11 +1242,9 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "nsTag" ((PCon "NsField")) (ELit (LString "field")))
 (DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "value")))
 (DTypeSig false "originTag" (TyFun (TyCon "IdentOrigin") (TyCon "String")))
-(DFunDef false "originTag" ((PCon "IdentBuiltin")) (ELit (LString "builtin")))
-(DFunDef false "originTag" ((PCon "IdentModule" PWild)) (ELit (LString "module")))
+(DFunDef false "originTag" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString "builtin"))) (ELam (PWild) (ELit (LString "module")))) (EVar "origin")))
 (DTypeSig false "originModuleOf" (TyFun (TyCon "IdentOrigin") (TyCon "String")))
-(DFunDef false "originModuleOf" ((PCon "IdentModule" (PVar "m"))) (EVar "m"))
-(DFunDef false "originModuleOf" ((PCon "IdentBuiltin")) (ELit (LString "")))
+(DFunDef false "originModuleOf" ((PVar "origin")) (EApp (EApp (EApp (EVar "identOriginFold") (ELit (LString ""))) (ELam ((PVar "m")) (EVar "m"))) (EVar "origin")))
 (DTypeSig true "identKey" (TyFun (TyCon "Ident") (TyCon "String")))
 (DFunDef false "identKey" ((PCon "Ident" (PVar "ns") (PVar "origin") (PVar "name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "nsTag") (EVar "ns"))) (EApp (EVar "lenKey") (EApp (EVar "originTag") (EVar "origin")))) (EApp (EVar "lenKey") (EApp (EVar "originModuleOf") (EVar "origin")))) (EApp (EVar "lenKey") (EVar "name"))))
 (DTypeSig true "identKeys" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyCon "String")))
@@ -996,6 +1261,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regKeyN" ((PVar "idents")) (EApp (EApp (EVar "RegKey") (EVar "idents")) (EListLit)))
 (DTypeSig true "regKeyAt" (TyFun (TyCon "Ident") (TyFun (TyCon "Int") (TyCon "RegKey"))))
 (DFunDef false "regKeyAt" ((PVar "ident") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "ident"))) (EListLit (EVar "slot"))))
+(DTypeSig true "regKeyNAt" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
+(DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "idents")) (EVar "ords")))
 (DTypeSig true "regKeyIdents" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Ident"))))
 (DFunDef false "regKeyIdents" ((PCon "RegKey" (PVar "idents") PWild)) (EVar "idents"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -1023,6 +1290,8 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regDelete" ((PVar "ident") (PVar "r")) (EApp (EApp (EVar "regDeleteK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "r")))
 (DTypeSig true "regEntries" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v")))))
 (DFunDef false "regEntries" ((PCon "Registry" (PVar "m"))) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EMethodRef "toList") (EVar "m"))))
+(DTypeSig true "regKeys" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "List") (TyCon "RegKey"))))
+(DFunDef false "regKeys" ((PVar "r")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "regEntries") (EVar "r"))))
 (DTypeSig true "regSize" (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyCon "Int")))
 (DFunDef false "regSize" ((PCon "Registry" (PVar "m"))) (EApp (EVar "omSize") (EVar "m")))
 (DTypeSig true "regFilter" (TyFun (TyFun (TyTuple (TyCon "RegKey") (TyVar "v")) (TyCon "Bool")) (TyFun (TyApp (TyCon "Registry") (TyVar "v")) (TyApp (TyCon "Registry") (TyVar "v")))))
@@ -1079,24 +1348,28 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
+(DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
+(DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "fromOption") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
-(DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))
-(DFunDef false "identIfaceFooM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsIface")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Foo"))))
+(DFunDef false "identIfaceFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsIface")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identTypeFooN" (TyCon "Ident"))
-(DFunDef false "identTypeFooN" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "n")))) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooN" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "n"))) (ELit (LString "Foo"))))
 (DTypeSig false "identTypeBarM" (TyCon "Ident"))
-(DFunDef false "identTypeBarM" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "Bar"))))
+(DFunDef false "identTypeBarM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Bar"))))
 (DTypeSig false "identTypeFooBuiltin" (TyCon "Ident"))
-(DFunDef false "identTypeFooBuiltin" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EVar "IdentBuiltin")) (ELit (LString "Foo"))))
+(DFunDef false "identTypeFooBuiltin" () (EApp (EApp (EVar "identBuiltinFixture") (EVar "NsType")) (ELit (LString "Foo"))))
 (DTypeSig false "identSizeIn" (TyFun (TyCon "Ns") (TyCon "Ident")))
-(DFunDef false "identSizeIn" ((PVar "ns")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EApp (EVar "IdentModule") (ELit (LString "m")))) (ELit (LString "size"))))
+(DFunDef false "identSizeIn" ((PVar "ns")) (EApp (EApp (EApp (EVar "identIn") (EVar "ns")) (ELit (LString "m"))) (ELit (LString "size"))))
 (DTypeSig false "allNsIdents" (TyApp (TyCon "List") (TyCon "Ident")))
 (DFunDef false "allNsIdents" () (EApp (EApp (EMethodRef "map") (EVar "identSizeIn")) (EListLit (EVar "NsType") (EVar "NsIface") (EVar "NsMethod") (EVar "NsCtor") (EVar "NsField") (EVar "NsValue"))))
 (DTypeSig false "identShiftA" (TyCon "Ident"))
-(DFunDef false "identShiftA" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "ab")))) (ELit (LString "c"))))
+(DFunDef false "identShiftA" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "ab"))) (ELit (LString "c"))))
 (DTypeSig false "identShiftB" (TyCon "Ident"))
-(DFunDef false "identShiftB" () (EApp (EApp (EApp (EVar "Ident") (EVar "NsType")) (EApp (EVar "IdentModule") (ELit (LString "a")))) (ELit (LString "bc"))))
+(DFunDef false "identShiftB" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "a"))) (ELit (LString "bc"))))
 (DTypeSig false "regBothNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regBothNs" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identIfaceFooM")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeFooM")) (ELit (LInt 1))) (EVar "regEmpty"))))
 (DTypeSig false "regBothOrigin" (TyApp (TyCon "Registry") (TyCon "Int")))
@@ -1107,6 +1380,18 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "regBothNames" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeBarM")) (ELit (LInt 200))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identTypeFooM")) (ELit (LInt 100))) (EVar "regEmpty"))))
 (DTypeSig false "regShift" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regShift" () (EApp (EApp (EApp (EVar "regInsert") (EVar "identShiftB")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsert") (EVar "identShiftA")) (ELit (LInt 1))) (EVar "regEmpty"))))
+(DTypeSig false "identIfaceIxM" (TyCon "Ident"))
+(DFunDef false "identIfaceIxM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsIface")) (ELit (LString "m"))) (ELit (LString "Ix"))))
+(DTypeSig false "identTypeIntM" (TyCon "Ident"))
+(DFunDef false "identTypeIntM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Int"))))
+(DTypeSig false "keyIxIntUndet" (TyCon "RegKey"))
+(DFunDef false "keyIxIntUndet" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
+(DTypeSig false "keyIxUndetInt" (TyCon "RegKey"))
+(DFunDef false "keyIxUndetInt" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 1)))))
+(DTypeSig false "keyIxPresentOnly" (TyCon "RegKey"))
+(DFunDef false "keyIxPresentOnly" () (EApp (EVar "regKeyN") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))))
+(DTypeSig false "regIxUndet" (TyApp (TyCon "Registry") (TyCon "Int")))
+(DFunDef false "regIxUndet" () (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxUndetInt")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxIntUndet")) (ELit (LInt 1))) (EVar "regEmpty"))))
 (DTypeSig false "regAllNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regAllNs" () (EApp (EVar "regFromEntries") (EApp (EApp (EVar "zipNsValues") (EVar "allNsIdents")) (ELit (LInt 1)))))
 (DTypeSig false "zipNsValues" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))))

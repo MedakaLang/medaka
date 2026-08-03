@@ -74,10 +74,20 @@ preflight:
 ##           run by `medaka test` itself (dogfooding). Needs NO oracle binaries.
 ##           This is what `medaka test` means; the differential gate suite is
 ##           `make gates`.
+## ⚠️ A compiler module with NO CALL SITES is in no entry's import closure, so
+##    `make medaka`, `make check-self` and `test/typecheck_compiler_source.sh`
+##    ALL miss it — verified 2026-08-03 by injecting `regSize (Registry m) =
+##    "not an int"` into `compiler/types/registry.mdk`: `./medaka check
+##    compiler/driver/medaka_cli.mdk` exited 0 and `make check-self` printed
+##    PASS.  `medaka test <file>` typechecks the file before running its
+##    doctests, so listing such a module HERE is what puts both its types and
+##    its doctests inside a required check (`inlang` runs `make test`).  Add a
+##    line here for every call-site-free compiler module.
 test: medaka
 	sh test/diff_compiler_ported.sh
 	./medaka test stdlib/list.mdk
 	./medaka test stdlib/core.mdk
+	./medaka test compiler/types/registry.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
