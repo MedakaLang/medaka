@@ -446,7 +446,16 @@ echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer lit
 # the sites this exists to enumerate. A pattern that legitimately BINDS the origin is
 # the expected first false positive; list it, and the list stays the audit.
 echo "checking #1110 Mono.TCon mint set ..."
+# ⚠️ ONE OF THE LINES BELOW IS A PATTERN, NOT A MINT — `headTyconMono`'s, added by
+# #1111 Stage A-2 unit A-2.2.  It is the FIRST site in the file to READ a
+# `Mono.TCon` origin (it projects the head into a `HeadKey` that can carry the
+# identity Stage A-1 put there), so its origin slot is `o` rather than `_` and the
+# pattern-erasing filter above cannot erase it.  This is exactly the false positive
+# the remedy predicts — "a pattern that legitimately BINDS the origin is the
+# expected first false positive; list it, and the list stays the audit" — so it is
+# listed rather than the filter widened.  It CONSTRUCTS no `TCon`.
 mono_tcon_allowed="| TCon String TyConOrigin
+TCon n o => Some (headKeyOfCon o n)
 tconBuiltin n = TCon n OriginBuiltin
 tconFrom o n = TCon n o
 tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin
@@ -475,7 +484,11 @@ if [ "$mono_tcon_actual" != "$mono_tcon_expected" ]; then
   echo "  Do NOT widen the pattern-vs-construction filter above; add the line here."
   exit 1
 fi
-echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 1)) Mono.TCon mint(s), no other construction site"
+# ⚠️ minus TWO, not one: the declaration line AND the origin-BINDING pattern listed
+# above are both in the allowlist but neither is a mint.  A bare `- 1` here would
+# report "5 mints" for four, i.e. the count would silently absorb the next pattern
+# added — the slack the sibling ratchets' comments warn about.
+echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 2)) Mono.TCon mint(s) + 1 origin-binding pattern, no other construction site"
 
 # The names `tconBuiltin` claims as language-provided must be exactly that, and the
 # authority is resolve's own `primitiveTypes` rather than a second hand-kept list here.

@@ -1,5 +1,5 @@
 # META
-source_lines=1049
+source_lines=1208
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -586,6 +586,94 @@ sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
 sregMergeGo [] acc = acc
 sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
 
+-- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
+-- Stage A-2 unit A-2.2 (#1111).  `types/typecheck.mdk`'s two head projections
+-- — `headTyconMono : Mono -> …` (the GOAL side of a dispatch key) and
+-- `headTyconTy : Ty -> …` (the IMPL side) — both had `Option String` as their
+-- result, so the identity `Mono.TCon`/`Ty.TyCon` already CARRY (Stage A-1) was
+-- thrown away at the return type.  This is the type that lets it through.
+--
+-- 🚨 THE DERIVATION, because the obvious widening is wrong.  Widening to
+-- `Option Ident` would give `None` TWO meanings that are not the same fact:
+--
+--   (1) "this type has no head type constructor at all" — a bare tyvar, a
+--       function type, an effect row.  That is what `None` means TODAY, and it
+--       is a property of the TYPE.
+--   (2) "there is a head type constructor, but no identity for it" — `mkIdent`
+--       answers `None` on the FLAT/single-file driver path, where every user
+--       declaration still carries the pipeline-stage marker (`Ns`' doc-comment
+--       in `frontend/ast.mdk`; A-2 is Module-path-only until #1115/E-1).  That
+--       is a property of the PIPELINE, not of the type.
+--
+-- Collapsing (1) and (2) is the conflation class this whole stage exists to
+-- remove, so they stay apart: `None` keeps meaning (1) — unchanged, at every
+-- one of the 23 call sites — and `HkBare` carries (2).
+--
+-- 🚨 AND THERE IS A THIRD FACT, which is why this type has THREE inhabitants
+-- and not two.  `headTyconMono` has an explicit `TRigid n => Some n` arm: a
+-- head fabricated from a type-PARAMETER name.  `docs/spec/DICT-SEMANTICS.md`
+-- §8 I6.1 says such a head denotes a rigid type variable, is not a
+-- declaration, and MUST NOT be assigned an identity — and `Mono`'s own
+-- doc-comment (`types/typecheck.mdk`) records that the arm is
+-- ANSWER-PRESERVING, NOT CORRECT, kept deliberately, and that A-1's gain was
+-- making the violation GREPPABLE rather than invisible inside `TCon`.
+--
+-- Routing a rigid head into `HkBare` would throw that gain away at exactly the
+-- layer A-1 bought it for: `HkBare` means "a real declaration whose module id
+-- has not been acquired yet", and two `HkBare`s with the same name are the
+-- same declaration on the flat path.  A rigid `a` is not a declaration at ALL,
+-- so it must not be able to sit in the same inhabitant as one.  `HkRigid`
+-- keeps the I6.1 residual visible AND greppable at the key layer, which is
+-- what lets the follow-on semantics unit delete it by deleting an arm.
+--
+-- ⚠️ THIS UNIT CHANGES NO ANSWER.  Every consumer projects straight back to
+-- the bare name, so a rigid head is still handed out as a dispatch key exactly
+-- as it was.  Whoever removes that must remove the ARM, not this inhabitant.
+--
+-- `HkBare`/`HkRigid` carry no `Ns` (unlike an `Ident`, which carries one for
+-- the six-namespace reason `frontend/ast.mdk` gives): the head of a TYPE is
+-- always in the TYPE namespace, so there is no second population for a bare
+-- name here to collide with.  `HkIdent`'s `Ident` is always `NsType` for the
+-- same reason — `headKeyOfCon` below is the only mint, and it is where that is
+-- decided once.
+public export data HeadKey =
+  -- a real head type constructor whose DECLARING MODULE is known (§8 I4's
+  -- `(originModule, name)`), or one the LANGUAGE provides (`IdentBuiltin`)
+  | HkIdent Ident
+  -- a real head type constructor with NO identity acquired: the flat path
+  | HkBare String
+  -- 🚨 NOT A DECLARATION: the parameter name of a rigid type variable, handed
+  -- out as a dispatch key.  The §8 I6.1 residual, named rather than hidden.
+  | HkRigid String
+deriving (Eq, Ord, Debug)
+
+-- The ONE mint for a REAL head — `mkIdent` decides, so the two-absences
+-- question above is answered here and nowhere else.  Argument order mirrors
+-- `tconFrom : TyConOrigin -> String -> Mono` (`types/typecheck.mdk`), the mint
+-- that BUILT the head this projects, so a swapped pair does not typecheck.
+--
+-- ⚠️ There is deliberately no `headKeyOfRigid`: `HkRigid` is applied at
+-- exactly one site (`headTyconMono`'s `TRigid` arm) and a one-line helper
+-- would make that site read like a routine mint rather than the flagged
+-- violation it is.
+export headKeyOfCon : TyConOrigin -> String -> HeadKey
+headKeyOfCon origin name = match mkIdent NsType origin name
+  Some ident => HkIdent ident
+  None => HkBare name
+
+-- The bare name inside a head key, whatever its inhabitant.  Allocation-free:
+-- it returns a `String` that already exists.
+--
+-- 🚨 THIS IS THE STAGE A-2 LEDGER.  Every call is a dispatch key that is STILL
+-- keyed by a bare name, so `grep -n headKeyName compiler/types/typecheck.mdk`
+-- counts the residual, and a later unit's progress is a call LEAVING that
+-- count.  At A-2.2 it is deliberately every consumer — this unit widens the
+-- carrier and changes no answer.
+export headKeyName : HeadKey -> String
+headKeyName (HkIdent (Ident _ _ name)) = name
+headKeyName (HkBare name) = name
+headKeyName (HkRigid name) = name
+
 -- ── Deliberately NOT added, with the table each omission affects ───────────
 --   * NO `Display` for `Ident`/`RegKey` — see `Ident` in `frontend/ast.mdk`:
 --     user-facing rendering is A-2.8's decision, and a derived instance would
@@ -1051,6 +1139,77 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- True
 -- > sregMemberK (regKeyAt identIfaceFooM 4) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty)
 -- False
+
+-- ── F4: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
+-- Fixtures mirror the `Ident` ones above: `headA`/`headZ` are the SAME bare
+-- head name `Box` declared by two unrelated modules — the #1069/#1090/#1070
+-- collision shape verbatim, and the reason the projection had to widen at all.
+--
+-- ⚠️ `headU` is spelled with the CONSTRUCTOR, not as `headKeyOfCon
+-- OriginUnresolved "Box"`: `test/typecheck_compiler_source.sh`'s #1110 ratchet
+-- pins the SET OF FILES carrying a non-comment `OriginUnresolved` mention, and
+-- allow-listing this whole file for one fixture would excuse every future
+-- mention in it too. Nothing is lost — the mint's own answer for that origin is
+-- asserted below via `OriginModule ""`, the other input `mkIdent` refuses, and
+-- both land in the same inhabitant.
+headA : HeadKey
+headA = headKeyOfCon (OriginModule "apub") "Box"
+
+headZ : HeadKey
+headZ = headKeyOfCon (OriginModule "zopapub") "Box"
+
+headU : HeadKey
+headU = HkBare "Box"
+
+-- The mint is total, and each origin case lands where it must.
+-- > headKeyOfCon (OriginModule "apub") "Box" == HkIdent (Ident NsType identOriginBuiltin "Box")
+-- False
+-- > headKeyOfCon OriginBuiltin "Box" == HkIdent (Ident NsType identOriginBuiltin "Box")
+-- True
+-- > headKeyOfCon (OriginModule "") "Box" == HkBare "Box"
+-- True
+
+-- 🚨 THE POINT OF THE WIDENING: two modules' same-named heads are now DISTINCT
+-- keys, where the old `Option String` made them the same string.
+-- > headA == headZ
+-- False
+-- > headA == headKeyOfCon (OriginModule "apub") "Box"
+-- True
+
+-- The three inhabitants never equate, in every direction. An identity-bearing
+-- head is not a bare one, and NEITHER is a rigid type variable — §8 I6.1.
+-- > headA == headU
+-- False
+-- > headU == HkRigid "Box"
+-- False
+-- > headA == HkRigid "Box"
+-- False
+-- > HkRigid "Box" == HkRigid "Box"
+-- True
+
+-- Two identity-LESS heads of the same name still match, which is what keeps the
+-- flat/single-file path answering exactly as it does today.
+-- > headU == HkBare "Box"
+-- True
+
+-- `headKeyName` reads the bare name out of all three inhabitants — the
+-- projection every A-2.2 consumer uses, and the ledger of what is still
+-- bare-name-keyed.
+-- > headKeyName headA
+-- "Box"
+-- > headKeyName headU
+-- "Box"
+-- > headKeyName (HkRigid "a")
+-- "a"
+-- > headKeyName (headKeyOfCon OriginBuiltin "Int")
+-- "Int"
+
+-- ⚠️ ANSWER-PRESERVATION, ASSERTED RATHER THAN CLAIMED: for every input the old
+-- `Option String` projection could see, `headKeyName` of the new key is the
+-- string the old one returned. The pairs below are the three head classes the
+-- two projections produce — a module head, a builtin head, and a rigid one.
+-- > map headKeyName [headA, headZ, headU, HkRigid "a", headKeyOfCon OriginBuiltin "__tuple2__"]
+-- ["Box", "Box", "Box", "a", "__tuple2__"]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
@@ -1171,6 +1330,16 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DData Public "HeadKey" () ((variant "HkIdent" (ConPos (TyCon "Ident"))) (variant "HkBare" (ConPos (TyCon "String"))) (variant "HkRigid" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "HeadKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "HeadKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "HeadKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "HkIdent" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkIdent ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "HkBare" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkBare ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "HkRigid" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkRigid ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DTypeSig true "headKeyOfCon" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "HeadKey"))))
+(DFunDef false "headKeyOfCon" ((PVar "origin") (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "origin")) (EVar "name")) (arm (PCon "Some" (PVar "ident")) () (EApp (EVar "HkIdent") (EVar "ident"))) (arm (PCon "None") () (EApp (EVar "HkBare") (EVar "name")))))
+(DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
+(DFunDef false "headKeyName" ((PCon "HkIdent" (PCon "Ident" PWild PWild (PVar "name")))) (EVar "name"))
+(DFunDef false "headKeyName" ((PCon "HkBare" (PVar "name"))) (EVar "name"))
+(DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
@@ -1228,6 +1397,12 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "mregOrderA" () (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 1))) (EVar "mregEmpty"))))
 (DTypeSig false "mregOrderB" (TyApp (TyCon "MultiRegistry") (TyCon "Int")))
 (DFunDef false "mregOrderB" () (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 2))) (EVar "mregEmpty"))))
+(DTypeSig false "headA" (TyCon "HeadKey"))
+(DFunDef false "headA" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
+(DTypeSig false "headZ" (TyCon "HeadKey"))
+(DFunDef false "headZ" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "zopapub")))) (ELit (LString "Box"))))
+(DTypeSig false "headU" (TyCon "HeadKey"))
+(DFunDef false "headU" () (EApp (EVar "HkBare") (ELit (LString "Box"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
@@ -1348,6 +1523,16 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
+(DData Public "HeadKey" () ((variant "HkIdent" (ConPos (TyCon "Ident"))) (variant "HkBare" (ConPos (TyCon "String"))) (variant "HkRigid" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "HeadKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "HeadKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkIdent" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkBare" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkBare" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "HeadKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "HkIdent" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkIdent ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "HkBare" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkBare ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "HkRigid" (PVar "__a0")) () (EBinOp "++" (ELit (LString "HkRigid ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
+(DTypeSig true "headKeyOfCon" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "HeadKey"))))
+(DFunDef false "headKeyOfCon" ((PVar "origin") (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "origin")) (EVar "name")) (arm (PCon "Some" (PVar "ident")) () (EApp (EVar "HkIdent") (EVar "ident"))) (arm (PCon "None") () (EApp (EVar "HkBare") (EVar "name")))))
+(DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
+(DFunDef false "headKeyName" ((PCon "HkIdent" (PCon "Ident" PWild PWild (PVar "name")))) (EVar "name"))
+(DFunDef false "headKeyName" ((PCon "HkBare" (PVar "name"))) (EVar "name"))
+(DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
@@ -1405,3 +1590,9 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 (DFunDef false "mregOrderA" () (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 1))) (EVar "mregEmpty"))))
 (DTypeSig false "mregOrderB" (TyApp (TyCon "MultiRegistry") (TyCon "Int")))
 (DFunDef false "mregOrderB" () (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "mregAdd") (EVar "identTypeFooM")) (ELit (LInt 2))) (EVar "mregEmpty"))))
+(DTypeSig false "headA" (TyCon "HeadKey"))
+(DFunDef false "headA" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
+(DTypeSig false "headZ" (TyCon "HeadKey"))
+(DFunDef false "headZ" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "zopapub")))) (ELit (LString "Box"))))
+(DTypeSig false "headU" (TyCon "HeadKey"))
+(DFunDef false "headU" () (EApp (EVar "HkBare") (ELit (LString "Box"))))
