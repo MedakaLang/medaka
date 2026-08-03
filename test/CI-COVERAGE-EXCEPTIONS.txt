@@ -97,6 +97,21 @@
 # defining its own scope WAS DEFINING ITS OWN SCOPE. Widening it to every `.sh` in the repo
 # found 24 more real gates that ran nowhere:
 #
+# ── #1111 registry keying ratchet — invoked BY another gate, not named in a workflow ──
+#
+# test/registry_keying_ratchet.sh is deliberately NOT a `test/diff_compiler_*.sh` gate and
+# is deliberately NOT named anywhere in .github/workflows/*.yml. It is `sh`-invoked from
+# WITHIN test/typecheck_compiler_source.sh (see that script, right before its final PASS
+# line) — which IS named literally in the `soundness` job in ci.yml, so running that job
+# runs this script every time. The "named" mechanism above only scans workflow YAML text
+# for a literal `<name>.sh` mention; it has no way to see a nested `sh "$ROOT/test/foo.sh"`
+# call inside another shell script's SOURCE, so this one genuinely cannot self-classify and
+# needs this ledger row instead of a workflow reference. This is the intended shape (see
+# registry_keying_ratchet.sh's own header): folding a new check into an already-CI-wired
+# script avoids the "new test/*.sh matches no shard pattern, silently never runs" hazard
+# this very coverage gate exists to catch, at the cost of one ledger line here.
+test/registry_keying_ratchet   run every time via test/typecheck_compiler_source.sh (soundness job); not directly named in any workflow file, see the script's own header.
+
 #   sqlite/test/*_oracle.sh (22)  Differential gates diffing the pure-Medaka SQLite library
 #                                 against the REAL sqlite3 CLI. All 22 verified green
 #                                 (2026-07-13, ~5 min serial; 188 CPU-s). Now in the `sqlite`
