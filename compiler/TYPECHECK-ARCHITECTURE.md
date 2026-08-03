@@ -303,7 +303,7 @@ the impl, and writes a `Route` back into the AST's `Ref Route` cells.
 | Superinterface existence | dedicated walk | ~35 lines | DICT §3 |
 | Impl completeness / phantom methods | two walks | ~169 lines | **none** |
 | Interface type-parameter kinds | `checkGradedImplHeads` | ~195 lines | EFFECTS §6.1–§6.5 |
-| **Field resolution + record registry** | `resolveFieldRecord`, `collectAbstractRecordTypes`; cells `recordsRef`, `recordByNameRef`, `fieldOwnersRef`, `abstractRecordTypesRef` | ~410 lines / 4 cells | **none** |
+| **Field resolution + record registry** | `resolveFieldRecord`, `collectAbstractRecordTypes`; cells `recordByNameRef`, `fieldOwnersRef`, `abstractRecordTypesRef` | ~410 lines / 3 cells | **none** |
 
 ⚠️ DICT §6 is C1–C4 (unique most-specific instance, superclass consistency, resolution
 determinism, one instance environment). **It does not require an impl to define every
