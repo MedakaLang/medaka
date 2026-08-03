@@ -225,6 +225,28 @@ calm. Before you rely on a watcher, **run its exact query once by hand and confi
   a queue-bounce (the PR goes back to OPEN with a failed `merge_group` run) — that looks identical to
   "still queued." Bound the wait (e.g. ~30 iterations) so it can't hang forever, and re-check on exit.
 
+#### 🚨 A CONFLICTED PR GETS **ZERO** CI RUNS, AND EMPTY LOOKS EXACTLY LIKE PENDING
+
+`ci.yml` is `pull_request`-triggered (`.github/workflows/ci.yml:113`), so a run checks out
+**`refs/pull/N/merge`**. GitHub cannot materialize that ref while the branch conflicts with `main`,
+so the workflow never has anything to check out and **no run is ever queued** — not pending, not
+failed, *absent*. Every surface agrees and all read as "still queuing": `gh pr checks` says `no
+checks reported`, `gh run list --branch` returns `[]`, `gh pr view --json statusCheckRollup` has
+length 0.
+
+An agent waited ~30 minutes and reported *"looks like GitHub-side queuing"* — the honest read of
+that evidence, and wrong. The discriminators:
+
+```sh
+gh pr view N --json mergeStateStatus --jq .mergeStateStatus   # DIRTY == conflicts
+git ls-remote origin 'refs/pull/N/*'   # only .../head, NO .../merge  <- the direct proof
+```
+
+After the branch merges `origin/main`, the merge ref appears and the run starts immediately.
+Generalizes: **no signal is not a state on the green→pending→red axis.** When a watcher returns
+nothing, ask what would make the thing *unable to report* before concluding it has nothing to
+report.
+
 When CI goes red, **act, don't just report**:
 
 1. **Diagnose from the log** (`gh run view <id> --log-failed`): infra/workflow bug, real regression, or
@@ -546,6 +568,12 @@ Each is a failure actually watched happen this session:
      Do NOT await a notification."*
    - *"You are the implementer. Do not delegate, do not spawn a sub-agent, do not 'resume' another agent."*
 
+   ⚠️ **`pgrep -f <pattern>` SELF-MATCHES — say so, because agents adapt the idiom above into it.**
+   Two agents in one session rewrote the PID-poll as `pgrep -f '<pattern>'` and each burned a full
+   600s tool timeout, because the polling wrapper's own command line *contains* the pattern it is
+   grepping for, so the loop can never terminate. Poll a real PID, or grep the output FILE — never
+   the process table for a pattern you also typed.
+
    **Orchestrator-side remedy that actually unblocked them:** don't nudge blindly — `ps aux | grep -E
    'preflight|make medaka'`, wait on the PID yourself, READ the log, and hand the agent the *result*.
    Also verify a `timeout`-wrapped build **succeeded** rather than being killed at the limit; a
@@ -580,6 +608,13 @@ Each is a failure actually watched happen this session:
    code itself lives. Both were caught only because the *receiving* agent re-grepped. A relayed
    citation is a claim you are re-asserting; one `grep -n` for the definition before you paste it into
    a prompt is the whole cost.
+   ⚠️ **A relayed SCOPE CHARACTERISATION is the same claim, one level up.** The orchestrator told an
+   agent a just-merged PR was "comments only, so the merge should be textual and trivial" — true of
+   the *follow-up commit* the orchestrator had verified byte-by-byte, not of the whole PR, which also
+   exported a function and added a call. The agent read the merged hunks instead of trusting the
+   brief and caught it. Tell agents to verify a base's diff scope themselves (`git diff --stat`)
+   rather than inherit the orchestrator's summary — "comment-only," "additive," "mechanical" are
+   claims, and re-deriving one costs a single command.
 5. **"Disproving me is a SUCCESS."** Say it explicitly. It fired **three times in one session**, every
    time against the orchestrator. An honest `UNVERIFIED` beats a confident wrong answer.
 
@@ -791,6 +826,22 @@ probe reads in a PR body exactly like a real one — same shape, same confident 
 green result. General rule: **for every "I verified Z," name the observation that would have
 shown ¬Z; if none exists, say "not established" instead.** Generalizable trap: **two
 "independent" checks that share a pipeline stage give you ONE observation, not two.**
+
+### ⚠️ Split a PRE-EXISTING defect out of the PR that merely REPLICATES it
+
+A review of #1244 found that `resolve.mdk`'s `typeOriginExports` and `tyOriginScope` disagree
+on re-export precedence: a module that both declares and re-exports the same name attributes it
+to the re-exported source instead of the declarer. The mechanism was **pre-existing** — the
+identical probe reproduces on the `data`/type side, which #1244 never touched — and the PR only
+replicated it into a second namespace (interfaces).
+
+Fixing it inside #1244 would have moved goldens well beyond the PR's own layer (its own filed
+issue, #1245, says so: *"this fixes the type side too... expect golden movement beyond the
+interface layer"*), so a red result would not have named its culprit. The split: the PR narrows
+its now-overreaching claims and pins the wrong answer as a fixture; a separate issue owns the
+ordering fix; and the fix is recorded as a **precondition on the downstream unit that will
+first consume the value** rather than blocking the PR that merely inherited it. Keep the two
+apart, and say in the issue why they were kept apart.
 
 ---
 
@@ -1103,6 +1154,13 @@ an emitter-graph file does NOT invalidate the seed (emitted IR is identical); an
 - After each landing, reconcile `PLAN.md`, and verify root-cause claims on the binary before trusting them
   in docs.
 - Record durable workflow learnings in memory; record role learnings **here**.
+- **Pin a must-fail fixture to the DEFECT issue, never the multi-PR STAGE issue.** A stage issue
+  (e.g. an arc-tracking #1110) closes when the stage lands, long before the pinned defect is fixed —
+  `must_fail_census.sh` then reports PINNED-BUT-CLOSED and the next reader has to work out which of
+  the stage's PRs the pin meant. File a dedicated issue for the defect and retarget the pin to it.
+  ⚠️ The retarget is not a one-line edit: `diff_compiler_must_fail.sh` cross-checks the fixture
+  **directory name** against `claim.txt`'s `issue:` field (`test/diff_compiler_must_fail.sh:386,391`)
+  and reports MALFORMED on a mismatch — `git mv` the directory too, so history follows.
 
 ### 🏁 At session end, run the `orchestrator-wrapup` skill — don't hand-roll the close-out
 
@@ -1377,3 +1435,54 @@ that is what makes them expensive.
      suspected stderr-capture golden move, sweep the shard's own scripts for `2>&1` and name
      the candidates before the log arrives; the log then confirms or refutes in one read
      rather than starting the investigation.
+
+---
+
+## Stage A-1 of the typecheck arc, 2026-08-02/03 — four PRs, and the recurring defect was a CLAIM REACHING PAST ITS EVIDENCE
+
+#1234 → #1235 → #1238 → #1244 (rigid/mono separation, arc #1110, epic #1122). Every one of the
+four merged 12/12 green and was reviewed adversarially. In all four the finding was **not wrong
+code** — it was a *claim*, in a comment or a PR body, that asserted more than had been measured.
+Different surface each time:
+
+- **#1234** — the PR's own first commit (`e8b2483f`) never touched `compiler/entries/
+  origin_agreement_main.mdk` or `test/diff_compiler_origin_agreement.sh`, so both still quoted
+  `resolve.mdk`'s old *"FLAT (loader-less) DRIVERS GET NOTHING HERE"* text verbatim and described
+  #1227 as still open, after the fix landed. Invisible to every gate: `compiler/entries/*.mdk` is
+  not in the snapshot corpus (no `origin_agreement_main.md` under `test/snapshots/`), and a gate
+  script's own prose is never diffed against anything. Caught in review, fixed in the same PR
+  (`5fbca08c`).
+- **#1238 round 1** — a source comment stated *"a rigid name is lexically lowercase and a real
+  `TCon` name lexically uppercase,"* which licensed leaving four wildcards unarmed. Both halves are
+  false at the edges: `identStartLower` accepts `_`, and a **real** head can legally be
+  `__tupleN__` (`tupleCtorTyName` via `tyConBuiltin`) — so the two populations collide there.
+  Measured: `data Bad = Bad __tuple2__ ; g : Bad -> (,) ; g (Bad v) = v` typechecked clean on
+  `main` and produced `Type mismatch: (,) vs (,)` — an error whose two sides render identically —
+  on the branch before the fix. Fixing it exposed a second, S0-shaped hole once the discriminating
+  fixture's positive control deleted the new arm: not a different diagnostic, but **no diagnostic
+  at all** (silent accept, exit 0).
+- **#1238 round 3** — a fixture header claimed its program exercised the eleven exhaustive `Mono`
+  match arms. `test/eval_fixtures/` is **typecheck-free**: none of its five consumers (this gate,
+  `bootstrap_eval.sh`, `diff_compiler_core_ir.sh`, `diff_compiler_core_ir_roundtrip.sh`,
+  `diff_compiler_snapshot_core_ir.sh` — none of whose entry points, `entries/eval_main.mdk:19`,
+  `entries/core_ir_main.mdk:33`, `entries/core_ir_roundtrip_main.mdk:28`, `tools/snapshot.mdk:588`,
+  imports `types.typecheck`) constructs a single `Mono` for a fixture here. The author's own
+  positive control (delete an arm → fixture still green) supported the *wide* conclusion
+  "typecheck is not reached" and the header wrote the *narrow* one, "the dispatch half is not
+  reached" — the same species of overreach as the false naming invariant one round earlier, on a
+  probe that was itself sound. `test/diff_compiler_eval.sh`'s own header now says this was "twice"
+  written confidently and wrongly, and points a type-level assertion at
+  `test/typecheck_error_fixtures/` or `test/typecheck_fixtures/` instead.
+- **#1244** — three `resolve.mdk` comments plus the PR body asserted that a re-exported interface
+  always attributes to its **definer**. True only where the re-exporter does not also declare the
+  name itself: a module that both declares and re-exports the same interface attributes it to the
+  re-exported source instead (filed #1245). The identical mechanism already reproduces on the
+  `data`/type side, which #1244 never touched — so #1244 replicated a pre-existing defect into a
+  second namespace rather than introducing one (see "Split a PRE-EXISTING defect..." above).
+
+**Why it matters for orchestration:** no gate can see this class. Goldens pin *output*, not
+*justifications* — a comment or a PR-body claim can be flatly false while every fixture stays
+green. A false claim is exactly what the *next* agent inherits and builds on, so it propagates
+silently instead of failing loudly. Add this to every review brief, as a question separate from
+"is the code correct": **is every claim in this diff's comments and PR body supported by what was
+actually run, or does it merely describe what the author expected to be true?**
