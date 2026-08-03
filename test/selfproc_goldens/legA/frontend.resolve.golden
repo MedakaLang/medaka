@@ -2,7 +2,9 @@ addImportProvenance : Map String (List String) -> String -> List String -> Map S
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 ambigModPhrase : List String -> String
 ambigMods : Env -> String -> List String
+ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
 ambiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
+ambiguousTypeErrors : Env -> String -> Option Loc -> List ResError
 bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
 bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
 bestOfNames : SugQuery -> List String -> Option String
@@ -93,8 +95,10 @@ expEffectsDirect : List Decl -> List String
 expFieldOwnersDirect : List Decl -> List (String, String)
 expIfaceMethodsDirect : List Decl -> List (String, List String)
 expInterfacesDirect : List Decl -> List String
+expInterfacesOf : ModuleExports -> List String
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypesDirect : List Decl -> List String
+expTypesOf : ModuleExports -> List String
 expValuesDirect : List Decl -> List String
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
@@ -120,6 +124,7 @@ firstOr : String -> List String -> String
 flatTyOriginScope : List Decl -> Map String TyConOrigin
 foldCtorProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
+foldNamespaceProvenance : (Map String ModuleExports -> UsePath -> List String) -> Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 foldProvenance : Map String ModuleExports -> Map String (List String) -> List UsePath -> Map String (List String)
 hasFoldable : List Decl -> Bool
 hasNullaryClause : List FunClause -> Bool
@@ -128,6 +133,8 @@ haskellCtorAliases : List (String, String)
 haskellNote : String -> String -> String
 haskellTypeAliases : List (String, String)
 haskellValueAliases : List (String, String)
+ifaceAmbigMods : Env -> String -> List String
+ifaceAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ifaceDeclaredIn : String -> String -> (String, String)
 ifaceKey : String -> String
 ifaceMethodNm : IfaceMethod -> String
@@ -136,6 +143,9 @@ ifaceMethodsOf : String -> List (String, List String) -> List String
 ifaceValsOf : ModuleExports -> String -> List String
 implMethodNm : ImplMethod -> String
 importCtorNames : Map String ModuleExports -> UsePath -> List String
+importIfaceNames : Map String ModuleExports -> UsePath -> List String
+importNamesIn : (ModuleExports -> List String) -> Map String ModuleExports -> UsePath -> List String
+importTypeNames : Map String ModuleExports -> UsePath -> List String
 importValueNames : Map String ModuleExports -> UsePath -> List String
 importedEffects : Map String ModuleExports -> List Decl -> List String
 importedIfaceMethods : Map String ModuleExports -> List Decl -> List String -> List (String, List String)
@@ -155,11 +165,13 @@ isCtorAmbiguous : Env -> String -> Bool
 isEmptyL : List a -> Bool
 isHaskellAliasPair : String -> String -> Bool
 isHint : String -> Bool
+isIfaceAmbiguous : Env -> String -> Bool
 isImportedModuleName : Env -> String -> Bool
 isModId : String -> (String, List String) -> Bool
 isPubExp : ModuleExports -> String -> Bool
 isTransparentDecl : Decl -> Bool
 isTupleCtorTyName : String -> Bool
+isTypeAmbiguous : Env -> String -> Bool
 keepAmbiguous : List String -> List (String, List String) -> List (String, List String)
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundMethods : Env -> List String -> List String
@@ -318,6 +330,8 @@ takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
 tupleCtorTyNames : List String
 tyOriginScope : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> Map String TyConOrigin
+typeAmbigMods : Env -> String -> List String
+typeAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeDeclaredIn : String -> String -> (String, String)

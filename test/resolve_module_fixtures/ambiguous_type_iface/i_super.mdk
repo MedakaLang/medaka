@@ -1,0 +1,12 @@
+-- INTERFACE occurrence 4/4: a SUPERINTERFACE (`Super`, via `checkSuper`).
+--
+-- `Super` carries `superParams : List String` — type-parameter NAMES, not `Ty`s —
+-- so the node has no `Ty` position and therefore no span anywhere in the AST to
+-- borrow, and this row is unlocated.  That residual is structural and pre-existing
+-- (the sibling `UnknownInterface` at this same site is unlocated for the identical
+-- reason); reporting it unlocated beats not reporting a genuine use site at all.
+import ta.{Speak}
+import tb.{Speak}
+
+interface Yell a requires Speak a where
+  yell : a -> String

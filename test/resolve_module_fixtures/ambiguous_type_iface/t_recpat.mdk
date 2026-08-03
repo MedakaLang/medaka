@@ -1,0 +1,8 @@
+-- TYPE occurrence 2/3: a record PATTERN head (`recPatHead`).  `checkPat` routes
+-- `PRec` here and NOT through its `PCon` arm, so the constructor peer never sees
+-- this position — without its own guard it is silent while a signature is flagged.
+-- No signature on `sizeOf`, so `Crate` occurs exactly once.
+import ta.{Crate}
+import tb.{Crate}
+
+sizeOf (Crate { crateSz = n }) = n

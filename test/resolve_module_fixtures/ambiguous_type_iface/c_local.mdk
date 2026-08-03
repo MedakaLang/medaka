@@ -1,0 +1,22 @@
+-- CONTROL 1 — THE LOCAL-DECLARATION EXCLUSION, both namespaces.  Imports BOTH
+-- declarers AND declares its own `Widget` and its own `Speak`.  A name this module
+-- declares is not a participant in the ambiguity, it SETTLES it — the same rule
+-- `tyOriginScope`'s precedence argument states for identity, and the same one
+-- `ambiguousSet`/`ctorAmbiguousSet` already apply to values and constructors.
+--
+-- Contributes ZERO rows.  Drop the `sameMod` argument from either ambiguity set and
+-- this module starts reporting, which is what makes the golden a TWO-SIDED
+-- assertion rather than a one-sided "the error fires somewhere".
+import ta.{Widget, Speak}
+import tb.{Widget, Speak}
+
+data Widget = MkLocal Int
+
+interface Speak a where
+  speakHere : a -> String
+
+widenLocal : Widget -> Int
+widenLocal _ = 1
+
+shoutLocal : Speak a => a -> Int
+shoutLocal _ = 1

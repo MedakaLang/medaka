@@ -1,0 +1,6 @@
+-- TYPE occurrence 3/3: a record LITERAL head (`recCreateHead`), the
+-- expression-position peer of `t_recpat`.  Same head, same set, different arm.
+import ta.{Crate}
+import tb.{Crate}
+
+fresh n = Crate { crateSz = n }

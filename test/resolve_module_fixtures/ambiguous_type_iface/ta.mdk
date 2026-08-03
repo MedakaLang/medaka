@@ -1,0 +1,12 @@
+-- One of two UNRELATED modules that each independently declare a type `Widget`,
+-- a record `Crate`, and an interface `Speak`.  Neither imports the other.
+--
+-- Both DECLARATIONS are legal and must stay legal: ambiguity is diagnosed at the
+-- USE site (the Haskell/Rust model), never at the declaration.  This module
+-- contributing zero rows to `expected` is half of that assertion.
+public export data Widget = MkA Int
+
+public export data Crate = Crate { crateSz : Int }
+
+export interface Speak a where
+  speak : a -> String
