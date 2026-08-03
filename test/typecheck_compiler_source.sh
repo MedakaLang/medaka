@@ -714,5 +714,16 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
+# ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
+# Mechanical enforcement for the registry-keying arc (re-keying ~15
+# program-global cross-module tables from bare names to qualified identity):
+# pins CrossRun's and DriverState's field sets, their setRef write targets,
+# and the three engine module drivers' frame-seeding parity. Deliberately
+# NOT a standalone test/*.sh gate -- see test/registry_keying_ratchet.sh's own
+# header for why it rides inside this already-CI-wired script instead.
+if ! sh "$ROOT/test/registry_keying_ratchet.sh" "$ROOT"; then
+  exit 1
+fi
+
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0
