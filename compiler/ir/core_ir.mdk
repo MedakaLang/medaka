@@ -216,12 +216,22 @@ public export data CClause = CClause (List Pat) CExpr
 --     full-type impl key [for type-arg-distinct same-head dispatch, mirrors
 --     eval.mdk's VTypedImpl `k`], iface, dispatch
 --     positions, the clause's patterns, its lowered body).
---   CImplDefault = an untagged interface default (patterns + lowered body — the
---     fallback).
+--   CImplDefault = an untagged interface default (the INTERFACE IDENTITY that
+--     declared it, patterns + lowered body — the fallback).
+--
+-- ⚠️ `CImplDefault`'s leading String is #1047's fix and is NOT the interface's
+-- bare NAME: it is `ast.ifaceIdentity` (`"<module>::<Iface>"`), because two
+-- unrelated modules may each declare an interface with the same bare name and
+-- their defaults must not be confusable.  The registry is otherwise filtered by
+-- the bare METHOD name alone (`llvm_emit.findDefault`, `wasm_emit.findDefaultW`,
+-- `eval.pickTagFallback`), which is what made a method-less `impl Speak DogB`
+-- inherit the OTHER module's default body at exit 0 with no diagnostic.  Compare
+-- it ONLY with `ast.ifaceIdMatches` — `""` is absence, and absence must never
+-- match absence.
 public export data CImplEntry = CImplEntry String Int CImplBody
 public export data CImplBody =
   | CImplTagged String String String (List Int) (List Pat) CExpr
-  | CImplDefault (List Pat) CExpr
+  | CImplDefault String (List Pat) CExpr
 
 -- ── programs ───────────────────────────────────────────────────────────────
 -- A lowered program: top-level function groups (coalesced multi-clause), the

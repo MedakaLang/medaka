@@ -1,0 +1,48 @@
+issue: 1258
+what: two UNRELATED modules (amodr.mdk, zmodr.mdk) each declare an INTERFACE with the
+what: SAME BARE NAME `Same` -- `amodr.mdk`'s only method is `foo`, `zmodr.mdk`'s only
+what: method is `bar`. entry.mdk imports ONLY `amodr`'s `Same`/`foo` and ONLY
+what: `zmodr`'s unrelated `zrq` function -- it never imports `zmodr`'s `Same` at all.
+what: `universeIfaceRequiredRef` (compiler/types/typecheck.mdk) is the persistent
+what: interface->required-methods map used by the fast multi-module impl-completeness
+what: check (`checkImplCompletenessMap`); it is keyed by BARE interface name across
+what: the whole import graph, last-write-wins. Whichever module registers `Same` LAST
+what: overwrites the OTHER's required-method list in the shared map, so `impl Same ET`
+what: -- which correctly and completely implements `amodr.Same` (providing `foo`) -- is
+what: checked against `zmodr.Same`'s unrelated required-method list instead, and
+what: rejected as "missing method 'bar'" -- a method belonging to an interface this
+what: program never implements or calls.
+cmd: check-json entry.mdk
+exit: 1
+diag-code: T-INCOMPLETE-IMPL 11:10-11:11
+control: check-json control.mdk
+why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
+why-fixture: separate modules that share an interface name, one of which is imported
+why-fixture: for an unrelated binding only. `medaka check` resolves the same-directory
+why-fixture: sibling imports with no medaka.toml (same convention as
+why-fixture: 1069-dataparamkinds-bare-name-collision/ in this corpus), and loads only
+why-fixture: what entry.mdk/control.mdk transitively import.
+why-fixture: Pinned with `diag-code` (not `diag`) per TESTING-DESIGN's default -- the
+why-fixture: exact wording of the "missing method" message is not the defect; the
+why-fixture: defect is that the check fires AT ALL against an impl that is complete
+why-fixture: for the interface it actually names.
+why-control: control.mdk is BYTE-IDENTICAL to entry.mdk except the `import zmodr.{zrq}`
+why-control: line and the presence of zmodr.mdk in the import graph are both removed --
+why-control: the ONE flipped feature. With no other `Same` in scope, `impl Same ET`
+why-control: must typecheck cleanly against `amodr.Same` alone (pinned via
+why-control: `check-json`, which also asserts the control is diagnostic-free) and,
+why-control: run, print `1`.
+why-note: `checkImplCompletenessMap`'s own doc comment (typecheck.mdk, near its
+why-note: definition) asserts "Interface names are globally unique, so the map's
+why-note: last-write-wins carries the same required-method list the scan's first-match
+why-note: returned" -- this fixture is a direct counterexample to that premise; a
+why-note: future fix should correct or delete that comment along with the keying fix.
+why-note: this shape hits TWO collapsed tables at once -- see #1257 for ifaceSlotKey,
+why-note: a SEPARATE bare-name-keyed table that produces a DIFFERENT diagnostic
+why-note: (T-IMPL-KIND-MISMATCH) for the reversed import order on a graded interface.
+why-note: fix shape per the issue: fold module identity into
+why-note: universeIfaceRequiredRef's key (and correspondingly into
+why-note: insertIfaceRequired's insertion and checkImplCompletenessMap's lookup), so
+why-note: obligation-checking is tied to the interface an occurrence actually resolved
+why-note: to, not to registration order. That makes entry.mdk check cleanly, draining
+why-note: this row. Close #1258 and delete this fixture when that happens.

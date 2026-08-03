@@ -678,7 +678,18 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # (`constraintOrigin` / `superOrigin` / `requireOrigin` / `implOrigin`). Every one is
 # a NAMED field, so the name-set pin above sees them too; this count moves for the
 # same four and is bumped for that reason and no other.
-carrier_count_expected=10
+#
+# 10 -> 11 (#1047, Stage A-2 unit A-2.9): `ifaceIdentity : TyConOrigin -> String ->
+# String`, ast.mdk's first CONSUMER of the carrier — the function that projects
+# `(originModule, name)` into the one comparable string the Core IR's
+# `CImplDefault` and eval's default cells carry.  It is a READER, not a carrier:
+# it adds no field to any node, mints no origin, and declares no new inhabitant,
+# so neither `declHeadOf` nor either producer ratchet gains an arm (adding one
+# would be the contradiction this gate's own message warns about).  The name-set
+# pin above is correctly silent — a signature is not a named record field — and
+# this form-independent count is correctly NOT, which is exactly the division of
+# labour the paragraph above describes.  Bumped for that reason and no other.
+carrier_count_expected=11
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
@@ -713,6 +724,17 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   exit 1
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
+
+# ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
+# Mechanical enforcement for the registry-keying arc (re-keying ~15
+# program-global cross-module tables from bare names to qualified identity):
+# pins CrossRun's and DriverState's field sets, their setRef write targets,
+# and the three engine module drivers' frame-seeding parity. Deliberately
+# NOT a standalone test/*.sh gate -- see test/registry_keying_ratchet.sh's own
+# header for why it rides inside this already-CI-wired script instead.
+if ! sh "$ROOT/test/registry_keying_ratchet.sh" "$ROOT"; then
+  exit 1
+fi
 
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0

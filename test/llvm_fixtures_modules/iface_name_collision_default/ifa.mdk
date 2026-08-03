@@ -1,0 +1,6 @@
+-- #1047, module A: declares `interface Speak` with the default `"A-default"`.
+-- It has NO import relationship of any kind with ifb.mdk, which declares an
+-- interface of the SAME BARE NAME with a DIFFERENT default body.
+export interface Speak x where
+  speak : x -> String
+  speak _ = "A-default"

@@ -1,0 +1,11 @@
+-- CONTROL for #1257: identical to main.mdk minus the shadowing `gmod` module and its
+-- import -- the ONE flipped feature. With no other `Same` in scope, `impl Same P`
+-- must typecheck against `pmod.Same` alone and print `1`.
+import pmod.{Same, pmth}
+
+data P a b = MkP a b
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1 2))

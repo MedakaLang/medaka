@@ -1,0 +1,7 @@
+-- issue #1256: sibling module declaring a SAME-NAME record `Cfg` (the shadower) with a
+-- DIFFERENT field type -- field `fld : Float`. Only `zrf` is ever imported from this
+-- module -- entry.mdk never imports this `Cfg`.
+public export data Cfg = { fld : Float }
+
+export zrf : Int -> Int
+zrf n = n

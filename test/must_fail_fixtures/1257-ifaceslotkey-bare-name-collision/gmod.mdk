@@ -1,0 +1,7 @@
+-- issue #1257: sibling module declaring a GRADED interface `Same` (slot 0 is row-kinded)
+-- that shares its bare name with pmod.mdk's unrelated, non-graded `Same`.
+export interface Same f where
+  gandThen : f e a -> (a -> <e> f e b) -> f e b
+
+export gdummy : Int -> Int
+gdummy n = n

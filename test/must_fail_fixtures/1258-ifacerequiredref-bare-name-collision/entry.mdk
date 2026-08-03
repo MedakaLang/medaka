@@ -1,0 +1,14 @@
+-- issue #1258: `universeIfaceRequiredRef` is keyed by BARE interface name.
+-- `zmodr.mdk` declares its own same-name `Same` with a DIFFERENT required-method list,
+-- and even though entry.mdk imports ONLY `amodr`'s `Same` (never `zmodr`'s), the
+-- impl-completeness check reads whichever `Same` won the shared registry and rejects
+-- a complete, correct impl as "missing" a method belonging to the OTHER interface.
+import amodr.{Same, foo}
+import zmodr.{zrq} -- ONLY the function; never zmodr's Same
+
+data ET = MkET
+
+impl Same ET where
+  foo e = 1
+
+main = println (foo MkET)

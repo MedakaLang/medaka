@@ -1,0 +1,7 @@
+-- issue #1090: an UNRELATED same-name shadower `Bx`, same arity (2), but BOTH slots
+-- ordinary Type-kinded. Only `z2` is ever imported from this module -- main.mdk never
+-- imports this module's `Bx`.
+public export data Bx p q = MkZ p q
+
+export z2 : Int -> Int
+z2 n = n

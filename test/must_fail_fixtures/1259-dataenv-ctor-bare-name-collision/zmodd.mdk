@@ -1,0 +1,7 @@
+-- issue #1259: sibling module declaring a SAME-NAME constructor `Dup` (the shadower),
+-- attached to an UNRELATED type `Z1`. Only `zdf` is ever imported from this module --
+-- entryBrace.mdk/entryDotDot.mdk never import this module's `Z1` or its `Dup`.
+public export data Z1 = Dup String
+
+export zdf : Int -> Int
+zdf n = n
