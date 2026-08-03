@@ -1,0 +1,15 @@
+-- issue #1257: `ifaceSlotKey`/`checkGradedImplTys` key the graded-interface param-kind
+-- table by BARE interface name. This `impl Same P` names `pmod.Same` (the only `Same`
+-- providing `pmth`, which the impl implements in full) and never touches gmod's
+-- `Same`/`gandThen` at all -- but with `pmod` imported first, `gmod` imported second,
+-- the impl is checked against `gmod.Same`'s graded kind signature instead, since
+-- gmod's registration wins the bare-name race.
+import pmod.{Same, pmth}
+import gmod.{gdummy}
+
+data P a b = MkP a b
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1 2))

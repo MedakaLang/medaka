@@ -1,0 +1,3 @@
+-- issue #1090: user type, arity 2, slot 0 (`e`) is ROW-kinded -- a constructor field of
+-- the shape `Unit -> <e> a`.
+public export data Bx e a = MkBx (Unit -> <e> a)

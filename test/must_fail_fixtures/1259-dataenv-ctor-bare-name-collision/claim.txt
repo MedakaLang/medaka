@@ -1,0 +1,52 @@
+issue: 1259
+what: two UNRELATED modules (amodd.mdk, zmodd.mdk) each declare a CONSTRUCTOR with the
+what: SAME BARE NAME `Dup` -- `amodd.mdk`'s `A1 = Dup Int` vs `zmodd.mdk`'s
+what: `Z1 = Dup String`. entryBrace.mdk imports `A1` and `Dup` explicitly by name
+what: (`{A1, Dup}`) from `amodd`, plus `zmodd`'s unrelated `zdf` function -- it never
+what: imports `zmodd`'s `Z1` or its `Dup`. `universeDataEnv`/`addCtor`
+what: (compiler/types/typecheck.mdk) key the cross-module constructor environment by
+what: BARE constructor name, `omInsert` last-write-wins -- a namespace distinct from
+what: both the type-name registry (#1069/#1070) and the interface-name registries
+what: (#1257/#1258). Whichever module registers `Dup` LAST wins the lookup, so `v = Dup
+what: 5` (which can only mean `amodd.Dup` -- `zmodd` is never imported for its type or
+what: constructor) is checked against the WRONG `Dup`'s type, producing a false type
+what: mismatch naming a type (`Z1`) this program never references. The false-reject is
+what: import-SPELLING dependent: `{A1, Dup}` fails, but `{A1(..)}` (bring-all
+what: -constructors) does not -- see entryDotDot.mdk, documentary only -- confirming
+what: #674's fix (ctorMemberTypeName matching only `UseMember n True`) covered one
+what: import spelling's resolution path but not the underlying registry keying.
+cmd: check-json entryBrace.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 9:8-9:9
+diag-code: T-TYPE-MISMATCH 9:8-9:9
+control: check-json control.mdk
+why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
+why-fixture: separate modules that share a constructor name, one of which is imported
+why-fixture: for an unrelated binding only. `medaka check` resolves the same-directory
+why-fixture: sibling imports with no medaka.toml (same convention as
+why-fixture: 1069-dataparamkinds-bare-name-collision/ in this corpus), and loads only
+why-fixture: what entryBrace.mdk/control.mdk transitively import.
+why-fixture: Pinned with `diag-code` (not `diag`) per TESTING-DESIGN's default -- the
+why-fixture: exact wording of the type-mismatch message is not the defect; the defect
+why-fixture: is that a mismatch fires AT ALL against a program that only ever uses
+why-fixture: `amodd`'s `Dup`. Both diagnostics share one range (both anchor the same
+why-fixture: `Dup 5` application) -- pinned as two identical diag-code lines because
+why-fixture: the FULL ordered list is the assertion, and `render_diags` emits one line
+why-fixture: per diagnostic regardless of range collisions.
+why-fixture: `entryDotDot.mdk` (the `{A1(..)}` spelling) is included for documentary
+why-fixture: purposes only -- NOT read by this fixture's cmd/control -- to make the
+why-fixture: import-spelling dependence visible to a future reader without adding a
+why-fixture: second pinnable cmd/control pair to this one claim.txt (one fixture, one
+why-fixture: issue, one pinned observation).
+why-control: control.mdk is BYTE-IDENTICAL to entryBrace.mdk except the
+why-control: `import zmodd.{zdf}` line and the presence of zmodd.mdk in the import
+why-control: graph are both removed -- the ONE flipped feature. With no other `Dup` in
+why-control: scope, `v = Dup 5` must typecheck cleanly against `amodd.Dup` (pinned via
+why-control: `check-json`, which also asserts the control is diagnostic-free) and,
+why-control: run, print `x`.
+why-note: fix shape per the issue: fold module identity into universeDataEnv's
+why-note: constructor key (so `addCtor` keys on (module, cname) rather than bare
+why-note: cname). A correct fix should make BOTH import spellings agree (both
+why-note: accepting) -- not just leave the `{A1, Dup}` spelling to keep failing while
+why-note: `{A1(..)}` happens to work by accident of a different resolution path.
+why-note: Close #1259 and delete this fixture when that happens.

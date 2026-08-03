@@ -1,0 +1,9 @@
+-- CONTROL for #1259: identical to entryBrace.mdk minus the shadowing `zmodd` module
+-- and its import -- the ONE flipped feature. With no other `Dup` in scope, `v = Dup 5`
+-- must typecheck cleanly against `amodd.Dup` and print `x`.
+import amodd.{A1, Dup}
+
+v : A1
+v = Dup 5
+
+main = println "x"
