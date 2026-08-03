@@ -1002,7 +1002,7 @@ dispBindHeads cf (CBind _ clauses) =
 dispImplEntryHeads : (String -> String) -> CImplEntry -> List String
 dispImplEntryHeads cf (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) =
   allCallHeads cf body
-dispImplEntryHeads cf (CImplEntry _ _ (CImplDefault _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ (CImplDefault _ _ body)) =
   allCallHeads cf body
 
 allCallHeadsStmt : (String -> String) -> CStmt -> List String
@@ -1639,7 +1639,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispBindHeads" ((PVar "cf") (PCon "CBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses")))
 (DTypeSig false "dispImplEntryHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
-(DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
+(DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
 (DTypeSig false "allCallHeadsStmt" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allCallHeadsStmt" ((PVar "cf") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))
 (DFunDef false "allCallHeadsStmt" ((PVar "cf") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))
@@ -2096,7 +2096,7 @@ anyListM p (x::rest) =
 (DFunDef false "dispBindHeads" ((PVar "cf") (PCon "CBind" PWild (PVar "clauses"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses")))
 (DTypeSig false "dispImplEntryHeads" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
-(DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
+(DFunDef false "dispImplEntryHeads" ((PVar "cf") (PCon "CImplEntry" PWild PWild (PCon "CImplDefault" PWild PWild (PVar "body")))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "body")))
 (DTypeSig false "allCallHeadsStmt" (TyFun (TyFun (TyCon "String") (TyCon "String")) (TyFun (TyCon "CStmt") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "allCallHeadsStmt" ((PVar "cf") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))
 (DFunDef false "allCallHeadsStmt" ((PVar "cf") (PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EApp (EVar "allCallHeads") (EVar "cf")) (EVar "e")))

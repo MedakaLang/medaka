@@ -1,9 +1,0 @@
--- CONTROL for #1047: the SAME program as main.mdk with the second interface RENAMED
--- (`Speak`/`speak` in b.mdk/bi.mdk -> `Speak2`/`speak2` in b2.mdk/bi2.mdk). Nothing
--- else differs: still two unrelated modules, still two method-less impls inheriting
--- their own interface's default. It must print `A-default|B-default`. If THIS breaks,
--- cross-module default inheritance regressed generally, not #1047 specifically.
-import ai.{DogA(..), sayA}
-import bi2.{DogB(..), sayB}
-
-main = println (sayA DogA ++ "|" ++ sayB DogB)

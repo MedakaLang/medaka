@@ -1,0 +1,51 @@
+-- #1047 BYSTANDER fixture — "feature present, UNRELATED code still behaves".
+--
+-- AGENTS.md: for a change that adds a program-global table, the required fixture is
+-- NOT "the feature works" (entry.mdk of iface_name_collision_default is that one) —
+-- it is a program where the new construct is PRESENT while every asserted value
+-- comes from code that does not use it.  A fixture that only exercises the feature
+-- passes by construction and proves nothing about the rest of the corpus.
+--
+-- So: the colliding `Speak` pair (bysa/bysb + their method-less implementors) is in
+-- the module graph and is REACHED — `sayA`/`sayB` are called on the `let _` line
+-- below, which keeps them out of source DCE on the emit arms — but NOTHING they
+-- return is asserted.  Every printed line comes from `Greet`/`Wave`, whose interface
+-- AND method names are unique in the program, so exactly ONE `CImplDefault` exists
+-- per method and #1047's identity narrowing must never fire: each of these must be
+-- byte-for-byte what first-match returned before the fix.
+--
+--   glub  — `Greet`'s default, inherited cross-module by a METHOD-LESS `impl Greet
+--           Fish`.  This is the `emitDefaultRKey` / eval `pickTagFallback` route,
+--           the pair #1047 changed.
+--   claw  — `Wave`'s OVERRIDE for Crab: the tagged path, untouched by the fix.
+--   ~     — `Wave`'s default, inherited by Fish ALONGSIDE Crab's override, so the
+--           method has a default AND a tagged impl at once.
+--   glub  — `Greet`'s default at a SECOND inheriting type, so the per-(method, tag)
+--           default define is emitted twice under two tags from one entry.
+--
+-- ⚠️ Every call here is DIRECT (RKey), deliberately: a CONSTRAINED forwarder would
+-- route through the runtime dict dispatcher, and wasm has NO interface-default arms
+-- there (#1020) — such a fixture traps on wasm and would need an
+-- engine_divergence.txt row, which is not what a bystander fixture is for.  The
+-- dict-routed default chain (llvm's emitDefaultDispatchChain, which this PR also
+-- touches) is covered on eval+native by the sibling fixtures
+-- inherited_default_dict_dispatch / attributed_impl_dispatch, already ledgered for
+-- wasm under #1020.
+--
+-- ⚠️ This corpus is PRELUDE-FREE (diff_compiler_llvm_modules.sh passes an EMPTY
+-- core), so no prelude default can be asserted here.  The prelude's own defaults —
+-- where the overwhelming majority of this tree's `CImplDefault` entries live — are
+-- covered by the prelude-bearing corpora instead (diff_compiler_engines' llvm/ arm,
+-- test/eval_fixtures, the doctest suite).
+import bysai.{DogA(..), sayA}
+import bysbi.{DogB(..), sayB}
+import bysother.{Greet(..), greet, Wave(..), wave}
+import bysfish.{Fish(..), Crab(..)}
+
+main : <IO> Unit
+main =
+  let _ = sayA DogA ++ sayB DogB
+  let _ = putStrLn (greet Fish)
+  let _ = putStrLn (wave Crab)
+  let _ = putStrLn (wave Fish)
+  putStrLn (greet Crab)

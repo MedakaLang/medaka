@@ -1,0 +1,6 @@
+-- #1047 BYSTANDER fixture, module A of the colliding pair.  Present in the
+-- program's decl set so the identity-narrowing machinery is genuinely exercised;
+-- nothing about its VALUE is asserted by entry.mdk.
+export interface Speak x where
+  speak : x -> String
+  speak _ = "A-default"

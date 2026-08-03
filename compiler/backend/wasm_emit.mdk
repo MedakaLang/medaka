@@ -174,7 +174,14 @@
 -- `emitExpr` returns a flat list of instruction lines.  In ref-mode the value left
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Loc(..)}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  Addr(..),
+  Route(..),
+  Loc(..),
+  ifaceIdMatches,
+}
 import ir.core_ir.{
   CProgram(..),
   CBind(..),
@@ -207,12 +214,14 @@ import support.util.{
   reverseL,
   contains,
   filterList,
+  anyList,
   lookupAssoc,
   listLen,
   maxI,
   noneHeadTag,
   dedupBy,
 }
+import ir.core_ir_lower.{ifaceIdsAtTag}
 import backend.trmc_analysis.{
   SelfRef(..),
   trmcEligible,
@@ -1531,7 +1540,7 @@ scanImplsW7 impls = forEachU scanImplEntryW7 impls
 scanImplEntryW7 : CImplEntry -> Unit
 scanImplEntryW7 (CImplEntry _ _ body) = match body
   CImplTagged _ _ _ _ pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
-  CImplDefault pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
+  CImplDefault _ pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
 
 forEachU : (a -> Unit) -> List a -> Unit
 forEachU _ [] = ()
@@ -1854,7 +1863,7 @@ scanImplValueUses fnNames fnArs ctorArs impls = dedupKeep (flatMap
 scanImplEntryValueUses : List String -> List (String, Int) -> List (String, Int) -> CImplEntry -> List String
 scanImplEntryValueUses fnNames fnArs ctorArs (CImplEntry _ _ body) = match body
   CImplTagged _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
-  CImplDefault _ b => scanExprValueUses fnNames fnArs ctorArs b
+  CImplDefault _ _ b => scanExprValueUses fnNames fnArs ctorArs b
 
 scanBindValueUses : List String -> List (String, Int) -> List (String, Int) -> CBind -> List String
 scanBindValueUses fnNames fnArs ctorArs (CBind _ clauses) = flatMap
@@ -3005,7 +3014,7 @@ implBodiesForW fn ((CImplEntry name _ body)::rest) =
 
 implBodyExprW : CImplBody -> CExpr
 implBodyExprW (CImplTagged _ _ _ _ _ e) = e
-implBodyExprW (CImplDefault _ e) = e
+implBodyExprW (CImplDefault _ _ e) = e
 
 allWBoolW : Prog -> List CExpr -> Bool
 allWBoolW _ [] = True
@@ -4459,18 +4468,48 @@ findByTagW method tag ((CImplEntry n s (CImplTagged t k iface ps pats body))::re
   | otherwise = findByTagW method tag rest
 findByTagW method tag (_::rest) = findByTagW method tag rest
 
--- the interface DEFAULT entry (CImplDefault) for a method (mirror of defaultFor/
--- findDefault).  None ⇒ no default body ⇒ a genuine missing-impl error.
-defaultForW : Prog -> String -> Option CImplEntry
-defaultForW prog method =
-  findDefaultW method (methodEntriesW (progImpls prog) method)
+-- the interface DEFAULT entry (CImplDefault) for a method (mirror of
+-- llvm_emit's defaultFor/defaultForAt/findDefaults — LOCKSTEP, #1047: this
+-- registry is shared, so a fix landing in one backend leaves the other silently
+-- on the old behaviour and no engine-differential can see it, because on this bug
+-- BOTH backends were equally wrong).  None ⇒ no default body ⇒ a genuine
+-- missing-impl error.
+--
+-- [tag] is the concrete dispatch tag the default is being emitted FOR.  With ≤1
+-- candidate default named [method] — every collision-free program — this is
+-- first-match, byte-for-byte; it narrows by interface IDENTITY only when two
+-- same-named interfaces both declare a default for the same method name and the
+-- declared-impl table names exactly one of them at [tag].  See llvm_emit's
+-- `defaultFor` comment for the full argument.
+defaultForW : Prog -> String -> String -> Option CImplEntry
+defaultForW prog method tag =
+  pickDefaultAtW
+    tag
+    (findDefaultsW method (methodEntriesW (progImpls prog) method))
 
-findDefaultW : String -> List CImplEntry -> Option CImplEntry
-findDefaultW _ [] = None
-findDefaultW method ((CImplEntry n s (CImplDefault pats body))::rest)
-  | n == method = Some (CImplEntry n s (CImplDefault pats body))
-  | otherwise = findDefaultW method rest
-findDefaultW method (_::rest) = findDefaultW method rest
+findDefaultsW : String -> List CImplEntry -> List CImplEntry
+findDefaultsW _ [] = []
+findDefaultsW method ((CImplEntry n s (CImplDefault ifaceId pats body))::rest)
+  | n == method = CImplEntry n s (CImplDefault ifaceId pats body) :: findDefaultsW method rest
+  | otherwise = findDefaultsW method rest
+findDefaultsW method (_::rest) = findDefaultsW method rest
+
+pickDefaultAtW : String -> List CImplEntry -> Option CImplEntry
+pickDefaultAtW _ [] = None
+pickDefaultAtW _ [d] = Some d
+pickDefaultAtW tag (d::rest) = narrowDefaultsW (d::rest) (ifaceIdsAtTag tag) d
+
+narrowDefaultsW : List CImplEntry -> List String -> CImplEntry -> Option CImplEntry
+narrowDefaultsW ds ids fallback = match filterList (defaultOwnedByW ids) ds
+  [only] => Some only
+  _ => Some fallback
+
+defaultOwnedByW : List String -> CImplEntry -> Bool
+defaultOwnedByW ids ent = anyList (ifaceIdMatches (defaultIfaceIdOfW ent)) ids
+
+defaultIfaceIdOfW : CImplEntry -> String
+defaultIfaceIdOfW (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
+defaultIfaceIdOfW _ = ""
 
 -- `$mdk_default_<method>_<tag>` (mirror of llvm_emit's defaultFnName, gname-mangled
 -- for wasm symbols).
@@ -4496,7 +4535,7 @@ emitDefaultRKeyRef prog dictWords argInstrs name tag = match findByTagW name non
   Some _ => dictWords
     ++ argInstrs
     ++ ["call $" ++ implFnSym prog noneHeadTag name]
-  None => match defaultForW prog name
+  None => match defaultForW prog name tag
     Some entry =>
       let fname = defaultFnNameW tag name
       let _ = ensureDefaultEmittedW prog fname tag name entry
@@ -4612,11 +4651,11 @@ reqDictRoutesW n =
   map (i => RDict ("$reqdict_" ++ intToString i)) (rangeList 0 n)
 
 implDefaultPats : CImplEntry -> List Pat
-implDefaultPats (CImplEntry _ _ (CImplDefault pats _)) = pats
+implDefaultPats (CImplEntry _ _ (CImplDefault _ pats _)) = pats
 implDefaultPats _ = []
 
 implDefaultBody : CImplEntry -> CExpr
-implDefaultBody (CImplEntry _ _ (CImplDefault _ body)) = body
+implDefaultBody (CImplEntry _ _ (CImplDefault _ _ body)) = body
 implDefaultBody _ = CLit LUnit
 
 -- emit the synthesized default define `$fname` with the same body/locals machinery

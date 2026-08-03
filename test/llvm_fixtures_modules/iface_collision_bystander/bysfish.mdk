@@ -1,0 +1,17 @@
+-- #1047 BYSTANDER: cross-module implementors of the UNRELATED `Greet`/`Wave`
+-- interfaces.  `Fish` inherits both defaults (method-less impls); `Crab` overrides
+-- `wave` and inherits `greet`, so a method with a default AND an override is live
+-- alongside one with only a default.
+import bysother.{Greet(..), greet, Wave(..), wave}
+
+public export data Fish = Fish
+public export data Crab = Crab
+
+impl Greet Fish where
+
+impl Greet Crab where
+
+impl Wave Fish where
+
+impl Wave Crab where
+  wave _ = "claw"

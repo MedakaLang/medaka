@@ -66,8 +66,13 @@ ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
 declImplEntries : EvalEnv (Value a) -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value a))
-defaultEntry : EvalEnv (Value a) -> List String -> IfaceMethod -> List (String, (Int, Value a))
-defaultName : IfaceMethod -> List String
+declImplIfaceIdRow : Decl -> List (String, String, String)
+declImplIfaceIdTable : List Decl -> List (String, String, String)
+declImplIfaceIdsRef : Ref (List (String, String, String))
+defaultCellName : String -> String -> String
+defaultCellOf : EvalEnv (Value a) -> String -> String -> List (Value a)
+defaultEntry : EvalEnv (Value a) -> String -> List String -> IfaceMethod -> List (String, (Int, Value a))
+defaultNamesOf : String -> IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> Value a
 dispatchPositionsOf : Ty -> List String -> List Int
 doSetRef : Ref (Value a) -> Value a -> Value a
@@ -145,6 +150,8 @@ headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
 ifaceDispatchEntries : Decl -> List ((String, String), List Int)
 ifaceDispatchRef : Ref (List ((String, String), List Int))
+ifaceIdsAtTagE : String -> List String
+ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
 ifaceMethodArity : IfaceMethod -> (String, Int)
 ifaceMethodEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
@@ -188,8 +195,10 @@ listSliceV : List (Value a) -> Int -> Int -> List (Value a)
 lookupAtAddr : EvalEnv (Value a) -> String -> Addr -> Value a
 lookupBinding : String -> List (String, Value a) -> Option (Value a)
 lookupEnv : EvalEnv (Value a) -> String -> Value a
+lookupEnvOpt : EvalEnv (Value a) -> String -> Option (Value a)
 lookupFrameCell : List (String, Ref (Value a)) -> String -> Option (Ref (Value a))
 lookupFrames : List (List (String, Ref (Value a))) -> String -> Value a
+lookupFramesOpt : List (List (String, Ref (Value a))) -> String -> Option (Value a)
 lookupMethod : EvalEnv (Value a) -> String -> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
@@ -209,7 +218,7 @@ memberBind : UseMember -> (String, String)
 memoThunk : EvalEnv (Value a) -> Expr -> Value a
 memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
-methodAtNarrow : EvalEnv (Value a) -> Value a -> Route -> (Value a, List (Value a))
+methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
 methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
 methodDeclArities : Decl -> List (String, Int)
@@ -220,9 +229,10 @@ mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, 
 modImplEntries : List ((String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
-narrowMethod : Value a -> String -> Value a
+narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> Value a
 negFloatIEEE : Float -> Float
 noMainMsg : String
+oneOnly : List a -> Option a
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
@@ -230,6 +240,7 @@ ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
 orderingToValue : Ordering -> Value a
 outputRef : Ref String
+ownDefault : EvalEnv (Value a) -> String -> String -> Option (Value a)
 pAcos : Value a -> Value a
 pAllocBytes : Value a -> Value a
 pAllocBytesIO : Value a -> <IO> Value a
@@ -348,8 +359,9 @@ pWriteFile : Value a -> Value a -> <FileWrite> Value a
 pWriteFileBytes : Value a -> Value a -> <FileWrite> Value a
 payloadArity : ConPayload -> Int
 pendingRunDiags : Ref (List (String, String, List Diag))
-pickByTag : List (Value a) -> String -> Value a
-pickTagFallback : List (Value a) -> Value a
+pickByTag : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
+pickDefaultCand : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
+pickTagFallback : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
 ppEffAtomK : (String, Option String) -> String
 ppField : (String, Value a) -> String
 ppRowBodyK : List (String, Option String) -> Option String -> String
@@ -368,6 +380,8 @@ prim5M : (Value a -> Value a -> Value a -> Value a -> Value a -> Value a) -> Val
 progArgsRef : Ref (List String)
 pubReexports : List (String, Ref (Value a)) -> List (String, List (String, Ref (Value a))) -> List Decl -> List (String, Ref (Value a))
 pushFrame : EvalEnv (Value a) -> List (String, Ref (Value a)) -> EvalEnv (Value a)
+qualifiedDefaultEntry : String -> String -> (Int, Value a) -> List (String, (Int, Value a))
+qualifiedDefaultName : String -> String -> List String
 qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
 rangeListMk : List Int -> Value a
